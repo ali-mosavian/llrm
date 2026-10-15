@@ -667,6 +667,94 @@ done:
     assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
 }
 
+const SUMMARISED: &str = "
+define i16 @count(i16 %n) {
+b1:
+  %i = alloca i16
+  %sum = alloca i16
+  store i16 0, ptr %sum
+  store i16 0, ptr %i
+  br label %b2
+b2:
+  %a = load i16, ptr %i
+  %c = icmp ult i16 %a, %n
+  br i1 %c, label %b3, label %b4
+b3:
+  %s = load i16, ptr %sum
+  %j = load i16, ptr %i
+  %t = add i16 %s, %j
+  store i16 %t, ptr %sum
+  %k = add i16 %j, 1
+  store i16 %k, ptr %i
+  br label %b2
+b4:
+  %r = load i16, ptr %sum
+  ret i16 %r
+}
+
+define i16 @main() {
+entry:
+  %r = call i16 @count(i16 100)
+  ret i16 %r
+}
+";
+
+/// How many times each module analysis was worked out, by how it came out
+/// (`first`: nothing held), over a pipeline at -O1.
+fn module_runs(text: &str) -> Vec<(&'static str, &'static str, usize)> {
+    let mut module = crate::testing::parsed(text);
+    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    llrm_mir::passes::trace_recomputes(true);
+    let entered = |program: &mut Program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &applied)
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered).and_then(|done| done).unwrap();
+    let runs = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let mut by_how: Vec<(&'static str, &'static str, usize)> = Vec::new();
+    for (name, _, how, count) in runs {
+        match by_how.iter_mut().find(|(one, other, _)| *one == name && *other == how) {
+            Some(found) => found.2 += count,
+            None => by_how.push((name, how, count)),
+        }
+    }
+    by_how
+}
+
+/// The summaries and the globals' facts are worked out from nothing once for a
+/// program, not once for each segment of the pipeline and each module pass that
+/// makes its own analyses: the ones after the first start from what the
+/// last left (`Carried`). bench/sieve at -O1 worked the summaries out from
+/// nothing 5 times.
+#[test]
+fn the_summaries_are_worked_out_from_nothing_once() {
+    let runs = module_runs(SUMMARISED);
+    let first =
+        |name: &str| runs.iter().find(|(one, how, _)| *one == name && *how == "first").map_or(0, |found| found.2);
+    let counted = |name: &str| runs.iter().filter(|(one, ..)| *one == name).collect::<Vec<_>>();
+    assert_eq!(
+        (first("summaries"), first("globals-aa")),
+        (1, 1),
+        "from nothing again after the first run: {:?} {:?}",
+        counted("summaries"),
+        counted("globals-aa")
+    );
+}
+
+/// What the pipeline runs after the summaries are made and holds them past
+/// (`manager.freeze`) adds no memory operation. Six of those passes
+/// (loop-simplify, LCSSA, fold, algebraic, indvars, dead) did not say so, and
+/// each edit of theirs made the module's summaries and globals' facts again.
+#[test]
+fn the_passes_after_the_summaries_add_no_memory_operation() {
+    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    let passes = pipeline::header_copied(&applied);
+    assert!(passes.len() >= 7, "premise: the pass list this test names");
+    let adding: Vec<_> = passes.iter().filter(|pass| pass.adds_memory_operations()).map(|pass| pass.name()).collect();
+    assert!(adding.is_empty(), "held past, so they must not add one: {adding:?}");
+}
+
 thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

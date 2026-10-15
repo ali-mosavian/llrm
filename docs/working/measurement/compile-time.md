@@ -67,7 +67,7 @@ A change that saves compile time is checked byte-identical on the programs with 
 - Own instructions exclude children; total includes them. The biggest own step of the whole set, not of one file, is the target: one file (`d_faces`) is a tenth of QCport and unlike the rest.
 - A function's cost grows superlinearly in a few passes; the scaling axes (loop nest depth, caller chain length, function size) find them, and `tools/measure.py` gates their quadratic term.
 - The spiller route and the allocator's search run the machine phases more than once per function; whether they run is a level setting ([levels](../../reference/levels.md#register-allocation-by-level-gccs-ira-against-ours)).
-- The pass manager skips an analysis a pass declares it does not read (`Depends`) and freezes the module summaries after the interprocedural step; a pass that adds a memory operation after that point reads stale summaries, which `LLRM_CHECK_STALE` catches.
+- The pass manager skips an analysis a pass declares it does not read (`Depends`) and freezes the module summaries after the interprocedural step; a pass that adds a memory operation after that point reads stale summaries, which `LLRM_CHECK_STALE` catches. The module analyses of one segment are carried to the next ([module-analyses](../../optimizations/module-analyses.md#between-segments-and-after-the-summaries-are-made)).
 
 ## Designs not taken
 
