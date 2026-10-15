@@ -914,7 +914,7 @@ pub fn assembled(
             masm::Datum::Bytes(vec![0; main_frame as usize]),
         ]);
     }
-    for (bytes, id) in pool.borrow().entries() {
+    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let label = format!("$QB$D{id}");
         names.insert((Space::Segment, id), label.clone());
         if bytes.len() >= 8 {

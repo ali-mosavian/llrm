@@ -81,3 +81,14 @@ fn a_double_constant_is_on_an_8_byte_boundary() {
         "{text}"
     );
 }
+
+/// A 4-byte constant before an 8-byte one cost 4 bytes of padding in every
+/// language of nbody (data 28 -> 36, 31 -> 35, 16 -> 20): the 8-byte constants
+/// come first.
+#[test]
+fn the_wide_constants_are_laid_out_before_the_narrow_ones() {
+    let text = listing("float f(float x) { return x + 0.125f; }\ndouble g(double x) { return x * 0.1; }\n");
+    let wide = text.find("db 09ah,099h,099h,099h,099h,099h,0b9h,03fh").expect("the double 0.1");
+    let narrow = text.find("db 000h,000h,000h,03eh").expect("the float 0.125");
+    assert!(wide < narrow, "{text}");
+}

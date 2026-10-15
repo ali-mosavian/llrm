@@ -1,4 +1,4 @@
-reason = "a double constant is on 8 bytes: stft nib data +3/+7 bytes of padding; jpeg bq32 -1 instruction"
+reason = "doubles on 8 bytes (Intel486 data sheet 240440-002, section 10.1, Table 2.1): functions holding a double keep the call stack aligned (a pad push per call) and their frame objects and constants are 8-aligned; stft nib data +3 B of padding, bq32 -Os stft +1/+6 instructions, jpeg bq32 +-6 instructions and +-9 code bytes"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -57,7 +57,7 @@ kernel_ms = 646.3399
 
 [nib.Os]
 code_bytes = 2401
-data_bytes = 1096
+data_bytes = 1092
 bss_bytes = 0
 kernel_ms = 653.1238
 

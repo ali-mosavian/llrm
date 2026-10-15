@@ -305,7 +305,7 @@ pub fn assembled_by(
             _ => {}
         }
     }
-    for (bytes, id) in pool.borrow().entries() {
+    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
