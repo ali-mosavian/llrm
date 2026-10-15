@@ -579,12 +579,16 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
 def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
     """capability -> why this host lacks it: a directory its [capability] table names is not there.
     Only where GATE_ALLOW_MISSING is set (the CI workflow): elsewhere a moved tool directory must turn the gate red, not skip.
+    "1" allows every capability to be missing; a comma list ("perf") allows those and no others: a tool CI should have turns red.
     One whose LLRM_REQUIRE_* variable the caller set is never missing: its tests fail, as they always did."""
     environ = os.environ if environ is None else environ
     out = {}
     if not environ.get("GATE_ALLOW_MISSING"):
         return out
+    allowed = environ["GATE_ALLOW_MISSING"]
     for name, cap in load().get("capability", {}).items():
+        if allowed != "1" and name not in allowed.split(","):
+            continue
         if any(environ.get(v) for v in cap["require"]):
             continue
         for need in cap["needs"]:
@@ -633,6 +637,23 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
     out = {k: [c for c in needs if c in missing] for k, needs in load().get("requires", {}).items()}
     langs = [k[5:] for k, hit in out.items() if hit and k.startswith("lang:")]
     return langs, frozenset(k[4:] for k, hit in out.items() if hit and k.startswith("bin:"))
+
+
+def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
+    """The groups of this plan that need a capability only the private checkout has: their jobs read it, and a fork's pull request fails them."""
+    cfg = load()
+    private = {name for name, cap in cfg["capability"].items() if cap.get("private")}
+    steps = {"lang": "run", "bin": "integration"}  # the step that runs a language or a cheap test binary
+    need = {steps.get(key.split(":")[0], key) if ":" in key else key for key, caps in cfg["requires"].items() if private & set(caps)}
+    if any(private & set(caps) for caps in declared_requirements(root).values()):
+        need |= {"pytest", "pytest-programs", "pytest-quick", "changed-tests"}
+    return sorted(g for g, members in cfg["groups"].items() if any(s in p.steps and s in need for s in members))
+
+
+def private_env(directory: str, group: str = "") -> dict[str, str]:
+    """The tool variables for a job: each points into the private checkout at `directory`; the group's table replaces the general one."""
+    cfg = load()["private"]
+    return {name: str(Path(directory) / sub) for name, sub in {**cfg["env"], **cfg.get("group_env", {}).get(group, {})}.items()}
 
 
 def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
@@ -884,7 +905,7 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["plan", "run", "bisect", "main"])
+    ap.add_argument("command", choices=["plan", "run", "bisect", "main", "private-env", "private-repo", "private-public"])
     ap.add_argument("rest", nargs="*")
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
@@ -899,6 +920,14 @@ def main() -> int:
     args = ap.parse_args()
     if args.command == "main":
         return watch_main(args.force)
+    if args.command in ("private-repo", "private-public"):
+        cfg = load()["private"]
+        print(cfg["repo"] if args.command == "private-repo" else "\n".join(f"{k}={v}" for k, v in cfg["public"].items()))
+        return 0
+    if args.command == "private-env":  # for `>> "$GITHUB_ENV"`: paths only, nothing read from the checkout
+        for name, value in private_env(args.rest[0], args.group or "").items():
+            print(f"{name}={value}")
+        return 0
     if args.command == "bisect":
         return bisect(args.rest[0], args.rest[1], args.rest[2:])
     if args.command == "run" and args.tier == "smoke":
@@ -918,7 +947,7 @@ def main() -> int:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
     skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
     if args.json:
-        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "skipped": skipped}))
+        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped}))
         return 0
     print(f"tier {p.tier}: {p.reason}")
     for step, why in skipped.items():

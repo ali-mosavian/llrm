@@ -1154,3 +1154,41 @@ def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no
         logs.mkdir()
         _, code, _, _ = gate.run_step("facts", command, logs, {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}, check)
         assert code == {"ok": 0, "failed": 101, "silent": 78}[outcome], (outcome, code)
+
+
+def test_a_comma_list_allows_only_those_capabilities_to_be_missing(tmp_path):
+    """CI allowed any missing tool ("1") and passed Turbo, CodeView, QB 4.5 and QCport by skipping them; now it allows `perf` and nothing else."""
+    env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "perf"}
+    assert "turbo" not in gate.missing_capabilities(env)
+    assert gate.missing_capabilities({**env, "GATE_ALLOW_MISSING": "perf,turbo"}).keys() == {"turbo"}
+
+
+def test_the_hosted_workflow_allows_only_perf_to_be_missing():
+    allowed = re.findall(r"^\s+GATE_ALLOW_MISSING: *(\S+)", (ROOT / ".github/workflows/ci.yml").read_text(), re.M)
+    assert allowed == ["perf"]
+
+
+def test_the_groups_that_need_private_tools_are_named_in_the_plan():
+    """A job reads the private checkout only for these; a fork's pull request fails them by name."""
+    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    private = gate.private_groups(p)
+    assert {"reference", "run", "tools", "python"} <= set(private), private
+    assert "unit" not in private and "cost" not in private
+
+
+def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_that_run_it():
+    """A variable the checkout does not set falls back to a path on the developer's host: the job fails by "not found", or skips in a test."""
+    cfg = gate.load()
+    for group, steps in cfg["groups"].items():
+        env = gate.private_env("/p", group)
+        for step in steps:
+            for name in cfg["requires"].get(step, []):
+                for need in cfg["capability"][name]["needs"] if cfg["capability"][name].get("private") else []:
+                    assert need["env"] in env, (group, step, name, need["env"])
+
+
+def test_a_group_may_point_a_variable_somewhere_else():
+    """QCPORT is QCport's src for the reference step and the qb-quake variant for dfaces: one variable, two checkouts."""
+    assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "python")["QCPORT"] == "/p/qbq-llrm/src"
+    assert "QCPORT" not in gate.private_env("/p", "unit")
