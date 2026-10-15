@@ -1500,3 +1500,35 @@ out:
     let visits = crate::alias::value_rounds() - before;
     assert!(visits < 40, "{visits} visits for a loop of three pointer instructions");
 }
+
+/// Every solve worked out what had escaped before each call, load and store
+/// (a bit set cloned for each: 54 M of d_faces' 425 M escape cost, answers
+/// nothing reads). A solve works out none; an answer is found when asked, once.
+#[test]
+fn what_escaped_before_an_instruction_is_found_when_asked_and_once() {
+    let parsed = Parsed::new(
+        "declare void @keep(ptr)
+
+define void @f(ptr %p) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  store i16 1, ptr %a
+  %x = load i16, ptr %b
+  call void @keep(ptr %a)
+  store i16 2, ptr %a
+  ret void
+}
+",
+    );
+    let before = crate::alias::before_answers();
+    let facts = parsed.facts();
+    assert_eq!(crate::alias::before_answers() - before, 0, "the solve answered what nobody asked");
+    let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
+    let first = facts.escaped_before.get(&call).expect("a call is asked of");
+    let again = facts.escaped_before.get(&call).expect("a call is asked of");
+    assert_eq!(first, again);
+    assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
+    let a = parsed.object("a");
+    assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
+}
