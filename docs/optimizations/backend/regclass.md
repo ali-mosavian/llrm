@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:ccd9c8eafbc60fbb51a4ad62cea16583da16577aa9be7add6cacaf097920f403 -->
+<!-- src: crates/backend/llrm-core/src/backend/regclass.rs sha256:37904712fe87554384a10f0dbac45a668541f247c274309ff531fccee4179106 -->
 
 # regclass
 
@@ -26,7 +26,10 @@ registers. 2. The selector a far load writes takes them as well. 3. A
 connected component of such pairs is two-coloured (base side and index
 side). The colouring is chosen by fewest base-register clobbers, then by
 preferred indexes, then fewest bases; a component that is not bipartite, or
-cannot take either colouring, keeps the spelling in the source. 4. After
+cannot take either colouring, keeps the spelling in the source. The
+clobbers are read from the caller's intervals and masks, or, where it holds
+none, from the intervals of the pairs' values alone, found when a component
+has two colourings to choose between. 4. After
 coalescing, a phi's result and arguments are one web and take the web's
 class where its members agree. A member with a class of its own keeps it.
 
