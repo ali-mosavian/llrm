@@ -1108,3 +1108,42 @@ done:
         through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
     );
 }
+
+/// -O1 inlined small functions called more than once, searched allocations and
+/// made the spiller's second route, none of which gcc's -O1 does: 34% of
+/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
+/// called once still goes in (`-finline-functions-called-once`).
+#[test]
+fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+    let text = "
+define internal i16 @twice(i16 %x) {
+entry:
+  %y = add i16 %x, 7
+  ret i16 %y
+}
+
+define internal i16 @once(i16 %x) {
+entry:
+  %y = mul i16 %x, 3
+  ret i16 %y
+}
+
+define i16 @main(i16 %a) {
+entry:
+  %p = call i16 @twice(i16 %a)
+  %q = call i16 @twice(i16 %p)
+  %r = call i16 @once(i16 %q)
+  ret i16 %r
+}
+";
+    let o1 = pipeline::Options::basic();
+    assert!(!o1.searches() && !o1.compares_routes());
+    let o2 = pipeline::Options::standard();
+    assert!(o2.searches() && o2.compares_routes(), "premise: -O2 keeps both");
+    let (kept, _) = pipelined(text, o1);
+    let kept = crate::testing::printed(&kept);
+    assert_eq!(kept.matches("@twice(").count(), 2, "-O1 inlined a function called twice:\n{kept}");
+    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    let (gone, _) = pipelined(text, o2);
+    assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
+}
