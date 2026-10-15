@@ -992,6 +992,17 @@ def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_ne
     assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"
 
 
+def test_a_step_that_gets_little_cpu_on_a_loaded_host_is_not_stalled(tmp_path, monkeypatch):
+    """#1750's fast gate failed `spin` with STALL (79): under load a step computing for 4 s got under 0.1 s of CPU per poll, which
+    read as none. Any CPU growth is computing; a hung step has none."""
+    import os
+
+    ticks = iter(range(10**6))
+    monkeypatch.setattr(gate.proctree, "tree_cpu", lambda pid: next(ticks) * 0.02)
+    assert gate.run_step("slow", "sleep 2.5", tmp_path, {**os.environ}, stall=1)[1] == 0
+    monkeypatch.setattr(gate.proctree, "tree_cpu", lambda pid: 0.0)
+    assert gate.run_step("hung", "sleep 30", tmp_path, {**os.environ}, stall=1)[1] == gate.STALL_CODE
+
 def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_into_it(tmp_path):
     """#1758 failed `integration INCOMPLETE: 95 results of 83 test binaries`: a cargo left running by a killed gate wrote into the
     truncated log beside the new run's output (NUL gaps, a second run's results)."""

@@ -658,7 +658,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
                     break
                 time.sleep(min(1.0, stall / 4))
                 grown, burned = path.stat().st_size, proctree.tree_cpu(child.pid)
-                if grown != seen or burned - used >= 0.1:
+                if grown != seen or burned > used:  # any tick: a loaded host gives a computing step far less than 0.1 s a poll
                     seen, used, active = grown, burned, time.time()
                 elif time.time() - active > stall:
                     os.killpg(child.pid, signal.SIGKILL)
