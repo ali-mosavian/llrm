@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlower.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlower.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:c56715a8012ab887856d974292b7f9d86a22470ae8ef977b08468affd7c92f2e -->
+<!-- src: crates/opt/llrm-transforms/src/switchlower.rs sha256:bfc9166cf96258d9fd6a8755363b532557d10ccebfb29174ad94ee3498864605 -->
 
 # switchlower
 
@@ -13,14 +13,19 @@ another are made one range (`group_case_labels`); cases to the default
 are dropped. The values are ordered signed or unsigned, whichever makes
 the narrower span: a `-1, 0, 1` switch is three adjacent values.
 
-Switch conversion (`tree-switch-conversion.cc` `switch_conversion::expand`,
-gcc's `-ftree-switch-conversion`, -O2 and up). Every case target is the
-join `J` or an empty block that jumps to it, and every phi of `J` takes a
-constant from each. With more than two distinct targets, a span of at most
-8 values per case label (a range counts twice:
-`param_switch_conversion_branch_ratio`), and not better as bit tests, the
-phis become loads from a private constant array indexed by `x - min`, behind
-one `x - min <= span` test; a hole holds the default's constant.
+Switch conversion (gcc's `-ftree-switch-conversion`, -O2 and up; LLVM's
+`SimplifyCFG::SwitchToLookupTable`). Every case target is the join `J` or
+an empty block that jumps to it, and every phi of `J` takes a constant from
+each. Where bit tests are not better (`switch_conversion::expand`), the
+phis become loads from a private constant array indexed by `x - min`,
+behind one `x - min <= span` test; a hole holds the default's constant.
+One decision makes it: at least three case values at a density of 10% of
+the span (40% tuned for size; LLVM's `isSwitchDense`), and the lookup
+priced under the tree it replaces by the target's costs. A path of the
+tree is the average depth of a balanced tree of compare and branch, and a
+move for each phi; the table's the range test and a load for each phi, a
+widening where its cells are narrower. Tuned for size the costs are bytes
+and the whole tree is set against the code and the data of the table.
 
 Bit tests (`bit_test_cluster`). A run of clusters narrower than a word with
 at most 3 targets, and 3 cases for one target, 5 for two or 6 for three, is

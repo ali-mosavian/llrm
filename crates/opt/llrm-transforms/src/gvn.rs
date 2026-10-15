@@ -419,7 +419,7 @@ fn _numbered(
             }
         }
     };
-    *unit.function = chosen.0;
+    unit.function.adopt(chosen.0);
     Ok(chosen.1)
 }
 

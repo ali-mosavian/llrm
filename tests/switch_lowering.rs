@@ -24,6 +24,14 @@ fn compares(
         .count()
 }
 
+/// x_switch_ranges: 58 case values over a span of 114 were a tree of compares
+/// at 51% density, 2.09x clang's instructions; the table is priced under that
+/// tree.
+#[test]
+fn a_character_class_at_half_density_is_a_lookup_table() {
+    assert!(compares("x_switch_ranges", &["-O2"]) <= 3);
+}
+
 #[test]
 fn a_switch_of_constants_is_a_load_and_a_character_class_a_few_ranges() {
     for flags in [["-O2"], ["-Os"]] {
