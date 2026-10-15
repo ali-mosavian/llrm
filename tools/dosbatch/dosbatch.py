@@ -221,7 +221,12 @@ _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
 def os_layer(target: str, field: str, language: str) -> str:
     """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    return subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    said = subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    if field == "directory" and "/runtime/" in said:
+        # The compiler names the runtime of the tree it was built in; a target shared by two worktrees holds the other's (a gate of main
+        # read the tip's path: 14 collection errors). The tools read this tree's.
+        return str(ROOT / "runtime" / said.rpartition("/runtime/")[2])
+    return said
 
 
 def os_defines(target: str, language: str) -> tuple[str, ...]:
