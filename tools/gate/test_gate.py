@@ -477,9 +477,10 @@ def test_the_full_tier_has_every_step_the_fast_tier_has_for_the_same_paths():
     assert "scans" in gate.plan(["crates/ir/llrm-mir/src/lib.rs"], "full").steps
 
 
-def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path):
+def test_a_failed_step_keeps_its_log_past_the_next_run_of_the_step(tmp_path, monkeypatch):
     """A pytest failure under host load was lost: the gate prints the last 30 lines of the log and a rerun overwrote it, so the
     failing test was never named (#1184)."""
+    monkeypatch.delenv("GATE_ALLOW_MISSING", raising=False)  # CI sets it, and a step that skips itself there fails
     env = {**__import__("os").environ}
     assert gate.run_step("probe", "echo FAILED tests/test_x.py::test_y; exit 1", tmp_path, env)[1] == 1
     assert gate.run_step("probe", "echo fine", tmp_path, env)[1] == 0
@@ -1240,10 +1241,10 @@ def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fa
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
     command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
-    command = command.replace("uv run -q --project tools python tools/qcport-run.py", "echo ran")
-    base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"}
+    command = command.replace("uv run -q --project tools python tools/qcport-run.py", 'echo ran "$JWLINK"')
+    base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "LLRM_BIN": "/t/release"}
     both = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**base, "QCPORT": "a", "QCPORT_INC": "b", "QCPORT_BORLAND": "c"})
-    assert (both.returncode, both.stdout.strip()) == (0, "ran"), both
+    assert (both.returncode, both.stdout.strip()) == (0, "ran /t/release/jwlink"), both  # the linker the build made: a runner has none on PATH
     none = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env=base)
     assert none.returncode not in (0, 77) and "QCPORT is not set" in none.stderr, none
 
