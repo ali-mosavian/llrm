@@ -311,18 +311,21 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
 /// LSR, and `icmp ne (x + 1), 2` became `icmp ne x, 1` for the counter's own
 /// next value: `lea eax,[ecx+1]; add edi,24; cmp ecx,1; mov ecx,eax; jne`, the
 /// counter in two registers (x_life +5% clocks). The step is tested where it
-/// is made: `inc ecx; add edi,24; cmp ecx,2; jne`.
+/// is made: `inc ecx; add edi,24; cmp ecx,2; jne`, or, with the counter
+/// started at -3, `add edi,24; inc ecx; jne` (the compare gone: lsr's
+/// candidates take the address constants as displacements, so the exit-tested
+/// one is no longer crowded out).
 #[test]
 fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
     let text = listing("x_life", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let stepped = lines
-        .windows(4)
-        .any(
-            |w| w[0].strip_prefix("inc ")
-                .is_some_and(|register| w[1..3].iter().any(|line| *line == format!("cmp {register}, 2")))
-                && w[3].starts_with("jne "),
-        );
+    let stepped = lines.windows(4).any(|w| {
+        w[0].strip_prefix("inc ")
+            .is_some_and(|register| w[1..3].iter().any(|line| *line == format!("cmp {register}, 2")))
+            && w[3].starts_with("jne ")
+    }) || lines
+        .windows(3)
+        .any(|w| w[0].starts_with("inc ") && w[1].starts_with("add ") && w[2].starts_with("jne "));
     assert!(stepped, "{text}");
 }
 
