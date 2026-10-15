@@ -1773,24 +1773,56 @@ impl Analysis for DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
-        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
+        let reached = Reached::new(function, &shape, &reached);
+        Some(Ok(held.keeping(|at| !reached.affects(at))))
     }
 }
 
-/// Whether `at`, or a block above it, is one of `reached`.
-pub fn dominated_by(
-    shape: &Shape,
-    reached: &BTreeSet<i64>,
-    at: i64,
-) -> bool {
-    let mut above = Some(at);
-    while let Some(one) = above {
-        if reached.contains(&one) {
-            return true;
-        }
-        above = shape.dominance.immediate(one);
+/// Whether what the edges' facts say at a block may have changed with the
+/// blocks `reached`: it is one, or a block above it is, or a join's phi there
+/// reads a predecessor that is (an incoming value is taken at its predecessor's
+/// end, not above the join). Each block is judged once.
+pub struct Reached<'a> {
+    function: &'a Function,
+    shape: &'a Shape,
+    reached: &'a BTreeSet<i64>,
+    seen: std::cell::RefCell<std::collections::BTreeMap<i64, bool>>,
+}
+
+impl<'a> Reached<'a> {
+    pub fn new(
+        function: &'a Function,
+        shape: &'a Shape,
+        reached: &'a BTreeSet<i64>,
+    ) -> Self {
+        Self { function, shape, reached, seen: std::cell::RefCell::default() }
     }
-    false
+
+    pub fn affects(
+        &self,
+        at: i64,
+    ) -> bool {
+        if let Some(found) = self.seen.borrow().get(&at) {
+            return *found;
+        }
+        // A block met again on the way is a cycle: no news of it.
+        self.seen.borrow_mut().insert(at, false);
+        let block = crate::cfg::block(at);
+        let mut found =
+            self.reached.contains(&at) || self.shape.dominance.immediate(at).is_some_and(|up| self.affects(up));
+        if !found
+            && self
+                .function
+                .block(block)
+                .instructions()
+                .first()
+                .is_some_and(|&first| self.function.instruction(first).opcode == Opcode::Phi)
+        {
+            found = self.function.predecessors(block).into_iter().any(|pred| self.affects(crate::cfg::id(pred)));
+        }
+        self.seen.borrow_mut().insert(at, found);
+        found
+    }
 }
 
 /// The facts each counted loop gives its blocks, and where there is none the
@@ -1831,9 +1863,9 @@ impl Analysis for Bounded {
         // A loop starts from the edges' facts of its dominator: those of a
         // block a change reached or one it dominates may have changed.
         let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
-        });
+        let affected = Reached::new(function, &shape, &reached);
+        let dirty =
+            ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| affected.affects(at));
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }
 }

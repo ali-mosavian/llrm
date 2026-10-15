@@ -72,6 +72,9 @@ struct Memo {
     assumes: RefCell<HashMap<i64, Rc<Vec<Intervals>>>>,
     /// Block -> the predecessor its edge is taken from.
     sole: RefCell<HashMap<i64, Option<i64>>>,
+    /// Block -> its place in the reverse postorder: a join reads the
+    /// predecessors found before it, not those that come round to it.
+    place: std::cell::OnceCell<Rc<HashMap<i64, usize>>>,
     failed: RefCell<Option<String>>,
 }
 
@@ -189,6 +192,9 @@ impl EdgeFacts {
                     .collect();
                 *memo.sole.borrow_mut() =
                     self.memo.sole.borrow().iter().filter(|(at, _)| kept(**at)).map(|(k, v)| (*k, *v)).collect();
+                if let Some(place) = self.memo.place.get() {
+                    let _ = memo.place.set(Rc::clone(place));
+                }
                 EdgeFacts { memo: Rc::new(memo) }
             }
         }
@@ -296,7 +302,11 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         let function = self.unit.function;
         if let ValueDef::Instruction(inst) = function.value(value).def
             && function.parent(inst).map(cfg::id) == Some(at)
-            && let Some(interval) = ranges::_computed(self.unit, inst, &After(self, at), self.facts)
+            && let Some(interval) = if function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi {
+                self.joined(inst, at)
+            } else {
+                ranges::_computed(self.unit, inst, &After(self, at), self.facts)
+            }
         {
             let interval = match inherited.as_deref() {
                 Some(previous) if previous.width == interval.width => Interval {
@@ -311,6 +321,81 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             }
         }
         inherited.map(|found| (*found).clone())
+    }
+
+    fn place_of(
+        &self,
+        at: i64,
+    ) -> usize {
+        let place = self
+            .memo
+            .place
+            .get_or_init(
+                || {
+                    let function = self.unit.function;
+                    let order = llrm_support::graph::reverse_postorder(
+                        &cfg::graph(function),
+                        function.entry().map(cfg::id).unwrap_or_default(),
+                    );
+                    Rc::new(order.into_iter().enumerate().map(|(place, at)| (at, place)).collect())
+                },
+            );
+        place.get(&at).copied().unwrap_or(usize::MAX)
+    }
+
+    /// What a join's phi holds (`ranges::joined`): each incoming value as it is
+    /// at the end of its predecessor, narrowed by the edge it comes along.
+    fn joined(
+        &self,
+        inst: InstId,
+        at: i64,
+    ) -> Option<Interval> {
+        let function = self.unit.function;
+        let op = function.instruction(inst);
+        let width = op.result.and_then(|result| self.unit.int_bits(Operand::Value(result)))?;
+        if self.shape().loops.iter().any(|one| one.header == at) {
+            return None;
+        }
+        let entry = function.entry().map(cfg::id);
+        let mut hull: Option<Interval> = None;
+        for pair in op.operands.chunks(2) {
+            let &[value, Operand::Block(from)] = pair else { return None };
+            let pred = cfg::id(from);
+            if entry != Some(pred) && self.shape().dominance.immediate(pred).is_none() {
+                continue;
+            }
+            if self.place_of(pred) >= self.place_of(at) {
+                return None;
+            }
+            // A constant is the same on every edge: what the edge says of the
+            // values is no news of it.
+            if self.unit.int_constant(value).is_some() {
+                let found = ranges::_operand(self.unit, value, &Intervals::default(), self.facts)
+                    .filter(|found| found.width == width)?;
+                hull = Some(match hull {
+                    None => found,
+                    Some(held) => Interval { low: held.low.min(found.low), high: held.high.max(found.high), width },
+                });
+                continue;
+            }
+            let assumed = self.assumed(pred);
+            let state = Below { ranger: self, block: pred, assumed: &assumed };
+            let delta = match ranges::edge_delta_of(self.unit, from, cfg::block(at), &state, Some(self.facts)) {
+                Ok(Some(delta)) => delta,
+                Ok(None) => continue,
+                Err(why) => {
+                    self.memo.failed.borrow_mut().get_or_insert(why);
+                    return None;
+                }
+            };
+            let found = ranges::_operand(self.unit, value, &ranges::Over { delta, base: &state }, self.facts)
+                .filter(|found| found.width == width)?;
+            hull = Some(match hull {
+                None => found,
+                Some(held) => Interval { low: held.low.min(found.low), high: held.high.max(found.high), width },
+            });
+        }
+        hull
     }
 
     /// What `value` holds at the start of `at`: walked up the blocks that start

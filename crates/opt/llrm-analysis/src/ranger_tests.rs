@@ -181,8 +181,70 @@ b4:
     assert!(asked >= 8, "premise: {asked} answers");
     let shape = unit.shape();
     let reached = std::collections::BTreeSet::from([at("b1")]);
-    let after = held.keeping(|block| !crate::manager::dominated_by(&shape, &reached, block));
+    let after = held.keeping(|block| !crate::manager::Reached::new(f, &shape, &reached).affects(block));
     // b1, b2 and b3 are b1's or below it; b4 is not.
     assert!(after.answers() < asked, "the answers below the edit stand");
     assert!(after.answers() >= 2, "b4's answers stand: {} of {asked}", after.answers());
+}
+
+/// `if (n > 40) n = 40;` made `%p = phi [40, %b1], [%x, %b2]`, which had no
+/// interval, so a trunc and sext of it stayed (a movsx a trip in d_faces'
+/// vertex loop). A join's phi is the hull of its incoming values on their
+/// edges.
+#[test]
+fn a_phi_of_a_clamp_is_bounded_by_the_clamp() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %x) {
+b0:
+  %c = icmp sgt i16 %x, 40
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 40, %b1 ], [ %x, %b2 ]
+  ret i16 %p
+}
+",
+    );
+    agrees(&parsed);
+    let unit = parsed.unit();
+    let facts = unit.registers();
+    let ranger = EdgeRanger::new(&unit, &facts);
+    let f = function(&parsed.module, "f");
+    let p = ranger.at(value(f, "p"), cfg::id(block(f, "b3")));
+    assert_eq!(p.as_deref().map(|found| &found.high), Some(&40.into()));
+    assert_eq!(p.as_deref().map(|found| &found.low), Some(&(-32768).into()));
+}
+
+/// A header's phi waits for its back edge: it is the box search's, and a join
+/// does not guess it.
+#[test]
+fn a_loop_headers_phi_is_not_joined() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %j, %h ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %h, label %out
+
+out:
+  ret i16 %j
+}
+",
+    );
+    agrees(&parsed);
+    let unit = parsed.unit();
+    let facts = unit.registers();
+    let ranger = EdgeRanger::new(&unit, &facts);
+    let f = function(&parsed.module, "f");
+    assert_eq!(ranger.at(value(f, "i"), cfg::id(block(f, "h"))), None);
 }

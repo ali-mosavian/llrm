@@ -1188,9 +1188,12 @@ pub fn edges_solved(
             }
         };
         for &inst in function.block(block).instructions() {
-            let (Some(interval), Some(result)) =
-                (_computed(unit, inst, &scoped, facts), function.instruction(inst).result)
-            else {
+            let computed = if function.instruction(inst).opcode == Opcode::Phi {
+                joined(unit, inst, at, &shape, &known, facts)?
+            } else {
+                _computed(unit, inst, &scoped, facts)
+            };
+            let (Some(interval), Some(result)) = (computed, function.instruction(inst).result) else {
                 continue;
             };
             let interval = match scoped.get(&result) {
@@ -1225,6 +1228,62 @@ pub fn edges_solved(
         known.insert(at, below);
     }
     Ok(EdgeStates { order, own, below: known, made })
+}
+
+/// What a join's phi holds: the hull of each incoming value as it is at the end
+/// of its predecessor, narrowed by the edge it comes along (GCC's
+/// `range_of_phi`, `gimple-range-fold.cc`, which takes each argument's range on
+/// its edge). A header's phi is the box search's (its back edge is not found
+/// yet), and an edge no execution takes brings nothing. `known` holds the state
+/// below each block found so far.
+fn joined(
+    unit: &Unit,
+    inst: InstId,
+    at: i64,
+    shape: &cfg::Shape,
+    known: &BTreeMap<i64, Scope>,
+    facts: &IndexMap<ValueId, Known>,
+) -> Result<Option<Interval>, String> {
+    let function = unit.function;
+    let op = function.instruction(inst);
+    let Some(width) = op.result.and_then(|result| unit.int_bits(Operand::Value(result))) else { return Ok(None) };
+    if shape.loops.iter().any(|one| one.header == at) {
+        return Ok(None);
+    }
+    let entry = function.entry().map(cfg::id);
+    let mut hull: Option<Interval> = None;
+    for pair in op.operands.chunks(2) {
+        let &[value, Operand::Block(from)] = pair else { return Ok(None) };
+        let pred = cfg::id(from);
+        if entry != Some(pred) && shape.dominance.immediate(pred).is_none() {
+            continue;
+        }
+        let Some(state) = known.get(&pred) else { return Ok(None) };
+        // A constant is the same on every edge: what the edge says of the
+        // values is no news of it.
+        if unit.int_constant(value).is_some() {
+            let Some(found) = _operand(unit, value, &Intervals::default(), facts).filter(|found| found.width == width)
+            else {
+                return Ok(None);
+            };
+            hull = Some(match hull {
+                None => found,
+                Some(held) => Interval { low: held.low.min(found.low), high: held.high.max(found.high), width },
+            });
+            continue;
+        }
+        let Some(delta) = edge_delta_of(unit, from, cfg::block(at), state, Some(facts))? else { continue };
+        let Some(found) =
+            _operand(unit, value, &Over { delta, base: state }, facts).filter(|found| found.width == width)
+        else {
+            return Ok(None);
+        };
+        hull = Some(match hull {
+            None => found,
+            Some(held) => Interval { low: held.low.min(found.low), high: held.high.max(found.high), width },
+        });
+    }
+    Ok(hull)
 }
 
 /// Whether `parent`'s terminator names `block` more than once: a conditional
