@@ -1177,3 +1177,18 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
 def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow
+
+
+def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_traceback(tmp_path, monkeypatch, capsys):
+    """#1832 (tools only: the plan has no build) on a fresh target dir died in snapshot_binaries with FileNotFoundError on target/release."""
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "fresh"))
+    monkeypatch.delenv("LLRM_BIN", raising=False)
+    plan = gate.Plan("fast", "tools only", ["pytest-quick", "docs"], None, [], ["tools/gate/train.py"])
+    code, failed = gate.execute(plan)
+    out = capsys.readouterr().out
+    assert code == 2 and failed == ["build"] and "does not exist and this plan builds nothing" in out and "pytest-quick" in out, out
+    # a plan whose steps read the tree only needs no binaries
+    monkeypatch.setattr(gate, "commands", lambda *a, **k: {"docs": "true"})
+    monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
+    code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
+    assert code == 0
