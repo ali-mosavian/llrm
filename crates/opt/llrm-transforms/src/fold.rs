@@ -123,6 +123,10 @@ use crate::lcssa::{arms, from_arms, operations};
 pub struct Fold;
 
 impl FunctionPass for Fold {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "fold"
     }
