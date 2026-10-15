@@ -486,3 +486,29 @@ def test_the_cases_regression_as_measured_fails_the_gate_at_the_size_the_gate_us
     assert measure.step_rises(base, now, measure.tolerances())[1], "x3.9 at 2N went unseen"
     axis = measure.axis_rises({"cases O1": [100, 200, 400]}, {"cases O1": [100, 400, 1600]}, measure.tolerances())
     assert axis[1], "its axis (the whole compile's second difference) fails as well"
+
+
+def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
+    """#1755s
+
+
+def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
+    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled."""
+    import threading
+
+    monkeypatch.setattr(measure, "CACHE", tmp_path)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with measure.locked("b"):
+            held.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    held.wait(5)
+    threading.Timer(0.6, release.set).start()
+    with measure.locked("b", every=0.2):
+        pass
+    thread.join()
+    assert capsys.readouterr().out.count("measure: waiting") >= 2

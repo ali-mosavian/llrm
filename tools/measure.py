@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -225,11 +226,21 @@ def built(sha: str) -> Path:
 
 
 @contextlib.contextmanager
-def locked(name: str):
-    """An exclusive lock named `name` between sessions (and threads: each opens the file itself)."""
+def locked(name: str, every: float = 60.0):
+    """An exclusive lock named `name` between sessions (and threads: each opens the file itself). A wait says so every `every` seconds:
+    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build."""
     CACHE.mkdir(parents=True, exist_ok=True)
     with open(CACHE / f"{name}.lock", "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        began = last = time.monotonic()
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() - last >= every:
+                    last = time.monotonic()
+                    print(f"measure: waiting {last - began:.0f}s for the lock {name[:24]} (another session holds it)", flush=True)
+                time.sleep(min(0.5, every / 4))
         yield
 
 
