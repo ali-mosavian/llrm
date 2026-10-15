@@ -1,12 +1,5 @@
-reason = "hoist prices a float load its reader folds as the reader's own memory form (and holds floats to the x87 stack's depth): a loop that read 16 hoisted-and-spilled matrix values now reads them as memory operands, as gcc does (d_faces, -O2 clocks vs gcc 1.17 -> 1.12). Here: nbody -Os instructions -6.5%, clocks -2.8%; nbody -O1/-O2 (QB) instructions +2.1% and memory operands +6.9% with clocks -1.4% and 20 B less code; fpbench/nbody_single -Os memory operands +32% (the folded loads), instructions -2.4%, clocks -1.6%, 8 B less code."
-blessed = "2026-10-16"
-
-[bas.O1]
-instructions = 1037180
-memory_operands = 144105
-code_bytes = 388
-data_bytes = 145
-bss_bytes = 0
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 1037180
@@ -17,18 +10,12 @@ bss_bytes = 0
 kernel_ms = 13.8467
 
 [bas.Os]
-instructions = 1013186
-memory_operands = 192105
-code_bytes = 375
-data_bytes = 145
-bss_bytes = 0
-
-[bq16.O1]
-instructions = 1037180
+instructions = 1037186
 memory_operands = 144105
-code_bytes = 393
+code_bytes = 383
 data_bytes = 145
 bss_bytes = 0
+kernel_ms = 13.8467
 
 [bq16.O2]
 instructions = 1037180
@@ -39,36 +26,24 @@ bss_bytes = 0
 kernel_ms = 13.8412
 
 [bq16.Os]
-instructions = 1013186
-memory_operands = 192105
-code_bytes = 380
+instructions = 1037186
+memory_operands = 144105
+code_bytes = 388
 data_bytes = 145
 bss_bytes = 0
-
-[bq32.O1]
-instructions = 1013183
-code_bytes = 466
-data_bytes = 151
-bss_bytes = 0
+kernel_ms = 13.8413
 
 [bq32.O2]
-instructions = 1013183
-code_bytes = 466
+instructions = 1037183
+code_bytes = 472
 data_bytes = 151
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 1013191
-code_bytes = 453
+instructions = 1037191
+code_bytes = 459
 data_bytes = 151
 bss_bytes = 0
-
-[c.O1]
-instructions = 1037186
-memory_operands = 144111
-code_bytes = 335
-data_bytes = 24
-bss_bytes = 96
 
 [c.O2]
 instructions = 1037186
@@ -79,18 +54,12 @@ bss_bytes = 96
 kernel_ms = 13.8369
 
 [c.Os]
-instructions = 1013186
-memory_operands = 192111
-code_bytes = 327
+instructions = 1037186
+memory_operands = 144111
+code_bytes = 335
 data_bytes = 24
 bss_bytes = 96
-
-[nib.O1]
-instructions = 1401428
-memory_operands = 229174
-code_bytes = 609
-data_bytes = 32
-bss_bytes = 0
+kernel_ms = 13.8369
 
 [nib.O2]
 instructions = 1276428

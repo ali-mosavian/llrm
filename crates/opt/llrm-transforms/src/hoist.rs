@@ -566,7 +566,7 @@ fn _slots_remain(unit: &passes::Unit) -> bool {
 
 /// Each block's executions per entry: as `_frequencies` finds them from the
 /// loops' proven trips, or once for all where `size` counts bytes.
-fn _frequency(
+pub(crate) fn _frequency(
     unit: &passes::Unit,
     analyses: &mut Analyses,
     outer: &Outer,
