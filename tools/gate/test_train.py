@@ -6,7 +6,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import pytest
 import train  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _own_logs(tmp_path, monkeypatch):
+    """A test that gates writes its logs under its own directory, not the real ~/scratch/train-logs."""
+    monkeypatch.setattr(train, "LOGS", tmp_path / "train-logs")
 
 NAME = "Clau" + "de"  # spelt in halves: the smoke tier refuses a diff that carries the word
 
@@ -156,3 +163,8 @@ def test_the_tip_and_main_are_gated_in_targets_and_logs_of_their_own(monkeypatch
     train.full_gate("b" * 40, main, ["pytest"])
     assert targets == ["/t/target-train-tree", "/t/target-train-main"]
     assert sorted(p.name for p in (tmp_path / "logs").iterdir()) == [f"{'a' * 12}-train-tree-full.log", f"{'b' * 12}-train-main-pytest.log"]
+
+
+def test_a_gating_test_writes_its_logs_under_its_own_directory(tmp_path):
+    """#1784's tests wrote tip-test_*.log into ~/scratch/train-logs, where the real train keeps its evidence."""
+    assert train.LOGS.is_relative_to(tmp_path), train.LOGS
