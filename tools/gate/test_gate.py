@@ -1082,3 +1082,23 @@ def test_smoke_fails_a_pr_that_tracks_build_products_and_does_not_build_for_it(t
     git("add", "d1.o")
     assert gate.products_main(tmp_path) == 1
     assert gate.commands(gate.plan(["docs/x.md"], "smoke"), gate.load(), gate.packages())["products"].startswith("python3 -c")
+
+
+def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_not_run_pytest_programs_files_twice():
+    """#1765 and #1766 were smoke-green and failed tools/test_identical.py (1.7 s) and tests/test_readme.py (0.3 s) in the train. And the
+    pytest step passed `tests/*.py` as explicit files, which run though `--ignore` names them: test_loops.py and test_programs_compile.py
+    (pytest-programs' own) ran twice."""
+    cfg, pkgs = gate.load(), gate.packages()
+    smoke = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke")
+    assert "pytest-quick" in smoke.steps and "pytest-quick" not in gate.plan(["docs/x.md"], "smoke").steps
+    quick = gate.commands(smoke, cfg, pkgs)["pytest-quick"]
+    for slow in cfg["smoke"]["slow_pytest"]:
+        assert (gate.ROOT / slow).exists(), slow
+        assert f"--ignore={slow}" in quick or slow in ("tests/test_loops.py",), slow
+    assert "tests/test_readme.py" in quick.split() and "--ignore=tools/test_identical.py" not in quick and " tools " in quick
+    assert "pytest-quick-durations.json" in quick and "pytest-durations.json" not in quick, "its own durations file, not the full step's"
+    full = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full"), cfg, pkgs)
+    for step in ("pytest", "pytest-quick"):
+        named = (full if step == "pytest" else {step: quick})[step].split()
+        assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
+    assert "tests/test_loops.py" in full["pytest-programs"] and "tests/test_programs_compile.py" in full["pytest-programs"]
