@@ -562,6 +562,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     out = {
         **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
+        "facts": (1, False),  # one binary that must report: a log with none (a build that ran no test) is incomplete, not a pass
         "run": (1, True),
         "scans": (None, True),
         "rfmt-post": (None, False),

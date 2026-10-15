@@ -31,7 +31,7 @@ COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_
 def method(root: Path = ROOT) -> str:
     """What the counts are made of besides the compiler: the harness, the programs and their settings. A stored base of another method is
     measured again (the base's compiler, this tree's harness and programs, as measure.py does)."""
-    files = sorted((root / "tools/bench").glob("*.py")) + sorted((root / "tools/dosbatch").glob("*.py")) + sorted((root / "crates/target/llrm-x86-m16/bench").glob("*.py"))
+    files = sorted((root / "tools/bench").glob("*.py")) + sorted((root / "tools/dosbatch").glob("*.py")) + sorted((root / "crates/target").glob("*/bench/*.py"))  # the targets' emulators
     files += sorted(path for pattern in ("*/*.c", "*/*.bas", "*/*.nib", "*/bench.toml", "*/*/*.bas", "*/*/bench.toml") for path in (root / "bench").glob(pattern))
     digest = hashlib.sha256()
     for one in files:
@@ -80,6 +80,18 @@ def waivers(root: Path = ROOT) -> list[dict]:
         for row in data.get("row", []):
             out.append({**row, "reason": data.get("reason", ""), "file": path.name})
     return out
+
+
+def consume_waivers(root: Path, measured: dict) -> list[str]:
+    """Delete the waiver files whose every row the blessed counts now are: the baseline carries them, so the waiver is spent."""
+    spent = []
+    for path in sorted((root / "bench/waivers").glob("*.toml")):
+        rows = tomllib.loads(path.read_text()).get("row", [])
+        parts = [row["label"].split(" ") for row in rows]
+        if rows and all(measured.get((p[0], p[1], p[2].lstrip("-")), {}).get(row["counter"]) == row["to"] for p, row in zip(parts, rows)):
+            path.unlink()
+            spent.append(path.name)
+    return spent
 
 
 def judge(measured: dict, base: dict, waived: list[dict]) -> tuple[list[tuple], list[tuple], list[str]]:
