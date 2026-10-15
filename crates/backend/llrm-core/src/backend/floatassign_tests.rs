@@ -115,6 +115,21 @@ fn test_a_round_writes_only_the_blocks_a_new_spill_reaches() {
     );
 }
 
+/// `assigned` solved the body's liveness five times (d_faces -O2: 43 of the
+/// pass's 128 M instructions): before and after aliasing, then again in
+/// `_aliased`, `_homes` and `_allocnos`. The body is solved twice at most, once
+/// before and once after aliasing, each a pair of block sets.
+#[test]
+fn test_the_body_liveness_is_solved_at_most_twice() {
+    use crate::backend::allocate::SETS_BUILT;
+    let (body, mut frame) = before_float_assign();
+    let cpu = crate::backend::cpu::profile("486").unwrap();
+    SETS_BUILT.with(|one| one.set(0));
+    assigned(&body, Some(&mut frame), None, false, cpu).unwrap();
+    let built = SETS_BUILT.with(|one| one.get());
+    assert!(built <= 4, "{built} block sets built: more than two solutions");
+}
+
 /// Nine floats copy at once into a loop's phis (fpbench, #358). Each spilled
 /// copy was stored after all nine were made, nine registers wide, and
 /// FloatAlloc refused the body with "floating instruction requires too many

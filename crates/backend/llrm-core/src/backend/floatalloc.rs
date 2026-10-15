@@ -130,7 +130,7 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::loops;
-use crate::backend::allocate::live;
+use crate::backend::allocate::{Live, live};
 use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
 use crate::backend::constpool::Pool;
@@ -1000,12 +1000,23 @@ fn _converted(
     if floating.is_empty() {
         return Ok(body.clone());
     }
-    let body = &_split_for_the_stack(body, &floating);
+    // The split's own liveness and bundles are the body's where it adds no
+    // block.
     let (live_in, live_out) = live(body);
+    let bundles = spillplacement::bundles(body);
+    let split = _split_for_the_stack(body, &floating, (&live_in, &live_out), &bundles);
+    let (body, live_in, live_out, bundles) = match split {
+        Some(body) => {
+            let (live_in, live_out) = live(&body);
+            let bundles = spillplacement::bundles(&body);
+            (std::borrow::Cow::Owned(body), live_in, live_out, bundles)
+        }
+        None => (std::borrow::Cow::Borrowed(body), live_in, live_out, bundles),
+    };
+    let body = &*body;
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
     };
-    let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
@@ -1106,12 +1117,12 @@ fn _converted(
 fn _split_for_the_stack(
     body: &LirBody,
     floating: &HashSet<u32>,
-) -> LirBody {
-    let (live_in, live_out) = live(body);
+    (live_in, live_out): (&Live, &Live),
+    bundles: &spillplacement::Bundles,
+) -> Option<LirBody> {
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
     };
-    let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     let mut entries: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -1134,7 +1145,7 @@ fn _split_for_the_stack(
             }
         }
     }
-    if edges.is_empty() { body.clone() } else { crate::backend::phielim::placed_on_edges(body, &edges) }
+    (!edges.is_empty()).then(|| crate::backend::phielim::placed_on_edges(body, &edges))
 }
 
 /// Where the instructions leaving the block begin; the stack shuffles there.
