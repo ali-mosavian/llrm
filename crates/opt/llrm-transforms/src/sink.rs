@@ -78,10 +78,9 @@
 //! # Keeps
 //! Dominators and loops: no block or edge changes.
 
-use std::collections::{BTreeMap, BTreeSet};
-
 use llrm_analysis::cfg;
 use llrm_analysis::memoryssa::{Accesses, Writers};
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -115,20 +114,20 @@ impl FunctionPass for Sink {
 
 /// Edges of the function by block.
 struct Edges {
-    succ: BTreeMap<BlockId, Vec<BlockId>>,
-    pred: BTreeMap<BlockId, Vec<BlockId>>,
+    succ: IdMap<BlockId, Vec<BlockId>>,
+    pred: IdMap<BlockId, Vec<BlockId>>,
 }
 
 impl Edges {
     fn of(function: &Function) -> Self {
-        let mut succ: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
-        let mut pred: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
+        let mut succ: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
+        let mut pred: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
         for block in cfg::graph(function) {
             let from = cfg::block(block.at);
             for to in block.succ {
                 let to = cfg::block(to);
-                succ.entry(from).or_default().push(to);
-                pred.entry(to).or_default().push(from);
+                succ.get_or_insert_with(from, Vec::new).push(to);
+                pred.get_or_insert_with(to, Vec::new).push(from);
             }
         }
         Self { succ, pred }
@@ -136,11 +135,11 @@ impl Edges {
 
     /// What `from` reaches along `edges`, never entering `blocked`.
     fn reach(
-        edges: &BTreeMap<BlockId, Vec<BlockId>>,
+        edges: &IdMap<BlockId, Vec<BlockId>>,
         from: impl IntoIterator<Item = BlockId>,
         blocked: &[BlockId],
-    ) -> BTreeSet<BlockId> {
-        let mut seen = BTreeSet::new();
+    ) -> IdSet<BlockId> {
+        let mut seen = IdSet::new();
         let mut work: Vec<BlockId> = from.into_iter().filter(|block| !blocked.contains(block)).collect();
         while let Some(block) = work.pop() {
             if !seen.insert(block) {
@@ -157,7 +156,7 @@ impl Edges {
         from: BlockId,
         through: BlockId,
     ) -> bool {
-        Self::reach(&self.succ, [from], &[through]).iter().any(|block| self.succ.get(block).is_none_or(Vec::is_empty))
+        Self::reach(&self.succ, [from], &[through]).iter().any(|block| self.succ.get(&block).is_none_or(Vec::is_empty))
     }
 
     /// The blocks on a path from `from` to `to` that enters neither again.
@@ -165,10 +164,10 @@ impl Edges {
         &self,
         from: BlockId,
         to: BlockId,
-    ) -> BTreeSet<BlockId> {
+    ) -> Vec<BlockId> {
         let forward = Self::reach(&self.succ, self.succ.get(&from).cloned().unwrap_or_default(), &[from, to]);
         let backward = Self::reach(&self.pred, self.pred.get(&to).cloned().unwrap_or_default(), &[from, to]);
-        forward.intersection(&backward).copied().collect()
+        forward.iter().filter(|block| backward.contains(block)).collect()
     }
 }
 
@@ -215,7 +214,7 @@ fn _readers(
 fn _feeds_moved(
     function: &Function,
     inst: InstId,
-    moved: &BTreeSet<InstId>,
+    moved: &IdSet<InstId>,
 ) -> bool {
     function
         .instruction(inst)
@@ -243,7 +242,7 @@ pub fn sunk(
     let mut plan: Vec<(InstId, InstId)> = Vec::new();
     let weight = |block: BlockId| frequency.as_ref().and_then(|map| map.get(&cfg::id(block)).copied());
     let blocks: Vec<BlockId> = unit.function.layout().to_vec();
-    let mut sunk_set: BTreeSet<InstId> = BTreeSet::new();
+    let mut sunk_set: IdSet<InstId> = IdSet::new();
     for &home in blocks.iter().rev() {
         let insts: Vec<InstId> = trial.block(home).instructions().to_vec();
         for (at, &inst) in insts.iter().enumerate().rev() {
