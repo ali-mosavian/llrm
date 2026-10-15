@@ -193,3 +193,39 @@ fn unlike_accesses_of_one_body_meet_both_ways_and_two_objects_none() {
     let other = Access { object: 1, ..walker(0, 4, 4, false) };
     assert_eq!(meetings(&walker(0, 4, 4, true), &other, None), Meetings { forward: false, backward: false });
 }
+
+/// `a[j][i] = ..` over a 64 by 64 table of dwords, `i` the outer loop: the
+/// swap makes the inner walk four bytes, not 256 (a 16 byte line), and no cell
+/// is written twice, so it is legal.
+#[test]
+fn a_column_walk_of_a_table_is_swapped_when_each_cell_is_written_once() {
+    let write = [access(&[sub(0, 4, 256)], true)];
+    assert!(interchangeable(&write, 64, None));
+    assert_eq!(walk_cost(&write, 16, Innermost::Inner), 16);
+    assert_eq!(walk_cost(&write, 16, Innermost::Outer), 4);
+}
+
+/// The same table walked 128 columns of 64: column 64 of row 0 is column 0 of
+/// row 1, a cell written at `(64, -1)` and `(0, 0)`, which the swap reverses.
+#[test]
+fn rows_that_run_into_the_next_are_not_swapped() {
+    let write = [access(&[sub(0, 4, 256)], true)];
+    assert!(!interchangeable(&write, 128, Some(64)));
+}
+
+/// gcc's `x[j-1] = x[j]` has the vector `(1, -1)`: the swap reads a cell before
+/// its write.
+#[test]
+fn a_shift_that_a_later_pass_reads_back_is_not_swapped() {
+    let nest = [access(&[sub(0, 0, 1)], false), access(&[sub(-1, 0, 1)], true)];
+    assert!(!interchangeable(&nest, 8, None));
+}
+
+/// Two reads never order anything, and an address no loop moves costs none.
+#[test]
+fn reads_may_swap_and_an_unmoved_address_is_free() {
+    let reads = [access(&[sub(0, 4, 256)], false), access(&[sub(8, 0, 0)], false)];
+    assert!(interchangeable(&reads, 64, None));
+    assert_eq!(walk_cost(&reads, 16, Innermost::Inner), 16);
+    assert_eq!(walk_cost(&reads, 16, Innermost::Outer), 4);
+}

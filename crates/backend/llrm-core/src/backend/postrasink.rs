@@ -522,7 +522,7 @@ mod tests {
 
     use super::sunk;
     use crate::model::ir::{Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn r(register: RegId) -> Loc {

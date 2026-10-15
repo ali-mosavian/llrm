@@ -1071,6 +1071,26 @@ fn _pays(
     _cheaper_by(each, known, most, costs, size, moved, fills, stored)
 }
 
+/// What a copy of `length` bytes costs: the loads and stores isel expands it to
+/// (`MEMCPY_MOVES` of them, a dword each, the odd bytes by their set bits),
+/// else the string instruction.
+pub(crate) fn copy_price(
+    costs: &OperationCosts,
+    length: i64,
+    backward: bool,
+) -> i64 {
+    let pairs = length / 4 + i64::from((length % 4).count_ones());
+    if pairs <= 8 { pairs * (costs.load + costs.store) } else { string_copy(costs, length, backward) }
+}
+
+fn string_copy(
+    costs: &OperationCosts,
+    length: i64,
+    backward: bool,
+) -> i64 {
+    costs.copy + (length + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 }
+}
+
 /// Whether a fill beats a loop of `each` per trip, over `known` trips or, where
 /// there are none, up to `most` of them. A copy of `moved` bytes a trip, `rep
 /// movs` in dwords, `.1` where it runs down, beats one a few loads and stores.
@@ -1118,11 +1138,9 @@ fn _cheaper_by(
         };
         return trips * each > fills * fill;
     };
-    let string = costs.copy + (trips * bytes + 3) / 4 * costs.copy_cell + if backward { costs.direction } else { 0 };
-    let pairs = known.map(|count| count * bytes).map(|length| length / 4 + i64::from((length % 4).count_ones()));
-    let copy = match pairs {
-        Some(pairs) if pairs <= 8 => pairs * (costs.load + costs.store),
-        _ => string,
+    let copy = match known {
+        Some(count) => copy_price(costs, count * bytes, backward),
+        None => string_copy(costs, trips * bytes, backward),
     };
     trips * each > copy
 }

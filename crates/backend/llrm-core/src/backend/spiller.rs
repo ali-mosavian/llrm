@@ -6746,7 +6746,7 @@ mod tests {
     #[test]
     fn test_the_postings_of_a_long_edited_block_are_those_of_working_them_out() {
         use crate::model::ir::Semantics;
-        use crate::model::lir::{Block, Insn, LirBlock};
+        use crate::model::lir::{Insn, LirBlock};
         let make = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
             Arc::new(Insn::new(
                 at,

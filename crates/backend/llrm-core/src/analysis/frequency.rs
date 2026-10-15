@@ -387,7 +387,7 @@ mod tests {
 
     use super::Frequency;
     use crate::model::ir::{Operation, Semantics};
-    use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
+    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn insn(

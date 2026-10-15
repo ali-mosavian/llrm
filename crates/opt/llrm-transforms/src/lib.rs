@@ -128,12 +128,15 @@ pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopinterchange;
 pub mod loopmotion;
+pub mod loopnest;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
 pub mod loopversion;
 pub mod lsr;
+pub mod memcpyopt;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]

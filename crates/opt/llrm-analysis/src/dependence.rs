@@ -82,11 +82,18 @@
 //! `an_array_walked_again_by_each_outer_pass_allows_a_jam_by_two` in
 //! `dependence_tests.rs`.
 //!
+//! `interchangeable(accesses, outer_trips, inner_trips)` asks whether the loops
+//! may swap: a vector `(x, y)` with `x > 0` and `y < 0` becomes `(y, x)`, the
+//! later access first, so none may exist for a pair with a write. `walk_cost`
+//! prices a walk by the bytes an access steps in the loop that runs innermost,
+//! at most a cache line, none where it does not move.
+//!
 //! # Provides
-//! `distances`, `factor`, `fusable`, `meetings`. Consumers: `unroll_jam`
-//! (`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
-//! (`crates/opt/llrm-transforms/src/loopfuse.rs`) and `loopdistribute`
-//! (`crates/opt/llrm-transforms/src/loopdistribute.rs`).
+//! `distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
+//! `walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
+//! unroll_jam.rs`) and `loopfuse` (`crates/opt/llrm-transforms/src/loopfuse.
+//! rs`) and `loopdistribute` (`crates/opt/llrm-transforms/src/loopdistribute.
+//! rs`) and `loopinterchange`.
 //!
 //! # See also
 //! gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`
@@ -195,6 +202,70 @@ pub fn distances(
     found.sort();
     found.dedup();
     if found.is_empty() { Distances::Independent } else { Distances::Vectors(found) }
+}
+
+/// Whether the loops of a nest may swap places: no pair of accesses with a
+/// write (a write with itself too) has a dependence vector `(x, y)` with `x >
+/// 0` and `y < 0`, which the swap turns into `(y, x)`, the later access first.
+/// A pair of unknown distance with a write does not. `outer_trips` bounds the
+/// outer distances; `inner_trips` the inner ones where known (gcc's
+/// `valid_data_dependences`, LLVM's `LoopInterchangeLegality`'s direction
+/// vectors).
+pub fn interchangeable(
+    accesses: &[Access],
+    outer_trips: i64,
+    inner_trips: Option<i64>,
+) -> bool {
+    accesses
+        .iter()
+        .enumerate()
+        .all(
+            |(at, one)| accesses[at..]
+                .iter()
+                .filter(|other| one.write || other.write)
+                .all(
+                    |other| match distances(one, other, outer_trips - 1, inner_trips) {
+                        Distances::Independent => true,
+                        Distances::Unknown => false,
+                        Distances::Vectors(vectors) => vectors.iter().all(|&(x, y)| !(x > 0 && y < 0)),
+                    },
+                ),
+        )
+}
+
+/// Which loop of a nest runs innermost.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Innermost {
+    Outer,
+    Inner,
+}
+
+/// What one trip of the loop that runs `innermost` costs the data cache, over
+/// all `accesses` (each a flattened byte address, `subscripts[0]`): the bytes
+/// it steps, at most a cache `line`; an address the loop does not move is
+/// kept in a register and costs none (gcc's `compute_access_stride`, LLVM's
+/// `CacheCost`).
+pub fn walk_cost(
+    accesses: &[Access],
+    line: i64,
+    innermost: Innermost,
+) -> i64 {
+    accesses
+        .iter()
+        .map(|one| {
+            let step = one
+                .subscripts
+                .first()
+                .map_or(
+                    0,
+                    |sub| match innermost {
+                        Innermost::Outer => sub.outer,
+                        Innermost::Inner => sub.inner,
+                    },
+                );
+            step.abs().min(line)
+        })
+        .sum()
 }
 
 /// What a nest allows of an outer unroll that fuses the inner copies.

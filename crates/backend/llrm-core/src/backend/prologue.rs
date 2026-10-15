@@ -361,7 +361,7 @@ mod tests {
     use super::reserved;
     use crate::backend::frame::{self, Frame};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
-    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn instruction(

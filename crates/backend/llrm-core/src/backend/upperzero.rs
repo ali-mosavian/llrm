@@ -410,7 +410,7 @@ mod tests {
 
     use super::{before, bit};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn one(

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:a5df1fd79fd95f784ffb3df57afbc110ec69564b0d0d68fb710cfd1f15e00217 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:249accb9ef2df90b2ed24b2e7884635ea3fd73ec5d0d865d9f9449ae0394c881 -->
 
 # allocate
 
@@ -123,6 +123,11 @@ refreshed, any placed value that now overlaps another or has a clobber in
 its range is unplaced, and every new, moved or unplaced value re-enters
 the queue. The loop stops when the queue is empty (`BUDGET` visits at
 most, 200000).
+
+The last chance before a value is spilled is recoloring (`Coloring`,
+LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
+It is not tried where more values are live at one point of the value than
+there are registers for them (`crowded`): no moving about places it.
 
 Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than

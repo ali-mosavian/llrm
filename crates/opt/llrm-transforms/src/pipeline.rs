@@ -26,6 +26,7 @@
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+//!     swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
 //!     mrg["<b>merge (once)</b>"]:::mid
 //!   end
@@ -40,7 +41,8 @@
 //!   unsw --> fuse
 //!   fuse --> dist
 //!   dist --> ver
-//!   ver --> jam
+//!   ver --> swap
+//!   swap --> jam
 //!   jam --> mrg
 //!   mrg --> c
 //!   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -104,10 +106,10 @@
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 //! | `unroll`, `peel` | the pass of that name |
-//! | `fill` | `fill`, `merge` |
+//! | `fill` | `fill`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
-//! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+//! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 //! | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 //! | `version` | `version` (off by default; on at -O3 and -Omax) |
 //! | `fuse` | `fuse` (off by default; on at -Omax) |
@@ -146,8 +148,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopmotion, loopsimplify, loopsplit, loopversion, lsr, peel, phiopt, ports, promote, rotate, switchlower,
-    tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel, phiopt, ports,
+    promote, rotate, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -208,6 +210,9 @@ pub struct Options {
     /// A nest's outer loop unrolled and its inner copies fused (gcc's
     /// `-floop-unroll-and-jam`, -O3; -Omax too).
     pub unroll_jam: bool,
+    /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
+    /// too. LLVM's `LoopInterchange` is off in its pipelines.
+    pub interchange: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -258,6 +263,7 @@ impl Default for Options {
             distribute: false,
             version: false,
             unroll_jam: false,
+            interchange: false,
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -334,6 +340,7 @@ impl Options {
             distribute: true,
             version: true,
             unroll_jam: true,
+            interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
         }
@@ -351,6 +358,7 @@ impl Options {
             distribute: true,
             version: true,
             unroll_jam: true,
+            interchange: true,
             exhaustive: true,
             ..Self::default()
         }
@@ -415,7 +423,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" | "merge" => self.fill,
+            "fill" | "merge" | "memcpyopt" => self.fill,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -481,6 +489,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
         Box::new(fill::Merge { size: applied.options.prefers_size() }),
+        Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -757,6 +766,7 @@ pub struct Fixed {
     distribute: Option<loopdistribute::Distribute>,
     version: Option<loopversion::Version>,
     fuse: Option<loopfuse::Fuse>,
+    interchange: Option<loopinterchange::Interchange>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
     dump: Option<PathBuf>,
@@ -774,6 +784,7 @@ fn without_candidates(options: &Options) -> Options {
         distribute: false,
         version: false,
         unroll_jam: false,
+        interchange: false,
         ..options.clone()
     }
 }
@@ -792,7 +803,8 @@ impl Fixed {
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
-        let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
+        let (last, passes): (Vec<_>, Vec<_>) =
+            passes.into_iter().partition(|one| matches!(one.name(), "merge" | "memcpyopt"));
         // A candidate is judged after the whole pipeline, with the passes that
         // make candidates off.
         let judged = || {
@@ -827,6 +839,7 @@ impl Fixed {
             distribute: distribute.filter(|_| only.is_none()),
             version: version.filter(|_| only.is_none()),
             fuse: fuse.filter(|_| only.is_none()),
+            interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
             dump: applied.dump.clone(),
@@ -894,6 +907,14 @@ impl Fixed {
         // before has parted and joined what it will.
         if let Some(version) = &mut self.version {
             run.step(version, "version", unit, analyses);
+        }
+        // Before jamming: the swapped nest is the one that is jammed. Cleaned
+        // as a peeled loop is.
+        if let Some(interchange) = &mut self.interchange {
+            if run.step(interchange, "interchange", unit, analyses) {
+                self.scalarized(unit, analyses, run, "interchanged");
+                self.fixed(unit, analyses, run, "interchanged-")?;
+            }
         }
         // After unswitching, as gcc's pass order has it: an invariant guard is
         // out of the nest by then. The fused copies are cleaned as a peeled

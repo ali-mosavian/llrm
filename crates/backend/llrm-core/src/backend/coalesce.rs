@@ -1275,7 +1275,7 @@ mod tests {
     use crate::analysis::intervals;
     use crate::backend::{allocate, cpu::ProfileOrName, select, target};
     use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn semantics(

@@ -49,8 +49,10 @@
 //!
 //! Below -Omax `directed` runs the allocator alone first and runs the spiller
 //! route only if at least 0.5% of the weighted instructions are spill or
-//! frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route.
-//! With `-fallocation-routes` off the allocator runs alone.
+//! frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route,
+//! `measure` runs both whatever the traffic and `LLRM_DEBUG=routes` says what
+//! the allocator alone left. With `-fallocation-routes` off the allocator runs
+//! alone.
 //!
 //! When all functions are done the module's constants are added to the data,
 //! stack checks the program proves unneeded are elided, undefined names
@@ -612,6 +614,7 @@ fn directed(
     let (alone, _) = timed("candidate allocator alone", || phased(staged, name, pool, target, false, true))?;
     let busy = crate::analysis::frequency::Frequency::of(&alone.0.body);
     let (mut traffic, mut all) = (0.0, 0.0);
+    let (mut spill_only, mut loop_spill, mut frame_cells, mut spill_insns) = (0.0, 0.0, 0.0, 0usize);
     for block in &alone.0.body.blocks {
         // Where bytes are the measure every instruction counts once, as `cost`
         // does.
@@ -622,9 +625,25 @@ fn directed(
             if one.spill_reload || one.spill_store || frame {
                 traffic += weight;
             }
+            if one.spill_reload || one.spill_store {
+                spill_only += weight;
+                spill_insns += 1;
+                if busy.block(block.at) > 1.0 {
+                    loop_spill += weight;
+                }
+            } else if frame {
+                frame_cells += weight;
+            }
         }
     }
-    if traffic < SPILLER_TRAFFIC * all {
+    llrm_support::debug!(
+        "routes",
+        "{name}: all {all:.1} traffic {traffic:.4} spill {spill_only:.4} loop-spill {loop_spill:.4} frame-cells {frame_cells:.4} spill-insns {spill_insns} insns {}",
+        alone.0.body.insns().len()
+    );
+    // `LLRM_CANDIDATES=measure` runs the spiller's route whatever the traffic,
+    // for `tools/routetable.py`.
+    if traffic < SPILLER_TRAFFIC * all && std::env::var("LLRM_CANDIDATES").as_deref() != Ok("measure") {
         return Ok(alone);
     }
     let Some((spilled, ran)) = timed("candidate spiller", || phased_to(staged, name, pool, target, true, true, true))?
