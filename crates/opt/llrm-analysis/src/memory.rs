@@ -1655,6 +1655,21 @@ pub fn indexed(
     found
 }
 
+/// The pointer `pointer` is an offset or a respelling of, found without the
+/// rest of what `MemRef::at` works out.
+pub(crate) fn root_of(
+    unit: &Unit,
+    pointer: Operand,
+) -> Operand {
+    let mut root = pointer;
+    while let Some(step) = step(unit, root) {
+        match step {
+            Step::Through(inner) | Step::Offset { pointer: inner, .. } => root = inner,
+        }
+    }
+    root
+}
+
 enum Step {
     /// The same address, spelled otherwise.
     Through(Operand),
