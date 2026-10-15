@@ -1,39 +1,39 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5531
+code_bytes = 5527
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.2466
 
 [bas.Os]
-code_bytes = 5182
+code_bytes = 5178
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.065
 
 [bq16.O2]
-code_bytes = 5567
+code_bytes = 5563
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1078.9088
 
 [bq16.Os]
-code_bytes = 5217
+code_bytes = 5213
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84337547
-code_bytes = 6496
+instructions = 84337515
+code_bytes = 6490
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431943
-code_bytes = 6039
+instructions = 89431912
+code_bytes = 6033
 data_bytes = 29209
 bss_bytes = 0
 

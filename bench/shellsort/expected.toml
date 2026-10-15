@@ -1,10 +1,10 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
+blessed = "2026-10-15"
 
 [bas.O2]
-instructions = 10790
+instructions = 10772
 memory_operands = 2001
-code_bytes = 339
+code_bytes = 335
 data_bytes = 17
 bss_bytes = 0
 
@@ -17,9 +17,9 @@ bss_bytes = 0
 kernel_ms = 0.1604
 
 [bq16.O2]
-instructions = 11549
+instructions = 11531
 memory_operands = 1903
-code_bytes = 353
+code_bytes = 347
 data_bytes = 17
 bss_bytes = 0
 
@@ -32,7 +32,7 @@ bss_bytes = 0
 
 [bq32.O2]
 instructions = 10356
-code_bytes = 345
+code_bytes = 342
 data_bytes = 23
 bss_bytes = 0
 
@@ -43,9 +43,9 @@ data_bytes = 23
 bss_bytes = 0
 
 [c.O2]
-instructions = 9658
+instructions = 9355
 memory_operands = 1629
-code_bytes = 165
+code_bytes = 161
 data_bytes = 0
 bss_bytes = 0
 
@@ -58,9 +58,9 @@ bss_bytes = 0
 kernel_ms = 0.1262
 
 [nib.O2]
-instructions = 10508
+instructions = 10490
 memory_operands = 1661
-code_bytes = 196
+code_bytes = 192
 data_bytes = 0
 bss_bytes = 0
 

@@ -1,39 +1,39 @@
-reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
+reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5212
+code_bytes = 5208
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4853
+code_bytes = 4849
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5244
+code_bytes = 5240
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4885
+code_bytes = 4881
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63440134
-code_bytes = 6278
+instructions = 63440104
+code_bytes = 6272
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613330
-code_bytes = 5868
+instructions = 64613293
+code_bytes = 5862
 data_bytes = 29697
 bss_bytes = 0
 

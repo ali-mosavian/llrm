@@ -1,4 +1,4 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
 blessed = "2026-10-15"
 
 [c.O2]
@@ -11,7 +11,7 @@ bss_bytes = 0
 [c.Os]
 instructions = 86962
 memory_operands = 3945
-code_bytes = 190
+code_bytes = 188
 data_bytes = 0
 bss_bytes = 0
 kernel_ms = 1.161

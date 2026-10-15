@@ -1,5 +1,5 @@
-reason = "word promotion rows against current main and the frame branch; worse rows are 1-4 bytes/instructions in tiny parity programs"
-blessed = "2026-10-14"
+reason = "work-priced: the hoisted zeroing of a word register adds one instruction at loop entry (stft bq32 +2..+5 of ~1e8) and turns the loop's movzx into a mov (fewer 486/P5 clocks); the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib, recpow, jpeg code bytes)"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 170763
@@ -34,13 +34,13 @@ bss_bytes = 0
 kernel_ms = 16.2058
 
 [bq32.O2]
-instructions = 58321
+instructions = 58318
 code_bytes = 243
 data_bytes = 8019
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 58321
+instructions = 58318
 code_bytes = 243
 data_bytes = 8019
 bss_bytes = 0
