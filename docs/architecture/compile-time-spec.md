@@ -95,17 +95,27 @@ Function / LirFunction
 Every mutation goes through `Editor` (MIR today has `edit.rs`; LIR gets the same). The editor appends to the change log. llrm's log already names instructions and old operands ([module.rs:135-176](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/module.rs#L135-L176), [module.rs:625-632](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/module.rs#L625-L632)), which is finer than LLVM's `PreservedAnalyses` or gcc's TODO flags. A consumer asks for the digest since its mark:
 
 ```
-Touched {
-  blocks:   BitSet<BlockId>          any instruction added, removed, moved or rewritten
-  cfg:      Vec<(BlockId, BlockId, Added|Removed)>
-  values:   added, removed, operands_changed: BitSet<ValueId>
-  memory:   added, removed, moved: BitSet<InstId>   loads, stores, calls
-}
-```
+Touched {                                   as built in #1744 (llrm-mir/src/touched.rs), plus `pointers`
+  blocks:            BitSet<BlockId>        any instruction added, removed, moved or rewritten
+  blocks_created, blocks_erased: BitSet<BlockId>
+  cfg:               Vec<(BlockId, BlockId, Added|Removed)>   net edges
+  values_added, values_removed, operands_changed: BitSet<ValueId>
+  memory_added, memory_removed, memory_moved, memory_rewritten: BitSet<InstId>   loads, stores, calls;
+                                            rewritten = a store or call whose operands changed in place
+  parameters:        bool
+  pointers:          BitSet<ValueId>        pointer-typed values added, removed or with changed operands, and the values
+                                            of changed pointer constraints (stores and loads of pointers, calls passing
+                                            them): what PointerValues' keep-or-re-solve rule reads (3.2)
+}```
 
-- `Touched` is derived from the log on demand and cached per mark, so a consumer pays for the edits since its mark only.
+- `Function::touched_since(mark) -> Option<Touched>` is derived from the log on demand, so a consumer pays for the edits since its mark only. `None` means the mark no longer resolves (another lineage, or trimmed) and the consumer recomputes.
+- **Interim, as of #1744** (to close in the next core PRs):
+  - `Touched` is returned by value, not yet cached per mark;
+  - classification is by the instruction's current opcode until the log carries old opcodes, which comes with the invertible log and checkpoint/rollback;
+  - `pointers` needs types, so it is filled by `touched_since(mark)?.with_pointers(function, context)` (#1744): pointer- and aggregate-typed values added, removed or with changed operands, plus the pointer-typed operands and results of loads, stores and calls added, removed, moved or rewritten. The `pointers` epoch stays as the O(1) key;
+  - there is no `globals` epoch yet: the editor has no `Context` to tell a global from an integer constant.
 - **Speculation without copies.** `editor.checkpoint()` returns a mark, and `editor.rollback(mark)` replays the log backwards; the log already holds old operands and positions. Pricing a hoist, a numbering or a candidate transform edits the live function and rolls back if rejected. `fork`, and every `clone` used for pricing, go. A rolled-back edit leaves no `Touched` behind for consumers, because the log is truncated to the checkpoint.
-- **Epochs.** Each function also keeps never-reset counters, bumped by the editor from each change: cfg, memory instructions, pointer values, calls and global names. A module-level memo (GlobalsAA's and Summaries' per-body contributions) stores the epochs it read and is valid iff they are equal. That is an O(1) check, coarser than `Touched`. Function analyses use `update(prev, &Touched)`; memos that only need "did anything of this kind change in this body" use the epochs.
+- **Epochs.** Each function also keeps never-reset counters, bumped by the editor from each change: `Function::epochs() -> Epochs { cfg, memory, pointers, calls }`, and `globals` once the editor can see the `Context`. A module-level memo (GlobalsAA's and Summaries' per-body contributions) stores the epochs it read and is valid iff they are equal. That is an O(1) check, coarser than `Touched`. Function analyses use `update(prev, &Touched)`; memos that only need "did anything of this kind change in this body" use the epochs.
 - **Liveness and intervals** (LIR):
   - per-block use/def and live-in/out as dense bitsets indexed by vreg, kept on the block with its version;
   - per-vreg live intervals as a sorted `Vec<Segment>`, computed once per function and edited by the allocator's edits (LLVM `LiveRangeEdit`, [LiveRangeEdit.cpp:55](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/CodeGen/LiveRangeEdit.cpp#L55));
@@ -136,6 +146,8 @@ This section and section 3 are what the rest builds on. Owner: worst-rows; regal
 | `Rewritten` | id only | old opcode, flags or attributes when those changed (`set_flags`, `make_store_*`, attribute setters) |
 | `Parameters` | kind only | the old parameter list |
 | LIR | none | the same kinds, with `Successors { block, was }` |
+
+**The digest classifies from the log.** The memory bit (a change to a load, a store or a call) and the pointer bit (a pointer-typed value, or a store, load or call that moves a pointer) are derived from each change's instruction and its old operands. The record therefore needs no field of its own for them; for an erased or rewritten instruction, the old opcode and operands it carries are what the classification reads.
 
 **Marks and the digest.**
 - `function.mark()` is a point in the log; `function.touched_since(mark) -> &Touched` is the digest of section 2.2, built once per (mark, log length) and cached.
@@ -205,8 +217,8 @@ Columns: the edit record's parts are **B** blocks touched, **V** values added or
 | ScalarEvolution | [passes.rs:615](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/passes.rs#L615) | Loops | none() | drop erased values; redo recurrences reached by def-use from O/V; full on E |
 | AssumptionCache | [manager.rs:1341](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1341) | — | none() | add or remove assume calls in V; full on E |
 | ExposedFrames | [manager.rs:1050](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1050) | outer | SKIPS | drop erased allocas; recheck allocas whose def-use reach meets O/V |
-| PointerValues | [manager.rs:1076](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1076) | Shape, ExposedFrames; outer: Summaries (captures, returns) | SKIPS | exact rules from the log: a move that crosses no kill of the cells it reads keeps every fact; an erased dead store keeps them; an operand rewrite to a value with an equal fact keeps them. Otherwise reset the solution in RPO from the first touched block to the blocks its facts reach, and re-solve that region. Never a warm start: the solve is flow-sensitive through spill cells, so a stale cell fact would survive one. Full on E |
-| Pointers (escapes) | [manager.rs:1097](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1097) | PointerValues, AssumptionCache; outer: Summaries (captures) | SKIPS | escapes answered per query with a cache, invalidated per instruction in O/M (LLVM `EarliestEscapeAnalysis`, [BasicAliasAnalysis.cpp:213](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L213)); the region rule of PointerValues where a published cell is involved |
+| PointerValues | [manager.rs:1076](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1076) | Shape, ExposedFrames; outer: Summaries (captures, returns) | SKIPS; flow-sensitive through per-block cell maps | **one flow-insensitive solve per body**: a worklist over SSA values and constraints (Andersen, as gcc's `solve_graph`, [tree-ssa-structalias.cc:2711](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-structalias.cc#L2711)); one abstract location per object, no per-block maps. An edit that touches no pointer-typed value and no pointer constraint (`Touched.pointers` empty) keeps it; otherwise one re-solve of the body, counted |
+| Pointers (escapes) | [manager.rs:1097](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1097) | PointerValues, AssumptionCache; outer: Summaries (captures) | SKIPS | escapes per query, cached, invalidated per instruction in O/M (LLVM `EarliestEscapeAnalysis`, [BasicAliasAnalysis.cpp:213](https://github.com/llvm/llvm-project/blob/llvmorg-20.1.8/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L213)). A query that needs a cell's contents goes through the memory SSA walker with its cache, not through the solve |
 | Registers (`consts::known`) | [manager.rs:1213](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1213) | Shape, AssumptionCache, ExposedFrames | INCR | as today: values reached by def-use from O/V, plus table loads |
 | DemandedBits | [manager.rs:1321](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1321) | — | none() | drop erased; redo operands of O/V instructions backward to a fixed point |
 | Counted | [manager.rs:1385](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/manager.rs#L1385) | Shape, Registers | INCR per loop | as today |
@@ -223,6 +235,11 @@ Columns: the edit record's parts are **B** blocks touched, **V** values added or
 | TerminalSites | [noreturn.rs:195](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/noreturn.rs#L195) | Declarations | none() | add or remove calls in V; full on a declarations change |
 | Products (frequencies, trips, odds) | [lsr.rs:406](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-transforms/src/lsr.rs#L406) | Registers, Shape, Counted | INCR | the one owner of MIR block frequencies; profit's private `_frequencies` go ([profit.rs:348](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-transforms/src/profit.rs#L348)) |
 | MIR liveness (no owner today) | [liveness.rs:375](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/opt/llrm-analysis/src/liveness.rs#L375) | Shape | per call (4 callers) | owned; dataflow rule of 3.1 |
+
+**Points-to solve strategy, decided.** The solve is flow-insensitive per body, as gcc's, and the flow-sensitive precision is answered per query. through-memory measured the variant before the decision. Its solve has no per-block cell state, loads from objects, and does not order escapes. It makes 9.9% of pointer-value facts coarser and changes 23% of solves, but the output barely moves:
+- 21 of 680 corpus objects change, all of them QCport modules, by at most +60 B on a 28 KB module;
+- the 66 vsgcc programs are identical at every level;
+- 1 of 424 bench rows is worse (parity/qmove, c -Os, +3.5%).
 
 **Outer reads.** Today `READS_OUTER` is true by default ([passes.rs:276](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/passes.rs#L276)): every analysis but Dominators, Loops, ScalarEvolution, Shape and DemandedBits is dropped whenever any module result moves ([passes.rs:1524-1535](https://github.com/ali-mosavian/llrm/blob/a99bffc80c76da6fdffa295f6b77d5192d3ba275/crates/ir/llrm-mir/src/passes.rs#L1524-L1535)). Each analysis instead declares `OUTER_DEPENDS`, the module facts it reads and the keys it reads them by (a callee's summary, a global's declaration). The `Outer` accessor records reads in check builds and fails on an undeclared one. A changed module fact then invalidates only the results that read its changed keys. The known reads are in the table above: Summaries for CallEffects, PointerValues and Pointers; Declarations for ExposedFrames and TerminalSites. The owners complete the list in stage 1.
 
@@ -348,7 +365,7 @@ Each stage lands alone. Stages marked *identical* must pass `tools/identical.py`
 | 0b | **One allocation and one route by default**: the trials and the second route off (the user's decision; regalloc's flag-drop PR) | changes; rows recorded for 4.3 | regalloc | `-fno-allocation-search -fno-allocation-routes`: -2.98 G (-36%) | 5.3 G (measured) |
 | 1 | **The core (2.3 and 3.1), MIR and LIR**: invertible log, stable ids, `Touched`, epochs, checkpoint/rollback replacing `fork` and pricing clones; the manager's `update`/`DEPENDS`/lazy `get`, preserved from `reads()`, no invalidate-all inside passes, check modes | identical | worst-rows | recomputations that come out identical: ~0.56 G (see below) | ~4.7 G |
 | 2 | LIR representation on the core (arena, operands, slots on instructions, use lists); allocator local edits, interference cache, recolouring pre-check | identical | regalloc | ~85% of the one allocation's 0.98 G | ~3.9 G |
-| 3 | Points-to: exact update rules from the log and a downstream region re-solve (3.2), escapes per query; memory SSA updater; `Annotated` per access; GlobalsAA and Summaries read the owner | identical (check modes) | through-memory | the pointer family and memory SSA past what stage 1 removed, ~0.6 G | ~3.3 G |
+| 3 | Points-to as decided in 3.2: one flow-insensitive solve per body, re-solved only when `Touched.pointers` is non-empty; escapes per query; cell contents through the memory SSA walker; memory SSA updater; `Annotated` per access; GlobalsAA and Summaries read the owner | changes (21 QCport objects, 1 bench row, measured); gated by 4.3 | through-memory | the pointer family and memory SSA past what stage 1 removed, ~0.6 G | ~3.3 G |
 | 4 | MIR order and uses O(1); update rules for the rest of 3.2; every `Shape::of` and private solve asks its owner | identical | worst-rows | ~half of the analyses' remaining ~0.8 G | ~2.9 G |
 | 5 | Change-driven continuation replacing rounds; `LLRM_CHECK_FIXPOINT` | identical | worst-rows | passes' own work in runs that changed nothing (0.55 G) and in rounds 3-5 | ~2.4 G |
 | 6 | LIR liveness owner with dirty blocks; peephole and jumps on dirty blocks; floatassign exits before rebuilding | identical | regalloc | ~75% of LIR clean-up's 0.51 G | ~2.0 G |
