@@ -2042,6 +2042,38 @@ pub struct Effect {
     pub fills: Vec<MemRef>,
 }
 
+/// `effects` with each value `to` gives another operand named by it, the
+/// effects of the same calls on the same bytes after a value is replaced by
+/// one found equal. The lists the calls share stay shared. None where a
+/// reference cannot carry its names over (`MemRef::renamed`).
+pub fn effects_renamed(
+    effects: &IndexMap<InstId, Effect>,
+    to: &dyn Fn(ValueId) -> Option<Operand>,
+) -> Option<IndexMap<InstId, Effect>> {
+    let mut lists: HashMap<*const [MemRef], Rc<[MemRef]>> = HashMap::default();
+    let mut list = |old: &Rc<[MemRef]>| -> Option<Rc<[MemRef]>> {
+        if let Some(done) = lists.get(&Rc::as_ptr(old)) {
+            return Some(Rc::clone(done));
+        }
+        let made: Rc<[MemRef]> = old.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?.into();
+        lists.insert(Rc::as_ptr(old), Rc::clone(&made));
+        Some(made)
+    };
+    effects
+        .iter()
+        .map(|(inst, effect)| {
+            Some((
+                *inst,
+                Effect {
+                    loads: list(&effect.loads)?,
+                    stores: list(&effect.stores)?,
+                    fills: effect.fills.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Instantiate callee effects through actual pointer provenance: each
 /// call's effect, as old `calls_annotated` wrote it into the call.
 pub fn calls_annotated(
