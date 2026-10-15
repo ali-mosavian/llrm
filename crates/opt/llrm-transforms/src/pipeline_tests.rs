@@ -699,11 +699,14 @@ entry:
 }
 ";
 
-/// How many times each module analysis was worked out, by how it came out
-/// (`first`: nothing held), over a pipeline at -O1.
-fn module_runs(text: &str) -> Vec<(&'static str, &'static str, usize)> {
+/// `text` through the pipeline under `options`, with how many times each module
+/// analysis was worked out, by how it came out (`first`: nothing held).
+fn pipelined(
+    text: &str,
+    options: pipeline::Options,
+) -> (Module, Vec<(&'static str, &'static str, usize)>) {
     let mut module = crate::testing::parsed(text);
-    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    let applied = Applied { options, ..Applied::default() };
     llrm_mir::passes::trace_recomputes(true);
     let entered = |program: &mut Program| {
         program.exports.entries.insert("main".to_owned());
@@ -719,7 +722,7 @@ fn module_runs(text: &str) -> Vec<(&'static str, &'static str, usize)> {
             None => by_how.push((name, how, count)),
         }
     }
-    by_how
+    (module, by_how)
 }
 
 /// The summaries and the globals' facts are worked out from nothing once for a
@@ -729,7 +732,7 @@ fn module_runs(text: &str) -> Vec<(&'static str, &'static str, usize)> {
 /// nothing 5 times.
 #[test]
 fn the_summaries_are_worked_out_from_nothing_once() {
-    let runs = module_runs(SUMMARISED);
+    let (_, runs) = pipelined(SUMMARISED, pipeline::Options::basic());
     let first =
         |name: &str| runs.iter().find(|(one, how, _)| *one == name && *how == "first").map_or(0, |found| found.2);
     let counted = |name: &str| runs.iter().filter(|(one, ..)| *one == name).collect::<Vec<_>>();
@@ -740,6 +743,46 @@ fn the_summaries_are_worked_out_from_nothing_once() {
         counted("summaries"),
         counted("globals-aa")
     );
+}
+
+/// The summaries carried to the segment after `GlobalDce` are of bodies whose
+/// ids it has moved: it removed `@dead`, which came before `@bump` and `@main`.
+/// A summary kept by id and not by body would give `@bump` the summary `@dead`
+/// had (no memory touched) and let `@main` return the 1 it stored before the
+/// call. Each body's `Mark` names its function, so the bodies that moved are
+/// worked out again. A guard: it passes without the carry too.
+#[test]
+fn summaries_carried_past_a_removed_global_stay_with_their_bodies() {
+    let text = "
+@g = global i16 0
+
+define internal i16 @dead() {
+entry:
+  ret i16 7
+}
+
+define void @bump() {
+entry:
+  store i16 5, ptr @g
+  ret void
+}
+
+define i16 @main() {
+entry:
+  store i16 1, ptr @g
+  call void @bump()
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+";
+    let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..pipeline::Options::basic() };
+    let (module, runs) = pipelined(text, options);
+    let printed = crate::testing::printed(&module);
+    let first = runs.iter().find(|(name, how, _)| *name == "summaries" && *how == "first").map_or(0, |found| found.2);
+    assert_eq!(first, 1, "premise: the summaries were carried from segment to segment: {runs:?}");
+    assert!(!printed.contains("@dead"), "premise: the global that came first is removed:\n{printed}");
+    assert!(printed.contains("call void @bump()"), "premise: the call stays:\n{printed}");
+    assert!(printed.contains("load i16, ptr @g"), "the load after the call was forwarded from before it:\n{printed}");
 }
 
 /// What the pipeline runs after the summaries are made and holds them past
