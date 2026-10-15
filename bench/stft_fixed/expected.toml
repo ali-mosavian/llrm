@@ -1,5 +1,5 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
 code_bytes = 1776
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 98394524
-code_bytes = 1641
+instructions = 98394523
+code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 99053713
-code_bytes = 1588
+instructions = 99053715
+code_bytes = 1583
 data_bytes = 4709
 bss_bytes = 0
 
