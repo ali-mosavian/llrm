@@ -219,22 +219,24 @@ fn _numbers(
             function.set_operands(inst, swapped);
         }
     }
-    let Some(edge) = edge else {
+    if edge.is_empty() {
         return !values.is_empty();
-    };
-    let instruction = function.instruction(edge.op);
-    let (ty, result) = (instruction.ty, instruction.result.expect("an integer result"));
-    let name = function.value(result).name.clone();
-    let incoming = edge
-        .numbers
-        .iter()
-        .map(|(parent, number)| (Operand::Constant(context.int(ty, _bits(number))), *parent))
-        .collect::<Vec<_>>();
-    let phi = function.create_instruction(Opcode::Phi, ty, from_arms(&incoming), Flags::default(), name.as_deref());
-    let first = operations(function, edge.block)[0];
-    function.insert(phi, Position::Before(first)).expect("a placed block");
-    function.replace_value(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
-    function.erase(edge.op).expect("its uses were replaced");
+    }
+    for edge in edge {
+        let instruction = function.instruction(edge.op);
+        let (ty, result) = (instruction.ty, instruction.result.expect("an integer result"));
+        let name = function.value(result).name.clone();
+        let incoming = edge
+            .numbers
+            .iter()
+            .map(|(parent, number)| (Operand::Constant(context.int(ty, _bits(number))), *parent))
+            .collect::<Vec<_>>();
+        let phi = function.create_instruction(Opcode::Phi, ty, from_arms(&incoming), Flags::default(), name.as_deref());
+        let first = operations(function, edge.block)[0];
+        function.insert(phi, Position::Before(first)).expect("a placed block");
+        function.replace_value(result, Operand::Value(function.instruction(phi).result.expect("a phi's value")));
+        function.erase(edge.op).expect("its uses were replaced");
+    }
     true
 }
 
@@ -269,13 +271,17 @@ fn _known_values(
     out
 }
 
-/// The first pure operation a join's phis feed, in the join or the blocks
-/// only it leads to, whose answer is a number on every incoming edge.
+/// Every pure operation a join's phis feed, in the join or the blocks only it
+/// leads to, whose answer is a number on every incoming edge: all from the one
+/// set of facts, since replacing one by a phi of its numbers leaves the others'
+/// answers true (LLVM's SCCP and GCC's CCP settle every one in a single
+/// propagation).
 fn _folded_phi_edges(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-) -> Option<_EdgeFold> {
+) -> Vec<_EdgeFold> {
     let function = unit.function;
+    let mut found = Vec::new();
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
@@ -341,12 +347,12 @@ fn _folded_phi_edges(
                     numbers.push((parent, masked(&fact.n, width)));
                 }
                 if numbers.len() == order.len() {
-                    return Some(_EdgeFold { op: inst, block, numbers });
+                    found.push(_EdgeFold { op: inst, block, numbers });
                 }
             }
         }
     }
-    None
+    found
 }
 
 #[cfg(test)]
