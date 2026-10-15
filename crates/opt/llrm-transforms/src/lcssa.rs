@@ -186,9 +186,7 @@ fn _opened(function: &mut Function) -> Result<bool, String> {
     let graph = cfg::graph(function);
     let mut exits = BTreeSet::new();
     for loop_ in cfg::Shape::of(function).loops {
-        for block in graph.iter().filter(|block| loop_.body.contains(&block.at)) {
-            exits.extend(block.succ.iter().copied().filter(|successor| !loop_.body.contains(successor)));
-        }
+        exits.extend(loop_.exits(function).into_iter().map(|(_, to)| to));
     }
     let one = |function: &Function, phi: InstId| {
         let values = arms(function, phi).into_iter().map(|(value, _)| value).collect::<Vec<_>>();

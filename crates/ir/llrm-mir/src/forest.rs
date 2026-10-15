@@ -36,6 +36,10 @@ pub struct Forest {
     ats: Vec<i64>,
     /// Each block's innermost loop by place in `ats`; `NONE` outside any.
     innermost: Vec<u32>,
+    /// Where an address stands in `ats`, by its distance from the lowest, when
+    /// the addresses lie close (a block's number in its function does): a
+    /// lookup is then an index, not a search.
+    table: Vec<u32>,
 }
 
 const NONE: u32 = u32::MAX;
@@ -46,7 +50,15 @@ impl Forest {
         &self,
         at: i64,
     ) -> Option<usize> {
-        let slot = self.ats.binary_search(&at).ok()?;
+        let slot = if self.table.is_empty() {
+            self.ats.binary_search(&at).ok()?
+        } else {
+            let place = *self.table.get(usize::try_from(at.checked_sub(self.ats[0])?).ok()?)?;
+            if place == NONE {
+                return None;
+            }
+            place as usize
+        };
         (self.innermost[slot] != NONE).then(|| self.innermost[slot] as usize)
     }
 
@@ -134,6 +146,7 @@ impl Body {
                 last: 0,
             }],
             innermost: vec![0; ats.len()],
+            table: lookup(&ats),
             ats,
         };
         Self::new(&std::rc::Rc::new(forest), 0)
@@ -413,7 +426,23 @@ pub fn forest(
         let children = loops[index].children.clone();
         pending.extend(children.into_iter().rev().map(|child| (child, false)));
     }
-    Forest { loops, ats, innermost }
+    let table = lookup(&ats);
+    Forest { loops, ats, innermost, table }
+}
+
+/// `ats`' places by distance from the first, when they lie within four times
+/// their number of it.
+fn lookup(ats: &[i64]) -> Vec<u32> {
+    let (Some(&first), Some(&last)) = (ats.first(), ats.last()) else { return Vec::new() };
+    let span = (last - first) as usize + 1;
+    if span > 4 * ats.len() + 64 {
+        return Vec::new();
+    }
+    let mut table = vec![NONE; span];
+    for (place, &at) in ats.iter().enumerate() {
+        table[(at - first) as usize] = place as u32;
+    }
+    table
 }
 
 thread_local! {

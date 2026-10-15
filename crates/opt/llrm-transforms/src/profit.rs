@@ -264,10 +264,13 @@ pub fn site(
         None => UNIT,
     };
     let callees = outer.callees();
-    let writes = unit
-        .function
-        .walk()
-        .filter(|(block, _)| loop_.body.contains(&cfg::id(*block)))
+    let writes = loop_
+        .body
+        .iter()
+        .flat_map(|&at| {
+            let block = cfg::block(at);
+            unit.function.block(block).instructions().iter().map(move |&inst| (block, inst))
+        })
         .any(
             |(_, inst)| unit.calls_out(inst)
                 && !callee(unit.context, unit.function, inst)
