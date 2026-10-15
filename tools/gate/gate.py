@@ -249,7 +249,7 @@ def smoke_plan(files: list[str]) -> Plan:
     keep = load()["smoke"]["steps"]
     built = "build" in fast.steps
     # the audit of target facts is integration's in the fast tier: the smoke tier runs it alone
-    steps = [s for s in keep if s in ("docs", "changed-tests", "products") or s in fast.steps or (s == "pytest-programs" and built) or (s == "facts" and "integration" in fast.steps)]
+    steps = [s for s in keep if s in ("docs", "changed-tests", "products") or s in fast.steps or s in ("pytest-programs", "pytest-quick") and built or (s == "facts" and "integration" in fast.steps)]
     return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
 
 
@@ -483,9 +483,16 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
-        f'out=$(uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | tail -3; '
+        f'out=$(uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | grep -aE "^(FAIL|BETTER|SKIP) |measurements:"; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
+    def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
+        # pytest-programs' two files are named out of the list: an explicit file argument runs though --ignore names it (the step ran them
+        # twice, 160 s of a loaded host)
+        own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
+        tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit"
+
     steps = {
         "build": BUILD,
         "facts": f"{cargo} --test target_facts",
@@ -510,10 +517,13 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-durations.json tools crates tests/*.py --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py) + " -- -q -p no:cacheprovider -p pytest_cpulimit",
+        "pytest": cfg_pytest(skip_py),
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
+        # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
+        # and tests/test_readme.py in the train.
+        "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
