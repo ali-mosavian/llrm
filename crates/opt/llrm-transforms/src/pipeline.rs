@@ -286,9 +286,10 @@ impl Options {
     /// loop is copied out completely only where the code does not grow;
     /// nothing is inlined but the last call of a function (gcc has no
     /// `-finline-small-functions` below -O2), no allocation search or second
-    /// route (gcc has neither: compile -34% on d_faces), value numbering that inserts nothing (`-ftree-fre`; no
-    /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
-    /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// route (gcc has neither: compile -34% on d_faces), value numbering that
+    /// inserts nothing (`-ftree-fre`; no `-ftree-pre`), and no sibling
+    /// calls, peeling or unswitching. Pattern fill is on
+    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
     /// here, the user's decision of 2026-10-10 (docs/reference/levels.md).
     pub fn basic() -> Self {

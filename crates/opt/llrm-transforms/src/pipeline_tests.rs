@@ -1142,7 +1142,11 @@ entry:
     assert!(o2.searches() && o2.compares_routes(), "premise: -O2 keeps both");
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);
-    assert_eq!(kept.matches("@twice(").count(), 2, "-O1 inlined a function called twice:\n{kept}");
+    assert_eq!(
+        kept.lines().filter(|line| line.contains("call ") && line.contains("@twice")).count(),
+        2,
+        "-O1 inlined a function called twice:\n{kept}"
+    );
     assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
     let (gone, _) = pipelined(text, o2);
     assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
