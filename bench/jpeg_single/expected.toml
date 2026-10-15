@@ -1,4 +1,4 @@
-reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
+reason = "frame objects and the relaid hole are 8-aligned in functions holding doubles: jpeg bq32 +9 code bytes, +-6 instructions"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -27,13 +27,13 @@ kernel_ms = 602.1462
 
 [bq32.O2]
 instructions = 63440134
-code_bytes = 6278
+code_bytes = 6287
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613330
-code_bytes = 5868
+instructions = 64613329
+code_bytes = 5877
 data_bytes = 29697
 bss_bytes = 0
 
