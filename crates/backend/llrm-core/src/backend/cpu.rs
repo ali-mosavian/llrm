@@ -397,6 +397,7 @@ fn _profile(
     operations.pieces_set_size = table.set_ratio_size.unwrap_or(0);
     operations.pieces_clear_size = table.clear_ratio_size.unwrap_or(0);
     operations.jump_table = table.jump_table.unwrap_or(0);
+    operations.cache_line = table.cache_line.unwrap_or(0);
     Ok(Profile {
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),

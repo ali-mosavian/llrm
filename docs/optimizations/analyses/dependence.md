@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/dependence.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/dependence.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:742ef80ce1468cb5843fac09031e44757e56e438958c4a63e3ec1ee683c20310 -->
+<!-- src: crates/opt/llrm-analysis/src/dependence.rs sha256:4318024fc3aae80fd4f1676579705a2b1c73e905b6582f11a30d23d8ad91d99f -->
 
 # dependence
 
@@ -87,11 +87,18 @@ From unit test
 `an_array_walked_again_by_each_outer_pass_allows_a_jam_by_two` in
 `dependence_tests.rs`.
 
+`interchangeable(accesses, outer_trips, inner_trips)` asks whether the loops
+may swap: a vector `(x, y)` with `x > 0` and `y < 0` becomes `(y, x)`, the
+later access first, so none may exist for a pair with a write. `walk_cost`
+prices a walk by the bytes an access steps in the loop that runs innermost,
+at most a cache line, none where it does not move.
+
 ## Provides
-`distances`, `factor`, `fusable`, `meetings`. Consumers: `unroll_jam`
-(`crates/opt/llrm-transforms/src/unroll_jam.rs`) and `loopfuse`
-(`crates/opt/llrm-transforms/src/loopfuse.rs`) and `loopdistribute`
-(`crates/opt/llrm-transforms/src/loopdistribute.rs`).
+`distances`, `factor`, `fusable`, `meetings`, `interchangeable`,
+`walk_cost`. Consumers: `unroll_jam` (`crates/opt/llrm-transforms/src/
+unroll_jam.rs`) and `loopfuse` (`crates/opt/llrm-transforms/src/loopfuse.
+rs`) and `loopdistribute` (`crates/opt/llrm-transforms/src/loopdistribute.
+rs`) and `loopinterchange`.
 
 ## See also
 gcc `tree-data-ref.cc` distance vectors read by `adjust_unroll_factor`

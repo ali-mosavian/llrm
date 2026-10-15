@@ -51,6 +51,7 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
             .calling(prices.calling);
     // What the CPU's table states beside its clocks.
     dos.costs.jump_table = prices.operations.jump_table;
+    dos.costs.cache_line = prices.operations.cache_line;
     std::rc::Rc::new(dos)
 }
 

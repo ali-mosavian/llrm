@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:c3a36b0c97386abbf96a0755ac7e935ab377358d571daee257cc4432dd1449f2 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:94e458bbe6cf891000349dca0c28261e9b008d8775eeb02bf5bb20a60b2d92ac -->
 
 # pipeline
 
@@ -31,6 +31,7 @@ flowchart TB
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     ver["<b>version (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     fuse["<b>fuse (-Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
+    swap["<b>interchange (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     jam["<b>unroll-jam (-O3, -Omax)</b><br/><small>sroa, then B's rounds</small>"]:::mid
     mrg["<b>merge (once)</b>"]:::mid
   end
@@ -45,7 +46,8 @@ flowchart TB
   unsw --> fuse
   fuse --> dist
   dist --> ver
-  ver --> jam
+  ver --> swap
+  swap --> jam
   jam --> mrg
   mrg --> c
   c -.->|"a changed body goes<br/>back through B"| sroa
@@ -112,7 +114,7 @@ counterpart of each limit, is
 | `fill` | `fill`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
-| `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
+| `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
 | `distribute` | `distribute` (off by default; on at -O3 and -Omax) |
 | `version` | `version` (off by default; on at -O3 and -Omax) |
 | `fuse` | `fuse` (off by default; on at -Omax) |

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/unroll_jam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/unroll_jam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:db9413ec32c840994399ac278abaa531c490ba07997ccfd08d5cfdd6b32b7d19 -->
+<!-- src: crates/opt/llrm-transforms/src/unroll_jam.rs sha256:5ade847ea9d92f250b863d29b856af8d8b58fbb2e2b2c193e1112f4469286f9a -->
 
 # unroll_jam
 
@@ -8,13 +8,13 @@ N copies of the inner loop are fused into one, so what the outer
 iterations share is used by all N in one pass of the inner loop.
 
 ## How it works
-A nest is a loop that holds exactly one other loop and nothing else
-besides pure work. The outer header tests and has one way into the loop. A
-chain of single-successor blocks `pre` leads from it to the inner header,
-and a chain `post` from the inner exit to the outer latch; no other block
-is in the outer loop. Work in `pre`, `post` and the outer header is pure
-(no memory, no division), and `pre`, `post` have no phis. The inner loop
-has one latch and leaves only from its header, into a block only it
+A nest (`loopnest`) is a loop that holds exactly one other loop and nothing
+else besides pure work. The outer header tests and has one way into the
+loop. A chain of single-successor blocks `pre` leads from it to the inner
+header, and a chain `post` from the inner exit to the outer latch; no other
+block is in the outer loop. Work in `pre`, `post` and the outer header is
+pure (no memory, no division), and `pre`, `post` have no phis. The inner
+loop has one latch and leaves only from its header, into a block only it
 enters.
 
 The inner loop must run the same in every outer iteration: its test and the

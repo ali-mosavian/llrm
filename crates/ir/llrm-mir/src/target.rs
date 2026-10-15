@@ -235,6 +235,9 @@ pub struct OperationCosts {
     /// The fewest case values for which a switch is a jump table (gcc's
     /// `case_values_threshold`); 0: the target has no table jump.
     pub jump_table: i64,
+    /// Bytes of one line of the CPU's data cache (its first level); 0: the
+    /// target states none (no cache, or not known).
+    pub cache_line: i64,
 }
 
 impl OperationCosts {
@@ -336,6 +339,7 @@ impl Default for OperationCosts {
             pieces_set_size: 0,
             pieces_clear_size: 0,
             jump_table: 0,
+            cache_line: 0,
         }
     }
 }
