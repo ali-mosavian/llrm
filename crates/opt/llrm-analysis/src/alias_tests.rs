@@ -1469,3 +1469,34 @@ fn the_value_solve_visits_each_pointer_instruction_a_few_times() {
     let pointer_instructions = 5 * n + 2;
     assert!(visits <= 4 * pointer_instructions, "{visits} visits for {pointer_instructions} pointer instructions");
 }
+
+/// A pointer carried around a loop through a spill slot, with no phi to widen
+/// it, grew a slice a trip until the limit: qcport/cmd -O1 took 7.3 G
+/// instructions where 2.6 G was (a 170-instruction body solved in 4,691
+/// visits). A fact a store after the load carries back is widened as a
+/// loop-carried phi is.
+#[test]
+fn a_pointer_walking_a_loop_through_a_slot_settles_in_a_few_visits() {
+    let parsed = Parsed::new(
+        "define void @f(i1 %c, ptr %base) {
+b0:
+  %slot = alloca ptr
+  store ptr %base, ptr %slot
+  br label %loop
+
+loop:
+  %p = load ptr, ptr %slot
+  %q = getelementptr i8, ptr %p, i16 1
+  store ptr %q, ptr %slot
+  br i1 %c, label %loop, label %out
+
+out:
+  ret void
+}
+",
+    );
+    let before = crate::alias::value_rounds();
+    crate::alias::point_values(&parsed.unit()).unwrap();
+    let visits = crate::alias::value_rounds() - before;
+    assert!(visits < 40, "{visits} visits for a loop of three pointer instructions");
+}

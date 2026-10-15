@@ -2670,6 +2670,34 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         })
         .collect();
     let exact = crate::slotstores::reaching(unit, &pointer_loads);
+    // A load that a store after it in a cycle reaches carries a fact around the
+    // cycle: widened, as a loop-carried phi is, or each trip adds a slice.
+    let carried: llrm_mir::dense::IdSet<InstId> = {
+        let place: llrm_mir::dense::IdMap<InstId, usize> = function
+            .layout()
+            .iter()
+            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .collect();
+        pointer_loads
+            .iter()
+            .filter(|load| {
+                let Some(stores) = exact.get(load) else { return false };
+                let Some(here) = function.parent(*load) else { return false };
+                stores
+                    .iter()
+                    .any(
+                        |&store| {
+                            let Some(there) = function.parent(store) else { return false };
+                            if there == here {
+                                place.get(&store) > place.get(load)
+                            } else {
+                                shape.reaching.to(function, there).contains(&here)
+                            }
+                        },
+                    )
+            })
+            .collect()
+    };
     let mut readers: HashMap<ValueId, Vec<usize>> = HashMap::default();
     for (slot, &inst) in order.iter().enumerate() {
         for value in read_values(unit, inst).chain(exact.get(&inst).into_iter().flatten().flat_map(|&store| {
@@ -2775,8 +2803,15 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
                         .map(|&store| _operand(unit, function.instruction(store).operands[0], &solve.values))
                         .collect();
                     if sources.iter().all(Option::is_some) {
-                        if let Some(loaded) = _union(sources.iter().map(Option::as_ref)) {
+                        if let Some(mut loaded) = _union(sources.iter().map(Option::as_ref)) {
                             let result = op.result.expect("a load's result");
+                            if carried.contains(&inst) {
+                                if let Some(previous) = solve.values.get(&result) {
+                                    if loaded != *previous {
+                                        loaded = _widened(&previous.union(&loaded));
+                                    }
+                                }
+                            }
                             if solve.learn(result, loaded) {
                                 wake_readers(result, &mut work, &mut queued);
                             }
