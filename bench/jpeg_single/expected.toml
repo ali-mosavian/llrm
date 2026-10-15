@@ -1,50 +1,50 @@
-reason = "x87: a store or compare of a live value no longer copies it (fist, fcom/fcomp st(i)), and by default a float conversion stays in its register without a store and load (gcc's -fexcess-precision=fast; -fexcess-precision=standard rounds): float rows fewer instructions and bytes; jpeg_fixed bq32 -O2 +1 instruction is an integer program (layout-dependent copy path), not x87"
+reason = "a compare with an integer load nothing else reads is ficom/ficomp [m] where the target prices it below fild + fcom (486: 15 against 13+8): the nib/BASIC float rows fewer instructions and bytes; jpeg_fixed bq32 +1 instruction is integer code (layout-dependent copy)"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5208
+code_bytes = 5189
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4849
+code_bytes = 4830
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5240
+code_bytes = 5221
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4881
+code_bytes = 4862
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63000793
-code_bytes = 6274
+instructions = 62116818
+code_bytes = 6266
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64173988
-code_bytes = 5864
+instructions = 63290020
+code_bytes = 5856
 data_bytes = 29697
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3123
+code_bytes = 3176
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
 
 [c.Os]
-code_bytes = 2874
+code_bytes = 2905
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.1458

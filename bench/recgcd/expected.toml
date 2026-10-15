@@ -1,17 +1,16 @@
-reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
-blessed = "2026-10-12"
+reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+blessed = "2026-10-15"
 
 [c.O2]
-instructions = 24028
-memory_operands = 1203
-code_bytes = 150
+instructions = 20426
+memory_operands = 1204
+code_bytes = 139
 data_bytes = 0
 bss_bytes = 0
 
 [c.Os]
-instructions = 24328
-memory_operands = 1205
-code_bytes = 126
+instructions = 24323
+memory_operands = 1801
+code_bytes = 124
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 0.3252

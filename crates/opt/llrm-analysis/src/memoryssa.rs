@@ -1564,7 +1564,6 @@ impl<'a> Writers<'a> {
         read: &MemRef,
     ) -> bool {
         read.unwritable()
-            || (!self.anywhere
-                && self.index.near(read).into_iter().all(|(writer, _)| spares(accesses, program, read, writer)))
+            || (!self.anywhere && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
 }

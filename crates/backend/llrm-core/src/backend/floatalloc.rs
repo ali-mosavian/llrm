@@ -744,15 +744,22 @@ impl _Stack {
         cell: Loc,
     ) -> Result<(), Raised> {
         self.top(left)?;
-        if self.survives(left) {
-            self.duplicate(left)?;
-        }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        // Fused from a home load, it is already `fcomp` or, over an integer
-        // cell, `ficomp`.
-        let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
+        // `fcom`/`fcomp` or, over an integer cell, `ficom`/`ficomp`, however it
+        // was written: the popping form where the left dies, else the
+        // one that leaves it, not a copy of it.
+        let integer = what.name.as_deref().is_some_and(|name| name.starts_with("fi"));
+        let lives = self.survives(left);
+        let name = match (integer, lives) {
+            (true, true) => "ficom",
+            (true, false) => "ficomp",
+            (false, true) => "fcom",
+            (false, false) => "fcomp",
+        };
         self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
-        self.values.remove(0);
+        if !lives {
+            self.values.remove(0);
+        }
         self.status()
     }
 
@@ -763,42 +770,39 @@ impl _Stack {
         left: u32,
         right: u32,
     ) -> Result<(), Raised> {
-        // Right still read, left not: left on top, `fcomp st(i)` pops it and
-        // leaves right where it lies. Both still read: `fcom st(i)`. As
-        // gcc's reg-stack and LLVM's X86FloatingPoint compare against any slot,
-        // not a copy of it.
-        if right != left && !self.survives(right) == false {
-            let top_left = index_of(&self.values, left) == 0 || {
-                let slot = index_of(&self.values, left);
+        // As gcc's reg-stack and LLVM's X86FloatingPoint compare against any
+        // slot, not a copy of it: left on top (one exchange
+        // at most), then `fcompp` where both die and right lies beneath it;
+        // `fcomp st(i)` where left dies, which pops it; `fcom st(i)`
+        // where it lives. A right that dies is popped after, as any dead value
+        // is.
+        if right != left {
+            let slot = index_of(&self.values, left);
+            if slot != 0 {
                 self.exchange(slot);
-                true
-            };
-            if top_left {
-                let slot = index_of(&self.values, right);
-                let name = if self.survives(left) { "fcom" } else { "fcomp" };
+            }
+            let slot = index_of(&self.values, right);
+            let (lives, other_lives) = (self.survives(left), self.survives(right));
+            if !lives && !other_lives && slot == 1 {
+                self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
+                self.values.drain(..2);
+            } else {
+                let name = if lives { "fcom" } else { "fcomp" };
                 self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
-                if name == "fcomp" {
+                if !lives {
                     self.values.remove(0);
                 }
-                return self.status();
             }
+            return self.status();
         }
-        // Left on top and right beneath it, each a copy where it is read again:
-        // `fld st(i)` copies from any slot.
+        // One value on both sides: a copy of it, read again where it is.
         if self.survives(left) {
             self.duplicate(left)?;
         } else {
             self.top(left)?;
         }
-        if right == left || self.survives(right) {
-            self.duplicate(right)?;
-            self.exchange(1);
-        } else if index_of(&self.values, right) != 1 {
-            let slot = index_of(&self.values, right);
-            self.exchange(slot);
-            self.exchange(1);
-            self.exchange(slot);
-        }
+        self.duplicate(right)?;
+        self.exchange(1);
         self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
         self.values.drain(..2);
         self.status()

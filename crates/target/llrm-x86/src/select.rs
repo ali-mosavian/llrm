@@ -1165,7 +1165,8 @@ pub static INT_SIZED: LazyLock<IndexMap<u32, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(2, "M16INT"), (4, "M32INT"), (8, "M64INT")]));
 pub const FLOAT_MEMORY: [&str; 11] =
     ["fld", "fstp", "fst", "fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcom", "fcomp"];
-pub const INT_MEMORY: [&str; 9] = ["fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr"];
+pub const INT_MEMORY: [&str; 11] =
+    ["fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr", "ficom", "ficomp"];
 
 /// An x87 instruction against memory -- `fld [x]`, `fmul [x]`, `fistp [x]`.
 pub fn float_memory(

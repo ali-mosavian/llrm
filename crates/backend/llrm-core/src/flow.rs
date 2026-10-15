@@ -102,7 +102,7 @@ pub fn machine_with<'a>(
         }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold),
+        Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
