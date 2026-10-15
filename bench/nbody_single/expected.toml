@@ -1,5 +1,5 @@
-reason = "a compare with an integer load nothing else reads is ficom/ficomp [m] where the target prices it below fild + fcom (486: 15 against 13+8): the nib/BASIC float rows fewer instructions and bytes; jpeg_fixed bq32 +1 instruction is integer code (layout-dependent copy)"
-blessed = "2026-10-15"
+reason = "merge of main: the x87 forms (#1767) move fpbench, jpeg_*, nbody, stft_single rows down against main's counts; no row worse"
+blessed = "2026-10-16"
 
 [bas.O2]
 instructions = 1037180
@@ -35,13 +35,13 @@ kernel_ms = 13.8413
 
 [bq32.O2]
 instructions = 1037183
-code_bytes = 474
+code_bytes = 472
 data_bytes = 151
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 1037191
-code_bytes = 461
+code_bytes = 459
 data_bytes = 151
 bss_bytes = 0
 

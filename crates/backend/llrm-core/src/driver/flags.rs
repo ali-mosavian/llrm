@@ -97,6 +97,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("jump-tables", |options, on| options.jump_tables = on),
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
+    ("tree-sink", |options, on| options.sink = on),
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
     ("tree-loop-distribute-patterns", |options, on| options.fill = on),
