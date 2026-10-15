@@ -18,6 +18,8 @@ For contributors to the backend's constant arithmetic. A multiply or divide by a
 
 ## Divide by a constant
 
+A multiply by a constant that only an address reads is no multiply when the constant is 3, 5 or 9 times an address scale (1, 2, 4 or 8): `a[3*i]` over `int` is `lea t,[i+i*2]` and `[a+t*4]`, `p[12*i]` over `char` the same. The `lea` is as many bytes as `imul r,r,imm8` and one clock, so the rule holds at every level, -Os included; the scale is the address's, not a `shl`. Any other constant a GEP index is multiplied by is priced as the patterns price it (`cheaper_chain`: a chain below the `imul` in the profile's channel, bytes then clocks tuned for size), where the index had been an `imul` whatever the table said. A pointer something else than an access reads keeps the old multiply.
+
 `division::reciprocal` ([`division.rs`](../optimizations/backend/division.md)) replaces a signed dword division by a constant divisor with a multiply by a magic number (LLVM's `SignedDivisionByConstantInfo`, `magic`) when the CPU's multiply costs less than its divide. Negative divisors divide by the magnitude and negate; zero, `-1`, `INT_MIN` and word divisions keep `idiv`. The cost of the reciprocal is the multiply's clocks for the magic's bits, the shifts and corrections, and the reconstruction of the remainder (a `scale` chain, or an `imul`), counting each dword operand's prefix decode (`prefix` in `timings.times`); `timing.rs` holds audited core-clock ranges per form and width, and a CPU with no entry keeps `idiv`. When only the quotient is used, the reconstruction is left out of the estimate and the code. At -Os the division stays: the magic is a 5-byte `mov` before the multiply and corrections, where `cdq; idiv` is 3 bytes.
 
 ```

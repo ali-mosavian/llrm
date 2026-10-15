@@ -3365,7 +3365,21 @@ impl Selector<'_, '_, '_> {
         let exact = one.is_some_and(|(index, _)| matches!(index, Operand::Value(index) if self.exact.contains(&index)));
         let mut sum: Option<Held> = None;
         let mut parts: Vec<Held> = Vec::new();
+        // The scale an address takes of the one index's constant factor where
+        // the factor is `3`, `5` or `9` times one of the address's own: the
+        // `lea` makes the first and the address the second, `[base+t*4]`.
+        let mut tail = 1;
+        let absorbs = width == 4
+            && one.is_some()
+            && self.only_addressed(address)
+            && matches!(
+                pointer.moved(offset as i64),
+                Pointer::Based { index: None, .. }
+                    | Pointer::Frame { index: None, .. }
+                    | Pointer::Global { base: None, plus: None, .. }
+            );
         for (_, scale, index) in peeled {
+            let (index, scale) = if absorbs { self.absorbable(index, scale as i64) } else { (index, scale as i64) };
             let index_ty = function.operand_type(&self.module.context, index).expect("a typed index");
             let mut held = self.held(index, index_ty, at, out)?;
             if held.width > width {
@@ -3376,15 +3390,37 @@ impl Selector<'_, '_, '_> {
                 held = wide;
             }
             if scale != 1 {
-                let scaled = Held { value: self.fresh(), width };
-                let what = if scale.is_power_of_two() {
+                let mut scaled = Held { value: self.fresh(), width };
+                if absorbs && matches!(scale, 2 | 4 | 8) {
+                    // The address's own scale: no instruction.
+                    tail = scale;
+                    scaled = held;
+                } else if scale.count_ones() == 1 {
                     let shift = Loc::Imm(Imm { value: i64::from(scale.trailing_zeros()), width: 1, address: None });
-                    semantics(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(held), shift])
+                    let what =
+                        semantics(Operation::Binary, "shl", vec![Loc::Held(scaled)], vec![Loc::Held(held), shift]);
+                    out.push(insn(at, what));
+                } else if let Some((lea, rest)) = absorbs.then(|| Self::lea_factor(scale)).flatten() {
+                    // One `lea` for the factor, and the rest is the address's
+                    // scale: no instruction for it, the same bytes as the
+                    // `imul` and one clock.
+                    let cell = Mem { base: Some(held), index: Some(held), scale: lea, ..Mem::new(None, width) };
+                    out.push(insn(
+                        at,
+                        semantics(Operation::Address, "lea", vec![Loc::Held(scaled)], vec![Loc::Mem(cell)]),
+                    ));
+                    tail = rest;
+                } else if scale.count_ones() != 1
+                    && width == 4
+                    && let Some(chain) = self.cheaper_chain(scale, i64::from(width))
+                {
+                    self.emit_chain(at, out, Loc::Held(held), &chain, scaled);
                 } else {
-                    let factor = Loc::Imm(Imm { value: scale as i64, width, address: None });
-                    semantics(Operation::Multiply, "imul", vec![Loc::Held(scaled)], vec![Loc::Held(held), factor])
-                };
-                out.push(insn(at, what));
+                    let factor = Loc::Imm(Imm { value: scale, width, address: None });
+                    let what =
+                        semantics(Operation::Multiply, "imul", vec![Loc::Held(scaled)], vec![Loc::Held(held), factor]);
+                    out.push(insn(at, what));
+                }
                 held = scaled;
             }
             parts.push(held);
@@ -3433,8 +3469,14 @@ impl Selector<'_, '_, '_> {
         // A global's symbol is the displacement of the register holding the
         // index, [index+symbol], and the address as a value their sum.
         if let Pointer::Global { space, index, offset: start, base: None, .. } = pointer {
-            let indexed =
-                Pointer::Global { space, index, offset: start + offset as i64, base: Some(sum), scale: 1, plus: None };
+            let indexed = Pointer::Global {
+                space,
+                index,
+                offset: start + offset as i64,
+                base: Some(sum),
+                scale: tail,
+                plus: None,
+            };
             if self.only_addressed(address) || self.indexed_by_bytes(address) {
                 self.pointers.insert(address, indexed);
             } else {
@@ -3462,11 +3504,11 @@ impl Selector<'_, '_, '_> {
         if self.only_addressed(address) || chained {
             let indexed = match pointer.moved(offset as i64) {
                 Pointer::Based { base, index: None, offset, segment, .. } => {
-                    Some(Pointer::Based { base, index: Some(sum), scale: 1, offset, segment })
+                    Some(Pointer::Based { base, index: Some(sum), scale: tail, offset, segment })
                 }
                 _ if chained && !self.only_addressed(address) => None,
                 Pointer::Frame { disp, index: None, home, .. } => {
-                    Some(Pointer::Frame { disp, index: Some(sum), scale: 1, home })
+                    Some(Pointer::Frame { disp, index: Some(sum), scale: tail, home })
                 }
                 Pointer::Far { selector, base: Some(base), index: None, offset, .. } => {
                     Some(Pointer::Far { selector, base: Some(base), index: Some(sum), scale: 1, offset })
@@ -3964,6 +4006,35 @@ impl Selector<'_, '_, '_> {
         (at, total, adds)
     }
 
+    /// `scale` as `lea`'s factor, `2`, `4` or `8` plus one... that is `f` in
+    /// {3, 5, 9}, times an address scale `s` in {1, 2, 4, 8}: `(f - 1, s)`, the
+    /// scale `lea r,[x+x*(f-1)]` takes and the scale left for the address.
+    /// The index of `index * scale` with the index's own constant factor taken
+    /// into the scale where the address can take what is left: `x * 3` over
+    /// elements of 4 bytes is `x` at 12, which is `lea` by 3 and an address
+    /// scale of 4. The product is then made only if something else reads it.
+    fn absorbable(
+        &mut self,
+        index: Operand,
+        scale: i64,
+    ) -> (Operand, i64) {
+        let (inner, merged, _) = self.unscaled(index, scale);
+        let Operand::Value(product) = index else { return (index, scale) };
+        let fits = matches!(merged, 1 | 2 | 4 | 8) || Self::lea_factor(merged).is_some();
+        let dword =
+            self.function.operand_type(&self.module.context, inner).is_some_and(|ty| self.width(ty).ok() == Some(4));
+        if inner == index || !fits || !dword {
+            return (index, scale);
+        }
+        let product = self.value(product);
+        self.folded.insert(product);
+        (inner, merged)
+    }
+
+    fn lea_factor(scale: i64) -> Option<(i64, i64)> {
+        [3, 5, 9].into_iter().find_map(|f| [1, 2, 4, 8].into_iter().find(|s| f * s == scale).map(|s| (f - 1, s)))
+    }
+
     /// `index` times `scale` with the index's own multiply by a constant
     /// taken into the scale, as LLVM's address matcher folds a `mul` or
     /// `shl` into it; and the factor the index's range must keep from
@@ -3980,13 +4051,20 @@ impl Selector<'_, '_, '_> {
             return (index, scale, 1);
         };
         let width = self.width(instruction.ty).unwrap_or(0);
-        let factor = match (&instruction.opcode, self.constant(*by, width)) {
-            (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => factor,
-            (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => 1 << count,
+        // A product's constant is either factor: `mul 12, x` is `mul x, 12`.
+        let (factor, inner) = match (&instruction.opcode, self.constant(*by, width)) {
+            (Opcode::Binary(BinaryOp::Mul), Some(factor)) if factor > 0 => (factor, instruction.operands[0]),
+            (Opcode::Binary(BinaryOp::Mul), None) => match self.constant(instruction.operands[0], width) {
+                Some(factor) if factor > 0 => (factor, *by),
+                _ => return (index, scale, 1),
+            },
+            (Opcode::Binary(BinaryOp::Shl), Some(count)) if (0..8).contains(&count) => {
+                (1 << count, instruction.operands[0])
+            }
             _ => return (index, scale, 1),
         };
         let wraps = if instruction.flags.contains(llrm_mir::opcode::Flags::NSW) { 1 } else { factor };
-        (instruction.operands[0], scale * factor, wraps)
+        (inner, scale * factor, wraps)
     }
 
     /// The pointer `operand` offsets by constants.

@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl, one clock; jpeg_fixed/jpeg_single bq32 and parity/qbsp bq32 -O2 fewer instructions and 1-2 bytes; no row worse"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84337547
-code_bytes = 6496
+instructions = 84239250
+code_bytes = 6495
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431943
-code_bytes = 6039
+instructions = 89333638
+code_bytes = 6038
 data_bytes = 29209
 bss_bytes = 0
 

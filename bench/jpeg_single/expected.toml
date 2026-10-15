@@ -1,4 +1,4 @@
-reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
+reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl, one clock; jpeg_fixed/jpeg_single bq32 and parity/qbsp bq32 -O2 fewer instructions and 1-2 bytes; no row worse"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63440134
-code_bytes = 6278
+instructions = 63341829
+code_bytes = 6277
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613330
-code_bytes = 5868
+instructions = 64515024
+code_bytes = 5867
 data_bytes = 29697
 bss_bytes = 0
 

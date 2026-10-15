@@ -1,5 +1,5 @@
-reason = "frame register held as a value at m32 against main's new rows: instructions down in 24 rows (fib -10%, nbody -10%, jpeg_fixed -O2 -4%), queens +2% and jpeg -Os +0.1..0.8%; esp-addressed code is a byte longer an access"
-blessed = "2026-10-14"
+reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl, one clock; jpeg_fixed/jpeg_single bq32 and parity/qbsp bq32 -O2 fewer instructions and 1-2 bytes; no row worse"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 1054
@@ -30,8 +30,8 @@ data_bytes = 13
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 1158
-code_bytes = 550
+instructions = 1153
+code_bytes = 548
 data_bytes = 19
 bss_bytes = 0
 
