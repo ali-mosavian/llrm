@@ -93,7 +93,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 | `run` | `tests/run` in DOSBox for the languages the diff touches (`LLRM_RUN_ONLY`) | every program prints its `.out` | run |
 | `pytest` | `tools`, `crates`, `tests/*.py` | pass | python |
 | `pytest-programs` | `tests/test_programs_compile.py`, `tests/test_loops.py` | every program compiles bar `tools/sizes-known.txt`; loop checks hold | python |
-| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count off its `expected.toml` baseline | tools |
+| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count off its `expected.toml` baseline (`BASE` lines: the same against the base's counts, a dry run) | tools |
 | `torture` | `tools/torture/torture.py --gate`, the fixed sample | each program is a pass or a named design difference | tools |
 | `identity` | `tests/toolchain.rs` `test_the_identity_gate_passes` | the compiler built against itself makes identical objects | identity |
 | `turbo` | Turbo Debugger sessions (`tests/turbo.rs`) | the debugger shows the same values | reference |
