@@ -160,12 +160,15 @@ fn _integer_loads(
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
+        let mut changed = false;
         for one in &block.insns {
             let mut one = Arc::clone(one);
-            if let Some(what) = one.what.clone() {
-                if what.op == Operation::FloatLoad
-                    && name_is(&what, "fild")
-                    && what.sources.len() == 1
+            // Only a conversion of an integer is looked into: every other
+            // instruction's semantics were cloned here to be dropped.
+            if let Some(what) =
+                one.what.as_ref().filter(|what| what.op == Operation::FloatLoad && name_is(what, "fild")).cloned()
+            {
+                if what.sources.len() == 1
                     && what.dests.len() == 1
                     && matches!(what.sources[0], Loc::Held(_) | Loc::Imm(_))
                     && width_of(&what.sources[0]).is_some_and(|width| width == 2 || width == 4)
@@ -178,6 +181,7 @@ fn _integer_loads(
                         let mut made = (*one).clone();
                         made.what = Some(Semantics { name: Some(name.to_owned()), sources: Vec::new(), ..what });
                         insns.push(Arc::new(made));
+                        changed = true;
                         continue;
                     }
                     if let (Loc::Imm(Imm { value, width, .. }), Some(pool)) = (&what.sources[0], pool.as_deref_mut()) {
@@ -187,6 +191,7 @@ fn _integer_loads(
                         made.what =
                             Some(Semantics { name: Some("fld".to_owned()), sources: vec![Loc::Mem(cell)], ..what });
                         insns.push(Arc::new(made));
+                        changed = true;
                         continue;
                     }
                     let Some(frame) = frame.as_deref_mut() else {
@@ -213,13 +218,18 @@ fn _integer_loads(
                     made.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
                     made.uses = one.uses.iter().copied().filter(|arg| !uses.contains(arg)).collect();
                     one = Arc::new(made);
+                    changed = true;
                 }
             }
             insns.push(one);
         }
-        let mut made = block.clone();
-        made.insns = insns.into();
-        blocks.push(made);
+        if changed {
+            let mut made = block.clone();
+            made.insns = insns.into();
+            blocks.push(made);
+        } else {
+            blocks.push(block.clone());
+        }
     }
     let mut out = body.clone();
     out.blocks = blocks;
@@ -232,6 +242,18 @@ fn _integer_stores(
     mut frame: Option<&mut Frame>,
     basic_semantics: bool,
 ) -> Result<LirBody, Raised> {
+    // The readers of every value are only asked for a conversion's result.
+    let converts = |one: &Arc<Insn>| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::FloatStore
+                && (name_is(what, "fistp") || name_is(what, "fisttp"))
+                && what.sources.len() == 1
+                && matches!(what.dests.as_slice(), [Loc::Held(result)] if result.width == 2 || result.width == 4)
+        })
+    };
+    if !body.insns().iter().any(converts) {
+        return Ok(body.clone());
+    }
     let mut integer_readers: HashSet<u32> = body.pins.keys().copied().collect();
     for block in &body.blocks {
         integer_readers.extend(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
@@ -1926,6 +1948,16 @@ pub fn assigned(
     basic_semantics: bool,
     cpu: &Profile,
 ) -> Result<LirBody, Raised> {
+    // Nothing here to assign: the two integer passes below read each
+    // instruction's semantics and rebuild every block, on a body with no x87
+    // work in it (13 runs, 137 M instructions of d_faces -O1).
+    if _floating_values(body).is_empty()
+        && !body.insns().iter().any(|one| {
+            one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::FloatLoad | Operation::FloatStore))
+        })
+    {
+        return Ok(body.clone());
+    }
     let loaded = _integer_loads(body, frame.as_deref_mut(), pool)?;
     let body = _integer_stores(&loaded, frame.as_deref_mut(), basic_semantics)?;
     let floating = _floating_values(&body);
