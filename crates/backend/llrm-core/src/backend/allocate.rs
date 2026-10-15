@@ -2066,6 +2066,7 @@ fn _allocated(
         let Some(mine) = facts.live.get(&value).cloned() else {
             continue;
         };
+        llrm_support::debug!("events", "{}: pop v{value} {at:?} weight {:.3}", body.name, facts.live.weight(value));
         let mut order: Vec<RegId> = match fixed.get(&value) {
             None => target::order(facts.confined.get(&value), segments, classes),
             Some(register) => vec![*register],
@@ -2114,6 +2115,7 @@ fn _allocated(
         order.sort_by_key(|one| _whole(*one) == segments.data);
         let width = facts.widths.get(&value).copied().unwrap_or(4);
         if let Some(got) = _free(&mine, &order, &union, &facts.live, &facts.masks, width) {
+            llrm_support::debug!("events", "{}:   v{value} takes free {}", body.name, got.repr());
             r#where.insert(value, got);
             union.add(_whole(got), value, &facts.live);
             stage.insert(value, Stage::Done);
@@ -2156,6 +2158,13 @@ fn _allocated(
                 )
             });
             if let Some((got, victims)) = evicted {
+                llrm_support::debug!(
+                    "events",
+                    "{}:   v{value} evicts {:?} from {}",
+                    body.name,
+                    victims.iter().map(|one| (*one, facts.live.weight(*one))).collect::<Vec<_>>(),
+                    got.repr()
+                );
                 if !cascades.contains_key(&value) {
                     cascades.insert(value, newest);
                     newest += 1;
@@ -2511,6 +2520,16 @@ fn _allocated(
         for one in gone.iter().chain(&clashing) {
             if let Some(register) = r#where.remove(one) {
                 union.remove(_whole(register), *one, &facts.live);
+                llrm_support::debug!(
+                    "events",
+                    "{}:   v{one} loses {} to the rewrite, stage {:?}",
+                    body.name,
+                    register.repr(),
+                    stage.get(one)
+                );
+                if stage.get(one) == Some(&Stage::Done) {
+                    stage.insert(*one, Stage::Assign);
+                }
             }
         }
         // What the rewrite made or moved competes again; the rest still waits.
