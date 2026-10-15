@@ -937,7 +937,7 @@ def test_smoke_plans_the_fast_tiers_steps_cut_to_the_smoke_list_with_docs_and_th
     assert not {"run", "bench", "torture", "qcport", "measure", "identity", "turbo", "cv4", "dos-slow", "integration", "pytest"} & set(p.steps)
     assert "facts" in gate.plan(["tools/gate/pytest_shards.py"], "smoke").steps and "facts" in p.steps
     docs_only = gate.plan(["docs/working/gate.md"], "smoke")
-    assert docs_only.steps == ["docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
+    assert docs_only.steps == ["products", "docs", "changed-tests"], "a docs-only PR still has its generated pages checked, and builds nothing"
 
 
 def test_the_changed_tests_step_runs_the_test_beside_a_changed_tool_and_the_root_binary_it_changed():
@@ -1063,3 +1063,22 @@ def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
     if done.returncode and "Failed to connect" in done.stderr:
         pytest.skip("no systemd user manager")
     assert done.stdout.strip() == "1", (done.stdout, done.stderr)
+
+
+def test_smoke_fails_a_pr_that_tracks_build_products_and_does_not_build_for_it(tmp_path):
+    """#1777 tracked d1.o, d4.o and d8.o and was smoke-green: only the train's integration step ran tests/tracked_build_products.rs."""
+    import re
+    import subprocess as sp
+
+    rust = (gate.ROOT / "tests/tracked_build_products.rs").read_text()
+    assert tuple(re.search(r"PRODUCTS: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.PRODUCTS
+    assert tuple(re.search(r"FIXTURES: &\[&str\] = &\[(.*?)\]", rust).group(1).replace('"', "").replace(" ", "").split(",")) == gate.FIXTURES
+    assert gate.strays(["d1.o", "src/x.OBJ", "tests/inputs/a.o", "a.rs", "Makefile", "x.map"]) == ["d1.o", "src/x.OBJ", "x.map"]
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["crates/backend/llrm-core/src/lib.rs"]):
+        assert "products" in gate.plan(files, "smoke").steps, files
+    git = _repo(tmp_path)
+    assert gate.products_main(tmp_path) == 0
+    (tmp_path / "d1.o").write_text("x")
+    git("add", "d1.o")
+    assert gate.products_main(tmp_path) == 1
+    assert gate.commands(gate.plan(["docs/x.md"], "smoke"), gate.load(), gate.packages())["products"].startswith("python3 -c")

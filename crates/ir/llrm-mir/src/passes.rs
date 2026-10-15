@@ -1408,6 +1408,9 @@ pub struct ModuleAnalyses {
     /// that keeps a position in it is told which bodies moved since its last
     /// run without a look at each.
     edit_log: Vec<GlobalId>,
+    /// Which log this is: positions in `edit_log` mean something only to the
+    /// analyses made over it, not to ones carried from before.
+    log_epoch: u64,
     declarations_open: bool,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
@@ -1417,6 +1420,16 @@ pub struct ModuleAnalyses {
     /// brought up to date works everything out afresh.
     scratch: bool,
 }
+
+/// What a module's analyses leave for the next that is made over it: the
+/// results held, to be reused when worked out again the same, and what the
+/// analyses that bring their last run up to date kept (`memo`).
+pub struct Carried {
+    dropped: HashMap<TypeId, Rc<dyn Any>>,
+    memos: HashMap<TypeId, Box<dyn Any>>,
+}
+
+static NEXT_LOG_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl ModuleAnalyses {
     pub fn new(program: Rc<ProgramProxy>) -> Self {
@@ -1429,11 +1442,29 @@ impl ModuleAnalyses {
             functions: HashMap::default(),
             edited: BTreeSet::new(),
             edit_log: Vec::new(),
+            log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
         }
+    }
+
+    /// What `self` leaves for the analyses made next over this module.
+    pub fn carried(self) -> Carried {
+        let mut dropped = self.dropped;
+        dropped.extend(self.results.into_iter().map(|(id, (_, held))| (id, held)));
+        Carried { dropped, memos: self.memos }
+    }
+
+    /// `self`, with what the analyses before it left.
+    pub fn carrying(
+        mut self,
+        before: Carried,
+    ) -> Self {
+        self.dropped = before.dropped;
+        self.memos = before.memos;
+        self
     }
 
     /// The `T` an analysis left for its next run, made empty the first time:
@@ -1632,6 +1663,12 @@ impl ModuleAnalyses {
     /// The bodies reported edited so far, oldest first.
     pub fn edit_log(&self) -> &[GlobalId] {
         &self.edit_log
+    }
+
+    /// Which `edit_log` this is, for an analysis that keeps a position in it: a
+    /// position kept by analyses carried over from before is of another log.
+    pub fn log_epoch(&self) -> u64 {
+        self.log_epoch
     }
 
     /// Body `id` was edited by a function pass over it alone, which left
@@ -1967,7 +2004,11 @@ impl PassManager {
                     required: self.required.clone(),
                     ..ModuleAnalyses::new(analyses.proxy(program, at))
                 };
+                if let Some(before) = analyses.uncarry(at) {
+                    modules = modules.carrying(before);
+                }
                 let made = self.over(at, &mut program.modules[at], &mut modules, start..end, &dumps[at])?;
+                analyses.carry(at, modules.carried());
                 if made.iter().any(|one| !one.changes.is_empty())
                     || spanned("interface", || interface(&program.modules[at])) != before
                 {
