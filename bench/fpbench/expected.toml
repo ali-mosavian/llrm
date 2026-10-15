@@ -1,5 +1,5 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "hoist prices a float load its reader folds as the reader's own memory form (and holds floats to the x87 stack's depth): a loop that read 16 hoisted-and-spilled matrix values now reads them as memory operands, as gcc does (d_faces, -O2 clocks vs gcc 1.17 -> 1.12). Here: nbody -Os instructions -6.5%, clocks -2.8%; nbody -O2 (QB) instructions +2.1% and memory operands +6.9% with clocks -1.4% and 20 B less code; fpbench/nbody_single -Os memory operands +32% (the folded loads), instructions -2.4%, clocks -1.6%, 8 B less code."
+blessed = "2026-10-16"
 
 [bas.O2]
 instructions = 21692
@@ -50,12 +50,11 @@ data_bytes = 8
 bss_bytes = 0
 
 [c.Os]
-instructions = 19768
-memory_operands = 3003
-code_bytes = 336
+instructions = 19288
+memory_operands = 3963
+code_bytes = 328
 data_bytes = 8
 bss_bytes = 0
-kernel_ms = 0.2643
 
 [nib.O2]
 instructions = 19914
@@ -65,12 +64,11 @@ data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
-instructions = 19929
-memory_operands = 3003
-code_bytes = 484
+instructions = 19449
+memory_operands = 3963
+code_bytes = 476
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2669
 
 [ow.O2]
 instructions = 21603
