@@ -1,4 +1,4 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+reason = "on top of main: x87 compare puts its left on top and names the right's slot (jpeg_single bq32 -1.7% instructions, fewer code bytes); jpeg_fixed bq32 +-3 instructions is an integer program (layout-dependent copy path)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338433
+instructions = 84338434
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89432825
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0
