@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranger.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranger.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:dbd9a7cd6bfc87f80fb41f5e0050cdafe8f6a91f36d968660aae7bb9a98e4cbd -->
+<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:4a7ed7ee474d79371fdceb41545900b725e2af344c24b87e5cc06476b0ba4c09 -->
 
 # ranger
 
@@ -22,6 +22,18 @@ assumes above a block give, and the loop's operations worked from them, one
 value at a block. An answer keeps the boxed values it read, so the next
 round of `ranges::inductive_boxes` works out only what a changed box
 reaches.
+
+## Example
+`if x < 5 { y = x + 1 }`:
+
+```text
+  b0:  %c = icmp slt %x, 5        b1 (taken):     %x in [lo, 4]   %y in [lo+1, 5]
+       br %c, b1, b2              b2 (not taken): %x in [5, hi]
+                                  b3 (join):      nothing known of %x
+```
+
+From unit test `a_guard_bounds_the_value_on_its_edge_and_not_at_the_join` in
+`ranger_tests.rs`.
 
 ## Provides
 `EdgeRanger::at`, `LoopView::at`.

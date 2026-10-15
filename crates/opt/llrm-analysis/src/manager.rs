@@ -1255,8 +1255,8 @@ impl Analysis for TableLoads {
                 Change::Parameters => return None,
             }
         }
-        let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
-        let mut asked: BTreeSet<InstId> = BTreeSet::new();
+        let mut seen: llrm_mir::dense::IdSet<InstId> = work.iter().copied().collect();
+        let mut asked = llrm_mir::dense::IdSet::<InstId>::new();
         while let Some(inst) = work.pop() {
             if function.parent(inst).is_none() {
                 continue;
@@ -1273,13 +1273,13 @@ impl Analysis for TableLoads {
                 }
             }
         }
-        let mut found: BTreeSet<InstId> = previous
+        let mut found: llrm_mir::dense::IdSet<InstId> = previous
             .iter()
             .copied()
             .filter(|&inst| function.parent(inst).is_some() && !asked.contains(&inst))
             .collect();
-        found.extend(asked.into_iter().filter(|&inst| consts::is_table_load(&unit, inst)));
-        Some(found.into_iter().collect())
+        found.extend(asked.iter().filter(|&inst| consts::is_table_load(&unit, inst)));
+        Some(found.iter().collect())
     }
 }
 

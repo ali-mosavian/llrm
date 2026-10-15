@@ -18,6 +18,18 @@
 //! round of `ranges::inductive_boxes` works out only what a changed box
 //! reaches.
 //!
+//! # Example
+//! `if x < 5 { y = x + 1 }`:
+//!
+//! ```text
+//!   b0:  %c = icmp slt %x, 5        b1 (taken):     %x in [lo, 4]   %y in [lo+1, 5]
+//!        br %c, b1, b2              b2 (not taken): %x in [5, hi]
+//!                                   b3 (join):      nothing known of %x
+//! ```
+//!
+//! From unit test `a_guard_bounds_the_value_on_its_edge_and_not_at_the_join` in
+//! `ranger_tests.rs`.
+//!
 //! # Provides
 //! [`EdgeRanger::at`], [`LoopView::at`].
 //!
@@ -31,19 +43,19 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
-use llrm_support::hash::{HashMap, IndexMap};
+use llrm_support::hash::HashMap;
 
 use crate::cfg;
-use crate::consts::Known;
-use crate::memory::Unit;
+use crate::memory::{Knowns, Unit};
 use crate::ranges::{self, Interval, Intervals, Lookup};
 
 /// What the ranger has worked out of one body: the answers it keeps.
 #[derive(Default)]
 struct Memo {
     /// (value, block) -> what holds after the block's own instructions.
-    own: RefCell<HashMap<(ValueId, i64), Option<Rc<Interval>>>>,
+    own: RefCell<IdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
     /// Block -> what the edge from its sole predecessor sets, where it has one.
     edges: RefCell<HashMap<i64, Rc<Option<Intervals>>>>,
     /// Block -> what each of its assumes sets below it, in order.
@@ -77,7 +89,7 @@ impl std::fmt::Debug for EdgeFacts {
         &self,
         out: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        write!(out, "EdgeFacts({} answers)", self.memo.own.borrow().len())
+        write!(out, "EdgeFacts({} answers)", self.answers())
     }
 }
 
@@ -86,14 +98,14 @@ impl EdgeFacts {
     pub fn over<'a, 'u>(
         &self,
         unit: &'a Unit<'u>,
-        facts: &'a IndexMap<ValueId, Known>,
+        facts: &'a Knowns,
     ) -> EdgeRanger<'a, 'u> {
         EdgeRanger::with(Rc::clone(&self.memo), unit, facts)
     }
 
     /// How many answers are held.
     pub fn answers(&self) -> usize {
-        self.memo.own.borrow().len()
+        self.memo.own.borrow().iter().map(|(_, held)| held.len()).sum()
     }
 
     /// Every block's facts, as the table gave them: asked of every value at
@@ -101,12 +113,12 @@ impl EdgeFacts {
     pub fn blocks(
         &self,
         unit: &Unit,
-        facts: &IndexMap<ValueId, Known>,
-    ) -> IndexMap<i64, Intervals> {
+        facts: &Knowns,
+    ) -> llrm_support::hash::IndexMap<i64, Intervals> {
         use llrm_mir::dense::Dense;
         let ranger = self.over(unit, facts);
         let function = unit.function;
-        let mut found = IndexMap::default();
+        let mut found = llrm_support::hash::IndexMap::default();
         for &block in function.layout() {
             let at = cfg::id(block);
             let scope: Intervals = (0..function.value_count())
@@ -134,7 +146,9 @@ impl EdgeFacts {
         let mut kept = |at: i64| *judged.entry(at).or_insert_with(|| keep(at));
         match Rc::get_mut(&mut self.memo) {
             Some(memo) => {
-                memo.own.get_mut().retain(|(_, at), _| kept(*at));
+                for (_, held) in memo.own.get_mut().iter_mut() {
+                    held.retain(|at, _| kept(*at));
+                }
                 memo.edges.get_mut().retain(|at, _| kept(*at));
                 memo.assumes.get_mut().retain(|at, _| kept(*at));
                 memo.sole.get_mut().retain(|at, _| kept(*at));
@@ -142,14 +156,11 @@ impl EdgeFacts {
             }
             None => {
                 let memo = Memo::default();
-                *memo.own.borrow_mut() = self
-                    .memo
-                    .own
-                    .borrow()
-                    .iter()
-                    .filter(|((_, at), _)| kept(*at))
-                    .map(|(k, v)| (*k, v.clone()))
-                    .collect();
+                for (value, held) in self.memo.own.borrow().iter() {
+                    let stands: HashMap<i64, Option<Rc<Interval>>> =
+                        held.iter().filter(|(at, _)| kept(**at)).map(|(at, found)| (*at, found.clone())).collect();
+                    memo.own.borrow_mut().insert(value, stands);
+                }
                 *memo.edges.borrow_mut() = self
                     .memo
                     .edges
@@ -177,7 +188,7 @@ impl EdgeFacts {
 /// Edge facts of one body, asked of by value and block.
 pub struct EdgeRanger<'a, 'u> {
     unit: &'a Unit<'u>,
-    facts: &'a IndexMap<ValueId, Known>,
+    facts: &'a Knowns,
     shape: std::cell::OnceCell<Cow<'u, cfg::Shape>>,
     memo: Rc<Memo>,
 }
@@ -218,7 +229,7 @@ impl Lookup for Below<'_, '_, '_> {
 impl<'a, 'u> EdgeRanger<'a, 'u> {
     pub fn new(
         unit: &'a Unit<'u>,
-        facts: &'a IndexMap<ValueId, Known>,
+        facts: &'a Knowns,
     ) -> Self {
         Self::with(Rc::default(), unit, facts)
     }
@@ -226,7 +237,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
     fn with(
         memo: Rc<Memo>,
         unit: &'a Unit<'u>,
-        facts: &'a IndexMap<ValueId, Known>,
+        facts: &'a Knowns,
     ) -> Self {
         Self { unit, facts, shape: std::cell::OnceCell::new(), memo }
     }
@@ -248,11 +259,11 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         value: ValueId,
         at: i64,
     ) -> Option<Rc<Interval>> {
-        if let Some(found) = self.memo.own.borrow().get(&(value, at)) {
+        if let Some(found) = self.memo.own.borrow().get(&value).and_then(|held| held.get(&at)) {
             return found.clone();
         }
         let found = self.worked(value, at).map(Rc::new);
-        self.memo.own.borrow_mut().insert((value, at), found.clone());
+        self.memo.own.borrow_mut().get_or_insert_with(value, HashMap::default).insert(at, found.clone());
         found
     }
 
@@ -418,7 +429,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
 /// and the graph, shared by every `LoopView` of it.
 pub struct LoopContext<'a, 'u> {
     pub unit: &'a Unit<'u>,
-    pub facts: &'a IndexMap<ValueId, Known>,
+    pub facts: &'a Knowns,
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
     pub graph: &'a [cfg::Block],
@@ -426,14 +437,14 @@ pub struct LoopContext<'a, 'u> {
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
-    made: std::cell::OnceCell<HashMap<ValueId, InstId>>,
+    made: std::cell::OnceCell<IdMap<ValueId, InstId>>,
 }
 
 impl<'a, 'u> LoopContext<'a, 'u> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         unit: &'a Unit<'u>,
-        facts: &'a IndexMap<ValueId, Known>,
+        facts: &'a Knowns,
         shape: &'a cfg::Shape,
         assumed: &'a crate::assumptions::Assumptions,
         graph: &'a [cfg::Block],
@@ -445,12 +456,15 @@ impl<'a, 'u> LoopContext<'a, 'u> {
     }
 
     /// The value each operation makes, found when first asked.
-    fn makers(&self) -> &HashMap<ValueId, InstId> {
+    fn makers(&self) -> &IdMap<ValueId, InstId> {
         self.made.get_or_init(|| {
-            self.operations
-                .iter()
-                .filter_map(|&inst| self.unit.function.instruction(inst).result.map(|result| (result, inst)))
-                .collect()
+            let mut found = IdMap::new();
+            for &inst in self.operations {
+                if let Some(result) = self.unit.function.instruction(inst).result {
+                    found.insert(result, inst);
+                }
+            }
+            found
         })
     }
 }
@@ -480,12 +494,12 @@ pub struct LoopView<'r, 'a, 'u> {
     boxes: RefCell<Intervals>,
     round: std::cell::Cell<u32>,
     /// The round each box last changed in.
-    changed: RefCell<HashMap<ValueId, u32>>,
+    changed: RefCell<IdMap<ValueId, u32>>,
     /// The boxed values read by the answers being worked out, innermost last.
     reading: RefCell<Vec<Vec<ValueId>>>,
-    closed: RefCell<HashMap<ValueId, Held<Option<Rc<Interval>>>>>,
+    closed: RefCell<IdMap<ValueId, Held<Option<Rc<Interval>>>>>,
     layers: RefCell<HashMap<i64, Held<Rc<Vec<Intervals>>>>>,
-    swept: RefCell<HashMap<(ValueId, i64), Held<Option<Rc<Interval>>>>>,
+    swept: RefCell<IdMap<ValueId, HashMap<i64, Held<Option<Rc<Interval>>>>>>,
     failed: RefCell<Option<String>>,
 }
 
@@ -749,7 +763,8 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let kept = self
             .swept
             .borrow()
-            .get(&(value, at))
+            .get(&value)
+            .and_then(|held| held.get(&at))
             .filter(|held| self.stands(held.round, &held.reads))
             .map(|held| (held.answer.clone(), Rc::clone(&held.reads)));
         if let Some((answer, reads)) = kept {
@@ -777,7 +792,10 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
             None => base,
         };
         let reads = self.end();
-        self.swept.borrow_mut().insert((value, at), Held { answer: found.clone(), round: self.round.get(), reads });
+        self.swept
+            .borrow_mut()
+            .get_or_insert_with(value, HashMap::default)
+            .insert(at, Held { answer: found.clone(), round: self.round.get(), reads });
         found
     }
 }
@@ -786,7 +804,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
 /// what the table `states` holds there.
 pub fn check(
     unit: &Unit,
-    facts: &IndexMap<ValueId, Known>,
+    facts: &Knowns,
     states: &ranges::EdgeStates,
 ) {
     check_against(&EdgeRanger::new(unit, facts), unit, states);
