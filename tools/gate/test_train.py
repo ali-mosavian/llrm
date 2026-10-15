@@ -168,3 +168,11 @@ def test_the_tip_and_main_are_gated_in_targets_and_logs_of_their_own(monkeypatch
 def test_a_gating_test_writes_its_logs_under_its_own_directory(tmp_path):
     """#1784's tests wrote tip-test_*.log into ~/scratch/train-logs, where the real train keeps its evidence."""
     assert train.LOGS.is_relative_to(tmp_path), train.LOGS
+
+
+def test_trains_of_different_names_share_no_lock_worktree_or_target(tmp_path):
+    """One train at a time left 17 PRs waiting: the lock, the tip's and main's worktrees were fixed paths, so a second train would have
+    removed the first one's trees (and the target is named after the tree, so a tree of its own is a target of its own)."""
+    first, second = train.places("train", tmp_path), train.places("train5", tmp_path)
+    assert train.places("train", tmp_path) == (tmp_path / "scratch/train.lock", tmp_path / "scratch/train-tree", tmp_path / "scratch/train-main")
+    assert not set(first) & set(second) and len({p.name for p in (*first, *second)}) == 6
