@@ -435,11 +435,12 @@ pub fn live_of(
     wanted: &IdSet<ValueId>,
 ) -> Liveness {
     let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
-    for (value, range) in ranges_of(function, wanted) {
-        for at in range.into {
+    let ranges = ranges_of(function, wanted);
+    for (value, range) in ranges.iter() {
+        for &at in &range.into {
             found.live_in.entry(at).or_default().insert(value);
         }
-        for at in range.out {
+        for &at in &range.out {
             found.live_out.entry(at).or_default().insert(value);
         }
     }
@@ -451,13 +452,13 @@ pub fn live_of(
 pub fn ranges_of(
     function: &Function,
     wanted: &IdSet<ValueId>,
-) -> BTreeMap<ValueId, Range> {
+) -> IdMap<ValueId, Range> {
     use llrm_mir::module::ValueDef;
     enum Reach {
         After(BlockId, ValueId),
         Out(BlockId, ValueId),
     }
-    let mut found: BTreeMap<ValueId, Range> = BTreeMap::new();
+    let mut found: IdMap<ValueId, Range> = IdMap::new();
     let Some(&entry) = function.layout().first() else { return found };
     // Where a value is made: a block, and whether by a phi. A value made by
     // nothing here arrives at the entry.
@@ -470,7 +471,7 @@ pub fn ranges_of(
     // Each block's instructions by position, worked out once for the blocks a
     // read is asked about in: a scan of the block for every read is the block
     // squared.
-    let mut positions: BTreeMap<i64, llrm_support::hash::HashMap<llrm_mir::module::InstId, usize>> = BTreeMap::new();
+    let mut positions: IdMap<BlockId, IdMap<llrm_mir::module::InstId, usize>> = IdMap::new();
     let mut pending = Vec::new();
     for value in wanted.iter() {
         let at = made(value);
@@ -483,7 +484,7 @@ pub fn ranges_of(
             // it comes first.
             let exposed = match at {
                 Some((home, false)) if home == block => {
-                    let places = positions.entry(id(block)).or_insert_with(|| {
+                    let places = positions.get_or_insert_with(block, || {
                         function.block(block).instructions().iter().enumerate().map(|(at, &one)| (one, at)).collect()
                     });
                     let maker = match function.value(value).def {
@@ -500,10 +501,10 @@ pub fn ranges_of(
         }
     }
     // A block's predecessors, asked once for all the values live into it.
-    let mut before: llrm_support::hash::HashMap<i64, Vec<BlockId>> = Default::default();
+    let mut before = IdMap::<BlockId, Vec<BlockId>>::new();
     let mut seen_phis = BTreeSet::<(i64, ValueId)>::new();
-    let mut seen_out = llrm_support::hash::HashSet::<(i64, ValueId)>::default();
-    let mut seen_in = llrm_support::hash::HashSet::<(i64, ValueId)>::default();
+    let mut seen_out = IdMap::<ValueId, IdSet<BlockId>>::new();
+    let mut seen_in = IdMap::<ValueId, IdSet<BlockId>>::new();
     while let Some(reach) = pending.pop() {
         match reach {
             Reach::Out(block, value) => {
@@ -511,8 +512,8 @@ pub fn ranges_of(
                     Some((home, phi)) => home == block && !phi,
                     None => block == entry,
                 };
-                if seen_out.insert((id(block), value)) {
-                    found.entry(value).or_default().out.push(id(block));
+                if seen_out.get_or_insert_with(value, IdSet::new).insert(block) {
+                    found.get_or_insert_with(value, Range::default).out.push(id(block));
                     if !by_op {
                         pending.push(Reach::After(block, value));
                     }
@@ -538,17 +539,17 @@ pub fn ranges_of(
                         }
                     }
                 } else {
-                    if !seen_in.insert((id(block), value)) {
+                    if !seen_in.get_or_insert_with(value, IdSet::new).insert(block) {
                         continue;
                     }
-                    found.entry(value).or_default().into.push(id(block));
-                    let from = before.entry(id(block)).or_insert_with(|| function.predecessors(block));
+                    found.get_or_insert_with(value, Range::default).into.push(id(block));
+                    let from = before.get_or_insert_with(block, || function.predecessors(block));
                     pending.extend(from.iter().map(|&from| Reach::Out(from, value)));
                 }
             }
         }
     }
-    for range in found.values_mut() {
+    for (_, range) in found.iter_mut() {
         range.into.sort_unstable();
         range.out.sort_unstable();
     }

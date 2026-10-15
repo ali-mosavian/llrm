@@ -1561,7 +1561,7 @@ fn renewed(
     found: &mut Liveness,
     placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
     named: &IdSet<ValueId>,
-    mut computed: BTreeMap<ValueId, liveness::Range>,
+    mut computed: IdMap<ValueId, liveness::Range>,
 ) {
     for value in named.iter() {
         let now = computed.remove(&value).unwrap_or_default();

@@ -898,7 +898,7 @@ fn test_a_value_read_where_it_was_is_not_edited_in_the_live_sets() {
     let named: IdSet<ValueId> = [a, b, c].into_iter().collect();
     let range = |into: &[i64]| Range { into: into.to_vec(), out: Vec::new() };
     // `b` no longer reaches block 1; `c` is read nowhere.
-    let computed = BTreeMap::from([(a, range(&[0, 1])), (b, range(&[0]))]);
+    let computed: IdMap<ValueId, Range> = [(a, range(&[0, 1])), (b, range(&[0]))].into_iter().collect();
     super::RANGES_EDITED.with(|one| one.set(0));
     super::renewed(&mut found, &mut placed, &named, computed);
     assert_eq!(super::RANGES_EDITED.with(|one| one.get()), 2, "b and c are edited, a is not");
