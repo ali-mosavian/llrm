@@ -1,4 +1,4 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+reason = "stack alignment: a call's pad and aligned slots shift jpeg bq32 by 1 instruction"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -32,7 +32,7 @@ data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89432827
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0
