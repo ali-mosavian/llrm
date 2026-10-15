@@ -927,7 +927,7 @@ fn truth(
 pub struct Cycle<'a> {
     pub header: i64,
     pub latches: &'a BTreeSet<i64>,
-    pub body: &'a BTreeSet<i64>,
+    pub body: &'a llrm_mir::forest::Body,
     /// The trips induction proves, in place of the heuristic's odds.
     pub trips: Option<i64>,
 }
@@ -1023,11 +1023,7 @@ pub fn propagated_edges(
         for from in predecessors(block) {
             let Some(&from) = place.get(&from) else { continue };
             let Some(edge) = next[from].iter().position(|to| *to == block) else { continue };
-            let back = headed
-                .get(&block)
-                .into_iter()
-                .flatten()
-                .any(|&index| cycles[index].body.contains(&order[from]));
+            let back = headed.get(&block).into_iter().flatten().any(|&index| cycles[index].body.contains(&order[from]));
             list.push(Coming { from, edge, back });
         }
         let _ = at;
@@ -1142,7 +1138,11 @@ pub fn propagated_edges(
                         .filter(|one| stamp[one.from] == index && !one.back)
                         .map(|one| {
                             mass[one.from]
-                                * if rough { given(order[one.from], order[at]) } else { edge(one.from, one.edge, visits) }
+                                * if rough {
+                                    given(order[one.from], order[at])
+                                } else {
+                                    edge(one.from, one.edge, visits)
+                                }
                         })
                         .sum()
                 };
@@ -1196,7 +1196,11 @@ pub fn propagated_edges(
         let entering: f64 = if at == 0 {
             1.0
         } else {
-            coming[at].iter().filter(|one| !one.back).map(|one| frequency[one.from] * edge(one.from, one.edge, &visits)).sum()
+            coming[at]
+                .iter()
+                .filter(|one| !one.back)
+                .map(|one| frequency[one.from] * edge(one.from, one.edge, &visits))
+                .sum()
         };
         frequency[at] = entering * scale[at];
     }

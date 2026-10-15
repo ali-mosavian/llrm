@@ -138,10 +138,11 @@ pub fn closed(
         .flat_map(|block| block.succ.iter().copied())
         .filter(|at| !loop_.body.contains(at))
         .collect::<BTreeSet<_>>();
-    if exits
-        .iter()
-        .any(|at| predecessors.get(at).is_none_or(|parents| parents.is_empty() || !parents.is_subset(&loop_.body)))
-    {
+    if exits.iter().any(|at| {
+        predecessors
+            .get(at)
+            .is_none_or(|parents| parents.is_empty() || !parents.iter().all(|at| loop_.body.contains(at)))
+    }) {
         return Ok(false);
     }
     let definitions = definitions(function, &loop_.body);

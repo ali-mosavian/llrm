@@ -18,12 +18,12 @@ pub struct Loop {
 }
 
 /// The blocks of one loop, those of the loops inside it too, as the forest of
-/// the function holds them: asking whether a block is in it takes no more than
-/// a lookup, and naming them all costs what they are.
+/// the function holds them: asking whether a block is in it is a lookup, and
+/// naming them all costs what they are, the first time.
 #[derive(Clone)]
 pub struct Body {
-    forest: std::rc::Rc<crate::forest::Forest>,
-    index: usize,
+    ids: crate::forest::Body,
+    named: std::rc::Rc<std::cell::OnceCell<Vec<BlockId>>>,
 }
 
 impl Body {
@@ -31,22 +31,25 @@ impl Body {
         &self,
         block: &BlockId,
     ) -> bool {
-        self.forest.contains(self.index, i64::from(block.0))
+        self.ids.contains(&i64::from(block.0))
     }
 
     pub fn len(&self) -> usize {
-        self.forest.loops[self.index].size
+        self.ids.len()
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// The same blocks as addresses.
+    pub fn ids(&self) -> &crate::forest::Body {
+        &self.ids
+    }
+
     /// The blocks in ascending order.
-    pub fn iter(&self) -> std::vec::IntoIter<BlockId> {
-        let mut found: Vec<BlockId> = self.forest.blocks(self.index).map(|at| BlockId(at as u32)).collect();
-        found.sort_unstable();
-        found.into_iter()
+    pub fn iter(&self) -> std::slice::Iter<'_, BlockId> {
+        self.named.get_or_init(|| self.ids.iter().map(|&at| BlockId(at as u32)).collect()).iter()
     }
 }
 
@@ -55,7 +58,7 @@ impl std::fmt::Debug for Body {
         &self,
         out: &mut std::fmt::Formatter<'_>,
     ) -> std::fmt::Result {
-        out.debug_set().entries(self.iter()).finish()
+        self.ids.fmt(out)
     }
 }
 
@@ -64,13 +67,13 @@ impl PartialEq for Body {
         &self,
         other: &Self,
     ) -> bool {
-        self.len() == other.len() && self.iter().eq(other.iter())
+        self.ids == other.ids
     }
 }
 
 impl<'a> IntoIterator for &'a Body {
-    type Item = BlockId;
-    type IntoIter = std::vec::IntoIter<BlockId>;
+    type Item = &'a BlockId;
+    type IntoIter = std::slice::Iter<'a, BlockId>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -115,7 +118,7 @@ impl LoopInfo {
                 let one = &forest.loops[index];
                 Loop {
                     header: BlockId(one.header as u32),
-                    blocks: Body { forest: std::rc::Rc::clone(&forest), index },
+                    blocks: Body { ids: crate::forest::Body::new(&forest, index), named: Default::default() },
                     latches: one.latches.iter().map(|&at| BlockId(at as u32)).collect(),
                     parent: one.parent.map(|parent| place[parent]),
                 }
@@ -176,7 +179,7 @@ pub fn exits(
     one: &Loop,
 ) -> bool {
     !one.latches.is_empty()
-        && one.blocks.iter().any(|block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
+        && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
 }
 
 /// Whether the loop `latch` closes carries `llvm.loop.mustprogress`.

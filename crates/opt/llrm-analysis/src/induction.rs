@@ -2136,7 +2136,7 @@ impl Invariant {
 /// What the blocks `inside` do not define.
 pub fn invariant(
     function: &Function,
-    inside: &BTreeSet<i64>,
+    inside: &llrm_mir::forest::Body,
 ) -> Invariant {
     let defined = inside
         .iter()

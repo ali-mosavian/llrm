@@ -490,8 +490,13 @@ pub fn _threaded(
     let none = BTreeSet::new();
     let mut loop_edges = BTreeSet::new();
     for loop_ in cfg::Shape::of(function).loops {
-        let outside =
-            predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside = predecessors
+            .get(&loop_.header)
+            .unwrap_or(&none)
+            .iter()
+            .copied()
+            .filter(|at| !loop_.body.contains(at))
+            .collect::<Vec<_>>();
         if let [parent] = outside[..]
             && *known[&parent] == [loop_.header]
         {
@@ -509,7 +514,7 @@ pub fn _threaded(
                     let parents = predecessors.get(&block.at).unwrap_or(&none);
                     !loop_.body.contains(&block.at)
                         && !parents.is_empty()
-                        && parents.is_subset(&loop_.body)
+                        && parents.iter().all(|at| loop_.body.contains(at))
                         && block.succ.len() == 1
                         && !loop_.body.contains(&block.succ[0])
                 })

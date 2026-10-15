@@ -297,7 +297,7 @@ fn controls(
             !inside_outer(from)
         })?;
     let inner = control(function, nest.inner_header(), nest.inner_latch(), &|from| from == nest.entry())?;
-    let stays = |header, body: &BTreeSet<i64>| {
+    let stays = |header, body: &llrm_mir::forest::Body| {
         function.successors(header).first().is_some_and(|to| body.contains(&cfg::id(*to)))
     };
     if !stays(nest.outer_header(), &nest.outer.body) || !stays(nest.inner_header(), &nest.inner.body) {

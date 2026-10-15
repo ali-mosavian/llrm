@@ -208,7 +208,8 @@ fn _candidate(
         let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
             continue;
         };
-        let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside =
+            predecessors[&loop_.header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
         if skip.contains(&latch)
             || outside.len() != 1
             || loop_.body.iter().map(|&at| operations(&closed, cfg::block(at)).len()).sum::<usize>() > MAX_LOOP_OPS

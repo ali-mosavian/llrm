@@ -146,7 +146,7 @@ pub(crate) use llrm_analysis::occurrence::{arms, from_arms};
 /// The values defined in `blocks`, each with its block.
 pub(crate) fn definitions(
     function: &Function,
-    blocks: &BTreeSet<i64>,
+    blocks: &llrm_mir::forest::Body,
 ) -> BTreeMap<ValueId, i64> {
     let mut defined = BTreeMap::new();
     for &at in blocks {

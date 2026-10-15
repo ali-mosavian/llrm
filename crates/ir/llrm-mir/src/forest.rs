@@ -88,6 +88,166 @@ impl Forest {
     }
 }
 
+/// The blocks of one loop, those of the loops inside it too, as the forest
+/// holds them: whether a block is in it is a lookup, and they are named, in
+/// ascending order, the first time they are walked.
+#[derive(Clone)]
+pub struct Body {
+    forest: std::rc::Rc<Forest>,
+    index: usize,
+    /// Blocks put in since, by a pass that keeps the loops up to date as it
+    /// edits (a block put on an edge); none in a loop as found.
+    added: std::collections::BTreeSet<i64>,
+    named: std::rc::Rc<std::cell::OnceCell<Vec<i64>>>,
+}
+
+impl Body {
+    pub fn new(
+        forest: &std::rc::Rc<Forest>,
+        index: usize,
+    ) -> Self {
+        Self {
+            forest: std::rc::Rc::clone(forest),
+            index,
+            added: std::collections::BTreeSet::new(),
+            named: std::rc::Rc::default(),
+        }
+    }
+
+    /// A body of the blocks named, in no function: a loop made for a caller
+    /// that has the blocks and not a forest.
+    pub fn from_blocks(blocks: impl IntoIterator<Item = i64>) -> Self {
+        let mut ats: Vec<i64> = blocks.into_iter().collect();
+        ats.sort_unstable();
+        ats.dedup();
+        let header = ats.first().copied().unwrap_or(0);
+        let forest = Forest {
+            loops: vec![TreeLoop {
+                header,
+                latches: Vec::new(),
+                parent: None,
+                children: Vec::new(),
+                own: ats.clone(),
+                size: ats.len(),
+                depth: 1,
+                enter: 0,
+                last: 0,
+            }],
+            innermost: vec![0; ats.len()],
+            ats,
+        };
+        Self::new(&std::rc::Rc::new(forest), 0)
+    }
+
+    pub fn contains(
+        &self,
+        at: &i64,
+    ) -> bool {
+        self.forest.contains(self.index, *at) || self.added.contains(at)
+    }
+
+    /// Puts `at` in; whether it was not.
+    pub fn insert(
+        &mut self,
+        at: i64,
+    ) -> bool {
+        if self.contains(&at) {
+            return false;
+        }
+        self.added.insert(at);
+        self.named = std::rc::Rc::default();
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.forest.loops[self.index].size + self.added.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether every block of `other` is in this one.
+    pub fn is_superset(
+        &self,
+        other: &Body,
+    ) -> bool {
+        other.len() <= self.len() && other.iter().all(|at| self.contains(at))
+    }
+
+    /// Whether every block of this one is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Body,
+    ) -> bool {
+        other.is_superset(self)
+    }
+
+    /// The blocks as a set, for a caller that changes them.
+    pub fn to_set(&self) -> std::collections::BTreeSet<i64> {
+        self.iter().copied().collect()
+    }
+
+    /// The blocks in ascending order.
+    pub fn iter(&self) -> std::slice::Iter<'_, i64> {
+        self.named
+            .get_or_init(|| {
+                let mut found: Vec<i64> = self.forest.blocks(self.index).chain(self.added.iter().copied()).collect();
+                found.sort_unstable();
+                found
+            })
+            .iter()
+    }
+}
+
+impl std::fmt::Debug for Body {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for Body {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl PartialEq<std::collections::BTreeSet<i64>> for Body {
+    fn eq(
+        &self,
+        other: &std::collections::BTreeSet<i64>,
+    ) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for Body {}
+
+impl std::hash::Hash for Body {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.len().hash(state);
+        self.iter().for_each(|one| one.hash(state));
+    }
+}
+
+impl<'a> IntoIterator for &'a Body {
+    type Item = &'a i64;
+    type IntoIter = std::slice::Iter<'a, i64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 /// The [`Forest`] of the blocks `nodes` name, each an address and its
 /// successors, from `entry` (the first block where none is given). `reachable`
 /// says whether the entry reaches a block and `dominates` whether one block

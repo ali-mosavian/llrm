@@ -46,8 +46,11 @@ fn a_loop_body_always_contains_its_own_header_and_latch() {
         let known: BTreeSet<i64> = graph.iter().map(|one| one.at).collect();
         for one in loops::loops(&graph, None) {
             assert!(one.body.contains(&one.header), "{name}");
-            assert!(one.latches.is_subset(&one.body), "{name}");
-            assert!(one.body.is_subset(&known), "{name}: a loop body never names a block outside the graph");
+            assert!(one.latches.iter().all(|at| one.body.contains(at)), "{name}");
+            assert!(
+                one.body.iter().all(|at| known.contains(at)),
+                "{name}: a loop body never names a block outside the graph"
+            );
             found += 1;
         }
     }

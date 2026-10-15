@@ -2059,7 +2059,7 @@ fn shared_slots(
 fn first_uses(
     flow: &Flow,
     weights: &Weights<'_>,
-    within: &BTreeSet<i64>,
+    within: &crate::analysis::loops::Body,
     header: i64,
     value: u32,
 ) -> f64 {
