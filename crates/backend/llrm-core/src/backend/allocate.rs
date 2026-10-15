@@ -119,6 +119,11 @@
 //! the queue. The loop stops when the queue is empty (`BUDGET` visits at
 //! most, 200000).
 //!
+//! The last chance before a value is spilled is recoloring (`Coloring`,
+//! LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
+//! It is not tried where more values are live at one point of the value than
+//! there are registers for them (`crowded`): no moving about places it.
+//!
 //! Last, `_recolored_hints` moves a value into a copy partner's register when
 //! that register is free over its whole interval and joins more copies than
 //! the one it has, so each joined copy becomes a deleted move.
@@ -3350,7 +3355,9 @@ impl Coloring<'_> {
     /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
     pub const DEPTH: usize = 5;
     pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session. A search that fails tries every
+    /// Registers tried per recoloring session. (A session is not made at all
+    /// where `crowded`: more of the values live at a point of the value than
+    /// there are registers for them.) A search that fails tries every
     /// register at every level, so it grows with the class (x_ll_arith: 7
     /// registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the
     /// time). Of 19.6k sessions on QCport and the 66 programs, 178 succeed
@@ -3375,11 +3382,127 @@ impl Coloring<'_> {
         }
     }
 
+    /// Whether more values are live at one point of `value` than there are
+    /// registers for them: the values placed in a register `value` could take
+    /// that are live at a point of `value`, with `value`, need a register each
+    /// out of the registers each could end in (its order, less those a point
+    /// in it destroys), and moving them about changes neither. When the ones
+    /// whose registers all lie among a set outnumber the set, no recoloring
+    /// places `value`, and `recolor` would fail whatever it tried (Hall's
+    /// condition, the necessary half).
+    fn crowded(
+        &self,
+        value: u32,
+    ) -> bool {
+        let mine = &self.live[&value];
+        let mut group: Vec<u32> = vec![value];
+        for register in (self.order)(value) {
+            for other in self.union.meeting(&_whole(register), mine, self.live) {
+                if !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        // The registers each could end in: its own order less those a point
+        // inside it destroys, as a bit of the registers there are.
+        let mut registers: Vec<RegId> = Vec::new();
+        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
+        for one in &group {
+            let mut bits = 0u64;
+            for register in (self.order)(*one) {
+                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
+                    continue;
+                }
+                let whole = _whole(register);
+                let at = match registers.iter().position(|held| *held == whole) {
+                    Some(at) => at,
+                    None => {
+                        registers.push(whole);
+                        registers.len() - 1
+                    }
+                };
+                if at >= 64 {
+                    return false;
+                }
+                bits |= 1 << at;
+            }
+            allowed.push(bits);
+        }
+        let live_at = |one: u32, point: i64| {
+            self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
+        };
+        // At each point one of them starts within `value`: those live there
+        // need a register each, and the ones whose registers all lie among
+        // some set of them, no more than the set has.
+        let mut seen: Vec<i64> = Vec::new();
+        for one in &group {
+            for segment in &self.live[one].segments {
+                let point = segment.start;
+                if seen.contains(&point)
+                    || !mine.segments.iter().any(|inside| inside.start <= point && point < inside.end)
+                {
+                    continue;
+                }
+                seen.push(point);
+                let here: Vec<u64> = group
+                    .iter()
+                    .zip(&allowed)
+                    .filter(|(other, _)| live_at(**other, point))
+                    .map(|(_, bits)| *bits)
+                    .collect();
+                for set in &here {
+                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
+                    if within > set.count_ones() as usize {
+                        return true;
+                    }
+                }
+                let every = here.iter().fold(0u64, |all, bits| all | bits);
+                if here.len() > every.count_ones() as usize {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// `RAGreedy::tryLastChanceRecoloring`: a register for `value` whose
     /// holders all move elsewhere, recursively. `recolored` are the values
     /// placed in this session, never moved again. On success `value` is
     /// placed; on failure nothing has changed.
     pub fn recolor(
+        &mut self,
+        value: u32,
+        depth: usize,
+        recolored: &mut BTreeSet<u32>,
+    ) -> bool {
+        if depth >= Self::DEPTH {
+            return false;
+        }
+        if depth == 0 && self.crowded(value) {
+            if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
+                let mut again = Coloring {
+                    union: &mut *self.union,
+                    r#where: &mut *self.r#where,
+                    live: self.live,
+                    index: self.index,
+                    masks: self.masks,
+                    order: self.order,
+                    width: self.width,
+                    fenced: self.fenced,
+                    budget: Self::BUDGET,
+                    stack: Vec::new(),
+                };
+                assert!(
+                    !again.search(value, 0, &mut BTreeSet::new()),
+                    "value#{value}: crowded, and recolored all the same"
+                );
+            }
+            return false;
+        }
+        self.search(value, depth, recolored)
+    }
+
+    fn search(
         &mut self,
         value: u32,
         depth: usize,
