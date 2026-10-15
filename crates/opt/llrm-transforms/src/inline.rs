@@ -257,14 +257,25 @@ impl Threshold {
     ) -> Option<i64> {
         // -O1 has no `-finline-functions`: its threshold keeps the ordinary
         // budget.
-        let floor =
-            if self.limit < Self::default().limit { 0 } else { INSNS_AUTO * self.limit / Self::default().limit };
+        let floor = if self.limit < Self::default().limit {
+            0
+        } else if self.limit >= Self::new(250).limit {
+            // -O3's `max-inline-insns-auto` is 30, twice -O2's
+            // (opts.cc:690-694): the threshold's own 250 against
+            // 225 is not that ratio.
+            INSNS_AUTO_O3
+        } else {
+            INSNS_AUTO * self.limit / Self::default().limit
+        };
         self.budget(call_cost).map(|budget| budget.max(floor))
     }
 }
 
 /// GCC's `max-inline-insns-auto` at -O2 (params.opt:545).
 const INSNS_AUTO: i64 = 15;
+
+/// The same at -O3.
+const INSNS_AUTO_O3: i64 = 30;
 
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
