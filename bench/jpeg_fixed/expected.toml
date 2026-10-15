@@ -1,4 +1,4 @@
-reason = "memcpyopt makes the 170 byte copy in runtime/qb/fin.c one memcpy at -Os (-Os is bytes): jpeg_fixed bq32 -Os +6 instructions of 89M, jpeg_single bq32 -O2 +3, code bytes smaller"
+reason = "frame slots aligned to their width, up to the stack slot (m32: 4): frames grow by padding, two jpeg bq32 rows move by 1 instruction"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -32,7 +32,7 @@ data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89432827
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0

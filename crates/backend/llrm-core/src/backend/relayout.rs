@@ -151,6 +151,7 @@ fn replayed(
     hole: i64,
 ) -> Option<(Frame, IndexMap<i64, i64>)> {
     let mut again = Frame::new(frame.floor - hole);
+    again.align = frame.align;
     again.hole = hole;
     again.extents = frame.extents.iter().map(|(start, size)| (start - hole, *size)).collect();
     let mut homes: IndexMap<i64, i64> = IndexMap::default();

@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import CpuidFeature, Decoder, MemorySize, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
+from iced_x86 import CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
@@ -188,6 +188,34 @@ def multiplier_of(uc, ins):
             address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
         return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
     return 0
+
+
+MISALIGNED = 3
+
+
+def misalignment(address, size):
+    """The extra clocks a 486 takes for a data operand of `size` bytes at `address`: a word or dword that crosses a doubleword
+    boundary, or a quad or ten-byte operand not on one, takes 3 more (the figure Intel gives the 486 and Pentium for an operand
+    that is not aligned; recalled, as the other 486 rows of this model, to be checked against 240440-002)."""
+    if size <= 1:
+        return 0
+    if size <= 4:
+        return MISALIGNED if address % 4 + size > 4 else 0
+    return MISALIGNED if address % 4 else 0
+
+
+def operand_address(uc, ins):
+    """The address of `ins`'s explicit memory operand, in the flat model (segment bases are 0), or None."""
+    for i in range(ins.op_count):
+        if ins.op_kind(i) in MEMORY:
+            base = ins.memory_base
+            address = ins.memory_displacement
+            if base != Register.NONE:
+                address += uc.reg_read(UNICORN[base])
+            if ins.memory_index != Register.NONE:
+                address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
+            return address & 0xFFFFFFFF
+    return None
 
 
 def cost(ins, taken, first_rep, mem, multiplier=None):
@@ -400,6 +428,12 @@ def run(prog, variant, hot=False, limit=300_000_000):
         st["prev"] = address
         # Read before it runs: the 486's multiply costs what its multiplier is.
         st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
+        if mem and ins.mnemonic != Mnemonic.LEA and not rep:
+            where = operand_address(uc, ins)
+            extra = misalignment(where, MemorySizeExt.size(ins.memory_size)) if where is not None else 0
+            if extra:
+                total["clocks"] += extra
+                total["misaligned"] += 1
         if ret and uc.reg_read(UC_X86_REG_ESP) == st["sp"]:
             total["clocks"] += cost(ins, True, True, mem)
             st["active"] = False
@@ -409,7 +443,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     assert total["ins"], f"{prog} {variant}: the kernel was never entered"
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
-    return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], nops=total["nops"], clocks=total["clocks"], reports=reports,
+    return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], nops=total["nops"], clocks=total["clocks"], misaligned=total["misaligned"], reports=reports,
                 hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
 
 

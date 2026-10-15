@@ -1037,6 +1037,7 @@ fn staged(
     let mut frame =
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
+    frame.align = registers.slot.max(frame.align);
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;

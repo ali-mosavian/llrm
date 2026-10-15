@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/frame.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/frame.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:e088d20d350e601e22727ef3d5c36286e1e229c89db07d1849ac876485e8f677 -->
+<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:d8c0626a8ce743874908400d355797ba80a18a55c542d8e0138a5726aac3b684 -->
 
 # frame
 
@@ -28,6 +28,11 @@ block-beta
 ```
 
 *Frame layout, incoming arguments at the top*
+
+A spill slot is aligned as its width is, up to the target's stack slot
+(`align`: 4 in flat code, a word in real mode), as gcc's
+`assign_stack_local` and LLVM's `calculateFrameObjectOffsets` do: a dword or
+a quad across a doubleword boundary costs a 486 3 clocks.
 
 `of` builds the frame after selection. It scans the body for the lowest
 frame cell referenced (outgoing native stack arguments excepted) and, for a

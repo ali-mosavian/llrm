@@ -90,6 +90,18 @@ def test_a_multiply_costs_what_its_multiplier_is():
     assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
 
 
+def test_a_misaligned_operand_costs_the_486_three_clocks():
+    """The model charged nothing for an operand off its alignment, and llrm's frame slots are 2-aligned (`WORD = 2`): d_faces'
+    x87 spills at [esp+210] read as free where a 486 takes 3 more for each (81 of 187 dword and 30 of 62 qword stack operands)."""
+    assert harness.misalignment(0x1000, 4) == 0 and harness.misalignment(0x1004, 8) == 0
+    assert harness.misalignment(0x1002, 4) == 3      # a dword across a doubleword boundary
+    assert harness.misalignment(0x1003, 2) == 3      # a word across one
+    assert harness.misalignment(0x1002, 2) == 0      # a word inside one
+    assert harness.misalignment(0x1001, 1) == 0
+    assert harness.misalignment(0x1002, 8) == 3      # a quad off a doubleword boundary
+    assert harness.misalignment(0x1004, 10) == 0 and harness.misalignment(0x1006, 10) == 3
+
+
 def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_the_stack(built):
     """The table put llrm's watcom register arguments beside gcc's stack ones: part of every ratio was the ABI. build.sh passes
     -mabi=sysv and records it; the harness reads `report`'s value where that convention puts it."""
