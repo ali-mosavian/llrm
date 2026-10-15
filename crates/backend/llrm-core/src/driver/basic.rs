@@ -917,6 +917,9 @@ pub fn assembled(
     for (bytes, id) in pool.borrow().entries() {
         let label = format!("$QB$D{id}");
         names.insert((Space::Segment, id), label.clone());
+        if bytes.len() >= 8 {
+            pooled.push(masm::Datum::Align(masm::Align { to: 8 }));
+        }
         pooled.extend([masm::Datum::Object(masm::Label { name: label }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     pooled.extend(masm::jump_tables(&procedures, &mut names, module));

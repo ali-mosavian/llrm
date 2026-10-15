@@ -1,65 +1,65 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "a double constant on an 8-byte boundary (Intel486 data sheet 240440-002, section 10.1 and Table 2.1): nbody data +4 to +8 bytes of padding, 1200 operands no longer 3 clocks over"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 55208
 memory_operands = 26031
 code_bytes = 902
-data_bytes = 31
+data_bytes = 35
 bss_bytes = 0
 
 [bas.Os]
 instructions = 55261
 memory_operands = 26065
 code_bytes = 722
-data_bytes = 31
+data_bytes = 35
 bss_bytes = 0
 
 [bq16.O2]
 instructions = 56120
 memory_operands = 26082
 code_bytes = 904
-data_bytes = 31
+data_bytes = 35
 bss_bytes = 0
 
 [bq16.Os]
 instructions = 56171
 memory_operands = 26116
 code_bytes = 724
-data_bytes = 31
+data_bytes = 35
 bss_bytes = 0
 
 [bq32.O2]
 instructions = 50955
 code_bytes = 847
-data_bytes = 37
+data_bytes = 41
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 52567
 code_bytes = 732
-data_bytes = 37
+data_bytes = 41
 bss_bytes = 0
 
 [c.O2]
 instructions = 46457
 memory_operands = 20844
 code_bytes = 461
-data_bytes = 16
+data_bytes = 20
 bss_bytes = 0
 
 [c.Os]
 instructions = 44861
 memory_operands = 21632
 code_bytes = 341
-data_bytes = 16
+data_bytes = 20
 bss_bytes = 0
 
 [nib.O2]
 instructions = 46469
 memory_operands = 20846
 code_bytes = 498
-data_bytes = 28
+data_bytes = 36
 bss_bytes = 0
 kernel_ms = 0.6218
 
@@ -67,7 +67,7 @@ kernel_ms = 0.6218
 instructions = 46471
 memory_operands = 20834
 code_bytes = 370
-data_bytes = 28
+data_bytes = 36
 bss_bytes = 0
 
 [ow.O2]

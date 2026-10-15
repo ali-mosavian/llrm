@@ -1,5 +1,5 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "a double constant on an 8-byte boundary (Intel486 data sheet 240440-002, section 10.1 and Table 2.1): nbody data +4 to +8 bytes of padding, 1200 operands no longer 3 clocks over"
+blessed = "2026-10-15"
 
 [bas.O2]
 code_bytes = 1259
@@ -51,13 +51,13 @@ kernel_ms = 322.3449
 
 [nib.O2]
 code_bytes = 2337
-data_bytes = 1089
+data_bytes = 1092
 bss_bytes = 0
 kernel_ms = 646.3399
 
 [nib.Os]
 code_bytes = 2401
-data_bytes = 1089
+data_bytes = 1096
 bss_bytes = 0
 kernel_ms = 653.1238
 

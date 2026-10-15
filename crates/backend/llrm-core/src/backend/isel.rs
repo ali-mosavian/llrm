@@ -5238,6 +5238,7 @@ impl Selector<'_, '_, '_> {
         if !in_order {
             order.reverse();
         }
+        let first_push = out.len();
         let mut pushed = 0;
         let mut spans: Vec<(usize, i64)> = Vec::new();
         for index in order {
@@ -5372,6 +5373,30 @@ impl Selector<'_, '_, '_> {
             pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
+        // The stack a multiple of the target's alignment at the call, as the
+        // callee assumes it: what the arguments leave short is pushed first,
+        // above them, and the caller removes it with them. A callee that pops
+        // its own arguments cannot be told to leave a pad.
+        let align = self.callee_facts.stack_alignment(self.arch, &name);
+        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness != 32 {
+            0
+        } else {
+            (align - pushed % align) % align
+        };
+        for _ in 0..pad / self.arch.stack_slot_bytes() {
+            out.insert(
+                first_push,
+                insn(
+                    at,
+                    semantics(
+                        Operation::Push,
+                        "push",
+                        vec![],
+                        vec![Loc::Imm(Imm { value: 0, width: self.arch.stack_slot_bytes() as u32, address: None })],
+                    ),
+                ),
+            );
+        }
         let excess: i64 = spans
             .iter()
             .enumerate()
@@ -5380,6 +5405,7 @@ impl Selector<'_, '_, '_> {
             .sum();
         // A struct result's address the callee pops is not the caller's to
         // remove.
+        let pushed = pushed + pad;
         let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
             (Opcode::Call(info) | Opcode::Invoke(info), Some(one))
                 if hidden_slot_popped_by_callee(

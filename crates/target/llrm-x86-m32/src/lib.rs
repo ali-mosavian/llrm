@@ -137,6 +137,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().slot_bytes
     }
 
+    fn stack_alignment(&self) -> i64 {
+        CALLING.native().stack_alignment.unwrap_or(CALLING.native().slot_bytes)
+    }
+
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }

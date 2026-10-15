@@ -24,10 +24,16 @@
 //!
 //! *Frame layout, incoming arguments at the top*
 //!
-//! A spill slot is aligned as its width is, up to the target's stack slot
-//! (`align`: 4 in flat code, a word in real mode), as gcc's
-//! `assign_stack_local` and LLVM's `calculateFrameObjectOffsets` do: a dword or
-//! a quad across a doubleword boundary costs a 486 3 clocks.
+//! A spill slot is aligned as its width is, up to `align`: the target's stack
+//! slot (4 in flat code, a word in real mode), or its stack alignment (8) for a
+//! function that needs the stack aligned (`calleefacts`: one holding a double
+//! or calling one that does), as gcc's `assign_stack_local` and LLVM's
+//! `calculateFrameObjectOffsets` do. A dword or a quad off its alignment costs
+//! a 486 3 clocks (Intel486 data sheet 240440-002, section 10.1, Clock Count
+//! Assumptions 2; Table 2.1 gives the alignments). The frame register is
+//! 8-aligned where the stack is at the call (`masm::parts` rounds the frame,
+//! `isel` pads a call's arguments), so a displacement that is a multiple of 8
+//! is an aligned address.
 //!
 //! `of` builds the frame after selection. It scans the body for the lowest
 //! frame cell referenced (outgoing native stack arguments excepted) and, for a
