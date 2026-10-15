@@ -231,7 +231,15 @@ pub struct Options {
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
+    /// How many rounds of the body's passes run at most. A round after the
+    /// third found nothing on the 71 programs of the vsgcc tables and
+    /// QCport (the objects are the same), and the fourth and fifth of
+    /// d_faces were 354 Minstr; -Omax runs to the fixed point.
+    pub rounds: usize,
 }
+
+/// The rounds a body's passes run, short of -Omax's fixed point.
+const ROUNDS: usize = 3;
 
 impl Default for Options {
     fn default() -> Self {
@@ -241,6 +249,7 @@ impl Default for Options {
             inline: inline::Threshold::default(),
             lcssa: true,
             floatloop: true,
+            rounds: ROUNDS,
             fold: true,
             decide: true,
             dead: true,
@@ -360,6 +369,7 @@ impl Options {
             unroll_jam: true,
             interchange: true,
             exhaustive: true,
+            rounds: usize::MAX,
             ..Self::default()
         }
     }
@@ -769,6 +779,7 @@ pub struct Fixed {
     interchange: Option<loopinterchange::Interchange>,
     jam: Option<unroll_jam::UnrollJam>,
     only: bool,
+    rounds: usize,
     dump: Option<PathBuf>,
     /// Bodies run, naming each one's dump.
     runs: usize,
@@ -842,6 +853,7 @@ impl Fixed {
             interchange: (applied.options.interchange && only.is_none()).then_some(loopinterchange::Interchange),
             jam: (applied.options.unroll_jam && only.is_none()).then(unroll_jam::UnrollJam::default),
             only: only.is_some(),
+            rounds: applied.options.rounds,
             dump: applied.dump.clone(),
             runs: 0,
         }
@@ -964,12 +976,18 @@ impl Fixed {
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
         run.fixed += 1;
         for iteration in 0..limit {
+            if iteration >= self.rounds {
+                self.report_unspent(unit, analyses, iteration);
+                run.settled(unit, analyses);
+                return Ok(());
+            }
             let before = run.version;
             run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
                 if let Some((version, stretches)) = *settled {
                     if version == run.version {
                         run.skipped += 1;
+                        run.check_skipped(&mut **one, unit, analyses);
                         continue;
                     }
                     // Edits since it found nothing to do, none of which reaches
@@ -978,6 +996,7 @@ impl Fixed {
                     let reached = run.reached_since(stretches);
                     if !reached.meets(one.reads()) {
                         run.unreached += 1;
+                        run.check_skipped(&mut **one, unit, analyses);
                         continue;
                     }
                 }
@@ -1006,6 +1025,41 @@ impl Fixed {
             }
         }
         Err(format!("MIR optimization did not converge after {limit} size-scaled rounds"))
+    }
+}
+
+impl Fixed {
+    /// `LLRM_CHECK_ROUNDS`: the pass that a round after the budget would have
+    /// changed the body with, said on stderr; nothing fails, as the budget is a
+    /// choice and a body may need more.
+    fn report_unspent(
+        &mut self,
+        unit: &Unit,
+        analyses: &Analyses,
+        rounds: usize,
+    ) {
+        if !llrm_support::env_set("LLRM_CHECK_ROUNDS") {
+            return;
+        }
+        let mut context = unit.context.clone();
+        let mut function = unit.function.clone();
+        let mut declared = unit.declared.clone();
+        let mut copy = Unit {
+            context: &mut context,
+            layout: unit.layout,
+            function: &mut function,
+            id: unit.id,
+            metadata: unit.metadata,
+            declared: &mut declared,
+        };
+        for pass in &mut self.passes {
+            let before = copy.function.mark();
+            let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+            if !preserved.are_all_preserved() {
+                eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
+                return;
+            }
+        }
     }
 }
 
@@ -1166,6 +1220,34 @@ impl Run {
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);
         self.changed(stage, unit, analyses);
         true
+    }
+
+    /// `LLRM_CHECK_SKIPPED`: a pass skipped as settled or as reading nothing
+    /// the edits since reached is run on a copy, and finds nothing to do.
+    fn check_skipped(
+        &self,
+        pass: &mut dyn FunctionPass,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
+        if !llrm_support::env_set("LLRM_CHECK_SKIPPED") || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
+        {
+            return;
+        }
+        let mut context = unit.context.clone();
+        let mut function = unit.function.clone();
+        let mut declared = unit.declared.clone();
+        let before = function.mark();
+        let mut copy = Unit {
+            context: &mut context,
+            layout: unit.layout,
+            function: &mut function,
+            id: unit.id,
+            metadata: unit.metadata,
+            declared: &mut declared,
+        };
+        let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+        assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 
     /// The body a pipeline hands out, with its unreachable blocks settled.

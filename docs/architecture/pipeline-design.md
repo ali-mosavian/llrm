@@ -46,6 +46,23 @@ Capping the rounds (`LLRM_MAX_ROUNDS`, measured, not kept), executed work (instr
 
 `d_faces.c` -O1: 2 rounds produce the listing of unlimited rounds (2148 against 2152 lines) for 8860 M against 9544 M instructions (-7%). One round leaves 2527 lines. Round 2 is the clean-up the first round exposes; rounds 3 and later are verification.
 
+### The rounds are bounded
+
+`Options::rounds` is 3 at -O1, -O2, -O3, -Os and -Og; -Omax runs to the fixed point. Measured with the budget as a cap (`LLRM_MAX_ROUNDS`, a temporary knob), the 71 programs of the vsgcc tables at the four levels (ins, mem and code of each row, 284 rows):
+
+| rounds | rows that differ | worst |
+|---|---|---|
+| 3 | 1 of 284 (sieve -Os code -1 B) | none worse |
+| 2 | 12 to 14 of 71 at -O2, -O3 and -Os; sieve at -O1 | rectwo ins x2.33, recsum -Os x3.16, recfloat x1.46, recgcd x1.36 |
+
+Round 3 matters (the recursion programs), rounds 4 and later did not on any row. QCport and the 66 programs at -O1, -O2 and -Os: 15 of 408 objects differ and none by more than 25 bytes (net -24 B at -O2, +22 B at -Os). d_faces default flags, the assembly the same at all four levels: -O1 6246 M to 5892 M (-5.7%), -O2 6838 M to 6471 M, -O3 7587 M to 7413 M, -Os 7004 M to 6445 M (-8.0%); the 136-file corpus -0.6% to -1.5%.
+
+`LLRM_CHECK_ROUNDS=1` says on stderr, for each body that reached the budget, the pass a further round would still change it with; nothing fails. A rounds budget is what LLVM and gcc have: InstCombine runs one iteration per run, the CGSCC devirtualization pass four, and gcc's pass list runs each pass instance once.
+
+### What a pass's reads can and cannot say
+
+A pass skipped as settled or as reading nothing the edits since reached (`FunctionPass::reads`) is run on a copy by `LLRM_CHECK_SKIPPED=1`, which asserts that it finds nothing to do. A footprint says what an instruction is, not where the value it defines sits: a moved load is `MEMORY` alone, while it changes what `lcssa` (and a loop bound that becomes invariant, and a speculation a `phiopt` may do) sees. So a pass that reads where values are defined cannot leave `MEMORY` out of its reads; `lcssa` skipped a run it needed at x_nbody_f -Omax, found by the check when its reads were narrowed. The footprint of the edits since an analysis's result was dropped had no memory and no structure in 19% of the recomputations that came out equal, and none that came out different had; narrowing an analysis by it is safe and worth about 70 M of d_faces -O1.
+
 ## Complexity by step
 
 Slopes from `scaling.py run`, `-O2` own Minstr, top four sizes; llrm against gcc at -O1, same generated programs. The exponent is cost against N.

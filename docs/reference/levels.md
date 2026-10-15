@@ -14,6 +14,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir ports` (module, then in the body loop) | x | on | on | on | on | on |
 | `mir stamp` | x | on | on | on | on | on |
 | *MIR, each body to a fixed point (`mir pipeline`)* | | | | | | |
+| `mir pipeline` rounds, at most | x | 3 | 3 | 3 | to the fixed point | 3 |
 | `mir sroa` | x | on | on | on | on | on |
 | `mir fold` | x | on | on | on | on | on |
 | `mir decide` | x | on | on | on | on | on |
@@ -169,6 +170,7 @@ Sources read:
 
 | limit | ours | gcc | LLVM | verdict for 1b |
 |---|---|---|---|---|
+| rounds of a body's passes | 3 at -O1 to -O3, -Os and -Og; -Omax to the fixed point (`Options::rounds`, `pipeline.rs`) | none: `passes.def` runs each pass instance once | `max-devirt-iterations` 4 (CGSCC), `instcombine-max-iterations` 1 | 3 matches the vsgcc tables of unlimited rounds (1 of 284 rows differs, by 1 B); `LLRM_CHECK_ROUNDS` says which pass a further round would still use |
 | inline threshold, -O2 | 225 [`inline.rs:98`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/inline.rs#L98) (ours: see below) | `max-inline-insns-auto` 15 ([params.opt:545](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/params.opt#L545)), `max-inline-insns-single` 70 ([557](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/params.opt#L557)), `early-inlining-insns` 6 ([129](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/params.opt#L129)) | `inline-threshold` 225 [`Analysis/InlineCost.cpp:77`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InlineCost.cpp#L77) | kept: a ratio, not gcc's unit |
 | inline threshold, -O3 | 250 [`pipeline.rs:185`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/pipeline.rs#L185) | auto 30, single 200, early 14, `inline-min-speedup` 15 ([205](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/params.opt#L205); 30 below -O3) (`opts.cc` [690-694](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L690-L694)) | `OptAggressiveThreshold` 250 [`include/llvm/Analysis/InlineCost.h:46`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/InlineCost.h#L46) | 250, a ratio |
 | inline hint | 325 [`inline.rs:82`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/opt/llrm-transforms/src/inline.rs#L82) | `inline-heuristics-hint-percent` 200 ([201](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/params.opt#L201); 600 at -O3) | `inlinehint-threshold` 325 [`InlineCost.cpp:81`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InlineCost.cpp#L81) | LLVM's, no gcc unit |
