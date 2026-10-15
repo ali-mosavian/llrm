@@ -182,7 +182,7 @@ fn _folded(
     calls: &Calls,
 ) -> bool {
     // Before the facts are asked, so that they see the constants.
-    let edges = _edge_conditions(context, function);
+    let edges = edges::conditions_decided(context, function);
     if edges {
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
@@ -191,45 +191,6 @@ fn _folded(
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
     floatfold::_folded(context, layout, function, analyses, calls) | numbers | edges
-}
-
-/// A phi in one arm of a `br i1` that takes the branch's own condition from
-/// the branch's block reads that arm's constant: the edge it is read on is
-/// the one the condition decides (GVN's `propagateEquality` over the edge's
-/// own phi uses). Loop rotation and `lcssa` make these (`phi i1 [%c, %latch]`
-/// in the exit, for a test after the loop), and no GVN runs after them; the
-/// branch on the phi then decides itself. Whether any use changed.
-fn _edge_conditions(
-    context: &mut Context,
-    function: &mut Function,
-) -> bool {
-    let mut found = Vec::new();
-    for &block in function.layout() {
-        let Some(last) = function.terminator(block) else { continue };
-        let branch = function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-            continue;
-        };
-        if branch.opcode != Opcode::Br || taken == other {
-            continue;
-        }
-        for (target, holds) in [(taken, 1), (other, 0)] {
-            for one in function.users(condition) {
-                let user = function.instruction(one.user);
-                if user.opcode == Opcode::Phi
-                    && function.parent(one.user) == Some(target)
-                    && user.operands[one.index as usize + 1] == Operand::Block(block)
-                {
-                    found.push((*one, condition, holds));
-                }
-            }
-        }
-    }
-    for &(one, condition, holds) in &found {
-        let constant = context.int(function.value(condition).ty, holds);
-        function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
-    }
-    !found.is_empty()
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit
