@@ -282,6 +282,8 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: ChangeLog,
+    /// How many edits of each kind the function has had: no part of what it is.
+    pub(crate) epochs: crate::touched::Epochs,
     /// How many changes `take_changes` has handed out: the log keeps them, so
     /// an analysis computed before can still be brought up to date.
     pub(crate) taken: usize,
@@ -344,6 +346,7 @@ impl Function {
             value_uses: Vec::new(),
             block_uses: Vec::new(),
             changes: ChangeLog::default(),
+            epochs: crate::touched::Epochs::default(),
             taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
@@ -601,8 +604,17 @@ impl Function {
         &mut self,
         change: Change,
     ) {
+        let mut epochs = self.epochs;
+        epochs.bump(self, &change);
+        self.epochs = epochs;
         self.lineage.logged += 1;
         self.changes.0.push(change);
+    }
+
+    /// How many edits of each kind the function has had: a memo that read
+    /// these is true while they are as they were.
+    pub fn epochs(&self) -> crate::touched::Epochs {
+        self.epochs
     }
 
     /// Where the function stands now.
@@ -618,6 +630,22 @@ impl Function {
         let mut copy = self.clone();
         copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
         copy
+    }
+
+    /// Puts `fork`, a `fork` of this function that was edited, in its place
+    /// with the history both made: a mark taken before the fork still
+    /// resolves, and what an analysis kept past it is brought up to date
+    /// from.
+    pub fn adopt(
+        &mut self,
+        mut fork: Self,
+    ) {
+        debug_assert!(fork.lineage.uid == self.lineage.uid, "a fork of this function");
+        let mut history = std::mem::take(&mut self.changes.0);
+        history.append(&mut fork.changes.0);
+        fork.changes.0 = history;
+        fork.taken = self.taken;
+        *self = fork;
     }
 
     /// What changed since `mark`, in order; none where `mark` is of another
