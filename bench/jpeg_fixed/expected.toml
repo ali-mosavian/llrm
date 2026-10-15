@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "a signed short counter read as an index is widened to the index's width (indvars), and symbol+base+index*scale is one mode: bq32 jpeg_fixed -15 B"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84337547
-code_bytes = 6496
+instructions = 84337237
+code_bytes = 6481
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89431943
-code_bytes = 6039
+instructions = 89431625
+code_bytes = 6024
 data_bytes = 29209
 bss_bytes = 0
 
