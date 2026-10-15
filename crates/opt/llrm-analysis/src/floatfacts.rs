@@ -1098,7 +1098,7 @@ pub fn solved_over(
     // `LLRM_CHECK_FLOAT_LOADS`: the solve that walks every float load finds
     // what the one that walks those a known store may reach does.
     static CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if *CHECK.get_or_init(|| std::env::var_os("LLRM_CHECK_FLOAT_LOADS").is_some()) {
+    if *CHECK.get_or_init(|| llrm_support::env_set("LLRM_CHECK_FLOAT_LOADS")) {
         let whole = _solved_over(unit, calls, integers, false);
         assert!(
             whole.facts == solved.facts,
