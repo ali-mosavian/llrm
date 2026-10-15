@@ -28,6 +28,32 @@
 //! `LLRM_CHECK_REFERENCES=1` decomposes afresh on every ask and asserts the
 //! kept one equal.
 //!
+//! # Example
+//! Two loads whose pointers are `gep`s of one `alloca`; `%q`'s offset is then
+//! rewritten:
+//!
+//! ```mir
+//! define i16 @f(i16 %i) {
+//! b0:
+//!   %a = alloca [8 x i16]
+//!   %p = getelementptr inbounds i16, ptr %a, i16 %i
+//!   %q = getelementptr inbounds i16, ptr %a, i16 3
+//!   %x = load i16, ptr %p
+//!   %y = load i16, ptr %q
+//!   %z = add i16 %x, %y
+//!   ret i16 %z
+//! }
+//! ```
+//!
+//! | ask | decomposes |
+//! |-----|------------|
+//! | `%x`, `%y`, `%x`, `%y` | two: the repeats read the kept ones |
+//! | after `%q` is rewritten, `%x` and `%y` | one: `%y`, whose chain holds `%q` |
+//!
+//! From unit test
+//! `test_a_changed_pointer_chain_decomposes_again_and_an_unchanged_one_does_not`
+//! in `references_tests.rs`.
+//!
 //! # Provides
 //! `of` (what `MemRef::of` reads through), `built` (decompositions made on this
 //! thread, for the test that a second ask makes none).
@@ -42,6 +68,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{Change, InstId, Mark, ValueId};
 use llrm_support::hash::HashMap;
 
@@ -66,9 +93,9 @@ struct Table {
     mark: Mark,
     /// The metadata the types were read from.
     metadata: (usize, usize),
-    made: HashMap<InstId, Rc<MemRef>>,
+    made: IdMap<InstId, Rc<MemRef>>,
     /// Each value some chain read, with the accesses whose chain it is in.
-    chains: HashMap<ValueId, Vec<InstId>>,
+    chains: IdMap<ValueId, Vec<InstId>>,
 }
 
 impl Table {
@@ -76,8 +103,8 @@ impl Table {
         Self {
             mark: unit.function.mark(),
             metadata: (unit.metadata.as_ptr() as usize, unit.metadata.len()),
-            made: HashMap::default(),
-            chains: HashMap::default(),
+            made: IdMap::new(),
+            chains: IdMap::new(),
         }
     }
 
@@ -159,7 +186,7 @@ pub(crate) fn of(
     let mut chain = Vec::new();
     let made = Rc::new(MemRef::decomposed(unit, inst, &mut chain)?);
     for value in chain {
-        table.chains.entry(value).or_default().push(inst);
+        table.chains.get_or_insert_with(value, Vec::new).push(inst);
     }
     table.made.insert(inst, Rc::clone(&made));
     Some(made)

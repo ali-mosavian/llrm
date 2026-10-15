@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/references.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/references.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/references.rs sha256:6aec689106581203bfb597e09c267bfdb0ef6a7b6063ed5dde6fc1d6126e828e -->
+<!-- src: crates/opt/llrm-analysis/src/references.rs sha256:1ce6212bc9f001eb0e5a02a71b81ba27dbd1861d10b260b7bccbb21c15cbe3c5 -->
 
 # references
 
@@ -32,6 +32,32 @@ an instruction stands.
 
 `LLRM_CHECK_REFERENCES=1` decomposes afresh on every ask and asserts the
 kept one equal.
+
+## Example
+Two loads whose pointers are `gep`s of one `alloca`; `%q`'s offset is then
+rewritten:
+
+```mir
+define i16 @f(i16 %i) {
+b0:
+  %a = alloca [8 x i16]
+  %p = getelementptr inbounds i16, ptr %a, i16 %i
+  %q = getelementptr inbounds i16, ptr %a, i16 3
+  %x = load i16, ptr %p
+  %y = load i16, ptr %q
+  %z = add i16 %x, %y
+  ret i16 %z
+}
+```
+
+| ask | decomposes |
+|-----|------------|
+| `%x`, `%y`, `%x`, `%y` | two: the repeats read the kept ones |
+| after `%q` is rewritten, `%x` and `%y` | one: `%y`, whose chain holds `%q` |
+
+From unit test
+`test_a_changed_pointer_chain_decomposes_again_and_an_unchanged_one_does_not`
+in `references_tests.rs`.
 
 ## Provides
 `of` (what `MemRef::of` reads through), `built` (decompositions made on this
