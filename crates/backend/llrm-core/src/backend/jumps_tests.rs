@@ -1346,3 +1346,29 @@ fn a_table_naming_one_passage_four_times_strands_it_once() {
         );
     }
 }
+
+/// Each trace after the first began with a look at every block waiting, for
+/// the one the placed blocks reach last, and a map of the placed ones made
+/// again: N returns, N traces, N^2 (`cases` 1024: `_placed` 7% of the compile).
+/// They are kept as blocks are placed.
+#[test]
+fn starting_a_trace_does_not_look_at_every_block_waiting() {
+    let arms = 60;
+    let mut blocks = vec![block(0, vec![_compare(0), _branch(1, "je", 1000)], vec![1000, 10])];
+    blocks.extend((0..arms).map(|case| {
+        let at = 10 + 10 * case;
+        block(
+            at,
+            vec![_compare(at), _branch(at + 1, "je", 1000 + at), _jump(at + 2, at + 10)],
+            vec![1000 + at, at + 10],
+        )
+    }));
+    blocks.push(block(10 + 10 * arms, vec![_return(10 + 10 * arms)], vec![]));
+    blocks.push(block(1000, vec![_return(1000)], vec![]));
+    blocks.extend((0..arms).map(|case| block(1010 + 10 * case, vec![_return(1010 + 10 * case)], vec![])));
+    EXAMINED.with(|one| one.set(0));
+    let placed_body = placed(&body("f", 0, blocks.into_iter().collect())).unwrap();
+    assert_eq!(placed_body.blocks.len(), 2 * arms as usize + 3);
+    let looked = EXAMINED.with(|one| one.get());
+    assert!(looked <= 8 * arms as usize, "{looked} entries looked at for {arms} arms");
+}

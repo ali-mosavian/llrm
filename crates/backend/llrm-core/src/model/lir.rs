@@ -978,6 +978,12 @@ pub struct BlockOdds {
     pub taken: IndexMap<(i64, i64), u32>,
 }
 
+// Probabilities read, for a test that a dispatch of N cases reads O(N).
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl BlockOdds {
     pub const CERTAIN: f64 = 2147483648.0;
 
@@ -987,6 +993,8 @@ impl BlockOdds {
         from: i64,
         to: i64,
     ) -> Option<f64> {
+        #[cfg(test)]
+        ASKED.with(|one| one.set(one.get() + 1));
         self.taken.get(&(from, to)).map(|one| f64::from(*one) / Self::CERTAIN)
     }
 
@@ -1011,6 +1019,27 @@ impl BlockOdds {
         let known: f64 = succ.iter().filter_map(|one| self.probability(from, *one)).sum();
         let unknown = succ.iter().filter(|one| self.probability(from, **one).is_none()).count();
         (1.0 - known).max(0.0) / unknown as f64
+    }
+
+    /// `chance` of every distinct successor in `succ`, in order of position:
+    /// what asking each one by one gives, with the successors read once instead
+    /// of once per edge (a dispatch on N cases asked N^2 probabilities).
+    pub fn chances(
+        &self,
+        from: i64,
+        succ: &[i64],
+    ) -> Vec<(i64, f64)> {
+        let succ: BTreeSet<i64> = succ.iter().copied().collect();
+        if succ.len() == 1 {
+            return succ.into_iter().map(|to| (to, 1.0)).collect();
+        }
+        let stated: Vec<(i64, Option<f64>)> = succ.iter().map(|&to| (to, self.probability(from, to))).collect();
+        let known: f64 = stated.iter().filter_map(|(_, one)| *one).sum();
+        let unknown = stated.iter().filter(|(_, one)| one.is_none()).count();
+        stated
+            .into_iter()
+            .map(|(to, one)| (to, one.unwrap_or_else(|| (1.0 - known).max(0.0) / unknown as f64)))
+            .collect()
     }
 
     /// `from`'s edge to `old`, among its successors `succ`, replaced by edges

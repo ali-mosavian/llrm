@@ -125,10 +125,7 @@ pub(super) fn combined(
     let mut made = dword_pairs(regs, made, &uses, &blocks);
     blocks
         .into_iter()
-        .map(|block| LirBlock {
-            insns: made.shift_remove(&block.at).expect("every block").into(),
-            ..block.into_inner()
-        })
+        .map(|block| LirBlock { insns: made.swap_remove(&block.at).expect("every block").into(), ..block.into_inner() })
         .collect()
 }
 
