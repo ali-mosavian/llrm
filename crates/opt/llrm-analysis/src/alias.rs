@@ -166,7 +166,8 @@ use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
-pub const EMPTY: Provenance = Provenance { slices: crate::memory::Sorted::new(), restrict: crate::memory::Sorted::new() };
+pub const EMPTY: Provenance =
+    Provenance { slices: crate::memory::Sorted::new(), restrict: crate::memory::Sorted::new() };
 
 /// One actual argument of a call: a provenance, a `(pointer value,
 /// displacement)` pair, or nothing a pointer is.

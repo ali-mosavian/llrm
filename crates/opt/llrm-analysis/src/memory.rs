@@ -875,10 +875,7 @@ impl Provenance {
         &self,
         other: &Self,
     ) -> Self {
-        Self {
-            slices: self.slices.union(&other.slices),
-            restrict: self.restrict.union(&other.restrict),
-        }
+        Self { slices: self.slices.union(&other.slices), restrict: self.restrict.union(&other.restrict) }
     }
 
     /// Whether every byte `other` may reach is one `self` may reach, by slice
@@ -1553,8 +1550,8 @@ struct Held {
     seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::HashMap<InstId, Option<MemRef>>>>,
 }
 
-/// The most versions kept: the analyses of one function ask in a run, and a call
-/// summary asks of its callees in between.
+/// The most versions kept: the analyses of one function ask in a run, and a
+/// call summary asks of its callees in between.
 const ACCESS_VERSIONS: usize = 8;
 
 thread_local! {
@@ -1667,13 +1664,17 @@ impl MemRef {
             seen.borrow_mut().insert(inst, made.clone());
             return made;
         };
-        // Metadata is attached without a change logged: the type is asked again.
+        // Metadata is attached without a change logged: the type is asked
+        // again.
         if let Some(access) = &mut found {
             access.typed = typed(unit, inst);
             access.lineage = lineage(unit, inst);
         }
         if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
-            assert!(found == Self::derived(unit, inst), "the held access of {inst:?} is not what deriving it again gives");
+            assert!(
+                found == Self::derived(unit, inst),
+                "the held access of {inst:?} is not what deriving it again gives"
+            );
         }
         found
     }

@@ -1557,9 +1557,8 @@ b0:
 /// store tagged `!tbaa` after its first ask was apart from nothing.
 #[test]
 fn a_type_attached_after_the_access_was_first_asked_is_seen() {
-    let mut parsed = Parsed::new(&format!(
-        "define void @f(ptr %p) {{\n  store i16 1, ptr %p\n  ret void\n}}\n{TYPE_TREE}"
-    ));
+    let mut parsed =
+        Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p\n  ret void\n}}\n{TYPE_TREE}"));
     let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
     assert!(MemRef::of(&parsed.unit(), store).expect("a store").typed.is_none(), "premise: no type yet");
     let (_, function) = parsed.module.function_mut("f").expect("f");

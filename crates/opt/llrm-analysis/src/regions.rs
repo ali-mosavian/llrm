@@ -232,7 +232,10 @@ fn refined<'a>(
     program: Option<&ProgramProxy>,
 ) -> Result<Option<Cow<'a, Provenance>>, RegionError> {
     if let Some(slice) = foreign(reference, facts, program) {
-        return Ok(Some(Cow::Owned(Provenance { slices: crate::memory::Sorted::from([slice]), restrict: crate::memory::Sorted::new() })));
+        return Ok(Some(Cow::Owned(Provenance {
+            slices: crate::memory::Sorted::from([slice]),
+            restrict: crate::memory::Sorted::new(),
+        })));
     }
     reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
 }
@@ -788,8 +791,8 @@ pub(crate) mod tests {
         assert_eq!(std::mem::size_of::<super::OverlapBucket>(), 4);
     }
 
-    use std::collections::BTreeSet;
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
 
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::{Module, Operand};
