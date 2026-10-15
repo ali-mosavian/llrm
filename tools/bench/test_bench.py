@@ -623,3 +623,20 @@ def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
     """The two targets' tables compare the same inlining: build.sh passes llrm no -fno-inline-functions."""
     text = (bench.ROOT / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
     assert [line for line in text.splitlines() if "$LLRM" in line and "-fno-inline-functions" in line] == []
+
+
+def test_a_pr_that_makes_a_row_worse_than_its_base_fails_and_only_a_waiver_for_that_count_excuses_it(monkeypatch):
+    """With no count file left, the base is the only thing a regression can be judged against: it must still fail the step."""
+    fib = bench.BENCH / "fib"
+
+    def rows(instructions):
+        return {("fib", one.language, "O2"): {"instructions": instructions, "memory_operands": 40} if one.language == "c" else {"skip": "no"} for one in bench.variants(fib)}
+
+    base = {key: row for key, row in rows(100).items() if "skip" not in row}
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+    problems = bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})
+    assert problems == ["fib c -O2: instructions 101 > 100 (worse)"]
+    waiver = [{"label": "fib c -O2", "counter": "instructions", "to": 101, "reason": "r", "file": "w.toml"}]
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: waiver)
+    assert bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"}) == []
+    assert bench.judge(rows(102), ["fib"], ["O2"], base, {"fib"}) == ["fib c -O2: instructions 102 > 100 (worse)"]
