@@ -208,6 +208,50 @@ fn a_result_a_change_leaves_true_stands_past_the_pass_that_made_it() {
     }
 }
 
+thread_local! {
+    static DERIVED: std::cell::RefCell<Vec<crate::module::Mark>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Asks `Steady` for the point its result was derived at, and notes it.
+struct NoteDerived;
+
+impl FunctionPass for NoteDerived {
+    fn name(&self) -> &'static str {
+        "note-derived"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let (_, mark) = analyses.get_derived::<Steady>(unit.context, unit.layout, unit.function);
+        DERIVED.with(|all| all.borrow_mut().push(mark));
+        PreservedAnalyses::all()
+    }
+}
+
+/// A memo inside one analysis's result, of what it read of another, is keyed by
+/// the point the other was derived at (ThroughMemory's table of load
+/// providers behind `Accesses`, `Registers` and `Bounded`: 197 MemorySSA builds
+/// on d_faces -O1). That point moves when the result is worked out again and
+/// stays when it is kept past a change that did not reach it.
+#[test]
+fn the_point_a_result_was_derived_at_stays_while_it_is_kept() {
+    for (same, moves) in [(true, false), (false, true)] {
+        (KEPT.set(0), SAME.set(same));
+        DERIVED.with(|all| all.borrow_mut().clear());
+        let mut passes = PassManager::default();
+        passes.add(NoteDerived);
+        passes.add(Retarget(PreservedAnalyses::none()));
+        passes.add(NoteDerived);
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        let marks = DERIVED.with(|all| all.borrow().clone());
+        assert_eq!(marks.len(), 2);
+        assert_eq!(marks[0] != marks[1], moves, "unaffected = {same}");
+    }
+}
+
 /// Rewrites the entry's branch `times` over to what it already is.
 struct Rewrite(usize);
 
@@ -816,6 +860,99 @@ fn an_incremental_result_made_under_other_outer_facts_is_derived_again() {
     analyses.manager(id, &first).invalidate(function, &PreservedAnalyses::none());
     analyses.manager(id, &second).get::<ReadsOuter>(&module.context, &layout, function);
     assert_eq!(OUTER_RUNS.get(), 2, "brought up to date under other outer facts");
+}
+
+thread_local! {
+    static OUTER_MADE: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+}
+
+/// Reads the module's metadata and nothing else of the outer facts.
+struct MetadataOnly;
+
+impl Analysis for MetadataOnly {
+    type Result = usize;
+    const NAME: &'static str = "metadata-only";
+    const OUTER_DEPENDS: Option<&'static [crate::passes::OuterFact]> = Some(&[crate::passes::OuterFact::Metadata]);
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        OUTER_MADE.set((OUTER_MADE.get().0 + 1, OUTER_MADE.get().1));
+        function.layout().len()
+    }
+}
+
+/// Reads all of the outer facts, as every analysis did.
+struct AllOuter;
+
+impl Analysis for AllOuter {
+    type Result = usize;
+    const NAME: &'static str = "all-outer";
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        OUTER_MADE.set((OUTER_MADE.get().0, OUTER_MADE.get().1 + 1));
+        function.layout().len()
+    }
+}
+
+struct LookOuter;
+
+impl FunctionPass for LookOuter {
+    fn name(&self) -> &'static str {
+        "look-outer"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<MetadataOnly>(unit.context, unit.layout, unit.function);
+        analyses.get::<AllOuter>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::all()
+    }
+}
+
+/// A module pass that gives the declaration `@g` an attribute.
+struct Attributes;
+
+impl ModulePass for Attributes {
+    fn name(&self) -> &'static str {
+        "attributes"
+    }
+
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
+        let g = module.named("g").unwrap();
+        let (_, function) = module.function_mut("g").unwrap();
+        function.attrs.push(crate::opcode::Attribute::Flag("nounwind".into()));
+        vec![g]
+    }
+}
+
+/// A declaration changed and every function analysis went, whatever it read
+/// (pointer-values, which reads declarations and nothing of GlobalsAA or the
+/// summaries, was made again each time those moved). A result that declares
+/// what it reads of the outer facts stands past a change to another part.
+#[test]
+fn a_result_stands_past_a_change_to_an_outer_fact_it_does_not_read() {
+    OUTER_MADE.set((0, 0));
+    let mut module = parse::module(&format!("declare void @g()\n{TEXT}")).unwrap();
+    let mut passes = PassManager::default();
+    passes.add(LookOuter);
+    passes.add_module(Attributes);
+    passes.add(LookOuter);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    assert_eq!(OUTER_MADE.get(), (1, 2), "(metadata-only, all-outer) runs");
 }
 
 /// The required module analyses were made before every pass: before a module

@@ -275,6 +275,28 @@ pub trait Analysis: 'static {
     /// it builds on. One that does not outlives a change to the module.
     const READS_OUTER: bool = true;
 
+    /// Which parts of the outer facts the result reads: it is kept past a
+    /// change to any other. None, the default, is all of them (what
+    /// `READS_OUTER` says). LLVM's `Result::invalidate` asks the same of
+    /// the proxies a result holds. A result that reads a part it does not
+    /// declare is caught by `LLRM_CHECK_REPLAY` as any kept result that is
+    /// not what is derived again.
+    const OUTER_DEPENDS: Option<&'static [OuterFact]> = None;
+
+    /// Whether what the result read, under `was`, is as `now` has it.
+    fn outer_unchanged(
+        was: &Outer,
+        now: &Outer,
+    ) -> bool {
+        if !Self::READS_OUTER {
+            return true;
+        }
+        match Self::OUTER_DEPENDS {
+            None => was.versions == now.versions,
+            Some(facts) => facts.iter().all(|fact| was.versions.of(*fact) == now.versions.of(*fact)),
+        }
+    }
+
     /// Whether `update` can bring a result the function has since changed up to
     /// date: such a result is kept past an invalidation, with the point in
     /// the function's history it was true at.
@@ -701,6 +723,91 @@ impl PreservedAnalyses {
     }
 }
 
+/// A part of what a function analysis may read beyond its function.
+#[derive(Clone, Copy)]
+pub enum OuterFact {
+    /// The module's metadata nodes.
+    Metadata,
+    /// Each global's declaration (`Declarations`).
+    Declarations,
+    /// The program: its layout, target, segments, exports and the program
+    /// analyses computed.
+    Program,
+    /// A module analysis the proxy holds, by its type:
+    /// `Module(TypeId::of::<M>)`.
+    Module(fn() -> TypeId),
+}
+
+thread_local! {
+    static VERSION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn fresh_version() -> u64 {
+    VERSION.with(|next| {
+        next.set(next.get() + 1);
+        next.get()
+    })
+}
+
+/// A number for each part of the outer facts, the same while the part is: a
+/// result read some of them, and stands while those numbers do.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Versions {
+    metadata: u64,
+    declarations: u64,
+    program: u64,
+    modules: HashMap<TypeId, u64>,
+}
+
+impl Versions {
+    /// Numbers no other outer facts have.
+    fn fresh(modules: &HashMap<TypeId, Rc<dyn Any>>) -> Self {
+        Self {
+            metadata: fresh_version(),
+            declarations: fresh_version(),
+            program: fresh_version(),
+            modules: modules.keys().map(|&id| (id, fresh_version())).collect(),
+        }
+    }
+
+    /// The numbers of `now` made of the facts `old` held: a part that is the
+    /// same keeps its number.
+    fn after(
+        old: &Outer,
+        now: &Outer,
+    ) -> Self {
+        let keep = |same: bool, was: u64| if same { was } else { fresh_version() };
+        Self {
+            metadata: keep(old.metadata == now.metadata, old.versions.metadata),
+            declarations: keep(
+                Rc::ptr_eq(&old.globals, &now.globals) || *old.globals == *now.globals,
+                old.versions.declarations,
+            ),
+            program: keep(Rc::ptr_eq(&old.program, &now.program), old.versions.program),
+            modules: now
+                .modules
+                .iter()
+                .map(|(id, one)| {
+                    let same = old.modules.get(id).is_some_and(|two| Rc::ptr_eq(one, two));
+                    (*id, keep(same, old.versions.modules.get(id).copied().unwrap_or(0)))
+                })
+                .collect(),
+        }
+    }
+
+    fn of(
+        &self,
+        fact: OuterFact,
+    ) -> u64 {
+        match fact {
+            OuterFact::Metadata => self.metadata,
+            OuterFact::Declarations => self.declarations,
+            OuterFact::Program => self.program,
+            OuterFact::Module(id) => self.modules.get(&id()).copied().unwrap_or(0),
+        }
+    }
+}
+
 /// What a function analysis may read beyond its function: LLVM's outer
 /// analysis manager proxy, read-only. The module's metadata and globals,
 /// each function by its declaration alone since a function analysis reads
@@ -711,6 +818,7 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    pub versions: Versions,
 }
 
 impl Outer {
@@ -730,6 +838,7 @@ impl Outer {
     ) {
         let result = ModuleAnalyses::new(Rc::clone(&self.program)).get::<M>(module);
         self.modules.insert(TypeId::of::<M>(), result);
+        self.versions.modules.insert(TypeId::of::<M>(), fresh_version());
     }
 
     /// Whether alias and decisions ask the intervals of counted loops.
@@ -811,6 +920,11 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
+    /// Whether what the result read of the outer facts is as `now` has it.
+    fn outer_unchanged(
+        &self,
+        now: &Outer,
+    ) -> bool;
     /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
 }
@@ -819,8 +933,12 @@ struct Entry<A: Analysis> {
     result: Rc<A::Result>,
     /// What the result may have read of the module.
     outer: Rc<Outer>,
-    /// The function's history when the result was derived.
+    /// The function's history when the result was last known true.
     mark: crate::module::Mark,
+    /// Where the result was last worked out or brought up to date: it stays
+    /// while the result is kept past changes that did not reach it, so a memo
+    /// of what was read of it is good while this is the same.
+    derived: crate::module::Mark,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -851,6 +969,13 @@ impl<A: Analysis> Cached for Entry<A> {
 
     fn incremental(&self) -> bool {
         A::INCREMENTAL || A::SKIPS
+    }
+
+    fn outer_unchanged(
+        &self,
+        now: &Outer,
+    ) -> bool {
+        A::outer_unchanged(&self.outer, now)
     }
 
     fn mark(&self) -> crate::module::Mark {
@@ -958,8 +1083,29 @@ impl Analyses {
     ) {
         self.cache.insert(
             TypeId::of::<A>(),
-            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result,
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                derived: function.mark(),
+            }),
         );
+    }
+
+    /// `A`'s result, and the point of the function's history it was last worked
+    /// out or brought up to date at (`Entry::derived`): a result kept past
+    /// changes that did not reach it keeps its point. A memo inside another
+    /// analysis's result, of what it read here, is good while that point is the
+    /// same.
+    pub fn get_derived<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> (Rc<A::Result>, crate::module::Mark) {
+        let result = self.get::<A>(context, layout, function);
+        let entry = self.cache.get(&TypeId::of::<A>()).expect("held: just asked");
+        (result, entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").derived)
     }
 
     /// `A`'s result for `function`, computed once until invalidated.
@@ -984,18 +1130,19 @@ impl Analyses {
         } else {
             None
         };
+        let mut kept_derived: Option<crate::module::Mark> = None;
         let updated = self.kept.remove(&key).and_then(|held| {
             // Taken out of its box, so that `update_owned` is handed the only
             // reference there is.
-            let (result, outer, mark) = {
+            let (result, outer, mark, derived) = {
                 let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
-                (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
+                (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark, old.derived)
             };
             drop(held);
             let changes = function.changes_since(mark)?;
             // What it read of the outer facts is not what is there now: the
             // changes of the function are not all that moved.
-            if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
+            if !A::outer_unchanged(&outer, &self.outer) {
                 return None;
             }
             // Asking of a long log again and again is more than the run it
@@ -1011,7 +1158,7 @@ impl Analyses {
                     ))
                     .count()
                     <= 256
-                && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
+                && A::outer_unchanged(&outer, &self.outer)
                 && A::unaffected(changes, context, function)
             {
                 if check_replay() {
@@ -1035,6 +1182,7 @@ impl Analyses {
                             .collect::<Vec<_>>()
                     );
                 }
+                kept_derived = Some(derived);
                 return Some(Rc::clone(&result));
             }
             let made =
@@ -1082,7 +1230,12 @@ impl Analyses {
         }
         self.cache.insert(
             key,
-            Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result: Rc::clone(&result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                derived: kept_derived.unwrap_or_else(|| function.mark()),
+            }),
         );
         result
     }
@@ -1124,6 +1277,24 @@ impl Analyses {
         function: &Function,
     ) {
         self.vouched = Some(function.mark());
+    }
+
+    /// Drops what read a part of the outer facts that `now` has other than it
+    /// was: a result that read others stands.
+    fn drop_for_outer(
+        &mut self,
+        now: &Outer,
+    ) {
+        let gone: Vec<TypeId> =
+            self.cache.iter().filter(|(_, entry)| !entry.outer_unchanged(now)).map(|(key, _)| *key).collect();
+        for key in gone {
+            let entry = self.cache.remove(&key).expect("held");
+            if entry.incremental() {
+                self.kept.insert(key, entry);
+            } else if why() {
+                self.evicted.insert(key, entry);
+            }
+        }
     }
 
     fn drop_unpreserved(
@@ -1501,6 +1672,7 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    versions: Versions::fresh(&HashMap::default()),
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -1528,7 +1700,7 @@ impl ModuleAnalyses {
     ) -> &mut Analyses {
         let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
         if !Rc::ptr_eq(&cache.outer, outer) {
-            cache.drop_unpreserved(&PreservedAnalyses::function());
+            cache.drop_for_outer(outer);
             cache.outer = Rc::clone(outer);
         }
         cache
@@ -1602,8 +1774,17 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let mut now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            versions: Versions::fresh(&modules),
+            modules,
+        };
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
+            if let Some(old) = &self.outer {
+                now.versions = Versions::after(old, &now);
+            }
             self.outer = Some(Rc::new(now));
         }
         Rc::clone(self.outer.as_ref().expect("set above"))
