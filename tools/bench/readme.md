@@ -43,7 +43,7 @@ also judges against the base commit's counts, measured with this tree's harness 
 (`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): `BASE n: w worse, b better; d differ from expected.toml`, `BASE-WORSE` and `BASE-DIFF`
 lines. It never fails the gate. A deliberate worse count is a waiver, one file per PR, `bench/waivers/NAME.toml`: `reason`, and
 `[[row]]` entries of `label` (`"fib bq32 -O2"`), `counter` and `to` (the count it may reach); it holds only for that count and goes stale
-(`BASE-STALE`) when it excuses nothing. See `basecounts.py`.
+(`BASE-STALE`) when it excuses nothing. The committed judge honors waivers too: a count above `expected.toml` passes where a waiver names its row, counter and exactly that count, and `--bless` removes the waiver once the blessed baseline carries it (a batch of clean PRs can move a count together, which a train may not raise on its own). See `basecounts.py`.
 
 ## Timed-only: grep
 

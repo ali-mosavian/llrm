@@ -608,8 +608,9 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
-def against(label: str, got: dict, want: dict | None) -> list[str]:
-    """What fails the gate for one measurement: no baseline, a count above it (worse), one below it (better, to bless)."""
+def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
+    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (bench/waivers) names its row,
+    counter and this count, one below it (better, to bless)."""
     if want is None:
         return [f"{label}: no baseline; run --bless --reason"]
     problems = []
@@ -618,6 +619,8 @@ def against(label: str, got: dict, want: dict | None) -> list[str]:
             continue
         if counter not in want:
             problems.append(f"{label}: no baseline for {counter}; run --bless --reason")
+        elif got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
+            continue
         elif got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
         elif got[counter] < want[counter]:
@@ -670,6 +673,7 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
 def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     """What fails the gate."""
     problems = []
+    waived = basecounts.waivers(ROOT)
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -685,7 +689,7 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     problems.append(f"{label}: {got['error']}")
                 else:
                     want = baseline.get(variant.language, {}).get(opt)
-                    problems += against(label, got, want)
+                    problems += against(label, got, want, waived)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
@@ -808,6 +812,8 @@ def main() -> int:
                 return 1
             changed += write_expected(directory, measured, name, args.reason)
         print(f"blessed {len(names)} benchmarks, {changed} files changed")
+        for used in basecounts.consume_waivers(ROOT, measured):
+            print(f"waiver spent: {used}")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
     problems, better = split_better(judge(measured, args.select, args.opt)) if args.batch else (judge(measured, args.select, args.opt), [])
