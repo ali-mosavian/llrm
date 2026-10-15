@@ -632,6 +632,22 @@ impl Function {
         copy
     }
 
+    /// Puts `fork`, a `fork` of this function that was edited, in its place
+    /// with the history both made: a mark taken before the fork still
+    /// resolves, and what an analysis kept past it is brought up to date
+    /// from.
+    pub fn adopt(
+        &mut self,
+        mut fork: Self,
+    ) {
+        debug_assert!(fork.lineage.uid == self.lineage.uid, "a fork of this function");
+        let mut history = std::mem::take(&mut self.changes.0);
+        history.append(&mut fork.changes.0);
+        fork.changes.0 = history;
+        fork.taken = self.taken;
+        *self = fork;
+    }
+
     /// What changed since `mark`, in order; none where `mark` is of another
     /// function or what followed it has been taken.
     pub fn changes_since(
