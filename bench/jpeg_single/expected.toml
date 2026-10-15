@@ -1,4 +1,4 @@
-reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63440134
-code_bytes = 6278
+instructions = 63438974
+code_bytes = 6231
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613330
-code_bytes = 5868
+instructions = 64612169
+code_bytes = 5824
 data_bytes = 29697
 bss_bytes = 0
 

@@ -1,0 +1,11 @@
+reason = "train 5 (#1791 #1758 #1789 #1793 #1799): each PR is clean alone; together they move the flat -Os jpeg kernels by 2 instructions of 89M and 64M, and the batch's blessed numbers for those rows were the earlier PRs'"
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "instructions"
+to = 89333640
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "instructions"
+to = 64515026

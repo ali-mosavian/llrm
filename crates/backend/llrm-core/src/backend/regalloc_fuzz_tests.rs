@@ -2204,3 +2204,45 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
     }
     assert!(carried > 100, "only {carried} rewrites carried their points");
 }
+
+/// A trial that spills a value its shape protects is dropped whatever it costs,
+/// and the rounds after that spill were work no output read: sort_ in quicksort
+/// at -O3 spent 294 M of 795 M instructions in a Scoped trial that spilled 140
+/// values to lose to the base's 44. It stops at the first protected spill, and
+/// what is kept is what it was.
+#[test]
+fn test_a_trial_that_spills_a_protected_value_stops_there_and_changes_nothing() {
+    use crate::backend::allocate::{abandoned_trials, abandoning};
+    let shape = Shape { pool: 12, ops: 11 };
+    let mut stopped = 0;
+    for seed in 0..120_u64 {
+        let run = |on: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu =
+                crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+            let mut phase = RegAlloc::new(
+                None,
+                None,
+                ProfileOrName::Profile(cpu),
+                &*target::BUILT_IN,
+                &crate::backend::classes::RegisterClasses::m16(),
+            )
+            .expect("a phase");
+            abandoning(on);
+            let before = abandoned_trials();
+            let out = phase.transform(body).expect("allocated");
+            abandoning(true);
+            (abandoned_trials() - before, out)
+        };
+        let (cut, with) = run(true);
+        let (none, without) = run(false);
+        assert_eq!(none, 0, "seed {seed}: a trial was stopped with the stop off");
+        assert_eq!(
+            format!("{:?}", with.insns()),
+            format!("{:?}", without.insns()),
+            "seed {seed}: stopping a trial changed the output"
+        );
+        stopped += cut;
+    }
+    assert!(stopped > 0, "premise: some trial spilled a value it protects");
+}

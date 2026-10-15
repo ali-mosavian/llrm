@@ -166,7 +166,8 @@ use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
-pub const EMPTY: Provenance = Provenance { slices: BTreeSet::new(), restrict: BTreeSet::new() };
+pub const EMPTY: Provenance =
+    Provenance { slices: crate::memory::Sorted::new(), restrict: crate::memory::Sorted::new() };
 
 /// One actual argument of a call: a provenance, a `(pointer value,
 /// displacement)` pair, or nothing a pointer is.
@@ -868,7 +869,7 @@ fn _unknown_base(
     at: InstId,
 ) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
     OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let mut reads = NONLOCAL.slices.clone();
+    let mut reads = NONLOCAL.slices.to_set();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
     // address: every object, whether the program ever took its address.
@@ -2075,7 +2076,7 @@ pub fn calls_annotated(
     let reference = |one: &Slice| {
         MemRef::reach(
             u32::try_from(one.width).expect("a slice width is a memory width"),
-            Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() },
+            Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
 
@@ -2118,8 +2119,8 @@ pub fn calls_annotated(
         };
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
-            effect.reads.extend(NONLOCAL.slices.clone());
+            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
+            effect.reads.extend(NONLOCAL.slices.to_set());
             effect.reads.extend(_tracked(&procedure.unit));
         }
         // What an unplaced write may reach: each of its types' stores, not an
@@ -2127,8 +2128,8 @@ pub fn calls_annotated(
         let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
-            reached.extend(NONLOCAL.slices.clone());
+            let mut reached = if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible };
+            reached.extend(NONLOCAL.slices.to_set());
             match &effect.unknown_write_types {
                 // A pointer no fact follows reaches only what escaped, never a
                 // tracked global.
@@ -2494,8 +2495,7 @@ fn _direct(
         // based on it reach is reached by nothing that is not.
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
-            let mut restrict = source.restrict.clone();
-            restrict.insert(Identity::Value(result.0));
+            let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
             Ok(Some(Provenance { slices: source.slices, restrict }))
         }
         // A callee whose result is `noalias` returns a pointer to an object
@@ -3590,7 +3590,7 @@ pub fn annotated_with(
                         i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
                     };
                     got = Some(Provenance {
-                        slices: BTreeSet::from([Slice::new(
+                        slices: crate::memory::Sorted::from([Slice::new(
                             source.object.clone(),
                             model(&low)?,
                             model(&high)?,
