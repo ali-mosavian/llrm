@@ -161,8 +161,8 @@ def test_every_x87_encoding_has_a_clock_price():
 
 
 def test_a_dword_at_an_odd_address_is_counted_as_misaligned():
-    """The 486 pays for an access across an alignment boundary and the table showed nothing of it: a loop of `mov eax, [ebx+1]` and
-    one of `mov eax, [ebx]` cost the same in instructions, memory operands and (nearly) clocks."""
+    """The 486 pays three clocks for a misaligned access and the table showed nothing of it: a loop of `mov eax, [ebx+1]` and one of
+    `mov eax, [ebx]` cost the same in instructions, memory operands and clocks. A double wants 8 (Table 2.1)."""
     from iced_x86 import Decoder
     from unicorn import UC_ARCH_X86, UC_MODE_32, Uc
     from unicorn.x86_const import UC_X86_REG_EBX, UC_X86_REG_ESI, UC_X86_REG_EDI
@@ -181,3 +181,5 @@ def test_a_dword_at_an_odd_address_is_counted_as_misaligned():
     assert count(bytes.fromhex("0fb74302")) == 0    # movzx eax, word [ebx+2]
     assert count(bytes.fromhex("8a4301")) == 0      # mov al, [ebx+1]: a byte is never across
     assert count(bytes.fromhex("a5")) == 1          # movsd: the source esi is odd, the destination edi is not
+    assert count(bytes.fromhex("dd4304")) == 1      # fld qword [ebx+4]: a double wants 8
+    assert count(bytes.fromhex("dd4308")) == 0      # fld qword [ebx+8]

@@ -17,7 +17,7 @@ About a minute. Products go to `$VSGCC_WORK` (default `~/scratch/vsgcc-work`); t
 
 - **Variants.** llrm (`-m32 -mabi=sysv`), gcc and clang at -O1, -O2, -O3 and -Os, all with `-march=i486`; gcc -O0 is the reference. Every compiler reads the same wrapper (`d_faces.c` with `far`, `near`, `huge`, `pascal` and `cdecl` emptied), so that all take the flat model and one calling convention.
 - **What is counted.** Every instruction executed inside d_faces.o and the runtime library it pulls in; the scene and the stand-ins (env.elf, loaded apart) are not. Instructions, memory operands, operands across an alignment boundary, and 486 clocks by [harness.py](../harness.py)'s model.
-- **Misaligned operands.** An operand whose address is not a multiple of its size, the size taken as 4 at most (a qword or tbyte starts on a dword or misses). The 486 pays for each; the clock model does not charge it yet, so it is a count of its own.
+- **Misaligned operands.** Intel486 data sheet 240440-002 (10.1, assumption 2, and Table 2.1): a word is aligned at 2, a dword or single real at 4, a double or extended real at 8, and each misaligned access costs three clocks, which `harness.py` adds to the clocks and counts apart.
 - **Self-check.** `env.c` folds every call it receives (integers exactly, floats rounded coarsely enough that the x87's extended intermediates and a float rounded at every store agree) into one hash, and the stand-ins answer from their arguments alone. A variant is `yes` when it reports the hash of gcc -O0, `WRONG` when not; the exit status says so.
 
 ## The scene

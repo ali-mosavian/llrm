@@ -205,15 +205,19 @@ def memory_address(uc, ins, operand):
     return address & 0xFFFFFFFF
 
 
+MISALIGNED = 3
+
+
 def misaligned_operands(uc, ins):
-    """How many of the instruction's memory operands the 486 reads or writes across an alignment boundary: an address that is not
-    a multiple of the operand's size, the size taken as 4 at most (a qword or a tbyte is two or three dword accesses, and
-    misses only when it does not start on a dword)."""
+    """How many of the instruction's memory operands the 486 reads or writes misaligned, each costing MISALIGNED clocks: Intel486
+    data sheet 240440-002, section 10.1, Instruction Clock Count Assumptions, 2: "Accesses are aligned. Add three clocks to each
+    misaligned access." Misaligned is Table 2.1, Data Type Alignment Requirements: a word at 2, a dword or single real at 4,
+    a double or extended real at 8."""
     count = 0
     for operand in range(ins.op_count):
         if ins.op_kind(operand) in MEMORY:
-            size = min(4, MemorySizeExt.size(ins.memory_size))
-            if size > 1 and memory_address(uc, ins, operand) % size:
+            size = MemorySizeExt.size(ins.memory_size)
+            if size > 1 and memory_address(uc, ins, operand) % (2 if size == 2 else 4 if size <= 4 else 8):
                 count += 1
     return count
 
@@ -424,8 +428,10 @@ def run(prog, variant, hot=False, limit=300_000_000):
             return
         total["ins"] += 1
         total["mem"] += mem
-        if mem:
-            total["misaligned"] += misaligned_operands(uc, ins)
+        if mem and ins.mnemonic != Mnemonic.LEA:
+            late = misaligned_operands(uc, ins)
+            total["misaligned"] += late
+            total["clocks"] += MISALIGNED * late
         hits[address] += 1
         st["prev"] = address
         # Read before it runs: the 486's multiply costs what its multiplier is.

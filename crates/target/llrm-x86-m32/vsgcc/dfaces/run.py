@@ -21,7 +21,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import harness  # noqa: E402
-from harness import MEMORY, OUT, cost, elf_segments, misaligned_operands, multiplier_of, nm, omf_link  # noqa: E402
+from harness import MEMORY, MISALIGNED, OUT, cost, elf_segments, misaligned_operands, multiplier_of, nm, omf_link  # noqa: E402
 from iced_x86 import Decoder, Mnemonic  # noqa: E402
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc  # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ECX, UC_X86_REG_ESP  # noqa: E402
@@ -168,8 +168,10 @@ def run(variant, limit=400_000_000):
             return
         total["ins"] += 1
         total["mem"] += mem
-        if mem:
-            total["misaligned"] += misaligned_operands(uc, ins)
+        if mem and ins.mnemonic != Mnemonic.LEA:
+            late = misaligned_operands(uc, ins)
+            total["misaligned"] += late
+            total["clocks"] += MISALIGNED * late
         st["multiplier"] = multiplier_of(uc, ins) if ins.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
 
     uc.hook_add(UC_HOOK_CODE, hook)
