@@ -512,3 +512,61 @@ def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, mo
         pass
     thread.join()
     assert capsys.readouterr().out.count("measure: waiting") >= 2
+
+# The `analysis through-memory` step of joins at 2N=128 (#1755): 254.6 -> 282.0 Minstr under mimalloc, equal under the system allocator.
+STEP = "joins O2 analysis through-memory"
+
+
+def rise_under_mimalloc():
+    return made(passes={STEP: [38.4, 103.8, 254.6, 9000.0]}), made(passes={STEP: [38.6, 103.6, 282.0, 9000.0]})
+
+
+def test_a_step_rise_the_system_allocator_does_not_show_is_a_heap_layout_effect_and_passes():
+    """#1755 failed `analysis through-memory` +27 Minstr: identical input and output, the step equal under glibc malloc."""
+    base, now = rise_under_mimalloc()
+    assert measure.rises(base, now, TOL)[1], "the rise is real under the shipped allocator"
+    system = lambda sha, cells: {STEP: [38.4, 103.8, 254.6, 9000.0] if sha == "b" else [38.6, 103.7, 254.9, 9000.0]}
+    lines, bad = measure.confirmed(measure.rises(base, now, TOL)[1], base, now, "b", "h", TOL, system)
+    assert bad == [] and "not confirmed under the system allocator" in lines[0], (lines, bad)
+
+
+def test_a_step_rise_that_shows_under_both_allocators_fails_and_prints_both():
+    base, now = rise_under_mimalloc()
+    system = lambda sha, cells: {STEP: [38.4, 103.8, 254.6, 9000.0] if sha == "b" else [38.6, 103.6, 282.0, 9000.0]}
+    lines, bad = measure.confirmed(measure.rises(base, now, TOL)[1], base, now, "b", "h", TOL, system)
+    assert len(bad) == 1 and "254.6" in bad[0] and "282.0" in bad[0] and "system allocator" in bad[0], bad
+
+
+def test_a_rise_the_system_allocator_cannot_check_stands_and_a_clean_run_builds_nothing():
+    base, now = rise_under_mimalloc()
+    found = measure.rises(base, now, TOL)[1]
+    assert measure.confirmed(found, base, now, "b", "h", TOL, lambda sha, cells: None)[1] == found
+
+    def never(sha, cells):
+        raise AssertionError("a run with no step rise built the system allocator's compiler")
+
+    assert measure.confirmed([], base, now, "b", "h", TOL, never) == ([], [])
+    axis_only = ["joins O2: cost at 2N=128 x2 > 1.5"]
+    assert measure.confirmed(axis_only, base, now, "b", "h", TOL, never)[1] == axis_only, "an axis is judged on the shipped binary"
+
+
+def test_the_system_allocator_measurement_of_a_commit_is_built_and_made_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    monkeypatch.setattr(measure, "tree_of", lambda sha: "t" + sha)
+    built, ran = [], []
+    monkeypatch.setattr(measure.scaling_gate, "pass_costs", lambda axis, level, work: ran.append((axis, level)) or {f"{axis} {level} s": (1.0, 2.0, 3.0, 4.0)})
+    build = lambda sha: built.append(sha) or tmp_path
+    first = measure.system_passes("c" * 40, {"joins O2"}, build)
+    assert measure.system_passes("c" * 40, {"joins O2"}, build) == first == {"joins O2 s": [1.0, 2.0, 3.0, 4.0]}
+    assert built == ["c" * 40] and ran == [("joins", "O2")]
+    measure.system_passes("c" * 40, {"joins O2", "cases O1"}, build)
+    assert ran == [("joins", "O2"), ("cases", "O1")], "only the cell not yet measured is"
+
+
+def test_a_row_names_the_size_it_is_at_so_2n_is_not_read_off_the_halves():
+    """The log said `2N x1.108 (38.592/103.553/281.974 ...)` and was read as a rise at 4N: the three numbers are N/2, N and 2N and
+    the line named no size."""
+    base, now = rise_under_mimalloc()
+    lines, bad = measure.rises(base, now, TOL)
+    assert "2N=128" in " ".join(lines) and "2N=128" in " ".join(bad), (lines, bad)

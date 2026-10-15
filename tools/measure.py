@@ -225,6 +225,75 @@ def built(sha: str) -> Path:
     return BUILD / "target" / PROFILE
 
 
+SYSTEM_BUILD = "env -u RUSTFLAGS cargo build --release -q --bin llrm-c --features system-alloc"
+
+
+def built_system(sha: str) -> Path | None:
+    """`sha`'s llrm-c with the system allocator in a target of its own (reused), its release directory; None where `sha` has no
+    `system-alloc` feature (a base from before it)."""
+    BUILD.mkdir(parents=True, exist_ok=True)
+    tree = checked_out(sha, BUILD / "tree")
+    env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target-system")}
+    env.pop("LLRM_BIN", None)
+    if "system-alloc" not in (tree / "Cargo.toml").read_text():
+        return None
+    done = subprocess.run(["bash", "-c", SYSTEM_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+    if done.returncode:
+        raise SystemExit(f"measure: {sha[:9]} does not build with the system allocator:\n{done.stderr[-2000:]}")
+    return BUILD / "target-system" / "release"
+
+
+def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, list[float]] | None:
+    """The steps of `cells` ("axis level") of `sha` measured with the system allocator, stored by the tree like the baseline (a cell is
+    measured, and the compiler built, on a miss only); None where `sha` cannot be built that way."""
+    which = method() + "-system"
+    one = stored_path(sha, which, tree_of(sha))
+    have = json.loads(one.read_text()) if one.is_file() else {}
+    if missing := sorted(cells - have.keys()):
+        with locked("build"):
+            if (binary := build(sha)) is None:
+                return None
+            previous = os.environ.get("LLRM_BIN")
+            os.environ["LLRM_BIN"] = str(binary)
+            try:
+                for cell in missing:
+                    axis, level = cell.split(" ")
+                    with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
+                        have[cell] = {k: [round(v, 3) for v in got] for k, got in scaling_gate.pass_costs(axis, level, Path(tmp)).items()}
+            finally:
+                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        CACHE.mkdir(parents=True, exist_ok=True)
+        one.write_text(json.dumps(have, separators=(",", ":")) + "\n")
+    return {k: v for cell in cells for k, v in have[cell].items()}
+
+
+def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, tol: dict, system=None) -> tuple[list[str], list[str]]:
+    """(lines, bad) with each step rise kept only if it shows under the system allocator too: mimalloc's heap layout moves a step's count
+    (#1755: `analysis through-memory` +27 Minstr under mimalloc, equal under glibc, though the step ran on the same input). The axes and
+    the compile stay judged on the shipped binary. A rise that cannot be checked stands."""
+    steps = {b.split(": ")[0] for b in bad} & now["passes"].keys()
+    if not steps:
+        return [], bad
+    cells = {" ".join(k.split(" ")[:2]) for k in steps}
+    system = system or system_passes
+    was, got = system(base_sha, cells), system(head, cells)
+    if was is None or got is None:
+        return [], bad
+    judged = judged_axes(base, now)
+    _, also = step_rises(was, got, tol, judged)
+    kept = {b.split(": ")[0] for b in also}
+    lines, out = [], []
+    for b in bad:
+        key = b.split(": ")[0]
+        if key not in steps:
+            out.append(b)
+        elif key in kept:
+            out.append(f"{b}; system allocator {'/'.join(map(str, got[key][:3]))} against {'/'.join(map(str, was[key][:3])) if key in was else 'none'} (mimalloc and system malloc both rose)")
+        else:
+            lines.append(f"{key}: not confirmed under the system allocator, a heap layout effect: {'/'.join(map(str, got.get(key, [])[:3]))} against {'/'.join(map(str, was.get(key, [])[:3]))}")
+    return lines, out
+
+
 @contextlib.contextmanager
 def locked(name: str, every: float = 60.0):
     """An exclusive lock named `name` between sessions (and threads: each opens the file itself). A wait says so every `every` seconds:
@@ -303,6 +372,12 @@ def superlinear(half: float, small: float, big: float) -> float:
     return max(0.0, second(half, small, big))
 
 
+def two_n(key: str) -> str:
+    """The size the cost at 2N is at, as 2N=128: the rows are N/2, N and 2N and name no size."""
+    n = scaling_gate.SIZES.get(key.split(" ")[0])
+    return f"2N={2 * n}" if n else "2N"
+
+
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
@@ -310,11 +385,11 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: d
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
         tol = row_tolerance(general, key)
         more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
-        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
+        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), {two_n(key)} x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
-            bad.append(f"{key}: cost at 2N x{big / was_big:.4f} > {tol['worst']}")
+            bad.append(f"{key}: cost at {two_n(key)} x{big / was_big:.4f} > {tol['worst']}")
     return lines, bad
 
 
@@ -331,8 +406,8 @@ def step_rises(
         rise = max(tol["step_rise"], tol["pass_slack"])  # a row accepted at a higher pass_slack is accepted at that for this too
         if key in base and big > base[key][2] * rise and big - base[key][2] >= tol["step_floor"]:
             # whatever its share of the compile: a step that was 907 Minstr at 2N and is 13,840 was 0.4% of a compile and is not now
-            lines.append(f"{key}: 2N x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
-            bad.append(f"{key}: cost at 2N x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: {two_n(key)} x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
+            bad.append(f"{key}: cost at {two_n(key)} x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
             continue
         if big < tol["high"] * whole:
             continue
@@ -342,8 +417,8 @@ def step_rises(
         more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
             shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
-            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f} ({shown})")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), {two_n(key)} x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or {two_n(key)} x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
     return lines, bad
 
 
@@ -359,11 +434,15 @@ def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[
     return "; steps of the same axis and level that rose: " + ", ".join(f"{name.split(' ', 2)[2]} +{rise:.1f} Minstr" for rise, name in rows[:3]) if rows else ""
 
 
+def judged_axes(base: dict, now: dict) -> frozenset[str]:
+    return frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
+
+
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
     tol = tol or tolerances()
     lines, bad = [], []
     # An axis judges a new row only when its own second difference did not rise: work moved between rows leaves it flat or lower.
-    judged = frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
+    judged = judged_axes(base, now)
     for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", lambda b, n, t: step_rises(b, n, t, judged))):
         got = check(base[part], now[part], tol)
         lines += got[0]
@@ -433,6 +512,9 @@ def check(jobs: int, ref: str) -> int:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
     lines, bad = rises(base, now)
+    if bad:
+        more, bad = confirmed(bad, base, now, base_sha, head, tolerances())
+        lines += more
     print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
     # The gated head is stored by its tree: the commit that lands it (a squash of the same tree) is the next run's base, measured here.

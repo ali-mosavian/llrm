@@ -1,5 +1,8 @@
 //! Compile C to an object.
 
+// `system-alloc`: tools/measure.py confirms a step rise with this build, as
+// mimalloc's heap layout moves a step's count by itself.
+#[cfg(not(feature = "system-alloc"))]
 #[global_allocator]
 static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
