@@ -90,20 +90,6 @@ def test_a_multiply_costs_what_its_multiplier_is():
     assert harness.multiply_clocks(0xFFFFFFFF, True) == 15      # -1: n = 5 for a negative multiplier
 
 
-def test_a_misaligned_operand_costs_the_486_three_clocks():
-    """The model charged nothing for an operand off its alignment, and llrm's frame slots were 2-aligned (`WORD = 2`): d_faces'
-    spills at [esp+210] read as free where a 486 takes 3 more for each. Intel486 data sheet 240440-002 section 10.1 (Instruction
-    Clock Count Assumptions, 2: "Add three clocks to each misaligned access"), with Table 2.1's alignments: word 2, dword 4,
-    double and extended real 8."""
-    assert harness.misalignment(0x1000, 4) == 0 and harness.misalignment(0x1008, 8) == 0
-    assert harness.misalignment(0x1002, 4) == 3      # a dword off a doubleword boundary
-    assert harness.misalignment(0x1003, 2) == 3      # a word at an odd address
-    assert harness.misalignment(0x1002, 2) == 0      # a word at an even one
-    assert harness.misalignment(0x1001, 1) == 0
-    assert harness.misalignment(0x1004, 8) == 3      # a double off a quadword boundary, though it is on a doubleword's
-    assert harness.misalignment(0x1010, 10) == 0 and harness.misalignment(0x1004, 10) == 3
-
-
 def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_the_stack(built):
     """The table put llrm's watcom register arguments beside gcc's stack ones: part of every ratio was the ABI. build.sh passes
     -mabi=sysv and records it; the harness reads `report`'s value where that convention puts it."""
@@ -172,3 +158,28 @@ def test_every_x87_encoding_has_a_clock_price():
                 ins = Decoder(bits, bytes([opcode, modrm, 0, 0, 0, 0, 0, 0])).decode()
                 if ins.code != Code.INVALID:
                     harness.cost(ins, False, True, 1)
+
+
+def test_a_dword_at_an_odd_address_is_counted_as_misaligned():
+    """The 486 pays three clocks for a misaligned access and the table showed nothing of it: a loop of `mov eax, [ebx+1]` and one of
+    `mov eax, [ebx]` cost the same in instructions, memory operands and clocks. A double wants 8 (Table 2.1)."""
+    from iced_x86 import Decoder
+    from unicorn import UC_ARCH_X86, UC_MODE_32, Uc
+    from unicorn.x86_const import UC_X86_REG_EBX, UC_X86_REG_ESI, UC_X86_REG_EDI
+
+    uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.reg_write(UC_X86_REG_EBX, 0x1000)
+    uc.reg_write(UC_X86_REG_ESI, 0x2001)
+    uc.reg_write(UC_X86_REG_EDI, 0x3000)
+
+    def count(code):
+        return harness.misaligned_operands(uc, Decoder(32, code, ip=0).decode())
+
+    assert count(bytes.fromhex("8b4301")) == 1      # mov eax, [ebx+1]
+    assert count(bytes.fromhex("8b03")) == 0        # mov eax, [ebx]
+    assert count(bytes.fromhex("0fb74301")) == 1    # movzx eax, word [ebx+1]
+    assert count(bytes.fromhex("0fb74302")) == 0    # movzx eax, word [ebx+2]
+    assert count(bytes.fromhex("8a4301")) == 0      # mov al, [ebx+1]: a byte is never across
+    assert count(bytes.fromhex("a5")) == 1          # movsd: the source esi is odd, the destination edi is not
+    assert count(bytes.fromhex("dd4304")) == 1      # fld qword [ebx+4]: a double wants 8
+    assert count(bytes.fromhex("dd4308")) == 0      # fld qword [ebx+8]
