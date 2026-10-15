@@ -949,6 +949,7 @@ impl Analysis for Reads {
     fn remapped(
         old: &Self::Result,
         substituted: &dyn Fn(crate::module::ValueId) -> Option<Operand>,
+        _: &[Change],
         _: &Context,
         _: &Function,
     ) -> Option<Self::Result> {
