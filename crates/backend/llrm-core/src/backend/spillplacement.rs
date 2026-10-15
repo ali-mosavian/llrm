@@ -225,10 +225,35 @@ impl Node {
     }
 }
 
+/// How often each block runs per entry to the body, by its loop depth: a fact
+/// of the blocks' shape, found once for every split of a function.
+pub struct Levels;
+
+impl Fact for Levels {
+    type Result = IndexMap<i64, f64>;
+    type Inputs = Shape;
+    const NAME: &'static str = "block-levels";
+
+    fn run(body: &LirBody) -> IndexMap<i64, f64> {
+        ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect()
+    }
+
+    fn inputs(body: &LirBody) -> Shape {
+        Shape::of(body)
+    }
+
+    fn held_by(
+        kept: &Shape,
+        body: &LirBody,
+    ) -> bool {
+        kept.holds(body)
+    }
+}
+
 /// One placement query over a body's bundles.
 pub struct Placement<'a> {
     pub bundles: &'a Bundles,
-    pub frequency: IndexMap<i64, f64>,
+    pub frequency: Arc<IndexMap<i64, f64>>,
     nodes: Vec<Node>,
     active: BTreeSet<usize>,
     todo: BTreeSet<usize>,
@@ -244,7 +269,7 @@ impl<'a> Placement<'a> {
         body: &LirBody,
         bundles: &'a Bundles,
     ) -> Self {
-        let frequency = ranges::depths_shared(body).iter().map(|(at, depth)| (*at, ranges::level(*depth))).collect();
+        let frequency = body.facts.0.get::<Levels>(body);
         Self {
             bundles,
             frequency,
