@@ -203,12 +203,11 @@ fn _reused(body: &LirBody) -> LirBody {
             *defined.entry(*value).or_insert(0) += 1;
         }
     }
-    let (_, leaving) = allocate::live(body);
+    let rows = allocate::live_rows(body);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-        let out = &leaving[&block.at];
         // Where each value is read and written in the block, in order: what the
         // scans below ask, in a log of the block's length.
         let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
@@ -249,7 +248,7 @@ fn _reused(body: &LirBody) -> LirBody {
                 continue;
             }
             if defined.get(&into.value) != Some(&1)
-                || out.contains(&into.value)
+                || rows.live_out(block.at, into.value)
                 || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
             {
                 continue;
