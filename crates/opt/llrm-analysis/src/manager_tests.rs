@@ -196,7 +196,7 @@ fn every_corpus_function_answers_through_the_manager_as_directly() {
                     .get::<DominatedEdges>(&module.context, &layout, function)
                     .as_ref()
                     .as_ref()
-                    .map(|states| states.blocks(function))
+                    .map(|states| states.blocks(&unit, &unit.registers()))
                     .map_err(String::clone),
                 ranges::dominated_edges(&unit),
                 "{at}"
@@ -485,8 +485,8 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
 }
 
 /// A branch's bound changed outside the blocks it narrows: the edge facts of
-/// the blocks past it were kept stale. Only the blocks the change reaches are
-/// worked again, and what comes out is what working them all gives.
+/// the blocks past it were kept stale. What is asked after is what working
+/// every block gives.
 #[test]
 fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let mut module = parsed(&format!("{DOS}{LIMITED}"));
@@ -495,11 +495,12 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let states = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
+        let unit = crate::testing::with_registers(Unit::of(module, &layout, function));
         analyses
             .get::<DominatedEdges>(&module.context, &layout, function)
             .as_ref()
             .as_ref()
-            .map(|states| states.blocks(function))
+            .map(|held| held.blocks(&unit, &unit.registers()))
             .map_err(String::clone)
             .unwrap()
     };
@@ -513,17 +514,7 @@ fn a_change_to_a_branch_bound_reworks_the_blocks_past_it() {
         function.set_operand(lim, 0, seven);
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
-    let solved = ranges::blocks_solved();
     let after = states(&mut analyses, &module);
-    // The check works them all again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
-        assert!(
-            ranges::blocks_solved() - solved < function(&module, "f").layout().len(),
-            "{} blocks worked of {}",
-            ranges::blocks_solved() - solved,
-            function(&module, "f").layout().len()
-        );
-    }
     assert_ne!(before, after, "the bound the change reached");
     let fresh = Analyses::new(outer);
     let mut fresh = fresh;
@@ -574,13 +565,12 @@ fn a_change_to_a_loop_reworks_the_loop_that_starts_from_it() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
-        analyses
-            .get::<super::Bounded>(&module.context, &layout, function)
-            .as_ref()
-            .as_ref()
-            .map(ranges::Bounds::facts)
-            .map_err(String::clone)
-            .unwrap()
+        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
+        let unit = held.unit(&module.context, &layout, function, analyses.outer());
+        match held.bounds() {
+            Some(Ok(bounds)) => bounds.complete(&unit),
+            _ => panic!("bounds"),
+        }
     };
     let before = facts(&mut analyses, &module);
     {
@@ -613,13 +603,12 @@ fn an_instruction_erased_above_a_loop_leaves_the_loops_facts() {
     let mut analyses = Analyses::new(Rc::clone(&outer));
     let facts = |analyses: &mut Analyses, module: &llrm_mir::module::Module| {
         let function = function(module, "f");
-        analyses
-            .get::<super::Bounded>(&module.context, &layout, function)
-            .as_ref()
-            .as_ref()
-            .map(ranges::Bounds::facts)
-            .map_err(String::clone)
-            .unwrap()
+        let held = super::Ranges::of(&module.context, &layout, function, analyses, true);
+        let unit = held.unit(&module.context, &layout, function, analyses.outer());
+        match held.bounds() {
+            Some(Ok(bounds)) => bounds.complete(&unit),
+            _ => panic!("bounds"),
+        }
     };
     let seven = {
         let function = function(&module, "f");

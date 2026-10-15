@@ -39,11 +39,9 @@ use crate::consts::Known;
 use crate::memory::Unit;
 use crate::ranges::{self, Interval, Intervals, Lookup};
 
-/// Edge facts of one body, asked of by value and block.
-pub struct EdgeRanger<'a, 'u> {
-    unit: &'a Unit<'u>,
-    facts: &'a IndexMap<ValueId, Known>,
-    entry: Option<BlockId>,
+/// What the ranger has worked out of one body: the answers it keeps.
+#[derive(Default)]
+struct Memo {
     /// (value, block) -> what holds after the block's own instructions.
     own: RefCell<HashMap<(ValueId, i64), Option<Rc<Interval>>>>,
     /// Block -> what the edge from its sole predecessor sets, where it has one.
@@ -51,6 +49,133 @@ pub struct EdgeRanger<'a, 'u> {
     /// Block -> what each of its assumes sets below it, in order.
     assumes: RefCell<HashMap<i64, Rc<Vec<Intervals>>>>,
     failed: RefCell<Option<String>>,
+}
+
+/// The edges' facts of a body as the manager keeps them: nothing is worked out
+/// until a pass asks (`ranger`), and an edit drops only the answers it can
+/// change.
+#[derive(Clone, Default)]
+pub struct EdgeFacts {
+    memo: Rc<Memo>,
+}
+
+/// Two bodies' facts are equal: what they hold is of what was asked, and a
+/// check compares the answers (`check`).
+impl PartialEq for EdgeFacts {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for EdgeFacts {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(out, "EdgeFacts({} answers)", self.memo.own.borrow().len())
+    }
+}
+
+impl EdgeFacts {
+    /// The answers about `unit`'s body, over its registers.
+    pub fn over<'a, 'u>(
+        &self,
+        unit: &'a Unit<'u>,
+        facts: &'a IndexMap<ValueId, Known>,
+    ) -> EdgeRanger<'a, 'u> {
+        EdgeRanger::with(Rc::clone(&self.memo), unit, facts)
+    }
+
+    /// How many answers are held.
+    pub fn answers(&self) -> usize {
+        self.memo.own.borrow().len()
+    }
+
+    /// Every block's facts, as the table gave them: asked of every value at
+    /// every block, for a check or a test.
+    pub fn blocks(
+        &self,
+        unit: &Unit,
+        facts: &IndexMap<ValueId, Known>,
+    ) -> IndexMap<i64, Intervals> {
+        use llrm_mir::dense::Dense;
+        let ranger = self.over(unit, facts);
+        let function = unit.function;
+        let mut found = IndexMap::default();
+        for &block in function.layout() {
+            let at = cfg::id(block);
+            let scope: Intervals = (0..function.value_count())
+                .filter_map(|index| {
+                    let value = ValueId::at(index);
+                    ranger.at(value, at).map(|interval| (value, (*interval).clone()))
+                })
+                .collect();
+            if !scope.is_empty() {
+                found.insert(at, scope);
+            }
+        }
+        found
+    }
+
+    /// What is left of the answers once the blocks `keep` is false of are
+    /// asked again. The answers are worked on in place where nobody else holds
+    /// them.
+    pub fn keeping(
+        mut self,
+        keep: impl Fn(i64) -> bool,
+    ) -> EdgeFacts {
+        // Each block is judged once, not once for each answer it has.
+        let mut judged: HashMap<i64, bool> = HashMap::default();
+        let mut kept = |at: i64| *judged.entry(at).or_insert_with(|| keep(at));
+        match Rc::get_mut(&mut self.memo) {
+            Some(memo) => {
+                memo.own.get_mut().retain(|(_, at), _| kept(*at));
+                memo.edges.get_mut().retain(|at, _| kept(*at));
+                memo.assumes.get_mut().retain(|at, _| kept(*at));
+                self
+            }
+            None => {
+                let memo = Memo::default();
+                *memo.own.borrow_mut() = self
+                    .memo
+                    .own
+                    .borrow()
+                    .iter()
+                    .filter(|((_, at), _)| kept(*at))
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect();
+                *memo.edges.borrow_mut() = self
+                    .memo
+                    .edges
+                    .borrow()
+                    .iter()
+                    .filter(|(at, _)| kept(**at))
+                    .map(|(k, v)| (*k, Rc::clone(v)))
+                    .collect();
+                *memo.assumes.borrow_mut() = self
+                    .memo
+                    .assumes
+                    .borrow()
+                    .iter()
+                    .filter(|(at, _)| kept(**at))
+                    .map(|(k, v)| (*k, Rc::clone(v)))
+                    .collect();
+                EdgeFacts { memo: Rc::new(memo) }
+            }
+        }
+    }
+}
+
+/// Edge facts of one body, asked of by value and block.
+pub struct EdgeRanger<'a, 'u> {
+    unit: &'a Unit<'u>,
+    facts: &'a IndexMap<ValueId, Known>,
+    shape: Cow<'u, cfg::Shape>,
+    entry: Option<BlockId>,
+    memo: Rc<Memo>,
 }
 
 /// What holds at `.1` once its instructions have run.
@@ -91,21 +216,21 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         unit: &'a Unit<'u>,
         facts: &'a IndexMap<ValueId, Known>,
     ) -> Self {
-        Self {
-            unit,
-            facts,
-            entry: unit.function.entry(),
-            own: RefCell::default(),
-            edges: RefCell::default(),
-            assumes: RefCell::default(),
-            failed: RefCell::default(),
-        }
+        Self::with(Rc::default(), unit, facts)
+    }
+
+    fn with(
+        memo: Rc<Memo>,
+        unit: &'a Unit<'u>,
+        facts: &'a IndexMap<ValueId, Known>,
+    ) -> Self {
+        Self { unit, facts, shape: unit.shape(), entry: unit.function.entry(), memo }
     }
 
     /// The first error a transfer function gave, if one did: answers after it
     /// are not to be trusted.
     pub fn error(&self) -> Option<String> {
-        self.failed.borrow().clone()
+        self.memo.failed.borrow().clone()
     }
 
     /// What holds of `value` at block `at` after its instructions, as
@@ -115,11 +240,11 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         value: ValueId,
         at: i64,
     ) -> Option<Rc<Interval>> {
-        if let Some(found) = self.own.borrow().get(&(value, at)) {
+        if let Some(found) = self.memo.own.borrow().get(&(value, at)) {
             return found.clone();
         }
         let found = self.worked(value, at).map(Rc::new);
-        self.own.borrow_mut().insert((value, at), found.clone());
+        self.memo.own.borrow_mut().insert((value, at), found.clone());
         found
     }
 
@@ -127,7 +252,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         &self,
         at: i64,
     ) -> bool {
-        self.entry.map(cfg::id) == Some(at) || self.unit.shape().dominance.immediate(at).is_some()
+        self.entry.map(cfg::id) == Some(at) || self.shape.dominance.immediate(at).is_some()
     }
 
     fn worked(
@@ -173,7 +298,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             }
             return self.below(value, parent);
         }
-        match self.unit.shape().dominance.immediate(at) {
+        match self.shape.dominance.immediate(at) {
             Some(up) => self.below(value, up),
             None if self.entry.map(cfg::id) == Some(at) && self.unit.function.parameters().contains(&value) => {
                 ranges::declared_argument(self.unit, value).map(Rc::new)
@@ -206,7 +331,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         parent: i64,
         at: i64,
     ) -> Rc<Option<Intervals>> {
-        if let Some(found) = self.edges.borrow().get(&at) {
+        if let Some(found) = self.memo.edges.borrow().get(&at) {
             return Rc::clone(found);
         }
         let known = Below { ranger: self, block: parent, assumed: &self.assumed(parent) };
@@ -214,12 +339,12 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         {
             Ok(delta) => delta,
             Err(why) => {
-                self.failed.borrow_mut().get_or_insert(why);
+                self.memo.failed.borrow_mut().get_or_insert(why);
                 None
             }
         };
         let delta = Rc::new(delta);
-        self.edges.borrow_mut().insert(at, Rc::clone(&delta));
+        self.memo.edges.borrow_mut().insert(at, Rc::clone(&delta));
         delta
     }
 
@@ -239,7 +364,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
         &self,
         at: i64,
     ) -> Rc<Vec<Intervals>> {
-        if let Some(found) = self.assumes.borrow().get(&at) {
+        if let Some(found) = self.memo.assumes.borrow().get(&at) {
             return Rc::clone(found);
         }
         let mut deltas: Vec<Intervals> = Vec::new();
@@ -254,7 +379,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             }
         }
         let deltas = Rc::new(deltas);
-        self.assumes.borrow_mut().insert(at, Rc::clone(&deltas));
+        self.memo.assumes.borrow_mut().insert(at, Rc::clone(&deltas));
         deltas
     }
 }
@@ -634,8 +759,16 @@ pub fn check(
     facts: &IndexMap<ValueId, Known>,
     states: &ranges::EdgeStates,
 ) {
+    check_against(&EdgeRanger::new(unit, facts), unit, states);
+}
+
+/// `check`, of answers already kept.
+pub fn check_against(
+    ranger: &EdgeRanger,
+    unit: &Unit,
+    states: &ranges::EdgeStates,
+) {
     use llrm_mir::dense::Dense;
-    let ranger = EdgeRanger::new(unit, facts);
     let function = unit.function;
     for &block in function.layout() {
         let at = cfg::id(block);

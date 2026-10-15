@@ -155,7 +155,7 @@ pub struct Interval {
 /// interval it can touch.
 pub fn covering<'a>(
     reference: &'a MemRef,
-    known: &BTreeMap<ValueId, Interval>,
+    known: &dyn Lookup,
 ) -> Cow<'a, MemRef> {
     let Some(base) = reference.base else {
         return Cow::Borrowed(reference);
@@ -163,7 +163,7 @@ pub fn covering<'a>(
     if !reference.object || reference.segment.is_some() {
         return Cow::Borrowed(reference);
     }
-    let Some(interval) = known.get(&base) else {
+    let Some(interval) = known.lookup(&base) else {
         return Cow::Borrowed(reference);
     };
     if interval.width != reference.base_width || reference.base_width != reference.index_bits {
@@ -196,7 +196,7 @@ pub fn covering<'a>(
 pub fn inside_object(
     unit: &Unit,
     reference: &MemRef,
-    known: &BTreeMap<ValueId, Interval>,
+    known: &dyn Lookup,
 ) -> bool {
     let covered = covering(reference, known);
     let extent = covered.root.and_then(|root| crate::memory::object_of(unit, root)).and_then(|object| object.extent);
@@ -990,6 +990,44 @@ impl Lookup for Intervals {
     }
 }
 
+impl Lookup for BTreeMap<ValueId, Interval> {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        self.get(value).map(Cow::Borrowed)
+    }
+}
+
+/// `delta`'s facts over those of `base`: what holds past a branch's edge.
+pub struct Over<'a> {
+    pub delta: Intervals,
+    pub base: &'a dyn Lookup,
+}
+
+impl Lookup for Over<'_> {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        match self.delta.get(value) {
+            Some(found) => Some(Cow::Borrowed(found)),
+            None => self.base.lookup(value),
+        }
+    }
+}
+
+/// `on_edge`, without a copy of what is known: the edge's facts over `known`.
+pub fn on_edge_over<'a>(
+    unit: &Unit,
+    block: BlockId,
+    successor: BlockId,
+    known: &'a dyn Lookup,
+    facts: Option<&IndexMap<ValueId, Known>>,
+) -> Result<Option<Over<'a>>, String> {
+    Ok(edge_delta(unit, block, successor, known, facts)?.map(|delta| Over { delta, base: known }))
+}
+
 impl<T: Lookup + ?Sized> Lookup for Rc<T> {
     fn lookup(
         &self,
@@ -1233,16 +1271,17 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
                 // body's.
-                let facts = held.facts();
+                let facts = held.loops_facts();
                 assert!(
                     (!unit.loop_intervals && facts.is_empty())
-                        || facts == bounded_with(&Unit { bounds: None, ..*unit }, &registers)?,
+                        || facts
+                            == bounded_solved(&Unit { bounds: None, ..*unit }, &registers, None, false)?.loops_facts(),
                     "the bounds a unit carries are not those of the body it stands over: stale"
                 );
             }
             Ok(std::borrow::Cow::Borrowed(held))
         }
-        _ => Ok(std::borrow::Cow::Owned(bounded_solved(unit, &registers, None)?)),
+        _ => Ok(std::borrow::Cow::Owned(bounded_solved(unit, &registers, None, false)?)),
     }
 }
 
@@ -1251,7 +1290,7 @@ pub fn bounded_with(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
 ) -> Result<Facts, String> {
-    Ok(bounded_solved(unit, facts, None)?.facts())
+    Ok(bounded_solved(unit, facts, None, false)?.facts())
 }
 
 thread_local! {
@@ -1301,6 +1340,9 @@ pub struct Bounds {
     /// The edges' facts it was worked out under: a loop reads them where it
     /// starts from.
     edges: IndexMap<i64, Scope>,
+    /// The edges' facts are the unit's own, asked of by value and block
+    /// (`ranger`), and `edges` holds none.
+    lazy: bool,
     within: IndexMap<i64, Scope>,
     /// The blocks two loops' facts contradict each other at: none executes
     /// them.
@@ -1319,21 +1361,94 @@ impl Bounds {
         self.dead.contains(&at)
     }
 
-    /// What is known at `at`.
-    pub fn at(
+    /// What the counted loops know at `at`, where one holds it.
+    pub fn within(
         &self,
         at: i64,
     ) -> Option<&Intervals> {
-        self.within.get(&at).or_else(|| self.edges.get(&at)).map(|scope| &**scope)
+        self.within.get(&at).map(|scope| &**scope)
     }
 
-    /// As `bounded` gives them.
+    /// What is known at block `at`: the loops' facts where a loop holds it,
+    /// else the edges', asked of `unit` where it carries them.
+    pub fn scope<'a, 'u>(
+        &'a self,
+        unit: &'a Unit<'u>,
+        at: i64,
+    ) -> BlockScope<'a, 'u> {
+        BlockScope { bounds: self, unit, at }
+    }
+
+    /// As `bounded` gives them, the edges' facts asked of `unit` where they are
+    /// lazy: every value at every block, for a check or a test.
+    pub fn complete(
+        &self,
+        unit: &Unit,
+    ) -> Facts {
+        if !self.lazy {
+            return self.facts();
+        }
+        let mut found = self.loops_facts();
+        if let (Some(edges), Some(registers)) = (unit.edges, unit.registers) {
+            for (at, scope) in edges.blocks(unit, registers) {
+                found.entry(at).or_insert(scope);
+            }
+        }
+        found
+    }
+
+    /// The loops' facts alone.
+    pub fn loops_facts(&self) -> Facts {
+        self.within.iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
+    }
+
+    /// As `bounded` gives them, where the edges' facts are held (not lazy).
     pub fn facts(&self) -> Facts {
         self.within
             .iter()
             .chain(self.edges.iter().filter(|(at, _)| !self.within.contains_key(*at)))
             .map(|(at, scope)| (*at, (**scope).clone()))
             .collect()
+    }
+}
+
+/// A question answered by a function of the value.
+struct Asked<'a>(&'a dyn Fn(&ValueId) -> Option<Interval>);
+
+impl Lookup for Asked<'_> {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        (self.0)(value).map(Cow::Owned)
+    }
+}
+
+/// What `Bounds` knows at one block, value by value.
+pub struct BlockScope<'a, 'u> {
+    bounds: &'a Bounds,
+    unit: &'a Unit<'u>,
+    at: i64,
+}
+
+impl Lookup for BlockScope<'_, '_> {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        if let Some(scope) = self.bounds.within.get(&self.at) {
+            return scope.get(value).map(Cow::Borrowed);
+        }
+        if !self.bounds.lazy {
+            return self.bounds.edges.get(&self.at).and_then(|scope| scope.get(value)).map(Cow::Borrowed);
+        }
+        // The unit's own answers where it carries them; else worked out for
+        // this one question.
+        let found = match (self.unit.edges, self.unit.registers) {
+            (Some(edges), Some(registers)) => edges.over(self.unit, registers).at(*value, self.at),
+            _ => crate::ranger::EdgeRanger::new(self.unit, &self.unit.registers()).at(*value, self.at),
+        };
+        found.map(|found| Cow::Owned((*found).clone()))
     }
 }
 
@@ -1350,15 +1465,13 @@ pub fn loops_reached(
     shape: &cfg::Shape,
     blocks: &BTreeSet<BlockId>,
     conditions: &BTreeSet<BlockId>,
-    bounds: &Bounds,
-    held: &EdgeStates,
+    edges_changed: &dyn Fn(i64) -> bool,
 ) -> BTreeSet<i64> {
     let loops = &shape.loops;
     let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
     let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
-    let now = held.shared(function);
     // Where each loop starts from: the block its header's dominator is, and the
     // blocks that enter it.
     let starts = |one: &loops::Loop| -> Vec<i64> {
@@ -1369,11 +1482,7 @@ pub fn loops_reached(
             .chain(entering.get(&one.header).into_iter().flatten().copied().filter(|at| !one.body.contains(at)))
             .collect()
     };
-    let moved = |at: &i64| match (bounds.edges.get(at), now.get(at)) {
-        (Some(was), Some(is)) => !Rc::ptr_eq(was, is) && was != is,
-        (None, None) => false,
-        _ => true,
-    };
+    let moved = |at: &i64| edges_changed(*at);
     let mut dirty: BTreeSet<i64> = loops
         .iter()
         .filter(|one| {
@@ -1442,6 +1551,7 @@ pub fn bounded_solved(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
     prior: Option<(&Bounds, &BTreeSet<i64>)>,
+    lazy: bool,
 ) -> Result<Bounds, String> {
     let function = unit.function;
     let graph = cfg::graph(function);
@@ -1450,19 +1560,28 @@ pub fn bounded_solved(
     let shape = unit.shape();
     let assumed = unit.assumptions();
     // The manager's, where the facts asked of are the unit's own registers.
-    let edges_above = match (unit.edges, unit.registers) {
-        (Some(states), Some(registers)) if std::ptr::eq(facts, registers) => {
-            let held = states.shared(function);
+    // The manager's, asked of by value and block, where the facts asked of are
+    // the unit's own registers and the caller reads the bounds with its unit;
+    // else every block's, worked out.
+    let ranger = match (lazy, unit.edges, unit.registers) {
+        (true, Some(held), Some(registers)) if std::ptr::eq(facts, registers) => Some(held.over(unit, registers)),
+        _ => None,
+    };
+    let edges_above: IndexMap<i64, Scope> = match &ranger {
+        Some(ranger) => {
             if llrm_support::env_set("LLRM_CHECK_REPLAY") {
-                assert!(
-                    held.iter().map(|(at, scope)| (*at, (**scope).clone())).collect::<IndexMap<_, _>>()
-                        == dominated_edges_with(unit, facts)?,
-                    "the edges a unit carries are not those of the body it stands over: stale"
-                );
+                crate::ranger::check_against(ranger, unit, &edges_solved(unit, facts, None)?);
             }
-            held
+            IndexMap::default()
         }
-        _ => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+        None => dominated_edges_with(unit, facts)?.into_iter().map(|(at, scope)| (at, Rc::new(scope))).collect(),
+    };
+    // What the edges above give a value at the end of block `at`.
+    let edges_at = |at: i64, value: &ValueId| -> Option<Interval> {
+        match &ranger {
+            Some(ranger) => ranger.at(*value, at).map(|found| (*found).clone()),
+            None => edges_above.get(&at).and_then(|scope| scope.get(value)).cloned(),
+        }
     };
     let headers: Vec<i64> = shape.loops.iter().map(|one| one.header).collect();
     // An enclosing loop's facts are in `result` before an inner loop reads
@@ -1567,12 +1686,21 @@ pub fn bounded_solved(
         }
         let counted = !known.is_empty();
         // What is known above the loop of the values made outside it.
-        let at_entry = |at: i64| {
-            let mut found = edges_above.get(&at).map(|scope| (**scope).clone()).unwrap_or_default();
-            for (value, interval) in result.get(&at).into_iter().flat_map(|scope| scope.iter()) {
-                narrow(&mut found, value, interval.clone());
+        let at_entry = |at: i64, value: &ValueId| -> Option<Interval> {
+            let edge = edges_at(at, value);
+            let narrowed = result.get(&at).and_then(|scope| scope.get(value));
+            match (edge, narrowed) {
+                (edge, None) => edge,
+                (None, Some(held)) => Some(held.clone()),
+                (Some(edge), Some(held)) if edge.width == held.width => {
+                    let (low, high) =
+                        (edge.low.clone().max(held.low.clone()), edge.high.clone().min(held.high.clone()));
+                    // Where the two disagree entirely, what the edges say
+                    // stands.
+                    Some(if low > high { edge } else { Interval { low, high, width: edge.width } })
+                }
+                (Some(edge), Some(_)) => Some(edge),
             }
-            found
         };
         // A loop with nothing counted and no phi to box has no facts: what its
         // operations would be swept for is not worked out.
@@ -1602,13 +1730,13 @@ pub fn bounded_solved(
         // LazyValueInfo of one value at a point (`getValueAt`), not of every
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
-        let header_scope = shape.dominance.immediate(loop_.header).map(at_entry).unwrap_or_default();
+        let header_above = shape.dominance.immediate(loop_.header);
         for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
                     && outside(value)
                     && !known.contains_key(&value)
-                    && let Some(interval) = header_scope.get(&value)
+                    && let Some(interval) = header_above.and_then(|up| at_entry(up, &value))
                 {
                     known.insert(value, interval.clone());
                 }
@@ -2085,7 +2213,7 @@ pub fn bounded_solved(
             }
         }
     }
-    Ok(Bounds { headers, edges: edges_above, within: result, dead })
+    Ok(Bounds { headers, edges: edges_above, lazy: ranger.is_some(), within: result, dead })
 }
 
 #[cfg(test)]
@@ -2129,7 +2257,7 @@ fn box_candidates(
     loop_: &loops::Loop,
     facts: &IndexMap<ValueId, Known>,
     known: &Intervals,
-    at_entry: &dyn Fn(i64) -> Intervals,
+    at_entry: &dyn Fn(i64, &ValueId) -> Option<Interval>,
 ) -> Vec<Candidate> {
     const SIZE: usize = 512;
     let function = unit.function;
@@ -2154,7 +2282,8 @@ fn box_candidates(
                 latches.push((cfg::id(from), value));
             } else {
                 entries.push(
-                    _operand(unit, value, &at_entry(cfg::id(from)), facts).filter(|interval| interval.width == width),
+                    _operand(unit, value, &Asked(&|one| at_entry(cfg::id(from), one)), facts)
+                        .filter(|interval| interval.width == width),
                 );
             }
         }
@@ -2336,7 +2465,7 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
     // has them as its facts already, and narrowing a map by itself, entry
     // by entry for every block of a chain of N branches, was most of the
     // work (N^2 of them).
-    let bounds = bounded_solved(unit, &unit.registers(), None)?;
+    let bounds = bounded_solved(unit, &unit.registers(), None, false)?;
     let mut result = bounds.facts();
     for (at, edges) in &bounds.edges {
         if !bounds.within.contains_key(at) {
@@ -2370,27 +2499,23 @@ pub fn operand_at(
     let facts = unit.registers();
     let Operand::Value(value) = operand else { return Ok(_operand(unit, operand, &Intervals::default(), &facts)) };
     let held = bounds(unit)?;
-    // The manager's where the unit carries its edges (one block's, not a map of
-    // them all), else worked out here.
-    let worked;
-    let edges: Option<&Intervals> = match unit.edges {
-        Some(states) => states.scope_of(at).map(|scope| &**scope),
-        None => {
-            worked = dominated_edges(unit)?.shift_remove(&at);
-            worked.as_ref()
-        }
+    // The manager's where the unit carries its edges (asked of this value at
+    // this block), else worked out here.
+    let edge: Option<Interval> = match (unit.edges, unit.registers) {
+        (Some(edges), Some(registers)) => edges.over(unit, registers).at(value, at).map(|found| (*found).clone()),
+        _ => dominated_edges(unit)?.shift_remove(&at).and_then(|scope| scope.get(&value).cloned()),
     };
     let mut known = Intervals::default();
-    if let Some(interval) = held.at(at).and_then(|scope| scope.get(&value)) {
-        known.insert(value, interval.clone());
+    if let Some(interval) = held.scope(unit, at).lookup(&value) {
+        known.insert(value, interval.into_owned());
     }
-    if let Some(interval) = edges.and_then(|scope| scope.get(&value)) {
+    if let Some(interval) = edge {
         match known.get(&value) {
             Some(previous) if previous.width == interval.width => {
-                narrow(&mut known, value, interval.clone());
+                narrow(&mut known, value, interval);
             }
             _ => {
-                known.insert(value, interval.clone());
+                known.insert(value, interval);
             }
         }
     }

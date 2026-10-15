@@ -236,12 +236,11 @@ fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
             continue;
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
-        if answer.is_none()
-            && let Some(scope) = scoped.at(cfg::id(block))
-        {
+        if answer.is_none() {
+            let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
             for target in function.successors(block) {
-                if ranges::on_edge(unit, block, target, scope, Some(&facts))?.is_some() {
+                if ranges::on_edge_over(unit, block, target, &scope, Some(&facts))?.is_some() {
                     possible.push(target);
                 }
             }

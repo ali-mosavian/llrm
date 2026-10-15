@@ -453,9 +453,10 @@ fn _widened_counters(
         if narrow >= wide {
             continue;
         }
-        let (Some(counter), Some(interval)) =
-            (counters.get(&source), bounds.at(at).and_then(|known| known.get(&source)))
-        else {
+        let (Some(counter), Some(interval)) = (
+            counters.get(&source),
+            ranges::Lookup::lookup(&bounds.scope(unit, at), &source).map(|found| found.into_owned()),
+        ) else {
             continue;
         };
         if interval.width != narrow {
