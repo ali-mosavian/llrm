@@ -744,8 +744,8 @@ fn _short_update_runs<'b>(
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
     // A run is a plain move into a stored value followed by something: only a
-    // definition of one can start it.
-    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
+    // definition of one can start it, so only those positions are looked at.
+    let mut starts: Vec<(u32, u32)> = postings::following(body, |postings| {
         stored
             .iter()
             .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
@@ -756,23 +756,28 @@ fn _short_update_runs<'b>(
                     Some((into, _)) if into == *value
                 ) && insns.get(at.1 as usize + 1).is_some()
             })
-            .map(|(_, at)| at.0 as usize)
+            .map(|(_, at)| at)
             .collect()
     });
-    if relevant.is_empty() {
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &relevant)?;
-    Ok((Cow::Owned(made), next))
+    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &starts)?;
+    Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
+/// `body` with the runs that start at `starts` (block, position) made short,
+/// or none where none is eligible. Each run is two instructions, so a start
+/// right after the one before it is not looked at.
 fn _short_update_runs_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
-    relevant: &BTreeSet<usize>,
-) -> Result<(LirBody, u32), Error> {
+    starts: &[(u32, u32)],
+) -> Result<(Option<LirBody>, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
         None => {
@@ -781,25 +786,25 @@ fn _short_update_runs_whole(
             (index, live)
         }
     };
-    let mut blocks = Vec::new();
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        // A run starts at a plain move into a stored value: a block with none
-        // is as it was, the very same instructions.
-        if !relevant.contains(&block_index) {
-            blocks.push(block.clone());
-            continue;
-        }
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    let mut next = 0;
+    while next < starts.len() {
+        let block_index = starts[next].0 as usize;
+        let end = next + starts[next..].iter().take_while(|(block, _)| *block as usize == block_index).count();
+        let block = &body.blocks[block_index];
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        let mut position = 0;
-        while position < block.insns.len() {
-            let first = &block.insns[position];
-            let second = block.insns.get(position + 1);
-            let (Some(pair), Some(second)) = (_plain_move(first), second) else {
-                insns.push(Arc::clone(first));
-                position += 1;
+        // What of the block is copied so far.
+        let mut copied = 0;
+        let mut after_last: Option<usize> = None;
+        for &(_, at) in &starts[next..end] {
+            let position = at as usize;
+            if after_last.is_some_and(|last| position < last) {
                 continue;
-            };
-            let (into, outof) = pair;
+            }
+            let first = &block.insns[position];
+            let second = &block.insns[position + 1];
+            let Some((into, outof)) = _plain_move(first) else { continue };
             let width = _width(first, into);
             let slot = index.at[&key(first)];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
@@ -823,19 +828,32 @@ fn _short_update_runs_whole(
                     true
                 };
             if !eligible {
-                insns.push(Arc::clone(first));
-                position += 1;
                 continue;
             }
             let renamed = IndexMap::from_iter([(into, outof)]);
-            let updated = _renamed(second, &renamed);
-            insns.push(updated);
+            insns.extend_from_slice(&block.insns[copied..position]);
+            insns.push(_renamed(second, &renamed));
             insns.push(_store(second, outof, &frame.cell(into, width)?));
-            position += 2;
+            copied = position + 2;
+            after_last = Some(position + 2);
         }
-        blocks.push(block.with_insns(insns));
+        if after_last.is_some() {
+            insns.extend_from_slice(&block.insns[copied..]);
+            while blocks.len() < block_index {
+                blocks.push(body.blocks[blocks.len()].clone());
+            }
+            blocks.push(block.with_insns(insns));
+            changed = true;
+        }
+        next = end;
     }
-    Ok((body.with_blocks(blocks), fresh))
+    if !changed {
+        return Ok((None, fresh));
+    }
+    while blocks.len() < body.blocks.len() {
+        blocks.push(body.blocks[blocks.len()].clone());
+    }
+    Ok((Some(body.with_blocks(blocks)), fresh))
 }
 
 /// An update of a spilled value whose result is read again in its block,

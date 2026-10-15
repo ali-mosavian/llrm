@@ -448,3 +448,17 @@ def test_a_carve_works_on_the_positions_that_name_the_value_not_on_the_block():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["split carving"] < 150, f"cells N=448 -O2: split carving cost {run['split carving']} Minstr (150 allowed; 333 before): {run}"
+
+
+def test_a_short_update_looks_at_the_definitions_of_the_spilled_values_and_not_at_every_instruction_of_the_block():
+    """Making an update of a spilled value short walked each block that holds a definition of one, end to end, and copied it:
+    `spill short updates` cost 335 Minstr on `cells` at N=896 (x4.1 for x2 the program). It looks at the positions the postings give."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["spill short updates"] < 20, f"cells N=448 -O2: spill short updates cost {run['spill short updates']} Minstr (20 allowed; 84 before): {run}"

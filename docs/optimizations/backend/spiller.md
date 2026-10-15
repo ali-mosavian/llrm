@@ -20,6 +20,10 @@ value of the set gets one of these, in this order:
 
 A plain copy of a value made again is made again the same way.
 
+Making an update short (`_short_update_runs`) looks at the definitions of the
+spilled values, which the postings give, and copies a block only where a run is
+made: `spill short updates` on `cells` at N=896 was 335 Minstr, 3.6 now.
+
 Slots are shared by [`crate::backend::slots`](slots.md). Within an allocation each
 stored value takes a slot of its own (`Frame::defer_colours`); once the
 allocation is kept, `slots_colored` shares them, as LLVM's
