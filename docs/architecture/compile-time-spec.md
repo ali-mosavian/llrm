@@ -292,6 +292,17 @@ The single run lands behind `-fallocation-single` in shadow mode: the gate compi
 
   Until then each decision is tuned on the rows it loses, with the per-row report naming them.
 
+Where today stands at m32 on this tree (`run.sh`, executed instructions, llrm over the other compiler, geomean with the worst row in brackets):
+
+| | -O1 | -O2 | -O3 | -Os |
+|---|---|---|---|---|
+| 30 bench programs, over gcc | 0.63 (1.18 recfloat) | 0.75 (1.22 nbody_fixed) | 0.71 (1.38 nbody_fixed) | 0.69 (1.21 nbody_fixed) |
+| 30 bench programs, over clang | 0.84 (2.85 recfloat) | 0.72 (1.81 matmul) | 0.69 (1.93 tile) | 0.71 (1.30 lru) |
+| 41 x_ kernels, over gcc | 0.88 | 0.91 | 0.93 | 0.86 |
+| 41 x_ kernels, over clang | 1.07 | 1.11 | 1.06 | 0.95 |
+
+The gate holds every row at today's value or better. Rows above 1.0 today are the code-quality backlog; they are not this redesign's to fix and must not grow.
+
 ## 5. Pipeline
 
 ### 5.1 Fixed order once, with in-pass worklists
