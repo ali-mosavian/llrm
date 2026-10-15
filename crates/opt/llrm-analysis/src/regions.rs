@@ -93,7 +93,7 @@
 //! LLVM BasicAA's constant-offset GEP comparison and TypeBasedAA.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use llrm_mir::module::{Operand, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
@@ -219,7 +219,7 @@ pub fn foreign_provenance(
     program: Option<&ProgramProxy>,
 ) -> Option<Provenance> {
     let slice = foreign(reference, Some(known), program)?;
-    Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
+    Some(Provenance { slices: crate::memory::Sorted::from([slice]), restrict: crate::memory::Sorted::new() })
 }
 
 /// What `reference` may name under `facts`: its linear bytes when its
@@ -232,7 +232,7 @@ fn refined<'a>(
     program: Option<&ProgramProxy>,
 ) -> Result<Option<Cow<'a, Provenance>>, RegionError> {
     if let Some(slice) = foreign(reference, facts, program) {
-        return Ok(Some(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })));
+        return Ok(Some(Cow::Owned(Provenance { slices: crate::memory::Sorted::from([slice]), restrict: crate::memory::Sorted::new() })));
     }
     reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
 }
@@ -347,7 +347,7 @@ fn narrowed<'a>(
         return Err(RegionError::NarrowedSliceUnrepresentable);
     };
     let slice = Slice::new(source.object.clone(), low, high, 1, width).map_err(RegionError::InvalidNarrowedSlice)?;
-    Ok(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: provenance.restrict.clone() }))
+    Ok(Cow::Owned(Provenance { slices: crate::memory::Sorted::from([slice]), restrict: provenance.restrict.clone() }))
 }
 
 /// Whether one reference lands in foreign memory and the other in program
@@ -788,7 +788,8 @@ pub(crate) mod tests {
         assert_eq!(std::mem::size_of::<super::OverlapBucket>(), 4);
     }
 
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeSet;
+    use std::collections::BTreeMap;
 
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::{Module, Operand};

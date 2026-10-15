@@ -628,18 +628,220 @@ pub fn gcd(
     one
 }
 
+/// A set kept as one sorted, shared array: iterates in `T`'s order as a
+/// `BTreeSet` does, but a copy is a count bumped, a union is a merge, and the
+/// elements sit together. Empty holds no allocation.
+#[derive(Debug)]
+pub struct Sorted<T>(Option<std::sync::Arc<[T]>>);
+
+impl<T> Clone for Sorted<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Default for Sorted<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: PartialEq> PartialEq for Sorted<T> {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (&self.0, &other.0) {
+            (Some(one), Some(two)) => std::sync::Arc::ptr_eq(one, two) || one[..] == two[..],
+            _ => self.is_empty() && other.is_empty(),
+        }
+    }
+}
+
+impl<T: Eq> Eq for Sorted<T> {}
+
+impl<T: std::hash::Hash> std::hash::Hash for Sorted<T> {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.as_slice().hash(state);
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for Sorted<T> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
+
+impl<T: Ord> Ord for Sorted<T> {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<T> Sorted<T> {
+    pub const fn new() -> Self {
+        Self(None)
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.as_slice().iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.as_slice().first()
+    }
+}
+
+impl<T: Ord + Clone> Sorted<T> {
+    pub fn contains(
+        &self,
+        one: &T,
+    ) -> bool {
+        self.as_slice().binary_search(one).is_ok()
+    }
+
+    /// Whether every element of `self` is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let mut rest = other.as_slice();
+        self.iter().all(|one| match rest.binary_search(one) {
+            Ok(at) => {
+                rest = &rest[at + 1..];
+                true
+            }
+            Err(_) => false,
+        })
+    }
+
+    pub fn is_disjoint(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let (mut one, mut two) = (self.as_slice(), other.as_slice());
+        while let (Some(a), Some(b)) = (one.first(), two.first()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Less => one = &one[1..],
+                std::cmp::Ordering::Greater => two = &two[1..],
+                std::cmp::Ordering::Equal => return false,
+            }
+        }
+        true
+    }
+
+    /// The elements of both; the one array shared where one holds the other.
+    pub fn union(
+        &self,
+        other: &Self,
+    ) -> Self {
+        if other.is_subset(self) {
+            return self.clone();
+        }
+        if self.is_subset(other) {
+            return other.clone();
+        }
+        let (mut one, mut two) = (self.as_slice(), other.as_slice());
+        let mut made = Vec::with_capacity(one.len() + two.len());
+        while let (Some(a), Some(b)) = (one.first(), two.first()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Less => {
+                    made.push(a.clone());
+                    one = &one[1..];
+                }
+                std::cmp::Ordering::Greater => {
+                    made.push(b.clone());
+                    two = &two[1..];
+                }
+                std::cmp::Ordering::Equal => {
+                    made.push(a.clone());
+                    one = &one[1..];
+                    two = &two[1..];
+                }
+            }
+        }
+        made.extend_from_slice(one);
+        made.extend_from_slice(two);
+        Self(Some(made.into()))
+    }
+
+    pub fn to_set(&self) -> BTreeSet<T> {
+        self.iter().cloned().collect()
+    }
+}
+
+impl<T: Ord + Clone> FromIterator<T> for Sorted<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
+        let mut made: Vec<T> = items.into_iter().collect();
+        made.sort();
+        made.dedup();
+        if made.is_empty() { Self(None) } else { Self(Some(made.into())) }
+    }
+}
+
+impl<T: Ord + Clone, const N: usize> From<[T; N]> for Sorted<T> {
+    fn from(items: [T; N]) -> Self {
+        items.into_iter().collect()
+    }
+}
+
+impl<T: Ord + Clone> From<BTreeSet<T>> for Sorted<T> {
+    fn from(items: BTreeSet<T>) -> Self {
+        items.into_iter().collect()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Sorted<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T: Clone> IntoIterator for Sorted<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().to_vec().into_iter()
+    }
+}
+
 /// `restrict` holds the `noalias`
 /// parameters a pointer is based on.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Provenance {
-    pub slices: BTreeSet<Slice>,
-    pub restrict: BTreeSet<Identity>,
+    pub slices: Sorted<Slice>,
+    pub restrict: Sorted<Identity>,
 }
 
 impl Provenance {
     /// `Provenance.one` with the whole-object bounds and no restrict roots.
     pub fn one(object: impl Into<ObjectRef>) -> Self {
-        Self { slices: BTreeSet::from([Slice::whole(object)]), restrict: BTreeSet::new() }
+        Self { slices: Sorted::from([Slice::whole(object)]), restrict: Sorted::new() }
     }
 
     pub fn one_with_slice(
@@ -650,7 +852,7 @@ impl Provenance {
         width: i64,
         restrict: BTreeSet<Identity>,
     ) -> Result<Self, SliceError> {
-        Ok(Self { slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict })
+        Ok(Self { slices: Sorted::from([Slice::new(object, low, high, stride, width)?]), restrict: restrict.into() })
     }
 
     pub fn shifted(
@@ -674,9 +876,19 @@ impl Provenance {
         other: &Self,
     ) -> Self {
         Self {
-            slices: self.slices.union(&other.slices).cloned().collect(),
-            restrict: self.restrict.union(&other.restrict).cloned().collect(),
+            slices: self.slices.union(&other.slices),
+            restrict: self.restrict.union(&other.restrict),
         }
+    }
+
+    /// Whether every byte `other` may reach is one `self` may reach, by slice
+    /// and restrict root: a fresh solve's answer is covered by a held one
+    /// that holds it.
+    pub fn covers(
+        &self,
+        other: &Self,
+    ) -> bool {
+        other.slices.is_subset(&self.slices) && other.restrict.is_subset(&self.restrict)
     }
 
     pub fn intersects(
@@ -1337,7 +1549,7 @@ pub struct MemRef {
 
 /// The accesses worked out for a version of a function, and which version.
 struct Held {
-    mark: llrm_mir::module::Mark,
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
     seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::HashMap<InstId, Option<MemRef>>>>,
 }
 
@@ -1432,10 +1644,10 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let mark = unit.function.mark();
+        let key = (unit.function.mark(), unit.spaces());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
-            held.iter().find(|one| one.mark == mark).map(|one| std::rc::Rc::clone(&one.seen))
+            held.iter().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
         });
         let seen = match held {
             Some(seen) => seen,
@@ -1445,19 +1657,25 @@ impl MemRef {
                     held.remove(0);
                 }
                 let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_support::hash::HashMap::default()));
-                held.push(Held { mark, seen: std::rc::Rc::clone(&seen) });
+                held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
                 seen
             }),
         };
-        if let Some(found) = seen.borrow().get(&inst) {
-            if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
-                assert!(*found == Self::derived(unit, inst), "the held access of {inst:?} is not what deriving it again gives");
-            }
-            return found.clone();
+        let found = seen.borrow().get(&inst).cloned();
+        let Some(mut found) = found else {
+            let made = Self::derived(unit, inst);
+            seen.borrow_mut().insert(inst, made.clone());
+            return made;
+        };
+        // Metadata is attached without a change logged: the type is asked again.
+        if let Some(access) = &mut found {
+            access.typed = typed(unit, inst);
+            access.lineage = lineage(unit, inst);
         }
-        let made = Self::derived(unit, inst);
-        seen.borrow_mut().insert(inst, made.clone());
-        made
+        if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
+            assert!(found == Self::derived(unit, inst), "the held access of {inst:?} is not what deriving it again gives");
+        }
+        found
     }
 
     fn derived(
@@ -2013,6 +2231,24 @@ mod tests {
         let copy = set.clone();
         assert_eq!(copy, set);
         assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
+    }
+
+    /// A provenance of shared sorted arrays iterates, merges and compares as
+    /// the `BTreeSet` it replaced did: the output of a compile follows its
+    /// order.
+    #[test]
+    fn a_provenance_unions_and_covers_as_a_set_does() {
+        let some = |at: &[i64]| -> Provenance {
+            let global = |n: i64| MemoryObject { identity: Some(Identity::Int(n)), ..object(MemoryKind::Global) };
+            Provenance { slices: at.iter().map(|&n| Slice::whole(global(n))).collect(), restrict: Default::default() }
+        };
+        let (one, two) = (some(&[3, 1, 1]), some(&[2, 3]));
+        let both = one.union(&two);
+        let expect: BTreeSet<Slice> = one.slices.iter().chain(two.slices.iter()).copied().collect();
+        assert_eq!(both.slices.iter().collect::<Vec<_>>(), expect.iter().collect::<Vec<_>>());
+        assert!(both.covers(&one) && both.covers(&two) && !one.covers(&two));
+        assert!(one.covers(&one) && one.covers(&some(&[])) && !some(&[]).covers(&one));
+        assert_eq!(some(&[1, 3]), one);
     }
 
     /// Two spellings of an object that differ in a fact are two objects here,
