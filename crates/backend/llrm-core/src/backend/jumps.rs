@@ -1107,9 +1107,8 @@ pub fn threaded(body: &LirBody) -> LirBody {
     // (LLVM's BranchFolding, gcc's `cleanup_cfg`); a change can open one in a
     // block before it, so passes repeat from the top until one finds none.
     let (mut from, mut visits) = (0, 0);
-    let mut degrees = Degrees::of(&body);
     loop {
-        match _step(&mut body, &mut at, &mut degrees, &protected, from, &mut visits) {
+        match _step(&mut body, &mut at, &protected, from, &mut visits) {
             Some(next) => from = next,
             None if from == 0 => break,
             None => from = 0,
@@ -1800,7 +1799,6 @@ pub fn _with_return(
 pub fn _step(
     body: &mut LirBody,
     at: &mut Places,
-    degrees: &mut Degrees,
     protected: &BTreeSet<i64>,
     from: usize,
     visits: &mut usize,
@@ -1857,11 +1855,11 @@ pub fn _step(
             let insns =
                 block.insns.iter().map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) });
             let moved_succ: Vec<i64> = succ.into_iter().collect();
-            degrees.moved(&block.succ, &moved_succ);
+            at.moved(&block.succ, &moved_succ);
             blocks[index] = LirBlock { succ: moved_succ, ..block.with_insns(insns.collect()) };
             body.blocks = blocks;
             let freed: Vec<i64> = changed.iter().map(|&(old, _)| old).collect();
-            _stranded(body, at, degrees, &freed);
+            _stranded(body, at, &freed);
             return Some(at.get(&here).unwrap_or(0));
         }
         let target = _through(&blocks, at, last_what.target, protected);
@@ -1871,14 +1869,14 @@ pub fn _step(
                 body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
             }
             blocks[index] = _retargeted(&block, last, onward);
-            degrees.moved(&block.succ, &blocks[index].succ);
+            at.moved(&block.succ, &blocks[index].succ);
             body.blocks = blocks;
             // Every block with edges is reached (the body was pruned after each
             // change), so the only block this can strand is the one
             // the branch left, and only when nothing else enters it.
             match last_what.target {
-                Some(old) => _stranded(body, at, degrees, &[old]),
-                None => _stranded_whole(body, at, degrees),
+                Some(old) => _stranded(body, at, &[old]),
+                None => _stranded_whole(body, at),
             }
             return Some(at.get(&here).unwrap_or(0));
         }
@@ -1956,13 +1954,13 @@ pub fn _step(
                     .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&inverted) } else { Arc::clone(one) })
                     .collect();
                 let succ = vec![onward.expect("checked above"), beyond.expect("a branch names its target")];
-                degrees.moved(&block.succ, &succ);
-                degrees.moved(&over.succ, &[]);
+                at.moved(&block.succ, &succ);
+                at.moved(&over.succ, &[]);
                 let freed = vec![over.at];
                 blocks[index] = LirBlock { insns, succ, ..block };
                 blocks[index + 1] = LirBlock { succ: Vec::new(), ..over };
                 body.blocks = blocks;
-                _stranded(body, at, degrees, &freed);
+                _stranded(body, at, &freed);
                 return Some(at.get(&here).unwrap_or(0));
             }
         }
@@ -2085,7 +2083,6 @@ pub fn _reachable(
 fn _stranded_whole(
     body: &mut LirBody,
     at: &mut Places,
-    degrees: &mut Degrees,
 ) {
     #[cfg(test)]
     WALKS.with(|one| one.set(one.get() + 1));
@@ -2131,58 +2128,12 @@ fn _stranded_whole(
         body.blocks.retain(|_| places.next().unwrap_or(true));
     }
     *at = Places::of(body);
-    *degrees = Degrees::of(body);
 }
 
 // Walks from the entry made to find the blocks a change strands.
 #[cfg(test)]
 thread_local! {
     pub(crate) static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many edges enter each block, kept across the changes `_step` makes, and
-/// the blocks on a cycle.
-///
-/// Every block that has edges is reached (the body is pruned after each
-/// change), so the blocks a change strands are the ones whose count it takes to
-/// zero, and those they enter in turn: no walk from the entry. A block on a
-/// cycle can keep its count and be cut off, so a count that reaches one is
-/// settled by the walk.
-pub struct Degrees {
-    entering: IndexMap<i64, u32>,
-    cyclic: HashSet<i64>,
-}
-
-impl Degrees {
-    fn of(body: &LirBody) -> Self {
-        let mut entering: IndexMap<i64, u32> = body.blocks.iter().map(|block| (block.at, 0)).collect();
-        for block in &body.blocks {
-            for to in &block.succ {
-                if let Some(count) = entering.get_mut(to) {
-                    *count += 1;
-                }
-            }
-        }
-        Self { cyclic: _cyclic(body), entering }
-    }
-
-    /// A block's edges `old` become `new`.
-    fn moved(
-        &mut self,
-        old: &[i64],
-        new: &[i64],
-    ) {
-        for to in old {
-            if let Some(count) = self.entering.get_mut(to) {
-                *count -= 1;
-            }
-        }
-        for to in new {
-            if let Some(count) = self.entering.get_mut(to) {
-                *count += 1;
-            }
-        }
-    }
 }
 
 /// The blocks on a cycle: those of a strongly connected component of more than
@@ -2252,7 +2203,6 @@ fn _cyclic(body: &LirBody) -> HashSet<i64> {
 fn _stranded(
     body: &mut LirBody,
     at: &mut Places,
-    degrees: &mut Degrees,
     freed: &[i64],
 ) {
     let settled = |block: &LirBlock| {
@@ -2264,7 +2214,7 @@ fn _stranded(
     // Only a block nothing enters is stranded; one that still has an edge in
     // is left to the walk that `_prune` makes in the end.
     let mut work: Vec<i64> =
-        freed.iter().copied().filter(|one| *one != body.entry && degrees.entering.get(one) == Some(&0)).collect();
+        freed.iter().copied().filter(|one| *one != body.entry && at.entering_of(*one) == Some(0)).collect();
     let mut gone: Vec<usize> = Vec::new();
     let mut stripped: HashSet<i64> = HashSet::default();
     while let Some(block_at) = work.pop() {
@@ -2285,13 +2235,12 @@ fn _stranded(
             body.blocks[index] = LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) };
         }
         for to in succ {
-            let Some(count) = degrees.entering.get_mut(&to) else { continue };
-            *count -= 1;
-            if *count > 0 {
+            let Some(count) = at.drop_edge(to) else { continue };
+            if count > 0 {
                 // Cut off from the entry all the same if the blocks that
                 // still enter it are a cycle's.
-                if degrees.cyclic.contains(&to) {
-                    return _stranded_whole(body, at, degrees);
+                if at.on_cycle(body, to) {
+                    return _stranded_whole(body, at);
                 }
             } else if to != body.entry {
                 work.push(to);
@@ -2316,19 +2265,81 @@ fn _stranded(
 /// Where each block is, kept as blocks are removed: a block's place is the one
 /// it began at less the blocks removed before it, from a Fenwick tree, so a
 /// removal does not number the blocks after it again.
+///
+/// It also keeps how many edges enter each block across the changes `_step`
+/// makes. Every block that has edges is reached (the body is pruned after each
+/// change), so the blocks a change strands are the ones whose count it takes to
+/// zero, and those they enter in turn: no walk from the entry. A block on a
+/// cycle can keep its count and be cut off, so a count that reaches one is
+/// settled by the walk.
 pub struct Places {
     began: IndexMap<i64, usize>,
     removed: Vec<u32>,
     gone: Vec<bool>,
+    taken: usize,
+    entering: Vec<u32>,
+    /// Found when a count first needs it, on the body as it is then: the
+    /// cycles only shrink.
+    cyclic: Option<HashSet<i64>>,
 }
 
 impl Places {
     fn of(body: &LirBody) -> Self {
         let count = body.blocks.len();
-        Self {
-            began: body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect(),
-            removed: vec![0; count + 1],
-            gone: vec![false; count],
+        let began: IndexMap<i64, usize> =
+            body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+        let mut entering = vec![0; count];
+        for block in &body.blocks {
+            for to in &block.succ {
+                if let Some(&index) = began.get(to) {
+                    entering[index] += 1;
+                }
+            }
+        }
+        Self { began, removed: vec![0; count + 1], gone: vec![false; count], taken: 0, entering, cyclic: None }
+    }
+
+    /// How many edges enter `at`.
+    fn entering_of(
+        &self,
+        at: i64,
+    ) -> Option<u32> {
+        self.began.get(&at).map(|&index| self.entering[index])
+    }
+
+    /// An edge into `to` is gone; how many are left.
+    fn drop_edge(
+        &mut self,
+        to: i64,
+    ) -> Option<u32> {
+        let index = *self.began.get(&to)?;
+        self.entering[index] -= 1;
+        Some(self.entering[index])
+    }
+
+    fn on_cycle(
+        &mut self,
+        body: &LirBody,
+        at: i64,
+    ) -> bool {
+        self.cyclic.get_or_insert_with(|| _cyclic(body)).contains(&at)
+    }
+
+    /// A block's edges `old` become `new`.
+    fn moved(
+        &mut self,
+        old: &[i64],
+        new: &[i64],
+    ) {
+        for to in old {
+            if let Some(&index) = self.began.get(to) {
+                self.entering[index] -= 1;
+            }
+        }
+        for to in new {
+            if let Some(&index) = self.began.get(to) {
+                self.entering[index] += 1;
+            }
         }
     }
 
@@ -2337,6 +2348,9 @@ impl Places {
         at: &i64,
     ) -> Option<usize> {
         let began = *self.began.get(at)?;
+        if self.taken == 0 {
+            return Some(began);
+        }
         if self.gone[began] {
             return None;
         }
@@ -2362,6 +2376,7 @@ impl Places {
     ) {
         let began = self.began[&at];
         self.gone[began] = true;
+        self.taken += 1;
         let mut node = began + 1;
         while node < self.removed.len() {
             self.removed[node] += 1;

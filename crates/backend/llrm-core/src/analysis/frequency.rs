@@ -338,9 +338,11 @@ impl Frequency {
         // them is settled from its first.
         let mut pending: Vec<i64> = blocks.iter().map(|one| one.at).filter(|at| bridge(*at).is_some()).collect();
         // The blocks that enter each, in the order of `blocks`: a scan of all
-        // of them for each bridge was quadratic in a function of N cases.
+        // of them for each bridge was quadratic in a function of N cases. A few
+        // bridges are scanned for, as the map costs more than they do.
         let mut entering: IndexMap<i64, Vec<&LirBlock>> = IndexMap::default();
-        for from in blocks {
+        let mapped = pending.len() > 16;
+        for from in blocks.iter().filter(|_| mapped) {
             for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
                 entering.entry(to).or_default().push(from);
             }
@@ -349,7 +351,12 @@ impl Frequency {
             let before = pending.len();
             pending.retain(|at| {
                 let mut runs = 0.0;
-                for from in entering.get(at).into_iter().flatten().copied().inspect(|_| tick()) {
+                let found: Vec<&LirBlock> = if mapped {
+                    entering.get(at).cloned().unwrap_or_default()
+                } else {
+                    blocks.iter().filter(|from| from.succ.contains(at)).collect()
+                };
+                for from in found.into_iter().inspect(|_| tick()) {
                     let Some(found) = block.get(&from.at).copied() else { return true };
                     runs += if bridge(from.at).is_some() {
                         found
