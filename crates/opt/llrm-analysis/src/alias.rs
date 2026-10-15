@@ -1080,6 +1080,7 @@ thread_local! {
     static OTHER_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static DIRECT_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WHOLE_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has worked out what an unknown call does other
@@ -1092,6 +1093,12 @@ pub fn other_runs() -> usize {
 /// procedure's is made once.
 pub fn direct_runs() -> usize {
     DIRECT_RUNS.with(std::cell::Cell::get)
+}
+
+/// How many runs of `summaries_updating` on this thread were worked out from
+/// nothing, for a test that a run in which every body is dirty is one.
+pub fn whole_runs() -> usize {
+    WHOLE_RUNS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has summarized a body against its callees'
@@ -1348,7 +1355,14 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
             && names.iter().all(|name| memo.direct.contains_key(*name) && memo.result.contains_key(*name))
             && memo.direct.len() == procedures.len()
     };
-    let whole = dirty.is_none() || !same_bodies || memo.known.as_ref() != known;
+    // Where every body is dirty nothing is kept, and what the update does to
+    // keep it (waking readers, comparing what changed) costs more than the
+    // run from nothing it comes to.
+    let every = dirty.is_some_and(|dirty| (0..procedures.len()).all(|at| dirty.contains(procedures.name(at))));
+    let whole = dirty.is_none() || every || !same_bodies || memo.known.as_ref() != known;
+    if whole {
+        WHOLE_RUNS.with(|runs| runs.set(runs.get() + 1));
+    }
     if whole {
         *memo = SummaryMemo::default();
     }

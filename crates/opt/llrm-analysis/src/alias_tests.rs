@@ -975,6 +975,26 @@ fn an_edit_visits_the_edited_body_and_its_callers_only() {
     assert_eq!(again, whole);
 }
 
+/// A run in which every body was edited updated what it kept, which was
+/// nothing: waking the readers of each body and comparing what changed cost 2.7
+/// and 5.2 Minstr more than the run from nothing on the `joins` axis at N=64
+/// (-O2), twice of six runs. It is the run from nothing, and the result is the
+/// same.
+#[test]
+fn a_run_in_which_every_body_is_edited_is_worked_out_from_nothing() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let mut memo = super::SummaryMemo::default();
+    let whole = super::summaries_updating(&procedures, None, &mut memo, None).unwrap();
+    let before = super::whole_runs();
+    let one = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    assert_eq!((super::whole_runs() - before, &one), (0, &whole), "one body edited is an update");
+    let all = BTreeSet::from(["f".to_owned(), "callee".to_owned()]);
+    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&all)).unwrap();
+    assert_eq!((super::whole_runs() - before, &again), (1, &whole), "every body edited is a run from nothing");
+}
+
 /// The facts a visit found are of the body as it was: an edited body is visited
 /// from its own, and the summaries are what a whole run of the edited module
 /// makes (host.c: one function differed before).
