@@ -167,12 +167,27 @@ impl Body {
         self.len() == 0
     }
 
-    /// Whether every block of `other` is in this one.
+    /// Whether every block of `other` is in this one: for loops of one forest,
+    /// whether `other` is this loop or inside it.
     pub fn is_superset(
         &self,
         other: &Body,
     ) -> bool {
+        if std::rc::Rc::ptr_eq(&self.forest, &other.forest) && self.added.is_empty() && other.added.is_empty() {
+            let (outer, inner) = (&self.forest.loops[self.index], &self.forest.loops[other.index]);
+            return outer.enter <= inner.enter && inner.enter <= outer.last;
+        }
         other.len() <= self.len() && other.iter().all(|at| self.contains(at))
+    }
+
+    /// How many loops hold this one, itself counted.
+    pub fn depth(&self) -> u32 {
+        self.forest.loops[self.index].depth
+    }
+
+    /// The header of the loop holding this one, the nearest.
+    pub fn parent_header(&self) -> Option<i64> {
+        self.forest.loops[self.index].parent.map(|parent| self.forest.loops[parent].header)
     }
 
     /// Whether every block of this one is in `other`.

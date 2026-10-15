@@ -622,10 +622,8 @@ fn _rewinding(
     let live = liveness::live(function);
     let graph = cfg::graph(function);
     for inner in found {
-        let Some(parent) = found
-            .iter()
-            .filter(|parent| inner.body.is_subset(&parent.body) && inner.body != parent.body)
-            .min_by_key(|parent| parent.body.len())
+        let Some(parent) =
+            inner.body.parent_header().and_then(|header| found.iter().find(|parent| parent.header == header))
         else {
             continue;
         };
