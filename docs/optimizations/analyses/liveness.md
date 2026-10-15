@@ -29,7 +29,9 @@ block.
 
 `live_of` follows only the values it is given (a manager analysis brought up
 to date for what a change named), from their reads, and gives their sets
-alone.
+alone. `ranges_of` gives the same by value, as sorted lists of blocks; the
+update of the spill model's pressure edits only the values whose blocks moved
+(of the values a pass names nearly all are read where they were).
 
 ```text
    B0:  %a = ...                 %a live_out(B0), live_in(B1) (read in B1)

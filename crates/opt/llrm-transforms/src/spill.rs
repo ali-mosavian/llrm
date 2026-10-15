@@ -1543,30 +1543,73 @@ impl llrm_mir::passes::Analysis for Pressure {
                     index
                 },
             );
-        for value in named.iter() {
-            let (into, out) = placed.remove(&value).unwrap_or_default();
-            for at in into {
-                found.live_in.get_mut(&at).map(|set| set.remove(&value));
-            }
-            for at in out {
-                found.live_out.get_mut(&at).map(|set| set.remove(&value));
-            }
-        }
-        let now = liveness::live_of(function, &named);
-        for (at, values) in now.live_in {
-            for value in &values {
-                placed.get_or_insert_with(*value, Default::default).0.insert(at);
-            }
-            found.live_in.entry(at).or_default().extend(values);
-        }
-        for (at, values) in now.live_out {
-            for value in &values {
-                placed.get_or_insert_with(*value, Default::default).1.insert(at);
-            }
-            found.live_out.entry(at).or_default().extend(values);
-        }
+        // Only a value whose blocks moved is touched: of the values a pass
+        // names nearly all are read where they were (quicksort -O3, 13
+        // updates: 1,300 named, 91 changed), and taking each out of its
+        // sets and putting it back was the update's cost.
+        renewed(&mut found, &mut placed, &named, liveness::ranges_of(function, &named));
         Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed))))
     }
+}
+
+/// `found` and `placed` with each value of `named` live where `computed` has
+/// it. Only a value whose blocks moved is touched: of the values a pass names
+/// nearly all are read where they were (quicksort -O3, 13 updates: 1,300
+/// named, 91 changed), and taking each out of its sets and putting it back
+/// was the update's cost.
+fn renewed(
+    found: &mut Liveness,
+    placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    named: &IdSet<ValueId>,
+    mut computed: IdMap<ValueId, liveness::Range>,
+) {
+    for value in named.iter() {
+        let now = computed.remove(&value).unwrap_or_default();
+        let kept = match placed.get(&value) {
+            Some((into, out)) => {
+                into.iter().copied().eq(now.into.iter().copied()) && out.iter().copied().eq(now.out.iter().copied())
+            }
+            None => now.into.is_empty() && now.out.is_empty(),
+        };
+        if !kept {
+            set_range(found, placed, value, now);
+        }
+    }
+}
+
+// Edits made to a value's live blocks by `Pressure::update_owned`, for a test
+// that a value read where it was is not taken out and put back.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RANGES_EDITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `value` live in the blocks of `now` in place of where `placed` has it.
+fn set_range(
+    found: &mut Liveness,
+    placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    value: ValueId,
+    now: liveness::Range,
+) {
+    #[cfg(test)]
+    RANGES_EDITED.with(|one| one.set(one.get() + 1));
+    let (into, out) = placed.remove(&value).unwrap_or_default();
+    for at in into {
+        found.live_in.get_mut(&at).map(|set| set.remove(&value));
+    }
+    for at in out {
+        found.live_out.get_mut(&at).map(|set| set.remove(&value));
+    }
+    if now.into.is_empty() && now.out.is_empty() {
+        return;
+    }
+    for &at in &now.into {
+        found.live_in.entry(at).or_default().insert(value);
+    }
+    for &at in &now.out {
+        found.live_out.entry(at).or_default().insert(value);
+    }
+    placed.insert(value, (now.into.into_iter().collect(), now.out.into_iter().collect()));
 }
 
 /// `Pressure` under a room and the registers a call keeps: what every pass that
