@@ -129,6 +129,7 @@ pub mod ranges;
 pub mod references;
 pub mod regions;
 pub mod sliceset;
+pub mod slotstores;
 pub mod ssa;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
