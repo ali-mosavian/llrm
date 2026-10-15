@@ -2,15 +2,17 @@
 //! nothing can break fails it.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-/// fmt.sh's exit status and stdout on a one-package tree whose only source is
-/// `source`.
-fn check(
+/// A one-package tree of its own whose only source is `source`, with fmt.sh
+/// in it as a link to the repository's. A copy written here and run at once
+/// failed with "Text file busy" (ETXTBSY) now and then: a test thread that
+/// forks while another has the copy open for writing leaves the child holding
+/// that descriptor until it execs, and the exec of the copy is refused.
+fn probe(
     name: &str,
     source: &str,
-) -> (Option<i32>, String) {
+) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("rfmt-post-fmt-sh-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     let write = |path: &str, text: &str| {
@@ -26,11 +28,20 @@ fn check(
     write("tools/rfmt-post/src/lib.rs", "pub fn stub() {}\n");
     let repo = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
     write("rustfmt.toml", &fs::read_to_string(format!("{repo}/rustfmt.toml")).unwrap());
-    write("tools/fmt.sh", &fs::read_to_string(format!("{repo}/tools/fmt.sh")).unwrap());
-    let script = root.join("tools/fmt.sh");
-    // the workers run it by its name
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let out = Command::new(&script)
+    // the script finds its root by the directory it is run from, and its
+    // workers run it by its name
+    std::os::unix::fs::symlink(format!("{repo}/tools/fmt.sh"), root.join("tools/fmt.sh")).unwrap();
+    root
+}
+
+/// fmt.sh's exit status and stdout on a one-package tree whose only source is
+/// `source`.
+fn check(
+    name: &str,
+    source: &str,
+) -> (Option<i32>, String) {
+    let root = probe(name, source);
+    let out = Command::new(root.join("tools/fmt.sh"))
         .arg("--check")
         .env("RFMT_POST_BIN", env!("CARGO_BIN_EXE_rfmt-post"))
         .current_dir(&root)
@@ -38,6 +49,23 @@ fn check(
         .unwrap();
     fs::remove_dir_all(&root).unwrap();
     (out.status.code(), String::from_utf8(out.stdout).unwrap())
+}
+
+/// The script a test runs is the repository's own file, which no thread has
+/// open for writing, never a copy written a moment before.
+#[test]
+fn the_script_a_probe_runs_is_the_repositorys_not_a_copy_written_for_it() {
+    let root = probe("linked", "pub fn f() {}\n");
+    let script = root.join("tools/fmt.sh");
+    assert!(
+        fs::symlink_metadata(&script).unwrap().file_type().is_symlink(),
+        "a written copy can be refused with ETXTBSY"
+    );
+    assert_eq!(
+        fs::canonicalize(&script).unwrap(),
+        fs::canonicalize(concat!(env!("CARGO_MANIFEST_DIR"), "/../fmt.sh")).unwrap()
+    );
+    fs::remove_dir_all(&root).unwrap();
 }
 
 const LONG: &str = "a comment far longer than eighty columns, which no line break can bring under it unless it moves";
