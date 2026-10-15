@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr.rs sha256:19c0bb64bd854abca62ff543c92e3eb90e25c4572579752680f9ba7c6187df23 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr.rs sha256:b9f45924e162df40cee1e9e5018f235d05f8f0ede88e2c080671374cef95210c -->
 
 # lsr
 
@@ -30,7 +30,10 @@ come before the choice:
 
 The candidates are recurrences the loop could carry in a register:
 - each use's own, and its start with the symbols split every way between
-  counter and base (up to three symbols), with and without the constant;
+  counter and base (up to three symbols), with and without the constant for
+  a compare or an exit, and without it for an address, which takes the
+  constant as its displacement (LLVM strips the immediate from the base
+  register, `LSRInstance::GenerateConstantOffsets`);
 - the loop's existing counters;
 - one counter per scale of an address form whose index is wider than the
   use;
