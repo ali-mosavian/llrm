@@ -44,9 +44,11 @@
 //! displacements in a frame; `hull_buckets` and `hull_span` serve a write and
 //! cells named by provenance alone (no root), by the hull of their slices in
 //! one object. `Index` does the same for lists of references:
-//! `near` returns the entries that name an object the reference may alias,
-//! every addressed one if the reference names an addressed object, and every
-//! entry without provenance; more than needed, never fewer.
+//! `all_near` asks a test of each such entry once, without building the list
+//! (a loop's loads asked its stores). `near` returns the entries that name an
+//! object the reference may alias, every addressed one if the reference names
+//! an addressed object, and every entry without provenance; more than needed,
+//! never fewer.
 //!
 //! Which linear memory holds no program data is the target's fact, and which
 //! address spaces hold program data the segment layout's; both come from the
@@ -1454,11 +1456,21 @@ pub struct Index<'a, T> {
     by_object: llrm_support::hash::HashMap<crate::memory::ObjectRef, Vec<usize>>,
     addressed: Vec<usize>,
     loose: Vec<usize>,
+    /// The query that last reached each entry, so `all_near` meets one once.
+    reached: std::cell::RefCell<Vec<u32>>,
+    queries: std::cell::Cell<u32>,
 }
 
 impl<T> Default for Index<'_, T> {
     fn default() -> Self {
-        Self { entries: Vec::new(), by_object: Default::default(), addressed: Vec::new(), loose: Vec::new() }
+        Self {
+            entries: Vec::new(),
+            by_object: Default::default(),
+            addressed: Vec::new(),
+            loose: Vec::new(),
+            reached: Default::default(),
+            queries: Default::default(),
+        }
     }
 }
 
@@ -1485,6 +1497,46 @@ impl<'a, T: Copy> Index<'a, T> {
                 }
             }
         }
+    }
+
+    /// Whether `holds` is true of every entry that may overlap `reference`,
+    /// each asked once and none after one that fails: `near` without the list
+    /// built and sorted for each question (a loop's loads asked its stores).
+    pub fn all_near(
+        &self,
+        reference: &MemRef,
+        mut holds: impl FnMut(T, &'a MemRef) -> bool,
+    ) -> bool {
+        let mut reached = self.reached.borrow_mut();
+        reached.resize(self.entries.len(), 0);
+        let query = self.queries.get().wrapping_add(1).max(1);
+        self.queries.set(query);
+        if query == 1 {
+            reached.fill(0);
+        }
+        let mut asks = |at: usize, reached: &mut Vec<u32>| -> bool {
+            if reached[at] == query {
+                return true;
+            }
+            reached[at] = query;
+            let (key, one) = self.entries[at];
+            holds(key, one)
+        };
+        let Some(provenance) = &reference.provenance else {
+            return (0..self.entries.len()).all(|at| asks(at, &mut reached));
+        };
+        let mut asked = Vec::new();
+        let mut lists: Vec<&Vec<usize>> = vec![&self.loose];
+        for slice in &provenance.slices {
+            if !asked.contains(&slice.object) {
+                asked.push(slice.object);
+                lists.extend(self.by_object.get(&slice.object));
+            }
+        }
+        if asked.iter().any(|object| object.addressed) {
+            lists.push(&self.addressed);
+        }
+        lists.into_iter().all(|list| list.iter().all(|&at| asks(at, &mut reached)))
     }
 
     /// Every entry that may overlap `reference`, with its key: more, never
