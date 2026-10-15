@@ -104,7 +104,7 @@
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 //! | `unroll`, `peel` | the pass of that name |
-//! | `fill` | `fill`, `merge` |
+//! | `fill` | `fill`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
@@ -146,8 +146,8 @@ use crate::interprocedural::Interprocedural;
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopmotion, loopsimplify, loopsplit, loopversion, lsr, peel, phiopt, ports, promote, rotate, switchlower,
-    tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel, phiopt, ports, promote, rotate,
+    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -415,7 +415,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" | "merge" => self.fill,
+            "fill" | "merge" | "memcpyopt" => self.fill,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -481,6 +481,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(peel::Peel { limits: limits() }),
         Box::new(fill::Fill { size: applied.options.prefers_size() }),
         Box::new(fill::Merge { size: applied.options.prefers_size() }),
+        Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
@@ -792,7 +793,8 @@ impl Fixed {
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
         let (unrollers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "unroll");
         let (peelers, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "peel");
-        let (last, passes): (Vec<_>, Vec<_>) = passes.into_iter().partition(|one| one.name() == "merge");
+        let (last, passes): (Vec<_>, Vec<_>) =
+            passes.into_iter().partition(|one| matches!(one.name(), "merge" | "memcpyopt"));
         // A candidate is judged after the whole pipeline, with the passes that
         // make candidates off.
         let judged = || {

@@ -1,5 +1,5 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "memcpyopt makes the 170 byte copy in runtime/qb/fin.c one memcpy at -Os (-Os is bytes): jpeg_fixed bq32 -Os +6 instructions of 89M, jpeg_single bq32 -O2 +3, code bytes smaller"
+blessed = "2026-10-15"
 
 [bas.O2]
 code_bytes = 5212
@@ -26,7 +26,7 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63443158
+instructions = 63443161
 code_bytes = 6278
 data_bytes = 29697
 bss_bytes = 0
