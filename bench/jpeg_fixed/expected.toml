@@ -1,5 +1,5 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "A constant multiply only an address reads is lea by 3, 5 or 9 and the address's scale (a[3*i], p[12*i]): no imul or shl; re-blessed on the merge of main: jpeg_fixed/jpeg_single bq32 -O2/-Os 98 to 99 K fewer instructions, parity/qbsp bq32 -O2 5 fewer"
+blessed = "2026-10-16"
 
 [bas.O2]
 code_bytes = 5531
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84336394
-code_bytes = 6446
+instructions = 84238089
+code_bytes = 6445
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89430784
-code_bytes = 5990
+instructions = 89332477
+code_bytes = 5989
 data_bytes = 29209
 bss_bytes = 0
 
