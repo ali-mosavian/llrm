@@ -230,10 +230,13 @@ struct Shape {
     path: Vec<BlockId>,
 }
 
-// Loops `peelsize` was asked about.
+// Loops `peelsize` was asked about, and graphs worked out for the loops'
+// shapes.
 #[cfg(test)]
 thread_local! {
     pub(crate) static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static GRAPHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A loop as `refused` names it: its header, blocks and instruction count. A
@@ -252,7 +255,15 @@ pub fn expanded(
     refused: &mut Refused,
 ) -> Result<bool, String> {
     let facts = analyses.fresh().get::<Registers>(context, layout, function);
-    let graph = cfg::graph(function);
+    #[cfg(test)]
+    CALLS.with(|one| one.set(one.get() + 1));
+    #[cfg(test)]
+    GRAPHED.with(|one| one.set(one.get() + 1));
+    let blocks = cfg::graph(function);
+    let graph = Graph {
+        blocks: blocks.iter().map(|block| (block.at, block)).collect(),
+        predecessors: loops::predecessors(&blocks),
+    };
     let mut found = None;
     let found_shape = cfg::Shape::of(function);
     let frequencies = profit::Frequencies::default();
@@ -335,15 +346,21 @@ fn _repeatable(
         && !op.opcode.is_terminator()
 }
 
+/// The blocks by position and their predecessors, worked out once for the
+/// loops asked (each asked them of the whole function).
+struct Graph<'a> {
+    blocks: BTreeMap<i64, &'a cfg::Block>,
+    predecessors: BTreeMap<i64, BTreeSet<i64>>,
+}
+
 /// `loop_`'s shape, where it is one this can expand.
 fn _shape(
     unit: &memory::Unit,
-    graph: &[cfg::Block],
+    graph: &Graph,
     loop_: &Loop,
 ) -> Option<Shape> {
     let function = unit.function;
-    let blocks = graph.iter().map(|block| (block.at, block)).collect::<BTreeMap<_, _>>();
-    let predecessors = loops::predecessors(graph);
+    let (blocks, predecessors) = (&graph.blocks, &graph.predecessors);
     let [latch] = loop_.latches.iter().copied().collect::<Vec<_>>()[..] else {
         return None;
     };
