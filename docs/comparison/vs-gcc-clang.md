@@ -125,3 +125,8 @@ What each side runs under `perf stat -e instructions:u` (children included, one 
 ## Run time
 
 Not measured. There is no gcc or clang binary run on hardware or in a timed emulator. The 486 clock column above is an estimate from instruction counts and says nothing about wall time.
+
+## d_faces, executed
+
+The programs above are kernels. The file the user's goal is judged on, QCport's `render/d_faces.c`, is run as it is on a seeded scene that reaches each of its paths (`vsgcc/dfaces`, [readme](../../crates/target/llrm-x86-m32/vsgcc/dfaces/readme.md)): llrm, gcc and clang at -O1, -O2, -O3 and -Os, each checked against the hash gcc -O0 reports, counting instructions, memory operands, misaligned operands and 486 clocks inside d_faces alone. The table also carries a `misaligned` column for every program: operands whose address is not a multiple of their size (at most 4).
+

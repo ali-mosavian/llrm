@@ -582,3 +582,41 @@ def test_a_bless_still_needs_a_reason():
 
     done = subprocess.run([sys.executable, str(Path(bench.__file__)), "--bless", "--batch"], capture_output=True, text=True)
     assert done.returncode == 2 and "--reason" in done.stderr
+
+
+def _c_build_commands(monkeypatch, tmp_path, name):
+    """The llrm-c commands `bench.build` runs for the C benchmark `name` at -O2."""
+    variant = next(one for directory in bench.benchmarks([name]) for one in bench.variants(directory) if one.language == "c")
+    seen = []
+
+    def run(command, *args, **kwargs):
+        seen.append(command)
+        Path(command[command.index("-o") + 1]).write_bytes(b"")
+        return type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(bench.cpulimit, "run", run)
+    monkeypatch.setattr(bench.dosbatch, "link_c", lambda *a, **k: None)
+    bench.build(variant, "O2", tmp_path, "x")
+    return seen
+
+
+def test_a_c_kernel_is_built_with_the_inlining_the_m32_table_and_gcc_have(monkeypatch, tmp_path):
+    """-fno-inline-functions kept the kernel a call and also kept `rectwo` from inlining itself, as gcc and clang do: its m16 row was
+    4.2x gcc's clocks, 2.6x with the inlining on. The run's build calls the kernel through a volatile pointer (vsgcc's wrap.py)."""
+    sized, counted = _c_build_commands(monkeypatch, tmp_path, "rectwo")
+    assert "-fno-inline-functions" not in sized and "-fno-inline-functions" not in counted
+    assert "(*volatile bench_rectwo_via)" in Path(counted[1]).read_text()
+
+
+def test_the_object_that_is_sized_has_no_pointer_in_it(monkeypatch, tmp_path):
+    """The pointer is 18 bytes of code and 4 of data in every C row's object: the sizes are of the kernel `noinline` and `main` as written."""
+    sized, counted = _c_build_commands(monkeypatch, tmp_path, "rectwo")
+    text = Path(sized[1]).read_text()
+    assert "__attribute__((noinline)) long bench_rectwo(" in text and "volatile" not in text
+    assert sized[sized.index("-o") + 1].endswith("x.obj") and counted[counted.index("-o") + 1].endswith("x.counted.obj")
+
+
+def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
+    """The two targets' tables compare the same inlining: build.sh passes llrm no -fno-inline-functions."""
+    text = (bench.ROOT / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
+    assert [line for line in text.splitlines() if "$LLRM" in line and "-fno-inline-functions" in line] == []

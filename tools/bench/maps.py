@@ -19,7 +19,7 @@ def symbols(listing: Path) -> dict[str, int]:
 def find(table: dict[str, int], name: str) -> int | None:
     """`name` as a language spells it: C and Nib prefix an underscore, BASIC upper-cases and may add a type character."""
     for spelling, address in table.items():
-        plain = spelling.lstrip("_").rstrip("&%#!$").lower()
+        plain = spelling.lstrip("_").split("@")[0].rstrip("&%#!$").lower()  # `@3`: a private convention's suffix
         if plain == name.lstrip("_").rstrip("&%#!$").lower():
             return address
     return None
