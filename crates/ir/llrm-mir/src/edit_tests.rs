@@ -525,39 +525,28 @@ fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
     assert!(f.instruction(phi).operands.is_empty());
 }
 
-/// Nanoseconds to make `count` instructions that all ask for the name `t`,
-/// least of three runs.
-fn naming_cost(count: usize) -> u128 {
-    (0..3)
-        .map(|_| {
-            let mut module = module(TEXT);
-            let i16 = module.context.types.int(16);
-            let one = module.context.int(i16, 1);
-            let f = function(&mut module);
-            let started = std::time::Instant::now();
-            for _ in 0..count {
-                let operand = Operand::Constant(one);
-                f.create_instruction(
-                    Opcode::Binary(BinaryOp::Add),
-                    i16,
-                    vec![operand, operand],
-                    Flags::default(),
-                    Some("t"),
-                );
-            }
-            started.elapsed().as_nanos()
-        })
-        .min()
-        .unwrap()
+/// Names looked at to make `count` instructions that all ask for the name `t`.
+fn naming_cost(count: usize) -> usize {
+    let mut module = module(TEXT);
+    let i16 = module.context.types.int(16);
+    let one = module.context.int(i16, 1);
+    let f = function(&mut module);
+    crate::edit::NAMES_LOOKED_AT.with(|looked| looked.set(0));
+    for _ in 0..count {
+        let operand = Operand::Constant(one);
+        f.create_instruction(Opcode::Binary(BinaryOp::Add), i16, vec![operand, operand], Flags::default(), Some("t"));
+    }
+    crate::edit::NAMES_LOOKED_AT.with(std::cell::Cell::get)
 }
 
 /// `hir to mir` of 1024 `switch` cases cost 13,840 Minstr, 15x more than the
 /// scan it replaced, because each new name hashed every name of the function:
-/// four times the names must cost about four times, not sixteen.
+/// four times the names must cost about four times the looks, not sixteen.
+/// (Counted, not timed: a test may not read the clock.)
 #[test]
 fn naming_a_value_does_not_look_at_every_name_of_the_function() {
-    let (few, many) = (naming_cost(6000), naming_cost(24000));
-    assert!(many < 9 * few, "6000 names {few} ns, 24000 names {many} ns");
+    let (few, many) = (naming_cost(600), naming_cost(2400));
+    assert!(many < 6 * few, "600 names looked at {few} times, 2400 names {many}");
 }
 
 #[test]
