@@ -17,6 +17,12 @@ pub enum Position {
     End(BlockId),
 }
 
+// Times a function's names were all hashed to find a free one.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static NAMES_HASHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Function {
     /// Parents and use lists from the arenas, after reading.
     pub(crate) fn index(&mut self) {
@@ -110,19 +116,31 @@ impl Function {
         &self,
         name: &str,
     ) -> String {
-        // One pass over the names, not one per candidate: a function whose
-        // `iv` is taken N times scanned every value N times for each new one.
+        let holds = |candidate: &str| {
+            self.values.iter().any(|one| one.name.as_deref() == Some(candidate))
+                || self.blocks.iter().any(|one| !one.erased && one.name.as_deref() == Some(candidate))
+        };
+        // A name nothing holds costs one scan of the names, comparing, not
+        // hashing them all (`hir to mir` of `cases` 1024 hashed every name for
+        // every instruction it made: 907 -> 13,840 Minstr).
+        if !holds(name) {
+            return name.to_owned();
+        }
+        // Taken: one pass over the names for all the candidates, not one pass
+        // for each (a function whose `iv` is taken N times scanned every value
+        // N times for each new one).
+        #[cfg(test)]
+        NAMES_HASHED.with(|one| one.set(one.get() + 1));
         let names: crate::hash::HashSet<&str> = self
             .values
             .iter()
             .filter_map(|one| one.name.as_deref())
             .chain(self.blocks.iter().filter(|one| !one.erased).filter_map(|one| one.name.as_deref()))
             .collect();
-        let taken = |candidate: &str| names.contains(candidate);
-        if !taken(name) {
-            return name.to_owned();
-        }
-        (1..).map(|n| format!("{name}{n}")).find(|candidate| !taken(candidate)).expect("some number is free")
+        (1..)
+            .map(|n| format!("{name}{n}"))
+            .find(|candidate| !names.contains(candidate.as_str()))
+            .expect("some number is free")
     }
 
     /// A new instruction, placed nowhere yet; its result, if its type is not

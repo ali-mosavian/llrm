@@ -696,3 +696,36 @@ fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
         "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself"
     );
 }
+
+/// Every instruction made hashed the names of every value of its function to
+/// find that its own was free: `hir to mir` of 1024 cases went from 907 to
+/// 13,840 Minstr. A name nothing holds is found by one comparing scan; only a
+/// taken one hashes the names, once.
+#[test]
+fn a_free_name_is_found_without_hashing_the_names_of_the_function() {
+    use crate::module::Operand;
+    use crate::opcode::{BinaryOp, Flags, Opcode};
+    let text = format!("{DATALAYOUT}\ndefine i16 @f(i16 %n) {{\nentry:\n  ret i16 %n\n}}\n");
+    let mut module = parse::module(&text).unwrap();
+    let (_, function) = module.function_mut("f").unwrap();
+    let parameter = function.parameters()[0];
+    let ty = function.value(parameter).ty;
+    crate::edit::NAMES_HASHED.with(|one| one.set(0));
+    let mut make = |name: &str| {
+        let id = function.create_instruction(
+            Opcode::Binary(BinaryOp::Add),
+            ty,
+            vec![Operand::Value(parameter), Operand::Value(parameter)],
+            Flags::default(),
+            Some(name),
+        );
+        function.value(function.instruction(id).result.unwrap()).name.clone().unwrap()
+    };
+    for at in 0..40 {
+        assert_eq!(make(&format!("t{at}")), format!("t{at}"));
+    }
+    assert_eq!(crate::edit::NAMES_HASHED.with(|one| one.get()), 0, "free names hashed the function's names");
+    assert_eq!(make("n"), "n1");
+    assert_eq!(make("n"), "n2");
+    assert_eq!(crate::edit::NAMES_HASHED.with(|one| one.get()), 2, "a taken name hashes them once");
+}
