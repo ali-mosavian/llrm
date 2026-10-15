@@ -6,7 +6,8 @@ QCport's render/d_faces.c is built by llrm (m32, the System V convention), gcc a
 reference. Each object is linked with env.c (see there), run in unicorn through `bench_dfaces`, and what executes inside d_faces.o
 (and the runtime library it pulls in) is counted: instructions, memory operands, operands across an alignment boundary and 486
 clocks (harness.py's model). A variant is right when the hash env.c reports equals the -O0 build's.
-Products go to $VSGCC_WORK, as for the rest of vsgcc; the QCport sources are read from $QCPORT, the directory that holds render/d_faces.c.
+Products go to $VSGCC_WORK, as for the rest of vsgcc; the QCport sources are read from $DFACES_SRC, else $QCPORT: the directory that holds render/d_faces.c (the qb-quake variant, which
+is not the QCport the QCPORT steps build).
 """
 import argparse
 import json
@@ -26,7 +27,7 @@ from iced_x86 import Decoder, Mnemonic  # noqa: E402
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc  # noqa: E402
 from unicorn.x86_const import UC_X86_REG_ECX, UC_X86_REG_ESP  # noqa: E402
 
-QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qbq-llrm/src"))
+QCPORT = Path(os.environ.get("DFACES_SRC") or os.environ.get("QCPORT") or Path.home() / "scratch/qbq-llrm/src")
 D_FACES = QCPORT / "render" / "d_faces.c"
 SOURCE = OUT / "dfaces" / "d_faces_flat.c"
 ENV_BASE = 0x300000                       # env.elf is loaded here; everything below it and above BASE is the code under test

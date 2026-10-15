@@ -99,13 +99,30 @@ def batches(prs: list[Pr], most: int) -> list[list[Pr]]:
     return out + ([now] if now else [])
 
 
-def build_tip(prs: list[Pr], tree: Path) -> tuple[str, list[tuple[Pr, str]]]:
-    """origin/main with each PR merged in order in `tree` (a worktree, left at the result): (the tip, [(PR, why) bounced]). A merge that
+def conflicted(tree: Path) -> list[str]:
+    return git("diff", "--name-only", "--diff-filter=U", cwd=tree).stdout.split()
+
+
+def baseline_only(tree: Path) -> bool:
+    """Whether every file a merge conflicts in is a benchmark's expected.toml."""
+    files = conflicted(tree)
+    return bool(files) and all(re.fullmatch(r"bench/.+/expected\.toml", name) for name in files)
+
+
+def build_tip(prs: list[Pr], tree: Path, base: str = BASE) -> tuple[str, list[tuple[Pr, str]]]:
+    """`base` (the commit origin/main was at when the train started: a ref that moves under a running train made later tips of another base
+    than the first gate's, and #1765 conflicted in one, was dropped, and was offered) with each PR merged in order in `tree` (a worktree, left at the result): (the tip, [(PR, why) bounced]). A merge that
     conflicts is undone and bounced; the rest go on."""
-    git("checkout", "-q", "--detach", BASE, cwd=tree)
+    git("checkout", "-q", "--detach", base, cwd=tree)
     bounced = []
     for pr in prs:
         done = git("merge", "--no-ff", "-q", "-m", f"train: #{pr.number}", pr.sha, cwd=tree, check=False)
+        if done.returncode and baseline_only(tree):
+            # Each PR blesses its own bench counts, so two that touch one benchmark conflict on its expected.toml (every PR of a train did, and
+            # all but one bounced). The batch's file stands; a count the PR made better is blessed by the train, one it made worse fails.
+            git("checkout", "--ours", "--", *conflicted(tree), cwd=tree)
+            git("add", "-A", cwd=tree)
+            done = git("commit", "-q", "--no-edit", cwd=tree, check=False)
         if done.returncode:
             git("merge", "--abort", cwd=tree, check=False)
             bounced.append((pr, "conflicts with the batch before it"))
@@ -119,16 +136,21 @@ class Verdict:
     text: str = ""
 
 
+def tree_env(env: dict, tree: Path) -> dict:
+    """`env` with one target per tree: the tip's gate and the re-run on main shared one, and main's pytest read the tip's llrm-c, which
+    names the tip's tree (the first run's failure was overwritten, and the second failed on that path)."""
+    if target := env.get("CARGO_TARGET_DIR"):
+        env = {**env, "CARGO_TARGET_DIR": f"{target}-{tree.name}"}
+    return env
+
+
 def full_gate(tip: str, tree: Path, steps: list[str] | None = None, strict: bool = False) -> Verdict:
     """The full tier at `tip` (checked out in `tree`), or only `steps` of it. The bench step runs in batch mode (a better count passes)
     unless `strict`."""
     git("checkout", "-q", "--detach", tip, cwd=tree)
     command = [sys.executable, "tools/gate/gate.py", "run", "--tier", "full", "--expect", tip, *(["--steps", *steps] if steps else [])]
     env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"} | ({} if strict else {"LLRM_BENCH_BATCH": "1"})
-    if target := env.get("CARGO_TARGET_DIR"):
-        # One target and one set of gate logs per tree: the tip's gate and the re-run on main shared both, and main's pytest read the tip's
-        # llrm-c, which names the tip's tree (the first run's failure was overwritten, and the second failed on that path).
-        env["CARGO_TARGET_DIR"] = f"{target}-{tree.name}"
+    env = tree_env(env, tree)
     done = subprocess.run(command, cwd=tree, capture_output=True, text=True, env=env)
     text = done.stdout + done.stderr
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -156,7 +178,7 @@ def search(prs: list[Pr], gated: Callable[[list[Pr], list[str]], Verdict], faile
     return green, culprits
 
 
-def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = print, blessed: Callable[[str, list[Pr]], tuple[str, Verdict | None]] | None = None) -> int:
+def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = lambda text: print(text, flush=True), blessed: Callable[[str, list[Pr]], tuple[str, Verdict | None]] | None = None) -> int:
     """One batch end to end. `tip_of(prs)` builds the tip, `gate_at(tip, steps)` gates it, `on_main(steps)` gates origin/main alone."""
     tip, bounced = tip_of(prs)
     for pr, why in bounced:
@@ -172,16 +194,25 @@ def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: 
         report(f"TRAIN ENV: {', '.join(verdict.failed)} fail on origin/main alone; no PR is blamed")
         return 3
 
+    lost: list[Pr] = []  # members a rebuilt tip left out: a conflict that shows only without the others, never tested, never offered
+
     def gated(some: list[Pr], steps: list[str]) -> Verdict:
-        part, _ = tip_of(some)
+        part, left_out = tip_of(some)
+        lost.extend(pr for pr, _ in left_out if pr not in lost)
         return gate_at(part, steps)
 
     green, culprits = search(merged, gated, verdict.failed)
     for pr, why in culprits:
         report(f"TRAIN FAIL #{pr.number}:\n{why}")
+    green = [pr for pr in green if pr not in lost]
+    if green:
+        tip, left_out = tip_of(green)
+        lost.extend(pr for pr, _ in left_out if pr not in lost)
+        green = [pr for pr in green if pr not in lost]
+    for pr in lost:
+        report(f"TRAIN DROPPED #{pr.number}: it conflicts when merged without the rest of the batch; not tested, not offered")
     if not green:
         return 1
-    tip, _ = tip_of(green)
     final = gate_at(tip, None)
     if not final.ok:
         report(f"TRAIN FAIL: the green rest ({' '.join('#%d' % p.number for p in green)}) fails the full gate together: {', '.join(final.failed)}")
@@ -194,8 +225,9 @@ def bless(tip: str, prs: list[Pr], tree: Path) -> tuple[str, Verdict | None]:
     (a better count then fails): (the tip to offer, the verdict of that gate; None when nothing got better). Nothing worse is ever written."""
     git("checkout", "-q", "--detach", tip, cwd=tree)
     names = " ".join(f"#{p.number}" for p in prs)
-    env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}
-    done = subprocess.run([sys.executable, "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
+    env = tree_env({k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}, tree)
+    # the tools' environment, as the gate's bench step runs it: this process's python has no unicorn (train 4 passed its gate and died here)
+    done = subprocess.run(["uv", "run", "-q", "--project", "tools", "python", "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
     if done.returncode:
         return tip, Verdict(False, ["bench"], done.stdout + done.stderr)
     if not git("status", "--porcelain", "--", "bench", cwd=tree).stdout.strip():
@@ -222,19 +254,28 @@ def land(tip: str, prs: list[Pr], report: Callable[[str], None]) -> int:
     return 0
 
 
+def places(name: str = "train", home: Path | None = None) -> tuple[Path, Path, Path]:
+    """The lock and the two worktrees (the tip's and main's) of the train called `name`: trains of other names share none of them, so they
+    run side by side (each gets its own target and logs from its tree's name, #1784)."""
+    scratch = (home or Path.home()) / "scratch"
+    return scratch / f"{name}.lock", scratch / f"{name}-tree", scratch / f"{name}-main"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("prs", nargs="+", type=int)
     ap.add_argument("--max", type=int, default=5)
+    ap.add_argument("--name", default="train", help="trains of different names run at once, each in its own worktrees and target")
     args = ap.parse_args()
     if problems := preflight():
-        print("TRAIN ENV: " + "; ".join(problems))
+        print("TRAIN ENV: " + "; ".join(problems), flush=True)
         return 3
-    lock = open(Path.home() / "scratch/train.lock", "w")
+    lock_path, tree, main_tree = places(args.name)
+    lock = open(lock_path, "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        print("TRAIN BUSY: another train is running")
+        print("TRAIN BUSY: another train is running", flush=True)
         return 3
     git("fetch", "-q", "origin", "main")
     ready = []
@@ -242,23 +283,22 @@ def main() -> int:
         pr, info = describe(number)
         git("fetch", "-q", "origin", f"pull/{number}/head")
         if why := pr_problems(info, pr.sha, smoked=gate.smoked(pr.sha)):
-            print(f"TRAIN REFUSED #{number}: {'; '.join(why)}")
+            print(f"TRAIN REFUSED #{number}: {'; '.join(why)}", flush=True)
         else:
             ready.append(pr)
     code = 0
-    tree = Path.home() / "scratch/train-tree"
+    base = git("rev-parse", BASE).stdout.strip()
     if tree.exists():
         git("worktree", "remove", "--force", str(tree), check=False)
-    git("worktree", "add", "--detach", str(tree), BASE)
+    git("worktree", "add", "--detach", str(tree), base)
     try:
-        main_tree = Path.home() / "scratch/train-main"
         if main_tree.exists():
             git("worktree", "remove", "--force", str(main_tree), check=False)
-        git("worktree", "add", "--detach", str(main_tree), BASE)
+        git("worktree", "add", "--detach", str(main_tree), base)
         for batch in batches(ready, args.max):
-            code |= run(batch, lambda some: build_tip(some, tree), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(git("rev-parse", BASE).stdout.strip(), main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
+            code |= run(batch, lambda some: build_tip(some, tree, base), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(base, main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
     finally:
-        for one in (tree, Path.home() / "scratch/train-main"):
+        for one in (tree, main_tree):
             git("worktree", "remove", "--force", str(one), check=False)
     return code
 

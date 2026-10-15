@@ -17,6 +17,7 @@ from pathlib import Path
 R = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(R / "tools"))
 import llrmbin
+import benchlist
 
 O = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))
 SKIP = {"readme.md", "parity", "huge", "textfill", "grep"}
@@ -64,7 +65,7 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--extra", nargs="*", default=[])
     args = parser.parse_args()
-    sources = {p: R / "bench" / p / f"{p}.c" for p in sorted(x.name for x in (R / "bench").iterdir()) if p not in SKIP}
+    sources = {p.name: p / f"{p.name}.c" for p in benchlist.directories(R / "bench", parity=False) if p.name not in SKIP}
     kernels = Path(__file__).resolve().parent / "kernels"
     for directory in ([kernels] if kernels.is_dir() else []) + [Path(d) for d in args.extra]:
         for source in sorted(Path(directory).glob("**/*.c")):
