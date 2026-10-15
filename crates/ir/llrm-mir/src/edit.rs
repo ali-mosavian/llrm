@@ -17,6 +17,13 @@ pub enum Position {
     End(BlockId),
 }
 
+// Names built into the index or probed in it, for a test that making a name
+// does not look at every name of the function.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static NAMES_LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Function {
     /// Parents and use lists from the arenas, after reading.
     pub(crate) fn index(&mut self) {
@@ -119,6 +126,8 @@ impl Function {
                     let mut held: crate::hash::HashMap<String, u32> = Default::default();
                     let live = self.blocks.iter().filter(|one| !one.erased).filter_map(|one| one.name.as_deref());
                     for held_name in self.values.iter().filter_map(|one| one.name.as_deref()).chain(live) {
+                        #[cfg(test)]
+                        NAMES_LOOKED_AT.with(|one| one.set(one.get() + 1));
                         *held.entry(held_name.to_owned()).or_default() += 1;
                     }
                     Names { held, taken_below: Default::default() }
@@ -131,7 +140,13 @@ impl Function {
             // made and no name has been released since: a name taken N times
             // is not searched N times for each new one.
             let from = taken_below.get(name).copied().unwrap_or(1);
-            let free = (from..).find(|n| !held.contains_key(&format!("{name}{n}"))).expect("some number is free");
+            let free = (from..)
+                .find(|n| {
+                    #[cfg(test)]
+                    NAMES_LOOKED_AT.with(|one| one.set(one.get() + 1));
+                    !held.contains_key(&format!("{name}{n}"))
+                })
+                .expect("some number is free");
             taken_below.insert(name.to_owned(), free + 1);
             format!("{name}{free}")
         };

@@ -432,3 +432,19 @@ def test_a_spill_copies_no_block_it_does_not_change():
         source.write_text(scaling.AXES["branches"](800))
         run = steps(compiler, source, "-O2")
     assert run["regalloc spill"] < 300, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (300 allowed; 326 before): {run}"
+
+
+def test_a_carve_works_on_the_positions_that_name_the_value_not_on_the_block():
+    """Carving a region walked its blocks end to end several times (liveness back from the block end for each border, every
+    instruction asked whether it names the value, every position of the block looked up in the copies map) and renamed, by a copy,
+    every instruction the region covers whether it names the value or not: `split carving` cost 333 Minstr on `cells` at N=448 and
+    1,259 at 896. They are asked of the value's own positions."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split carving"] < 150, f"cells N=448 -O2: split carving cost {run['split carving']} Minstr (150 allowed; 333 before): {run}"
