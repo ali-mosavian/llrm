@@ -42,9 +42,9 @@ def test_a_waiver_excuses_the_one_row_counter_and_count_it_names_and_goes_stale_
 
 
 def test_waivers_are_read_one_file_each(tmp_path):
-    (tmp_path / "bench/waivers").mkdir(parents=True)
-    (tmp_path / "bench/waivers/a.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 7\n')
-    (tmp_path / "bench/waivers/b.toml").write_text('reason = "s"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 9\n')
+    (tmp_path / bc.WAIVERS).mkdir(parents=True)
+    (tmp_path / bc.WAIVERS / "a.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 7\n')
+    (tmp_path / bc.WAIVERS / "b.toml").write_text('reason = "s"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 9\n')
     assert [(w["file"], w["to"]) for w in bc.waivers(tmp_path)] == [("a.toml", 7), ("b.toml", 9)]
 
 
@@ -85,3 +85,29 @@ def test_a_dry_run_that_fails_prints_why_and_never_fails_the_gate(monkeypatch):
     monkeypatch.setitem(sys.modules, "measure", boom)
     lines = bench.base_dry_run({}, types.SimpleNamespace(opt=["O2"], work=Path("/x")), [])
     assert lines == ["BASE: dry run failed: RuntimeError: no git"]
+
+
+def test_a_waiver_excuses_the_one_count_the_committed_judge_would_fail_and_the_bless_spends_it(tmp_path, monkeypatch):
+    """Train 5's batch of clean PRs moved jpeg_fixed bq32 -Os by +2 together: the train may not raise a count, so the owner's waiver (the
+    row, the counter, the count it may reach) lets exactly that count through, and the bless that writes it removes the waiver."""
+    import bench
+
+    want = {"instructions": 100, "code_bytes": 5}
+    waiver = [{"label": "jpeg_fixed bq32 -Os", "counter": "instructions", "to": 102, "reason": "r", "file": "w.toml"}]
+    assert bench.against("jpeg_fixed bq32 -Os", {"instructions": 102, "code_bytes": 5}, want, waiver) == []
+    assert bench.against("jpeg_fixed bq32 -Os", {"instructions": 103, "code_bytes": 5}, want, waiver)[0].endswith("(worse)"), "another count"
+    assert bench.against("jpeg_fixed bq32 -O2", {"instructions": 102, "code_bytes": 5}, want, waiver)[0].endswith("(worse)"), "another row"
+    assert bench.against("jpeg_fixed bq32 -Os", {"instructions": 102, "code_bytes": 6}, want, waiver)[0].endswith("(worse)"), "another counter"
+    (tmp_path / bc.WAIVERS).mkdir(parents=True)
+    (tmp_path / bc.WAIVERS / "w.toml").write_text('reason = "r"\n[[row]]\nlabel = "jpeg_fixed bq32 -Os"\ncounter = "instructions"\nto = 102\n')
+    (tmp_path / bc.WAIVERS / "other.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 5\n')
+    measured = {("jpeg_fixed", "bq32", "Os"): {"instructions": 102}, ("fib", "c", "O2"): {"instructions": 9}}
+    assert bc.consume_waivers(tmp_path, measured) == ["w.toml"]
+    assert [p.name for p in (tmp_path / bc.WAIVERS).glob("*.toml")] == ["other.toml"], "a waiver whose row is not at its count stays"
+
+
+def test_waivers_live_outside_bench_where_every_tool_that_lists_the_benchmarks_would_take_them_for_a_program():
+    """#1820 put them in bench/waivers/: identical.py looked for bench/waivers/waivers.c, vsgcc's programs, test_scaling_gate,
+    test_compile_cost and tests/run.rs all listed a benchmark called `waivers`."""
+    assert not bc.WAIVERS.startswith("bench/") and (bc.ROOT / "tools/bench").is_dir()
+    assert not (bc.ROOT / "bench/waivers").exists()

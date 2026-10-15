@@ -1838,6 +1838,12 @@ fn _root_get(
     key.then_some(rooted)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The values `secondary_bases` tried as derived from a candidate.
+    pub static SECONDARY_TRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Replace repeated allocated address shuttles with one clean 67h base.
 ///
 /// Constrained-occurrence splitting keeps a long-lived word value in any GPR
@@ -1886,21 +1892,10 @@ pub fn secondary_bases<'a>(
         None
     };
 
-    // The values whose one definition is an inserted instruction reading only
-    // `original`, by `original`: a candidate looks at those alone, not at every
-    // definition of the body (D^2 for D definitions: 36.7 M of 145 M in the
-    // peephole of d_faces' 1,836-instruction function).
-    let mut read_by: IndexMap<u32, Vec<u32>> = IndexMap::default();
-    for (value, definition) in &definitions {
-        if let Some(definition) = definition
-            && definition.inserted()
-            && let [only] = definition.uses[..]
-        {
-            read_by.entry(only).or_default().push(*value);
-        }
-    }
     let derived = |value: u32, original: u32, source: &Reg| -> Option<(Arc<Insn>, Vec<Arc<Insn>>)> {
-        let definition = definitions.get(&value).cloned().flatten()?;
+        #[cfg(test)]
+        SECONDARY_TRIES.with(|count| count.set(count.get() + 1));
+        let definition = definitions.get(&value)?.as_ref()?;
         let consumers = uses.get(&value).map_or(&[][..], Vec::as_slice);
         if !definition.inserted() || definition.uses != [original] || consumers.len() != 1 {
             return None;
@@ -1948,7 +1943,7 @@ pub fn secondary_bases<'a>(
                 }
             }
         }
-        if seen != 0 { Some((definition, consumers.to_vec())) } else { None }
+        if seen != 0 { Some((Arc::clone(definition), consumers.to_vec())) } else { None }
     };
 
     let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
@@ -1983,6 +1978,15 @@ pub fn secondary_bases<'a>(
     let mut substitutions: IndexMap<u32, (u32, RegId)> = IndexMap::default();
     let mut remove: HashSet<usize> = HashSet::default();
     let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
+    // `derived` needs a definition that uses its candidate alone, so the values
+    // to try for a candidate are those, found once (every candidate tried every
+    // definition, with a copy of its uses).
+    let mut used_alone: HashMap<u32, Vec<u32>> = HashMap::default();
+    for (value, made) in &definitions {
+        if let Some([only]) = made.as_ref().map(|made| made.uses.as_slice()) {
+            used_alone.entry(*only).or_default().push(*value);
+        }
+    }
     for (candidate, definition) in definitions.clone() {
         let Some(definition) = definition else {
             continue;
@@ -1997,7 +2001,7 @@ pub fn secondary_bases<'a>(
             continue;
         }
         let mut group = Vec::new();
-        for value in read_by.get(&candidate).into_iter().flatten() {
+        for value in used_alone.get(&candidate).into_iter().flatten() {
             if *value == candidate {
                 continue;
             }

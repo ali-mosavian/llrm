@@ -202,11 +202,74 @@ def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path
     seen = []
 
     def fake(command, **kw):
-        seen.append(kw["env"]["CARGO_TARGET_DIR"])
+        seen.append((kw["env"]["CARGO_TARGET_DIR"], command[:6]))
         return subprocess.CompletedProcess(command, 0, "", "")
 
     monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
     monkeypatch.setattr(train.subprocess, "run", fake)
     monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
     train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
-    assert seen == ["/t/target-train5-tree"]
+    # and in the tools' environment (uv): the train's own python has no unicorn, which bench imports (train 4 passed its gate, died here)
+    assert seen == [("/t/target-train5-tree", ["uv", "run", "-q", "--project", "tools", "python"])]
+
+
+def test_a_member_a_rebuilt_tip_leaves_out_is_reported_dropped_and_never_offered():
+    """Train 4 offered `PRs=#1765 #1768 #1780` for a tip holding #1768 and #1780: after the bisect it rebuilt the tip of the green rest, and
+    a member that conflicted only there was dropped without a word and still listed."""
+    said = []
+    one, two, three = pr(1), pr(2), pr(3)
+
+    def tip_of(some):
+        names = "".join(str(p.number) for p in some)
+        if len(some) < 3 and two in some:  # 2 conflicts once it is merged without 3
+            return f"tip{names.replace('2', '')}", [(two, "conflicts")]
+        return f"tip{names}", []
+
+    def gate_at(tip, steps):
+        return train.Verdict("3" not in tip, [] if "3" not in tip else ["bench"], "FAIL x\n")
+
+    code = train.run([one, two, three], tip_of, gate_at, lambda steps: train.Verdict(True), said.append)
+    assert not any("#2" in line and "PRs=" in line for line in said), said
+    assert any(line.startswith("TRAIN DROPPED #2") for line in said), said
+    assert code == 0 and any(line == "TRAIN PASS TIP=tip1 PRs=#1" for line in said), said
+
+
+def test_every_tip_of_a_run_is_built_on_the_commit_main_was_at_when_it_started(tmp_path):
+    """Train 4's tips were built on origin/main as it moved: the one rebuilt after the bisect sat on a main that had gained #1819, #1765
+    conflicted with it there and was dropped. A tip is built on the pinned commit, whatever the ref says now."""
+    git = _repo(tmp_path)
+    pinned = git("rev-parse", "HEAD")
+    a = _branch(git, tmp_path, "a", "f", "from a\n")
+    git("checkout", "-q", "main")
+    (tmp_path / "f").write_text("main moved\n")
+    git("commit", "-q", "-am", "main moves")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "--detach", "main")
+    tip, bounced = train.build_tip([pr(1, sha=a)], tmp_path, pinned)
+    assert bounced == [] and (tmp_path / "f").read_text() == "from a\n", "built on the pinned commit, where a merges"
+    moved, bounced = train.build_tip([pr(1, sha=a)], tmp_path)
+    assert [p.number for p, _ in bounced] == [1], "on the moved ref it conflicts: what the train used to do"
+
+
+def test_a_report_reaches_a_redirected_log_as_it_is_printed(tmp_path):
+    """Trains 4 to 7 printed nothing to their logs until they ended (stdout to a file is block-buffered), so every watch on them was silent
+    and a passed batch looked like a hung train."""
+    import os
+    import subprocess as sp
+
+    log = tmp_path / "log"
+    code = ("import sys; sys.path.insert(0, %r); import train, time; "
+            "train.run([train.Pr(1, 'a' * 40, [])], lambda prs: ('t', [(prs[0], 'conflicts')]), lambda t, s: None, lambda s: None); time.sleep(30)") % str(Path(train.__file__).parent)
+    with open(log, "w") as out:
+        child = sp.Popen([sys.executable, "-c", code], stdout=out, stderr=sp.STDOUT)
+        try:
+            for _ in range(100):
+                if "TRAIN" in log.read_text():
+                    break
+                import time as _time
+
+                _time.sleep(0.05)
+            assert "TRAIN BOUNCED #1" in log.read_text(), "printed but still in the buffer of a process that has not ended"
+        finally:
+            child.kill()
+            child.wait()

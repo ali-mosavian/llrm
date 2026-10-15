@@ -783,6 +783,23 @@ impl FromIterator<LirBlock> for Vec<Block> {
 }
 
 impl Block {
+    /// This block with `insns` in place of its instructions: the block itself,
+    /// the same allocation, when they are the instructions it has. A pass that
+    /// changed nothing in a block pays for no copy of it, and the facts kept
+    /// for the block (`Insns::same_as`) stand.
+    #[must_use]
+    pub fn with_insns(
+        &self,
+        insns: Vec<Arc<Insn>>,
+    ) -> Block {
+        if insns.len() == self.insns.len()
+            && insns.iter().zip(self.insns.iter()).all(|(one, two)| Arc::ptr_eq(one, two))
+        {
+            return self.clone();
+        }
+        self.0.with_insns(insns)
+    }
+
     /// The block itself, copied only if another body holds it.
     #[must_use]
     pub fn into_inner(self) -> LirBlock {
