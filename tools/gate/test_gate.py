@@ -1047,3 +1047,19 @@ def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
         assert sleeper not in ps().splitlines(), "the step outlived the gate"
     finally:
         sp.run(["pkill", "-f", sleeper])
+
+
+def test_the_gate_scope_is_omitted_from_systemd_oomd(tmp_path):
+    """systemd-oomd SIGKILLed two fast gates at 13:56 on memory pressure (58%, then 78%, over 50% for 20 s) with 174 G free: a gate in its
+    own scope was a victim. The scope carries user.oomd_omit, which oomd honours."""
+    import shutil
+    import subprocess as sp
+    import sys as _sys
+
+    if not shutil.which("systemd-run"):
+        pytest.skip("no systemd-run")
+    probe = "import os; cg = open('/proc/self/cgroup').read().split('::')[1].strip(); print(os.getxattr('/sys/fs/cgroup' + cg, 'user.oomd_omit').decode())"
+    done = sp.run(gate.scoped([_sys.executable, "-c", probe], {}), capture_output=True, text=True)
+    if done.returncode and "Failed to connect" in done.stderr:
+        pytest.skip("no systemd user manager")
+    assert done.stdout.strip() == "1", (done.stdout, done.stderr)
