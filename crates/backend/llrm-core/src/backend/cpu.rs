@@ -113,6 +113,8 @@ pub struct Profile {
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
+    /// The floating values it holds in registers at once.
+    pub float_register_capacity: i64,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
     pub _costs: Vec<(String, i64)>,
@@ -226,6 +228,7 @@ impl Profile {
             address_stall: self.address_prefix_stall,
             registers: self.register_capacity,
             call_registers: self.call_register_capacity,
+            float_registers: self.float_register_capacity,
             address_forms: self.address_forms.clone(),
             operations: self.operations.clone(),
             spaces: self.spaces,
@@ -273,6 +276,7 @@ impl Profile {
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
+            float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
@@ -570,6 +574,22 @@ mod tests {
         }
         assert!(profile("P5").unwrap().pentium_pairing);
         assert!(!names().into_iter().any(|name| name != "P5" && profile(name).unwrap().pentium_pairing));
+    }
+
+    /// The passes' view of the target (`Profile::target`, then the QB layer's
+    /// wrapper) dropped the depth of the floating stack: hoist saw no class and
+    /// held 16 matrix values across a loop on a stack of 8.
+    #[test]
+    fn test_a_profiles_target_states_the_depth_of_its_floating_stack() {
+        for name in names() {
+            let target = profile(name).unwrap();
+            assert_eq!(target.target().float_registers(), 8, "{name}");
+            assert_eq!(
+                target.operations.float_load_folded,
+                target.cost("x87_add_m").unwrap() - target.cost("x87_add").unwrap(),
+                "{name}"
+            );
+        }
     }
 
     #[test]

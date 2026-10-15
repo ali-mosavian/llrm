@@ -114,6 +114,8 @@ pub struct CpuPrices {
     /// Registers an allocator may hold values in, and those a call keeps.
     pub registers: i64,
     pub call_registers: i64,
+    /// The floating values it holds in registers at once.
+    pub float_registers: i64,
     /// The indexed addresses the target states, native form first.
     pub address_forms: Vec<AddressForm>,
     /// What each operation costs: the target's mapping applied to `costs`.
@@ -148,6 +150,7 @@ pub fn described_by_size(
     Rc::new(Described {
         registers: prices.registers,
         call_registers: prices.call_registers,
+        float_registers: prices.float_registers,
         address_forms: prices.address_forms.clone(),
         operations: prices.operations.clone(),
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
@@ -169,6 +172,7 @@ pub fn described_by_size(
 struct Described {
     registers: i64,
     call_registers: i64,
+    float_registers: i64,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
     sizes: Option<OperationCosts>,
@@ -245,6 +249,10 @@ impl llrm_mir::target::Machine for Described {
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn float_registers(&self) -> i64 {
+        self.float_registers
     }
 
     fn two_address(&self) -> bool {
