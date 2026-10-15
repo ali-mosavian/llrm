@@ -16,62 +16,6 @@ data_bytes = 15
 bss_bytes = 0
 kernel_ms = 4.278
 
-[bq16.O2]
-instructions = 347518
-memory_operands = 102524
-code_bytes = 462
-data_bytes = 15
-bss_bytes = 0
-
-[bq16.Os]
-instructions = 328633
-memory_operands = 91172
-code_bytes = 411
-data_bytes = 15
-bss_bytes = 0
-
-[bq32.O2]
-instructions = 334816
-code_bytes = 532
-data_bytes = 21
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 339404
-code_bytes = 441
-data_bytes = 21
-bss_bytes = 0
-
-[c.O2]
-instructions = 147321
-memory_operands = 21780
-code_bytes = 180
-data_bytes = 0
-bss_bytes = 0
-
-[c.Os]
-instructions = 160207
-memory_operands = 19810
-code_bytes = 159
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 2.1371
-
-[nib.O2]
-instructions = 167182
-memory_operands = 19777
-code_bytes = 189
-data_bytes = 0
-bss_bytes = 0
-
-[nib.Os]
-instructions = 272295
-memory_operands = 36773
-code_bytes = 279
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 3.6326
-
 [ow.O2]
 instructions = 217955
 memory_operands = 52782
