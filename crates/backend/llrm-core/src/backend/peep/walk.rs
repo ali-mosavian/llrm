@@ -456,8 +456,12 @@ impl<'a> Cx<'a> {
             .dead
             .get_or_init(
                 || {
-                    let exits = self.facts.exits.get_or_init(|| liveness::dead_at_exit(self.facts.body()));
-                    regthrash::_dead_after(regs, self.facts.bits, self.block(), exits[&self.block().at])
+                    let exits = self.facts.exits.get_or_init(|| {
+                        crate::support::debug::timed("peep facts exits", || liveness::dead_at_exit(self.facts.body()))
+                    });
+                    crate::support::debug::timed("peep facts dead after", || {
+                        regthrash::_dead_after(regs, self.facts.bits, self.block(), exits[&self.block().at])
+                    })
                 },
             );
         dead[&id(one)]
@@ -465,7 +469,9 @@ impl<'a> Cx<'a> {
 
     /// The flag lanes something may read after the block.
     pub fn flags_out(&self) -> Lanes {
-        self.facts.flags_out.get_or_init(|| peephole::_flags_live_out(self.facts.body()))[&self.block().at]
+        self.facts.flags_out.get_or_init(|| {
+            crate::support::debug::timed("peep facts flags out", || peephole::_flags_live_out(self.facts.body()))
+        })[&self.block().at]
     }
 
     /// The roots whose upper half is zero before `one`.
@@ -473,7 +479,9 @@ impl<'a> Cx<'a> {
         &self,
         one: &Arc<Insn>,
     ) -> upperzero::Roots {
-        self.facts.zero.get_or_init(|| upperzero::before(self.facts.body()))[&id(one)]
+        self.facts.zero.get_or_init(|| {
+            crate::support::debug::timed("peep facts upper zero", || upperzero::before(self.facts.body()))
+        })[&id(one)]
     }
 
     pub fn bits(&self) -> u32 {
@@ -504,13 +512,22 @@ fn run(
     }
 }
 
+/// `each` walks one block and answers its instructions if it changed any, none
+/// if it changed nothing: that block is then the same allocation in the result,
+/// and nothing was copied to find out.
 fn blocks(
     body: &LirBody,
     facts: &Facts,
-    mut each: impl FnMut(&Cx) -> Vec<Arc<Insn>>,
+    mut each: impl FnMut(&Cx) -> Option<Vec<Arc<Insn>>>,
 ) -> LirBody {
-    let blocks =
-        body.blocks.iter().map(|block| block.with_insns(each(&Cx::new(facts, Some(block), &block.insns)))).collect();
+    let blocks = body
+        .blocks
+        .iter()
+        .map(|block| match each(&Cx::new(facts, Some(block), &block.insns)) {
+            Some(insns) => block.with_insns(insns),
+            None => block.clone(),
+        })
+        .collect();
     body.with_blocks(blocks)
 }
 
@@ -521,15 +538,21 @@ pub fn each(
     matcher: &Matcher,
 ) -> LirBody {
     blocks(body, facts, |cx| {
-        (0..cx.insns.len())
-            .map(|at| match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
-                Some(mut out) => match out.pop() {
-                    Some(Out::Put(made)) => made,
+        let mut out: Option<Vec<Arc<Insn>>> = None;
+        for at in 0..cx.insns.len() {
+            match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
+                Some(mut made) => match made.pop() {
+                    Some(Out::Put(made)) => out.get_or_insert_with(|| cx.insns[..at].to_vec()).push(made),
                     _ => unreachable!("an each rule puts one instruction"),
                 },
-                None => Arc::clone(&cx.insns[at]),
-            })
-            .collect()
+                None => {
+                    if let Some(out) = &mut out {
+                        out.push(Arc::clone(&cx.insns[at]));
+                    }
+                }
+            }
+        }
+        out
     })
 }
 
@@ -564,24 +587,32 @@ pub fn window_insns(
     matcher: &Matcher,
     skip: Skip,
 ) -> Vec<Arc<Insn>> {
-    windows(&Cx::new(facts, None, insns), matcher, skip)
+    windows(&Cx::new(facts, None, insns), matcher, skip).unwrap_or_else(|| insns.to_vec())
 }
 
+/// The walk of one block, its instructions if a rule changed any, else none:
+/// the output is not built until the first match, and what came before it is
+/// the block's own.
 fn windows(
     cx: &Cx,
     matcher: &Matcher,
     skip: Skip,
-) -> Vec<Arc<Insn>> {
+) -> Option<Vec<Arc<Insn>>> {
     let insns = cx.insns;
     let code: Vec<usize> = (0..insns.len()).filter(|at| !skip.skips(&insns[*at])).collect();
-    let mut out = Vec::with_capacity(insns.len());
+    let mut out: Option<Vec<Arc<Insn>>> = None;
     let mut retired = Vec::new();
     let (mut next, mut at) = (0, 0);
     while at < code.len() {
-        out.extend(insns[next..code[at]].iter().cloned());
+        if let Some(out) = &mut out {
+            out.extend(insns[next..code[at]].iter().cloned());
+        }
         let taken = code[at..(at + matcher.width).min(code.len())].to_vec();
         match run(cx, matcher, &Window::new(insns, taken, &[])) {
             Some(made) => {
+                // Until a match the output is the input, so the first one
+                // starts it with what lies before the window.
+                let out = out.get_or_insert_with(|| insns[..code[at]].to_vec());
                 let last = code[at + made.len - 1];
                 let mut local = Vec::new();
                 let mut dropped = Vec::new();
@@ -613,14 +644,17 @@ fn windows(
                 at += made.len;
             }
             None => {
-                out.push(Arc::clone(&insns[code[at]]));
+                if let Some(out) = &mut out {
+                    out.push(Arc::clone(&insns[code[at]]));
+                }
                 next = code[at] + 1;
                 at += 1;
             }
         }
     }
+    let mut out = out?;
     out.extend(insns[next..].iter().cloned());
-    if retired.is_empty() { out } else { without(&out, &retired) }
+    Some(if retired.is_empty() { out } else { without(&out, &retired) })
 }
 
 /// Windows of `width` rewritten in place, moving on `advance` after a
@@ -633,18 +667,22 @@ pub fn slide(
     advance: usize,
 ) -> LirBody {
     blocks(body, facts, |cx| {
-        let mut insns = cx.insns.to_vec();
+        // The block's own instructions until a rule matches; a copy of them
+        // after.
+        let mut owned: Option<Vec<Arc<Insn>>> = None;
         let mut removed: HashSet<usize> = HashSet::default();
         let mut at = 0;
-        while at + matcher.width <= insns.len() {
-            if insns[at..at + matcher.width].iter().any(|one| removed.contains(&id(one))) {
+        while at + matcher.width <= cx.insns.len() {
+            let insns: &[Arc<Insn>] = owned.as_deref().unwrap_or(cx.insns);
+            if !removed.is_empty() && insns[at..at + matcher.width].iter().any(|one| removed.contains(&id(one))) {
                 at += 1;
                 continue;
             }
-            let Some(made) = run(cx, matcher, &Window::new(&insns, (at..at + matcher.width).collect(), &[])) else {
+            let Some(made) = run(cx, matcher, &Window::new(insns, (at..at + matcher.width).collect(), &[])) else {
                 at += 1;
                 continue;
             };
+            let insns = owned.get_or_insert_with(|| cx.insns.to_vec());
             for (offset, one) in made.out.into_iter().enumerate() {
                 match one {
                     Out::Put(one) => insns[at + offset] = one,
@@ -655,7 +693,8 @@ pub fn slide(
             }
             at += advance;
         }
-        lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>)
+        let insns = owned?;
+        Some(lir::without(&insns, |one| removed.contains(&id(one)), None::<fn(&Arc<Insn>) -> Arc<Insn>>))
     })
 }
 
@@ -675,10 +714,13 @@ pub fn gap(
     let cross = matcher.cross.expect("a gap group says what it may cross");
     blocks(body, facts, |cx| {
         let original = cx.insns;
-        let mut insns = original.to_vec();
+        // The block's own instructions until a rule matches; a copy of them
+        // after.
+        let mut owned: Option<Vec<Arc<Insn>>> = None;
         let work: Vec<usize> = (0..original.len()).filter(|at| !skip.skips(&original[*at])).collect();
         let mut at = 0;
         while at < work.len() {
+            let insns: &[Arc<Insn>] = owned.as_deref().unwrap_or(original);
             // A slot an earlier match rewrote or consumed starts no match: the
             // original it held is the instruction that match took
             // away, and writing it back wrote a read of a value the match had
@@ -692,7 +734,7 @@ pub fn gap(
             }
             let first = if first_original { Arc::clone(&original[work[at]]) } else { Arc::clone(&insns[work[at]]) };
             let mut next = at + 1;
-            let head = Window { insns: vec![&first], at: vec![work[at]], list: &insns, gap: &[] };
+            let head = Window { insns: vec![&first], at: vec![work[at]], list: insns, gap: &[] };
             let state = (matcher.head)(&head);
             if state != 0 {
                 for candidate in at + 1..work.len() {
@@ -700,14 +742,16 @@ pub fn gap(
                     let window = Window {
                         insns: std::iter::once(&first).chain(rest.iter().map(|one| &insns[*one])).collect(),
                         at: std::iter::once(work[at]).chain(rest.iter().copied()).collect(),
-                        list: &insns,
+                        list: insns,
                         gap: &insns[work[at] + 1..work[candidate]],
                     };
                     if let Some(made) = (matcher.tail)(cx, &window, state) {
                         let places = window.at.clone();
+                        drop(window);
                         if resume_past {
                             next = candidate + made.len - 1;
                         }
+                        let insns = owned.get_or_insert_with(|| original.to_vec());
                         for (place, one) in places.into_iter().zip(made.out) {
                             let Out::Put(one) = one else { unreachable!("a gap rule puts in place") };
                             insns[place] = one;
@@ -721,6 +765,6 @@ pub fn gap(
             }
             at = next;
         }
-        insns
+        owned
     })
 }

@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+import benchlist  # noqa: E402
 LLRM = Path(subprocess.run([sys.executable, str(ROOT / "tools" / "llrmbin.py"), "bin"], capture_output=True, text=True, check=True).stdout.strip()) / "llrm-c"
 ROW = re.compile(r"\[pressure\] (\S+) forecast peak (\d+) spilled (\d+) price (\d+); allocator (\d+) reloads, (\d+) stores, (\d+) remats, price (\d+)")
 
@@ -23,7 +25,7 @@ def runs(arguments):
 
 
 def rows(label, flags):
-    for source in sorted(glob.glob(str(ROOT / "bench" / "*" / "*.c"))):
+    for source in map(str, benchlist.sources(".c", ROOT / "bench", parity=False)):
         program = os.path.basename(source)[:-2]
         done = subprocess.run([LLRM, *flags, "-O2", "-fno-inline-functions", "-S", "-o", os.devnull, source], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "pressure"})
         for line in done.stderr.splitlines():

@@ -36,6 +36,15 @@ BCC runs at `-3`, llrm and Open Watcom at 486.
 
 BASIC is built on `llrm-qb`'s own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. `--runtime-frames` is not benchmarked.
 
+## Against the base (dry run)
+
+`expected.toml` is going: its counts are derived, and two PRs that touch one program conflict on it. `LLRM_BENCH_BASE=dry` (set in the gate)
+also judges against the base commit's counts, measured with this tree's harness and programs and kept by the base's git tree
+(`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): `BASE n: w worse, b better; d differ from expected.toml`, `BASE-WORSE` and `BASE-DIFF`
+lines. It never fails the gate. A deliberate worse count is a waiver, one file per PR, `tools/bench/waivers/NAME.toml`: `reason`, and
+`[[row]]` entries of `label` (`"fib bq32 -O2"`), `counter` and `to` (the count it may reach); it holds only for that count and goes stale
+(`BASE-STALE`) when it excuses nothing. The committed judge honors waivers too: a count above `expected.toml` passes where a waiver names its row, counter and exactly that count, and `--bless` removes the waiver once the blessed baseline carries it (a batch of clean PRs can move a count together, which a train may not raise on its own). See `basecounts.py`.
+
 ## Timed-only: grep
 
 `bench/grep` (`timed_only = true` in its bench.toml) is Aho-Corasick over the Silesia `dickens` text (10,192,446 bytes), read in 1K chunks
