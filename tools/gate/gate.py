@@ -224,6 +224,23 @@ def smoked(sha: str) -> bool:
     return (smoke_dir() / sha).is_file()
 
 
+# The check of tests/tracked_build_products.rs without a build, for smoke (a test ties the lists).
+PRODUCTS = ("obj", "exe", "o", "map", "lst")
+FIXTURES = ("tests/inputs/", "tests/fixtures/")
+
+
+def strays(names: list[str]) -> list[str]:
+    return [n for n in names if n.rpartition(".")[2].lower() in PRODUCTS and "." in n and not n.startswith(FIXTURES)]
+
+
+def products_main(root: Path | None = None) -> int:
+    listed = subprocess.run(["git", "ls-files"], cwd=root or ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    if found := strays([n for n in listed if n]):
+        print(f"build products are tracked: {found}")
+        return 1
+    return 0
+
+
 def smoke_plan(files: list[str]) -> Plan:
     """The fast tier's plan cut to the smoke steps, plus docs and the diff's own tests."""
     fast = plan(files)  # narrowed when no compiler source changed
@@ -232,7 +249,7 @@ def smoke_plan(files: list[str]) -> Plan:
     keep = load()["smoke"]["steps"]
     built = "build" in fast.steps
     # the audit of target facts is integration's in the fast tier: the smoke tier runs it alone
-    steps = [s for s in keep if s in ("docs", "changed-tests") or s in fast.steps or (s == "pytest-programs" and built) or (s == "facts" and "integration" in fast.steps)]
+    steps = [s for s in keep if s in ("docs", "changed-tests", "products") or s in fast.steps or s in ("pytest-programs", "pytest-quick") and built or (s == "facts" and "integration" in fast.steps)]
     return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
 
 
@@ -466,12 +483,21 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
-        f'out=$(uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | tail -3; '
+        f'out=$(LLRM_BENCH_BASE=dry uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | grep -aE "^(FAIL|BETTER|SKIP|BASE[A-Z-]*:? )|measurements:"; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
+    def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
+        # pytest-programs' two files are named out of the list: an explicit file argument runs though --ignore names it (the step ran them
+        # twice, 160 s of a loaded host)
+        own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
+        tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit"
+
     steps = {
         "build": BUILD,
         "facts": f"{cargo} --test target_facts",
+        # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
+        "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
         "docs": "python3 tools/docsbuild/build.py --check && python3 tools/passdocs.py --check",
         "changed-tests": changed_tests(p.files),
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
@@ -482,6 +508,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
         + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
+        # The smoke tier runs no integration step: the scans that are root test binaries (seeded_maps escaped it in #1792) are run here
+        # (target_facts is the facts step's).
+        + "".join(f"; {cargo} --test {Path(one['file']).stem} || rc=1" for one in cfg["scan"] if p.tier == "smoke" and one.get("step") == "integration" and Path(one["file"]).stem != "target_facts")
         + "; exit $rc",
         "bench": bench,
         "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
@@ -491,10 +520,13 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-durations.json tools crates tests/*.py --ignore=tests/test_programs_compile.py --ignore=tests/test_loops.py" + "".join(f" --ignore={f}" for f in skip_py) + " -- -q -p no:cacheprovider -p pytest_cpulimit",
+        "pytest": cfg_pytest(skip_py),
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
+        # What the full tier's pytest step runs but for its slow files: #1765 and #1766 were smoke-green and failed tools/test_identical.py
+        # and tests/test_readme.py in the train.
+        "pytest-quick": cfg_pytest(skip_py + tuple(cfg["smoke"]["slow_pytest"]), "pytest-quick-durations"),
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": "[ -f ~/scratch/qcport-env.sh ] || { echo SKIPPED: no ~/scratch/qcport-env.sh; exit 77; }; . ~/scratch/qcport-env.sh && uv run -q --project tools python tools/qcport-run.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
@@ -530,6 +562,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     out = {
         **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
+        "facts": (1, False),  # one binary that must report: a log with none (a build that ran no test) is incomplete, not a pass
         "run": (1, True),
         "scans": (None, True),
         "rfmt-post": (None, False),

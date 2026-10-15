@@ -139,57 +139,78 @@ fn ssa_reaching(
             &derived
         }
     };
-    // The accesses of every slot in order, by block, with what may write one.
-    let mut by_block: BTreeMap<i64, Vec<Event>> = BTreeMap::new();
+    // The slots loaded: a pointer load of a cell of an alloca names one.
     let mut cells: IdMap<ValueId, BTreeSet<Cell>> = IdMap::new();
+    let mut loaded: IdMap<InstId, (ValueId, Cell)> = IdMap::new();
+    for load in loads.iter() {
+        let Some(reference) = MemRef::of(unit, load) else { continue };
+        let Some(Operand::Value(slot)) = reference.root else { continue };
+        if !is_alloca(unit, slot) || reference.base.is_some() {
+            continue;
+        }
+        let cell = (reference.disp, reference.disp + i64::from(reference.width));
+        cells.get_or_insert_with(slot, BTreeSet::new).insert(cell);
+        loaded.insert(load, (slot, cell));
+    }
+    // A slot nothing exposes is written only by what names it, and a store
+    // through a phi or select of addresses, or one a scan of the root does not
+    // resolve, names it without this scan seeing it: its loads have no exact
+    // source.
+    let tainted: Vec<ValueId> = cells
+        .iter()
+        .map(|(slot, _)| slot)
+        .filter(|&slot| !exposed.contains(&slot) && !named_plainly(unit, slot))
+        .collect();
+    for slot in &tainted {
+        cells.remove(slot);
+    }
+    if cells.is_empty() {
+        return found;
+    }
+    // Only an exposed slot is written by what its address does not name.
+    let smashes = cells.keys().any(|slot| exposed.contains(&slot));
+    // The accesses of every slot loaded, in order, by block.
+    let mut by_block: BTreeMap<i64, Vec<Event>> = BTreeMap::new();
     for block in &graph {
         let events = by_block.entry(block.at).or_default();
         for &inst in function.block(cfg::block(block.at)).instructions() {
             let op = function.instruction(inst);
             match op.opcode {
-                Opcode::Load { .. } | Opcode::Store { .. } => {
-                    let is_load = matches!(op.opcode, Opcode::Load { .. });
-                    let Some(reference) = MemRef::of(unit, inst) else {
-                        if !is_load {
-                            events.push(Event::Smash);
-                        }
-                        continue;
-                    };
-                    let slot = match reference.root {
-                        Some(Operand::Value(slot)) if is_alloca(unit, slot) => slot,
-                        root => {
-                            // Another object's address is no slot's; any other
-                            // pointer may be.
-                            let elsewhere = matches!(
-                                root,
-                                Some(Operand::Constant(id)) if matches!(unit.context.get(id).kind, ConstantKind::Global(_))
-                            );
-                            if !is_load && !elsewhere {
-                                events.push(Event::Smash);
-                            }
-                            continue;
-                        }
-                    };
-                    let cell = (reference.disp, reference.disp + i64::from(reference.width));
-                    match (is_load, reference.base.is_some()) {
-                        (true, true) => {}
-                        (true, false) => {
-                            if loads.contains(&inst) {
-                                cells.get_or_insert_with(slot, BTreeSet::new).insert(cell);
-                                events.push(Event::Load { slot, cell, inst });
-                            }
-                        }
-                        (false, true) => events.push(Event::Store { slot, cell: None, inst }),
-                        (false, false) => events.push(Event::Store { slot, cell: Some(cell), inst }),
+                Opcode::Load { .. } => {
+                    if let Some(&(slot, cell)) = loaded.get(&inst).filter(|(slot, _)| cells.contains_key(slot)) {
+                        events.push(Event::Load { slot, cell, inst });
                     }
                 }
+                Opcode::Store { .. } => match crate::memory::root_of(unit, op.operands[1]) {
+                    Operand::Value(slot) if is_alloca(unit, slot) => {
+                        if !cells.contains_key(&slot) {
+                            continue;
+                        }
+                        // The cell it writes, or any of the slot where its
+                        // address is not an offset of
+                        // the slot's own.
+                        let cell = MemRef::of(unit, inst)
+                            .filter(|reference| {
+                                reference.root == Some(Operand::Value(slot)) && reference.base.is_none()
+                            })
+                            .map(|reference| (reference.disp, reference.disp + i64::from(reference.width)));
+                        events.push(Event::Store { slot, cell, inst });
+                    }
+                    // Another object's address is no slot's.
+                    Operand::Constant(id) if matches!(unit.context.get(id).kind, ConstantKind::Global(_)) => {}
+                    _ => {
+                        if smashes {
+                            events.push(Event::Smash);
+                        }
+                    }
+                },
                 Opcode::Call(_) | Opcode::Invoke(_) => {
-                    if !crate::alias::only_reads(unit, inst) {
+                    if smashes && !crate::alias::only_reads(unit, inst) {
                         events.push(Event::Smash);
                     }
                 }
                 _ => {
-                    if crate::memory::unmodeled_write(unit, inst) {
+                    if smashes && crate::memory::unmodeled_write(unit, inst) {
                         events.push(Event::Smash);
                     }
                 }
@@ -339,6 +360,45 @@ fn ssa_reaching(
         }
     }
     found
+}
+
+/// Whether every load and store the address of the slot `slot` reaches, through
+/// offsets, casts, phis and selects, names it as its own root: where a phi or a
+/// select joins its address with another's, or an access is of an address the
+/// root of which the scan does not resolve, the slot is written by what does
+/// not name it.
+fn named_plainly(
+    unit: &Unit,
+    slot: ValueId,
+) -> bool {
+    let function = unit.function;
+    let mut seen = llrm_mir::dense::IdSet::<ValueId>::new();
+    let mut work = vec![slot];
+    while let Some(value) = work.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        for one in function.users(value) {
+            let op = function.instruction(one.user);
+            match &op.opcode {
+                Opcode::Phi | Opcode::Select => return false,
+                Opcode::GetElementPtr { .. } | Opcode::Cast(_) | Opcode::Freeze if one.index == 0 => {
+                    work.extend(op.result);
+                }
+                Opcode::Load { .. } | Opcode::Store { .. }
+                    if one.index as usize == usize::from(matches!(op.opcode, Opcode::Store { .. })) =>
+                {
+                    let named = MemRef::of(unit, one.user)
+                        .is_some_and(|reference| reference.root == Some(Operand::Value(slot)));
+                    if !named {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    true
 }
 
 /// Whether `value` is an alloca's address.

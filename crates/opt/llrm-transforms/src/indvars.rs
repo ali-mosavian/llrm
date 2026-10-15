@@ -174,6 +174,10 @@ pub struct IndVars {
 }
 
 impl FunctionPass for IndVars {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "indvars"
     }

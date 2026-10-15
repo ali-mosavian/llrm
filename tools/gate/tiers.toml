@@ -156,14 +156,32 @@ build-script-reruns = "build_script_reruns"
 # and the pass pages are current) and `changed-tests` (the test files the diff touches or sits beside). `pytest-programs` (every program
 # compiles) joins when the build does. A smoke PASS is never a merge licence: the train's full gate on the tip is.
 [smoke]
-steps = ["build", "lib", "crate-tests", "scans", "facts", "fmt", "docs", "pytest-programs", "changed-tests"]
+steps = ["build", "lib", "crate-tests", "scans", "facts", "products", "fmt", "docs", "pytest-programs", "pytest-quick", "changed-tests"]
+# The pytest step's files that took under 45 s of a loaded host (1.7 s of test_identical, 0.3 s of test_readme unloaded): smoke runs
+# all but these, which are the minutes of it. A new slow file is added here, by the test that finds it over `slow_seconds`.
+slow_pytest = [
+    "crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py",
+    "tools/dosbatch/test_qbrt.py",
+    "tools/dosbatch/test_qb32.py",
+    "tools/gate/test_gate.py",
+    "tools/dosbatch/test_qbgfxfill.py",
+    "tools/bench/test_bench.py",
+    "tools/dosbatch/test_qbgfxspeed.py",
+    "crates/target/llrm-x86-m32/vsgcc/test_scaling.py",
+    "tools/test_alloc_scaling.py",
+    "tools/dosbatch/test_qb32cache.py",
+    "tests/test_loops.py",
+    "tools/dosbatch/test_qbentries.py",
+    "crates/target/llrm-x86-m32/vsgcc/dfaces/test_dfaces.py",
+    "tools/dosbatch/test_dosbatch.py",
+]
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts"]
+unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts", "products"]
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
-python = ["pytest", "pytest-programs", "changed-tests"]
+python = ["pytest", "pytest-programs", "pytest-quick", "changed-tests"]
 tools = ["bench", "torture"]
 identity = ["identity"]
 reference = ["turbo", "cv4", "qcport"]
