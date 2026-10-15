@@ -93,7 +93,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 | `run` | `tests/run` in DOSBox for the languages the diff touches (`LLRM_RUN_ONLY`) | every program prints its `.out` | run |
 | `pytest` | `tools`, `crates`, `tests/*.py` | pass | python |
 | `pytest-programs` | `tests/test_programs_compile.py`, `tests/test_loops.py` | every program compiles bar `tools/sizes-known.txt`; loop checks hold | python |
-| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count off its `expected.toml` baseline | tools |
+| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count off its `expected.toml` baseline (`BASE` lines: the same against the base's counts, a dry run) | tools |
 | `torture` | `tools/torture/torture.py --gate`, the fixed sample | each program is a pass or a named design difference | tools |
 | `identity` | `tests/toolchain.rs` `test_the_identity_gate_passes` | the compiler built against itself makes identical objects | identity |
 | `turbo` | Turbo Debugger sessions (`tests/turbo.rs`) | the debugger shows the same values | reference |
@@ -114,7 +114,7 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
 
 ## The smoke tier
 
-`gate.py run --tier smoke [--pr N]` is the cheap check of one PR (about a minute on a warm target): the fast tier's plan cut to `build`, `lib`, `crate-tests`, `scans`, `facts` (the target-facts audit), `fmt`, `docs` (generated pages and pass pages current), `pytest-programs` (every program compiles; with the build) and `changed-tests` (the test files the diff touches or sits beside). It refuses first, exit 2: a dirty tree, a PR whose base is not `main` (stacked; `--pr` reads it from `gh`), a branch that conflicts with `origin/main`, and a commit message, PR text or added line that names the assistant or its maker. A smoke PASS is not a merge licence: only a full gate on the tip is.
+`gate.py run --tier smoke [--pr N]` is the cheap check of one PR (about a minute on a warm target): the fast tier's plan cut to `build`, `lib`, `crate-tests`, `scans`, `facts` (the target-facts audit), `products` (no tracked `.o`, `.obj`, `.exe`, `.map` or `.lst` outside the fixtures; no build), `fmt`, `docs` (generated pages and pass pages current), `pytest-programs` (every program compiles; with the build), `pytest-quick` (the pytest step's files but the slow ones named in `tiers.toml` `[smoke] slow_pytest`; with the build) and `changed-tests` (the test files the diff touches or sits beside). It refuses first, exit 2: a dirty tree, a PR whose base is not `main` (stacked; `--pr` reads it from `gh`), a branch that conflicts with `origin/main`, and a commit message, PR text or added line that names the assistant or its maker. A smoke PASS is not a merge licence: only a full gate on the tip is.
 
 ## The merge train
 

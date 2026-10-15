@@ -21,7 +21,10 @@
 //! connected component of such pairs is two-coloured (base side and index
 //! side). The colouring is chosen by fewest base-register clobbers, then by
 //! preferred indexes, then fewest bases; a component that is not bipartite, or
-//! cannot take either colouring, keeps the spelling in the source. 4. After
+//! cannot take either colouring, keeps the spelling in the source. The
+//! clobbers are read from the caller's intervals and masks, or, where it holds
+//! none, from the intervals of the pairs' values alone, found when a component
+//! has two colourings to choose between. 4. After
 //! coalescing, a phi's result and arguments are one web and take the web's
 //! class where its members agree. A member with a class of its own keeps it.
 //!
@@ -672,23 +675,34 @@ fn _word_address_roles(
         adjacent.entry(*index).or_default().insert(*base);
     }
     let mut unseen: BTreeSet<u32> = adjacent.keys().copied().collect();
-    let (own_live, own_masks);
-    let (live, masks) = match found {
-        Some(found) => (found.live, found.masks),
-        None => {
-            let numbered = ranges::indexed(body);
-            own_live = ranges::intervals(body, Some(&numbered));
-            own_masks = _masks(body, &numbered, segments);
-            (&own_live as &dyn crate::backend::live::Ranges, &own_masks)
-        }
-    };
+    // Only a component with two ways to spell its pairs is priced by what
+    // clobbers the word base over its values; the body's intervals and
+    // masks are found for the first, if the caller holds none.
+    let own = std::cell::OnceCell::new();
     let word_base = *registers.word_bases.iter().next().expect("one word base");
 
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
+        let (live, masks): (&dyn crate::backend::live::Ranges, &crate::backend::allocate::Masks) = match found {
+            Some(found) => (found.live, found.masks),
+            None => {
+                let (live, masks) = own.get_or_init(|| {
+                    let numbered = ranges::indexed(body);
+                    // The pairs' values only: the rest are never asked.
+                    let live = ranges::intervals_where(
+                        body,
+                        &numbered,
+                        &crate::analysis::frequency::Frequency::of(body),
+                        &|value| adjacent.contains_key(&value),
+                    );
+                    (live, _masks(body, &numbered, segments))
+                });
+                (live, masks)
+            }
+        };
         values
             .iter()
             .filter_map(|value| live.range(*value))
-            .map(|interval| i64::from(_clobbered(interval, word_base, &masks, 2)))
+            .map(|interval| i64::from(_clobbered(interval, word_base, masks, 2)))
             .sum()
     };
 

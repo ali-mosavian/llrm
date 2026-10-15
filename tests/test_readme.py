@@ -28,6 +28,23 @@ def _uncommented(text: str) -> list[str]:
     return [re.sub(r"\s*;.*$", "", line).rstrip() for line in text.splitlines()]
 
 
+def _renumbered(lines: list[str]) -> list[str]:
+    """`lines` with each local label (`L0_27`) named by where it first appears: its number counts the code laid out before it,
+    so it moves with an unrelated change that adds or drops an instruction; an instruction that changed still shows."""
+    names: dict[str, str] = {}
+    return [re.sub(r"\bL\d+_\d+\b", lambda found: names.setdefault(found.group(0), f"L{len(names)}"), line) for line in lines]
+
+
+def test_local_labels_are_compared_by_where_they_first_appear():
+    """Train 3 failed on `L0_27` against `L0_30` in a listing whose instructions had not changed."""
+    shown = ["_f proc", "L0_0:", "    jne L0_27", "L0_27:", "    jmp L0_25", "L0_25:"]
+    moved = ["_f proc", "L0_0:", "    jne L0_30", "L0_30:", "    jmp L0_23", "L0_23:"]
+    assert _renumbered(shown) == _renumbered(moved)
+    # An instruction that changed, or a jump that goes to another label, is not hidden by it.
+    assert _renumbered(shown) != _renumbered([*moved[:-2], "    jne L0_23", "L0_23:"])
+    assert _renumbered(shown) != _renumbered(["_f proc", "L0_0:", "    jne L0_30", "L0_30:", "    jmp L0_30", "L0_23:"])
+
+
 def _listing(command: list[str], name: str, out: Path) -> str:
     subprocess.run([*command, "-S", "-o", str(out)], cwd=DOT, check=True, capture_output=True)
     text = out.read_text().replace("\r", "")
@@ -41,7 +58,7 @@ def test_a_readme_listing_is_what_the_compiler_prints(language, command, name, t
         pytest.skip("build the compilers first: cargo build --release --bins")
     blocks = re.findall(r"```asm\n(.*?)\n```", (ROOT / "readme.md").read_text(), re.S)
     shown = blocks[[one[0] for one in CASES].index(language)]
-    assert _uncommented(shown) == _uncommented(_listing(command, name, tmp_path / "out.asm"))
+    assert _renumbered(_uncommented(shown)) == _renumbered(_uncommented(_listing(command, name, tmp_path / "out.asm")))
 
 
 @pytest.mark.parametrize(("heading", "source"), [("C, `llrm-c", "dot.c"), ("Nib, `llrm-nib", "dot.nib"), ("BASIC, `llrm-qb", "dot.bas")])
