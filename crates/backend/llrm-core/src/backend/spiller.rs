@@ -2842,13 +2842,14 @@ fn _stable_loads_from(
             continue;
         }
         let flow = flow.get_or_init(|| Flow::of(body));
-        let held = if _exact_frame(cell) {
+        let held = if _exact_frame(cell) || _fixed_data(cell).is_some() {
             // Only what may write the cell is asked of, and the blocks between
             // the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
             let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> =
                 crate::support::hash::HashMap::default();
-            for (block, position) in writers.near(cell) {
+            let near = if _exact_frame(cell) { writers.near(cell) } else { writers.near_fixed(cell) };
+            for (block, position) in near {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
                     events.entry(block).or_default().push((position, false));
                 }
@@ -2915,11 +2916,27 @@ struct Writers {
     exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
     /// The widest of those cells.
     widest: i64,
+    /// What may write memory no fixed cell of a frame or a data segment names:
+    /// a call, an unmodeled write, a store through a register or to an
+    /// unplaced cell. (`wild` also holds the stores to fixed data cells, which
+    /// a frame cell is asked about as it always was.)
+    hard_wild: Vec<(usize, usize)>,
+    /// The stores to a fixed data cell, by its space and symbol, then its
+    /// first byte.
+    fixed: std::collections::BTreeMap<(u8, i64), std::collections::BTreeMap<i64, Vec<(usize, usize)>>>,
+    widest_fixed: i64,
 }
 
 impl Writers {
     fn of(body: &LirBody) -> Self {
-        let mut found = Self { wild: Vec::new(), exact: Default::default(), widest: 1 };
+        let mut found = Self {
+            wild: Vec::new(),
+            exact: Default::default(),
+            widest: 1,
+            hard_wild: Vec::new(),
+            fixed: Default::default(),
+            widest_fixed: 1,
+        };
         for (block, one_block) in body.blocks.iter().enumerate() {
             for (position, one) in one_block.insns.iter().enumerate() {
                 let dests = one
@@ -2933,17 +2950,27 @@ impl Writers {
                         },
                     );
                 let mut wild = one.call.is_some() || one.unmodeled_write();
+                let mut hard = wild;
                 for cell in dests {
                     if _exact_frame(cell) {
                         let addr = cell.addr.expect("an exact frame cell has an address");
                         found.exact.entry(addr.disp).or_default().push((block, position));
                         found.widest = found.widest.max(i64::from(cell.width));
+                    } else if let Some(key) = _fixed_data(cell) {
+                        let addr = cell.addr.expect("a fixed data cell has an address");
+                        found.fixed.entry(key).or_default().entry(addr.disp).or_default().push((block, position));
+                        found.widest_fixed = found.widest_fixed.max(i64::from(cell.width));
+                        wild = true;
                     } else {
                         wild = true;
+                        hard = true;
                     }
                 }
                 if wild {
                     found.wild.push((block, position));
+                }
+                if hard {
+                    found.hard_wild.push((block, position));
                 }
             }
         }
@@ -2967,6 +2994,43 @@ impl Writers {
         found.dedup();
         found
     }
+
+    /// `near` for a fixed data cell: the stores to other data cells that are
+    /// not a frame's or another symbol's meet it only by their bytes, and one
+    /// of another symbol may.
+    fn near_fixed(
+        &self,
+        cell: &Mem,
+    ) -> Vec<(usize, usize)> {
+        let key = _fixed_data(cell).expect("a fixed data cell");
+        let low = cell.addr.expect("a fixed data cell has an address").disp;
+        let high = low + i64::from(cell.width.max(1));
+        let mut found = self.hard_wild.clone();
+        for (other, cells) in &self.fixed {
+            if *other == key {
+                for places in cells.range(low - self.widest_fixed + 1..high).map(|(_, places)| places) {
+                    found.extend(places.iter().copied());
+                }
+            } else {
+                found.extend(cells.values().flatten().copied());
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+}
+
+/// A cell of a data segment or an external symbol at a fixed offset: no
+/// register in its address. Its space and symbol.
+fn _fixed_data(cell: &Mem) -> Option<(u8, i64)> {
+    let addr = cell.addr?;
+    let space = match addr.space {
+        Space::Segment => 0,
+        Space::External => 1,
+        _ => return None,
+    };
+    (addr.base == (RegId::None).iced() && cell.base.is_none() && cell.index.is_none()).then_some((space, addr.index))
 }
 
 /// Whether the cell holds at every one of `uses` (block, position), given where
@@ -6248,6 +6312,75 @@ mod tests {
         let asked = super::KEEPS.with(std::cell::Cell::get) - before;
         assert_eq!(stable.len() as i64, n - 1, "every load but the one whose cell is stored to");
         assert!(!stable.contains_key(&8), "value 8 was loaded from [bp-16], which a store overwrites");
+        assert!(asked as i64 <= 2 * n, "{asked} questions of `_keeps` for {n} loads in a body of {total} instructions");
+    }
+
+    /// A function with n values loaded from a static array asked of every
+    /// instruction for each, as the frame's were (#924): `cells` 1024 spent
+    /// 3 G in `ssa remakable`, 2.0 the slope. Only what may write a cell is
+    /// asked about it, and a store that does overlap one cell still makes that
+    /// one unstable.
+    #[test]
+    fn test_a_loaded_static_cell_is_asked_about_only_what_may_write_it() {
+        let cell = |disp: i64| Loc::Mem(mem(Addr::new(Space::External, disp), 2, RegId::None, disp, 4));
+        let n = 60_i64;
+        let mut insns = Vec::new();
+        for i in 0..n {
+            insns.push(insn(
+                i,
+                (i, i + 1),
+                semantics(Operation::Move, "mov", vec![held(1 + i as u32, 2)], vec![cell(2 * (i + 1))]),
+                &[1 + i as u32],
+                &[],
+            ));
+        }
+        // Stores to cells of their own, far from every load's, and one onto the
+        // cell of the load numbered 7.
+        for i in 0..n {
+            let at = 100 + i;
+            insns.push(insn(
+                at,
+                (at, at + 1),
+                semantics(
+                    Operation::Move,
+                    "mov",
+                    vec![cell(1000 + 2 * i)],
+                    vec![Loc::Imm(Imm { value: 0, width: 2, address: None })],
+                ),
+                &[],
+                &[],
+            ));
+        }
+        insns.push(insn(
+            300,
+            (300, 301),
+            semantics(
+                Operation::Move,
+                "mov",
+                vec![cell(16)],
+                vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
+            ),
+            &[],
+            &[],
+        ));
+        for i in 0..n {
+            let at = 400 + i;
+            insns.push(insn(
+                at,
+                (at, at + 1),
+                semantics(Operation::Push, "push", vec![], vec![held(1 + i as u32, 2)]),
+                &[],
+                &[1 + i as u32],
+            ));
+        }
+        let total = insns.len() as i64;
+        let body = _body(insns);
+        let values: Vec<u32> = (1..=n as u32).collect();
+        let before = super::KEEPS.with(std::cell::Cell::get);
+        let stable = super::_stable_loads(&body, &set(&values));
+        let asked = super::KEEPS.with(std::cell::Cell::get) - before;
+        assert_eq!(stable.len() as i64, n - 1, "every load but the one whose cell is stored to");
+        assert!(!stable.contains_key(&8), "value 8 was loaded from [table+16], which a store overwrites");
         assert!(asked as i64 <= 2 * n, "{asked} questions of `_keeps` for {n} loads in a body of {total} instructions");
     }
 
