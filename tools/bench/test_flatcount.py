@@ -1,0 +1,78 @@
+"""The flat (dos32) kernel's work in an emulator, priced by the 486's clocks (tools/bench/flatcount.py)."""
+
+from __future__ import annotations
+
+import sys
+import struct
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import flatcount  # noqa: E402
+
+BASE = 0x08048000
+KERNEL = BASE + 0x40
+
+
+def image(tmp_path: Path, kernel: bytes) -> Path:
+    """A flat ELF of one segment: at BASE `call KERNEL; hlt`, at KERNEL the kernel; its map names KERNEL as BENCHK."""
+    code = bytearray(0x40) + kernel
+    code[0:6] = b"\xe8" + struct.pack("<i", KERNEL - (BASE + 5)) + b"\xf4"
+    header = bytearray(52)
+    header[0:16] = b"\x7fELF\x01\x01\x01" + bytes(9)
+    struct.pack_into("<HHIIIIIHHHHHH", header, 16, 2, 3, 1, BASE, 52, 0, 0, 52, 32, 1, 0, 0, 0)
+    phdr = struct.pack("<8I", 1, 84, BASE, BASE, len(code), len(code), 7, 4096)
+    path = tmp_path / "k.elf"
+    path.write_bytes(bytes(header) + phdr + bytes(code))
+    path.with_suffix(".map").write_text(f"{KERNEL:08x}*      BENCHK\n")
+    return path
+
+
+def test_a_kernels_instructions_and_486_clocks_are_counted_from_its_entry_to_its_return(tmp_path):
+    # mov ecx,3; l: dec ecx; jnz l; ret
+    elf = image(tmp_path, b"\xb9\x03\x00\x00\x00\x49\x75\xfd\xc3")
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert not ran.error, ran.error
+    # 1 + 3 * 2 + the ret; the table: mov 1, dec 1 each, jnz 3 taken twice and 1 not, ret 5
+    assert (ran.region.instructions, ran.region.clocks) == (8, 1 + 3 + (3 + 3 + 1) + 5)
+
+
+def test_a_repeated_string_instruction_is_one_instruction_and_one_with_ecx_zero_too(tmp_path):
+    """DOSBox counts a REP once; the emulator's hook fires per iteration, and once more with ECX at 0."""
+    # mov ecx,5; rep stosd; xor ecx,ecx; rep stosd; ret  (edi 0x1000 is writable memory)
+    elf = image(tmp_path, b"\xbf\x00\x10\x00\x00\xb9\x05\x00\x00\x00\xf3\xab\x31\xc9\xf3\xab\xc3")
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert not ran.error and ran.region.instructions == 6, (ran.error, ran.region)
+
+
+def test_a_call_the_emulator_does_not_know_stops_the_run_and_is_named(tmp_path):
+    elf = image(tmp_path, b"\xcd\x2f\xc3")  # int 2fh
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert ran.region is None and "int 0x2f" in ran.error, ran.error
+
+
+def test_a_region_that_is_not_in_the_map_is_an_error_not_zero(tmp_path):
+    ran = flatcount.run(image(tmp_path, b"\xc3"), "NOPE", tmp_path)
+    assert ran.region is None and "NOPE" in ran.error
+
+
+def test_the_emulators_count_and_dosboxs_agree_within_a_few_instructions_not_where_a_rep_was_sliced():
+    """DOSBox counts a long REP in slices of its cycle budget: scroll read 58,321 there and 21,015 here."""
+    assert flatcount.agrees(372144, 372144) and flatcount.agrees(22784, 22785) and flatcount.agrees(84627970, 84337547)
+    assert not flatcount.agrees(21015, 58321) and not flatcount.agrees(1000000, 1100000)
+
+
+def test_a_flat_row_gets_clocks_only_where_the_emulator_ran_the_kernel_dosbox_counted(monkeypatch, tmp_path):
+    import types
+
+    import bench
+
+    ran = lambda instructions, clocks=7: types.SimpleNamespace(error="", region=types.SimpleNamespace(instructions=instructions, clocks=clocks))  # noqa: E731
+    key = ("fib", "bq32", "O2")
+    monkeypatch.setattr(flatcount, "run", lambda *a: ran(100))
+    assert bench.flat_clocks(key, tmp_path / "x.elf", "BenchFib", 100, tmp_path) == {"clocks": 7}
+    assert bench.flat_clocks(key, tmp_path / "x.elf", "BenchFib", 5000, tmp_path) == {}, "another run's price is no price"
+    monkeypatch.setattr(flatcount, "run", lambda *a: types.SimpleNamespace(error="int 0x2f", region=None))
+    assert bench.flat_clocks(key, tmp_path / "x.elf", "BenchFib", 100, tmp_path) == {}
+    line = bench.clock_lines({("fib", "bq32", "O2"): {"clocks": 7, "instructions": 100}}, ["fib"])
+    assert line == ["fib bq32 -O2: 7 clocks, 100 instructions"], "a flat row has no memory operands count"
