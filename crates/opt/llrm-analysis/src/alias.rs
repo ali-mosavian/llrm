@@ -415,7 +415,7 @@ fn _resolved_reference(
 ///
 /// `captures` holds PARAMETER
 /// object identities.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Summary {
     pub reads: SliceSet,
     pub writes: SliceSet,
@@ -1978,7 +1978,7 @@ pub fn calls_annotated(
         procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
     let computed;
-    let callbacks = match procedure.unit.callbacks {
+    let callbacks = match procedure.unit.callbacks() {
         Some(held) => {
             if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
                 assert!(

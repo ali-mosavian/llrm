@@ -1103,3 +1103,22 @@ b0:
     let facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
     super::Table::of(&module, &program, globals, &facts, None).check_against_scratch();
 }
+
+/// A memory view over the module's facts read what calling back into the module
+/// does when it was made, so every pass that asked for one was run again each
+/// time the callbacks' summary moved: d_faces -O3 ran 19 passes twice more to
+/// find nothing. It is read where it is asked for.
+#[test]
+fn a_memory_view_reads_the_callbacks_where_they_are_asked_for() {
+    use llrm_mir::passes::read;
+    let module = parsed(&format!("{DOS}define void @f() {{\nb0:\n  ret void\n}}\n"));
+    let mut outer = Outer::of(&module, None);
+    outer.require::<super::Callbacks>(&module);
+    let function = module.global(module.named("f").expect("f")).function().expect("a function");
+    let layout = layout(&module);
+    read::swap(0);
+    let unit = Unit::within(&module.context, &layout, function, &outer);
+    assert_eq!(read::swap(0) & read::CALLBACKS, 0, "making the view reads no callbacks");
+    unit.callbacks();
+    assert_eq!(read::swap(0) & read::CALLBACKS, read::CALLBACKS, "asking for them does");
+}

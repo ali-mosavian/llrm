@@ -240,6 +240,12 @@ pub struct Mark {
 }
 
 impl Mark {
+    /// The function history this is a point in: equal for the points of one
+    /// function, other for a copy's.
+    pub fn lineage(&self) -> u64 {
+        self.uid
+    }
+
     /// How many changes the function had logged at this point.
     pub fn position(&self) -> usize {
         self.at

@@ -9,6 +9,10 @@
 //! after `globalopt` is a function, module or program pass of the manager.
 //! With `LLRM_VERIFY` set the module is verified after each manager pass;
 //! with `Applied::dump` set each changed step of each body is written there.
+//! A body sent back through [`Fixed`] by a later stage starts only the passes
+//! that found nothing last time and read nothing that changed since
+//! ([`crate::settled`]); `LLRM_CHECK_SETTLED=1` runs them and fails where one
+//! changes the body.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -145,6 +149,7 @@ use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
+use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
@@ -1042,11 +1047,18 @@ impl FunctionPass for Fixed {
             classified: unit.function.mark(),
             stretches: Vec::new(),
             unreached: 0,
+            slice: None,
+            persisted: 0,
+            records: unit.context.extension::<Settled>(),
+            rerun: false,
+            idle_at: Vec::new(),
         };
+        run.rerun = run.records.knows(unit.function);
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
+        run.remember(unit, analyses);
         llrm_support::debug!(
             "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
@@ -1054,6 +1066,7 @@ impl FunctionPass for Fixed {
             run.steps,
             run.skipped,
             run.unreached,
+            run.persisted,
             run.version,
             run.idle,
             run.useful,
@@ -1062,6 +1075,13 @@ impl FunctionPass for Fixed {
         );
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
+}
+
+/// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
+/// and fails where it changes the body.
+fn settled_checked() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_SETTLED").is_some())
 }
 
 /// One body's run through `Fixed`.
@@ -1093,6 +1113,18 @@ struct Run {
     /// Passes not run because no edit since they found nothing reached what
     /// they read.
     unreached: usize,
+    /// The facts outside the body, as of a point in its history
+    /// (`settled::slice`).
+    slice: Option<(llrm_mir::module::Mark, settled::Slice)>,
+    /// Passes not run because they found nothing in an earlier run, under the
+    /// same facts (`settled`).
+    persisted: usize,
+    /// The records of the earlier runs of this body, and whether there are any.
+    records: std::rc::Rc<Settled>,
+    rerun: bool,
+    /// What each pass last found nothing on in this run: where, and what it
+    /// read.
+    idle_at: Vec<(&'static str, llrm_mir::module::Mark, u8, llrm_mir::footprint::Footprint)>,
 }
 
 impl Run {
@@ -1126,6 +1158,48 @@ impl Run {
         self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
     }
 
+    /// The passes that found nothing and that no edit since reaches are
+    /// recorded as settled on the body as it is: a later run starts none of
+    /// them where what they read is as it was (`settled`).
+    fn remember(
+        &mut self,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
+        if self.idle_at.is_empty() {
+            return;
+        }
+        let _span = llrm_support::debug::span("settled remember");
+        let slice = self.slice(unit, analyses);
+        for &(name, mark, bits, reads) in &self.idle_at {
+            let reached = unit
+                .function
+                .changes_since(mark)
+                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes));
+            if !reached.meets(reads) {
+                self.records.note(name, unit.function, slice, bits);
+            }
+        }
+    }
+
+    /// The facts outside the body its passes read, as it stands.
+    fn slice(
+        &mut self,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) -> settled::Slice {
+        let now = unit.function.mark();
+        match self.slice {
+            Some((at, slice)) if at == now => slice,
+            _ => {
+                let _span = llrm_support::debug::span("settled slice");
+                let slice = settled::slice(unit, analyses.outer_unread());
+                self.slice = Some((now, slice));
+                slice
+            }
+        }
+    }
+
     /// `pass` over the body; whether it changed it.
     fn step(
         &mut self,
@@ -1137,11 +1211,26 @@ impl Run {
         if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
             return false;
         }
+        let name = pass.name();
+        let mut skipped = false;
+        if self.rerun {
+            let slice = self.slice(unit, analyses);
+            skipped = self.records.holds(name, unit.function, slice, pass.reads());
+        }
+        let checking = skipped && settled_checked();
+        if skipped && !checking {
+            self.persisted += 1;
+            llrm_mir::passes::read::note(self.records.bits(name, unit.function));
+            return false;
+        }
         self.steps += 1;
         let before = unit.function.mark();
+        let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        let read = llrm_mir::passes::read::swap(outside);
+        llrm_mir::passes::read::note(read);
         self.classify(unit);
         if let Some((billed, analysed)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
@@ -1155,12 +1244,21 @@ impl Run {
                 if idle { "idle" } else { "changed" }
             );
         }
+        assert!(
+            !checking || preserved.are_all_preserved(),
+            "{}: skipped as settled by an earlier run, it changed the body ({stage})",
+            pass.name()
+        );
         if preserved.are_all_preserved() {
             // Every result stands, as the body is now (it may have edited and
             // put back).
             analyses.vouch(unit.function);
+            self.idle_at.retain(|one| one.0 != name);
+            self.idle_at.push((name, unit.function.mark(), read, pass.reads()));
             return false;
         }
+        self.idle_at.retain(|one| one.0 != name);
+        self.records.forget(name, unit.function);
         llrm_mir::passes::note_pass(pass.name());
         llrm_mir::passes::spanned("invalidate", || analyses.invalidate(unit.function, &preserved));
         analyses.check_kept(pass.name(), unit.context, unit.layout, unit.function);

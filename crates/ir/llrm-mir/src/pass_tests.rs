@@ -868,3 +868,58 @@ fn a_body_a_function_pass_edited_is_in_the_log_of_edits() {
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(LOGGED.get(), 1, "the edit the pass made was not reported");
 }
+
+/// Reads what each function does to memory, from the outer facts.
+struct ReadsEffects;
+
+impl Analysis for ReadsEffects {
+    type Result = usize;
+    const NAME: &'static str = "reads-effects";
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        analyses: &mut Analyses,
+    ) -> usize {
+        analyses.outer().callees().len()
+    }
+}
+
+/// Reads nothing outside the function.
+struct ReadsNone;
+
+impl Analysis for ReadsNone {
+    type Result = usize;
+    const NAME: &'static str = "reads-none";
+    const READS_OUTER: bool = false;
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        function.layout().len()
+    }
+}
+
+/// A pass is run again only where what it read of the module has changed, so
+/// what it read has to be said: by the analysis it asks for, the first time and
+/// when the result is held, and by what it asks of the proxy.
+#[test]
+fn what_an_analysis_read_of_the_module_is_noted_each_time_it_is_asked_for() {
+    use crate::passes::read;
+    let module = module();
+    let id = module.named("f").unwrap();
+    let function = module.global(id).function().unwrap();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    let layout = DataLayout::default();
+    read::swap(0);
+    analyses.get::<ReadsNone>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), 0, "an analysis of the function alone reads nothing of the module");
+    analyses.get::<ReadsEffects>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), read::CALLEES | read::DECLARATIONS, "the first time: the proxy, and what the callees do");
+    analyses.get::<ReadsEffects>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), read::CALLEES | read::DECLARATIONS, "held: it is still what the pass read");
+    analyses.outer();
+    assert_eq!(read::swap(0), read::DECLARATIONS, "the proxy asked for is the declarations read");
+}
