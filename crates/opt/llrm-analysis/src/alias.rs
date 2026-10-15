@@ -1,5 +1,5 @@
-//! Strong, flow-sensitive alias analysis: what each pointer may point to, what
-//! escapes and when, and what each call reads and writes.
+//! Strong alias analysis: what each pointer may point to, what escapes and
+//! when, and what each call reads and writes.
 //!
 //! # How it works
 //! One vocabulary serves every frontend. A pointer's fact is a `Provenance`: a
@@ -11,19 +11,23 @@
 //! `Allocation`. Unknown stores kill spill facts; they never manufacture a
 //! disjointness proof.
 //!
-//! Value solve (`point_values`). Pointer facts flow forward over the CFG to a
-//! fixed point:
+//! Value solve (`point_values`). Pointer facts flow over the values to a fixed
+//! point, by gcc's worklist over constraints (`solve_graph`,
+//! [tree-ssa-structalias.cc#L2711](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-structalias.cc#L2711)):
+//! an instruction is visited again only when a value it reads, or the fields of
+//! an object it loads from, changed. The solve is flow-insensitive through
+//! memory: one abstract location per object.
 //!
 //! - `alloca`, `bitcast`, `addrspacecast`, `getelementptr` give a fact from
 //!   their operand (`_direct`); a constant displacement shifts the slices, a
 //!   variable index widens to the whole object.
 //! - A `phi` or `select` joins its arms as a union; a pointer with an arm no
 //!   fact follows is `UNKNOWN`.
-//! - Pointers stored to an exact slot (a spill slot) are tracked per block in a
-//!   `CellMap` keyed by `CellKey`; a possibly overlapping store or an unmodeled
-//!   call write kills them; a join keeps a cell only if every parent holds it.
-//!   A load of a pointer reads the cell, else the union of every pointer ever
-//!   stored into the object.
+//! - A store of a pointer adds it to the fields of the objects it may write; a
+//!   load of one reads every pointer ever stored into the object, and
+//!   `UNKNOWN`, unless the slot is one only this body writes: then it is the
+//!   stores that reach it (`slotstores::reaching`, the memory SSA of one
+//!   object), a spilled pointer read back as what was spilled.
 //! - A loop-carried fact is widened to whole objects (`_widened`) at a
 //!   natural-loop header so it settles, and a fact with more than
 //!   `MAX_FIELDS_FOR_FIELD_SENSITIVE` slices is also collapsed, as gcc and LLVM
@@ -34,8 +38,8 @@
 //! ```text
 //!  %p = alloca [8 x i16]            %p -> {frame:%p [0,16)}
 //!  %q = gep %p, i16 2               %q -> {frame:%p [4,6)}
-//!  store ptr %q, ptr %slot          cell(%slot) = %q          (spill slot)
-//!  %r = load ptr, ptr %slot         %r -> {frame:%p [4,6)}    (exact slot)
+//!  store ptr %q, ptr %slot          slot's stores: {this one}  (spill slot)
+//!  %r = load ptr, ptr %slot         %r -> {frame:%p [4,6)}     (its reaching store)
 //!  call @unknown(ptr %q)            %q's object escapes from here on
 //! ```
 //!
@@ -120,8 +124,9 @@
 //! # Needs
 //! [`crate::globalsaa`] (tracked globals), [`crate::cfg::Shape`],
 //! [`crate::ranges`] and [`crate::consts`] (index intervals, constants),
-//! [`crate::cellmap`], [`crate::induction`] (strides), `llrm_mir::memory` for
-//! what attributes state.
+//! [`crate::cellmap`] (the escape solve's per-block cells),
+//! [`crate::slotstores`], [`crate::induction`] (strides), `llrm_mir::memory`
+//! for what attributes state.
 //!
 //! # See also
 //! LLVM `BasicAA`, `GlobalsAA`, `EarliestEscapeInfo`, `FunctionAttrs`
@@ -704,6 +709,21 @@ pub fn read_arguments(
 
 /// Whether the call `at` keeps no copy of its argument `index`: `nocapture`
 /// at the site or on the callee's parameter.
+/// Whether the call `inst` writes no memory at all, through its arguments or
+/// otherwise.
+pub(crate) fn only_reads(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
+    let allowed = _allowed(unit, inst);
+    matches!(
+        unit.function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    )
+        && !allowed.arguments.writes
+        && !allowed.other.writes
+}
+
 fn _borrowed(
     unit: &Unit,
     at: InstId,
@@ -2484,7 +2504,6 @@ fn joined(op: &llrm_mir::module::Instruction) -> Option<Vec<Operand>> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PointValues {
     pub values: llrm_support::hash::SparseIdMap<ValueId, Provenance>,
-    incoming: IndexMap<i64, IndexMap<CellKey, Provenance>>,
 }
 
 thread_local! {
@@ -2520,18 +2539,58 @@ pub fn value_solves() -> usize {
     VALUE_SOLVES.with(std::cell::Cell::get)
 }
 
-/// The value solve of `points_to`.
+/// One instruction of the value solve: what it learns of a pointer value, and
+/// what it adds to the cells of the objects it stores through.
+struct Solve {
+    values: IndexMap<ValueId, Provenance>,
+    /// Every pointer stored anywhere in each object: what a load from any cell
+    /// of it may get.
+    fields: HashMap<ObjectRef, Provenance>,
+    /// Objects a store of an unknown pointer, or a call, may have written.
+    unbounded: HashSet<ObjectRef>,
+    limited: HashSet<ValueId>,
+    any_limited: bool,
+}
+
+impl Solve {
+    /// `fact` as `value`'s, widened past the field limit; whether it was new.
+    fn learn(
+        &mut self,
+        value: ValueId,
+        fact: Provenance,
+    ) -> bool {
+        let fact = if fact.slices.len() > MAX_FIELDS_FOR_FIELD_SENSITIVE
+            || (self.any_limited && self.limited.contains(&value))
+        {
+            self.any_limited = true;
+            if self.limited.insert(value) {
+                LIMIT_COLLAPSES.with(|collapsed| collapsed.set(collapsed.get() + 1));
+            }
+            _widened(&fact)
+        } else {
+            fact
+        };
+        if self.values.get(&value) == Some(&fact) {
+            return false;
+        }
+        self.values.insert(value, fact);
+        true
+    }
+}
+
+/// The value solve of `points_to`: gcc's `solve_graph` over SSA values
+/// ([tree-ssa-structalias.cc#L2711](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/tree-ssa-structalias.cc#L2711)),
+/// one constraint per instruction that makes, moves, joins, loads or stores a
+/// pointer, visited again only when a value or an object's fields it reads
+/// changed. The contents of a cell are one abstract location per object (every
+/// pointer stored into it anywhere, or unknown): what an exact cell holds at a
+/// point is the memory SSA's to say per query.
 pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     VALUE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let seeds = seeds(unit);
-    let mut values = seeds.clone();
     let pointer_values = may_point(unit);
     let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    let none = BTreeSet::new();
-    // A pointer value is otherwise an exact byte slice. Natural-loop joins
-    // are the one place those exact facts can grow without a program bound.
     let shape = unit.shape();
     let dominance = &shape.dominance;
     let back_edges = graph
@@ -2539,214 +2598,233 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
         .filter(|(at, successor)| dominance.dominates(*successor, *at))
         .collect::<BTreeSet<_>>();
-    let mut incoming =
-        graph.iter().map(|block| (block.at, IndexMap::<CellKey, Provenance>::default())).collect::<IndexMap<_, _>>();
-    let mut outgoing = incoming.clone();
-    let instructions = |at: i64| function.block(cfg::block(at)).instructions();
-
-    // A block reads its parents' cells and these values. With neither
-    // changed since its last visit it would compute what it already holds,
-    // widening included, as widening an object's whole slice gives the same
-    // slice.
-    let reads = graph
-        .iter()
-        .map(|block| instructions(block.at).iter().flat_map(|&inst| read_values(unit, inst)).collect::<HashSet<_>>())
-        .collect::<Vec<_>>();
-    let tick = std::cell::Cell::new(0_u64);
-    let touched = RefCell::new(HashMap::<ValueId, u64>::default());
-    // Every pointer stored anywhere in each object: what a cell of it may
-    // hold when its exact contents are not known.
-    let mut fields = HashMap::<ObjectRef, Provenance>::default();
-    // Objects a call or an unknown value may have written: no such bound.
-    let mut unbounded = HashSet::<ObjectRef>::default();
-    let mut sent = HashMap::<i64, u64>::default();
-    let mut visited = vec![None::<u64>; graph.len()];
-    let limited = RefCell::new(HashSet::<ValueId>::default());
-    let any_limited = std::cell::Cell::new(false);
-    loop {
-        let changed = std::cell::Cell::new(false);
-        VALUE_ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
-        let learn = |values: &mut IndexMap<ValueId, Provenance>, value: ValueId, fact: Provenance| {
-            // Past the limit a value stays whole: its objects whole joined with
-            // another slice of them are not one slice, and a value
-            // taken whole once would grow again by the slices its
-            // loop makes.
-            let fact = if fact.slices.len() > MAX_FIELDS_FOR_FIELD_SENSITIVE
-                || (any_limited.get() && limited.borrow().contains(&value))
-            {
-                any_limited.set(true);
-                if limited.borrow_mut().insert(value) {
-                    LIMIT_COLLAPSES.with(|collapsed| collapsed.set(collapsed.get() + 1));
-                }
-                _widened(&fact)
-            } else {
-                fact
-            };
-            if values.get(&value) != Some(&fact) {
-                values.insert(value, fact);
-                touched.borrow_mut().insert(value, tick.get());
-                changed.set(true);
+    // The instructions that can give a pointer a fact, in program order, and
+    // the ones that read each value they read.
+    let mut order: Vec<InstId> = Vec::new();
+    for block in &graph {
+        for &inst in function.block(cfg::block(block.at)).instructions() {
+            let op = function.instruction(inst);
+            let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
+            let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
+            if pointer_result || pointer_store {
+                order.push(inst);
             }
-        };
-        for (index, block) in graph.iter().enumerate() {
-            let parents_at = predecessors.get(&block.at).unwrap_or(&none);
-            if let Some(last) = visited[index] {
-                let since = |stamp: Option<&u64>| stamp.is_some_and(|stamp| *stamp >= last);
-                let touched = touched.borrow();
-                if !parents_at.iter().any(|parent| since(sent.get(parent)))
-                    && !reads[index].iter().any(|value| since(touched.get(value)))
-                {
-                    continue;
-                }
-            }
-            tick.set(tick.get() + 1);
-            visited[index] = Some(tick.get());
-            let has_back_edge = parents_at.iter().any(|parent| back_edges.contains(&(*parent, block.at)));
-            let mut state = IndexMap::default();
-            {
-                let parents = parents_at.iter().map(|one| &outgoing[one]).collect::<Vec<_>>();
-                let previous_incoming = &incoming[&block.at];
-                if !parents.is_empty() {
-                    let keys = parents.iter().flat_map(|one| one.keys()).cloned().collect::<IndexSet<_>>();
-                    for key in keys {
-                        // A missing fact on one incoming edge is unknown, not
-                        // an invitation to retain the
-                        // other edge's pointer.
-                        if parents.iter().all(|one| one.contains_key(&key)) {
-                            let mut fact =
-                                _union(parents.iter().map(|one| one.get(&key))).expect("every parent holds this key");
-                            if has_back_edge {
-                                if let Some(previous) = previous_incoming.get(&key) {
-                                    if fact != *previous {
-                                        fact = _widened(&previous.union(&fact));
-                                    }
-                                }
-                            }
-                            state.insert(key, fact);
-                        }
-                    }
-                }
-            }
-            incoming.insert(block.at, state.clone());
-            let mut state = CellMap::new(state, _key_place);
-            for &inst in instructions(block.at) {
-                let op = function.instruction(inst);
-                if let (Some(arms), Some(result)) = (joined(op), op.result) {
-                    let parts = arms.iter().map(|&one| _operand(unit, one, &values)).collect::<Vec<_>>();
-                    if pointer_values.contains(&result) || (!parts.is_empty() && parts.iter().all(Option::is_some)) {
-                        let mut fact = if parts.iter().any(Option::is_none) {
-                            Some(UNKNOWN.clone())
-                        } else {
-                            _union(parts.iter().map(Option::as_ref))
-                        };
-                        if let Some(current) = &fact {
-                            let carried = op.opcode == Opcode::Phi
-                                && op.operands.iter().skip(1).step_by(2).any(|parent| {
-                                    matches!(
-                                        parent,
-                                        Operand::Block(parent) if back_edges.contains(&(cfg::id(*parent), block.at))
-                                    )
-                                });
-                            if carried {
-                                if let Some(previous) = values.get(&result) {
-                                    if current != previous {
-                                        fact = Some(_widened(&previous.union(current)));
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(fact) = fact {
-                            learn(&mut values, result, fact);
-                        }
-                    }
-                    continue;
-                }
-                // Arithmetic derived from an already-known pointer proves its
-                // own pointer nature.
-                if let (Some(direct), Some(result)) = (_direct(unit, inst, &values)?, op.result) {
-                    if !seeds.contains_key(&result) {
-                        learn(&mut values, result, direct);
-                    }
-                }
-                let reference = MemRef::of(unit, inst);
-                match (&op.opcode, reference) {
-                    (Opcode::Load { .. }, Some(reference))
-                        if op.result.is_some_and(|result| pointer_values.contains(&result)) =>
-                    {
-                        let resolved =
-                            MemRef { provenance: _resolved_reference(unit, &reference, &values), ..reference.clone() };
-                        let loaded = _cell_key(&resolved).and_then(|key| state.get(&key).cloned());
-                        let loaded = loaded.or_else(|| {
-                            let stored = resolved
-                                .provenance
-                                .iter()
-                                .flat_map(|provenance| provenance.slices.iter())
-                                .map(|one| {
-                                    (!unbounded.contains(&one.object)).then(|| fields.get(&one.object)).flatten()
-                                })
-                                .collect::<Option<Vec<_>>>()?;
-                            (!stored.is_empty())
-                                .then(|| _union(stored.into_iter().map(Some).chain([Some(&*UNKNOWN)])))?
-                        });
-                        if let Some(loaded) = loaded {
-                            learn(&mut values, op.result.expect("a load's result"), loaded);
-                        }
-                    }
-                    (Opcode::Store { .. }, Some(reference)) => {
-                        let source = _operand(unit, op.operands[0], &values);
-                        let keyed = MemRef { provenance: _resolved_reference(unit, &reference, &values), ..reference };
-                        let pointer_stored = is_pointer(unit, op.operands[0]);
-                        let bounded = source.is_some() || !pointer_stored;
-                        if let (false, Some(targets)) = (bounded, &keyed.provenance) {
-                            for one in &targets.slices {
-                                if unbounded.insert(one.object) {
-                                    changed.set(true);
-                                }
-                            }
-                        }
-                        if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
-                            for one in &targets.slices {
-                                // Whole objects: stored offsets may shift each
-                                // trip around a loop.
-                                let grown = _widened(
-                                    &fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)),
-                                );
-                                if fields.get(&one.object) != Some(&grown) {
-                                    fields.insert(one.object, grown);
-                                    changed.set(true);
-                                }
-                            }
-                        }
-                        let key = _cell_key(&keyed);
-                        // Any possibly overlapping write invalidates prior cell
-                        // contents; an exact pointer store then defines it.
-                        _kill(&mut state, key.as_ref());
-                        if let (Some(key), Some(source)) = (key, &source) {
-                            state.insert(key, source.clone(), _key_place);
-                        }
-                    }
-                    // A call writes whatever its callee does, so a cell it
-                    // may write holds an unknown pointer after it.
-                    _ if unmodeled_write(unit, inst) => _kill(&mut state, None),
-                    _ => {}
-                }
-            }
-            let state = state.into_items();
-            if outgoing[&block.at] != state {
-                outgoing.insert(block.at, state);
-                sent.insert(block.at, tick.get());
-                changed.set(true);
-            }
-        }
-        if !changed.get() {
-            break;
         }
     }
-
-    Ok(PointValues { values, incoming })
+    // What a load of a slot nothing else writes reads: the stores that reach
+    // it.
+    let pointer_loads: llrm_mir::dense::IdSet<InstId> = order
+        .iter()
+        .copied()
+        .filter(|&inst| {
+            let op = function.instruction(inst);
+            matches!(op.opcode, Opcode::Load { .. }) && op.result.is_some_and(|result| pointer_values.contains(&result))
+        })
+        .collect();
+    let exact = crate::slotstores::reaching(unit, &pointer_loads);
+    // A load that a store after it in a cycle reaches carries a fact around the
+    // cycle: widened, as a loop-carried phi is, or each trip adds a slice.
+    let carried: llrm_mir::dense::IdSet<InstId> = {
+        let place: llrm_mir::dense::IdMap<InstId, usize> = function
+            .layout()
+            .iter()
+            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .collect();
+        pointer_loads
+            .iter()
+            .filter(|load| {
+                let Some(stores) = exact.get(load) else { return false };
+                let Some(here) = function.parent(*load) else { return false };
+                stores
+                    .iter()
+                    .any(
+                        |&store| {
+                            let Some(there) = function.parent(store) else { return false };
+                            if there == here {
+                                place.get(&store) > place.get(load)
+                            } else {
+                                shape.reaching.to(function, there).contains(&here)
+                            }
+                        },
+                    )
+            })
+            .collect()
+    };
+    let mut readers: HashMap<ValueId, Vec<usize>> = HashMap::default();
+    for (slot, &inst) in order.iter().enumerate() {
+        for value in read_values(unit, inst).chain(exact.get(&inst).into_iter().flatten().flat_map(|&store| {
+            match function.instruction(store).operands[0] {
+                Operand::Value(source) => Some(source),
+                _ => None,
+            }
+        })) {
+            let list = readers.entry(value).or_default();
+            if list.last() != Some(&slot) {
+                list.push(slot);
+            }
+        }
+    }
+    let mut solve = Solve {
+        values: seeds.clone(),
+        fields: HashMap::default(),
+        unbounded: HashSet::default(),
+        limited: HashSet::default(),
+        any_limited: false,
+    };
+    // The loads that read each object's cells.
+    let mut watchers: HashMap<ObjectRef, HashSet<usize>> = HashMap::default();
+    let mut queued = vec![true; order.len()];
+    let mut work: std::collections::BinaryHeap<std::cmp::Reverse<usize>> =
+        (0..order.len()).map(std::cmp::Reverse).collect();
+    let wake_readers =
+        |value: ValueId, work: &mut std::collections::BinaryHeap<std::cmp::Reverse<usize>>, queued: &mut Vec<bool>| {
+            for &reader in readers.get(&value).into_iter().flatten() {
+                if !queued[reader] {
+                    queued[reader] = true;
+                    work.push(std::cmp::Reverse(reader));
+                }
+            }
+        };
+    let wake_watchers = |object: &ObjectRef,
+                         watchers: &HashMap<ObjectRef, HashSet<usize>>,
+                         work: &mut std::collections::BinaryHeap<std::cmp::Reverse<usize>>,
+                         queued: &mut Vec<bool>| {
+        for &reader in watchers.get(object).into_iter().flatten() {
+            if !queued[reader] {
+                queued[reader] = true;
+                work.push(std::cmp::Reverse(reader));
+            }
+        }
+    };
+    while let Some(std::cmp::Reverse(slot)) = work.pop() {
+        queued[slot] = false;
+        VALUE_ROUNDS.with(|rounds| rounds.set(rounds.get() + 1));
+        let inst = order[slot];
+        let op = function.instruction(inst);
+        if let (Some(arms), Some(result)) = (joined(op), op.result) {
+            let parts = arms.iter().map(|&one| _operand(unit, one, &solve.values)).collect::<Vec<_>>();
+            if pointer_values.contains(&result) || (!parts.is_empty() && parts.iter().all(Option::is_some)) {
+                let mut fact = if parts.iter().any(Option::is_none) {
+                    Some(UNKNOWN.clone())
+                } else {
+                    _union(parts.iter().map(Option::as_ref))
+                };
+                if let Some(current) = &fact {
+                    let block = function.parent(inst).map(cfg::id);
+                    let carried = op.opcode == Opcode::Phi
+                        && op.operands.iter().skip(1).step_by(2).any(|parent| {
+                            matches!(
+                                parent,
+                                Operand::Block(parent)
+                                    if block.is_some_and(|block| back_edges.contains(&(cfg::id(*parent), block)))
+                            )
+                        });
+                    if carried {
+                        if let Some(previous) = solve.values.get(&result) {
+                            if current != previous {
+                                fact = Some(_widened(&previous.union(current)));
+                            }
+                        }
+                    }
+                }
+                if let Some(fact) = fact {
+                    if solve.learn(result, fact) {
+                        wake_readers(result, &mut work, &mut queued);
+                    }
+                }
+            }
+            continue;
+        }
+        // Arithmetic derived from an already-known pointer proves its own
+        // pointer nature.
+        if let (Some(direct), Some(result)) = (_direct(unit, inst, &solve.values)?, op.result) {
+            if !seeds.contains_key(&result) && solve.learn(result, direct) {
+                wake_readers(result, &mut work, &mut queued);
+            }
+        }
+        let reference = MemRef::of(unit, inst);
+        match (&op.opcode, reference) {
+            (Opcode::Load { .. }, Some(reference))
+                if op.result.is_some_and(|result| pointer_values.contains(&result)) =>
+            {
+                // Every store that reaches a slot only this body writes: what
+                // was stored, and nothing else.
+                if let Some(stores) = exact.get(&inst) {
+                    let sources: Vec<Option<Provenance>> = stores
+                        .iter()
+                        .map(|&store| _operand(unit, function.instruction(store).operands[0], &solve.values))
+                        .collect();
+                    if sources.iter().all(Option::is_some) {
+                        if let Some(mut loaded) = _union(sources.iter().map(Option::as_ref)) {
+                            let result = op.result.expect("a load's result");
+                            if carried.contains(&inst) {
+                                if let Some(previous) = solve.values.get(&result) {
+                                    if loaded != *previous {
+                                        loaded = _widened(&previous.union(&loaded));
+                                    }
+                                }
+                            }
+                            if solve.learn(result, loaded) {
+                                wake_readers(result, &mut work, &mut queued);
+                            }
+                        }
+                        continue;
+                    }
+                }
+                let resolved =
+                    MemRef { provenance: _resolved_reference(unit, &reference, &solve.values), ..reference.clone() };
+                let mut stored = Vec::new();
+                let mut known = true;
+                for one in resolved.provenance.iter().flat_map(|provenance| provenance.slices.iter()) {
+                    watchers.entry(one.object).or_default().insert(slot);
+                    match (!solve.unbounded.contains(&one.object)).then(|| solve.fields.get(&one.object)).flatten() {
+                        Some(held) => stored.push(held),
+                        None => known = false,
+                    }
+                }
+                if known && !stored.is_empty() {
+                    let loaded = _union(stored.into_iter().map(Some).chain([Some(&*UNKNOWN)]));
+                    if let Some(loaded) = loaded {
+                        let result = op.result.expect("a load's result");
+                        if solve.learn(result, loaded) {
+                            wake_readers(result, &mut work, &mut queued);
+                        }
+                    }
+                }
+            }
+            (Opcode::Store { .. }, Some(reference)) => {
+                let source = _operand(unit, op.operands[0], &solve.values);
+                let keyed = MemRef { provenance: _resolved_reference(unit, &reference, &solve.values), ..reference };
+                let pointer_stored = is_pointer(unit, op.operands[0]);
+                let bounded = source.is_some() || !pointer_stored;
+                if let (false, Some(targets)) = (bounded, &keyed.provenance) {
+                    for one in &targets.slices {
+                        if solve.unbounded.insert(one.object) {
+                            wake_watchers(&one.object, &watchers, &mut work, &mut queued);
+                        }
+                    }
+                }
+                if let (Some(source), Some(targets)) = (&source, &keyed.provenance) {
+                    for one in &targets.slices {
+                        // Whole objects: stored offsets may shift each trip
+                        // around a loop.
+                        let grown = _widened(
+                            &solve.fields.get(&one.object).map_or_else(|| source.clone(), |held| held.union(source)),
+                        );
+                        if solve.fields.get(&one.object) != Some(&grown) {
+                            solve.fields.insert(one.object, grown);
+                            wake_watchers(&one.object, &watchers, &mut work, &mut queued);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(PointValues { values: solve.values })
 }
 
-/// Flow pointer objects through values, exact spill slots and CFG joins.
+/// Flow pointer objects through values, spill slots and CFG joins.
 pub fn points_to(
     unit: &Unit,
     arguments: Option<&IndexMap<InstId, Vec<Actual>>>,
@@ -2775,15 +2853,18 @@ fn escapes(
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let none = BTreeSet::new();
-    let (values, incoming) = (&solved.values, &solved.incoming);
+    let values = &solved.values;
     let instructions = |at: i64| function.block(cfg::block(at)).instructions();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
-        let (Opcode::Store { .. }, Some(reference)) = (&op.opcode, MemRef::of(unit, inst)) else { continue };
+        if !matches!(op.opcode, Opcode::Store { .. }) {
+            continue;
+        }
         let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
+        let Some(reference) = MemRef::of(unit, inst) else { continue };
         let targets = _resolved_reference(unit, &reference, &values)
             .into_iter()
             .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
@@ -2869,13 +2950,34 @@ fn escapes(
             .flat_map(|one| one.slices.into_iter().map(|slice| slice.object))
             .collect::<Vec<_>>()
     };
-    let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
+    let mut publishes: IndexMap<i64, HashMap<InstId, Vec<usize>>> = IndexMap::default();
     let mut during: IndexMap<InstId, Vec<usize>> = IndexMap::default();
     for block in &graph {
-        let mut cells = CellMap::new(incoming[&block.at].clone(), _key_place);
-        let mut mine = Vec::new();
+        // What a block holds of its cells on entry is not carried between
+        // blocks: what a cell held anywhere is `pointer_fields`'.
+        let mut cells = CellMap::new(IndexMap::default(), _key_place);
+        let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
         for &inst in instructions(block.at) {
             let op = function.instruction(inst);
+            // What publishes an object: a call, a return, a store, an integer
+            // made of a pointer, or anything that takes a pointer
+            // or a constant that names a global. The rest holds the
+            // state it had.
+            let publishes_something = calls.contains(&inst)
+                || matches!(op.opcode, Opcode::Ret | Opcode::Store { .. })
+                || op.operands.iter().any(|&operand| match operand {
+                    Operand::Value(_) => is_pointer(unit, operand),
+                    Operand::Constant(id) => {
+                        !matches!(
+                            unit.context.get(id).kind,
+                            ConstantKind::Int(_) | ConstantKind::Float(_)
+                        )
+                    }
+                    Operand::Block(_) => false,
+                });
+            if !publishes_something {
+                continue;
+            }
             let mut newly = BTreeSet::new();
             // What a call reads a pointer out of, it may keep.
             let mut lent = BTreeSet::new();
@@ -2957,8 +3059,12 @@ fn escapes(
             let lent_numbers = lent.iter().map(number).collect::<HashSet<_>>();
             let mut published = pointees(newly, &cells);
             published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
-            mine.push(published);
-            during.insert(inst, initialized(pointees(passing, &cells)));
+            if !published.is_empty() {
+                mine.insert(inst, published);
+            }
+            if calls.contains(&inst) {
+                during.insert(inst, initialized(pointees(passing, &cells)));
+            }
         }
         publishes.insert(block.at, mine);
     }
@@ -2967,7 +3073,7 @@ fn escapes(
         .iter()
         .map(|(at, mine)| {
             let mut all = Bits::new(objects.len());
-            mine.iter().flatten().for_each(|one| all.insert(*one));
+            mine.values().flatten().for_each(|one| all.insert(*one));
             (*at, all)
         })
         .collect::<IndexMap<_, _>>();
@@ -2995,8 +3101,10 @@ fn escapes(
     let mut before = IndexMap::<InstId, Bits>::default();
     for block in &graph {
         let mut state = entering(block.at, &out);
-        for (&inst, escapes) in instructions(block.at).iter().zip(&publishes[&block.at]) {
-            escapes.iter().for_each(|one| state.insert(*one));
+        for &inst in instructions(block.at) {
+            if let Some(escapes) = publishes[&block.at].get(&inst) {
+                escapes.iter().for_each(|one| state.insert(*one));
+            }
             if calls.contains(&inst)
                 || matches!(
                     function.instruction(inst).opcode,

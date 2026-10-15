@@ -67,7 +67,7 @@ emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic.a
 emitted/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
-emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
+emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 emitted/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
@@ -124,12 +124,12 @@ emitted/nib-examples-gradebook define internal void @curve(ptr addrspace(1) noca
 emitted/nib-examples-gradebook define internal i16 @average(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-examples-gradebook define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-greeting define internal ptr @shout(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-greeting define internal ptr @label(ptr nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
+emitted/nib-examples-greeting define internal ptr @label(ptr %0, i16 %1) addrspace(1)
 emitted/nib-examples-greeting define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-interop-main define i16 @_weight(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-interop-main define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-inventory define internal i16 @stocked(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
-emitted/nib-examples-inventory define internal void @restock(ptr addrspace(1) nocapture %0, ptr nocapture %1, i16 %2) addrspace(1)
+emitted/nib-examples-inventory define internal void @restock(ptr addrspace(1) nocapture %0, ptr %1, i16 %2) addrspace(1)
 emitted/nib-examples-inventory define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-laps define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-league define internal i16 @Team.points(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
@@ -369,7 +369,7 @@ emitted/nib-port-dc2d8cd94c-program define internal i32 @value() addrspace(1) me
 emitted/nib-port-defb4773d9-array_borrow define internal void @bump(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-port-defb4773d9-array_borrow define internal i16 @calculate() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-port-e888c9b41b-program define internal i16 @value() addrspace(1) memory(none) willreturn nounwind norecurse
-emitted/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) memory(read, argmem: none, inaccessiblemem: none) norecurse
+emitted/nib-port-e892f791bd-slice_loop define internal i16 @main() addrspace(1) memory(none) norecurse
 emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @product(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-ea42ea699b-fixed_i32 define internal i32 @quotient(i32 %0, i32 %1) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-port-ea42ea699b-fixed_i32 define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
@@ -416,7 +416,7 @@ emitted/nib-runtime define internal void @heap.grow(i16 %0) addrspace(1) memory(
 emitted/nib-runtime define internal void @heap.trim(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
 emitted/nib-runtime define internal ptr @heap.allocate(i16 %0) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define internal void @heap.release(ptr %0) addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-emitted/nib-runtime define internal i8 @heap.resize(ptr nocapture %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
+emitted/nib-runtime define internal i8 @heap.resize(ptr %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-runtime define internal ptr @buffers.flags(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-runtime define internal ptr @buffers.length(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-runtime define internal ptr @buffers.capacity(ptr %0) addrspace(1) memory(none) willreturn nounwind norecurse
@@ -602,7 +602,7 @@ optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.basic
 optimized/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(ptr nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
-optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) %0, i16 %1) addrspace(1)
+optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
 optimized/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
 optimized/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)

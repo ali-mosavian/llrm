@@ -25,7 +25,10 @@
 //!
 //! The candidates are recurrences the loop could carry in a register:
 //! - each use's own, and its start with the symbols split every way between
-//!   counter and base (up to three symbols), with and without the constant;
+//!   counter and base (up to three symbols), with and without the constant for
+//!   a compare or an exit, and without it for an address, which takes the
+//!   constant as its displacement (LLVM strips the immediate from the base
+//!   register, `LSRInstance::GenerateConstantOffsets`);
 //! - the loop's existing counters;
 //! - one counter per scale of an address form whose index is wider than the
 //!   use;
@@ -1545,15 +1548,20 @@ fn _candidates(
                     .collect();
                 let symbolic = Scev { constant: BigInt::from(0), terms: part, width: of.width() };
                 add(&mut found, Recurrence { start: symbolic.clone(), ..bare.clone() }, None, None);
-                add(
-                    &mut found,
-                    Recurrence {
-                        start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())),
-                        ..bare.clone()
-                    },
-                    None,
-                    None,
-                );
+                // An address takes the constant as its displacement: a
+                // candidate for each constant is a candidate
+                // per copy of an unrolled body.
+                if site.one.kind != UseKind::Address {
+                    add(
+                        &mut found,
+                        Recurrence {
+                            start: symbolic.plus(&Scev::constant(of.start.constant.clone(), of.width())),
+                            ..bare.clone()
+                        },
+                        None,
+                        None,
+                    );
+                }
             }
         } else {
             add(&mut found, Recurrence { start: Scev::constant(0, of.width()), ..bare.clone() }, None, None);
@@ -1568,7 +1576,9 @@ fn _candidates(
             Some(_) => {
                 let pointer = pointer_type(site.one.value);
                 if pointer.is_some() {
-                    add(&mut found, of.clone(), pointer, None);
+                    if site.one.kind != UseKind::Address {
+                        add(&mut found, of.clone(), pointer, None);
+                    }
                     add(&mut found, Recurrence { start: of.start.symbolic(), ..of.clone() }, pointer, None);
                 }
             }

@@ -113,6 +113,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::cfg::Shape;
 use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
@@ -228,7 +229,7 @@ pub fn simplified(
         round |= _divisions(context, layout, function, &outer, &facts);
         round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
         round |= _unread_bits(context, layout, function, analyses, changed || round);
-        let recurrences = _recurrences(context, layout, function, &outer);
+        let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
                 round |= _rewritten(context, layout, function, &recurrences, inst, size);
@@ -824,6 +825,8 @@ fn _recurrences(
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
+    analyses: &mut Analyses,
+    edited: bool,
 ) -> BTreeSet<ValueId> {
     let masked_scale = function
         .walk()
@@ -835,12 +838,15 @@ fn _recurrences(
     if !masked_scale {
         return BTreeSet::new();
     }
-    let shape = cfg::Shape::of(function);
-    let analysed = Unit::within(context, layout, function, outer).with_shape(&shape);
-    // Found once, for the body as the rounds before left it, not for each
-    // loop's recurrences.
-    let registers = consts::known(&analysed);
-    let analysed = analysed.with_registers(&registers);
+    // The manager's shape and register facts, brought up to date by what the
+    // rounds before changed, not worked out afresh for each round: 19 ms of 53
+    // in this pass on d_faces -O1.
+    if edited {
+        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+    }
+    let shape = analyses.get::<Shape>(context, layout, function);
+    let registers = analyses.get::<Registers>(context, layout, function);
+    let analysed = Unit::within(context, layout, function, outer).with_shape(&shape).with_registers(&registers);
     shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
 }
 
