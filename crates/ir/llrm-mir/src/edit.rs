@@ -4,8 +4,8 @@
 use std::collections::BTreeSet;
 
 use crate::module::{
-    Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, Operand, Use, ValueData,
-    ValueDef, ValueId,
+    Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
+    Operand, Use, ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
@@ -106,23 +106,54 @@ impl Function {
 
     /// `name`, or `name` with the least number appended that no live value
     /// or block of the function holds, as LLVM's symbol table makes names.
+    /// The name is taken from then on.
     fn unique_name(
-        &self,
+        &mut self,
         name: &str,
     ) -> String {
-        // One pass over the names, not one per candidate: a function whose
-        // `iv` is taken N times scanned every value N times for each new one.
-        let names: crate::hash::HashSet<&str> = self
-            .values
-            .iter()
-            .filter_map(|one| one.name.as_deref())
-            .chain(self.blocks.iter().filter(|one| !one.erased).filter_map(|one| one.name.as_deref()))
-            .collect();
-        let taken = |candidate: &str| names.contains(candidate);
-        if !taken(name) {
-            return name.to_owned();
+        let Names { held, taken_below } = self
+            .names
+            .0
+            .get_or_insert_with(
+                || {
+                    let mut held: crate::hash::HashMap<String, u32> = Default::default();
+                    let live = self.blocks.iter().filter(|one| !one.erased).filter_map(|one| one.name.as_deref());
+                    for held_name in self.values.iter().filter_map(|one| one.name.as_deref()).chain(live) {
+                        *held.entry(held_name.to_owned()).or_default() += 1;
+                    }
+                    Names { held, taken_below: Default::default() }
+                },
+            );
+        let unique = if !held.contains_key(name) {
+            name.to_owned()
+        } else {
+            // `name1` .. below the remembered number were taken when it was
+            // made and no name has been released since: a name taken N times
+            // is not searched N times for each new one.
+            let from = taken_below.get(name).copied().unwrap_or(1);
+            let free = (from..).find(|n| !held.contains_key(&format!("{name}{n}"))).expect("some number is free");
+            taken_below.insert(name.to_owned(), free + 1);
+            format!("{name}{free}")
+        };
+        *held.entry(unique.clone()).or_default() += 1;
+        unique
+    }
+
+    /// A block's name is free again once the block is erased.
+    fn release_name(
+        &mut self,
+        block: BlockId,
+    ) {
+        let (Some(names), Some(name)) = (self.names.0.as_mut(), self.blocks[block.0 as usize].name.as_deref()) else {
+            return;
+        };
+        if let Some(count) = names.held.get_mut(name) {
+            *count -= 1;
+            if *count == 0 {
+                names.held.remove(name);
+                names.taken_below.clear();
+            }
         }
-        (1..).map(|n| format!("{name}{n}")).find(|candidate| !taken(candidate)).expect("some number is free")
     }
 
     /// A new instruction, placed nowhere yet; its result, if its type is not
@@ -933,6 +964,7 @@ impl Function {
             self.blocks[block.0 as usize].erased = true;
             self.log(Change::BlockErased(block));
         }
+        self.names = NameIndex::default();
         self.layout.clear();
         self.debug_records.clear();
         self.erased.fill(true);
@@ -952,6 +984,7 @@ impl Function {
             return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
         }
         self.layout.retain(|one| *one != block);
+        self.release_name(block);
         self.blocks[block.0 as usize].erased = true;
         self.log(Change::BlockErased(block));
         Ok(())

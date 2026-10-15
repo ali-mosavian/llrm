@@ -79,7 +79,7 @@ use std::sync::{Arc, LazyLock};
 
 use crate::backend::frame::{self as frames, Frame};
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::IndexMap;
 
@@ -192,7 +192,7 @@ pub fn reserved(
     let runtime_entry = entry.insns.iter().position(|one| {
         _upper(calls, one.at) == frames::ENTER && one.what.as_ref().is_none_or(|what| what.op == Operation::Call)
     });
-    let mut leaves: Vec<(&LirBlock, usize)> = body
+    let mut leaves: Vec<(&Block, usize)> = body
         .blocks
         .iter()
         .flat_map(|block| {
@@ -397,7 +397,7 @@ mod tests {
             instruction(3, Operation::Return, "retf", vec![], vec![]),
         ];
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("procedure", 0, vec![block], IndexMap::default(), IndexMap::default())
+        LirBody::new("procedure", 0, vec![block.into()], IndexMap::default(), IndexMap::default())
     }
 
     fn runtime() -> IndexMap<i64, String> {

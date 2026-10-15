@@ -141,14 +141,20 @@ mod tests {
         let body = LirBody::new(
             "f",
             0,
-            vec![LirBlock::new(
-                0,
-                vec![
-                    insn(0, semantics(Operation::Address, vec![held(9)], vec![Loc::Mem(frame), held(4)])),
-                    insn(1, semantics(Operation::Address, vec![held(9)], vec![Loc::Mem(seg.clone()), Loc::Mem(plain)])),
-                    insn(2, semantics(Operation::Move, vec![held(9)], vec![Loc::Mem(seg)])),
-                ],
-            )],
+            vec![
+                LirBlock::new(
+                    0,
+                    vec![
+                        insn(0, semantics(Operation::Address, vec![held(9)], vec![Loc::Mem(frame), held(4)])),
+                        insn(
+                            1,
+                            semantics(Operation::Address, vec![held(9)], vec![Loc::Mem(seg.clone()), Loc::Mem(plain)]),
+                        ),
+                        insn(2, semantics(Operation::Move, vec![held(9)], vec![Loc::Mem(seg)])),
+                    ],
+                )
+                .into(),
+            ],
             IndexMap::default(),
             IndexMap::default(),
         );

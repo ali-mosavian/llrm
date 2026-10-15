@@ -106,7 +106,7 @@ use std::sync::Arc;
 
 use crate::analysis::loops;
 use crate::backend::{allocate, spiller};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::IndexMap;
 
 /// Whether `one` brings back a value `redefined` names.
@@ -128,7 +128,7 @@ pub fn repaired(
 ) -> LirBody {
     let (live_in, _) = allocate::live(body);
     let graph = &body.blocks;
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let idom = loops::immediate_dominators(&graph, Some(body.entry));
     let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
     for block in &body.blocks {
@@ -187,7 +187,8 @@ pub fn repaired(
     let mut next = spiller::_next_value(body);
     let mut stacks: IndexMap<u32, Vec<u32>> = IndexMap::default();
     let mut insns_of: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
-    let mut phis_of: IndexMap<i64, Vec<Phi>> = body.blocks.iter().map(|block| (block.at, block.phis.clone())).collect();
+    let mut phis_of: IndexMap<i64, Vec<Phi>> =
+        body.blocks.iter().map(|block| (block.at, block.phis.to_vec())).collect();
     // The result of the phi placed for a value in a block.
     let mut made: IndexMap<(i64, u32), u32> = IndexMap::default();
     // (block, value) whose phi still needs its operand from a predecessor, in
@@ -291,7 +292,7 @@ pub fn repaired(
         .map(|block| {
             let insns = insns_of.get(&block.at).cloned().unwrap_or_else(|| block.insns.to_vec());
             let phis = phis_of.get(&block.at).cloned().unwrap_or_default();
-            LirBlock { phis, ..block.with_insns(insns) }
+            LirBlock { phis: phis.into(), ..block.with_insns(insns).into_inner() }
         })
         .collect();
     body.with_blocks(rebuilt)
@@ -356,7 +357,7 @@ pub fn simplified(body: &LirBody) -> Option<LirBody> {
                             .collect(),
                     })
                     .collect();
-                LirBlock { phis, ..block.with_insns(insns) }
+                LirBlock { phis, ..block.with_insns(insns).into_inner() }
             })
             .collect();
         body = body.with_blocks(blocks);

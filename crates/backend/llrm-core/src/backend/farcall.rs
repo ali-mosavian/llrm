@@ -174,7 +174,7 @@ mod tests {
         };
         let far = call(4, 5, 4);
         let block = LirBlock::new(0, vec![Arc::clone(&far), call(8, 6, 2), far]);
-        let body = LirBody::new("far", 0, vec![block], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("far", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
         let frame = Rc::new(RefCell::new(Frame::new(-16)));
         let out = FarIndirectCalls::new(Rc::clone(&frame)).transform(body).unwrap();
         let cell = "Mem(addr=[bp-0x14], width=4, through=26, offset=0, disp_width=2, base=None, \
@@ -232,7 +232,7 @@ mod tests {
         let body = LirBody::new(
             "far",
             0,
-            vec![LirBlock::new(0, vec![Arc::new(call)])],
+            vec![LirBlock::new(0, vec![Arc::new(call)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -273,7 +273,7 @@ mod tests {
             let mut body = LirBody::new(
                 "f",
                 0,
-                vec![LirBlock::new(0, vec![Arc::clone(&call)])],
+                vec![LirBlock::new(0, vec![Arc::clone(&call)]).into()],
                 IndexMap::default(),
                 IndexMap::default(),
             );

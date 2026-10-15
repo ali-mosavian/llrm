@@ -63,7 +63,7 @@ use crate::abi::runtime::EVERY;
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::backend::lower_int64::_helper;
 use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, LirBlock};
+use crate::model::lir::{Block, Insn, LirBlock};
 
 /// What starts a pad: `cld`, the one state it sets, as a call that
 /// leaves no register as it was.
@@ -115,11 +115,11 @@ impl Selector<'_, '_, '_> {
     /// that is never taken to it, and on to `entry`. The root, and `blocks`.
     pub(super) fn rooted(
         &self,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
         entry: i64,
         pad: Option<i64>,
         at: i64,
-    ) -> (Vec<LirBlock>, i64) {
+    ) -> (Vec<Block>, i64) {
         let Some(pad) = pad else { return (blocks, entry) };
         let sp = Loc::Reg(Reg { register: crate::model::ir::STACK, width: 2 });
         let zero = Loc::Imm(Imm { value: 0, width: 2, address: None });
@@ -127,7 +127,7 @@ impl Selector<'_, '_, '_> {
             insn(at, semantics(Operation::Compare, "cmp", vec![], vec![sp, zero])),
             insn(at, Semantics { target: Some(pad), ..semantics(Operation::Branch, "je", vec![], vec![]) }),
         ];
-        let root = LirBlock { succ: vec![pad, entry], ..LirBlock::new(at, never.to_vec()) };
-        (std::iter::once(root).chain(blocks).collect(), at)
+        let root = LirBlock { succ: vec![pad, entry].into(), ..LirBlock::new(at, never.to_vec()) };
+        (std::iter::once(Block::from(root)).chain(blocks).collect(), at)
     }
 }

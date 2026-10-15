@@ -678,7 +678,7 @@ mod tests {
         let body = LirBody::new(
             "far",
             0x10,
-            vec![LirBlock::new(0x10, vec![Arc::new(load)])],
+            vec![LirBlock::new(0x10, vec![Arc::new(load)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -715,10 +715,13 @@ mod tests {
         let body = LirBody::new(
             "string",
             0x10,
-            vec![LirBlock::new(
-                0x10,
-                vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))],
-            )],
+            vec![
+                LirBlock::new(
+                    0x10,
+                    vec![Arc::new(Insn::new(0x10, Some((0x10, 0x11)), Some(copy), vec![5, 6], vec![1, 2, 3]))],
+                )
+                .into(),
+            ],
             IndexMap::default(),
             IndexMap::default(),
         );

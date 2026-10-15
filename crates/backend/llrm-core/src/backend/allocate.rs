@@ -263,7 +263,7 @@ use crate::backend::liveunion::{LiveUnion, Overlaps};
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup, spiller, spillplacement, splitkit};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::{Exception, LIRTransform};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyrepr::Repr;
@@ -1202,7 +1202,7 @@ pub fn narrowed(
 ) -> (LirBody, IndexMap<u32, RegId>) {
     let mut read: BTreeSet<u32> =
         body.blocks.iter().flat_map(|block| block.insns.iter().flat_map(|one| one.uses.iter().copied())).collect();
-    read.extend(body.blocks.iter().flat_map(LirBlock::arrives));
+    read.extend(body.blocks.iter().flat_map(|one| one.arrives()));
     let mut dropped: IndexMap<u32, RegId> = IndexMap::default();
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -4273,7 +4273,7 @@ fn _scoped_foldable_indexes(
     if bases.is_empty() {
         return BTreeSet::new();
     }
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut indexes: BTreeSet<u32> = BTreeSet::new();
     for found in loops::loops(&body.blocks, Some(body.entry)) {
         let cells: Vec<&Mem> = found
@@ -4836,7 +4836,7 @@ mod tests {
         entry: i64,
         insns: Vec<Insn>,
     ) -> LirBody {
-        LirBody::new(name, entry, vec![block(entry, insns)], IndexMap::default(), IndexMap::default())
+        LirBody::new(name, entry, vec![block(entry, insns).into()], IndexMap::default(), IndexMap::default())
     }
 
     /// A spill walked every instruction of the body to learn which of its few
@@ -4893,12 +4893,17 @@ mod tests {
             block(15, vec![count_again, test_again, back_again]),
             block(20, vec![push, ret]),
         );
-        first.succ = vec![10];
-        looping.succ = vec![10, 15];
-        again.succ = vec![15, 20];
-        last.succ = vec![];
-        let mut body =
-            LirBody::new("t", 0, vec![first, looping, again, last], IndexMap::default(), IndexMap::default());
+        first.succ = vec![10].into();
+        looping.succ = vec![10, 15].into();
+        again.succ = vec![15, 20].into();
+        last.succ = vec![].into();
+        let mut body = LirBody::new(
+            "t",
+            0,
+            vec![first.into(), looping.into(), again.into(), last.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         body.loop_trip_counts = vec![(10, 3), (15, 7)];
         let got = _through_regalloc(body, &[]);
         let loads_in = |at: i64| {
@@ -5637,10 +5642,10 @@ mod tests {
             vec![],
         );
         let mut first = block(0, vec![define]);
-        first.succ = vec![0x10];
+        first.succ = vec![0x10].into();
         let mut second = block(0x10, vec![]);
-        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }];
-        let body = LirBody::new("phi", 0, vec![first, second], IndexMap::default(), IndexMap::default());
+        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }].into();
+        let body = LirBody::new("phi", 0, vec![first.into(), second.into()], IndexMap::default(), IndexMap::default());
         let (live_in, live_out) = live(&body);
         assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");
         assert!(!live_in[&0x10].contains(&1) && !live_in[&0x10].contains(&2));
@@ -5768,12 +5773,12 @@ mod tests {
                 "overlap" => {
                     let what = Semantics { sources: vec![held(1, 2)], ..used.what.clone().expect("semantics") };
                     let extra = Insn { at: 4, covers: Some((4, 5)), what: Some(what), uses: vec![1], ..used.clone() };
-                    body.blocks = vec![block(0, vec![define, copy, used, extra])];
+                    body.blocks = vec![block(0, vec![define, copy, used, extra]).into()];
                 }
                 "clobber" => {
                     let mut extra = Insn::new(2, Some((2, 2)), None, vec![], vec![]);
                     extra.clobbers = BTreeSet::from([RegId::EDI]);
-                    body.blocks = vec![block(0, vec![define, extra, copy, used])];
+                    body.blocks = vec![block(0, vec![define, extra, copy, used]).into()];
                 }
                 "class" => {
                     let byte_use = Insn::new(
@@ -5783,7 +5788,7 @@ mod tests {
                         vec![],
                         vec![1],
                     );
-                    body.blocks = vec![block(0, vec![define, byte_use, copy, used])];
+                    body.blocks = vec![block(0, vec![define, byte_use, copy, used]).into()];
                 }
                 _ => {
                     pinned.insert(1, RegId::ECX);
@@ -5830,7 +5835,7 @@ mod tests {
             push(6, returned),
         ];
         let pins = IndexMap::from_iter([(returned, RegId::EAX)]);
-        let body = LirBody::new("chain", 0, vec![block(0, insns)], IndexMap::default(), pins);
+        let body = LirBody::new("chain", 0, vec![block(0, insns).into()], IndexMap::default(), pins);
         let got = allocated(&body, Some(&body.pins)).expect("allocates");
         assert_eq!(got.r#where[&total], RegId::EAX);
         assert_eq!(got.r#where[&copied], RegId::EAX);

@@ -72,7 +72,7 @@ use crate::backend::cpu::Profile;
 use crate::backend::peep::{self, walk::Facts};
 use crate::backend::{comparefold, farload, rmw, stepflags};
 use crate::model::ir::{self, Loc, Operation};
-use crate::model::lir::{self, Insn, LirBlock};
+use crate::model::lir::{self, Block, Insn, LirBlock};
 use crate::support::hash::IndexMap;
 
 /// `blocks` with the selections made. No value of isel's is exposed: a
@@ -80,10 +80,10 @@ use crate::support::hash::IndexMap;
 pub(super) fn combined(
     regs: Regs,
     bits: u32,
-    blocks: Vec<LirBlock>,
+    blocks: Vec<Block>,
     cpu: &Profile,
     rules: &peep::Rules,
-) -> Vec<LirBlock> {
+) -> Vec<Block> {
     let exposed = BTreeSet::new();
     let read_by_phis: BTreeSet<u32> = blocks
         .iter()
@@ -125,7 +125,10 @@ pub(super) fn combined(
     let mut made = dword_pairs(regs, made, &uses, &blocks);
     blocks
         .into_iter()
-        .map(|block| LirBlock { insns: made.shift_remove(&block.at).expect("every block").into(), ..block })
+        .map(|block| LirBlock {
+            insns: made.shift_remove(&block.at).expect("every block").into(),
+            ..block.into_inner()
+        })
         .collect()
 }
 
@@ -133,7 +136,7 @@ pub(super) fn combined(
 /// inputs, and phis.
 fn recount(
     made: &IndexMap<i64, Vec<Arc<Insn>>>,
-    blocks: &[LirBlock],
+    blocks: &[Block],
 ) -> IndexMap<u32, i64> {
     let mut uses: IndexMap<u32, i64> = IndexMap::default();
     for one in made.values().flatten() {
@@ -214,7 +217,7 @@ fn dword_pairs(
     regs: Regs,
     mut made: IndexMap<i64, Vec<Arc<Insn>>>,
     uses: &IndexMap<u32, i64>,
-    blocks: &[LirBlock],
+    blocks: &[Block],
 ) -> IndexMap<i64, Vec<Arc<Insn>>> {
     let loads: IndexMap<u32, (i64, usize, ir::Mem)> = made
         .iter()

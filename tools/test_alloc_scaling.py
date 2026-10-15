@@ -404,3 +404,31 @@ def test_a_value_with_more_values_live_than_registers_is_not_recolored():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["regalloc recolor"] < 200, f"cells N=448 -O2: regalloc recolor cost {run['regalloc recolor']} Minstr (200 allowed; 599 before): {run}"
+
+
+def test_a_spill_shares_the_lists_of_the_blocks_it_does_not_change():
+    """Copying a `LirBlock` copied its successor and phi lists, and the spiller copied every block of the body at every round:
+    `regalloc spill` own cost 590 Minstr on `branches` at N=800 and 2,256 at 1600. A copy of a block shares the lists until one changes."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](800))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc spill"] < 450, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (450 allowed; 590 before): {run}"
+
+
+def test_a_spill_copies_no_block_it_does_not_change():
+    """The body held its blocks by value: every round of the spiller cloned and dropped every block (each a few allocations),
+    `regalloc spill` costing 326 Minstr on `branches` at N=800 once the lists were shared. A body shares the blocks it keeps."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](800))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc spill"] < 300, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (300 allowed; 326 before): {run}"

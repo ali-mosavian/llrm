@@ -1,4 +1,4 @@
-use crate::module::{Change, Function, InstId, Module, Operand, Use, ValueId};
+use crate::module::{BlockId, Change, Function, InstId, Module, Operand, Use, ValueId};
 use crate::opcode::{BinaryOp, Flags, Opcode};
 use crate::{Position, parse, print};
 
@@ -523,4 +523,51 @@ fn a_value_replaced_and_a_phi_cleared_leave_the_use_lists_true() {
     f.set_operands(phi, Vec::new());
     assert!(f.check_uses().is_empty(), "{:?}", f.check_uses());
     assert!(f.instruction(phi).operands.is_empty());
+}
+
+/// Nanoseconds to make `count` instructions that all ask for the name `t`,
+/// least of three runs.
+fn naming_cost(count: usize) -> u128 {
+    (0..3)
+        .map(|_| {
+            let mut module = module(TEXT);
+            let i16 = module.context.types.int(16);
+            let one = module.context.int(i16, 1);
+            let f = function(&mut module);
+            let started = std::time::Instant::now();
+            for _ in 0..count {
+                let operand = Operand::Constant(one);
+                f.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    i16,
+                    vec![operand, operand],
+                    Flags::default(),
+                    Some("t"),
+                );
+            }
+            started.elapsed().as_nanos()
+        })
+        .min()
+        .unwrap()
+}
+
+/// `hir to mir` of 1024 `switch` cases cost 13,840 Minstr, 15x more than the
+/// scan it replaced, because each new name hashed every name of the function:
+/// four times the names must cost about four times, not sixteen.
+#[test]
+fn naming_a_value_does_not_look_at_every_name_of_the_function() {
+    let (few, many) = (naming_cost(6000), naming_cost(24000));
+    assert!(many < 9 * few, "6000 names {few} ns, 24000 names {many} ns");
+}
+
+#[test]
+fn a_name_is_free_again_when_its_block_is_erased() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let first = f.create_block(Some("b"));
+    assert_eq!(f.create_block(Some("b")), BlockId(2));
+    assert_eq!(f.block(BlockId(2)).name.as_deref(), Some("b1"));
+    f.erase_block(first).unwrap();
+    let again = f.create_block(Some("b"));
+    assert_eq!(f.block(again).name.as_deref(), Some("b"));
 }

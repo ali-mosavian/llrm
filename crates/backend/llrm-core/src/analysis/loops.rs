@@ -28,6 +28,15 @@ impl Node for LirBlock {
     }
 }
 
+impl Node for crate::model::lir::Block {
+    fn at(&self) -> i64 {
+        self.at
+    }
+    fn succ(&self) -> &[i64] {
+        &self.succ
+    }
+}
+
 impl<T: Node> Node for &T {
     fn at(&self) -> i64 {
         (*self).at()

@@ -132,7 +132,7 @@ use crate::backend::{
     spillforward, storecombine,
 };
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -1682,7 +1682,7 @@ fn _loaded_addresses(
     }
     let insns: Vec<_> =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
-    Ok(block.with_insns(insns))
+    Ok(block.with_insns(insns).into_inner())
 }
 
 /// The instructions of `block` after which no arithmetic flag is read,
@@ -2739,8 +2739,8 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
 
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> =
         body.blocks.iter().map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect())).collect();
-    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
-    let blocks: HashMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
+    let nodes: Vec<&Block> = body.blocks.iter().collect();
+    let blocks: HashMap<i64, &Block> = nodes.iter().map(|block| (block.at, *block)).collect();
     // The solution's output is what is live on entry; what a block's last
     // instruction leaves is its input.
     let solved = dataflow::solve(
