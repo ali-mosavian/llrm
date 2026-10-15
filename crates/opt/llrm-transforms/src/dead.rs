@@ -80,6 +80,10 @@ use crate::transform::live;
 pub struct Dead;
 
 impl FunctionPass for Dead {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "dead"
     }

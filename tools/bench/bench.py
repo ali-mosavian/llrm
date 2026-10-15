@@ -34,6 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))  # wrap.py: the comparison with gcc and clang's
 
 import cpulimit  # noqa: E402
+import benchlist  # noqa: E402
+import basecounts  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
@@ -127,8 +129,7 @@ def directory_name(directory: Path) -> str:
 
 
 def benchmarks(selected: list[str]) -> list[Path]:
-    dirs = [one for one in sorted(BENCH.glob("*/bench.toml"))] + [one for one in sorted(BENCH.glob("parity/*/bench.toml"))]
-    found = [one.parent for one in dirs]
+    found = benchlist.directories(BENCH)
     return [one for one in found if not selected or one.name in selected or str(one.relative_to(BENCH)) in selected]
 
 
@@ -607,8 +608,9 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
     return True
 
 
-def against(label: str, got: dict, want: dict | None) -> list[str]:
-    """What fails the gate for one measurement: no baseline, a count above it (worse), one below it (better, to bless)."""
+def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
+    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (tools/bench/waivers) names its row,
+    counter and this count, one below it (better, to bless)."""
     if want is None:
         return [f"{label}: no baseline; run --bless --reason"]
     problems = []
@@ -617,6 +619,8 @@ def against(label: str, got: dict, want: dict | None) -> list[str]:
             continue
         if counter not in want:
             problems.append(f"{label}: no baseline for {counter}; run --bless --reason")
+        elif got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
+            continue
         elif got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
         elif got[counter] < want[counter]:
@@ -669,6 +673,7 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
 def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     """What fails the gate."""
     problems = []
+    waived = basecounts.waivers(ROOT)
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
@@ -684,7 +689,7 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     problems.append(f"{label}: {got['error']}")
                 else:
                     want = baseline.get(variant.language, {}).get(opt)
-                    problems += against(label, got, want)
+                    problems += against(label, got, want, waived)
                     if variant.timed_only:
                         problems += time_against(label, got, want)
                     for reference in REFERENCES.get(variant.language, ()):
@@ -745,6 +750,29 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
+def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
+    """The verdict against the base's counts, beside the committed baselines': printed, never failing the gate (until both agree on
+    enough PRs, then the baselines go: tools/bench/basecounts.py). Where they disagree the lines say so."""
+    try:
+        import measure
+
+        head = measure.git("rev-parse", "HEAD")
+        base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
+            base, was = basecounts.base_counts(
+                base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
+            )
+        now = basecounts.programs(ROOT)
+        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers(), {name for name in now if was.get(name) == now[name]})
+        differing = basecounts.differences(old, worse, better)
+    except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
+        return ["BASE: dry run failed: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:]]
+    lines = [f"BASE {base_sha[:9]}: {len(worse)} worse, {len(better)} better; {len(differing)} differ from expected.toml" + (f"; {len(stale)} stale waivers" if stale else "")]
+    lines += [f"BASE-WORSE {one[0]}: {one[1]} {one[3]} > {one[2]}" for one in worse]
+    lines += [f"BASE-DIFF {one}" for one in differing] + [f"BASE-STALE {one}" for one in stale]
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("select", nargs="*")
@@ -754,6 +782,7 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true")
     parser.add_argument("--batch", action="store_true", help="the merge train's mode: a count below its baseline is listed as BETTER, not failed; with --bless, only when nothing else fails")
     parser.add_argument("--reason", default="")
+    parser.add_argument("--no-judge", action="store_true", help="measure, write --json and stop: the base's counts are made this way")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
@@ -764,6 +793,8 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.no_judge:
+        return 0
     if args.bless and args.batch:
         # blessing a batch writes only numbers that went down: anything worse, missing or broken is not blessed over
         if (left := split_better(judge(measured, args.select, args.opt))[0]):
@@ -781,6 +812,8 @@ def main() -> int:
                 return 1
             changed += write_expected(directory, measured, name, args.reason)
         print(f"blessed {len(names)} benchmarks, {changed} files changed")
+        for used in basecounts.consume_waivers(ROOT, measured):
+            print(f"waiver spent: {used}")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
     problems, better = split_better(judge(measured, args.select, args.opt)) if args.batch else (judge(measured, args.select, args.opt), [])
@@ -793,6 +826,8 @@ def main() -> int:
         print("FAIL", one)
     for one in better:
         print("BETTER", one)
+    if os.environ.get("LLRM_BENCH_BASE") == "dry":
+        print(*base_dry_run(measured, args, [*problems, *better]), sep="\n")
     print(f"{len(measured)} measurements: {len(problems)} problems" + (f", {len(better)} better" if args.batch else ""))
     return 1 if problems else 0
 
