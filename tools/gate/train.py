@@ -109,10 +109,11 @@ def baseline_only(tree: Path) -> bool:
     return bool(files) and all(re.fullmatch(r"bench/.+/expected\.toml", name) for name in files)
 
 
-def build_tip(prs: list[Pr], tree: Path) -> tuple[str, list[tuple[Pr, str]]]:
-    """origin/main with each PR merged in order in `tree` (a worktree, left at the result): (the tip, [(PR, why) bounced]). A merge that
+def build_tip(prs: list[Pr], tree: Path, base: str = BASE) -> tuple[str, list[tuple[Pr, str]]]:
+    """`base` (the commit origin/main was at when the train started: a ref that moves under a running train made later tips of another base
+    than the first gate's, and #1765 conflicted in one, was dropped, and was offered) with each PR merged in order in `tree` (a worktree, left at the result): (the tip, [(PR, why) bounced]). A merge that
     conflicts is undone and bounced; the rest go on."""
-    git("checkout", "-q", "--detach", BASE, cwd=tree)
+    git("checkout", "-q", "--detach", base, cwd=tree)
     bounced = []
     for pr in prs:
         done = git("merge", "--no-ff", "-q", "-m", f"train: #{pr.number}", pr.sha, cwd=tree, check=False)
@@ -285,15 +286,16 @@ def main() -> int:
         else:
             ready.append(pr)
     code = 0
+    base = git("rev-parse", BASE).stdout.strip()
     if tree.exists():
         git("worktree", "remove", "--force", str(tree), check=False)
-    git("worktree", "add", "--detach", str(tree), BASE)
+    git("worktree", "add", "--detach", str(tree), base)
     try:
         if main_tree.exists():
             git("worktree", "remove", "--force", str(main_tree), check=False)
-        git("worktree", "add", "--detach", str(main_tree), BASE)
+        git("worktree", "add", "--detach", str(main_tree), base)
         for batch in batches(ready, args.max):
-            code |= run(batch, lambda some: build_tip(some, tree), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(git("rev-parse", BASE).stdout.strip(), main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
+            code |= run(batch, lambda some: build_tip(some, tree, base), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(base, main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
     finally:
         for one in (tree, main_tree):
             git("worktree", "remove", "--force", str(one), check=False)

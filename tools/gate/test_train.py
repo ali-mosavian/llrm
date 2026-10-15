@@ -231,3 +231,20 @@ def test_a_member_a_rebuilt_tip_leaves_out_is_reported_dropped_and_never_offered
     assert not any("#2" in line and "PRs=" in line for line in said), said
     assert any(line.startswith("TRAIN DROPPED #2") for line in said), said
     assert code == 0 and any(line == "TRAIN PASS TIP=tip1 PRs=#1" for line in said), said
+
+
+def test_every_tip_of_a_run_is_built_on_the_commit_main_was_at_when_it_started(tmp_path):
+    """Train 4's tips were built on origin/main as it moved: the one rebuilt after the bisect sat on a main that had gained #1819, #1765
+    conflicted with it there and was dropped. A tip is built on the pinned commit, whatever the ref says now."""
+    git = _repo(tmp_path)
+    pinned = git("rev-parse", "HEAD")
+    a = _branch(git, tmp_path, "a", "f", "from a\n")
+    git("checkout", "-q", "main")
+    (tmp_path / "f").write_text("main moved\n")
+    git("commit", "-q", "-am", "main moves")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "--detach", "main")
+    tip, bounced = train.build_tip([pr(1, sha=a)], tmp_path, pinned)
+    assert bounced == [] and (tmp_path / "f").read_text() == "from a\n", "built on the pinned commit, where a merges"
+    moved, bounced = train.build_tip([pr(1, sha=a)], tmp_path)
+    assert [p.number for p, _ in bounced] == [1], "on the moved ref it conflicts: what the train used to do"
