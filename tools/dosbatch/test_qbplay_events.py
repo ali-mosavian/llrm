@@ -98,3 +98,30 @@ def test_a_text_step_gives_the_emulator_cpu_seconds_not_wall_seconds(monkeypatch
         assert outcome == ["done"]
     finally:
         one.process.kill()
+
+
+def test_a_checkpoint_is_settled_by_what_the_guest_ran_not_by_how_often_the_host_looked(monkeypatch, tmp_path):
+    """GORILLA's prompt3 differed by 56 pixels from BCOM45's whenever the emulator's core was starved: three looks 0.03 s apart on the wall
+    saw one half-drawn frame three times and the checkpoint was taken at once. Pinned among 40 busy loops, 3 runs of 3 failed."""
+    import subprocess
+    import sys
+
+    import qb32demos
+
+    one = session_without_a_process()
+    one.screen_hash = lambda: "half-drawn"
+    one.process = subprocess.Popen(["sleep", "30"])  # an emulator that has run nothing
+    monkeypatch.setattr(qb32demos, "LONGEST", 60)
+    outcome = []
+    thread = threading.Thread(target=lambda: outcome.append(qb32demos.settled(one, tmp_path, "prompt3", "before")), daemon=True)
+    busy = subprocess.Popen([sys.executable, "-c", "while True: pass"])
+    try:
+        thread.start()
+        time.sleep(0.5)
+        assert outcome == [], "the checkpoint was taken before the guest ran"
+        one.process = busy  # the guest runs
+        thread.join(30)
+        assert outcome == [None]
+    finally:
+        one.process.kill()
+        busy.kill()

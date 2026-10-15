@@ -92,6 +92,7 @@ VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 
+import benchlist  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
 
@@ -124,7 +125,7 @@ def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
     files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
-    files += sorted((ROOT / "bench").glob("*/*.c")) + sorted((VSGCC / "kernels").glob("*/*.c"))
+    files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
     if qcport := os.environ.get("QCPORT"):
         files += sorted(Path(qcport).expanduser().glob("*/*.c"))
     digest = hashlib.sha256()
@@ -319,21 +320,22 @@ def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, t
 
 
 @contextlib.contextmanager
-def locked(name: str, every: float = 60.0):
+def locked(name: str, every: float = 60.0, clock=time.monotonic, sleep=time.sleep):
     """An exclusive lock named `name` between sessions (and threads: each opens the file itself). A wait says so every `every` seconds:
-    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build."""
+    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build.
+    `clock` and `sleep` are the test's, which waits on virtual time."""
     CACHE.mkdir(parents=True, exist_ok=True)
     with open(CACHE / f"{name}.lock", "w") as handle:
-        began = last = time.monotonic()
+        began = last = clock()
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.monotonic() - last >= every:
-                    last = time.monotonic()
+                if clock() - last >= every:
+                    last = clock()
                     print(f"measure: waiting {last - began:.0f}s for the lock {name[:24]} (another session holds it)", flush=True)
-                time.sleep(min(0.5, every / 4))
+                sleep(min(0.5, every / 4))
         yield
 
 
