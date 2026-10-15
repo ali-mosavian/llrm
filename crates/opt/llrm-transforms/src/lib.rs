@@ -134,6 +134,7 @@ pub mod loopsimplify;
 pub mod loopsplit;
 pub mod loopversion;
 pub mod lsr;
+pub mod memcpyopt;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]

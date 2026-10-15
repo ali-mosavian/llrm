@@ -69,7 +69,7 @@ pub fn of(
     let mut seen: IdSet<u32> = IdSet::new();
     for change in changes {
         let inst = match *change {
-            Change::BlockCreated(_) | Change::BlockErased(_) => {
+            Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => {
                 found = found | Footprint::STRUCTURE;
                 continue;
             }

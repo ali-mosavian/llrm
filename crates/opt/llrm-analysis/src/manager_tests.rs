@@ -1063,3 +1063,43 @@ b0:
     facts.clear();
     assert!(stale.is_err(), "a body whose kept calls are not scratch's passed the check");
 }
+
+/// A body whose parameters changed with no instruction touched kept its
+/// point values: `remove_parameter` logged nothing, so the body's mark stood
+/// and `Summaries` kept facts naming the parameter by its old position
+/// (`LLRM_CHECK_SUMMARIES` on QCport -Omax: _ent_lights_apply@3.constprop.1
+/// differed from scratch; a caller instantiating the summary read the wrong
+/// actual).
+#[test]
+fn a_body_with_a_parameter_removed_has_its_point_values_made_again() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f(ptr %unused, ptr %p) {{
+b0:
+  store i16 1, ptr %p
+  ret void
+}}
+"
+    ));
+    let program = llrm_mir::program::Program::new(vec![module.clone()], Rc::new(Neutral)).unwrap();
+    let mut analyses = ModuleAnalyses::new(llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0));
+    analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let f = module.named("f").unwrap();
+    let before = analyses.memo::<super::SummariesMemo>().facts[&f].mark;
+    {
+        let llrm_mir::module::Module { context, globals, .. } = &mut module;
+        let llrm_mir::module::GlobalKind::Function(function) = &mut globals[f.0 as usize].kind else {
+            panic!("a function")
+        };
+        function.remove_parameter(context, 0);
+    }
+    assert_ne!(before, function(&module, "f").mark(), "removing a parameter left the body's history as it was");
+    analyses.changed(f);
+    analyses.invalidate(&PreservedAnalyses::none());
+    let globals = analyses.get::<super::GlobalsAA>(&module);
+    analyses.get::<super::Summaries>(&module);
+    let program = analyses.program().clone();
+    let globals = Result::as_ref(&*globals).unwrap();
+    let facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
+    super::Table::of(&module, &program, globals, &facts, None).check_against_scratch();
+}

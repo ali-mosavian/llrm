@@ -52,7 +52,7 @@ impl Depends {
         let mut work: Vec<InstId> = Vec::new();
         for change in changes {
             match *change {
-                Change::BlockCreated(_) | Change::BlockErased(_) => return false,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return false,
                 // What the operands were is for readers of the log;
                 // the `Rewritten` after it is the change.
                 Change::Operand { .. } | Change::Operands { .. } => {}

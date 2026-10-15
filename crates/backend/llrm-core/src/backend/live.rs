@@ -25,6 +25,11 @@
 //!
 //! After an edit, [`LiveRanges::edited`] drops the intervals of the touched
 //! values and puts the recomputed ones in; the rest are shared by `Arc`. The
+//! allocator's own facts are carried to the next round and edited where they
+//! are (`edit`, `Indexes::patch`): nothing else holds them (`release` clears
+//! the spiller's copy, `snapshot` keeps the touched values' old intervals for
+//! `LiveUnion::refresh_among`), so a round copies nothing of the values it did
+//! not name. The
 //! allocator also leaves its latest intervals in a thread-local (`hold`); the
 //! spiller it calls takes them back (`held`) when the body is exactly the one
 //! they were made of, instead of working them out again.
@@ -72,6 +77,18 @@ impl Ranges for IndexMap<u32, Interval> {
     }
 }
 
+/// Some values' intervals as they were before an edit.
+pub struct Snapshot(IndexMap<u32, Arc<Interval>>);
+
+impl Ranges for Snapshot {
+    fn range(
+        &self,
+        value: u32,
+    ) -> Option<&Interval> {
+        self.0.get(&value).map(|one| &**one)
+    }
+}
+
 /// The positive infinity a value that must not be spilled weighs.
 pub const INF: f64 = f64::INFINITY;
 
@@ -109,6 +126,11 @@ impl std::ops::Index<&u32> for LiveRanges {
 }
 
 impl LiveRanges {
+    /// Holding nothing: what stands in a place whose intervals were taken.
+    pub fn empty() -> Self {
+        Self::new(IndexMap::default(), Arc::new(Indexes::plain()), IndexMap::default())
+    }
+
     pub fn new(
         ranges: IndexMap<u32, Interval>,
         index: Arc<Indexes>,
@@ -155,6 +177,49 @@ impl LiveRanges {
             #[cfg(test)]
             forced: None,
         }
+    }
+
+    /// `edited`, taking the intervals this holds instead of copying them: what
+    /// is the same in every other body is not touched.
+    pub fn edit(
+        mut self,
+        touched: &crate::support::hash::HashSet<u32>,
+        again: IndexMap<u32, Interval>,
+        totals: IndexMap<u32, f64>,
+        index: Arc<Indexes>,
+    ) -> Self {
+        for value in touched {
+            self.ranges.swap_remove(value);
+        }
+        self.ranges.extend(again.into_iter().map(|(value, one)| (value, Arc::new(one))));
+        let total = Arc::make_mut(&mut self.total);
+        for value in touched {
+            total.swap_remove(value);
+        }
+        total.extend(totals);
+        self.index = index;
+        self
+    }
+
+    /// These intervals without the numbering they were made against, which
+    /// whoever edits them holds: it is edited where it is only if no other copy
+    /// of it stands.
+    pub fn apart(mut self) -> Self {
+        self.index = Arc::new(Indexes::plain());
+        self.sibling = Arc::default();
+        self.fold = Arc::default();
+        self
+    }
+
+    /// The intervals of `touched` as they are, to be asked after this is edited
+    /// (`LiveUnion::refresh_among` asks where a value was).
+    pub fn snapshot(
+        &self,
+        touched: &crate::support::hash::HashSet<u32>,
+    ) -> Snapshot {
+        Snapshot(
+            touched.iter().filter_map(|value| self.ranges.get(value).map(|one| (*value, Arc::clone(one)))).collect(),
+        )
     }
 
     /// With what its copies and folds save, and the values that may not be
@@ -268,6 +333,12 @@ pub fn hold(
         *held.borrow_mut() =
             Some((body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(), Arc::clone(live)));
     });
+}
+
+/// Forget the intervals held: the allocator is about to edit them where they
+/// are, which it can only do when no one else holds them.
+pub fn release() {
+    HELD.with(|held| *held.borrow_mut() = None);
 }
 
 /// The intervals the allocator holds of exactly `body`, if it does.

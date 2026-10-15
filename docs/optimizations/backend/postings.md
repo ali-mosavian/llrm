@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postings.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:393a62401d080e6713686e8229763f6ebfbdf60a089b6cf0fbdfc5a0eef6daa5 -->
+<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:e733958334c139022356ca8155c935ed36a3adbe2de05a3c605a09748f6a812a -->
 
 # postings
 
@@ -30,10 +30,20 @@ blocks that differ (`replaced`):
  are cut out of its list and the new ones spliced in, in position order.
 ```
 
-A block of more than 48 instructions is patched instead of remade: the kept
-instructions are found by pointer (`intervals::aligned_insns`) and their
-entries moved to their new positions, the removed ones' dropped, the added
-ones' put in, so the cost is the block's entries and not a hash insert each.
+Occurrences are kept by slot, not by position: each block numbers its
+instructions with ascending slots, `STRIDE` apart, and an entry names
+`(block, slot)`. A rewrite that keeps most of a block (`aligned_insns` finds
+the kept instructions by pointer) leaves their slots and entries alone, cuts
+the entries of the instructions it removed and puts those of the ones it
+added at slots between their neighbours', as LLVM's `SlotIndexes` numbers an
+instruction put between two (and renumbers a block only when the room is
+used up). The cost of an edit is the entries of the instructions it changed,
+not those of every instruction after it. A position, where a reader wants
+one, is where the slot is in the block's list of slots.
+
+A block the rewrite made over (little of it is the same, or the kept
+instructions changed their order) is made again: the entries of the values
+it names are cut out and the new ones spliced in.
 
 `LLRM_CHECK_POSTINGS` asserts after each update that the followed postings
 equal ones worked out whole. `redone()` counts the blocks worked again, for

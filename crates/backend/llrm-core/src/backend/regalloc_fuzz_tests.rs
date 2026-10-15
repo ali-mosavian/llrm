@@ -1090,10 +1090,9 @@ fn test_intervals_from_occurrences_are_those_of_the_walk() {
             let mut places: IndexMap<u32, Vec<ranges::Occurrence>> = IndexMap::default();
             for &value in &values {
                 let mut at: Vec<ranges::Place> = postings
-                    .defs(value)
-                    .iter()
-                    .chain(postings.uses(value))
-                    .map(|(block, position)| (*block as usize, *position as usize))
+                    .defs_at(value)
+                    .chain(postings.uses_at(value))
+                    .map(|(block, position)| (block as usize, position as usize))
                     .collect();
                 at.sort_unstable();
                 at.dedup();
@@ -2099,8 +2098,19 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
                 current = edited;
                 continue;
             };
-            let found = changes(&current, &edited)
-                .and_then(|changes| Masks::after(&masks, &numbering, &patched, segments, &changes));
+            let found = changes(&current, &edited).and_then(|changes| {
+                let gone: IndexMap<usize, i64> = changes
+                    .gone
+                    .iter()
+                    .filter_map(|one| {
+                        numbering
+                            .at
+                            .get(&crate::analysis::intervals::key(one))
+                            .map(|slot| (crate::analysis::intervals::key(one), *slot))
+                    })
+                    .collect();
+                Masks::after(&masks, &gone, &patched, segments, &changes)
+            });
             let fresh = _masks(&edited, &patched, segments);
             let found = found.expect("a rewrite of the same shape carries the points");
             assert!(found.same_points(&fresh), "seed {seed}: the points carried differ from a fresh look");
