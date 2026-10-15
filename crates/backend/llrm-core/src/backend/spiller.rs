@@ -744,8 +744,8 @@ fn _short_update_runs<'b>(
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
     // A run is a plain move into a stored value followed by something: only a
-    // definition of one can start it.
-    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
+    // definition of one can start it, so only those positions are looked at.
+    let mut starts: Vec<(u32, u32)> = postings::following(body, |postings| {
         stored
             .iter()
             .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
@@ -756,23 +756,28 @@ fn _short_update_runs<'b>(
                     Some((into, _)) if into == *value
                 ) && insns.get(at.1 as usize + 1).is_some()
             })
-            .map(|(_, at)| at.0 as usize)
+            .map(|(_, at)| at)
             .collect()
     });
-    if relevant.is_empty() {
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &relevant)?;
-    Ok((Cow::Owned(made), next))
+    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &starts)?;
+    Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
+/// `body` with the runs that start at `starts` (block, position) made short,
+/// or none where none is eligible. Each run is two instructions, so a start
+/// right after the one before it is not looked at.
 fn _short_update_runs_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
-    relevant: &BTreeSet<usize>,
-) -> Result<(LirBody, u32), Error> {
+    starts: &[(u32, u32)],
+) -> Result<(Option<LirBody>, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
         None => {
@@ -781,25 +786,25 @@ fn _short_update_runs_whole(
             (index, live)
         }
     };
-    let mut blocks = Vec::new();
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        // A run starts at a plain move into a stored value: a block with none
-        // is as it was, the very same instructions.
-        if !relevant.contains(&block_index) {
-            blocks.push(block.clone());
-            continue;
-        }
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    let mut next = 0;
+    while next < starts.len() {
+        let block_index = starts[next].0 as usize;
+        let end = next + starts[next..].iter().take_while(|(block, _)| *block as usize == block_index).count();
+        let block = &body.blocks[block_index];
         let mut insns: Vec<Arc<Insn>> = Vec::new();
-        let mut position = 0;
-        while position < block.insns.len() {
-            let first = &block.insns[position];
-            let second = block.insns.get(position + 1);
-            let (Some(pair), Some(second)) = (_plain_move(first), second) else {
-                insns.push(Arc::clone(first));
-                position += 1;
+        // What of the block is copied so far.
+        let mut copied = 0;
+        let mut after_last: Option<usize> = None;
+        for &(_, at) in &starts[next..end] {
+            let position = at as usize;
+            if after_last.is_some_and(|last| position < last) {
                 continue;
-            };
-            let (into, outof) = pair;
+            }
+            let first = &block.insns[position];
+            let second = &block.insns[position + 1];
+            let Some((into, outof)) = _plain_move(first) else { continue };
             let width = _width(first, into);
             let slot = index.at[&key(first)];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
@@ -823,19 +828,32 @@ fn _short_update_runs_whole(
                     true
                 };
             if !eligible {
-                insns.push(Arc::clone(first));
-                position += 1;
                 continue;
             }
             let renamed = IndexMap::from_iter([(into, outof)]);
-            let updated = _renamed(second, &renamed);
-            insns.push(updated);
+            insns.extend_from_slice(&block.insns[copied..position]);
+            insns.push(_renamed(second, &renamed));
             insns.push(_store(second, outof, &frame.cell(into, width)?));
-            position += 2;
+            copied = position + 2;
+            after_last = Some(position + 2);
         }
-        blocks.push(block.with_insns(insns));
+        if after_last.is_some() {
+            insns.extend_from_slice(&block.insns[copied..]);
+            while blocks.len() < block_index {
+                blocks.push(body.blocks[blocks.len()].clone());
+            }
+            blocks.push(block.with_insns(insns));
+            changed = true;
+        }
+        next = end;
     }
-    Ok((body.with_blocks(blocks), fresh))
+    if !changed {
+        return Ok((None, fresh));
+    }
+    while blocks.len() < body.blocks.len() {
+        blocks.push(body.blocks[blocks.len()].clone());
+    }
+    Ok((Some(body.with_blocks(blocks)), fresh))
 }
 
 /// An update of a spilled value whose result is read again in its block,
@@ -848,29 +866,34 @@ fn _local_updates<'b>(
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
-    // An update defines a stored value and reads it.
-    let relevant: BTreeSet<usize> = postings::following(body, |postings| {
+    // An update defines a stored value and reads it: only a definition of one
+    // can be one, so only those positions are looked at.
+    let mut starts: Vec<(u32, u32)> = postings::following(body, |postings| {
         stored
             .iter()
             .flat_map(|&value| postings.defs(value).into_iter().map(move |at| (value, at)))
             .filter(|(value, at)| _at(body, *at).uses.contains(value))
-            .map(|(_, at)| at.0 as usize)
+            .map(|(_, at)| at)
             .collect()
     });
-    if relevant.is_empty() {
+    starts.sort_unstable();
+    starts.dedup();
+    if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _local_updates_whole(body, stored, frame, fresh, &relevant)?;
-    Ok((Cow::Owned(made), next))
+    let (made, next) = _local_updates_whole(body, stored, frame, fresh, &starts)?;
+    Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
+/// `body` with the updates at `starts` (block, position) made local, or none
+/// where none is worth it.
 fn _local_updates_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
     frame: &mut Frame,
     mut fresh: u32,
-    relevant: &BTreeSet<usize>,
-) -> Result<(LirBody, u32), Error> {
+    starts: &[(u32, u32)],
+) -> Result<(Option<LirBody>, u32), Error> {
     let (index, live) = match crate::backend::live::held(body) {
         Some(held) => (Arc::clone(held.index()), Shared::Held(held)),
         None => {
@@ -889,35 +912,35 @@ fn _local_updates_whole(
                 !what.dests.iter().chain(&what.sources).any(|operand| matches!(operand, Loc::Mem(_)))
             })
     };
-    let mut blocks = Vec::new();
-    for (block_index, block) in body.blocks.iter().enumerate() {
-        // An update defines a stored value and reads it: a block with none is
-        // as it was.
-        if !relevant.contains(&block_index) {
-            blocks.push(block.clone());
-            continue;
-        }
-        let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-        let mut position = 0;
-        while position < insns.len() {
-            let update = Arc::clone(&insns[position]);
-            let Some(&value) = update.defines.first() else {
-                position += 1;
-                continue;
-            };
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    let mut next = 0;
+    while next < starts.len() {
+        let block_index = starts[next].0 as usize;
+        let end = next + starts[next..].iter().take_while(|(block, _)| *block as usize == block_index).count();
+        let block = &body.blocks[block_index];
+        let mut insns: Option<Vec<Arc<Insn>>> = None;
+        // How many instructions the runs made so far put in front of a
+        // position of the block as it was.
+        let mut shift = 0;
+        for &(_, at) in &starts[next..end] {
+            // The block is copied at the first update made.
+            let working: &[Arc<Insn>] = insns.as_deref().unwrap_or(&block.insns);
+            let position = at as usize + shift;
+            let update = Arc::clone(&working[position]);
+            let Some(&value) = update.defines.first() else { continue };
             let is_update = stored.contains(&value)
                 && update.defines.len() == 1
                 && update.uses.contains(&value)
                 && register_only(&update)
                 && update.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Binary | Operation::Unary));
             if !is_update {
-                position += 1;
                 continue;
             }
             // The reads that follow, up to a redefinition or anything a
             // register may not survive.
             let mut reads = Vec::new();
-            for (at, one) in insns.iter().enumerate().skip(position + 1) {
+            for (at, one) in working.iter().enumerate().skip(position + 1) {
                 if one.defines.contains(&value) || !register_only(one) {
                     break;
                 }
@@ -925,17 +948,13 @@ fn _local_updates_whole(
                     reads.push(at);
                 }
             }
-            let Some(&last) = reads.last() else {
-                position += 1;
-                continue;
-            };
-            let slot = index.at[&key(&insns[last])];
+            let Some(&last) = reads.last() else { continue };
+            let slot = index.at[&key(&working[last])];
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let kept = live.get(&value).expect("live").segments.iter().any(|segment| segment.overlaps(&after));
             // Worth it when it saves a memory operand: the update's own
             // and each read's, against one reload and perhaps one store.
             if reads.len() + 1 <= 1 + usize::from(kept) {
-                position += 1;
                 continue;
             }
             let width = _width(&update, value);
@@ -943,20 +962,33 @@ fn _local_updates_whole(
             let register = fresh;
             fresh += 1;
             let renamed = IndexMap::from_iter([(value, register)]);
+            let working = insns.get_or_insert_with(|| block.insns.to_vec());
             for at in &reads {
-                insns[*at] = _renamed(&insns[*at], &renamed);
+                working[*at] = _renamed(&working[*at], &renamed);
             }
             let mut run = vec![_reload(&update, register, &cell), _renamed(&update, &renamed)];
             if kept {
                 run.push(_store(&update, register, &cell));
             }
-            let length = run.len();
-            insns.splice(position..=position, run);
-            position += length;
+            shift += run.len() - 1;
+            working.splice(position..=position, run);
         }
-        blocks.push(block.with_insns(insns));
+        if let Some(insns) = insns {
+            while blocks.len() < block_index {
+                blocks.push(body.blocks[blocks.len()].clone());
+            }
+            blocks.push(block.with_insns(insns));
+            changed = true;
+        }
+        next = end;
     }
-    Ok((body.with_blocks(blocks), fresh))
+    if !changed {
+        return Ok((None, fresh));
+    }
+    while blocks.len() < body.blocks.len() {
+        blocks.push(body.blocks[blocks.len()].clone());
+    }
+    Ok((Some(body.with_blocks(blocks)), fresh))
 }
 
 /// A move between two spilled values that share one slot.
@@ -2841,25 +2873,31 @@ fn _stable_loads_from(
         if uses[value].iter().any(|one| one.group.is_some()) {
             continue;
         }
-        let flow = flow.get_or_init(|| Flow::of(body));
         let held = if _exact_frame(cell) || _fixed_data(cell).is_some() {
+            let flow = flow.get_or_init(|| Flow::of(body));
             // Only what may write the cell is asked of, and the blocks between
             // the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> =
-                crate::support::hash::HashMap::default();
-            let near = if _exact_frame(cell) { writers.near(cell) } else { writers.near_fixed(cell) };
+            let mut events = Events::default();
+            let near = if _exact_frame(cell) {
+                writers.near(cell)
+            } else {
+                let (explicit, background) = writers.near_fixed(cell, body.spares.is_empty());
+                events.background = background;
+                explicit
+            };
             for (block, position) in near {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
-                    events.entry(block).or_default().push((position, false));
+                    events.own.entry(block).or_default().push((position, false));
                 }
             }
-            events.entry(define_at.0).or_default().push((define_at.1, true));
-            for list in events.values_mut() {
+            events.own.entry(define_at.0).or_default().push((define_at.1, true));
+            for list in events.own.values_mut() {
                 list.sort_unstable();
             }
             _holds_at(flow, &events, &use_places[value])
         } else {
+            let flow = flow.get_or_init(|| Flow::of(body));
             _unchanged(body, flow, define, cell, &uses[value])
         };
         if llrm_support::env_set("LLRM_CHECK_UNCHANGED") {
@@ -2908,9 +2946,10 @@ impl<'a> Flow<'a> {
 /// body: the loads asked about are many and an instruction that writes none of
 /// their cells is nearly every instruction.
 struct Writers {
-    /// (block, position) of what may write memory no exact frame cell names: a
-    /// call, an unmodeled write, a store to a based, indexed or unplaced
-    /// cell.
+    /// (block, position) of what may write memory no exact frame cell names and
+    /// no fixed data cell: a call, an unmodeled write, a store to a based,
+    /// indexed or unplaced cell. (A store to a fixed data cell never meets a
+    /// frame cell: other regions in `overlap::may_overlap`.)
     wild: Vec<(usize, usize)>,
     /// The stores to an exact frame cell, by its first byte.
     exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
@@ -2918,13 +2957,84 @@ struct Writers {
     widest: i64,
     /// What may write memory no fixed cell of a frame or a data segment names:
     /// a call, an unmodeled write, a store through a register or to an
-    /// unplaced cell. (`wild` also holds the stores to fixed data cells, which
-    /// a frame cell is asked about as it always was.)
+    /// unplaced cell.
     hard_wild: Vec<(usize, usize)>,
-    /// The stores to a fixed data cell, by its space and symbol, then its
-    /// first byte.
-    fixed: std::collections::BTreeMap<(u8, i64), std::collections::BTreeMap<i64, Vec<(usize, usize)>>>,
+    /// The stores to a fixed data cell, by its space and symbol.
+    fixed: crate::support::hash::HashMap<(u8, i64), Group>,
     widest_fixed: i64,
+    /// What writes fixed data cells of more than one space and symbol: asked of
+    /// every fixed cell one by one.
+    mixed: Vec<(usize, usize)>,
+    /// The same by block, in position order, of what writes the cells of one
+    /// symbol: of every symbol, and of the external symbols alone.
+    stores: Lists,
+    externals: Lists,
+}
+
+/// The stores to the fixed data cells of one space and symbol.
+#[derive(Default)]
+struct Group {
+    /// (first byte, (block, position)) in program order.
+    places: Vec<(i64, (usize, usize))>,
+    /// The same by first byte, made when asked.
+    by_byte: std::cell::OnceCell<Vec<(i64, (usize, usize))>>,
+    /// What writes cells of this symbol alone, in program order.
+    only: Vec<(usize, usize)>,
+}
+
+/// Positions in a block, in order.
+type Lists = Vec<Vec<usize>>;
+
+/// What kills a fixed data cell without being named for it (LLVM's
+/// `AliasSetTracker` keeps an unknown-alias set for the same reason): a store
+/// to another external symbol meets an external symbol's cell, a store to any
+/// symbol meets a segment's cell, and a store to another segment's cell meets
+/// nothing of it. The answer is the regions' (`overlap::may_overlap`), whatever
+/// the displacements.
+struct Background<'a> {
+    lists: &'a Lists,
+    /// What writes the cell's own symbol: asked of by bytes, not here.
+    excluded: &'a [(usize, usize)],
+}
+
+/// What may change a cell and where it is made to hold.
+#[derive(Default)]
+struct Events<'a> {
+    /// Per block, (position, true for the load, false for a write), in order.
+    own: crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
+    /// The writes every block's list of positions stands for.
+    background: Option<Background<'a>>,
+}
+
+impl Events<'_> {
+    /// The last event of `block` before `position` (the last of all when
+    /// `None`): its position and whether it is the load.
+    fn before(
+        &self,
+        block: usize,
+        position: Option<usize>,
+    ) -> Option<(usize, bool)> {
+        let own = self.own.get(&block).and_then(|list| {
+            list.iter().rev().find(|(at, _)| position.is_none_or(|bound| *at < bound)).map(|(at, load)| (*at, *load))
+        });
+        let background = self
+            .background
+            .as_ref()
+            .and_then(
+                |background| {
+                    let list = background.lists.get(block)?;
+                    let mut end = position.map_or(list.len(), |bound| list.partition_point(|at| *at < bound));
+                    while end > 0 && background.excluded.binary_search(&(block, list[end - 1])).is_ok() {
+                        end -= 1;
+                    }
+                    end.checked_sub(1).map(|last| (list[last], false))
+                },
+            );
+        match (own, background) {
+            (Some(own), Some(background)) => Some(if background.0 > own.0 { background } else { own }),
+            (one, other) => one.or(other),
+        }
+    }
 }
 
 impl Writers {
@@ -2936,6 +3046,9 @@ impl Writers {
             hard_wild: Vec::new(),
             fixed: Default::default(),
             widest_fixed: 1,
+            mixed: Vec::new(),
+            stores: vec![Vec::new(); body.blocks.len()],
+            externals: vec![Vec::new(); body.blocks.len()],
         };
         for (block, one_block) in body.blocks.iter().enumerate() {
             for (position, one) in one_block.insns.iter().enumerate() {
@@ -2951,16 +3064,21 @@ impl Writers {
                     );
                 let mut wild = one.call.is_some() || one.unmodeled_write();
                 let mut hard = wild;
+                let mut key: Option<(u8, i64)> = None;
+                let mut several = false;
                 for cell in dests {
                     if _exact_frame(cell) {
                         let addr = cell.addr.expect("an exact frame cell has an address");
                         found.exact.entry(addr.disp).or_default().push((block, position));
                         found.widest = found.widest.max(i64::from(cell.width));
-                    } else if let Some(key) = _fixed_data(cell) {
+                    } else if let Some(one_key) = _fixed_data(cell) {
                         let addr = cell.addr.expect("a fixed data cell has an address");
-                        found.fixed.entry(key).or_default().entry(addr.disp).or_default().push((block, position));
+                        found.fixed.entry(one_key).or_default().places.push((addr.disp, (block, position)));
                         found.widest_fixed = found.widest_fixed.max(i64::from(cell.width));
-                        wild = true;
+                        if key.is_some_and(|had| had != one_key) {
+                            several = true;
+                        }
+                        key = Some(one_key);
                     } else {
                         wild = true;
                         hard = true;
@@ -2971,6 +3089,20 @@ impl Writers {
                 }
                 if hard {
                     found.hard_wild.push((block, position));
+                }
+                if let Some(key) = key {
+                    if several {
+                        found.mixed.push((block, position));
+                    } else {
+                        let group = found.fixed.get_mut(&key).expect("its group is made");
+                        if group.only.last() != Some(&(block, position)) {
+                            group.only.push((block, position));
+                            found.stores[block].push(position);
+                            if key.0 == 1 {
+                                found.externals[block].push(position);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2995,29 +3127,56 @@ impl Writers {
         found
     }
 
-    /// `near` for a fixed data cell: the stores to other data cells that are
-    /// not a frame's or another symbol's meet it only by their bytes, and one
-    /// of another symbol may.
+    /// `near` for a fixed data cell: what the cell's own symbol is written by
+    /// meets it by bytes; what writes another symbol meets it as the regions
+    /// say (`Background`) where the body has no `spares` pair (`by_regions`),
+    /// else is named one by one.
     fn near_fixed(
         &self,
         cell: &Mem,
-    ) -> Vec<(usize, usize)> {
+        by_regions: bool,
+    ) -> (Vec<(usize, usize)>, Option<Background<'_>>) {
         let key = _fixed_data(cell).expect("a fixed data cell");
         let low = cell.addr.expect("a fixed data cell has an address").disp;
         let high = low + i64::from(cell.width.max(1));
         let mut found = self.hard_wild.clone();
-        for (other, cells) in &self.fixed {
-            if *other == key {
-                for places in cells.range(low - self.widest_fixed + 1..high).map(|(_, places)| places) {
-                    found.extend(places.iter().copied());
+        found.extend(self.mixed.iter().copied());
+        let group = self.fixed.get(&key);
+        if let Some(group) = group {
+            let by_byte = group
+                .by_byte
+                .get_or_init(
+                    || {
+                        let mut sorted = group.places.clone();
+                        sorted.sort_unstable();
+                        sorted
+                    },
+                );
+            let first = by_byte.partition_point(|(byte, _)| *byte < low - self.widest_fixed + 1);
+            found.extend(by_byte[first..].iter().take_while(|(byte, _)| *byte < high).map(|(_, place)| *place));
+        }
+        // A `spares` pair (the optimizer's proof that a write is apart from a
+        // load) lets a store to another space than the cell's keep it: those
+        // are then named one by one. The stores to an external symbol meet an
+        // external symbol's cell whatever a pair says.
+        let (lists, named) = match (key.0, by_regions) {
+            (1, true) => (Some(&self.stores), None),
+            (1, false) => (Some(&self.externals), Some(0)),
+            (_, true) => (Some(&self.externals), None),
+            (_, false) => (None, Some(1)),
+        };
+        let excluded = group.map_or(&[][..], |group| &group.only);
+        let background = lists.map(|lists| Background { lists, excluded });
+        if let Some(space) = named {
+            for (other, group) in &self.fixed {
+                if other.0 == space {
+                    found.extend(group.only.iter().copied());
                 }
-            } else {
-                found.extend(cells.values().flatten().copied());
             }
         }
         found.sort_unstable();
         found.dedup();
-        found
+        (found, background)
     }
 }
 
@@ -3040,17 +3199,16 @@ fn _fixed_data(cell: &Mem) -> Option<(u8, i64)> {
 /// uses and not over the whole body.
 fn _holds_at(
     flow: &Flow,
-    events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
+    events: &Events,
     uses: &[(usize, usize)],
 ) -> bool {
     use crate::support::hash::{HashMap, HashSet};
     // Whether the cell holds out of a block that has an event: after its last.
-    let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
+    let decided = |block: usize| events.before(block, None).map(|(_, load)| load);
     let mut needed: Vec<usize> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::default();
     for &(block, position) in uses {
-        let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
-        if before.is_none() && seen.insert(block) {
+        if events.before(block, Some(position)).is_none() && seen.insert(block) {
             needed.push(block);
         }
     }
@@ -3084,11 +3242,9 @@ fn _holds_at(
             }
         }
     }
-    uses.iter().all(|&(block, position)| {
-        match events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position)) {
-            Some((_, load)) => *load,
-            None => held[&block],
-        }
+    uses.iter().all(|&(block, position)| match events.before(block, Some(position)) {
+        Some((_, load)) => load,
+        None => held[&block],
     })
 }
 
