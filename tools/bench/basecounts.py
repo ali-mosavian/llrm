@@ -5,7 +5,7 @@ Bench counts against the base's, not against counts committed per program.
 benchmark conflicted (all five of a train did, on jpeg_fixed). The counts are derived data: the baseline is what the base commit's compiler
 measures with this tree's harness and programs, kept by the base's git tree like measure.py's (a landed tree is measured once). A row
 worse than the base's fails; one better passes, and becomes the next base. A deliberate trade is a waiver, one file per PR in
-bench/waivers/ (unique names, so none conflict): the row, the counter and the count it is allowed to reach. It holds only while the row
+tools/bench/waivers/ (unique names, so none conflict): the row, the counter and the count it is allowed to reach. It holds only while the row
 is that count and worse than the base's, so it expires with the PR.
 """
 
@@ -26,6 +26,8 @@ CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
 OURS = ("c", "nib", "bq16", "bq32")
 COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
+# Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
+WAIVERS = "tools/bench/waivers"
 
 
 def method(root: Path = ROOT) -> str:
@@ -73,9 +75,9 @@ def base_counts(sha: str, opts: list[str], tree_of, build, measure_with, cache: 
 
 
 def waivers(root: Path = ROOT) -> list[dict]:
-    """bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
+    """tools/bench/waivers/*.toml: `reason`, and `[[row]]` entries of `label` ("fib bq32 -O2"), `counter` and `to`."""
     out = []
-    for path in sorted((root / "bench/waivers").glob("*.toml")):
+    for path in sorted((root / WAIVERS).glob("*.toml")):
         data = tomllib.loads(path.read_text())
         for row in data.get("row", []):
             out.append({**row, "reason": data.get("reason", ""), "file": path.name})
@@ -85,7 +87,7 @@ def waivers(root: Path = ROOT) -> list[dict]:
 def consume_waivers(root: Path, measured: dict) -> list[str]:
     """Delete the waiver files whose every row the blessed counts now are: the baseline carries them, so the waiver is spent."""
     spent = []
-    for path in sorted((root / "bench/waivers").glob("*.toml")):
+    for path in sorted((root / WAIVERS).glob("*.toml")):
         rows = tomllib.loads(path.read_text()).get("row", [])
         parts = [row["label"].split(" ") for row in rows]
         if rows and all(measured.get((p[0], p[1], p[2].lstrip("-")), {}).get(row["counter"]) == row["to"] for p, row in zip(parts, rows)):
