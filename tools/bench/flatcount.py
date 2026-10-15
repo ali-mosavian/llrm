@@ -22,7 +22,8 @@ from unicorn.x86_const import (
 )
 from iced_x86 import Decoder, Mnemonic
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm-x86-m16/bench"))
+for _bench in sorted((Path(__file__).resolve().parents[2] / "crates/target").glob("*/bench")):  # the targets' emulators (icount)
+    sys.path.insert(0, str(_bench))
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))
 
 import icount  # noqa: E402
@@ -34,6 +35,7 @@ GDT = 0x9000
 FLAT_CODE, FLAT_DATA = 0x00CF9A000000FFFF, 0x00CF92000000FFFF  # base 0, 4 GiB, 32-bit: the stack is ESP, not SP
 
 
+WORD = (1 << 16) - 1  # a DPMI call's 16-bit register halves
 AGREE = 0.005  # the emulator's count and DOSBox's differ by this much of the count or less, or 64 instructions
 
 
@@ -97,7 +99,7 @@ def run(image: Path, region: str, cwd: Path, limit: int = 400_000_000) -> icount
         write(UC_X86_REG_EFLAGS, (flags | 1) if on else (flags & ~1))
 
     def interrupt(uc, number, _):
-        ax = read(UC_X86_REG_EAX) & 0xFFFF
+        ax = read(UC_X86_REG_EAX) & WORD
         if number == 0x31 and ax in (0x0201, 0x0203, 0x0205, 0x0900, 0x0901, 0x0902):
             carry(False)  # DPMI vectors, the interrupt flag: accepted
         elif number == 0x31 and ax == 0x0204:
@@ -105,11 +107,11 @@ def run(image: Path, region: str, cwd: Path, limit: int = 400_000_000) -> icount
             write(UC_X86_REG_EDX, 0)
             carry(False)
         elif number == 0x31 and ax == 0x0501:
-            size = ((read(UC_X86_REG_EBX) & 0xFFFF) << 16) | (read(UC_X86_REG_ECX) & 0xFFFF)
+            size = ((read(UC_X86_REG_EBX) & WORD) << 16) | (read(UC_X86_REG_ECX) & WORD)
             at = state["heap"]
             state["heap"] += (size + 0xFFF) & ~0xFFF
             write(UC_X86_REG_EBX, at >> 16)
-            write(UC_X86_REG_ECX, at & 0xFFFF)
+            write(UC_X86_REG_ECX, at & WORD)
             write(UC_X86_REG_ESI, 0)
             write(UC_X86_REG_EDI, 1)
             carry(False)
@@ -145,10 +147,10 @@ def run(image: Path, region: str, cwd: Path, limit: int = 400_000_000) -> icount
             carry(False)
         elif number == 0x21 and ax >> 8 == 0x42:
             file = state["files"].get(read(UC_X86_REG_EBX))
-            offset = (read(UC_X86_REG_ECX) << 16 | read(UC_X86_REG_EDX) & 0xFFFF) & 0xFFFFFFFF
+            offset = (read(UC_X86_REG_ECX) << 16 | read(UC_X86_REG_EDX) & WORD) & ((1 << 32) - 1)
             where = file.seek(offset, ax & 0xFF) if file else 0
             write(UC_X86_REG_EDX, where >> 16)
-            write(UC_X86_REG_EAX, where & 0xFFFF)
+            write(UC_X86_REG_EAX, where & WORD)
             carry(False)
         elif number == 0x21 and ax >> 8 == 0x44 and ax & 0xFF == 0:
             write(UC_X86_REG_EDX, 0)  # every handle a file
