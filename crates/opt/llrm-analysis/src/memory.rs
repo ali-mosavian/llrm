@@ -828,6 +828,10 @@ pub struct Unit<'a> {
     /// The allocas whose address is exposed, the manager's `ExposedFrames`;
     /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
+    /// The accesses of the body as `Accesses::plain` makes them under the
+    /// calls' footprints, the manager's `PlainAccesses`: every client of one
+    /// body state shares them, and the graph they make.
+    pub plain: Option<&'a crate::memoryssa::Accesses>,
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
@@ -898,6 +902,7 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            plain: None,
             point_values: None,
             callbacks: None,
             loop_intervals: true,
@@ -925,6 +930,25 @@ impl<'a> Unit<'a> {
         point_values: &'a crate::alias::PointValues,
     ) -> Self {
         Self { point_values: Some(point_values), ..self }
+    }
+
+    pub fn with_plain(
+        self,
+        plain: &'a crate::memoryssa::Accesses,
+    ) -> Self {
+        Self { plain: Some(plain), ..self }
+    }
+
+    /// The accesses `Accesses::plain` makes of this unit under `calls`: the
+    /// manager's where the unit has them, else made here.
+    pub fn plain_accesses(
+        &self,
+        calls: &crate::consts::Calls,
+    ) -> std::borrow::Cow<'_, crate::memoryssa::Accesses> {
+        match self.plain {
+            Some(shared) => std::borrow::Cow::Borrowed(shared),
+            None => std::borrow::Cow::Owned(crate::memoryssa::Accesses::plain(self, calls)),
+        }
     }
 
     pub fn with_exposed(

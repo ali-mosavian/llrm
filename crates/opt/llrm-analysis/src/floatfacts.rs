@@ -98,7 +98,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::context::Context;
 use llrm_mir::intrinsics::{FloatFunction, Intrinsic};
 use llrm_mir::module::Function;
-use llrm_mir::module::{InstId, Operand, ValueId};
+use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::types::{FloatKind, Type, TypeId, Types};
 use llrm_support::hash::HashSet;
@@ -110,6 +110,7 @@ use crate::consts::{self, _MemoryQueries, Calls, Cells, Known};
 use crate::graph::loops;
 use crate::induction;
 use crate::memory::{MemRef, Unit};
+use crate::memoryssa::Accesses;
 use crate::regions;
 
 /// Whether `ty` is, or holds, a floating-point number; an identified struct,
@@ -945,6 +946,114 @@ pub fn cells_before(
     consts::cells_read(unit, calls, &known, at, references, queries)
 }
 
+/// The float loads among `loads` that a store of a possibly known value may
+/// write, a superset of those a provider can give a fact (a provider is a store
+/// whose value the solve knows, and `Writers` leaves a load alone only where
+/// no such store may write its bytes, as `spares` decides).
+///
+/// A value is possibly known where it is a constant, an integer `integers`
+/// has, a phi (taken as known), an arithmetic rule over possibly known values
+/// or a load such a store may write; a load's own answer is a fixed point, from
+/// the loads of constants outward.
+fn _loads_a_known_store_may_reach(
+    unit: &Unit,
+    accesses: &Accesses,
+    rules: &[(InstId, Rule)],
+    loads: &llrm_mir::dense::IdSet<ValueId>,
+    integers: &IndexMap<ValueId, Known>,
+) -> llrm_mir::dense::IdSet<ValueId> {
+    let function = unit.function;
+    let mut reachable = llrm_mir::dense::IdSet::<ValueId>::default();
+    if loads.is_empty() {
+        return reachable;
+    }
+    let stores = rules
+        .iter()
+        .filter(|(inst, _)| matches!(function.instruction(*inst).opcode, Opcode::Store { .. }))
+        .map(|(inst, _)| *inst)
+        .collect::<Vec<_>>();
+    let mut pending: Vec<(InstId, ValueId, MemRef)> = rules
+        .iter()
+        .filter_map(|(inst, _)| {
+            let (reference, result) = crate::avail::loaded_into(unit, accesses, *inst)?;
+            loads.contains(&result).then_some((*inst, result, reference))
+        })
+        .collect();
+    let defining: llrm_mir::dense::IdMap<ValueId, usize> = rules
+        .iter()
+        .enumerate()
+        .filter_map(|(at, (inst, _))| Some((function.instruction(*inst).result?, at)))
+        .collect();
+    loop {
+        let mut known = llrm_mir::dense::IdMap::<ValueId, bool>::default();
+        let mut possibly = |value: ValueId| -> bool {
+            // An explicit stack: a chain of rules can be as long as the body.
+            let mut work = vec![value];
+            while let Some(&top) = work.last() {
+                if known.contains_key(&top) {
+                    work.pop();
+                    continue;
+                }
+                let verdict = if integers.contains_key(&top) {
+                    Some(true)
+                } else {
+                    match function.value(top).def {
+                        ValueDef::Instruction(inst) => match function.instruction(inst).opcode {
+                            Opcode::Phi => Some(true),
+                            Opcode::Load { .. } => Some(reachable.contains(&top)),
+                            _ => match defining.get(&top) {
+                                None => Some(false),
+                                Some(&at) => {
+                                    let operands = function
+                                        .instruction(rules[at].0)
+                                        .operands
+                                        .iter()
+                                        .filter_map(|operand| match operand {
+                                            Operand::Value(one) => Some(*one),
+                                            _ => None,
+                                        })
+                                        .collect::<Vec<_>>();
+                                    if let Some(open) = operands.iter().find(|one| !known.contains_key(*one)) {
+                                        work.push(*open);
+                                        None
+                                    } else {
+                                        Some(operands.iter().all(|one| known.get(one).copied().unwrap_or(false)))
+                                    }
+                                }
+                            },
+                        },
+                        _ => Some(false),
+                    }
+                };
+                if let Some(verdict) = verdict {
+                    known.insert(top, verdict);
+                    work.pop();
+                }
+            }
+            known.get(&value).copied().unwrap_or(false)
+        };
+        let sources = stores
+            .iter()
+            .copied()
+            .filter(|&store| match function.instruction(store).operands[0] {
+                Operand::Value(value) => possibly(value),
+                _ => true,
+            })
+            .collect::<Vec<_>>();
+        let writers = crate::memoryssa::Writers::of(accesses, &sources);
+        let before = reachable.len();
+        for (_, result, reference) in &pending {
+            if !reachable.contains(result) && !writers.spare(accesses, unit.program, reference) {
+                reachable.insert(*result);
+            }
+        }
+        if reachable.len() == before {
+            return reachable;
+        }
+        pending.retain(|(_, result, _)| !reachable.contains(result));
+    }
+}
+
 /// `consts::known_walked` and the float facts over it.
 pub fn solved_with(
     unit: &Unit,
@@ -964,6 +1073,28 @@ pub fn solved_over(
     unit: &Unit,
     calls: &Calls,
     integers: &IndexMap<ValueId, Known>,
+) -> Solved {
+    let solved = _solved_over(unit, calls, integers, true);
+    // `LLRM_CHECK_FLOAT_LOADS`: the solve that walks every float load finds
+    // what the one that walks those a known store may reach does.
+    static CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *CHECK.get_or_init(|| std::env::var_os("LLRM_CHECK_FLOAT_LOADS").is_some()) {
+        let whole = _solved_over(unit, calls, integers, false);
+        assert!(
+            whole.facts == solved.facts,
+            "LLRM_CHECK_FLOAT_LOADS: the loads left unwalked had facts: {} against {}",
+            whole.facts.len(),
+            solved.facts.len()
+        );
+    }
+    solved
+}
+
+fn _solved_over(
+    unit: &Unit,
+    calls: &Calls,
+    integers: &IndexMap<ValueId, Known>,
+    filtered: bool,
 ) -> Solved {
     let function = unit.function;
     let rules = function.walk().filter_map(|(_, inst)| rule(unit, inst).map(|rule| (inst, rule))).collect::<Vec<_>>();
@@ -996,9 +1127,20 @@ pub fn solved_over(
     // `known_walked` does.
     let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
     let walked_unit = annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
-    let accesses = crate::memoryssa::Accesses::plain(&walked_unit, calls);
-    let providers =
-        consts::load_providers(&walked_unit.with_registers(integers), &accesses, &|result| loads.contains(&result));
+    let accesses = walked_unit.plain_accesses(calls);
+    // Only a load some store of a possibly known value may reach is walked: 842
+    // of d_faces' float loads were, 88 had a provider, and the rest cost 58 M
+    // instructions to find none.
+    let reachable = if filtered {
+        _loads_a_known_store_may_reach(&walked_unit, &accesses, &rules, &loads, integers)
+    } else {
+        loads.clone()
+    };
+    let providers = if reachable.is_empty() {
+        Default::default()
+    } else {
+        consts::load_providers(&walked_unit.with_registers(integers), &accesses, &|result| reachable.contains(&result))
+    };
     let stored = std::cell::RefCell::new(integers.clone());
     let put = |site: InstId| consts::_put(unit, site, &stored.borrow());
     let rule_at: llrm_mir::dense::IdMap<InstId, usize> =
