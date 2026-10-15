@@ -1154,3 +1154,26 @@ def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no
         logs.mkdir()
         _, code, _, _ = gate.run_step("facts", command, logs, {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}, check)
         assert code == {"ok": 0, "failed": 101, "silent": 78}[outcome], (outcome, code)
+
+
+def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
+    """CI's jobs come from `gate.py plan --json` (ci.yml lists no step): the steps of its groups, with the build, are the steps `gate.py run`
+    plans for the same diff, so a green CI is the local pass. Checked for diffs of each kind, and that the workflow asks the planner."""
+    import json
+    import subprocess as sp
+
+    for files in (["docs/x.md"], ["tools/gate/gate.py"], ["bench/fib/fib.c"], ["crates/backend/llrm-core/src/lib.rs"], ["tests/turbo.rs"]):
+        local = gate.plan(files)
+        out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
+        ci = json.loads(out.stdout)
+        in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
+        assert ci["tier"] == local.tier, files
+        assert in_groups + sorted(ci["skipped"]) == sorted(s for s in local.steps if s != "build"), (files, ci)
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
+    assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
+
+
+def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow
