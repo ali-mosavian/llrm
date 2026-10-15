@@ -25,8 +25,23 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
   or loops `reached_by` the changes (a change to a terminator or to the CFG
   redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
+- `SOUND` with `covers`: the entry is kept past an invalidation while every
+  edit since it was derived keeps every live value's meaning
+  (`passes::sound_edits`, read from the change log, not promised by a pass):
+  an instruction erased, uses replaced by the same value (`replace_value`
+  logs `Substituted` first), a value made that nothing existing reads. A block
+  made or erased, an operand set to another value, an instruction rewritten in
+  place and a store or call made or moved each end it. What the result says of
+  a live value then holds; a value it has no entry for is unknown, and none is
+  asked of an erased one. gcc keeps its alias and points-to results across DCE,
+  folding and value numbering the same way. `Analyses::refresh_soft` drops what
+  was kept this way at the start of each round of a fixed point, so the facts are
+  worked out afresh once a round. `ThroughMemory` is `SOUND`: on `d_faces` -O1 it is derived 49 times
+  instead of 62 and the compile takes 1.3% fewer instructions.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
-  fresh `run`.
+  fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
+  something was kept as sound, what was derived from it is not compared with
+  fresh results (it is sound, not the same).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%

@@ -149,6 +149,11 @@ pub enum Change {
         from: BlockId,
     },
     Rewritten(InstId),
+    /// Every use of `value` is about to become an operand that is the same
+    /// value (`replace_value`: a common subexpression, a load's stored value, a
+    /// constant folded to), each as an `Operand` entry then a `Rewritten`
+    /// one. What an analysis said of any value stays true.
+    Substituted(ValueId),
     /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
     /// the change, by what reads what an instruction read before (the
     /// liveness of a value it stopped reading, the edge a branch stopped

@@ -73,7 +73,7 @@ pub fn of(
                 found = found | Footprint::STRUCTURE;
                 continue;
             }
-            Change::Operand { .. } | Change::Operands { .. } => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
             Change::Inserted { inst, .. }
             | Change::Moved { inst, .. }
             | Change::Rewritten(inst)
