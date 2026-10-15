@@ -1891,3 +1891,49 @@ fn test_a_first_read_moves_past_a_trapping_instruction_where_no_trap_is_unmasked
     let (memory, stack) = _x87(&insns, &[(x, 6.0), (y, 3.0), (c, 0.5), (z, 4.0)]);
     assert_eq!((memory[out], memory[other], stack), (2.0, 2.0, vec![]));
 }
+
+/// d_faces: both operands dying, the right not beneath the left, was three
+/// exchanges around `fcompp` (and `fxch st(2); fxch st(2)` pairs): the left is
+/// put on top and the compare names the right's slot, which a dead value then
+/// leaves with one `fstp st(i)`.
+#[test]
+fn test_a_compare_of_two_dying_values_apart_needs_no_rotation() {
+    let (a, b, c, out) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4), frame_cell(-16, 4));
+    let mut body = _body(vec![_load(5, &a), fchs(1, 5), _load(6, &b), fchs(3, 6), _load(7, &c), fchs(2, 7)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    // compare value 1 (deepest) with 2 (on top): 3 stays, read after the
+    // compare
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&out, 3)), vec![], vec![3])));
+    body.blocks[0].insns = insns.into();
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-16)));
+    let exchanges = names.iter().filter(|name| *name == "fxch").count();
+    assert!(exchanges <= 1, "{names:?}");
+    assert!(!names.iter().any(|name| name == "fcompp") || exchanges == 0, "{names:?}");
+}
+
+/// The left lives and the right dies: `fcom st(i)`, and the right leaves with
+/// `fstp st(i)`, no copy of the left.
+#[test]
+fn test_a_compare_that_keeps_its_left_and_drops_its_right_copies_nothing() {
+    let (a, b, out) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4));
+    let mut body = _body(vec![_load(5, &a), fchs(1, 5), _load(6, &b), fchs(2, 6)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&out, 1)), vec![], vec![1])));
+    body.blocks[0].insns = insns.into();
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-16)));
+    assert_eq!(names.iter().filter(|name| *name == "fld").count(), 2, "{names:?}");
+}

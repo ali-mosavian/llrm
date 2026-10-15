@@ -763,42 +763,39 @@ impl _Stack {
         left: u32,
         right: u32,
     ) -> Result<(), Raised> {
-        // Right still read, left not: left on top, `fcomp st(i)` pops it and
-        // leaves right where it lies. Both still read: `fcom st(i)`. As
-        // gcc's reg-stack and LLVM's X86FloatingPoint compare against any slot,
-        // not a copy of it.
-        if right != left && !self.survives(right) == false {
-            let top_left = index_of(&self.values, left) == 0 || {
-                let slot = index_of(&self.values, left);
+        // As gcc's reg-stack and LLVM's X86FloatingPoint compare against any
+        // slot, not a copy of it: left on top (one exchange
+        // at most), then `fcompp` where both die and right lies beneath it;
+        // `fcomp st(i)` where left dies, which pops it; `fcom st(i)`
+        // where it lives. A right that dies is popped after, as any dead value
+        // is.
+        if right != left {
+            let slot = index_of(&self.values, left);
+            if slot != 0 {
                 self.exchange(slot);
-                true
-            };
-            if top_left {
-                let slot = index_of(&self.values, right);
-                let name = if self.survives(left) { "fcom" } else { "fcomp" };
+            }
+            let slot = index_of(&self.values, right);
+            let (lives, other_lives) = (self.survives(left), self.survives(right));
+            if !lives && !other_lives && slot == 1 {
+                self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
+                self.values.drain(..2);
+            } else {
+                let name = if lives { "fcom" } else { "fcomp" };
                 self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
-                if name == "fcomp" {
+                if !lives {
                     self.values.remove(0);
                 }
-                return self.status();
             }
+            return self.status();
         }
-        // Left on top and right beneath it, each a copy where it is read again:
-        // `fld st(i)` copies from any slot.
+        // One value on both sides: a copy of it, read again where it is.
         if self.survives(left) {
             self.duplicate(left)?;
         } else {
             self.top(left)?;
         }
-        if right == left || self.survives(right) {
-            self.duplicate(right)?;
-            self.exchange(1);
-        } else if index_of(&self.values, right) != 1 {
-            let slot = index_of(&self.values, right);
-            self.exchange(slot);
-            self.exchange(1);
-            self.exchange(slot);
-        }
+        self.duplicate(right)?;
+        self.exchange(1);
         self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
         self.values.drain(..2);
         self.status()

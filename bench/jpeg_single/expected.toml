@@ -1,39 +1,39 @@
-reason = "x87: a store or compare of a live value no longer copies it (fist, fcom/fcomp st(i)), and by default a float conversion stays in its register without a store and load (gcc's -fexcess-precision=fast; -fexcess-precision=standard rounds): float rows fewer instructions and bytes; jpeg_fixed bq32 -O2 +1 instruction is an integer program (layout-dependent copy path), not x87"
+reason = "x87 compare: the left goes on top (one exchange at most) and the compare names the right's slot (fcompp, fcomp st(i) or fcom st(i)), no 3-exchange rotation: jpeg_single bq32 -1.0% instructions, fewer code bytes"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5208
+code_bytes = 5202
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4849
+code_bytes = 4843
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5240
+code_bytes = 5234
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4881
+code_bytes = 4875
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63000793
-code_bytes = 6274
+instructions = 62341030
+code_bytes = 6268
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64173988
-code_bytes = 5864
+instructions = 63514226
+code_bytes = 5858
 data_bytes = 29697
 bss_bytes = 0
 
