@@ -2961,11 +2961,24 @@ impl Selector<'_, '_, '_> {
         let width = self.width(ty)?;
         if let Some(value) = self.constant(operand, width) {
             let held = Held { value: self.fresh(), width };
+            // A narrow zero is written whole where the target runs narrow
+            // operations on the whole register: `xor r32,r32` has no operand-
+            // size prefix, and the half above is what no reader of the word
+            // looks at. Another constant stays a word: `mov r32,imm32` is a
+            // byte longer, and widening it moved allocations (shellsort at
+            // m32 -O2 lost a folded load: +63 instructions).
+            let whole = self.layout.largest_legal_integer() / 8;
+            let wide = if width < whole && self.types().int_bits(ty).is_some() && !self.promote.is_empty() && value == 0
+            {
+                whole
+            } else {
+                width
+            };
             let what = semantics(
                 Operation::Move,
                 "mov",
-                vec![Loc::Held(held)],
-                vec![Loc::Imm(Imm { value, width, address: None })],
+                vec![Loc::Held(Held { width: wide, ..held })],
+                vec![Loc::Imm(Imm { value, width: wide, address: None })],
             );
             out.push(insn(at, what));
             return Ok(held);
@@ -5409,8 +5422,12 @@ impl Selector<'_, '_, '_> {
         // A convention that passes in registers states what a call destroys, by
         // the registers it used.
         let changed = placed.as_ref().map(|(entry, placement)| {
-            let result =
-                (!self.types().is_void(instruction.ty)).then(|| self.size(instruction.ty)).transpose()?.map(i64::from);
+            // A float comes back in st(0): no general register holds it.
+            let float = self.arch.float_stack() > 0 && matches!(self.types().get(instruction.ty), Type::Float(_));
+            let result = (!self.types().is_void(instruction.ty) && !float)
+                .then(|| self.size(instruction.ty))
+                .transpose()?
+                .map(i64::from);
             let names = entry.clobbers(&placement.used, result);
             // The selectors the description names no more than a contract does
             // (FS, GS) are as much the callee's to use.

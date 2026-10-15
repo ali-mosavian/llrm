@@ -1,5 +1,5 @@
-reason = "merge of main: re-bless of the rows the x87 forms move"
-blessed = "2026-10-15"
+reason = "merge of main: the x87 forms (#1767) move fpbench, jpeg_*, nbody, stft_single rows against main's counts; stft_single c -O2 code 795 -> 804 B (the fi* operand forms), the rest down"
+blessed = "2026-10-16"
 
 [bas.O2]
 code_bytes = 1242
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 71705114
-code_bytes = 1374
+instructions = 71705104
+code_bytes = 1369
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 72564120
-code_bytes = 1341
+instructions = 72564109
+code_bytes = 1336
 data_bytes = 4733
 bss_bytes = 0
 
