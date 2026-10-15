@@ -16,7 +16,11 @@
 //! exit states, with the entry block also fed by `Live`, the state on entry to
 //! the function. Phis are wired before they are resolved, so back edges need no
 //! iteration over memory versions; then phis whose inputs reduce to one state
-//! are replaced by it.
+//! are replaced by it. What that makes (`Structure`) depends on the body and
+//! its `Accesses` alone, so it is kept in the accesses, per body state, and
+//! every graph built from them shares it: the walks' memory of what was
+//! asked (and the registers they know) is each graph's own. The manager's
+//! `PlainAccesses` is the one set `ThroughMemory` and `FloatFacts` share.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%

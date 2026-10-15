@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/floatfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/floatfacts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/floatfacts.rs sha256:9b36634485ecc308f01177db76654b03772f769b8723c547856198d4785e0c5b -->
+<!-- src: crates/opt/llrm-analysis/src/floatfacts.rs sha256:831232e55bcb9950e9a3e5ba2aabe7a3b5c45c97fc65cc397953093edc5f2caf -->
 
 # floatfacts
 
@@ -39,6 +39,15 @@ and a float store's bits reach its cells as a fact about the stored value
    %b = load double, ptr @x        read from MemorySSA's providers -> 3.5
    %c = fdiv double %b, 3.0        3.5/3 = 7/6, not exact: no fact
 ```
+
+Only a load some store of a possibly known value may write is walked for
+its providers (`_loads_a_known_store_may_reach`): a value is possibly known
+where it is a constant, an integer the solve was given, a phi, an operation
+on possibly known values, or a load that a store of one may write
+(`memoryssa::Writers`, as `spares` decides it); a load of constant memory
+reads its initializer. It is a fixed point from the constants outward and
+leaves the facts as they were (`LLRM_CHECK_FLOAT_LOADS` solves both ways and
+asserts they are equal).
 
 Counted float loops. `loop_exits` finds two-block counted loops (a
 single-latch loop whose latch ends in its `br` to the header, with a single

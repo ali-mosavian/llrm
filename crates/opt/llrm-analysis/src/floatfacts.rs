@@ -35,6 +35,15 @@
 //!    %c = fdiv double %b, 3.0        3.5/3 = 7/6, not exact: no fact
 //! ```
 //!
+//! Only a load some store of a possibly known value may write is walked for
+//! its providers (`_loads_a_known_store_may_reach`): a value is possibly known
+//! where it is a constant, an integer the solve was given, a phi, an operation
+//! on possibly known values, or a load that a store of one may write
+//! (`memoryssa::Writers`, as `spares` decides it); a load of constant memory
+//! reads its initializer. It is a fixed point from the constants outward and
+//! leaves the facts as they were (`LLRM_CHECK_FLOAT_LOADS` solves both ways and
+//! asserts they are equal).
+//!
 //! Counted float loops. `loop_exits` finds two-block counted loops (a
 //! single-latch loop whose latch ends in its `br` to the header, with a single
 //! preheader) whose float state lives in memory. If induction proves the trip
@@ -967,10 +976,14 @@ fn _loads_a_known_store_may_reach(
     if loads.is_empty() {
         return reachable;
     }
-    let stores = rules
-        .iter()
-        .filter(|(inst, _)| matches!(function.instruction(*inst).opcode, Opcode::Store { .. }))
-        .map(|(inst, _)| *inst)
+    // Any store: a float is as well read from the bytes of an integer one.
+    let stores = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            function.instruction(inst).opcode,
+            Opcode::Store { volatile: false, .. }
+        ))
         .collect::<Vec<_>>();
     let mut pending: Vec<(InstId, ValueId, MemRef)> = rules
         .iter()
@@ -979,6 +992,13 @@ fn _loads_a_known_store_may_reach(
             loads.contains(&result).then_some((*inst, result, reference))
         })
         .collect();
+    // A load of constant memory is read from its initializer, not from a store.
+    for (_, result, reference) in &pending {
+        if reference.unwritable() {
+            reachable.insert(*result);
+        }
+    }
+    pending.retain(|(_, result, _)| !reachable.contains(result));
     let defining: llrm_mir::dense::IdMap<ValueId, usize> = rules
         .iter()
         .enumerate()
@@ -1082,9 +1102,18 @@ pub fn solved_over(
         let whole = _solved_over(unit, calls, integers, false);
         assert!(
             whole.facts == solved.facts,
-            "LLRM_CHECK_FLOAT_LOADS: the loads left unwalked had facts: {} against {}",
+            "LLRM_CHECK_FLOAT_LOADS: the loads left unwalked had facts: {} against {}: {:?}",
             whole.facts.len(),
-            solved.facts.len()
+            solved.facts.len(),
+            whole
+                .facts
+                .keys()
+                .filter(|value| !solved.facts.contains_key(*value))
+                .map(|&value| match unit.function.value(value).def {
+                    ValueDef::Instruction(inst) => format!("{:?}", unit.function.instruction(inst)),
+                    other => format!("{other:?}"),
+                })
+                .collect::<Vec<_>>()
         );
     }
     solved

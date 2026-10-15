@@ -67,8 +67,9 @@
 //!  Bounded          Registers, Counted, DominatedEdges
 //!  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
 //!  Accesses         Annotated, CallEffects                  (memoryssa)
-//!  ThroughMemory    Writes, Annotated, Registers
-//!  FloatFacts       ThroughMemory, Writes, Annotated, Registers
+//!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
+//!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
+//!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
 //!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
