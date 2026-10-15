@@ -1276,3 +1276,61 @@ fn test_a_branch_or_table_is_remapped_by_its_blocks() {
     assert!(Semantics { target: Some(3), ..Semantics::new(Operation::Jump) }.remapped(to).is_none());
     assert!(Semantics::new(Operation::Move).remapped(to).is_none());
 }
+
+/// Each branch threaded past a passage walked the whole body from the entry to
+/// find what it stranded, though one block can only strand the blocks it alone
+/// enters: N cases, N walks of N blocks (`cases` 1024: `lir jumps` 8196 Minstr
+/// of 25 G). The edges entering each block are counted; a walk is made only for
+/// a block on a cycle.
+#[test]
+fn threading_a_chain_of_passages_makes_no_walk_from_the_entry() {
+    let cases = 40;
+    let (exit, last) = (10_000, 10 * cases);
+    let mut blocks = Vec::new();
+    let mut passages = Vec::new();
+    for case in 0..cases {
+        let (at, passage) = (10 * case, 20_000 + 10 * case);
+        blocks.push(block(
+            at,
+            vec![_compare(at), _branch(at + 1, "jne", passage), _jump(at + 2, at + 10)],
+            vec![passage, at + 10],
+        ));
+        passages.push(block(passage, vec![_inserted(_jump(passage, exit))], vec![exit]));
+    }
+    blocks.push(block(last, vec![_return(last)], vec![]));
+    blocks.extend(passages);
+    blocks.push(block(exit, vec![_return(exit)], vec![]));
+    WALKS.with(|one| one.set(0));
+    let result = threaded(&body("f", 0, blocks));
+    assert!(result.blocks.len() < 2 * cases as usize, "the passages are threaded past");
+    let walks = WALKS.with(|one| one.get());
+    assert_eq!(walks, 0, "{walks} walks from the entry for {cases} passages");
+}
+
+/// A table jump to one passage in several entries freed the passage once for
+/// each, and its edge to the exit was taken off the count each time: the
+/// count wrapped, the exit was thought unentered and removed while a block
+/// still jumped to it (qcport/mdl: `a jump to L8_38, which is nowhere`).
+#[test]
+fn a_table_naming_one_passage_four_times_strands_it_once() {
+    let (passage, exit, other) = (20, 30, 40);
+    let table = Semantics { table: vec![passage; 4], ..Semantics::new(Operation::Jump) };
+    let switch = Arc::new(Insn::new(1, Some((1, 1)), Some(table), Vec::new(), Vec::new()));
+    let blocks = vec![
+        block(0, vec![_compare(0), _branch(1, "jne", other)], vec![other, 10]),
+        block(10, vec![switch], vec![passage]),
+        block(passage, vec![_inserted(_jump(passage, exit))], vec![exit]),
+        block(other, vec![_inserted(_jump(other, exit))], vec![exit]),
+        block(exit, vec![_return(exit)], vec![]),
+    ];
+    let result = threaded(&body("f", 0, blocks));
+    let known: Vec<i64> = result.blocks.iter().map(|block| block.at).collect();
+    for block in &result.blocks {
+        assert!(
+            block.succ.iter().all(|to| known.contains(to)),
+            "{} jumps to a block that is gone: {:?}",
+            block.at,
+            block.succ
+        );
+    }
+}

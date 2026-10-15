@@ -1102,13 +1102,14 @@ pub fn threaded(body: &LirBody) -> LirBody {
     let body = _hoisted(body);
     let mut body = _reachable(&body, body.blocks.clone());
     let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    let mut at: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    let mut at = Places::of(&body);
     // One pass applies every change it meets, going on from the changed block
     // (LLVM's BranchFolding, gcc's `cleanup_cfg`); a change can open one in a
     // block before it, so passes repeat from the top until one finds none.
     let (mut from, mut visits) = (0, 0);
+    let mut degrees = Degrees::of(&body);
     loop {
-        match _step(&mut body, &mut at, &protected, from, &mut visits) {
+        match _step(&mut body, &mut at, &mut degrees, &protected, from, &mut visits) {
             Some(next) => from = next,
             None if from == 0 => break,
             None => from = 0,
@@ -1798,7 +1799,8 @@ pub fn _with_return(
 /// searched for what it reaches again.
 pub fn _step(
     body: &mut LirBody,
-    at: &mut IndexMap<i64, usize>,
+    at: &mut Places,
+    degrees: &mut Degrees,
     protected: &BTreeSet<i64>,
     from: usize,
     visits: &mut usize,
@@ -1854,14 +1856,13 @@ pub fn _step(
             let succ: IndexSet<i64> = table.iter().copied().collect();
             let insns =
                 block.insns.iter().map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&moved) } else { Arc::clone(one) });
-            blocks[index] = LirBlock { succ: succ.into_iter().collect(), ..block.with_insns(insns.collect()) };
+            let moved_succ: Vec<i64> = succ.into_iter().collect();
+            degrees.moved(&block.succ, &moved_succ);
+            blocks[index] = LirBlock { succ: moved_succ, ..block.with_insns(insns.collect()) };
             body.blocks = blocks;
-            for (old, _) in changed {
-                if old != body.entry && !body.blocks.iter().any(|one| one.succ.contains(&old)) {
-                    _stranded(body, at);
-                }
-            }
-            return Some(at.get(&here).copied().unwrap_or(0));
+            let freed: Vec<i64> = changed.iter().map(|&(old, _)| old).collect();
+            _stranded(body, at, degrees, &freed);
+            return Some(at.get(&here).unwrap_or(0));
         }
         let target = _through(&blocks, at, last_what.target, protected);
         if target != last_what.target {
@@ -1870,15 +1871,16 @@ pub fn _step(
                 body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
             }
             blocks[index] = _retargeted(&block, last, onward);
+            degrees.moved(&block.succ, &blocks[index].succ);
             body.blocks = blocks;
             // Every block with edges is reached (the body was pruned after each
             // change), so the only block this can strand is the one
             // the branch left, and only when nothing else enters it.
             match last_what.target {
-                Some(old) if old == body.entry || body.blocks.iter().any(|one| one.succ.contains(&old)) => {}
-                _ => _stranded(body, at),
+                Some(old) => _stranded(body, at, degrees, &[old]),
+                None => _stranded_whole(body, at, degrees),
             }
-            return Some(at.get(&here).copied().unwrap_or(0));
+            return Some(at.get(&here).unwrap_or(0));
         }
         if last_what.op == Operation::Jump && target == after {
             // A fall-through needs no machine jump.  A decoded jump may still
@@ -1899,7 +1901,7 @@ pub fn _step(
                 .collect();
             blocks[index] = LirBlock { insns: kept, ..block };
             body.blocks = blocks;
-            return Some(at.get(&here).copied().unwrap_or(0));
+            return Some(at.get(&here).unwrap_or(0));
         }
         if last_what.op == Operation::Jump
             && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
@@ -1924,7 +1926,7 @@ pub fn _step(
                     .collect();
                 blocks[index] = LirBlock { insns, ..block };
                 body.blocks = blocks;
-                return Some(at.get(&here).copied().unwrap_or(0));
+                return Some(at.get(&here).unwrap_or(0));
             }
         }
         let opposite = last_what.name.as_deref().and_then(|name| _OPPOSITE.get(name));
@@ -1954,11 +1956,14 @@ pub fn _step(
                     .map(|one| if Arc::ptr_eq(one, last) { Arc::clone(&inverted) } else { Arc::clone(one) })
                     .collect();
                 let succ = vec![onward.expect("checked above"), beyond.expect("a branch names its target")];
+                degrees.moved(&block.succ, &succ);
+                degrees.moved(&over.succ, &[]);
+                let freed = vec![over.at];
                 blocks[index] = LirBlock { insns, succ, ..block };
                 blocks[index + 1] = LirBlock { succ: Vec::new(), ..over };
                 body.blocks = blocks;
-                _stranded(body, at);
-                return Some(at.get(&here).copied().unwrap_or(0));
+                _stranded(body, at, degrees, &freed);
+                return Some(at.get(&here).unwrap_or(0));
             }
         }
     }
@@ -2012,17 +2017,17 @@ pub fn _passage(block: &LirBlock) -> Option<i64> {
 /// used by measurement.  Keeping the zero-length block changes no encoding.
 pub fn _through(
     blocks: &[LirBlock],
-    at: &IndexMap<i64, usize>,
+    at: &Places,
     target: Option<i64>,
     protected: &BTreeSet<i64>,
 ) -> Option<i64> {
     let (start, mut seen) = (target, HashSet::default());
     let mut target = target;
     while let Some(current) = target {
-        if protected.contains(&current) || !at.contains_key(&current) {
+        if protected.contains(&current) || !at.contains(&current) {
             break;
         }
-        let Some(onward) = _passage(&blocks[at[&current]]) else {
+        let Some(onward) = _passage(&blocks[at.get(&current).expect("known above")]) else {
             break;
         };
         if seen.contains(&current) {
@@ -2075,23 +2080,27 @@ pub fn _reachable(
     made
 }
 
-/// `_prune`, and the positions in `at` made again where it removed a block.
-fn _stranded(
+/// `_prune`, and the positions in `at` made again where it removed a block,
+/// from the whole body: what the counts cannot settle.
+fn _stranded_whole(
     body: &mut LirBody,
-    at: &mut IndexMap<i64, usize>,
+    at: &mut Places,
+    degrees: &mut Degrees,
 ) {
+    #[cfg(test)]
+    WALKS.with(|one| one.set(one.get() + 1));
     // Followed over the positions the caller keeps, and the blocks rebuilt only
     // if one that is reached by nothing is not already the bytes it owned:
     // the body is pruned after each change, so that is rarely more than the
     // block a branch just left.
     let blocks = &body.blocks;
     let mut reached = vec![false; blocks.len()];
-    let mut work: Vec<usize> = at.get(&body.entry).copied().into_iter().collect();
+    let mut work: Vec<usize> = at.get(&body.entry).into_iter().collect();
     while let Some(index) = work.pop() {
         if std::mem::replace(&mut reached[index], true) {
             continue;
         }
-        work.extend(blocks[index].succ.iter().filter_map(|to| at.get(to).copied()).filter(|&next| !reached[next]));
+        work.extend(blocks[index].succ.iter().filter_map(|to| at.get(to)).filter(|&next| !reached[next]));
     }
     let settled = |block: &LirBlock| {
         block.succ.is_empty()
@@ -2120,7 +2129,244 @@ fn _stranded(
     if keep.contains(&false) {
         let mut places = keep.into_iter();
         body.blocks.retain(|_| places.next().unwrap_or(true));
-        *at = body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    }
+    *at = Places::of(body);
+    *degrees = Degrees::of(body);
+}
+
+// Walks from the entry made to find the blocks a change strands.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many edges enter each block, kept across the changes `_step` makes, and
+/// the blocks on a cycle.
+///
+/// Every block that has edges is reached (the body is pruned after each
+/// change), so the blocks a change strands are the ones whose count it takes to
+/// zero, and those they enter in turn: no walk from the entry. A block on a
+/// cycle can keep its count and be cut off, so a count that reaches one is
+/// settled by the walk.
+pub struct Degrees {
+    entering: IndexMap<i64, u32>,
+    cyclic: HashSet<i64>,
+}
+
+impl Degrees {
+    fn of(body: &LirBody) -> Self {
+        let mut entering: IndexMap<i64, u32> = body.blocks.iter().map(|block| (block.at, 0)).collect();
+        for block in &body.blocks {
+            for to in &block.succ {
+                if let Some(count) = entering.get_mut(to) {
+                    *count += 1;
+                }
+            }
+        }
+        Self { cyclic: _cyclic(body), entering }
+    }
+
+    /// A block's edges `old` become `new`.
+    fn moved(
+        &mut self,
+        old: &[i64],
+        new: &[i64],
+    ) {
+        for to in old {
+            if let Some(count) = self.entering.get_mut(to) {
+                *count -= 1;
+            }
+        }
+        for to in new {
+            if let Some(count) = self.entering.get_mut(to) {
+                *count += 1;
+            }
+        }
+    }
+}
+
+/// The blocks on a cycle: those of a strongly connected component of more than
+/// one block, or with an edge to themselves.
+fn _cyclic(body: &LirBody) -> HashSet<i64> {
+    let index: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let successors: Vec<Vec<usize>> =
+        body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| index.get(to).copied()).collect()).collect();
+    // Tarjan's, with the recursion on a stack.
+    let count = successors.len();
+    let (mut order, mut low) = (vec![usize::MAX; count], vec![0; count]);
+    let (mut on, mut stack, mut next) = (vec![false; count], Vec::new(), 0);
+    let mut cyclic = HashSet::default();
+    for root in 0..count {
+        if order[root] != usize::MAX {
+            continue;
+        }
+        let mut calls = vec![(root, 0_usize)];
+        order[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on[root] = true;
+        while let Some(&mut (at, ref mut child)) = calls.last_mut() {
+            if let Some(&to) = successors[at].get(*child) {
+                *child += 1;
+                if order[to] == usize::MAX {
+                    order[to] = next;
+                    low[to] = next;
+                    next += 1;
+                    stack.push(to);
+                    on[to] = true;
+                    calls.push((to, 0));
+                } else if on[to] {
+                    low[at] = low[at].min(order[to]);
+                }
+                continue;
+            }
+            calls.pop();
+            if let Some(&(parent, _)) = calls.last() {
+                low[parent] = low[parent].min(low[at]);
+            }
+            if low[at] == order[at] {
+                let mut members = Vec::new();
+                while let Some(one) = stack.pop() {
+                    on[one] = false;
+                    members.push(one);
+                    if one == at {
+                        break;
+                    }
+                }
+                if members.len() > 1 || successors[at].contains(&at) {
+                    cyclic.extend(members.into_iter().map(|one| body.blocks[one].at));
+                }
+            }
+        }
+    }
+    cyclic
+}
+
+/// The blocks that `freed`, blocks a change took an edge from, strand: the
+/// positions in `at` made again where one is removed.
+///
+/// What `_prune` makes of them, in place: the blocks that keep bytes stay where
+/// they are, and only a block with none to keep takes the positions after it
+/// with it.
+fn _stranded(
+    body: &mut LirBody,
+    at: &mut Places,
+    degrees: &mut Degrees,
+    freed: &[i64],
+) {
+    let settled = |block: &LirBlock| {
+        block.succ.is_empty()
+            && block.phis.is_empty()
+            && !block.insns.is_empty()
+            && block.insns.iter().all(|one| Arc::ptr_eq(&lir::bytes_only(one), one) && !one.owned().is_empty())
+    };
+    // Only a block nothing enters is stranded; one that still has an edge in
+    // is left to the walk that `_prune` makes in the end.
+    let mut work: Vec<i64> =
+        freed.iter().copied().filter(|one| *one != body.entry && degrees.entering.get(one) == Some(&0)).collect();
+    let mut gone: Vec<usize> = Vec::new();
+    let mut stripped: HashSet<i64> = HashSet::default();
+    while let Some(block_at) = work.pop() {
+        if !stripped.insert(block_at) {
+            continue;
+        }
+        let Some(index) = at.get(&block_at) else { continue };
+        let block = &body.blocks[index];
+        if settled(block) {
+            continue;
+        }
+        let succ = block.succ.clone();
+        let kept: Vec<Arc<Insn>> =
+            block.insns.iter().filter(|one| !one.owned().is_empty()).map(lir::bytes_only).collect();
+        if kept.is_empty() {
+            gone.push(index);
+        } else {
+            body.blocks[index] = LirBlock { succ: Vec::new(), phis: Vec::new(), ..block.with_insns(kept) };
+        }
+        for to in succ {
+            let Some(count) = degrees.entering.get_mut(&to) else { continue };
+            *count -= 1;
+            if *count > 0 {
+                // Cut off from the entry all the same if the blocks that
+                // still enter it are a cycle's.
+                if degrees.cyclic.contains(&to) {
+                    return _stranded_whole(body, at, degrees);
+                }
+            } else if to != body.entry {
+                work.push(to);
+            }
+        }
+    }
+    if !gone.is_empty() {
+        let mut keep = vec![true; body.blocks.len()];
+        for index in gone {
+            keep[index] = false;
+        }
+        for (index, block) in body.blocks.iter().enumerate() {
+            if !keep[index] {
+                at.remove(block.at);
+            }
+        }
+        let mut places = keep.into_iter();
+        body.blocks.retain(|_| places.next().unwrap_or(true));
+    }
+}
+
+/// Where each block is, kept as blocks are removed: a block's place is the one
+/// it began at less the blocks removed before it, from a Fenwick tree, so a
+/// removal does not number the blocks after it again.
+pub struct Places {
+    began: IndexMap<i64, usize>,
+    removed: Vec<u32>,
+    gone: Vec<bool>,
+}
+
+impl Places {
+    fn of(body: &LirBody) -> Self {
+        let count = body.blocks.len();
+        Self {
+            began: body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect(),
+            removed: vec![0; count + 1],
+            gone: vec![false; count],
+        }
+    }
+
+    pub fn get(
+        &self,
+        at: &i64,
+    ) -> Option<usize> {
+        let began = *self.began.get(at)?;
+        if self.gone[began] {
+            return None;
+        }
+        // The blocks removed before it.
+        let (mut before, mut node) = (0_u32, began);
+        while node > 0 {
+            before += self.removed[node];
+            node &= node - 1;
+        }
+        Some(began - before as usize)
+    }
+
+    pub fn contains(
+        &self,
+        at: &i64,
+    ) -> bool {
+        self.get(at).is_some()
+    }
+
+    fn remove(
+        &mut self,
+        at: i64,
+    ) {
+        let began = self.began[&at];
+        self.gone[began] = true;
+        let mut node = began + 1;
+        while node < self.removed.len() {
+            self.removed[node] += 1;
+            node += node & node.wrapping_neg();
+        }
     }
 }
 
