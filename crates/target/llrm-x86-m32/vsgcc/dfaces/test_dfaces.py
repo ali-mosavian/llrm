@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+REQUIRES = ["qcport"]  # d_faces.c and its headers are QCport's, which the repository does not hold
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
