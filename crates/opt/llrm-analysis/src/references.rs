@@ -144,6 +144,14 @@ impl Table {
                     self.clear(unit);
                     return;
                 }
+                // The uses of a value replaced by an equal one are rewritten,
+                // each with an entry of its own; what read the value itself
+                // goes too.
+                Change::Substituted(value) => {
+                    for access in self.chains.remove(value).into_iter().flatten() {
+                        self.made.remove(&access);
+                    }
+                }
                 Change::Moved { .. } | Change::BlockCreated(_) | Change::BlockErased(_) => {}
             }
         }

@@ -102,3 +102,25 @@ fn test_a_kept_reference_equals_a_fresh_one_after_a_change() {
         }
     }
 }
+
+/// A value replaced by another everywhere (`replace_value`, which logs
+/// `Substituted` before the uses): an access whose chain read it decomposes
+/// again, and the kept reference is the fresh one.
+#[test]
+fn test_a_value_replaced_by_another_drops_the_accesses_that_read_it() {
+    let mut module = module();
+    let _ = asked(&module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let (p, q) = (value(function, "p"), value(function, "q"));
+        function.replace_value(p, Operand::Value(q));
+    }
+    assert!(asked(&module).2 >= 1, "the accesses that read %p decompose again");
+    let (function, layout) = (function(&module, "f"), layout(&module));
+    let unit = Unit::of(&module, &layout, function);
+    for (_, inst) in function.walk() {
+        if let Some(kept) = MemRef::of(&unit, inst) {
+            assert_eq!(kept, MemRef::decomposed(&unit, inst, &mut Vec::new()).unwrap());
+        }
+    }
+}
