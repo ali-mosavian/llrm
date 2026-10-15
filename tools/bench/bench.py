@@ -609,7 +609,7 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
 
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
-    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (bench/waivers) names its row,
+    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (tools/bench/waivers) names its row,
     counter and this count, one below it (better, to bless)."""
     if want is None:
         return [f"{label}: no baseline; run --bless --reason"]
