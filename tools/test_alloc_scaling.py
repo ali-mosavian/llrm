@@ -403,3 +403,17 @@ def test_a_spill_shares_the_lists_of_the_blocks_it_does_not_change():
         source.write_text(scaling.AXES["branches"](800))
         run = steps(compiler, source, "-O2")
     assert run["regalloc spill"] < 450, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (450 allowed; 590 before): {run}"
+
+
+def test_a_spill_copies_no_block_it_does_not_change():
+    """The body held its blocks by value: every round of the spiller cloned and dropped every block (each a few allocations),
+    `regalloc spill` costing 326 Minstr on `branches` at N=800 once the lists were shared. A body shares the blocks it keeps."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](800))
+        run = steps(compiler, source, "-O2")
+    assert run["regalloc spill"] < 300, f"branches N=800 -O2: regalloc spill cost {run['regalloc spill']} Minstr (300 allowed; 326 before): {run}"

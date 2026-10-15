@@ -1125,7 +1125,7 @@ fn landed_last(
     body: LirBody,
     marker: i64,
 ) -> Result<(LirBody, i64), String> {
-    let starts = |block: &crate::model::lir::LirBlock| {
+    let starts = |block: &crate::model::lir::Block| {
         block.insns.iter().find(|one| masm::prints(one)).is_some_and(|one| one.at == marker)
     };
     let Some(index) = body.blocks.iter().position(starts) else {

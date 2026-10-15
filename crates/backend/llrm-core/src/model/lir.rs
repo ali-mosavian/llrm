@@ -733,6 +733,66 @@ thread_local! {
     pub static BLOCK_CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// A block of a body, shared: copying the body copies counts, and a change to
+/// a block copies it first if another body holds it (`Arc::make_mut`), so a
+/// pass that changes a few blocks pays for those, not for every block.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Block(Arc<LirBlock>);
+
+impl Clone for Block {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl std::ops::Deref for Block {
+    type Target = LirBlock;
+    fn deref(&self) -> &LirBlock {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Block {
+    fn deref_mut(&mut self) -> &mut LirBlock {
+        Arc::make_mut(&mut self.0)
+    }
+}
+
+impl From<LirBlock> for Block {
+    fn from(block: LirBlock) -> Self {
+        Self(Arc::new(block))
+    }
+}
+
+/// `blocks`, shared: for a list of blocks made whole, as a test does.
+#[must_use]
+pub fn shared(blocks: Vec<LirBlock>) -> Vec<Block> {
+    blocks.into_iter().map(Block::from).collect()
+}
+
+impl FromIterator<LirBlock> for Vec<Block> {
+    fn from_iter<I: IntoIterator<Item = LirBlock>>(items: I) -> Self {
+        items.into_iter().map(Block::from).collect()
+    }
+}
+
+impl Block {
+    /// The block itself, copied only if another body holds it.
+    #[must_use]
+    pub fn into_inner(self) -> LirBlock {
+        Arc::unwrap_or_clone(self.0)
+    }
+
+    /// Whether both are the same allocation: nothing in between changed it.
+    #[must_use]
+    pub fn same_as(
+        &self,
+        other: &Self,
+    ) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 impl Clone for LirBlock {
     fn clone(&self) -> Self {
         #[cfg(test)]
@@ -761,8 +821,9 @@ impl LirBlock {
     pub fn with_insns(
         &self,
         insns: Vec<Arc<Insn>>,
-    ) -> Self {
+    ) -> Block {
         Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
+            .into()
     }
 
     /// Python `LirBlock.arrives`.
@@ -848,7 +909,7 @@ impl Eq for BlockFrequencies {}
 pub struct LirBody {
     pub name: String,
     pub entry: i64,
-    pub blocks: Vec<LirBlock>,
+    pub blocks: Vec<Block>,
     pub origin: IndexMap<u32, RegId>,
     pub pins: IndexMap<u32, RegId>,
     pub inputs: BTreeSet<u32>,
@@ -1011,7 +1072,7 @@ impl LirBody {
     pub fn new(
         name: impl Into<String>,
         entry: i64,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
         origin: IndexMap<u32, RegId>,
         pins: IndexMap<u32, RegId>,
     ) -> Self {
@@ -1064,7 +1125,7 @@ impl LirBody {
     #[must_use]
     pub fn with_blocks(
         &self,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
     ) -> Self {
         let frequencies = self.frequencies.as_ref().map(|kept| {
             // A block removed leaves the table with it.
@@ -1295,7 +1356,7 @@ mod tests {
         let body = super::LirBody::new(
             "f",
             1,
-            vec![super::LirBlock::new(1, vec![Arc::clone(&one)]), super::LirBlock::new(2, vec![one])],
+            vec![super::LirBlock::new(1, vec![Arc::clone(&one)]).into(), super::LirBlock::new(2, vec![one]).into()],
             Default::default(),
             Default::default(),
         );

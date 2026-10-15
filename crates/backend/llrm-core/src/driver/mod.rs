@@ -422,7 +422,7 @@ pub fn statement_table(
     let mut body = lir::LirBody::new(
         "$QB$STAT",
         1,
-        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)])],
+        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction)]).into()],
         Default::default(),
         Default::default(),
     );

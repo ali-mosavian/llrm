@@ -137,7 +137,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
@@ -236,7 +236,7 @@ pub fn eliminated_priced(
     prices: Option<EdgePrices>,
 ) -> Result<LirBody, String> {
     let body = &_exits_copied(body);
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, usize> = body.blocks.iter().map(|block| (block.at, block.succ.len())).collect();
     let widths = _widths(body);
     // Renaming a phi whose copies the predecessor could hold saves nothing
@@ -436,7 +436,7 @@ fn _exits_copied(body: &LirBody) -> LirBody {
                 });
                 LirBlock {
                     phis: phis.into_iter().cloned().collect(),
-                    ..block.with_insns(head.chain(block.insns.iter().cloned()).collect())
+                    ..block.with_insns(head.chain(block.insns.iter().cloned()).collect()).into_inner()
                 }
             })
             .collect(),
@@ -448,7 +448,7 @@ fn _exits_copied(body: &LirBody) -> LirBody {
 /// `into` defines it, so a path through `into` reads a new one.
 pub fn _observed(
     body: &LirBody,
-    at_of: &IndexMap<i64, &LirBlock>,
+    at_of: &IndexMap<i64, &Block>,
     where_: i64,
     into: i64,
     value: u32,
@@ -512,7 +512,7 @@ fn _read_once(body: &LirBody) -> IndexMap<u32, i64> {
 /// into `phi_block`, or down another path. Defining `result` where `value`
 /// was would then overwrite what that read wants.
 fn _live_after(
-    at_of: &IndexMap<i64, &LirBlock>,
+    at_of: &IndexMap<i64, &Block>,
     phi_block: i64,
     from: i64,
     value: u32,
@@ -562,7 +562,7 @@ fn _live_after(
 /// result with an argument they do not interfere (`tree-ssa-coalesce`) whoever
 /// else reads the argument.
 fn _read_past_loop(
-    at_of: &IndexMap<i64, &LirBlock>,
+    at_of: &IndexMap<i64, &Block>,
     header: i64,
     from: i64,
     value: u32,
@@ -839,7 +839,7 @@ pub fn placed_on_edges(
     body: &LirBody,
     transfers: &IndexMap<(i64, i64), Vec<Arc<Insn>>>,
 ) -> LirBody {
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut copies: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut split: IndexMap<(i64, i64), Split> = IndexMap::default();
     for (&(where_, into), insns) in transfers {
@@ -876,7 +876,7 @@ pub fn _split_edges(
     selected: bool,
     cheaper_on_edge: &dyn Fn(i64, i64) -> bool,
 ) -> Result<LirBody, String> {
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made: IndexMap<(i64, i64), LirBlock> = IndexMap::default();
     // The constants moved to their edges: the block they were made in and the
     // register they were made into.
@@ -945,7 +945,7 @@ pub fn _split_edges(
         );
     }
 
-    let mut blocks = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     for block in &body.blocks {
         let succ: Vec<i64> =
             block.succ.iter().map(|&one| landing.get(&(block.at, one)).copied().unwrap_or(one)).collect();
@@ -964,37 +964,40 @@ pub fn _split_edges(
                 }
             }
         }
-        blocks.push(LirBlock {
-            at: block.at,
-            insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
-            succ: succ.into(),
-            phis: kept[&block.at]
-                .iter()
-                .map(|phi| {
-                    _renamed_phi(
-                        &Phi {
-                            result: phi.result,
-                            incoming: phi
-                                .incoming
-                                .iter()
-                                .map(|&(where_, value)| {
-                                    (landing.get(&(where_, block.at)).copied().unwrap_or(where_), value)
-                                })
-                                .collect(),
-                        },
-                        rename,
-                    )
-                })
-                .collect::<Result<_, _>>()?,
-            cold: block.cold,
-        });
+        blocks.push(
+            LirBlock {
+                at: block.at,
+                insns: insns.iter().map(|one| _renamed(one, rename)).collect::<Result<_, _>>()?,
+                succ: succ.into(),
+                phis: kept[&block.at]
+                    .iter()
+                    .map(|phi| {
+                        _renamed_phi(
+                            &Phi {
+                                result: phi.result,
+                                incoming: phi
+                                    .incoming
+                                    .iter()
+                                    .map(|&(where_, value)| {
+                                        (landing.get(&(where_, block.at)).copied().unwrap_or(where_), value)
+                                    })
+                                    .collect(),
+                            },
+                            rename,
+                        )
+                    })
+                    .collect::<Result<_, _>>()?,
+                cold: block.cold,
+            }
+            .into(),
+        );
     }
     let mut out = body.clone();
     for (&(where_, into), &at) in &landing {
         let succ = &body.blocks.iter().find(|one| one.at == where_).expect("a split edge's block").succ;
         out.odds.rerouted(where_, succ, into, &[(at, 1.0)]);
     }
-    blocks.extend(made.into_values());
+    blocks.extend(made.into_values().map(Block::from));
     out.blocks = blocks;
     Ok(out)
 }
@@ -1076,7 +1079,7 @@ pub fn unsplit(body: &LirBody) -> LirBody {
         at
     };
 
-    let mut blocks = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     for block in &body.blocks {
         if bypass.contains_key(&block.at) {
             continue;
@@ -1101,13 +1104,16 @@ pub fn unsplit(body: &LirBody) -> LirBody {
                 incoming: phi.incoming.iter().map(|&(at, value)| (where_(at), value)).collect(),
             })
             .collect();
-        blocks.push(LirBlock {
-            at: block.at,
-            insns,
-            succ: block.succ.iter().map(|&at| where_(at)).collect(),
-            phis,
-            cold: block.cold,
-        });
+        blocks.push(
+            LirBlock {
+                at: block.at,
+                insns,
+                succ: block.succ.iter().map(|&at| where_(at)).collect(),
+                phis,
+                cold: block.cold,
+            }
+            .into(),
+        );
     }
     let mut out = body.clone();
     out.blocks = blocks;
@@ -1125,7 +1131,7 @@ mod tests {
     use crate::analysis::frequency::Frequency;
     use crate::backend::verify;
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody, Phi};
+    use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody, Phi};
     use crate::support::hash::IndexMap;
 
     fn what(
@@ -1149,7 +1155,7 @@ mod tests {
 
     fn body(
         name: &str,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
     ) -> LirBody {
         LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
@@ -1208,10 +1214,10 @@ mod tests {
         let mut anchored = body(
             "anchored-split-edge",
             vec![
-                block(0, vec![jump_branch], vec![1 << 32, 1 << 33], vec![]),
-                block(1 << 32, vec![Arc::clone(&anchor), Arc::clone(&jump)], vec![33], vec![]),
-                block(1 << 33, vec![anchor, jump], vec![33], vec![]),
-                block(33, vec![compare], vec![], vec![]),
+                block(0, vec![jump_branch], vec![1 << 32, 1 << 33], vec![]).into(),
+                block(1 << 32, vec![Arc::clone(&anchor), Arc::clone(&jump)], vec![33], vec![]).into(),
+                block(1 << 33, vec![anchor, jump], vec![33], vec![]).into(),
+                block(33, vec![compare], vec![], vec![]).into(),
             ],
         );
         anchored.inputs = BTreeSet::from([85]);
@@ -1225,7 +1231,7 @@ mod tests {
     fn test_split_fallthrough_gets_an_explicit_jump() {
         // EVTRAP's split exit edge was emitted unreachable after the handler.
         let jz = branch(0, Some((0, 2)), "jz", 20);
-        let edge_body = body("edge", vec![block(0, vec![Arc::clone(&jz)], vec![10, 20], vec![])]);
+        let edge_body = body("edge", vec![block(0, vec![Arc::clone(&jz)], vec![10, 20], vec![]).into()]);
         let done = _split_edges(
             &edge_body,
             &IndexMap::from_iter([((0, 10), Split::Pairs(vec![(2, 1)]))]),
@@ -1276,7 +1282,7 @@ mod tests {
         let looped = body(
             "looped",
             vec![
-                block(0, vec![mov(0, 1, 0), mov(1, 2, 1)], vec![10, 30], vec![]),
+                block(0, vec![mov(0, 1, 0), mov(1, 2, 1)], vec![10, 30], vec![]).into(),
                 block(
                     10,
                     vec![test],
@@ -1285,9 +1291,10 @@ mod tests {
                         Phi { result: 3, incoming: vec![(0, 1), (20, 4)] },
                         Phi { result: 4, incoming: vec![(0, 2), (20, 5)] },
                     ],
-                ),
-                block(20, vec![step], vec![10], vec![]),
-                block(30, vec![], vec![], vec![]),
+                )
+                .into(),
+                block(20, vec![step], vec![10], vec![]).into(),
+                block(30, vec![], vec![], vec![]).into(),
             ],
         );
         let done = eliminated(&looped).unwrap();
@@ -1321,9 +1328,9 @@ mod tests {
             let wide = body(
                 "wide",
                 vec![
-                    block(0, vec![load(0, 1)], if critical { vec![2, 1] } else { vec![2] }, vec![]),
-                    block(1, vec![load(1, 2)], vec![2], vec![]),
-                    block(2, vec![read], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 2)] }]),
+                    block(0, vec![load(0, 1)], if critical { vec![2, 1] } else { vec![2] }, vec![]).into(),
+                    block(1, vec![load(1, 2)], vec![2], vec![]).into(),
+                    block(2, vec![read], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 2)] }]).into(),
                 ],
             );
             let done = eliminated(&wide).unwrap();
@@ -1346,9 +1353,9 @@ mod tests {
         let exit = body(
             "exit",
             vec![
-                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]),
-                block(1, vec![], vec![], vec![]),
-                block(2, vec![Arc::new(use_)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1)] }]),
+                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
+                block(1, vec![], vec![], vec![]).into(),
+                block(2, vec![Arc::new(use_)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1)] }]).into(),
             ],
         );
 
@@ -1378,10 +1385,10 @@ mod tests {
         let live = body(
             "live-source",
             vec![
-                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]),
-                block(1, vec![push(1, 1)], vec![], vec![]),
-                block(2, vec![push(2, 3)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (4, 5)] }]),
-                block(4, vec![], vec![2], vec![]),
+                block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
+                block(1, vec![push(1, 1)], vec![], vec![]).into(),
+                block(2, vec![push(2, 3)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (4, 5)] }]).into(),
+                block(4, vec![], vec![2], vec![]).into(),
             ],
         );
 
@@ -1412,10 +1419,10 @@ mod tests {
         let mut branching = body(
             "both-edges",
             vec![
-                block(0, vec![define(0, 1), branch(1, Some((1, 2)), "jz", 2)], vec![1, 2], vec![]),
-                block(1, vec![], vec![], both(10)),
-                block(2, vec![], vec![], both(11)),
-                block(4, vec![define(4, 2), branch(5, Some((5, 6)), "jz", 2)], vec![1, 2], vec![]),
+                block(0, vec![define(0, 1), branch(1, Some((1, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
+                block(1, vec![], vec![], both(10)).into(),
+                block(2, vec![], vec![], both(11)).into(),
+                block(4, vec![define(4, 2), branch(5, Some((5, 6)), "jz", 2)], vec![1, 2], vec![]).into(),
             ],
         );
         for (to, probability) in [(1, 0.9), (2, 0.1)] {
@@ -1456,23 +1463,25 @@ mod tests {
         let trivial = body(
             "trivial-before-critical",
             vec![
-                block(0, vec![move_(0, 1, imm(7, 4))], vec![1], vec![]),
+                block(0, vec![move_(0, 1, imm(7, 4))], vec![1], vec![]).into(),
                 block(
                     1,
                     vec![branch(1, Some((1, 2)), "jz", 3)],
                     vec![2, 3],
                     vec![Phi { result: 2, incoming: vec![(0, 1)] }],
-                ),
+                )
+                .into(),
                 // Reading the source down the other arm requires a real edge
                 // copy.
-                block(2, vec![move_(2, 4, held(2, 4))], vec![], vec![]),
+                block(2, vec![move_(2, 4, held(2, 4))], vec![], vec![]).into(),
                 block(
                     3,
                     vec![move_(3, 7, held(6, 4))],
                     vec![],
                     vec![Phi { result: 6, incoming: vec![(1, 2), (4, 5)] }],
-                ),
-                block(4, vec![move_(4, 5, imm(9, 4))], vec![3], vec![]),
+                )
+                .into(),
+                block(4, vec![move_(4, 5, imm(9, 4))], vec![3], vec![]).into(),
             ],
         );
 
@@ -1493,12 +1502,12 @@ mod tests {
         let alternate = body(
             "alternate-phi",
             vec![
-                block(0, vec![], vec![1, 2], vec![]),
-                block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)] }]),
-                block(2, vec![], vec![], vec![]),
+                block(0, vec![], vec![1, 2], vec![]).into(),
+                block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)] }]).into(),
+                block(2, vec![], vec![], vec![]).into(),
             ],
         );
-        let at_of: IndexMap<i64, &LirBlock> = alternate.blocks.iter().map(|block| (block.at, block)).collect();
+        let at_of: IndexMap<i64, &Block> = alternate.blocks.iter().map(|block| (block.at, block)).collect();
         assert!(_observed(&alternate, &at_of, 0, 2, 7));
     }
 

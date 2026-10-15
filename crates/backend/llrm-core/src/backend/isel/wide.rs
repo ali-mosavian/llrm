@@ -92,7 +92,7 @@ use super::expand::{Half, expand_wide};
 use super::{Selector, Test, Unselected, condition_code, insn, refuse, semantics, swapped};
 use crate::backend::callregs::{call_clobbered_high, call_clobbers};
 use crate::model::ir::{Held, Imm, Loc, Operation};
-use crate::model::lir::{Insn, LirBlock};
+use crate::model::lir::{Block, Insn};
 
 type Pair = (Held, Held);
 
@@ -464,8 +464,8 @@ impl Selector<'_, '_, '_> {
     /// before it and goes with it.
     pub(super) fn unread_halves_dropped(
         &self,
-        mut blocks: Vec<LirBlock>,
-    ) -> Vec<LirBlock> {
+        mut blocks: Vec<Block>,
+    ) -> Vec<Block> {
         loop {
             let read: BTreeSet<u32> = blocks
                 .iter()

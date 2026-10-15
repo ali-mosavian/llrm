@@ -39,7 +39,7 @@ fn procedure(
     let mut insns = (0..pushes as i64).map(push).collect::<Vec<_>>();
     insns.push(insn(100, Operation::Call, "call", vec![]));
     insns.push(insn(101, Operation::Return, "ret", vec![]));
-    let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+    let body = LirBody::new(name, 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
     let callees = callees.iter().enumerate().map(|(at, one)| (100 + at as i64, Callee::new(*one, true))).collect();
     Procedure {
         name: name.to_owned(),
@@ -200,7 +200,7 @@ fn leaf(
     let body = LirBody::new(
         name,
         0,
-        vec![LirBlock::new(0, vec![insn(0, Operation::Return, "ret", vec![])])],
+        vec![LirBlock::new(0, vec![insn(0, Operation::Return, "ret", vec![])]).into()],
         IndexMap::default(),
         IndexMap::default(),
     );

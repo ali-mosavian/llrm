@@ -1109,7 +1109,7 @@ mod tests {
 
     fn body(
         name: &str,
-        blocks: Vec<lir::LirBlock>,
+        blocks: Vec<lir::Block>,
     ) -> lir::LirBody {
         lir::LirBody::new(name, 1, blocks, IndexMap::default(), IndexMap::default())
     }
@@ -1203,7 +1203,8 @@ mod tests {
         let jump = insn(1, targeted(Operation::Jump, "jmp", 2));
         let anchor = insn(1, semantics(Operation::Nothing, "", vec![], vec![]));
         let returned = insn(2, semantics(Operation::Return, "ret", vec![], vec![]));
-        let body = body("next", vec![block(1, vec![jump, anchor], vec![2]), block(2, vec![returned], vec![])]);
+        let body =
+            body("next", vec![block(1, vec![jump, anchor], vec![2]).into(), block(2, vec![returned], vec![]).into()]);
         let procedure = procedure("_next", false, body, 0, vec![]);
 
         let lines: Vec<String> = masm::_procedure(&procedure, &IndexMap::default(), 0)
@@ -1285,7 +1286,7 @@ mod tests {
             procedures: vec![procedure(
                 "_get",
                 true,
-                body("get", vec![lir::LirBlock::new(1, insns)]),
+                body("get", vec![lir::LirBlock::new(1, insns).into()]),
                 0,
                 vec![(2, masm::Callee::new("_f", true))],
             )],
@@ -1372,7 +1373,14 @@ mod tests {
             insn(21, semantics(Operation::Move, "mov", vec![reg(RegId::ES)], vec![imm(0, group)])),
             insn(22, semantics(Operation::Return, "", vec![], vec![])),
         ];
-        let f = body("f", vec![block(1, first, vec![10, 20]), block(10, second, vec![1]), block(20, third, vec![])]);
+        let f = body(
+            "f",
+            vec![
+                block(1, first, vec![10, 20]).into(),
+                block(10, second, vec![1]).into(),
+                block(20, third, vec![]).into(),
+            ],
+        );
         let helper = vec![
             insn(1, semantics(Operation::Move, "mov", vec![reg(RegId::SI)], vec![ax])),
             insn(2, semantics(Operation::Return, "ret", vec![], vec![])),
@@ -1414,7 +1422,7 @@ mod tests {
             procedures: vec![
                 masm::Procedure {
                     public: false,
-                    ..procedure("_h", false, body("h", vec![lir::LirBlock::new(1, helper)]), 0, vec![])
+                    ..procedure("_h", false, body("h", vec![lir::LirBlock::new(1, helper).into()]), 0, vec![])
                 },
                 procedure(
                     "_f",

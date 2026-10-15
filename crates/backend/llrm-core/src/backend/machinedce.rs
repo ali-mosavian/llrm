@@ -187,7 +187,7 @@ mod tests {
 
     use super::eliminated;
     use crate::model::ir::{Imm, Loc, Mem, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn what(
@@ -230,7 +230,7 @@ mod tests {
         LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
-    fn body(blocks: Vec<LirBlock>) -> LirBody {
+    fn body(blocks: Vec<Block>) -> LirBody {
         LirBody::new("machine-dce", 0, blocks, IndexMap::default(), IndexMap::default())
     }
 
@@ -253,8 +253,10 @@ mod tests {
         // An allocated result overwritten on every successor used to survive.
         let dead = _mov(0, 1, RegId::AX);
         let overwrite = _mov(5, 2, RegId::AX);
-        let result =
-            eliminated(body(vec![block(0, vec![Arc::clone(&dead)], vec![5]), block(5, vec![overwrite], vec![])]));
+        let result = eliminated(body(vec![
+            block(0, vec![Arc::clone(&dead)], vec![5]).into(),
+            block(5, vec![overwrite], vec![]).into(),
+        ]));
         let first = result.blocks.iter().find(|block| block.at == 0).unwrap();
         assert_eq!(first.insns[0].what.as_ref().unwrap().op, Operation::Nothing);
         assert_eq!(first.insns[0].defines, dead.defines);
@@ -271,9 +273,9 @@ mod tests {
             vec![1],
         ));
         let result = eliminated(body(vec![
-            block(0, vec![Arc::clone(&definition)], vec![5, 10]),
-            block(5, vec![_mov(5, 2, RegId::AX)], vec![]),
-            block(10, vec![read], vec![]),
+            block(0, vec![Arc::clone(&definition)], vec![5, 10]).into(),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]).into(),
+            block(10, vec![read], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, definition.what);
     }
@@ -289,9 +291,9 @@ mod tests {
         ));
         let second = Arc::new(Insn { at: 2, covers: Some((2, 4)), defines: vec![2], ..(*first).clone() });
         let result = eliminated(body(vec![
-            block(0, vec![first, Arc::clone(&second), branch(4, "je", vec![2])], vec![10, 20]),
-            block(10, vec![], vec![]),
-            block(20, vec![], vec![]),
+            block(0, vec![first, Arc::clone(&second), branch(4, "je", vec![2])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
         assert_eq!(result.blocks[0].insns[1].what, second.what);
@@ -312,9 +314,9 @@ mod tests {
             vec![],
         ));
         let result = eliminated(body(vec![
-            block(0, vec![Arc::clone(&add), branch(3, "jne", vec![1])], vec![10, 20]),
-            block(10, vec![], vec![]),
-            block(20, vec![], vec![]),
+            block(0, vec![Arc::clone(&add), branch(3, "jne", vec![1])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, add.what);
     }
@@ -337,8 +339,8 @@ mod tests {
             vec![],
         ));
         let result = eliminated(body(vec![
-            block(0, vec![Arc::clone(&load)], vec![5]),
-            block(5, vec![_mov(5, 2, RegId::BX)], vec![]),
+            block(0, vec![Arc::clone(&load)], vec![5]).into(),
+            block(5, vec![_mov(5, 2, RegId::BX)], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what.as_ref().unwrap().op, Operation::Nothing);
     }
@@ -358,8 +360,8 @@ mod tests {
             vec![],
         ));
         let result = eliminated(body(vec![
-            block(0, vec![Arc::clone(&load)], vec![5]),
-            block(5, vec![_mov(5, 2, RegId::AX)], vec![]),
+            block(0, vec![Arc::clone(&load)], vec![5]).into(),
+            block(5, vec![_mov(5, 2, RegId::AX)], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, load.what);
     }
@@ -388,9 +390,9 @@ mod tests {
             vec![],
         ));
         let result = eliminated(body(vec![
-            block(0, vec![Arc::clone(&cleanup), compare, branch(5, "je", vec![1])], vec![10, 20]),
-            block(10, vec![], vec![]),
-            block(20, vec![], vec![]),
+            block(0, vec![Arc::clone(&cleanup), compare, branch(5, "je", vec![1])], vec![10, 20]).into(),
+            block(10, vec![], vec![]).into(),
+            block(20, vec![], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, cleanup.what);
     }

@@ -101,7 +101,7 @@ use crate::backend::copysink::{copy_of, touches};
 use crate::backend::liveness::{_before, _effects, _universe};
 use crate::backend::peephole::{_lanes, Lanes};
 use crate::model::ir::{Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 /// The lanes live on entry to each block.
@@ -111,7 +111,7 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
     // Decoded once: the fixed point reads each block several times.
     let decoded: IndexMap<i64, _> =
         body.blocks.iter().map(|block| (block.at, _effects(regs, body.bits, block))).collect();
-    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let nodes: Vec<&Block> = body.blocks.iter().collect();
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     dataflow::solve(
         &nodes,
@@ -357,7 +357,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
     let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns: IndexMap<i64, Vec<Arc<Insn>>> =
         body.blocks.iter().map(|block| (block.at, block.insns.to_vec())).collect();
     let mut changed = false;
@@ -437,7 +437,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     let mut odds = body.odds.clone();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
     let mut retarget: IndexMap<i64, (i64, i64)> = IndexMap::default();
-    let mut bridges: Vec<LirBlock> = Vec::new();
+    let mut bridges: Vec<Block> = Vec::new();
     for ((from, target), stores) in &bridged {
         let last = stores.last().expect("a store");
         let mut stored = stores.clone();
@@ -452,11 +452,11 @@ pub fn sunk(body: &LirBody) -> LirBody {
         stored.push(Arc::new(jump));
         let source = by_at[from];
         odds.rerouted(*from, &source.succ, *target, &[(next_at, 1.0)]);
-        bridges.push(LirBlock { succ: vec![*target].into(), ..LirBlock::new(next_at, stored) });
+        bridges.push(LirBlock { succ: vec![*target].into(), ..LirBlock::new(next_at, stored) }.into());
         retarget.insert(*from, (*target, next_at));
         next_at += 1;
     }
-    let mut blocks: Vec<LirBlock> = body
+    let mut blocks: Vec<Block> = body
         .blocks
         .iter()
         .map(|block| {
@@ -522,7 +522,7 @@ mod tests {
 
     use super::sunk;
     use crate::model::ir::{Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn r(register: RegId) -> Loc {
@@ -601,7 +601,7 @@ mod tests {
             vec![use_di(9), insn(10, Operation::Jump, "jmp", vec![], vec![], Some(5))]
         };
         blocks.push(block(9, tail, if body_has_two_predecessors { vec![9, 5] } else { vec![5] }));
-        LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
+        LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
     }
 
     fn copies_in(
@@ -669,10 +669,11 @@ mod tests {
                         insn(10, Operation::Jump, "jmp", vec![], vec![], Some(5)),
                     ],
                     vec![5],
-                ),
-                block(7, vec![cmp(7), branch(8, 9)], vec![9, 5]),
-                block(1, vec![copy(1, DI, DX), cmp(2), branch(3, 7)], vec![7, 5]),
-                block(5, vec![ret], vec![]),
+                )
+                .into(),
+                block(7, vec![cmp(7), branch(8, 9)], vec![9, 5]).into(),
+                block(1, vec![copy(1, DI, DX), cmp(2), branch(3, 7)], vec![7, 5]).into(),
+                block(5, vec![ret], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -738,7 +739,7 @@ mod tests {
             ..Arc::unwrap_or_clone(insn(10 * n + 1, Operation::Return, "ret", vec![], vec![], None))
         });
         blocks.push(block(10 * n + 1, vec![ret], vec![]));
-        LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default())
+        LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default())
     }
 
     fn scanned(n: i64) -> usize {
@@ -810,7 +811,8 @@ mod tests {
                         insn(4, Operation::Branch, "jl", vec![], vec![], Some(5)),
                     ],
                     vec![5, 9],
-                ),
+                )
+                .into(),
                 block(
                     5,
                     vec![
@@ -818,8 +820,9 @@ mod tests {
                         insn(6, Operation::Jump, "jmp", vec![], vec![], Some(9)),
                     ],
                     vec![9],
-                ),
-                block(9, vec![ret], vec![]),
+                )
+                .into(),
+                block(9, vec![ret], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),

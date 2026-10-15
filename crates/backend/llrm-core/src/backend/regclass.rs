@@ -1019,7 +1019,13 @@ mod tests {
             phis: vec![].into(),
             cold: false,
         };
-        let body = LirBody::new("f", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![entry.into(), looped.into(), exit.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let segments = &target::BUILT_IN;
         let webs = classes(&body, &BTreeSet::new(), segments, &crate::backend::classes::RegisterClasses::m16());
         assert_eq!(webs.get(&entry_segment), webs.get(&segment));

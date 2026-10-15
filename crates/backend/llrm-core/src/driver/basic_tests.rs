@@ -22,7 +22,7 @@ fn loading(cell: Mem) -> LirBody {
     LirBody::new(
         "procedure",
         0,
-        vec![LirBlock::new(0, vec![Arc::new(load), Arc::new(leave)])],
+        vec![LirBlock::new(0, vec![Arc::new(load), Arc::new(leave)]).into()],
         IndexMap::default(),
         IndexMap::default(),
     )

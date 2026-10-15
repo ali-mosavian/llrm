@@ -62,7 +62,7 @@ use crate::analysis::loops as loopy;
 use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes, id};
 use crate::model::ir::{Loc, Operation, Reg};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::HashSet;
 use crate::support::hash::IndexMap;
 
@@ -121,7 +121,7 @@ pub fn touches(
 /// A path that comes back to the copy's block runs the copy again, so what it
 /// writes on the way cannot be why the last copy before the exit is wrong.
 fn _between(
-    at_of: &IndexMap<i64, &LirBlock>,
+    at_of: &IndexMap<i64, &Block>,
     inside: &BTreeSet<i64>,
     copy_at: i64,
     exit_from: i64,
@@ -163,11 +163,11 @@ fn _between(
 fn _round(
     regs: Regs,
     bits: u32,
-    at_of: &IndexMap<i64, &LirBlock>,
+    at_of: &IndexMap<i64, &Block>,
     inside: &BTreeSet<i64>,
     universe: &Lanes,
 ) -> IndexMap<i64, Lanes> {
-    let nodes: Vec<&LirBlock> = inside.iter().map(|at| at_of[at]).collect();
+    let nodes: Vec<&Block> = inside.iter().map(|at| at_of[at]).collect();
     dataflow::solve(
         &nodes,
         Direction::Backward,
@@ -191,7 +191,7 @@ pub fn sunk(body: &LirBody) -> LirBody {
     }
     let dominance = loopy::dominance(&graph, Some(body.entry));
     let universe = _universe(regs);
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut predecessors: IndexMap<i64, Vec<i64>> = at_of.keys().map(|at| (*at, Vec::new())).collect();
     for block in &body.blocks {
         for at in &block.succ {
@@ -290,7 +290,7 @@ mod tests {
 
     use super::sunk;
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::HashMap;
     use crate::support::hash::IndexMap;
 
@@ -394,14 +394,14 @@ mod tests {
             "f",
             1,
             vec![
-                block(1, vec![_jump(1, 31)], vec![31]),
-                block(31, vec![_compare(31, AX, BX), _branch(32, "jle", 91)], vec![35, 91]),
-                block(35, vec![_move(35, DX, AX)], vec![38]),
-                block(38, vec![_move(38, CX, DX), _compare(39, DX, BX), _branch(40, "jge", 86)], vec![42, 86]),
-                block(42, vec![_move(42, DX, BX)], vec![77]),
-                block(77, vec![_move(77, DX, CX), _jump(78, 38)], vec![38]),
-                block(86, vec![_move(86, SI, AX), _jump(87, 31)], vec![31]),
-                block(91, vec![_return(91)], vec![]),
+                block(1, vec![_jump(1, 31)], vec![31]).into(),
+                block(31, vec![_compare(31, AX, BX), _branch(32, "jle", 91)], vec![35, 91]).into(),
+                block(35, vec![_move(35, DX, AX)], vec![38]).into(),
+                block(38, vec![_move(38, CX, DX), _compare(39, DX, BX), _branch(40, "jge", 86)], vec![42, 86]).into(),
+                block(42, vec![_move(42, DX, BX)], vec![77]).into(),
+                block(77, vec![_move(77, DX, CX), _jump(78, 38)], vec![38]).into(),
+                block(86, vec![_move(86, SI, AX), _jump(87, 31)], vec![31]).into(),
+                block(91, vec![_return(91)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -421,13 +421,14 @@ mod tests {
             "f",
             1,
             vec![
-                block(1, vec![_jump(1, 5)], vec![5]),
+                block(1, vec![_jump(1, 5)], vec![5]).into(),
                 block(
                     5,
                     vec![_move(5, DX, AX), _move(6, DI, DX), _compare(7, AX, BX), _branch(8, "jl", 5)],
                     vec![5, 9],
-                ),
-                block(9, vec![_return(9)], vec![]),
+                )
+                .into(),
+                block(9, vec![_return(9)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -449,10 +450,10 @@ mod tests {
             "f",
             1,
             vec![
-                block(1, vec![_jump(1, 3)], vec![3]),
-                block(3, vec![_compare(3, AX, BX), _branch(4, "jge", 9)], vec![5, 9]),
-                block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _jump(7, 3)], vec![3]),
-                block(9, vec![_return(9)], vec![]),
+                block(1, vec![_jump(1, 3)], vec![3]).into(),
+                block(3, vec![_compare(3, AX, BX), _branch(4, "jge", 9)], vec![5, 9]).into(),
+                block(5, vec![_move(5, DX, AX), _move(6, DI, DX), _jump(7, 3)], vec![3]).into(),
+                block(9, vec![_return(9)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -489,7 +490,7 @@ mod tests {
     ) -> Vec<i64> {
         let mut held: HashMap<RegId, i64> = HashMap::default();
         let mut pushed = Vec::new();
-        let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+        let blocks: HashMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
         for at in path {
             for one in &blocks[at].insns {
                 let what = one.what.as_ref().unwrap();
@@ -524,7 +525,8 @@ mod tests {
                     0,
                     vec![_raw_insn(0, sem(Operation::Move, "mov", vec![si.clone()], vec![imm(0)], None))],
                     vec![0x10],
-                ),
+                )
+                .into(),
                 block(
                     0x10,
                     vec![
@@ -539,7 +541,8 @@ mod tests {
                         _raw_insn(0x1A, sem(Operation::Branch, "jl", vec![], vec![], Some(0x10))),
                     ],
                     vec![0x10, 0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x20,
                     vec![
@@ -547,8 +550,9 @@ mod tests {
                         _raw_insn(0x22, sem(Operation::Branch, "jne", vec![], vec![], Some(0))),
                     ],
                     vec![0, 0x30],
-                ),
-                block(0x30, vec![_raw_insn(0x30, sem(Operation::Return, "ret", vec![], vec![], None))], vec![]),
+                )
+                .into(),
+                block(0x30, vec![_raw_insn(0x30, sem(Operation::Return, "ret", vec![], vec![], None))], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),

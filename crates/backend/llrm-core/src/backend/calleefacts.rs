@@ -292,8 +292,13 @@ mod tests {
                 vec![],
             )
         });
-        let body =
-            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![call])], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "leaf",
+            1,
+            vec![LirBlock::new(1, vec![call]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
             pointer: RegId::BP,
             stack: RegId::SP,

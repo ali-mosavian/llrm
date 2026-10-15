@@ -112,7 +112,7 @@ use llrm_lir::registers::RegId;
 
 use crate::analysis::loops::{dominance, immediate_dominators, loops};
 use crate::model::ir::{self, Loc, Mem};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 
 /// What a procedure sets up and takes back: the frame, or a register it keeps
 /// for its caller.
@@ -501,8 +501,8 @@ fn tail_copied(
 ) -> Option<LirBody> {
     let mut next = body.blocks.iter().map(|block| block.at).max()? + 1;
     let mut odds = body.odds.clone();
-    let mut blocks: Vec<LirBlock> = Vec::new();
-    let mut made: Vec<LirBlock> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut made: Vec<Block> = Vec::new();
     for block in &body.blocks {
         if block.at == tail.at {
             continue;
@@ -538,12 +538,12 @@ fn tail_copied(
             }
         }
         let succ = block.succ.iter().map(|&to| if to == tail.at { copy } else { to }).collect();
-        blocks.push(LirBlock { succ, ..block.with_insns(insns) });
+        blocks.push(LirBlock { succ, ..block.with_insns(insns).into_inner() }.into());
         let body_copy: Vec<Arc<Insn>> = tail.insns.iter().map(|one| Arc::new((**one).clone())).collect();
         let own = LirBlock { succ: tail.succ.clone(), ..LirBlock::new(copy, body_copy) };
         // A block that fell into the tail falls into its copy; the others jump
         // to theirs, after the rest.
-        if named == 0 { blocks.push(own) } else { made.push(own) }
+        if named == 0 { blocks.push(own.into()) } else { made.push(own.into()) }
     }
     blocks.extend(made);
     let mut out = body.with_blocks(blocks);
@@ -602,7 +602,7 @@ mod tests {
         LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
-    fn body(blocks: Vec<LirBlock>) -> LirBody {
+    fn body(blocks: Vec<Block>) -> LirBody {
         LirBody::new("wrap", blocks[0].at, blocks, IndexMap::default(), IndexMap::default())
     }
 
@@ -616,7 +616,9 @@ mod tests {
             block(1, vec![ret(10)], vec![]),
             block(2, vec![touch(20, RegId::ESI), ret(22)], vec![]),
         ];
-        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).expect("a wrap");
+        let wrap =
+            wrapped(&body(crate::model::lir::shared(blocks)), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false)
+                .expect("a wrap");
         assert_eq!(wrap.wrapped, BTreeSet::from([Piece::Saved(RegId::ESI)]));
         assert_eq!(wrap.opens, BTreeMap::from([(2, vec![Piece::Saved(RegId::ESI)])]));
         assert_eq!(wrap.closes, BTreeMap::from([(2, vec![Piece::Saved(RegId::ESI)])]));
@@ -631,7 +633,10 @@ mod tests {
             block(2, vec![touch(20, RegId::ESI)], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false).is_none());
+        assert!(
+            wrapped(&body(crate::model::lir::shared(blocks)), &BTreeSet::from([RegId::EBX, RegId::ESI]), None, false)
+                .is_none()
+        );
     }
 
     /// The shared return copied for each way into it, the early exit has a
@@ -647,7 +652,7 @@ mod tests {
         let worth = |candidate: &LirBody| {
             wrapped(candidate, &kept, None, false).map_or(0, |wrap| wrap.wrapped.len() * 1000 + wrap.depth)
         };
-        let before = body(blocks);
+        let before = body(crate::model::lir::shared(blocks));
         assert_eq!(worth(&before), 0);
         let after = tails_split(&before, &worth);
         assert_eq!(after.blocks.len(), 4, "the return, once for each way into it");

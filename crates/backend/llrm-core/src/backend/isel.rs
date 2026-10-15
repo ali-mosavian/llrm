@@ -173,7 +173,7 @@ use crate::backend::target::Segments;
 use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
 use crate::model::lir::{
-    BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
+    Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
 };
 use crate::model::passes::AddressForm;
 use crate::support::hash::IndexMap;
@@ -1886,7 +1886,7 @@ impl Selector<'_, '_, '_> {
             }
             order.extend(finished.into_iter().rev());
         }
-        let mut made: IndexMap<BlockId, Vec<LirBlock>> = IndexMap::default();
+        let mut made: IndexMap<BlockId, Vec<Block>> = IndexMap::default();
         for &block in &order {
             self.current = Some(block);
             let blocks = made.entry(block).or_default();
@@ -1971,7 +1971,9 @@ impl Selector<'_, '_, '_> {
                     succ.push(block_at[&one]);
                 }
             }
-            blocks.push(LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(block_at[&block], insns) });
+            blocks.push(
+                LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(block_at[&block], insns) }.into(),
+            );
         }
         for block in made.values_mut().flatten() {
             for phi in block.phis.iter_mut() {
@@ -1986,7 +1988,7 @@ impl Selector<'_, '_, '_> {
             .iter()
             .flat_map(|block| {
                 let chain = made.shift_remove(block).unwrap_or_default();
-                chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one })
+                chain.into_iter().map(|one| LirBlock { cold: cold.contains(block), ..one.into_inner() })
             })
             .collect();
         let blocks = self.widen(combined::combined(
@@ -2015,7 +2017,7 @@ impl Selector<'_, '_, '_> {
     /// successors it has.
     fn odds(
         &self,
-        made: &IndexMap<BlockId, Vec<LirBlock>>,
+        made: &IndexMap<BlockId, Vec<Block>>,
         block_at: &IndexMap<BlockId, i64>,
     ) -> BlockOdds {
         let estimated = llrm_analysis::branchprob::estimated(
@@ -2662,7 +2664,7 @@ impl Selector<'_, '_, '_> {
         from: i64,
         mut insns: Vec<Arc<Insn>>,
         phis: Vec<Phi>,
-        blocks: &mut Vec<LirBlock>,
+        blocks: &mut Vec<Block>,
     ) -> Result<(), Unselected> {
         let at = self.ats[&inst];
         let (conjunction, a, b) = self.merges[&inst];
@@ -2683,10 +2685,12 @@ impl Selector<'_, '_, '_> {
                 Ok(())
             };
         branched(self, a, target, &mut insns)?;
-        blocks.push(LirBlock { succ: vec![target, other].into(), phis: phis.into(), ..LirBlock::new(from, insns) });
+        blocks.push(
+            LirBlock { succ: vec![target, other].into(), phis: phis.into(), ..LirBlock::new(from, insns) }.into(),
+        );
         let mut tail = Vec::new();
         branched(self, b, taken, &mut tail)?;
-        blocks.push(LirBlock { succ: vec![taken, otherwise].into(), ..LirBlock::new(second, tail) });
+        blocks.push(LirBlock { succ: vec![taken, otherwise].into(), ..LirBlock::new(second, tail) }.into());
         Ok(())
     }
 
@@ -2702,7 +2706,7 @@ impl Selector<'_, '_, '_> {
         from: i64,
         mut insns: Vec<Arc<Insn>>,
         phis: Vec<Phi>,
-        blocks: &mut Vec<LirBlock>,
+        blocks: &mut Vec<Block>,
     ) -> Result<(), Unselected> {
         let at = self.ats[&inst];
         let operands = self.function.instruction(inst).operands.clone();
@@ -2742,7 +2746,7 @@ impl Selector<'_, '_, '_> {
                 succ.push(target);
             }
         }
-        blocks.push(LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(from, insns) });
+        blocks.push(LirBlock { succ: succ.into(), phis: phis.into(), ..LirBlock::new(from, insns) }.into());
         Ok(())
     }
 
@@ -2756,7 +2760,7 @@ impl Selector<'_, '_, '_> {
         from: i64,
         mut insns: Vec<Arc<Insn>>,
         mut phis: Vec<Phi>,
-        blocks: &mut Vec<LirBlock>,
+        blocks: &mut Vec<Block>,
     ) -> Result<(), Unselected> {
         let at = self.ats[&inst];
         let operand = self.function.instruction(inst).operands[0];
@@ -2764,11 +2768,10 @@ impl Selector<'_, '_, '_> {
         let (default, cases) = self.cases(inst);
         if cases.is_empty() {
             insns.push(insn(at, jump(block_at[&default])));
-            blocks.push(LirBlock {
-                succ: vec![block_at[&default]].into(),
-                phis: phis.into(),
-                ..LirBlock::new(from, insns)
-            });
+            blocks.push(
+                LirBlock { succ: vec![block_at[&default]].into(), phis: phis.into(), ..LirBlock::new(from, insns) }
+                    .into(),
+            );
             return Ok(());
         }
         // A selector wider than a register (an i64 on a 32-bit target) is
@@ -2792,11 +2795,14 @@ impl Selector<'_, '_, '_> {
                 Semantics { target: Some(block_at[&target]), ..semantics(Operation::Branch, "je", vec![], vec![]) };
             insns.push(insn(at, branch));
             let succ = vec![block_at[&target], next];
-            blocks.push(LirBlock {
-                succ: succ.into(),
-                phis: std::mem::take(&mut phis).into(),
-                ..LirBlock::new(chain[index], std::mem::take(&mut insns))
-            });
+            blocks.push(
+                LirBlock {
+                    succ: succ.into(),
+                    phis: std::mem::take(&mut phis).into(),
+                    ..LirBlock::new(chain[index], std::mem::take(&mut insns))
+                }
+                .into(),
+            );
         }
         Ok(())
     }
@@ -4043,8 +4049,8 @@ impl Selector<'_, '_, '_> {
     /// word value a scaled address reads widened where it is defined.
     fn widen(
         &mut self,
-        blocks: Vec<LirBlock>,
-    ) -> Result<Vec<LirBlock>, Unselected> {
+        blocks: Vec<Block>,
+    ) -> Result<Vec<Block>, Unselected> {
         let regs = self.regs();
         let marked = |what: &Semantics| {
             let exact = |operand: &Loc| match operand {
@@ -4061,7 +4067,7 @@ impl Selector<'_, '_, '_> {
                 ..what.clone()
             }
         };
-        let blocks: Vec<LirBlock> = blocks
+        let blocks: Vec<Block> = blocks
             .into_iter()
             .map(|block| {
                 let insns = block

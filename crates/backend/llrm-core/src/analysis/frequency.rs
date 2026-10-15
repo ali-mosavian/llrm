@@ -15,8 +15,8 @@ use llrm_analysis::branchprob;
 
 use crate::analysis::facts::Fact;
 use crate::analysis::loops;
+use crate::model::lir::{Block, LirBlock, LirBody};
 use crate::model::lir::{BlockFrequencies, BlockOdds};
-use crate::model::lir::{LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 /// The body's blocks as a frequency reads them: the flow between them, the odds
@@ -150,14 +150,14 @@ impl Frequency {
                 let whole = flow.get_or_insert_with(|| {
                     // The blocks made since as the bridges they are: with
                     // work in them they would read as a loop's body.
-                    let shadow: Vec<LirBlock> = body
+                    let shadow: Vec<Block> = body
                         .blocks
                         .iter()
                         .map(|one| {
                             if table.contains_key(&one.at) {
                                 one.clone()
                             } else {
-                                LirBlock { succ: one.succ.clone(), ..LirBlock::new(one.at, Vec::new()) }
+                                LirBlock { succ: one.succ.clone(), ..LirBlock::new(one.at, Vec::new()) }.into()
                             }
                         })
                         .collect();
@@ -241,7 +241,7 @@ impl Frequency {
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
     pub fn over(
         body: &LirBody,
-        blocks: &[LirBlock],
+        blocks: &[Block],
     ) -> Self {
         let mut taken = IndexMap::default();
         for block in blocks {
@@ -255,7 +255,7 @@ impl Frequency {
         // with them, and 5 trips read 6 with one on a back edge). A
         // block with work in it stays: a body is not a bridge.
         let entry = body.entry;
-        let by_at: IndexMap<i64, &LirBlock> = blocks.iter().map(|block| (block.at, block)).collect();
+        let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
             let idle = one
@@ -291,7 +291,7 @@ impl Frequency {
                 }
             }
         }
-        let kept: Vec<LirBlock> = blocks
+        let kept: Vec<Block> = blocks
             .iter()
             .filter(|block| successors.contains_key(&block.at))
             .map(|block| LirBlock { succ: successors[&block.at].clone().into(), ..LirBlock::new(block.at, Vec::new()) })
@@ -387,7 +387,7 @@ mod tests {
 
     use super::Frequency;
     use crate::model::ir::{Operation, Semantics};
-    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn insn(
@@ -475,9 +475,9 @@ mod tests {
         body.odds.rerouted(2, &loop_.succ, 3, &[(4, 1.0)]);
         let blocks = vec![
             body.blocks[0].clone(),
-            LirBlock { succ: vec![2, 4].into(), ..body.blocks[1].clone() },
+            LirBlock { succ: vec![2, 4].into(), ..body.blocks[1].clone().into_inner() }.into(),
             body.blocks[2].clone(),
-            block(4, "jmp", Operation::Jump, vec![3]),
+            block(4, "jmp", Operation::Jump, vec![3]).into(),
         ];
         let body = body.with_blocks(blocks);
         let found = Frequency::of(&body);
@@ -493,7 +493,8 @@ mod tests {
             block(2, "jne", Operation::Branch, vec![2, 3]),
             block(3, "ret", Operation::Return, vec![]),
         ];
-        let mut body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         for (to, probability) in [(2, stay), (3, 1.0 - stay)] {
             body.odds.taken.insert((2, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
@@ -532,7 +533,8 @@ mod tests {
             block(2, "ret", Operation::Return, vec![]),
             block(3, "ret", Operation::Return, vec![]),
         ];
-        let mut body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("f", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         for (to, probability) in [(2, 1e-6), (3, 1.0 - 1e-6)] {
             body.odds.taken.insert((1, to), (probability * BlockOdds::CERTAIN).round() as u32);
         }
@@ -560,7 +562,7 @@ mod tests {
                         one.succ = one.succ.iter().map(|to| if *to == old { bridge } else { *to }).collect();
                     }
                 }
-                split.blocks.push(block(bridge, "jmp", Operation::Jump, vec![old]));
+                split.blocks.push(block(bridge, "jmp", Operation::Jump, vec![old]).into());
                 let after = Frequency::of(&split);
                 for at in [1, 2, 3] {
                     assert!(
@@ -593,7 +595,8 @@ mod tests {
                 LirBlock {
                     succ: vec![2].into(),
                     ..LirBlock::new(9, vec![insn(9, Operation::Move, "mov"), insn(9, Operation::Jump, "jmp")])
-                },
+                }
+                .into(),
             );
         let after = Frequency::of(&split);
         for at in [1, 2, 3] {
@@ -612,9 +615,9 @@ mod tests {
             "f",
             1,
             vec![
-                block(1, "jne", Operation::Branch, vec![2, 3]),
-                block(2, "jmp", Operation::Jump, vec![3]),
-                block(3, "ret", Operation::Return, vec![]),
+                block(1, "jne", Operation::Branch, vec![2, 3]).into(),
+                block(2, "jmp", Operation::Jump, vec![3]).into(),
+                block(3, "ret", Operation::Return, vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -628,9 +631,11 @@ mod tests {
         // from 2: block 3 now runs a thirty-second as often.
         let mut moved = body.clone();
         moved.blocks[0].succ = vec![2].into();
-        moved.blocks[1] = block(2, "jne", Operation::Branch, vec![4, 9]);
-        moved.blocks.push(block(4, "ret", Operation::Return, vec![]));
-        moved.blocks.push(LirBlock { succ: vec![3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) });
+        moved.blocks[1] = block(2, "jne", Operation::Branch, vec![4, 9]).into();
+        moved.blocks.push(block(4, "ret", Operation::Return, vec![]).into());
+        moved
+            .blocks
+            .push(LirBlock { succ: vec![3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Jump, "jmp")]) }.into());
         moved.odds.taken.insert((2, 9), (BlockOdds::CERTAIN / 32.0).round() as u32);
         moved.odds.taken.insert((2, 4), (BlockOdds::CERTAIN * 31.0 / 32.0).round() as u32);
         let said = Frequency::violations(&moved);
@@ -654,9 +659,11 @@ mod tests {
         let mut more = body.clone();
         // 2 -> 3 now goes through a new self loop 9.
         more.blocks[1].succ = vec![2, 8].into();
-        more.blocks.push(LirBlock { succ: vec![9].into(), ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) });
         more.blocks
-            .push(LirBlock { succ: vec![9, 3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) });
+            .push(LirBlock { succ: vec![9].into(), ..LirBlock::new(8, vec![insn(8, Operation::Jump, "jmp")]) }.into());
+        more.blocks.push(
+            LirBlock { succ: vec![9, 3].into(), ..LirBlock::new(9, vec![insn(9, Operation::Branch, "jne")]) }.into(),
+        );
         more.blocks[2].succ = vec![].into();
         for (from, to, probability) in
             [(2, 8, 1.0 / 32.0), (2, 2, 31.0 / 32.0), (9, 9, 31.0 / 32.0), (9, 3, 1.0 / 32.0)]

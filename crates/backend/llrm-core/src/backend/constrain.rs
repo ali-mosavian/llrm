@@ -935,7 +935,7 @@ mod tests {
         LirBody::new(
             "one",
             0,
-            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
+            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect()).into()],
             IndexMap::default(),
             IndexMap::default(),
         )
@@ -1336,7 +1336,7 @@ mod tests {
         let body = LirBody::new(
             "one",
             0x10,
-            vec![LirBlock::new(0x10, vec![Arc::new(one)])],
+            vec![LirBlock::new(0x10, vec![Arc::new(one)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );

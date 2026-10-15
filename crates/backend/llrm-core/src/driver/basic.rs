@@ -195,7 +195,7 @@ pub fn _runtime_frame(
     };
     let leave_at = serial + 3;
     let leave = _insn(leave_at, _semantics(Operation::Call, "call", vec![], vec![]));
-    let framed: Vec<lir::LirBlock> = body
+    let framed: Vec<lir::Block> = body
         .blocks
         .iter()
         .map(|block| {
@@ -207,7 +207,7 @@ pub fn _runtime_frame(
             block.with_insns(insns)
         })
         .collect();
-    let framed: Vec<lir::LirBlock> = framed
+    let framed: Vec<lir::Block> = framed
         .into_iter()
         .map(|block| {
             let mut insns = Vec::new();
@@ -217,7 +217,7 @@ pub fn _runtime_frame(
                 }
                 insns.push(Arc::clone(one));
             }
-            lir::LirBlock { insns: insns.into(), ..block }
+            lir::LirBlock { insns: insns.into(), ..block.into_inner() }
         })
         .collect();
 
@@ -244,7 +244,7 @@ pub fn _runtime_frame(
         }
         r#where.map_address(|at| ir::AddressRef { addr: Some(moved(&at.addr.unwrap())), ..at })
     };
-    let framed: Vec<lir::LirBlock> = framed
+    let framed: Vec<lir::Block> = framed
         .into_iter()
         .map(|block| {
             let insns = block
@@ -263,7 +263,7 @@ pub fn _runtime_frame(
                     None => Arc::clone(one),
                 })
                 .collect();
-            lir::LirBlock { insns, ..block }
+            lir::LirBlock { insns, ..block.into_inner() }
         })
         .collect();
     Ok((
@@ -1202,7 +1202,7 @@ pub fn ends_program(
         // blocks retain their CFG edges; MASM listing uses the untaken edge to
         // insert an explicit jump when it is not the next laid-out block.
         let succ = if exits { vec![] } else { block.succ.to_vec() };
-        blocks.push(lir::LirBlock { succ: succ.into(), ..block.with_insns(instructions) });
+        blocks.push(lir::LirBlock { succ: succ.into(), ..block.with_insns(instructions).into_inner() }.into());
     }
     (lir::LirBody { noreturn: true, ..body.with_blocks(blocks) }, sites)
 }

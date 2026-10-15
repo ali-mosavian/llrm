@@ -2088,7 +2088,8 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], sources));
         let leave = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, leave])];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let procedure = Procedure {
             name: "_get".into(),
             public: true,
@@ -2160,7 +2161,7 @@ mod tests {
         let body = lir::LirBody::new(
             "get",
             1,
-            vec![lir::LirBlock::new(1, vec![r#move, leave])],
+            vec![lir::LirBlock::new(1, vec![r#move, leave]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -2211,7 +2212,8 @@ mod tests {
         let r#move = insn(0, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()]));
         let returned = insn(1, semantics(Operation::Return, "retf", vec![], vec![]));
         let blocks = vec![lir::LirBlock::new(1, vec![r#move, returned])];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let procedure = |reserve| Procedure {
             name: "_get".into(),
             public: true,
@@ -2240,7 +2242,7 @@ mod tests {
             let body = lir::LirBody::new(
                 "get",
                 1,
-                vec![lir::LirBlock::new(1, vec![returned])],
+                vec![lir::LirBlock::new(1, vec![returned]).into()],
                 IndexMap::default(),
                 IndexMap::default(),
             );
@@ -2318,7 +2320,7 @@ mod tests {
         let body = lir::LirBody::new(
             "get",
             1,
-            vec![lir::LirBlock::new(1, vec![r#move, leave])],
+            vec![lir::LirBlock::new(1, vec![r#move, leave]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -2364,7 +2366,7 @@ mod tests {
             ..lir::LirBody::new(
                 "get",
                 1,
-                vec![lir::LirBlock::new(1, vec![ret()])],
+                vec![lir::LirBlock::new(1, vec![ret()]).into()],
                 IndexMap::default(),
                 IndexMap::default(),
             )
@@ -2411,14 +2413,14 @@ mod tests {
         body: Vec<Arc<lir::Insn>>,
         callees: IndexMap<i64, Callee>,
     ) -> Vec<String> {
-        flat_blocks(optional, reserve, vec![lir::LirBlock::new(1, body)], callees)
+        flat_blocks(optional, reserve, vec![lir::LirBlock::new(1, body).into()], callees)
     }
 
     /// `flat`, of several blocks.
     fn flat_blocks(
         optional: bool,
         reserve: i64,
-        blocks: Vec<lir::LirBlock>,
+        blocks: Vec<lir::Block>,
         callees: IndexMap<i64, Callee>,
     ) -> Vec<String> {
         let body =
@@ -2528,7 +2530,7 @@ mod tests {
             lir::LirBlock::new(3, vec![ret()]),
         ];
         let callees = IndexMap::from_iter([(4, Callee::new("_fail", false))]);
-        let lines = flat_blocks(true, 8, blocks, callees);
+        let lines = flat_blocks(true, 8, crate::model::lir::shared(blocks), callees);
         assert!(!lines.iter().any(|one| one.contains("ebp")), "the frame register stays: {lines:?}");
     }
 
@@ -2574,7 +2576,7 @@ mod tests {
         let body = lir::LirBody::new(
             "get",
             1,
-            vec![lir::LirBlock::new(1, vec![r#move, leave])],
+            vec![lir::LirBlock::new(1, vec![r#move, leave]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -2639,7 +2641,8 @@ mod tests {
             ),
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let procedure = Procedure {
             name: "_get".into(),
             public: true,
@@ -2680,7 +2683,8 @@ mod tests {
             },
             lir::LirBlock::new(3, vec![insn(5, semantics(Operation::Return, "ret", vec![], vec![]))]),
         ];
-        let body = lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default());
+        let body =
+            lir::LirBody::new("get", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let procedure = Procedure {
             name: "_get".into(),
             public: true,

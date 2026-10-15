@@ -697,7 +697,7 @@ mod tests {
 
     fn _body(insns: Vec<Insn>) -> LirBody {
         let block = LirBlock::new(0, insns.into_iter().map(Arc::new).collect());
-        LirBody::new("one", 0, vec![block], IndexMap::default(), IndexMap::default())
+        LirBody::new("one", 0, vec![block.into()], IndexMap::default(), IndexMap::default())
     }
 
     fn name(one: &Insn) -> String {
@@ -757,7 +757,7 @@ mod tests {
         let body = LirBody::new(
             "one",
             0,
-            vec![first, LirBlock::new(1, vec![Arc::new(reader)])],
+            vec![first.into(), LirBlock::new(1, vec![Arc::new(reader)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -797,7 +797,7 @@ mod tests {
         let body = LirBody::new(
             "one",
             0,
-            vec![first, LirBlock::new(1, vec![Arc::new(reader)])],
+            vec![first.into(), LirBlock::new(1, vec![Arc::new(reader)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );

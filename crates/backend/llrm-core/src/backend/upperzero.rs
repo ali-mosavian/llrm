@@ -69,7 +69,7 @@ use crate::analysis::loops;
 use crate::backend::liveness;
 use crate::backend::peephole::{_register_effects, id};
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::{HashMap, IndexMap};
 
 /// The roots a general register names, one bit each.
@@ -198,8 +198,8 @@ pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
     let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
-    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
-    let blocks: IndexMap<i64, &LirBlock> = nodes.iter().map(|block| (block.at, *block)).collect();
+    let nodes: Vec<&Block> = body.blocks.iter().collect();
+    let blocks: IndexMap<i64, &Block> = nodes.iter().map(|block| (block.at, *block)).collect();
     let solved = dataflow::solve(
         &nodes,
         Direction::Forward,
@@ -230,7 +230,7 @@ pub fn extended(
     regs: Regs,
     block: &LirBlock,
     roots: Roots,
-) -> LirBlock {
+) -> Block {
     let mut insns = block.insns.to_vec();
     let at = insns.last().map_or(block.at, |one| one.at);
     let position = if insns.last().is_some_and(|one| liveness::_leaves(one.what.as_ref())) {
@@ -251,7 +251,7 @@ pub fn extended(
         };
         insns.insert(position, Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new())));
     }
-    block.with_insns(insns)
+    block.with_insns(insns).into_inner().into()
 }
 
 /// `body` with the upper half of each loop's `roots` zeroed on entry, where
@@ -410,7 +410,7 @@ mod tests {
 
     use super::{before, bit};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn one(
@@ -454,7 +454,13 @@ mod tests {
             )
         };
         let exit = LirBlock::new(2, vec![one(5, Operation::Move, "mov", vec![bx], vec![word()], None)]);
-        let body = LirBody::new("zero", 0, vec![entry, looped, exit], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "zero",
+            0,
+            vec![entry.into(), looped.into(), exit.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
 
         let zero = before(&body);
 
@@ -477,13 +483,16 @@ mod tests {
             LirBody::new(
                 "mask",
                 0,
-                vec![LirBlock::new(
-                    0,
-                    vec![
-                        one(0, Operation::Binary, "and", vec![edx.clone()], vec![edx.clone(), mask(value)], None),
-                        one(1, Operation::Move, "mov", vec![edx.clone()], vec![edx.clone()], None),
-                    ],
-                )],
+                vec![
+                    LirBlock::new(
+                        0,
+                        vec![
+                            one(0, Operation::Binary, "and", vec![edx.clone()], vec![edx.clone(), mask(value)], None),
+                            one(1, Operation::Move, "mov", vec![edx.clone()], vec![edx.clone()], None),
+                        ],
+                    )
+                    .into(),
+                ],
                 IndexMap::default(),
                 IndexMap::default(),
             )
@@ -518,7 +527,7 @@ mod tests {
                 one(2, Operation::Nothing, "nop", vec![], vec![], None),
             ],
         );
-        let body = LirBody::new("swap", 0, vec![entry], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("swap", 0, vec![entry.into()], IndexMap::default(), IndexMap::default());
 
         let zero = before(&body);
 

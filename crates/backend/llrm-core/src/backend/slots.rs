@@ -121,7 +121,7 @@ pub fn moved(
                 Arc::new(Insn { what: Some(Semantics { dests, sources, ..what.clone() }), ..(**one).clone() })
             })
             .collect();
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone() });
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     let mut out = body.with_blocks(blocks);
     out.homes = Arc::new(

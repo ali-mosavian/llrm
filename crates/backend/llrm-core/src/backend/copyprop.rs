@@ -72,7 +72,7 @@ use crate::analysis::loops;
 use crate::backend::peephole::{_lanes, _register_effects, _register_effects_of_what, Lane, Lanes, id, is_frame_base};
 use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 use crate::support::hash::{HashMap, HashSet};
 
@@ -494,7 +494,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
         if !touched { Arc::clone(one) } else { Arc::new(Insn { what: Some(changed), ..(**one).clone() }) }
     };
 
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut reachable: HashSet<i64> = HashSet::default();
     let mut pending = vec![body.entry];
     while let Some(at) = pending.pop() {
@@ -509,7 +509,7 @@ fn forwarded_inner(body: &LirBody) -> LirBody {
     let predecessors = loops::predecessors(&graph);
     // Start at the must-analysis top, then intersect paths to a fixed point.
     // Entry contributes no equality, so a backedge cannot invent its own proof.
-    let nodes: Vec<&LirBlock> = body.blocks.iter().filter(|block| reachable.contains(&block.at)).collect();
+    let nodes: Vec<&Block> = body.blocks.iter().filter(|block| reachable.contains(&block.at)).collect();
     let solved = dataflow::solve(
         &nodes,
         Direction::Forward,

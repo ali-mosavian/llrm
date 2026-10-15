@@ -849,7 +849,7 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     let body = lir::LirBody::new(
         "callee",
         1,
-        vec![lir::LirBlock::new(1, vec![Arc::new(returned)])],
+        vec![lir::LirBlock::new(1, vec![Arc::new(returned)]).into()],
         IndexMap::default(),
         IndexMap::default(),
     );

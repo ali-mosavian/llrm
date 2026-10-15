@@ -124,7 +124,7 @@ use crate::backend::coalesce;
 use crate::backend::frame::{self as frames, Frame, SlotKey};
 use crate::backend::postings::{self, At, Postings};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
 use crate::support::pyset::PySet;
 
@@ -1632,7 +1632,7 @@ fn _identities_dropped(body: &LirBody) -> LirBody {
             insns.push(Arc::clone(&block.insns[at]));
             at += 1;
         }
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone() });
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
@@ -1829,7 +1829,7 @@ fn homes_by_sparse_body(
     changed: &[(usize, usize, Arc<Insn>)],
     first: u32,
 ) -> IndexMap<u32, Interval> {
-    let sparse_blocks: Vec<LirBlock> = body
+    let sparse_blocks: Vec<Block> = body
         .blocks
         .iter()
         .map(|block| LirBlock {
@@ -2883,7 +2883,7 @@ thread_local! { static KEEPS: std::cell::Cell<usize> = const { std::cell::Cell::
 /// The blocks of a body by address, and each one's predecessors.
 struct Flow<'a> {
     predecessors: IndexMap<i64, Vec<i64>>,
-    blocks: IndexMap<i64, &'a LirBlock>,
+    blocks: IndexMap<i64, &'a Block>,
     /// The same by position in `body.blocks`.
     parents: Vec<Vec<usize>>,
     entry: usize,
@@ -2892,7 +2892,7 @@ struct Flow<'a> {
 impl<'a> Flow<'a> {
     fn of(body: &'a LirBody) -> Self {
         let predecessors = _predecessors(body);
-        let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+        let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
         let parents = body
             .blocks
             .iter()
@@ -3241,7 +3241,7 @@ fn _unchanged_reference(
     uses: &[Arc<Insn>],
 ) -> bool {
     let predecessors = _predecessors(body);
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
     let mut outof: IndexMap<i64, bool> = IndexMap::default();
     let mut changing = true;
@@ -3380,7 +3380,7 @@ fn _remove_abandoned_in(
     }
     let reference = check_postings().then(|| _remove_abandoned(&body, abandoned));
     // What else reads a value: a block's arrivals and a phi's inputs.
-    let mut elsewhere: BTreeSet<u32> = body.blocks.iter().flat_map(LirBlock::arrives).collect();
+    let mut elsewhere: BTreeSet<u32> = body.blocks.iter().flat_map(|one| one.arrives()).collect();
     elsewhere.extend(
         body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)),
     );
@@ -3432,7 +3432,7 @@ pub fn _remove_abandoned(
     let every = || body.blocks.iter().flat_map(|block| &block.insns);
     let mut used: BTreeSet<u32> = every().flat_map(|one| one.uses.iter().copied()).collect();
     used.extend(every().flat_map(|one| one.requires.iter().map(|(held, _)| held.value)));
-    used.extend(body.blocks.iter().flat_map(LirBlock::arrives));
+    used.extend(body.blocks.iter().flat_map(|one| one.arrives()));
     used.extend(
         body.blocks.iter().flat_map(|block| &block.phis).flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)),
     );
@@ -4848,7 +4848,7 @@ mod tests {
     use crate::backend::frame::{Frame, SlotKey};
     use crate::backend::{objbuild, select};
     use crate::model::ir::{Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn semantics(
@@ -4926,7 +4926,7 @@ mod tests {
         LirBody::new(
             "one",
             0,
-            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
+            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect()).into()],
             IndexMap::default(),
             IndexMap::default(),
         )
@@ -5602,12 +5602,14 @@ mod tests {
                 LirBlock {
                     succ: vec![0x20].into(),
                     ..LirBlock::new(0x10, vec![Arc::new(source), Arc::new(extension), Arc::new(jump)])
-                },
+                }
+                .into(),
                 LirBlock {
                     succ: vec![0x20, 0x30].into(),
                     ..LirBlock::new(0x20, vec![Arc::new(use_), Arc::new(branch)])
-                },
-                LirBlock::new(0x30, vec![]),
+                }
+                .into(),
+                LirBlock::new(0x30, vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -6171,7 +6173,8 @@ mod tests {
         let last = blocks.last_mut().expect("a block");
         let used = insn(1000, (1000, 1001), semantics(Operation::Push, "push", vec![], vec![held(1, 2)]), &[], &[1]);
         last.insns.edit(|insns| insns.push(Arc::new(used)));
-        let body = LirBody::new("chain", 0, blocks, IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("chain", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         let before = super::KEEPS.with(std::cell::Cell::get);
         let stable = super::_stable_loads(&body, &set(&[1]));
         let asked = super::KEEPS.with(std::cell::Cell::get) - before;
@@ -6555,9 +6558,9 @@ mod tests {
             "three",
             0,
             vec![
-                block(0, vec![_move(10, 11, None, 0x10)], vec![1]),
-                block(1, vec![_add(1, 2, 0x100), _move(3, 1, None, 0x102)], vec![2]),
-                block(2, vec![_move(20, 21, None, 0x200), _move(22, 20, None, 0x202)], vec![]),
+                block(0, vec![_move(10, 11, None, 0x10)], vec![1]).into(),
+                block(1, vec![_add(1, 2, 0x100), _move(3, 1, None, 0x102)], vec![2]).into(),
+                block(2, vec![_move(20, 21, None, 0x200), _move(22, 20, None, 0x202)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -6600,7 +6603,7 @@ mod tests {
     fn test_a_spill_finds_the_intervals_of_the_homes_it_names_only() {
         use crate::analysis::intervals as ranges;
         use crate::model::ir::Semantics;
-        use crate::model::lir::{Insn, LirBlock};
+        use crate::model::lir::{Block, Insn, LirBlock};
         let nop = |at: i64| {
             Arc::new(Insn::new(
                 at,
@@ -6653,7 +6656,7 @@ mod tests {
         };
         let chain = |extra_at_30: bool| {
             let plan = names(extra_at_30);
-            let blocks: Vec<LirBlock> = (0..1600i64)
+            let blocks: Vec<Block> = (0..1600i64)
                 .map(|at| {
                     let mut insns = if at == 30 && extra_at_30 {
                         vec![nop(0x1000), nop(0x1001 + at), nop(0x2000 + at)]
@@ -6743,7 +6746,7 @@ mod tests {
     #[test]
     fn test_the_postings_of_a_long_edited_block_are_those_of_working_them_out() {
         use crate::model::ir::Semantics;
-        use crate::model::lir::{Insn, LirBlock};
+        use crate::model::lir::{Block, Insn, LirBlock};
         let make = |at: i64, defines: Vec<u32>, uses: Vec<u32>| {
             Arc::new(Insn::new(
                 at,
@@ -6761,7 +6764,7 @@ mod tests {
         let mut insns: Vec<Arc<Insn>> =
             (0..120).map(|at| make(at, vec![at as u32 % 9], vec![(at as u32 * 7) % 11, at as u32 % 5])).collect();
         let block = |insns: &[Arc<Insn>]| LirBlock::new(0, insns.to_vec());
-        let mut body = LirBody::new("long", 0, vec![block(&insns)], IndexMap::default(), IndexMap::default());
+        let mut body = LirBody::new("long", 0, vec![block(&insns).into()], IndexMap::default(), IndexMap::default());
         crate::backend::postings::following(&body, |_| ());
         for round in 0..200 {
             for _ in 0..1 + next(6) {
@@ -6778,7 +6781,7 @@ mod tests {
                     }
                 }
             }
-            body = body.with_blocks(vec![block(&insns)]);
+            body = body.with_blocks(vec![block(&insns).into()]);
             crate::backend::postings::following(&body, |found| {
                 assert!(
                     *found == crate::backend::postings::Postings::of(&body),
@@ -6947,7 +6950,8 @@ mod tests {
                         at(2, jump, &[], &[]),
                     ],
                     vec![0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x10,
                     vec![
@@ -6960,7 +6964,8 @@ mod tests {
                         ),
                     ],
                     vec![0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x20,
                     vec![
@@ -6969,8 +6974,10 @@ mod tests {
                         at(0x24, branch, &[], &[9]),
                     ],
                     vec![0x10, 0x30],
-                ),
-                block(0x30, vec![at(0x30, semantics(Operation::Return, "ret", vec![], vec![]), &[], &[])], vec![]),
+                )
+                .into(),
+                block(0x30, vec![at(0x30, semantics(Operation::Return, "ret", vec![], vec![]), &[], &[])], vec![])
+                    .into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -6987,7 +6994,7 @@ mod tests {
             Loc::Held(one) => held_[&one.value],
             other => panic!("{other:?}"),
         };
-        let blocks: IndexMap<i64, &LirBlock> = done.blocks.iter().map(|block| (block.at, block)).collect();
+        let blocks: IndexMap<i64, &Block> = done.blocks.iter().map(|block| (block.at, block)).collect();
         for at in [0, 0x20, 0x10, 0x20, 0x10, 0x20] {
             for one in &blocks[&at].insns {
                 let what = what(one);
@@ -7033,7 +7040,7 @@ mod tests {
         let body = LirBody::new(
             name,
             0,
-            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
+            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect()).into()],
             IndexMap::default(),
             IndexMap::default(),
         );

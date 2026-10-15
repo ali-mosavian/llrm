@@ -125,7 +125,7 @@ mod tests {
         LirBody::new(
             "g",
             1,
-            vec![block(1, &[2, 3]), block(2, &[3]), block(3, &[])],
+            vec![block(1, &[2, 3]).into(), block(2, &[3]).into(), block(3, &[]).into()],
             IndexMap::default(),
             IndexMap::default(),
         )

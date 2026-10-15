@@ -14,7 +14,7 @@ use crate::backend::frame::Frame;
 use crate::backend::phielim;
 use crate::backend::select;
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
 
@@ -79,7 +79,7 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
         .collect();
     LirBody {
         float_stack: llrm_target::Target::float_stack(&llrm_x86_m16::M16),
-        ..LirBody::new("floating", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
+        ..LirBody::new("floating", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
     }
 }
 
@@ -210,7 +210,7 @@ fn _along(
     result: &LirBody,
     path: &[i64],
 ) -> Vec<Arc<Insn>> {
-    let by_at: HashMap<i64, &LirBlock> = result.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: HashMap<i64, &Block> = result.blocks.iter().map(|block| (block.at, block)).collect();
     let mut insns = Vec::new();
     for (index, at) in path.iter().enumerate() {
         insns.extend(by_at[at].insns.iter().cloned());
@@ -280,8 +280,11 @@ fn test_truncation_saves_the_control_word_once_per_body() {
         block(5, vec![store(5, -2), store(6, -4)], vec![]),
     ];
     let mut frame = Frame::new(-8);
-    let result =
-        _truncating(&LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default()), Some(&mut frame)).unwrap();
+    let result = _truncating(
+        &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
+        Some(&mut frame),
+    )
+    .unwrap();
     let names: Vec<(i64, Vec<&str>)> = result
         .blocks
         .iter()
@@ -306,7 +309,11 @@ fn truncating_loop(body: Vec<Semantics>) -> LirBody {
         block(9, vec![insn(9, sem(Operation::Nothing, "", vec![], vec![]))], vec![]),
     ];
     let mut frame = Frame::new(-8);
-    _truncating(&LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default()), Some(&mut frame)).unwrap()
+    _truncating(
+        &LirBody::new("t", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default()),
+        Some(&mut frame),
+    )
+    .unwrap()
 }
 
 fn names_of(
@@ -576,9 +583,9 @@ fn test_region_value_reuses_one_reload_until_an_unknown_effect() {
         let mut body = _body(operations);
         let insns = body.insns();
         body.blocks = vec![
-            block(0, insns[..1].to_vec(), vec![8, 80]),
-            block(8, insns[1..].to_vec(), vec![]),
-            block(80, vec![], vec![]),
+            block(0, insns[..1].to_vec(), vec![8, 80]).into(),
+            block(8, insns[1..].to_vec(), vec![]).into(),
+            block(80, vec![], vec![]).into(),
         ];
         let result = with_frame(&body, &mut Frame::new(-8));
         let consumer = result.blocks.iter().find(|block| block.at == 8).unwrap();
@@ -838,10 +845,10 @@ fn test_float_survives_fork_join_and_loop_without_rereading_source() {
         let moved = |at: i64| Arc::new(Insn { at, covers: Some((at, at + 8)), ..(*store).clone() });
         let mut body = original.clone();
         body.blocks = vec![
-            block(48, vec![moved(48)], vec![]),
-            block(0, vec![load], vec![16, 32]),
-            block(16, vec![moved(16)], vec![16, 48]),
-            block(32, vec![moved(32)], vec![48]),
+            block(48, vec![moved(48)], vec![]).into(),
+            block(0, vec![load], vec![16, 32]).into(),
+            block(16, vec![moved(16)], vec![16, 48]).into(),
+            block(32, vec![moved(32)], vec![48]).into(),
         ];
         let mut slots = Frame::new(-20);
         let before = slots.size();
@@ -880,7 +887,7 @@ fn test_floating_bridge_never_reads_an_unestablished_slot() {
             body.entry = 48;
             blocks.push(block(48, vec![], vec![0, 16]));
         }
-        body.blocks = blocks;
+        body.blocks = crate::model::lir::shared(blocks);
         let result = allocated(&body, Some(&mut Frame::new(-10)), None, true, "386");
         assert!(matches!(result, Err(Raised::Unlowered(_))), "{defect}: {result:?}");
     }
@@ -901,7 +908,7 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
         ]);
         let insns = body.insns();
         body.blocks = vec![
-            block(0, insns[..2].to_vec(), vec![16]),
+            block(0, insns[..2].to_vec(), vec![16]).into(),
             LirBlock {
                 phis: vec![
                     Phi { result: 3, incoming: vec![(0, 1), (16, 4)] },
@@ -909,8 +916,9 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
                 ]
                 .into(),
                 ..block(16, insns[2..].to_vec(), vec![16, 48])
-            },
-            block(48, vec![], vec![]),
+            }
+            .into(),
+            block(48, vec![], vec![]).into(),
         ];
         let result = with_frame(&body, &mut Frame::new(-30));
         let insns = _along(&result, &[0, 16, 16, 48]);
@@ -968,7 +976,7 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
             blocks = vec![first, block(80, vec![], vec![]), second];
         }
         body.entry = if boundary == "entry" { 24 } else { 0 };
-        body.blocks = blocks;
+        body.blocks = crate::model::lir::shared(blocks);
         if boundary == "entry" {
             assert!(matches!(allocated(&body, None, None, true, "386"), Err(Raised::Unlowered(_))), "{boundary}");
             continue;
@@ -978,7 +986,7 @@ fn test_shared_float_crosses_only_a_unique_straight_line_edge() {
             allocated.blocks.iter().map(|block| block.at).collect::<Vec<_>>(),
             body.blocks.iter().map(|block| block.at).collect::<Vec<_>>()
         );
-        let by_at: HashMap<i64, &LirBlock> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
+        let by_at: HashMap<i64, &Block> = allocated.blocks.iter().map(|block| (block.at, block)).collect();
         // Where the other way out reads none, the load is made once the fork is
         // taken's way: the fork's block 0 no longer loads for an arm
         // half the calls never read.
@@ -1441,7 +1449,7 @@ fn test_exact_float_constants_need_no_frame() {
             let body = LirBody::new(
                 "constant",
                 0,
-                vec![LirBlock::new(0, vec![instruction])],
+                vec![LirBlock::new(0, vec![instruction]).into()],
                 IndexMap::default(),
                 IndexMap::default(),
             );
@@ -1472,7 +1480,7 @@ fn test_an_integer_constant_loads_from_the_pool() {
         let body = LirBody::new(
             "constant",
             0,
-            vec![LirBlock::new(0, vec![instruction])],
+            vec![LirBlock::new(0, vec![instruction]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -1504,12 +1512,13 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
     ]);
     let insns = body.insns();
     body.blocks = vec![
-        block(0, insns[..1].to_vec(), vec![16]),
+        block(0, insns[..1].to_vec(), vec![16]).into(),
         LirBlock {
             phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }].into(),
             ..block(16, insns[1..4].to_vec(), vec![16, 48])
-        },
-        block(48, insns[4..].to_vec(), vec![]),
+        }
+        .into(),
+        block(48, insns[4..].to_vec(), vec![]).into(),
     ];
     let result = with_frame(&body, &mut Frame::new(-24));
     let insns = _along(&result, &[0, 16, 16, 16, 48]);
@@ -1657,9 +1666,9 @@ fn test_a_value_every_successor_spills_leaves_in_memory() {
     ]);
     let insns = body.insns();
     body.blocks = vec![
-        block(0, insns[..3].to_vec(), vec![8, 16]),
-        block(8, insns[3..4].to_vec(), vec![16]),
-        block(16, insns[4..].to_vec(), vec![]),
+        block(0, insns[..3].to_vec(), vec![8, 16]).into(),
+        block(8, insns[3..4].to_vec(), vec![16]).into(),
+        block(16, insns[4..].to_vec(), vec![]).into(),
     ];
     let result = with_frame(&body, &mut Frame::new(-8));
     assert_eq!(spill_traffic(&result), 2);
@@ -1678,7 +1687,11 @@ fn test_a_join_that_reads_no_float_takes_none_on_its_other_edges() {
     let body = _body(vec![_load(1, &source), _store(&cell, 1)]);
     let (load, store) = (body.insns()[0].clone(), body.insns()[1].clone());
     let mut body = body;
-    body.blocks = vec![block(0, vec![load], vec![16, 48]), block(16, vec![store], vec![48]), block(48, vec![], vec![])];
+    body.blocks = vec![
+        block(0, vec![load], vec![16, 48]).into(),
+        block(16, vec![store], vec![48]).into(),
+        block(48, vec![], vec![]).into(),
+    ];
     let result = with_frame(&body, &mut Frame::new(-20));
     for path in [vec![0, 16, 48], vec![0, 48]] {
         let insns = _along(&result, &path);

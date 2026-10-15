@@ -353,7 +353,7 @@ mod tests {
                 Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![])),
             ],
         );
-        let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("bytes", 1, vec![block.into()], IndexMap::default(), IndexMap::default());
         let Err(Checked::Malformed(Malformed(said))) = checked(
             body,
             &mut DropsBytes,
@@ -379,7 +379,7 @@ mod tests {
         let mut body = LirBody::new(
             "phase",
             1,
-            vec![LirBlock::new(1, vec![Arc::new(source)])],
+            vec![LirBlock::new(1, vec![Arc::new(source)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
