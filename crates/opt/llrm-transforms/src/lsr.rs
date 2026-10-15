@@ -389,6 +389,18 @@ pub struct Frequencies {
     trips: llrm_support::hash::IndexMap<i64, i64>,
     /// The odds of each edge `by_block` was worked out from.
     taken: std::collections::BTreeMap<(i64, i64), f64>,
+    /// The blocks and their edges these were worked out on.
+    edges: Vec<(BlockId, Vec<BlockId>)>,
+}
+
+thread_local! {
+    static PRODUCTS_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread worked the frequencies out from scratch, for a
+/// test that a loop changed does not make the next loop's start over.
+pub fn products_runs() -> usize {
+    PRODUCTS_RUNS.with(std::cell::Cell::get)
 }
 
 impl Analysis for Products {
@@ -402,6 +414,7 @@ impl Analysis for Products {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
+        PRODUCTS_RUNS.with(|runs| runs.set(runs.get() + 1));
         let registers = analyses.get::<Registers>(context, layout, function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, function);
         let outer = std::rc::Rc::clone(analyses.outer());
@@ -416,7 +429,7 @@ impl Analysis for Products {
         let (by_block, taken) =
             profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
                 .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
-        Frequencies { by_block, trips, taken }
+        Frequencies { by_block, trips, taken, edges: _graph(function) }
     }
 
     /// They are worked out from the blocks and their edges, the loops, the
@@ -433,7 +446,10 @@ impl Analysis for Products {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
-        let reach = llrm_analysis::manager::reached_by(function, changes)?;
+        if _graph(function) != previous.edges {
+            return None;
+        }
+        let reach = llrm_analysis::manager::reached_keeping_edges(function, changes)?;
         if previous.by_block.is_none() || changes.iter().any(|one| _calls(function, one)) {
             return None;
         }
@@ -462,7 +478,12 @@ impl Analysis for Products {
         );
         let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
         let same = previous.taken.iter().filter(|((from, _), _)| wanted.contains(from)).eq(taken.iter());
-        same.then(|| Frequencies { by_block: previous.by_block.clone(), trips, taken: previous.taken.clone() })
+        same.then(|| Frequencies {
+            by_block: previous.by_block.clone(),
+            trips,
+            taken: previous.taken.clone(),
+            edges: previous.edges.clone(),
+        })
     }
 }
 
