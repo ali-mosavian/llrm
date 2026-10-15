@@ -990,3 +990,43 @@ def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_ne
     batch = gate.commands(plan, gate.load(), gate.packages())["bench"]
     assert "--batch" not in plain and "bench.py --batch" in batch
     assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"
+
+
+def test_a_step_log_is_a_new_file_so_an_orphan_of_a_killed_gate_cannot_write_into_it(tmp_path):
+    """#1758 failed `integration INCOMPLETE: 95 results of 83 test binaries`: a cargo left running by a killed gate wrote into the
+    truncated log beside the new run's output (NUL gaps, a second run's results)."""
+    import os
+    import threading
+
+    orphan = open(tmp_path / "step.log", "w")
+    threading.Timer(0.3, lambda: (orphan.write("ORPHAN test result: ok. 1 passed\n"), orphan.flush())).start()
+    gate.run_step("step", "echo mine; sleep 0.8; echo done", tmp_path, {**os.environ})
+    assert (tmp_path / "step.log").read_text() == "mine\ndone\n"
+
+
+def test_a_gate_killed_by_sigterm_kills_its_running_steps(tmp_path):
+    """A gate killed by SIGTERM left its step's cargo running, which then wrote to the log of the next run."""
+    import os
+    import signal
+    import subprocess as sp
+    import sys as _sys
+    import time as _time
+
+    def ps():
+        return sp.run(["ps", "-eo", "args"], capture_output=True, text=True).stdout
+
+    sleeper = f"sleep 62.{os.getpid()}"
+    here = str(Path(gate.__file__).parent)
+    code = f"import sys, os, pathlib; sys.path.insert(0, {here!r}); import gate; gate.kill_on_term(); gate.run_step('s', {sleeper!r}, pathlib.Path({str(tmp_path)!r}), dict(os.environ), stall=600)"
+    gate_proc = sp.Popen([_sys.executable, "-c", code])
+    try:
+        for _ in range(100):
+            if sleeper in ps():
+                break
+            _time.sleep(0.1)
+        gate_proc.send_signal(signal.SIGTERM)
+        assert gate_proc.wait(timeout=20) == 128 + signal.SIGTERM
+        _time.sleep(0.3)
+        assert sleeper not in ps(), "the step outlived the gate"
+    finally:
+        sp.run(["pkill", "-f", sleeper])

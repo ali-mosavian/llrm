@@ -615,6 +615,24 @@ def stall_seconds() -> float:
     return float(os.environ.get("GATE_STALL_MINUTES") or 10) * 60
 
 
+LIVE: set[int] = set()  # process groups of the running steps
+
+
+def kill_on_term() -> None:
+    """SIGTERM and SIGHUP kill the running steps' process groups before the gate dies: it used to leave them running, writing to their logs."""
+
+    def die(signum, frame):
+        for pgid in list(LIVE):
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        os._exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, die)
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -624,8 +642,12 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
     # debug-gate.env makes every tool a requirement; a capability this host lacks is not one.
     prelude = ". tools/debug-gate.env 2>/dev/null; " + "".join(f"unset {v}; " for v in unset) + "set -o pipefail; "
     path = logs / f"{name}.log"
+    # A new file, not a truncated one: an orphan of a killed gate still writing to the old inode interleaves with this step's output
+    # (NUL gaps and extra "test result" lines: #1758 "95 results of 83 test binaries").
+    path.unlink(missing_ok=True)
     with open(path, "w") as log:
         child = subprocess.Popen(["bash", "-c", prelude + command], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        LIVE.add(child.pid)
         seen, active, used = -1, time.time(), 0.0
         stalled = False
         try:
@@ -646,6 +668,7 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
         except BaseException:
             os.killpg(child.pid, signal.SIGKILL)
             raise
+        LIVE.discard(child.pid)
         child.returncode = code = STALL_CODE if stalled else os.waitstatus_to_exitcode(status)
         cpu = usage.ru_utime + usage.ru_stime
     if stalled:
@@ -825,6 +848,7 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
 
 
 def main() -> int:
+    kill_on_term()
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["plan", "run", "bisect", "main"])
     ap.add_argument("rest", nargs="*")
