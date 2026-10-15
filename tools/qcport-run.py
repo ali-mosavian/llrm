@@ -41,6 +41,7 @@ DATA = ("stuff.ini", "default.cfg", "start.qmp", "QUAKE.QPK", "run.conf")
 ARGUMENTS = "start.qmp -ticks 300"
 # FP87 first: the order the build that runs uses; CM first leaves a program that links and stops after its arguments.
 LIBRARIES = ("FP87", "MATHM", "CM")
+TOOLCHAIN_FILES = {"C0M.OBJ", *(f"{name}.LIB" for name in LIBRARIES)}  # what the listing names by the path it had where the Borland build was made
 
 
 def required(name: str) -> Path:
@@ -61,10 +62,13 @@ def compile_failure(compiler: Path, flags: list[str], source: Path, out: Path) -
     return f"{source.stem}: {status} {(done.stderr or done.stdout).strip()[-300:]}"
 
 
-def linked(listing: str, objects: Path, extra: list[str]) -> str:
-    """`listing` (a Borland build's QCPORT.LNK) naming the objects in `objects`, with `extra` added, libraries in the order that runs."""
+def linked(listing: str, objects: Path, extra: list[str], toolchain: Path | None = None) -> str:
+    """`listing` (a Borland build's QCPORT.LNK) naming the objects in `objects`, with `extra` added, libraries in the order that runs.
+    The listing names the toolchain's start-up and libraries by the path they had where it was made; `toolchain` is where they are here."""
     lines, libraries = [], []
     for line in listing.splitlines():
+        if toolchain and (kept := re.match(r"(file|library) '(.*/)?([^/]+\.(?:obj|lib))'$", line, re.I)) and kept.group(3).upper() in TOOLCHAIN_FILES:
+            line = f"{kept.group(1)} '{toolchain / kept.group(3)}'"
         found = re.match(r"file '(.*/)?([^/]+)\.obj'$", line, re.I)
         if line.startswith("library"):
             libraries.append(line)
@@ -155,7 +159,7 @@ def main() -> int:
         return 1
     listing = (borland / "QCPORT.LNK").read_text()
     for name, side in sides.items():
-        (side / "QCPORT.LNK").write_text(linked(listing, side, ["strlib.obj"] if name == "llrm" else []))
+        (side / "QCPORT.LNK").write_text(linked(listing, side, ["strlib.obj"] if name == "llrm" else [], Path(os.environ["QCPORT_BCC_LIB"]) if os.environ.get("QCPORT_BCC_LIB") else None))
         done = subprocess.run([linker, f"@{side / 'QCPORT.LNK'}"], capture_output=True, text=True)
         if not (side / "QCPORT.EXE").exists() or re.search(r"undefined|Error!", done.stdout + done.stderr):
             print(f"{name}: link failed\n" + (done.stdout + done.stderr)[-600:])

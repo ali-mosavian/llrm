@@ -32,6 +32,15 @@ def test_the_link_names_the_objects_beside_it_and_puts_the_libraries_in_the_orde
     assert lines[0] == "format dos" and "name /work/side/QCPORT.EXE" in lines
 
 
+def test_the_toolchain_files_are_found_where_the_toolchain_is_here_not_where_the_listing_was_made():
+    """CI's qcport step stopped at `cannot open /home/alim/scratch/qctc/bcpp31/LIB/C0M.OBJ`: the Borland build's listing names the
+    start-up and libraries by the development host's path."""
+    lines = qcport_run.linked(LISTING, Path("/work/side"), [], Path("/runner/bcpp31/lib")).splitlines()
+    assert "file '/runner/bcpp31/lib/C0M.OBJ'" in lines
+    assert [line for line in lines if line.startswith("library")] == ["library '/runner/bcpp31/lib/FP87.LIB'", "library '/runner/bcpp31/lib/MATHM.LIB'", "library '/runner/bcpp31/lib/CM.LIB'"]
+    assert "file '/work/side/bench.obj'" in lines
+
+
 def test_the_same_drawing_is_no_difference():
     drawn = {"frames": "62", "polys": "37637", "md5": "ba64"}
     assert qcport_run.verdict(drawn, dict(drawn)) == []
