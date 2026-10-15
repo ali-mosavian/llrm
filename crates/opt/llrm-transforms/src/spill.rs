@@ -1456,6 +1456,21 @@ impl llrm_mir::passes::Analysis for Pressure {
         function: &Function,
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> Option<Self::Result> {
+        Pressure::updated(previous, changes, context, function, Room::of(analyses.outer()).index_scales)
+    }
+}
+
+impl Pressure {
+    /// What `function` has of `previous`, a function that `changes` made it:
+    /// the live sets of the values they name solved again, the rest kept.
+    /// Where `previous` is shared, its live sets are copied.
+    pub fn updated(
+        previous: std::rc::Rc<Pressure>,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        function: &Function,
+        scales: u8,
+    ) -> Option<Pressure> {
         use llrm_mir::module::Change;
         let mut named = IdSet::<ValueId>::new();
         let name_operand = |named: &mut IdSet<ValueId>, operand: &Operand| {
@@ -1523,8 +1538,28 @@ impl llrm_mir::passes::Analysis for Pressure {
                 }
             }
         }
+        // Shared, as a base is that clones are priced from: its live sets are
+        // copied, and the blocks of the values named alone are looked for in
+        // them (the index of every value by its blocks, made for each copy,
+        // cost as much as solving them afresh).
+        let shared = std::rc::Rc::strong_count(&previous) > 1;
         let (mut found, placed) = std::rc::Rc::try_unwrap(previous)
             .map_or_else(|kept| (kept.found.clone(), kept.placed.clone()), |owned| (owned.found, owned.placed));
+        if shared && placed.0.is_none() {
+            let mut partial = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+            for (at, values) in &found.live_in {
+                for value in named.iter().filter(|value| values.contains(value)) {
+                    partial.get_or_insert_with(value, Default::default).0.insert(*at);
+                }
+            }
+            for (at, values) in &found.live_out {
+                for value in named.iter().filter(|value| values.contains(value)) {
+                    partial.get_or_insert_with(value, Default::default).1.insert(*at);
+                }
+            }
+            renewed(&mut found, &mut partial, &named, liveness::ranges_of(function, &named));
+            return Some(Pressure::with(context, function, scales, found, Placed::default()));
+        }
         let mut placed = placed
             .0
             .unwrap_or_else(
@@ -1548,7 +1583,7 @@ impl llrm_mir::passes::Analysis for Pressure {
         // updates: 1,300 named, 91 changed), and taking each out of its
         // sets and putting it back was the update's cost.
         renewed(&mut found, &mut placed, &named, liveness::ranges_of(function, &named));
-        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed))))
+        Some(Pressure::with(context, function, scales, found, Placed(Some(placed))))
     }
 }
 

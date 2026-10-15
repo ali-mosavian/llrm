@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:34645f1636642177dc6ae8f51e4a07ca5c5255676551f150ab2ca97c5c14f6f5 -->
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:680328472c3197a41f49ada7d91218bde39f18273433787da4ac9c6e1f954761 -->
 
 # hoist
 
@@ -34,7 +34,9 @@ forecast). While it prices higher, the values crossing the loop that the
 spill model spills, and what reads them, stay; a displacement the accesses
 fold, or a value rebuilt at each read, is not charged. A floating value held
 across the loop is charged its release. At -Os the run is priced in bytes,
-every block once.
+every block once. The moved function's liveness is the kept one's with the
+values the run moved solved again (`profit::spill_forecast_after`;
+`LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
 
 ## Example
 Before:

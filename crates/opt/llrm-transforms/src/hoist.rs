@@ -29,7 +29,9 @@
 //! spill model spills, and what reads them, stay; a displacement the accesses
 //! fold, or a value rebuilt at each read, is not charged. A floating value held
 //! across the loop is charged its release. At -Os the run is priced in bytes,
-//! every block once.
+//! every block once. The moved function's liveness is the kept one's with the
+//! values the run moved solved again (`profit::spill_forecast_after`;
+//! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
 //!
 //! # Example
 //! Before:
@@ -202,7 +204,9 @@ pub fn hoisted(
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
         let run = match &frequency {
-            Some(frequency) => _affordable(unit, analyses, &outer, run, before, into, &costs, room, frequency, &mut held),
+            Some(frequency) => {
+                _affordable(unit, analyses, moved, &outer, run, before, into, &costs, room, frequency, &mut held)
+            }
             None => run,
         };
         if run.is_empty() {
@@ -227,6 +231,7 @@ pub fn hoisted(
 fn _affordable(
     unit: &passes::Unit,
     analyses: &mut llrm_mir::passes::Analyses,
+    moved_before: bool,
     outer: &Outer,
     mut run: Vec<InstId>,
     before: InstId,
@@ -239,7 +244,20 @@ fn _affordable(
     // Each clone is priced from this, its liveness solved again for the values
     // the run moves alone (the whole function was solved for each of 28
     // forecasts: 63% of the spill model on d_faces at -Os).
-    let base = (room.priced()).then(|| analyses.get::<crate::spill::Pressure>(unit.context, unit.layout, unit.function));
+    // The cache holds the pressure of the function before the motions this pass
+    // has made, which are not told to it until it is let go.
+    if moved_before && room.priced() {
+        analyses.invalidate(unit.function, &PreservedAnalyses::all().except::<crate::spill::Pressure>());
+    }
+    let base =
+        (room.priced()).then(|| analyses.get::<crate::spill::Pressure>(unit.context, unit.layout, unit.function));
+    #[cfg(test)]
+    if let Some(base) = &base {
+        assert!(
+            **base == crate::spill::Pressure::of(unit.context, unit.function, room.index_scales),
+            "the pressure a clone is priced from is not the function's, which a motion has moved things in"
+        );
+    }
     // A run that is let go leaves the function as the clone priced it, whose
     // price is then the next loop's `kept`.
     let kept = match held.take() {

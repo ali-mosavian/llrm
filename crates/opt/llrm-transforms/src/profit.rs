@@ -553,16 +553,16 @@ pub fn spill_forecast_after(
     if !room.priced() {
         return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
     }
-    let Some(pressure) = spill::Pressure::updated(std::rc::Rc::clone(base), changes, context, function, room.index_scales)
+    let Some(pressure) =
+        spill::Pressure::updated(std::rc::Rc::clone(base), changes, context, function, room.index_scales)
     else {
         return spill_forecast(context, layout, function, costs, room, across, frequency);
     };
     let found = spill::View::over(&pressure, context, layout, function, room, across).forecast(costs, frequency);
     if llrm_support::env_set("LLRM_CHECK_VIEW") {
         let whole = spill::View::of(context, layout, function, room, across).forecast(costs, frequency);
-        let spilled = |forecast: &spill::Forecast<llrm_mir::dense::IdSet<ValueId>>| {
-            forecast.spilled.iter().collect::<Vec<_>>()
-        };
+        let spilled =
+            |forecast: &spill::Forecast<llrm_mir::dense::IdSet<ValueId>>| forecast.spilled.iter().collect::<Vec<_>>();
         assert!(
             found.cost == whole.cost && found.peak == whole.peak && spilled(&found) == spilled(&whole),
             "the forecast of a function from its base's liveness is not its own: cost {} vs {}, peak {} vs {}",
