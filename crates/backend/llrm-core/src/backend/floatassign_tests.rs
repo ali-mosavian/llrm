@@ -197,10 +197,11 @@ fn test_a_round_looks_for_the_crowded_block_from_where_the_last_left_off() {
     assert!(looked < 45, "{looked} blocks looked at over {rounds} rounds of {blocks}");
 }
 
-/// `lir floatassign` ran 13 times over d_faces -O1 for 137 M instructions, mostly
-/// on bodies with no x87 work: its integer passes cloned every instruction's
-/// semantics and rebuilt every block before the check for floats. A body with
-/// no float is returned as it came, its blocks the same allocations.
+/// `lir floatassign` ran 13 times over d_faces -O1 for 137 M instructions,
+/// mostly on bodies with no x87 work: its integer passes cloned every
+/// instruction's semantics and rebuilt every block before the check for floats.
+/// A body with no float is returned as it came, its blocks the same
+/// allocations.
 #[test]
 fn test_a_body_with_no_float_is_returned_without_rebuilding_a_block() {
     let (body, mut frame) = before("tilesum", "_tile_sum");

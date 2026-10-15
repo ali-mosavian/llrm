@@ -244,12 +244,17 @@ fn _integer_stores(
 ) -> Result<LirBody, Raised> {
     // The readers of every value are only asked for a conversion's result.
     let converts = |one: &Arc<Insn>| {
-        one.what.as_ref().is_some_and(|what| {
-            what.op == Operation::FloatStore
-                && (name_is(what, "fistp") || name_is(what, "fisttp"))
-                && what.sources.len() == 1
-                && matches!(what.dests.as_slice(), [Loc::Held(result)] if result.width == 2 || result.width == 4)
-        })
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::FloatStore
+                    && (name_is(what, "fistp") || name_is(what, "fisttp"))
+                    && what.sources.len() == 1
+                    && matches!(
+                        what.dests.as_slice(),
+                        [Loc::Held(result)] if result.width == 2 || result.width == 4
+                    ),
+            )
     };
     if !body.insns().iter().any(converts) {
         return Ok(body.clone());
