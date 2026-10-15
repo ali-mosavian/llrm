@@ -6,7 +6,7 @@ QCport's render/d_faces.c is built by llrm (m32, the System V convention), gcc a
 reference. Each object is linked with env.c (see there), run in unicorn through `bench_dfaces`, and what executes inside d_faces.o
 (and the runtime library it pulls in) is counted: instructions, memory operands, operands across an alignment boundary and 486
 clocks (harness.py's model). A variant is right when the hash env.c reports equals the -O0 build's.
-Products go to $VSGCC_WORK (default ~/scratch/vsgcc-work), the QCport sources are read from $QCPORT (default ~/scratch/qbq-llrm/src).
+Products go to $VSGCC_WORK, as for the rest of vsgcc; the QCport sources are read from $QCPORT, the directory that holds render/d_faces.c.
 """
 import argparse
 import json
