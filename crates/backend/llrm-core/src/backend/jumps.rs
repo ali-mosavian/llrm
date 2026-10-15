@@ -846,6 +846,58 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
 /// likelier edge falls through, a diamond's likelier arm falls into its
 /// join, an arm leaves its join only for a block before it that reaches the
 /// join `LIKELY`, and a new trace starts at the busiest block left.
+// Entries of the search for the next trace that `_placed` looked at.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn examined(count: usize) {
+    #[cfg(test)]
+    EXAMINED.with(|one| one.set(one.get() + count));
+    #[cfg(not(test))]
+    let _ = count;
+}
+
+/// A waiting block for `_placed` to start a trace at, ranked as it picks: the
+/// likeliest to run, then the one whose placed predecessor is latest, then the
+/// last in source order.
+struct Nearest {
+    busy: f64,
+    reached: usize,
+    place: usize,
+    at: i64,
+}
+
+impl PartialEq for Nearest {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Nearest {}
+
+impl PartialOrd for Nearest {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Nearest {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        self.busy.total_cmp(&other.busy).then(self.reached.cmp(&other.reached)).then(self.place.cmp(&other.place))
+    }
+}
+
 fn _placed(
     body: &LirBody,
     size: bool,
@@ -879,36 +931,44 @@ fn _placed(
     let mut current: Option<i64> = Some(body.entry);
     let mut source: Option<i64> = None;
     let empty = BTreeSet::new();
+    // What the search for the next trace needs, kept as blocks are placed and
+    // not worked out again over every block waiting: where each is in source
+    // order, the first waiting block (any, and not cold), and, for a waiting
+    // block that is not cold, the place of the block placed last that reaches
+    // it, in a heap that is cleaned as it is read.
+    let position: IndexMap<i64, usize> = explicit.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    let (mut first_waiting, mut first_hot) = (0_usize, 0_usize);
+    let mut last_reach: IndexMap<i64, usize> = IndexMap::default();
+    let mut nearest_heap: std::collections::BinaryHeap<Nearest> = std::collections::BinaryHeap::new();
     while order.len() < explicit.len() {
-        if current.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold))
-            && explicit.iter().any(|one| !one.cold && !done.contains(&one.at))
-        {
+        while first_hot < explicit.len() && (explicit[first_hot].cold || done.contains(&explicit[first_hot].at)) {
+            examined(1);
+            first_hot += 1;
+        }
+        if current.is_some_and(|at| by_at.get(&at).is_some_and(|block| block.cold)) && first_hot < explicit.len() {
             current = None; // after the hot blocks
         }
         if current.is_none_or(|at| done.contains(&at) || !by_at.contains_key(&at)) {
-            let waiting: Vec<&LirBlock> = explicit.iter().filter(|block| !done.contains(&block.at)).collect();
             // Next to the block last placed that reaches it: a trace started
             // in source order may land far past its branch.
-            let placed_at: IndexMap<i64, usize> =
-                order.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
-            let nearest = waiting
-                .iter()
-                .filter(|block| !block.cold)
-                .filter_map(|block| {
-                    predecessors
-                        .get(&block.at)?
-                        .iter()
-                        .filter_map(|from| placed_at.get(from))
-                        .max()
-                        .map(|last| (*last, *block))
-                })
-                .max_by(|(one, first), (other, second)| match odds {
-                    Some(busy) => busy.block(first.at).total_cmp(&busy.block(second.at)).then(one.cmp(other)),
-                    None => one.cmp(other),
-                })
-                .map(|(_, block)| block);
-            current =
-                Some(nearest.or_else(|| waiting.iter().find(|block| !block.cold).copied()).unwrap_or(waiting[0]).at);
+            while let Some(top) = nearest_heap.peek() {
+                examined(1);
+                if done.contains(&top.at) || last_reach.get(&top.at) != Some(&top.reached) {
+                    nearest_heap.pop();
+                } else {
+                    break;
+                }
+            }
+            while first_waiting < explicit.len() && done.contains(&explicit[first_waiting].at) {
+                examined(1);
+                first_waiting += 1;
+            }
+            let nearest = nearest_heap.peek().map(|top| top.at);
+            current = Some(
+                nearest
+                    .or_else(|| (first_hot < explicit.len()).then(|| explicit[first_hot].at))
+                    .unwrap_or(explicit[first_waiting].at),
+            );
             source = None;
         }
         let at = current.expect("set above");
@@ -956,6 +1016,19 @@ fn _placed(
         let block = &by_at[&at];
         order.push(block.clone());
         done.insert(at);
+        for to in &block.succ {
+            let Some(&place) = position.get(to) else { continue };
+            if done.contains(to) || explicit[place].cold {
+                continue;
+            }
+            last_reach.insert(*to, order.len() - 1);
+            nearest_heap.push(Nearest {
+                busy: odds.map_or(0.0, |busy| busy.block(*to)),
+                reached: order.len() - 1,
+                place,
+                at: *to,
+            });
+        }
         (current, source) = (
             _onward(body.bits, block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties),
             Some(at),
