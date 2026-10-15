@@ -92,6 +92,7 @@ VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 
+import benchlist  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
 
@@ -124,7 +125,7 @@ def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
     files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
-    files += sorted((ROOT / "bench").glob("*/*.c")) + sorted((VSGCC / "kernels").glob("*/*.c"))
+    files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
     if qcport := os.environ.get("QCPORT"):
         files += sorted(Path(qcport).expanduser().glob("*/*.c"))
     digest = hashlib.sha256()
@@ -319,21 +320,22 @@ def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, t
 
 
 @contextlib.contextmanager
-def locked(name: str, every: float = 60.0):
+def locked(name: str, every: float = 60.0, clock=time.monotonic, sleep=time.sleep):
     """An exclusive lock named `name` between sessions (and threads: each opens the file itself). A wait says so every `every` seconds:
-    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build."""
+    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build.
+    `clock` and `sleep` are the test's, which waits on virtual time."""
     CACHE.mkdir(parents=True, exist_ok=True)
     with open(CACHE / f"{name}.lock", "w") as handle:
-        began = last = time.monotonic()
+        began = last = clock()
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.monotonic() - last >= every:
-                    last = time.monotonic()
+                if clock() - last >= every:
+                    last = clock()
                     print(f"measure: waiting {last - began:.0f}s for the lock {name[:24]} (another session holds it)", flush=True)
-                time.sleep(min(0.5, every / 4))
+                sleep(min(0.5, every / 4))
         yield
 
 
@@ -396,6 +398,17 @@ def superlinear(half: float, small: float, big: float) -> float:
     return max(0.0, second(half, small, big))
 
 
+# A cost that at most doubles when N does grows no faster than linear there (a little over, for the compile's own noise).
+LINEAR = 2.05
+
+
+def grown(half: float, small: float, big: float) -> float:
+    """`superlinear` of a measurement now: nil where its last doubling is linear. A step (work that stops above some N: `live O1 peephole`
+    ran copyprop and regthrash at n=32 only, 16.2/23.4/44.9) is not a slope, and three points cannot tell a step from a curve by their second
+    difference. The base's is `superlinear` as it was: a fixed cost or linear work removed moves the ratio, not the second difference."""
+    return 0.0 if big <= LINEAR * small else superlinear(half, small, big)
+
+
 def two_n(key: str) -> str:
     """The size the cost at 2N is at, as 2N=128: the rows are N/2, N and 2N and name no size."""
     n = scaling_gate.SIZES.get(key.split(" ")[0])
@@ -408,7 +421,7 @@ def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: d
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
         tol = row_tolerance(general, key)
-        more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
+        more = grown(half, small, big) - superlinear(was_half, was_small, was_big)
         lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), {two_n(key)} x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
@@ -438,7 +451,7 @@ def step_rises(
         if key not in base and " ".join(key.split(" ")[:2]) in judged:
             continue
         was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
-        more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
+        more = grown(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
             shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
             lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), {two_n(key)} x{big / was_big:.3f} ({shown})")

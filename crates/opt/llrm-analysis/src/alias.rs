@@ -166,7 +166,8 @@ use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
-pub static EMPTY: LazyLock<Provenance> = LazyLock::new(|| Provenance::new(BTreeSet::new(), BTreeSet::new()));
+pub const EMPTY: Provenance =
+    Provenance { slices: crate::memory::Sorted::new(), restrict: crate::memory::Sorted::new() };
 
 /// One actual argument of a call: a provenance, a `(pointer value,
 /// displacement)` pair, or nothing a pointer is.
@@ -472,7 +473,7 @@ fn _resolved_reference(
                 .expect("a slice keeps its positive shape")
         })
         .collect();
-    Some(Provenance::new(slices, source.restrict.clone()))
+    Some(Provenance { slices, restrict: source.restrict })
 }
 
 /// One procedure's transitive memory effects in its own object space.
@@ -868,7 +869,7 @@ fn _unknown_base(
     at: InstId,
 ) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
     OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let mut reads = NONLOCAL.slices.clone();
+    let mut reads = NONLOCAL.slices.to_set();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
     // address: every object, whether the program ever took its address.
@@ -1227,7 +1228,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             }
             continue;
         };
-        for one in provenance.slices.iter().cloned() {
+        for one in provenance.slices {
             let unknown = one.object.kind == MemoryKind::Unknown;
             if outlives(&one) && !(unknown && !read) {
                 if read {
@@ -2075,7 +2076,7 @@ pub fn calls_annotated(
     let reference = |one: &Slice| {
         MemRef::reach(
             u32::try_from(one.width).expect("a slice width is a memory width"),
-            Provenance::new(BTreeSet::from([one.clone()]), BTreeSet::new()),
+            Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
 
@@ -2118,8 +2119,8 @@ pub fn calls_annotated(
         };
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
-            effect.reads.extend(NONLOCAL.slices.clone());
+            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
+            effect.reads.extend(NONLOCAL.slices.to_set());
             effect.reads.extend(_tracked(&procedure.unit));
         }
         // What an unplaced write may reach: each of its types' stores, not an
@@ -2127,8 +2128,8 @@ pub fn calls_annotated(
         let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
-            reached.extend(NONLOCAL.slices.clone());
+            let mut reached = if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible };
+            reached.extend(NONLOCAL.slices.to_set());
             match &effect.unknown_write_types {
                 // A pointer no fact follows reaches only what escaped, never a
                 // tracked global.
@@ -2379,8 +2380,7 @@ pub fn initialized(
                 continue;
             }
             let Some(reference) = MemRef::of(unit, inst) else { continue };
-            let slices =
-                facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices.clone());
+            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices);
             match op.opcode {
                 Opcode::Store { volatile: false, .. } => {
                     if let [one] = slices.iter().collect::<Vec<_>>()[..]
@@ -2449,7 +2449,7 @@ fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option
 /// important disjointness facts; only the changing subrange is forgotten.
 fn _widened(provenance: &Provenance) -> Provenance {
     let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object)).collect();
-    Provenance::new(slices, provenance.restrict.clone())
+    Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
 fn _cell_key(reference: &MemRef) -> Option<CellKey> {
@@ -2495,9 +2495,8 @@ fn _direct(
         // based on it reach is reached by nothing that is not.
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
-            let mut restrict = source.restrict.clone();
-            restrict.insert(Identity::Value(result.0));
-            Ok(Some(Provenance::new(source.slices.clone(), restrict)))
+            let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
+            Ok(Some(Provenance { slices: source.slices, restrict }))
         }
         // A callee whose result is `noalias` returns a pointer to an object
         // nothing else points to: its own, apart from every other.
@@ -2946,7 +2945,7 @@ fn escapes(
         let Some(reference) = MemRef::of(unit, inst) else { continue };
         let targets = _resolved_reference(unit, &reference, &values)
             .into_iter()
-            .flat_map(|provenance| provenance.slices.iter().map(|one| one.object).collect::<Vec<_>>())
+            .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
             .collect::<BTreeSet<_>>();
         for target in targets {
             pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
@@ -3027,7 +3026,7 @@ fn escapes(
         operands
             .iter()
             .filter_map(|&one| _operand(unit, one, values))
-            .flat_map(|one| one.slices.iter().map(|slice| slice.object).collect::<Vec<_>>())
+            .flat_map(|one| one.slices.into_iter().map(|slice| slice.object))
             .collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, HashMap<InstId, Vec<usize>>> = IndexMap::default();
@@ -3299,7 +3298,7 @@ fn _lost(
                 out.extend(
                     _operand(unit, operand, values)
                         .into_iter()
-                        .flat_map(|one| one.slices.iter().map(|slice| slice.object).collect::<Vec<_>>()),
+                        .flat_map(|one| one.slices.into_iter().map(|slice| slice.object)),
                 );
             }
         } else if let Operand::Constant(id) = operand {
@@ -3590,8 +3589,8 @@ pub fn annotated_with(
                     let model = |number: &BigInt| {
                         i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
                     };
-                    got = Some(Provenance::new(
-                        BTreeSet::from([Slice::new(
+                    got = Some(Provenance {
+                        slices: crate::memory::Sorted::from([Slice::new(
                             source.object.clone(),
                             model(&low)?,
                             model(&high)?,
@@ -3599,8 +3598,8 @@ pub fn annotated_with(
                             width,
                         )
                         .expect("a nonempty positive-stride slice is valid")]),
-                        current.restrict.clone(),
-                    ));
+                        restrict: current.restrict.clone(),
+                    });
                 }
             }
         }

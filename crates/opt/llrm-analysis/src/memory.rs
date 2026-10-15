@@ -37,9 +37,7 @@
 //! of the strides) and, for two distinct objects that may alias, true. A
 //! `Provenance` is a set of slices plus the `restrict` roots (`noalias`
 //! parameters) a pointer is based on; two with disjoint nonempty restrict sets
-//! do not intersect. Its two sets are shared (`Arc`): a `MemRef` is cloned for
-//! each cell a walk asks, and `sources_mut` copies them for the one that
-//! changes.
+//! do not intersect.
 //!
 //! `MemRef` is an access, LLVM's `MemoryLocation`, with its pointer decomposed
 //! as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`
@@ -571,6 +569,26 @@ impl Slice {
             .expect("shifting a valid slice retains its positive shape")
     }
 
+    /// Whether every byte `other` names is one `self` names. A pointer at or
+    /// past the end of the object names no byte of it, so it lies within any
+    /// slice of the object.
+    pub fn contains(
+        &self,
+        other: &Self,
+    ) -> bool {
+        if self.object != other.object {
+            return false;
+        }
+        if self.object.extent.is_some_and(|extent| other.low >= extent) {
+            return true;
+        }
+        let ends = (self.high - 1 + self.width, other.high - 1 + other.width);
+        if self.stride == other.stride && self.width >= other.width {
+            return other.low >= self.low && other.high <= self.high && (other.low - self.low) % self.stride == 0;
+        }
+        self.stride <= self.width && self.low <= other.low && ends.1 <= ends.0
+    }
+
     pub fn intersects(
         &self,
         other: &Self,
@@ -630,46 +648,220 @@ pub fn gcd(
     one
 }
 
-/// `restrict` holds the `noalias`
-/// parameters a pointer is based on.
-///
-/// Shared: a `MemRef` is cloned for each cell a walk asks and each fact a solve
-/// carries, and cloning the two sets of a provenance each time was 250 k deep
-/// copies of a d_faces -O1 compile.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Provenance(std::sync::Arc<Sources>);
+/// A set kept as one sorted, shared array: iterates in `T`'s order as a
+/// `BTreeSet` does, but a copy is a count bumped, a union is a merge, and the
+/// elements sit together. Empty holds no allocation.
+#[derive(Debug)]
+pub struct Sorted<T>(Option<std::sync::Arc<[T]>>);
 
-/// What a provenance names.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Sources {
-    pub slices: BTreeSet<Slice>,
-    pub restrict: BTreeSet<Identity>,
+impl<T> Clone for Sorted<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
 }
 
-impl std::ops::Deref for Provenance {
-    type Target = Sources;
-
-    fn deref(&self) -> &Sources {
-        &self.0
+impl<T> Default for Sorted<T> {
+    fn default() -> Self {
+        Self::new()
     }
+}
+
+impl<T: PartialEq> PartialEq for Sorted<T> {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (&self.0, &other.0) {
+            (Some(one), Some(two)) => std::sync::Arc::ptr_eq(one, two) || one[..] == two[..],
+            _ => self.is_empty() && other.is_empty(),
+        }
+    }
+}
+
+impl<T: Eq> Eq for Sorted<T> {}
+
+impl<T: std::hash::Hash> std::hash::Hash for Sorted<T> {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.as_slice().hash(state);
+    }
+}
+
+impl<T: PartialOrd> PartialOrd for Sorted<T> {
+    fn partial_cmp(
+        &self,
+        other: &Self,
+    ) -> Option<std::cmp::Ordering> {
+        self.as_slice().partial_cmp(other.as_slice())
+    }
+}
+
+impl<T: Ord> Ord for Sorted<T> {
+    fn cmp(
+        &self,
+        other: &Self,
+    ) -> std::cmp::Ordering {
+        self.as_slice().cmp(other.as_slice())
+    }
+}
+
+impl<T> Sorted<T> {
+    pub const fn new() -> Self {
+        Self(None)
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        self.0.as_deref().unwrap_or(&[])
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.as_slice().iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.as_slice().is_empty()
+    }
+
+    pub fn first(&self) -> Option<&T> {
+        self.as_slice().first()
+    }
+}
+
+impl<T: Ord + Clone> Sorted<T> {
+    pub fn contains(
+        &self,
+        one: &T,
+    ) -> bool {
+        self.as_slice().binary_search(one).is_ok()
+    }
+
+    /// Whether every element of `self` is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let mut rest = other.as_slice();
+        self.iter().all(|one| match rest.binary_search(one) {
+            Ok(at) => {
+                rest = &rest[at + 1..];
+                true
+            }
+            Err(_) => false,
+        })
+    }
+
+    pub fn is_disjoint(
+        &self,
+        other: &Self,
+    ) -> bool {
+        let (mut one, mut two) = (self.as_slice(), other.as_slice());
+        while let (Some(a), Some(b)) = (one.first(), two.first()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Less => one = &one[1..],
+                std::cmp::Ordering::Greater => two = &two[1..],
+                std::cmp::Ordering::Equal => return false,
+            }
+        }
+        true
+    }
+
+    /// The elements of both; the one array shared where one holds the other.
+    pub fn union(
+        &self,
+        other: &Self,
+    ) -> Self {
+        if other.is_subset(self) {
+            return self.clone();
+        }
+        if self.is_subset(other) {
+            return other.clone();
+        }
+        let (mut one, mut two) = (self.as_slice(), other.as_slice());
+        let mut made = Vec::with_capacity(one.len() + two.len());
+        while let (Some(a), Some(b)) = (one.first(), two.first()) {
+            match a.cmp(b) {
+                std::cmp::Ordering::Less => {
+                    made.push(a.clone());
+                    one = &one[1..];
+                }
+                std::cmp::Ordering::Greater => {
+                    made.push(b.clone());
+                    two = &two[1..];
+                }
+                std::cmp::Ordering::Equal => {
+                    made.push(a.clone());
+                    one = &one[1..];
+                    two = &two[1..];
+                }
+            }
+        }
+        made.extend_from_slice(one);
+        made.extend_from_slice(two);
+        Self(Some(made.into()))
+    }
+
+    pub fn to_set(&self) -> BTreeSet<T> {
+        self.iter().cloned().collect()
+    }
+}
+
+impl<T: Ord + Clone> FromIterator<T> for Sorted<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
+        let mut made: Vec<T> = items.into_iter().collect();
+        made.sort();
+        made.dedup();
+        if made.is_empty() { Self(None) } else { Self(Some(made.into())) }
+    }
+}
+
+impl<T: Ord + Clone, const N: usize> From<[T; N]> for Sorted<T> {
+    fn from(items: [T; N]) -> Self {
+        items.into_iter().collect()
+    }
+}
+
+impl<T: Ord + Clone> From<BTreeSet<T>> for Sorted<T> {
+    fn from(items: BTreeSet<T>) -> Self {
+        items.into_iter().collect()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a Sorted<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T: Clone> IntoIterator for Sorted<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().to_vec().into_iter()
+    }
+}
+
+/// `restrict` holds the `noalias`
+/// parameters a pointer is based on.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Provenance {
+    pub slices: Sorted<Slice>,
+    pub restrict: Sorted<Identity>,
 }
 
 impl Provenance {
-    pub fn new(
-        slices: BTreeSet<Slice>,
-        restrict: BTreeSet<Identity>,
-    ) -> Self {
-        Self(std::sync::Arc::new(Sources { slices, restrict }))
-    }
-
-    /// The sets to change: copied first if another provenance shares them.
-    pub fn sources_mut(&mut self) -> &mut Sources {
-        std::sync::Arc::make_mut(&mut self.0)
-    }
-
     /// `Provenance.one` with the whole-object bounds and no restrict roots.
     pub fn one(object: impl Into<ObjectRef>) -> Self {
-        Self::new(BTreeSet::from([Slice::whole(object)]), BTreeSet::new())
+        Self { slices: Sorted::from([Slice::whole(object)]), restrict: Sorted::new() }
     }
 
     pub fn one_with_slice(
@@ -680,7 +872,7 @@ impl Provenance {
         width: i64,
         restrict: BTreeSet<Identity>,
     ) -> Result<Self, SliceError> {
-        Ok(Self::new(BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict))
+        Ok(Self { slices: Sorted::from([Slice::new(object, low, high, stride, width)?]), restrict: restrict.into() })
     }
 
     pub fn shifted(
@@ -696,17 +888,24 @@ impl Provenance {
                 if whole || bounded_whole { one.clone() } else { one.shifted(amount) }
             })
             .collect();
-        Self::new(slices, self.restrict.clone())
+        Self { slices, restrict: self.restrict.clone() }
     }
 
     pub fn union(
         &self,
         other: &Self,
     ) -> Self {
-        Self::new(
-            self.slices.union(&other.slices).cloned().collect(),
-            self.restrict.union(&other.restrict).cloned().collect(),
-        )
+        Self { slices: self.slices.union(&other.slices), restrict: self.restrict.union(&other.restrict) }
+    }
+
+    /// Whether every slice of `other` lies within one of `self`'s: a kept
+    /// answer covers a fresh one that knows more. Restrict roots are ignored;
+    /// it asks only where a pointer may point.
+    pub fn covers(
+        &self,
+        other: &Self,
+    ) -> bool {
+        other.slices.iter().all(|two| self.slices.iter().any(|one| one.contains(two)))
     }
 
     pub fn intersects(
@@ -1130,7 +1329,8 @@ impl<'a> Unit<'a> {
     }
 
     /// The base reference of the load or store `inst`: its pointer decomposed,
-    /// with no provenance, made once and kept (`references`).
+    /// made once and kept across the edits that do not reach it
+    /// (`references`).
     pub fn base_reference(
         &self,
         inst: InstId,
@@ -1396,6 +1596,20 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
+/// The accesses worked out for a version of a function, and which version.
+struct Held {
+    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
+    seen: std::rc::Rc<std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Option<MemRef>>>>,
+}
+
+/// The most versions kept: the analyses of one function ask in a run, and a
+/// call summary asks of its callees in between.
+const ACCESS_VERSIONS: usize = 8;
+
+thread_local! {
+    static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl MemRef {
     /// Whether every object it may reach is constant, so that no write
     /// changes it.
@@ -1482,12 +1696,59 @@ impl MemRef {
         made
     }
 
-    /// The access instruction `inst` makes: a load's or a store's.
+    /// The access instruction `inst` makes: a load's or a store's. It is a fact
+    /// of the function's text alone (the pointer's chain of casts and offsets,
+    /// the access's type and width), so it is worked out once for each version
+    /// of the function, whichever of the analyses that read it asks first: a
+    /// quarter of the compile of d_faces was this, asked again by `escapes`,
+    /// `annotated`, `slotstores`, the summaries and the memory walks.
     pub fn of(
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        crate::references::of(unit, inst).map(|one| (*one).clone())
+        let key = (unit.function.mark(), unit.spaces());
+        let held = ACCESSES.with(|held| {
+            let held = held.borrow();
+            held.iter().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
+        });
+        let seen = match held {
+            Some(seen) => seen,
+            None => ACCESSES.with(|held| {
+                let mut held = held.borrow_mut();
+                if held.len() >= ACCESS_VERSIONS {
+                    held.remove(0);
+                }
+                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_mir::dense::IdMap::new()));
+                held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
+                seen
+            }),
+        };
+        let found = seen.borrow().get(&inst).cloned();
+        let Some(mut found) = found else {
+            let made = crate::references::of(unit, inst).map(|one| (*one).clone());
+            seen.borrow_mut().insert(inst, made.clone());
+            return made;
+        };
+        // Metadata is attached without a change logged: the type is asked
+        // again.
+        if let Some(access) = &mut found {
+            access.typed = typed(unit, inst);
+            access.lineage = lineage(unit, inst);
+        }
+        if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
+            assert!(
+                found == Self::derived(unit, inst),
+                "the held access of {inst:?} is not what deriving it again gives"
+            );
+        }
+        found
+    }
+
+    fn derived(
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Self> {
+        Self::decomposed(unit, inst, &mut Vec::new())
     }
 
     /// The access `inst` makes, decomposed afresh: what `references` keeps for
@@ -2046,6 +2307,30 @@ mod tests {
         let copy = set.clone();
         assert_eq!(copy, set);
         assert_eq!(super::OBJECT_COMPARES.with(std::cell::Cell::get) - before, 0, "objects compared tree against tree");
+    }
+
+    /// A provenance of shared sorted arrays iterates, merges and compares as
+    /// the `BTreeSet` it replaced did: the output of a compile follows its
+    /// order.
+    #[test]
+    fn a_provenance_unions_and_covers_as_a_set_does() {
+        let some = |at: &[i64]| -> Provenance {
+            let global = |n: i64| MemoryObject { identity: Some(Identity::Int(n)), ..object(MemoryKind::Global) };
+            Provenance { slices: at.iter().map(|&n| Slice::whole(global(n))).collect(), restrict: Default::default() }
+        };
+        let (one, two) = (some(&[3, 1, 1]), some(&[2, 3]));
+        let both = one.union(&two);
+        let expect: BTreeSet<Slice> = one.slices.iter().chain(two.slices.iter()).copied().collect();
+        assert_eq!(both.slices.iter().collect::<Vec<_>>(), expect.iter().collect::<Vec<_>>());
+        assert!(both.covers(&one) && both.covers(&two) && !one.covers(&two));
+        assert!(one.covers(&one) && one.covers(&some(&[])) && !some(&[]).covers(&one));
+        // A kept [-2^31, 2^31) covers a fresh [0, 1); a pointer one past the
+        // end of a 32-byte object lies within a slice of it.
+        let global = MemoryObject { identity: Some(Identity::Int(9)), extent: Some(32), ..object(MemoryKind::Global) };
+        let held = |low, high| Provenance::one_with_slice(global.clone(), low, high, 1, 1, BTreeSet::new()).unwrap();
+        assert!(held(-(1 << 31), 1 << 31).covers(&held(0, 1)) && !held(0, 1).covers(&held(-(1 << 31), 1 << 31)));
+        assert!(held(0, 32).covers(&held(32, 33)));
+        assert_eq!(some(&[1, 3]), one);
     }
 
     /// Two spellings of an object that differ in a fact are two objects here,

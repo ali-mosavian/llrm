@@ -190,7 +190,7 @@ pub fn _leaf(
         return None;
     }
     let type_class = reference.typed.clone().or_else(|| canonical.get(&(span.object, span.low, high)).cloned());
-    let restrict = reference.provenance.as_ref().map(|provenance| provenance.restrict.clone()).unwrap_or_default();
+    let restrict = reference.provenance.as_ref().map(|provenance| provenance.restrict.to_set()).unwrap_or_default();
     Some(_Leaf { object: span.object, low: span.low, high, type_class, restrict })
 }
 
@@ -281,7 +281,10 @@ pub fn _reference(
     match key {
         Key::Leaf(leaf) => MemRef::reach(
             width,
-            Provenance::new(BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]), leaf.restrict.clone()),
+            Provenance {
+                slices: llrm_analysis::memory::Sorted::from([slice(leaf.object.clone(), leaf.low, leaf.high)]),
+                restrict: leaf.restrict.clone().into(),
+            },
         ),
         Key::Ref(reference) => MemRef { width, ..reference.clone() },
     }

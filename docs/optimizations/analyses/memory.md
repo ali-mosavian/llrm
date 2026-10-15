@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memory.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memory.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:2579a55a851fe6de1f08cc0a660d32c56dbd965241361aaef9b893e509685cd8 -->
+<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:045d227923d6cb769fa4cd73ca695467bae89d3a7ef9b404ab4354c9b200cee3 -->
 
 # memory
 
@@ -42,15 +42,16 @@ WHOLE_HIGH` is "any byte". `Slice::intersects` is exact for one object (gcd
 of the strides) and, for two distinct objects that may alias, true. A
 `Provenance` is a set of slices plus the `restrict` roots (`noalias`
 parameters) a pointer is based on; two with disjoint nonempty restrict sets
-do not intersect. Its two sets are shared (`Arc`): a `MemRef` is cloned for
-each cell a walk asks, and `sources_mut` copies them for the one that
-changes.
+do not intersect. Both are `Sorted` arrays shared by count: iterated in `Ord`
+order as a `BTreeSet` was, a copy bumps a count, `union` merges (and shares
+the array where one holds the other), `covers` is the subset query. Where
+the object, `low` and `width` are not enough, ask these, not the field.
 
 `MemRef` is an access, LLVM's `MemoryLocation`, with its pointer decomposed
 as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`
 wrapped to the index width, and at most one variable index (`base`,
 `scale`), plus the width, `!tbaa` type and its ancestors (`lineage`), and
-`volatile`. `MemRef::of` builds it from a load or store, `filled` from a
+`volatile`. `MemRef::of` builds it from a load or store (once for each version of the function: an instruction's access is a fact of its text; `LLRM_CHECK_ACCESSES` derives it again to compare), `filled` from a
 constant-length `memset`, `reach` from provenance alone (what a call's
 effect names). `named` says the bytes are fixed outright; `unwritable` that
 every object it may reach is `constant`.

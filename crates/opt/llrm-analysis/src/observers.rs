@@ -172,8 +172,9 @@ fn _published(
         // As `avail::dead_stores` asks it: of the access itself, not of what
         // points-to resolves. A variable index into a local is not a name.
         if !reference.named() {
-            published
-                .extend(provenance.slices.iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown));
+            published.extend(
+                provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown),
+            );
         }
     }
     // What a published object holds is read too: a callee given a struct

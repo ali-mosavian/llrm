@@ -104,7 +104,10 @@ fn bytes(
     high: i64,
 ) -> MemRef {
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
-    MemRef::reach(u32::try_from(high - low).unwrap(), Provenance::new(BTreeSet::from([slice]), BTreeSet::new()))
+    MemRef::reach(
+        u32::try_from(high - low).unwrap(),
+        Provenance { slices: crate::memory::Sorted::from([slice]), restrict: crate::memory::Sorted::new() },
+    )
 }
 
 fn overlaps(
@@ -333,10 +336,10 @@ b30:
 ",
     );
     let facts = parsed.facts();
-    let expected = Provenance::new(
-        UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(),
-        BTreeSet::new(),
-    );
+    let expected = Provenance {
+        slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices),
+        restrict: crate::memory::Sorted::new(),
+    };
     assert_eq!(facts.values[&parsed.value("current")], expected);
     assert_eq!(facts.values[&parsed.value("advanced")], expected);
 }
@@ -683,7 +686,7 @@ b50:
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
     let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
     let global = object_of(&parsed.unit(), root).expect("an object");
-    assert_eq!(tagged.slices, BTreeSet::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
+    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
 }
 
 /// A byte counter stepping by `step` for 200 trips, counting the trips
@@ -1461,21 +1464,6 @@ fn pointers_made_restrict_are_apart_and_a_lone_one_is_not() {
     assert!(restricted_overlap(none));
 }
 
-/// A `MemRef` is cloned for each cell a walk asks and each fact a solve
-/// carries: 250 k copies of a provenance's two sets in a d_faces -O1 compile,
-/// 1.3% of it. A clone shares them; the one that changes is the one that
-/// copies.
-#[test]
-fn test_cloning_a_provenance_shares_its_sets_and_changing_one_copies_them() {
-    let one = Provenance::one(ObjectRef::UNKNOWN);
-    let copy = one.clone();
-    assert!(std::ptr::eq(&one.slices, &copy.slices) && std::ptr::eq(&one.restrict, &copy.restrict));
-    let mut changed = one.clone();
-    changed.sources_mut().restrict.insert(Identity::Value(7));
-    assert!(one.restrict.is_empty() && changed.restrict.len() == 1);
-    assert!(std::ptr::eq(&one.slices, &copy.slices));
-}
-
 /// The value solve visited every instruction of every block each round (a
 /// chain of N diamonds spilling and reloading a pointer: d_faces, 178 solves of
 /// 0.3 G for 1.2 G); it visits an instruction again only when a value or an
@@ -1563,4 +1551,20 @@ b0:
     assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
     let a = parsed.object("a");
     assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
+}
+
+/// An access was held for each version of its function, and a type tag
+/// attached afterwards logs no change: the held access kept no type, so a
+/// store tagged `!tbaa` after its first ask was apart from nothing.
+#[test]
+fn a_type_attached_after_the_access_was_first_asked_is_seen() {
+    let mut parsed =
+        Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p\n  ret void\n}}\n{TYPE_TREE}"));
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    assert!(MemRef::of(&parsed.unit(), store).expect("a store").typed.is_none(), "premise: no type yet");
+    let (_, function) = parsed.module.function_mut("f").expect("f");
+    function.annotate(store, "tbaa", llrm_mir::module::MetadataId(5));
+    let reference = MemRef::of(&parsed.unit(), store).expect("a store");
+    assert!(reference.typed.is_some(), "the type attached later was not seen");
+    assert_eq!(reference.lineage.len(), 3);
 }
