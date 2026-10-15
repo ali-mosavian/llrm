@@ -1,4 +1,4 @@
-reason = "frame objects and the relaid hole are 8-aligned in functions holding doubles: jpeg bq32 +9 code bytes, +-6 instructions"
+reason = "an alloca keeps the slot layout where the function keeps no wider stack alignment: jpeg bq32 back to -9 code bytes, +-1 instruction"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63440134
-code_bytes = 6287
+instructions = 63440135
+code_bytes = 6278
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613329
-code_bytes = 5877
+instructions = 64613333
+code_bytes = 5868
 data_bytes = 29697
 bss_bytes = 0
 

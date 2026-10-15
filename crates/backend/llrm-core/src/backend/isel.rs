@@ -1661,15 +1661,20 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let group = group_of[&inst];
-                    // An object lies on its type's alignment, or its size's
-                    // where the front end typed it as
-                    // bytes, up to the stack's where the
-                    // function keeps it: a local `double[4]` at 4 mod
-                    // 8 costs a 486 3 clocks an access (nbody -O2: 18,404).
-                    let align = natural_align(&self.module.context.types, &self.layout, allocated)
-                        .max(1 << size.clamp(1, 8).ilog2())
-                        .min(self.callee_facts.stack_alignment(self.arch, name))
-                        .max(1);
+                    // Where the function keeps the stack aligned beyond a slot,
+                    // an object lies on its type's alignment, or its size's
+                    // where the front end typed it as bytes: a local
+                    // `double[4]` at 4 mod 8 costs a 486 3 clocks an access
+                    // (nbody -O2: 18,404). Else the layout is the slot's.
+                    let kept = self.callee_facts.stack_alignment(self.arch, name);
+                    let align = if kept > i64::from(self.arch.stack_slot_bytes()) {
+                        natural_align(&self.module.context.types, &self.layout, allocated)
+                            .max(1 << size.clamp(1, 8).ilog2())
+                            .min(kept)
+                            .max(1)
+                    } else {
+                        1
+                    };
                     let disp = *homes
                         .entry(group)
                         .or_insert_with(
