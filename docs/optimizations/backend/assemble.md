@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:217e82e9bdf81bb9c66dba9f71cb044707909f3422ddb6f2d887f2cdde5ad13e -->
+<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:5c5613db77e50a7b9379ecbec608287e42f4192ff781b02ebb082413223cc810 -->
 
 # assemble
 
@@ -54,8 +54,10 @@ register it must save; a tie is decided by the other measure.
 
 Below -Omax `directed` runs the allocator alone first and runs the spiller
 route only if at least 0.5% of the weighted instructions are spill or
-frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route.
-With `-fallocation-routes` off the allocator runs alone.
+frame-cell traffic; `LLRM_CANDIDATES=spiller|allocator` forces one route,
+`measure` runs both whatever the traffic and `LLRM_DEBUG=routes` says what
+the allocator alone left. With `-fallocation-routes` off the allocator runs
+alone.
 
 When all functions are done the module's constants are added to the data,
 stack checks the program proves unneeded are elided, undefined names
