@@ -107,7 +107,7 @@ use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
-use crate::model::lir::{self, Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, IndexMap};
 
@@ -212,7 +212,7 @@ pub fn joined(
     // the deepest loops first, as LLVM's `RegisterCoalescer` orders its
     // worklist, and in a loop the blocks that run most often.
     let busy = crate::analysis::frequency::Frequency::of(body);
-    let mut blocks: Vec<&LirBlock> = body.blocks.iter().collect();
+    let mut blocks: Vec<&Block> = body.blocks.iter().collect();
     let depth = ranges::depths_shared(body);
     blocks.sort_by(|a, b| {
         let (a_depth, b_depth) = (depth.get(&a.at).copied().unwrap_or(0), depth.get(&b.at).copied().unwrap_or(0));
@@ -351,7 +351,7 @@ pub fn joined(
                             incoming: phi.incoming.iter().map(|(at, value)| (*at, swap(*value))).collect(),
                         })
                         .collect(),
-                    ..block.with_insns(_kept(block, &swap))
+                    ..block.with_insns(_kept(block, &swap)).into_inner()
                 })
                 .collect(),
         )
@@ -1340,7 +1340,7 @@ mod tests {
         LirBody::new(
             name,
             0,
-            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect())],
+            vec![LirBlock::new(0, insns.into_iter().map(Arc::new).collect()).into()],
             IndexMap::default(),
             pins.iter().copied().collect(),
         )
@@ -1635,14 +1635,14 @@ mod tests {
                     .map(Arc::new)
                     .collect(),
             );
-            block.succ = vec![0x20];
+            block.succ = vec![0x20].into();
             block
         };
         let last = LirBlock::new(0x20, vec![Arc::new(_use(0x20, 2))]);
         let body = LirBody::new(
             "two arms",
             0,
-            vec![arm(0, 61), arm(0x10, 63), last],
+            vec![arm(0, 61).into(), arm(0x10, 63).into(), last.into()],
             IndexMap::default(),
             IndexMap::default(),
         );

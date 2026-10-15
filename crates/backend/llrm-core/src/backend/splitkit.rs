@@ -98,7 +98,7 @@ use crate::backend::liveunion::LiveUnion;
 use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::backend::{allocate, spiller};
 use crate::model::ir::{self, Held, Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
 /// Carve spilled address operands -- base, index, selector -- into the
@@ -612,7 +612,7 @@ pub fn carved_moving(
     // The blocks as they were, but those a copy is put in or the region
     // covers, which are in `touched`: the positions of an untouched block stay
     // (`Moved` says nothing of it).
-    let mut out: Vec<LirBlock> = body.blocks.clone();
+    let mut out: Vec<Block> = body.blocks.clone();
     let mut moved: Moved = IndexMap::default();
     let touched: BTreeSet<usize> = inserted
         .keys()
@@ -649,7 +649,7 @@ pub fn carved_moving(
             out[place] = block.with_insns(insns);
         }
     }
-    let mut made: Vec<LirBlock> = Vec::new();
+    let mut made: Vec<Block> = Vec::new();
     let mut next_at =
         if bridges.is_empty() { 0 } else { body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1 };
     let mut bridged: IndexMap<(i64, i64), i64> = IndexMap::default();
@@ -676,8 +676,9 @@ pub fn carved_moving(
             .collect();
         out[place] = LirBlock {
             succ: original.succ.iter().map(|one| if *one == outside { bridge } else { *one }).collect(),
-            ..original.with_insns(rewritten)
-        };
+            ..original.with_insns(rewritten).into_inner()
+        }
+        .into();
         let mut jump = Insn::new(
             beside.at,
             Some((beside.at, beside.at)),
@@ -686,13 +687,16 @@ pub fn carved_moving(
             Vec::new(),
         );
         jump.call = beside.call.clone();
-        made.push(LirBlock {
-            succ: vec![outside],
-            ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)])
-        });
+        made.push(
+            LirBlock {
+                succ: vec![outside].into(),
+                ..LirBlock::new(bridge, vec![copy(&beside, entering), Arc::new(jump)])
+            }
+            .into(),
+        );
         // A phi in the target now arrives from the bridge.
         if let Some(&target) = graph.position.get(&outside) {
-            for phi in &mut out[target].phis {
+            for phi in out[target].phis.iter_mut() {
                 for (from, _) in &mut phi.incoming {
                     if *from == source {
                         *from = bridge;
@@ -1665,7 +1669,7 @@ mod tests {
     use crate::analysis::frequency::Frequency;
     use crate::analysis::intervals::{self};
     use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::HashMap;
     use crate::support::hash::IndexMap;
 
@@ -1734,12 +1738,12 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: &[i64],
     ) -> LirBlock {
-        LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, insns) }
     }
 
     fn body(
         name: &str,
-        blocks: Vec<LirBlock>,
+        blocks: Vec<Block>,
     ) -> LirBody {
         LirBody::new(name, 0, blocks, IndexMap::default(), IndexMap::default())
     }
@@ -1786,7 +1790,7 @@ mod tests {
         body(
             "one",
             vec![
-                block(0, vec![move_imm(0, 3, 0x40), move_imm(2, 4, 1), jump(4, 0x10)], &[0x10]),
+                block(0, vec![move_imm(0, 3, 0x40), move_imm(2, 4, 1), jump(4, 0x10)], &[0x10]).into(),
                 block(
                     0x10,
                     vec![
@@ -1800,7 +1804,8 @@ mod tests {
                         _insn(0x12, sem(Operation::Branch, "jne", vec![], vec![], Some(0x10)), &[], &[]),
                     ],
                     &[0x10, 0x20],
-                ),
+                )
+                .into(),
                 block(
                     0x20,
                     vec![
@@ -1808,7 +1813,8 @@ mod tests {
                         _insn(0x22, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[5]),
                     ],
                     &[],
-                ),
+                )
+                .into(),
             ],
         )
     }
@@ -1889,13 +1895,13 @@ mod tests {
         use crate::model::lir::Phi;
         let mut join =
             block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
-        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }];
+        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }].into();
         let body = body(
             "phi",
             vec![
-                block(0, vec![move_imm(0, 3, 1), jump(1, 0x10)], &[0x10]),
-                block(0x10, vec![move_imm(0x10, 3, 2), jump(0x11, 0x20)], &[0x20]),
-                join,
+                block(0, vec![move_imm(0, 3, 1), jump(1, 0x10)], &[0x10]).into(),
+                block(0x10, vec![move_imm(0x10, 3, 2), jump(0x11, 0x20)], &[0x20]).into(),
+                join.into(),
             ],
         );
         // The region of block 0x10 writes the value and leaves for 0x20, whose
@@ -1956,9 +1962,10 @@ mod tests {
                         jump(4, 0x10),
                     ],
                     &[0x10],
-                ),
-                block(0x10, vec![add(0x10, 12), jump(0x12, 0x20)], &[0x20]),
-                block(0x20, vec![push(0x20, 11), push(0x21, 12)], &[]),
+                )
+                .into(),
+                block(0x10, vec![add(0x10, 12), jump(0x12, 0x20)], &[0x20]).into(),
+                block(0x20, vec![push(0x20, 11), push(0x21, 12)], &[]).into(),
             ],
         );
         let mut region = Region::default();
@@ -1974,9 +1981,9 @@ mod tests {
         let body = body(
             "one",
             vec![
-                block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]),
-                block(0x10, vec![add(0x10, 3), move_imm(0x12, 7, 2), jump(0x14, 0x20)], &[0x20]),
-                block(0x20, vec![push(0x20, 3), push(0x21, 7)], &[]),
+                block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]).into(),
+                block(0x10, vec![add(0x10, 3), move_imm(0x12, 7, 2), jump(0x14, 0x20)], &[0x20]).into(),
+                block(0x20, vec![push(0x20, 3), push(0x21, 7)], &[]).into(),
             ],
         );
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
@@ -1993,11 +2000,11 @@ mod tests {
         let body = body(
             "one",
             vec![
-                block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]),
-                block(0x10, vec![add(0x10, 3), jump(0x11, 0x18)], &[0x18]),
-                block(0x18, vec![move_imm(0x18, 7, 2), branch, jump(0x1a, 0x20)], &[0x30, 0x20]),
-                block(0x20, vec![push(0x20, 3), push(0x21, 7)], &[]),
-                block(0x30, vec![push(0x30, 3)], &[]),
+                block(0, vec![move_imm(0, 3, 1), jump(2, 0x10)], &[0x10]).into(),
+                block(0x10, vec![add(0x10, 3), jump(0x11, 0x18)], &[0x18]).into(),
+                block(0x18, vec![move_imm(0x18, 7, 2), branch, jump(0x1a, 0x20)], &[0x30, 0x20]).into(),
+                block(0x20, vec![push(0x20, 3), push(0x21, 7)], &[]).into(),
+                block(0x30, vec![push(0x30, 3)], &[]).into(),
             ],
         );
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x20, 0x30])).expect("cut");
@@ -2032,7 +2039,7 @@ mod tests {
     ) -> Vec<i64> {
         let mut values: HashMap<u32, i64> = HashMap::default();
         let mut pushed = Vec::new();
-        let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|one| (one.at, one)).collect();
+        let blocks: HashMap<i64, &Block> = body.blocks.iter().map(|one| (one.at, one)).collect();
         for at in path {
             for one in &blocks[at].insns {
                 let what = one.what.as_ref().expect("semantics");
@@ -2059,9 +2066,9 @@ mod tests {
         let body = body(
             "one",
             vec![
-                block(0, vec![move_imm(0, 3, 1), branch], &[0x10, 0x20]),
-                block(0x10, vec![add(0x10, 3), jump(0x12, 0x20)], &[0x20]),
-                block(0x20, vec![push(0x20, 3)], &[]),
+                block(0, vec![move_imm(0, 3, 1), branch], &[0x10, 0x20]).into(),
+                block(0x10, vec![add(0x10, 3), jump(0x12, 0x20)], &[0x20]).into(),
+                block(0x20, vec![push(0x20, 3)], &[]).into(),
             ],
         );
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10, 0x20])).expect("cut");
@@ -2085,9 +2092,9 @@ mod tests {
         let body = body(
             "one",
             vec![
-                block(0, vec![jump(0, 0x10)], &[0x10]),
-                block(0x10, vec![Arc::new(call), Arc::new(out), jump(0x14, 0x20)], &[0x20]),
-                block(0x20, vec![push(0x20, 3)], &[]),
+                block(0, vec![jump(0, 0x10)], &[0x10]).into(),
+                block(0x10, vec![Arc::new(call), Arc::new(out), jump(0x14, 0x20)], &[0x20]).into(),
+                block(0x20, vec![push(0x20, 3)], &[]).into(),
             ],
         );
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
@@ -2126,7 +2133,7 @@ mod tests {
         let (cut, kept) = loop_bases(&_pointer_across_a_loop(), &BTreeSet::from([3]));
         assert_eq!(kept.len(), 1);
         let fresh = *kept.iter().next().expect("one");
-        let blocks: HashMap<i64, &LirBlock> = cut.blocks.iter().map(|one| (one.at, one)).collect();
+        let blocks: HashMap<i64, &Block> = cut.blocks.iter().map(|one| (one.at, one)).collect();
         // v3 is a constant: the piece remakes it on entry rather than copy it.
         assert!(blocks[&0].insns.iter().any(|one| one.defines == [fresh] && one.uses.is_empty()));
         // The loop never writes v3, so v3 still holds it after: no copy back.
@@ -2179,7 +2186,7 @@ mod tests {
     fn test_a_piece_after_a_meta_instruction_starts_at_its_own_slot() {
         let marker = Arc::new(Insn::new(2, Some((2, 3)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
         let insns = vec![move_imm(0, 3, 0x40), marker, move_imm(4, 4, 1), push(6, 3), push(8, 4)];
-        let body = body("marked", vec![block(0, insns, &[])]);
+        let body = body("marked", vec![block(0, insns, &[]).into()]);
         let index = intervals::indexed(&body);
         let mut piece = Region::default();
         piece.add(0, 2, 3);
@@ -2203,7 +2210,7 @@ mod tests {
         let marker = Arc::new(Insn::new(2, Some((2, 3)), Some(crate::model::lir::inert()), Vec::new(), Vec::new()));
         let first = vec![move_imm(0, 3, 0x40), marker, move_imm(4, 4, 1), push(6, 3), push(8, 4)];
         let second = vec![push(10, 3), push(12, 4)];
-        let body = body("touching", vec![block(0, first, &[1]), block(1, second, &[])]);
+        let body = body("touching", vec![block(0, first, &[1]).into(), block(1, second, &[]).into()]);
         let index = intervals::indexed(&body);
         // A window ends at the slot of the instruction after it, and the last
         // one's at the block's end.
@@ -2245,13 +2252,14 @@ mod tests {
         let body = body(
             "one",
             vec![
-                block(0, vec![move_imm(0, 3, 0x40), jump(2, 0x10)], &[0x10]),
-                block(0x10, vec![add(0x10, 3), add(0x12, 3), add(0x14, 3), jump(0x16, 0x20)], &[0x20]),
+                block(0, vec![move_imm(0, 3, 0x40), jump(2, 0x10)], &[0x10]).into(),
+                block(0x10, vec![add(0x10, 3), add(0x12, 3), add(0x14, 3), jump(0x16, 0x20)], &[0x20]).into(),
                 block(
                     0x20,
                     vec![push(0x20, 3), _insn(0x22, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])],
                     &[],
-                ),
+                )
+                .into(),
             ],
         );
         let live = crate::backend::allocate::live(&body);
@@ -2322,11 +2330,14 @@ mod tests {
     fn test_a_local_split_holds_the_references_before_the_interference() {
         let body = body(
             "one",
-            vec![block(
-                0,
-                vec![move_imm(0, 3, 1), add(2, 3), add(4, 3), move_imm(6, 7, 2), push(8, 3), push(10, 7)],
-                &[],
-            )],
+            vec![
+                block(
+                    0,
+                    vec![move_imm(0, 3, 1), add(2, 3), add(4, 3), move_imm(6, 7, 2), push(8, 3), push(10, 7)],
+                    &[],
+                )
+                .into(),
+            ],
         );
         let index = intervals::indexed(&body);
         let live = crate::backend::allocate::live(&body);
@@ -2367,7 +2378,7 @@ mod tests {
         body(
             "count",
             vec![
-                block(0, vec![move_imm(0, 4, 0), jump(2, 0x10)], &[0x10]),
+                block(0, vec![move_imm(0, 4, 0), jump(2, 0x10)], &[0x10]).into(),
                 block(
                     0x10,
                     vec![
@@ -2375,8 +2386,9 @@ mod tests {
                         _insn(0x12, sem(Operation::Branch, "jge", vec![], vec![], Some(0x30)), &[], &[]),
                     ],
                     &[0x20, 0x30],
-                ),
-                block(0x20, vec![add(0x20, 4), jump(0x22, 0x10)], &[0x10]),
+                )
+                .into(),
+                block(0x20, vec![add(0x20, 4), jump(0x22, 0x10)], &[0x10]).into(),
                 block(
                     0x30,
                     vec![
@@ -2384,14 +2396,15 @@ mod tests {
                         _insn(0x32, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[5]),
                     ],
                     &[],
-                ),
+                )
+                .into(),
             ],
         )
     }
 
     /// Values after executing the body: moves, add, cmp, jge, jmp and ret.
     fn _run(body: &LirBody) -> HashMap<u32, i64> {
-        let blocks: HashMap<i64, &LirBlock> = body.blocks.iter().map(|one| (one.at, one)).collect();
+        let blocks: HashMap<i64, &Block> = body.blocks.iter().map(|one| (one.at, one)).collect();
         let mut values: HashMap<u32, i64> = HashMap::default();
         let (mut at, mut flags) = (body.entry, 0);
         for _step in 0..1000 {
@@ -2447,10 +2460,10 @@ mod tests {
         let mut loopy = body(
             "bridged",
             vec![
-                block(0, vec![move_imm(0, 4, 0)], &[1, 2, 3]),
-                block(1, vec![add(1, 4)], &[2, 3]),
-                block(2, vec![add(2, 4)], &[1, 3]),
-                block(3, vec![ret(3)], &[]),
+                block(0, vec![move_imm(0, 4, 0)], &[1, 2, 3]).into(),
+                block(1, vec![add(1, 4)], &[2, 3]).into(),
+                block(2, vec![add(2, 4)], &[1, 3]).into(),
+                block(3, vec![ret(3)], &[]).into(),
             ],
         );
         for (from, to, probability) in

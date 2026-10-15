@@ -255,7 +255,7 @@ pub fn checked(
 /// `body` without meta instructions, and without the unreachable blocks
 /// that held only those.
 fn without_meta(body: LirBody) -> LirBody {
-    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &block.succ)).collect();
+    let succ: IndexMap<i64, &Vec<i64>> = body.blocks.iter().map(|block| (block.at, &*block.succ)).collect();
     let (mut reached, mut work) = (std::collections::BTreeSet::new(), vec![body.entry]);
     while let Some(at) = work.pop() {
         if succ.contains_key(&at) && reached.insert(at) {
@@ -353,7 +353,7 @@ mod tests {
                 Arc::new(Insn::new(4, Some((4, 5)), Some(returned), vec![], vec![])),
             ],
         );
-        let body = LirBody::new("bytes", 1, vec![block], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("bytes", 1, vec![block.into()], IndexMap::default(), IndexMap::default());
         let Err(Checked::Malformed(Malformed(said))) = checked(
             body,
             &mut DropsBytes,
@@ -379,7 +379,7 @@ mod tests {
         let mut body = LirBody::new(
             "phase",
             1,
-            vec![LirBlock::new(1, vec![Arc::new(source)])],
+            vec![LirBlock::new(1, vec![Arc::new(source)]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );

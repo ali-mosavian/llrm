@@ -757,7 +757,8 @@ mod tests {
                 vec![30],
             ),
         ];
-        let body = LirBody::new("index", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("index", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
 
         let result = exact_addresses(&body, "386").unwrap();
 
@@ -798,7 +799,8 @@ mod tests {
             one(4, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
             one(5, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
         ];
-        let body = LirBody::new("copied", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("copied", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
 
         let result = exact_addresses(&body, "386").unwrap();
 
@@ -850,8 +852,13 @@ mod tests {
             one(5, Operation::Move, "mov", vec![reg(RegId::SI, 2)], vec![Loc::Mem(cell(2))], vec![14], vec![12]),
             one(6, Operation::Compare, "cmp", vec![], vec![reg(RegId::CX, 2), reg(RegId::SI, 2)], vec![], vec![13, 14]),
         ];
-        let body =
-            LirBody::new("clobbered", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new(
+            "clobbered",
+            0,
+            vec![LirBlock::new(0, insns).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
 
         let result = exact_addresses(&body, "386").unwrap();
 

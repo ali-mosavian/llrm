@@ -295,6 +295,30 @@ pub struct Function {
     /// removed or added; empty while none moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
+    /// The names of the live values and blocks, for `unique_name`.
+    pub(crate) names: NameIndex,
+}
+
+/// A count per name held by a live value or block, made at the first new name
+/// and kept by the edits after it, and per base name the number below which
+/// every `base{n}` is taken. A cache: it is never part of what two functions
+/// are equal by.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NameIndex(pub(crate) Option<Names>);
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Names {
+    pub(crate) held: crate::hash::HashMap<String, u32>,
+    pub(crate) taken_below: crate::hash::HashMap<String, u32>,
+}
+
+impl PartialEq for NameIndex {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 impl Function {
@@ -325,6 +349,7 @@ impl Function {
             debug_dropped: Vec::new(),
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
+            names: NameIndex::default(),
         }
     }
 

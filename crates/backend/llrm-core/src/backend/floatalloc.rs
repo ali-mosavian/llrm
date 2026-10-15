@@ -137,7 +137,7 @@ use crate::backend::frame::Frame;
 use crate::backend::select;
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Reg, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 use crate::support::hash::{HashMap, HashSet};
@@ -916,7 +916,7 @@ pub(super) fn _float_copy(one: &Insn) -> Option<(u32, u32)> {
 /// The blocks in reverse postorder from the entry, then the unreachable ones,
 /// and how many are reached.
 fn _reverse_postorder(body: &LirBody) -> (Vec<i64>, usize) {
-    let at_of: HashMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: HashMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let (mut seen, mut order) = (HashSet::default(), Vec::new());
     let mut pending: Vec<(i64, usize)> = vec![(body.entry, 0)];
     seen.insert(body.entry);
@@ -964,7 +964,7 @@ fn _converted(
         held.entry(entry).or_default().extend(floats(&live_in[&block.at]));
         held.entry(exit).or_default().extend(floats(&live_out[&block.at]));
     }
-    let at_of: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut settled: IndexMap<usize, Vec<u32>> = IndexMap::default();
     let status_word = classes.status_word().ok_or_else(|| unlowered("the target has no x87 status word register"))?;
     let mut stack = _Stack::new(floating.clone(), body.float_stack, status_word);
@@ -988,7 +988,7 @@ fn _converted(
             })
             .max()
             .map_or(0, |most| most + 1);
-    let mut made: IndexMap<i64, LirBlock> = IndexMap::default();
+    let mut made: IndexMap<i64, Block> = IndexMap::default();
     let (order, _) = _reverse_postorder(body);
     for at in order {
         let block = at_of[&at];
@@ -1044,7 +1044,7 @@ fn _converted(
         stack.out.extend(block.insns[cut..].iter().cloned());
         let mut one = block.clone();
         one.insns = std::mem::take(&mut stack.out).into();
-        made.insert(at, one);
+        made.insert(at, one.into_inner().into());
     }
     let mut out = body.clone();
     out.blocks = body.blocks.iter().map(|block| made.shift_remove(&block.at).expect("every block allocated")).collect();

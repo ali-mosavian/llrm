@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::model::lir::LirBlock;
+use crate::model::lir::Block;
 use crate::support::hash::IndexMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,7 +45,7 @@ thread_local! {
 /// output across it. A block starts with no input; its input is worked out the
 /// first time it is worked.
 pub fn solve<S: Clone + PartialEq>(
-    nodes: &[&LirBlock],
+    nodes: &[&Block],
     direction: Direction,
     initial: impl Fn(i64) -> S,
     input: impl Fn(i64, &IndexMap<i64, S>) -> S,

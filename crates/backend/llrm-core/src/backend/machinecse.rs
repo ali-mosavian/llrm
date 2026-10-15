@@ -383,7 +383,7 @@ mod tests {
     }
 
     fn _body(insns: Vec<Arc<Insn>>) -> LirBody {
-        LirBody::new("machine-cse", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
+        LirBody::new("machine-cse", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
     }
 
     fn block(
@@ -391,7 +391,7 @@ mod tests {
         insns: Vec<Arc<Insn>>,
         succ: Vec<i64>,
     ) -> LirBlock {
-        LirBlock { succ, ..LirBlock::new(at, insns) }
+        LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) }
     }
 
     fn overwrite(
@@ -455,7 +455,7 @@ mod tests {
         let body = LirBody::new(
             "machine-cse",
             0,
-            vec![block(0, vec![first], vec![5]), block(5, vec![Arc::clone(&repeated)], vec![])],
+            vec![block(0, vec![first], vec![5]).into(), block(5, vec![Arc::clone(&repeated)], vec![]).into()],
             IndexMap::default(),
             IndexMap::default(),
         );
@@ -473,10 +473,10 @@ mod tests {
             "machine-cse",
             0,
             vec![
-                block(0, vec![], vec![1, 2]),
-                block(1, vec![first], vec![5]),
-                block(2, vec![second], vec![5]),
-                block(5, vec![repeated], vec![]),
+                block(0, vec![], vec![1, 2]).into(),
+                block(1, vec![first], vec![5]).into(),
+                block(2, vec![second], vec![5]).into(),
+                block(5, vec![repeated], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -494,10 +494,10 @@ mod tests {
             "machine-cse",
             0,
             vec![
-                block(0, vec![], vec![1, 2]),
-                block(1, vec![first], vec![5]),
-                block(2, vec![overwrite(2, (2, 4), 2)], vec![5]),
-                block(5, vec![Arc::clone(&repeated)], vec![]),
+                block(0, vec![], vec![1, 2]).into(),
+                block(1, vec![first], vec![5]).into(),
+                block(2, vec![overwrite(2, (2, 4), 2)], vec![5]).into(),
+                block(5, vec![Arc::clone(&repeated)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),
@@ -523,9 +523,9 @@ mod tests {
             "machine-cse",
             0,
             vec![
-                block(0, vec![first], vec![3]),
-                block(3, vec![call], vec![5]),
-                block(5, vec![Arc::clone(&repeated)], vec![]),
+                block(0, vec![first], vec![3]).into(),
+                block(3, vec![call], vec![5]).into(),
+                block(5, vec![Arc::clone(&repeated)], vec![]).into(),
             ],
             IndexMap::default(),
             IndexMap::default(),

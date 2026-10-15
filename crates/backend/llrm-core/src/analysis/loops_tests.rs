@@ -6,13 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
-use crate::model::lir::LirBlock;
+use crate::model::lir::{Block, LirBlock};
 
 fn block(
     at: i64,
     succ: &[i64],
 ) -> LirBlock {
-    LirBlock { succ: succ.to_vec(), ..LirBlock::new(at, vec![]) }
+    LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, vec![]) }
 }
 
 fn set(items: &[i64]) -> BTreeSet<i64> {
@@ -137,7 +137,7 @@ fn test_a_block_with_one_predecessor_is_never_a_frontier() {
 
 /// The blocks of `graph` the entry reaches without passing through `removed`.
 fn reached(
-    graph: &[LirBlock],
+    graph: &[Block],
     removed: Option<i64>,
 ) -> BTreeSet<i64> {
     let mut seen = BTreeSet::new();
@@ -146,7 +146,7 @@ fn reached(
         if Some(at) == removed || !seen.insert(at) {
             continue;
         }
-        pending.extend(graph.iter().find(|one| one.at == at).map(|one| one.succ.clone()).unwrap_or_default());
+        pending.extend(graph.iter().find(|one| one.at == at).map(|one| one.succ.to_vec()).unwrap_or_default());
     }
     seen
 }
@@ -162,7 +162,7 @@ fn test_dominators_are_what_the_definition_says_on_random_graphs() {
     };
     for _ in 0..300 {
         let size = 1 + next(12) as i64;
-        let graph: Vec<LirBlock> = (0..size)
+        let graph: Vec<Block> = (0..size)
             .map(|at| block(at, &(0..next(4)).map(|_| next(size as u64) as i64).collect::<Vec<_>>()))
             .collect();
         let found = dominators(&graph, Some(0));
@@ -190,7 +190,7 @@ fn test_dominators_are_what_the_definition_says_on_random_graphs() {
 #[test]
 fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
     let n = 4000;
-    let reversed: Vec<LirBlock> = (0..n).rev().map(|at| block(at, &[(at + 1).min(n)])).chain([block(n, &[])]).collect();
+    let reversed: Vec<Block> = (0..n).rev().map(|at| block(at, &[(at + 1).min(n)])).chain([block(n, &[])]).collect();
     let started = std::time::Instant::now();
     let found = dominance(&reversed, Some(0));
     assert!(found.dominates(0, n) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));

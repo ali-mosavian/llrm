@@ -516,7 +516,7 @@ pub fn indexed_shared(body: &LirBody) -> Arc<Indexes> {
 /// its phis, and what its frequencies read.
 struct Remembered {
     entry: i64,
-    blocks: Vec<(i64, Vec<i64>, Vec<crate::model::lir::Phi>, Insns)>,
+    blocks: Vec<(i64, crate::model::lir::Shared<i64>, crate::model::lir::Shared<crate::model::lir::Phi>, Insns)>,
     count: usize,
     odds: crate::model::lir::BlockOdds,
     trips: Vec<(i64, i64)>,

@@ -28,7 +28,7 @@ fn _insn(
 }
 
 fn _body(insns: Vec<Arc<Insn>>) -> LirBody {
-    LirBody::new("latency", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default())
+    LirBody::new("latency", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default())
 }
 
 fn reg(

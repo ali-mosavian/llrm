@@ -136,7 +136,7 @@ use crate::backend::regclass::{self, Classes};
 use crate::backend::target::{self, Segments};
 use crate::backend::{spiller, splitkit, ssarepair, twoaddr};
 use crate::model::ir::{Loc, Operation, Semantics};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
 
@@ -435,7 +435,7 @@ impl Flow {
             depth: ranges::depths_in(body, loops),
             from_top: body.blocks.iter().map(|block| (block.at, IndexMap::default())).collect(),
             length,
-            succ: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
+            succ: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
         };
         flow.distances(body);
         flow
@@ -1528,7 +1528,7 @@ fn simulated(
             preds.entry(*to).or_default().push(block.at);
         }
     }
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut made_in: IndexMap<u32, i64> = IndexMap::default();
     for (at, made) in &flow.defines {
         for value in made.keys() {
@@ -1976,7 +1976,7 @@ fn memory_phis(
 /// where each phi's result is made and in what order the phis come, and where
 /// each value is defined.
 struct Places<'a> {
-    by_at: IndexMap<i64, &'a LirBlock>,
+    by_at: IndexMap<i64, &'a Block>,
     /// A phi's result: its block's position in `body.blocks` and its own in the
     /// block's phis.
     phis: IndexMap<u32, (usize, usize)>,
@@ -2118,7 +2118,7 @@ fn loop_room(
 }
 
 fn reverse_postorder(body: &LirBody) -> Vec<i64> {
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut seen: BTreeSet<i64> = BTreeSet::new();
     let mut post: Vec<i64> = Vec::new();
     let mut todo: Vec<(i64, usize)> = vec![(body.entry, 0)];
@@ -2211,7 +2211,7 @@ fn written(
         crossing.entry(*edge).or_default().moves.extend(values.iter().copied());
     }
     let critical = body.critical_edges();
-    let by_at: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let by_at: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     // What code put in a block sits beside: its last instruction, or the
     // block's own address when it has none.
     let anchor =
@@ -2226,7 +2226,7 @@ fn written(
         };
     let mut odds = body.odds.clone();
     let mut next_at = body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1;
-    let mut bridges: Vec<LirBlock> = Vec::new();
+    let mut bridges: Vec<Block> = Vec::new();
     let mut retarget: IndexMap<(i64, i64), i64> = IndexMap::default();
     // Edge code at the end of a predecessor with one successor, at the start of
     // a successor with one predecessor, else in a block on the edge.
@@ -2281,12 +2281,12 @@ fn written(
             );
             jump.call = beside.call.clone();
             insns.push(Arc::new(jump));
-            bridges.push(LirBlock { succ: vec![*to], ..LirBlock::new(at, insns) });
+            bridges.push(LirBlock { succ: vec![*to].into(), ..LirBlock::new(at, insns) }.into());
             odds.rerouted(*from, &source.succ, *to, &[(at, 1.0)]);
             retarget.insert((*from, *to), at);
         }
     }
-    let mut blocks: Vec<LirBlock> = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     for block in &body.blocks {
         let edit = &edits[&block.at];
         let tail = splitkit::_tail(block);
@@ -2370,13 +2370,13 @@ fn written(
             ending(&last, &mut insns);
         }
         let succ = block.succ.iter().map(|to| retarget.get(&(block.at, *to)).copied().unwrap_or(*to)).collect();
-        let mut made = LirBlock { succ, ..block.with_insns(insns) };
+        let mut made = LirBlock { succ, ..block.with_insns(insns).into_inner() };
         made.phis.retain(|phi| !memory.contains(&phi.result));
-        blocks.push(made);
+        blocks.push(made.into());
     }
     for ((from, to), at) in &retarget {
         if let Some(target) = blocks.iter_mut().find(|block| block.at == *to) {
-            for phi in &mut target.phis {
+            for phi in target.phis.iter_mut() {
                 for (source, _) in &mut phi.incoming {
                     if source == from {
                         *source = *at;
@@ -2427,7 +2427,7 @@ mod tests {
             ),
             one(4, what(Operation::Binary, "add", vec![held(4)], vec![held(2), held(2)]), vec![4], vec![2]),
         ];
-        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         let made = remakable(&body, &BTreeSet::from([1, 2]));
         // The load is made again for its copies too, so it holds only to the
         // last of their uses.
@@ -2468,7 +2468,8 @@ mod tests {
             ),
             one(2, what(Operation::Binary, "add", vec![held(2)], vec![held(1), held(1)]), vec![2], vec![1]),
         ];
-        let mut body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         if spared {
             body.spares = Arc::new(BTreeSet::from([(0, 1)]));
         }
@@ -2545,7 +2546,7 @@ mod tests {
                 vec![1, 2],
             )),
         ];
-        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns)], IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
         assert!(!remakable(&body, &BTreeSet::from([1])).contains_key(&1));
         assert!(spiller::_stable_loads(&body, &BTreeSet::from([1])).is_empty());
     }

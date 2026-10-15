@@ -76,7 +76,7 @@ use llrm_lir::registers::Regs;
 use crate::analysis::dataflow::{self, Direction};
 use crate::backend::peephole::{_frame_cell, _frame_written, _lanes, _overlapping, _register_effects, id};
 use crate::model::ir::{Loc, Mem, Operation, Reg};
-use crate::model::lir::{self, Insn, LirBlock, LirBody};
+use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 use crate::support::hash::HashSet;
 use crate::support::hash::IndexMap;
 
@@ -266,8 +266,8 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
             }
         }
     }
-    let blocks: IndexMap<i64, &LirBlock> = body.blocks.iter().map(|block| (block.at, block)).collect();
-    let nodes: Vec<&LirBlock> = body.blocks.iter().collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    let nodes: Vec<&Block> = body.blocks.iter().collect();
     let solved = dataflow::solve(
         &nodes,
         Direction::Forward,

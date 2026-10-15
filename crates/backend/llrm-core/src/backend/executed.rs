@@ -286,7 +286,7 @@ mod tests {
     use super::executed;
     use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
-    use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
+    use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
     fn insn(
@@ -312,7 +312,8 @@ mod tests {
             insn(3, Operation::Nothing, "", vec![], vec![]),
             insn(4, Operation::Return, "ret", vec![], vec![]),
         ];
-        let body = LirBody::new("anchored", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("anchored", 1, vec![LirBlock::new(1, insns).into()], IndexMap::default(), IndexMap::default());
         assert_eq!(executed(&body).expect("straight-line").instructions, 2.0);
     }
 
@@ -334,7 +335,8 @@ mod tests {
             marked(4, false, false, false),
             insn(5, Operation::Return, "ret", vec![], vec![]),
         ];
-        let body = LirBody::new("spilled", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("spilled", 1, vec![LirBlock::new(1, insns).into()], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.reloads, done.stores, done.remats, done.instructions), (1.0, 1.0, 1.0, 5.0));
     }
@@ -352,7 +354,8 @@ mod tests {
             insn(2, Operation::Multiply, "imul", vec![eax.clone()], vec![eax, cell]),
             insn(3, Operation::Return, "ret", vec![], vec![]),
         ];
-        let body = LirBody::new("folded", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("folded", 1, vec![LirBlock::new(1, insns).into()], IndexMap::default(), IndexMap::default());
         let done = executed(&body).expect("straight-line");
         assert_eq!((done.stores, done.reloads), (1.0, 1.0));
     }
@@ -366,7 +369,8 @@ mod tests {
     fn test_a_loop_reading_an_incoming_argument_home_reloads_it_each_trip() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let home = Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, 8)), 2));
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(
                 1,
@@ -386,7 +390,8 @@ mod tests {
             ),
             block(3, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
-        let mut body = LirBody::new("args", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("args", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(2, 5)];
         // The entry's own read is the load every path makes; the loop's five
         // trips are the reloads.
@@ -401,7 +406,8 @@ mod tests {
     fn test_a_loop_tested_at_its_header_runs_its_body_every_trip() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
@@ -415,7 +421,8 @@ mod tests {
             ),
             block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
-        let mut body = LirBody::new("counted", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("counted", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(2, 5)];
         // The entry's jump, the header's six tests, five trips of two, the
         // return.
@@ -430,7 +437,8 @@ mod tests {
     fn test_a_loop_counted_at_its_one_exit_runs_its_count() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let blocks = vec![
             block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(2, vec![insn(2, Operation::Move, "mov", vec![ax], vec![bx])], vec![3]),
@@ -438,7 +446,8 @@ mod tests {
             block(5, vec![insn(4, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
             block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
-        let mut body = LirBody::new("split", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("split", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         body.loop_trip_counts = vec![(2, 5)];
         // The entry's jump, five trips of the body's move and test, four of
         // the way back, the return.
@@ -453,7 +462,8 @@ mod tests {
     fn test_a_guard_into_a_preheader_enters_its_loop_as_into_the_header() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let looped = |preheader: bool| {
             let mut blocks = vec![block(
                 1,
@@ -472,9 +482,15 @@ mod tests {
                 vec![3, 4],
             ));
             blocks.push(block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]));
-            executed(&LirBody::new("guarded", 1, blocks, IndexMap::default(), IndexMap::default()))
-                .expect("a loop")
-                .instructions
+            executed(&LirBody::new(
+                "guarded",
+                1,
+                crate::model::lir::shared(blocks),
+                IndexMap::default(),
+                IndexMap::default(),
+            ))
+            .expect("a loop")
+            .instructions
         };
         // The preheader's jump, taken as often as the guard takes it (half,
         // with no odds), is all that differs.
@@ -489,11 +505,12 @@ mod tests {
     fn test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let moved = |at| insn(at, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()]);
         let tested = |at| insn(at, Operation::Branch, "jne", vec![], vec![]);
         let stay = 124.0 / 128.0;
-        let run = |blocks: Vec<LirBlock>, edges: &[(i64, i64, f64)]| {
+        let run = |blocks: Vec<Block>, edges: &[(i64, i64, f64)]| {
             let mut body = LirBody::new("uncounted", 1, blocks, IndexMap::default(), IndexMap::default());
             for &(from, to, probability) in edges {
                 body.odds
@@ -505,17 +522,21 @@ mod tests {
         let ret = |at| block(at, vec![insn(at, Operation::Return, "ret", vec![], vec![])], vec![]);
         // The header, a move and a test: 32 times, and the return once.
         let once = run(
-            vec![block(1, vec![moved(1)], vec![2]), block(2, vec![moved(2), tested(3)], vec![2, 4]), ret(4)],
+            vec![
+                block(1, vec![moved(1)], vec![2]).into(),
+                block(2, vec![moved(2), tested(3)], vec![2, 4]).into(),
+                ret(4).into(),
+            ],
             &[(2, 2, stay), (2, 4, 1.0 - stay)],
         );
         assert!((once - (1.0 + 32.0 * 2.0 + 1.0)).abs() < 0.01, "{once}");
         // A second exit tested in the same trip.
         let twice = run(
             vec![
-                block(1, vec![moved(1)], vec![2]),
-                block(2, vec![moved(2), tested(3)], vec![3, 5]),
-                block(3, vec![tested(4)], vec![2, 5]),
-                ret(5),
+                block(1, vec![moved(1)], vec![2]).into(),
+                block(2, vec![moved(2), tested(3)], vec![3, 5]).into(),
+                block(3, vec![tested(4)], vec![2, 5]).into(),
+                ret(5).into(),
             ],
             &[(2, 3, stay), (2, 5, 1.0 - stay), (3, 2, stay), (3, 5, 1.0 - stay)],
         );
@@ -532,7 +553,8 @@ mod tests {
         let mut store = (*insn(1, Operation::FloatStore, "fstp", vec![cell], vec![])).clone();
         store.spill_store = true;
         let insns = vec![Arc::new(store), insn(2, Operation::Return, "ret", vec![], vec![])];
-        let body = LirBody::new("x87", 1, vec![LirBlock::new(1, insns)], IndexMap::default(), IndexMap::default());
+        let body =
+            LirBody::new("x87", 1, vec![LirBlock::new(1, insns).into()], IndexMap::default(), IndexMap::default());
         assert_eq!(executed(&body).expect("straight-line").stores, 0.0);
     }
 
@@ -545,7 +567,8 @@ mod tests {
     fn test_a_diamonds_jumps_are_counted_taken_or_not_and_priced() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();
             one.what.as_mut().unwrap().target = Some(target);
@@ -561,7 +584,8 @@ mod tests {
                 block(second, vec![mov(4)], vec![4]),
                 block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
             ];
-            let mut body = LirBody::new("diamond", 1, blocks, IndexMap::default(), IndexMap::default());
+            let mut body =
+                LirBody::new("diamond", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
             for (to, probability) in [(2, 0.75), (3, 0.25)] {
                 body.odds.taken.insert((1, to), (probability * BlockOdds::CERTAIN).round() as u32);
             }
@@ -584,7 +608,8 @@ mod tests {
     fn test_work_after_a_branch_runs_as_often_as_it_falls_through() {
         let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
         let bx = Loc::Reg(Reg { register: RegId::BX, width: 2 });
-        let block = |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ, ..LirBlock::new(at, insns) };
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
         let targeted = |at, op, name, target| {
             let mut one = (*insn(at, op, name, vec![], vec![])).clone();
             one.what.as_mut().unwrap().target = Some(target);
@@ -604,7 +629,8 @@ mod tests {
             block(3, vec![insn(5, Operation::Move, "mov", vec![ax.clone()], vec![bx.clone()])], vec![4]),
             block(4, vec![insn(6, Operation::Return, "ret", vec![], vec![])], vec![]),
         ];
-        let mut body = LirBody::new("tail", 1, blocks, IndexMap::default(), IndexMap::default());
+        let mut body =
+            LirBody::new("tail", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
         body.odds.taken.insert((1, 3), (0.75 * BlockOdds::CERTAIN) as u32);
         body.odds.taken.insert((1, 4), (0.25 * BlockOdds::CERTAIN) as u32);
         let done = executed(&body).expect("straight branches");

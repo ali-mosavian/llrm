@@ -93,7 +93,7 @@ pub fn laid_again(
         for one in &block.insns {
             insns.push(moved.insn(one)?);
         }
-        blocks.push(LirBlock { insns: insns.into(), ..block.clone() });
+        blocks.push(LirBlock { insns: insns.into(), ..block.clone().into_inner() }.into());
     }
     let mut body = first.body.with_blocks(blocks);
     body.homes = Arc::new(

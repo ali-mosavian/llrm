@@ -204,7 +204,7 @@ mod tests {
         let none = LirBody::new("f", 1, Vec::new(), IndexMap::default(), IndexMap::default());
         let facts = Facts::default();
         assert_eq!(*facts.get_checked::<Forgetful>(&none, true), 0);
-        let one = none.with_blocks(vec![crate::model::lir::LirBlock::new(1, Vec::new())]);
+        let one = none.with_blocks(vec![crate::model::lir::LirBlock::new(1, Vec::new()).into()]);
         assert_eq!(*facts.get_checked::<Forgetful>(&one, false), 0, "unchecked, the stale result stands");
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| facts.get_checked::<Forgetful>(&one, true)))

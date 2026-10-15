@@ -231,11 +231,15 @@ mod tests {
             }
             let (low, marker, high) = (Arc::new(low), Arc::new(marker), Arc::new(high));
             let blocks = if guard == Some("block") {
-                vec![LirBlock { succ: vec![8], ..LirBlock::new(0, vec![low, marker]) }, LirBlock::new(8, vec![high])]
+                vec![
+                    LirBlock { succ: vec![8].into(), ..LirBlock::new(0, vec![low, marker]) },
+                    LirBlock::new(8, vec![high]),
+                ]
             } else {
                 vec![LirBlock::new(0, vec![low, marker, high])]
             };
-            let body = LirBody::new("stores", 0, blocks, IndexMap::default(), IndexMap::default());
+            let body =
+                LirBody::new("stores", 0, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
             let result = combined(&body);
             if guard.is_some() {
                 assert_eq!(result, body, "{guard:?}");
