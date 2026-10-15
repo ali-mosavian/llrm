@@ -10,6 +10,12 @@ use crate::module::{
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
 
+/// A point of a function's history, with what a rollback needs besides the log.
+pub struct Checkpoint {
+    mark: crate::module::Mark,
+    records: Vec<DebugRecord>,
+}
+
 /// Where an instruction goes: before another, or at a block's end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Position {
@@ -356,9 +362,80 @@ impl Function {
         if position == Position::Before(inst) {
             return Ok(());
         }
-        let (from, _) = self.detach(inst, true).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+        let (from, from_next) =
+            self.detach(inst, true).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
         let (block, next) = self.attach(inst, position)?;
-        self.log(Change::Moved { inst, block, next, from });
+        self.log(Change::Moved { inst, block, next, from, from_next });
+        Ok(())
+    }
+
+    /// A point to `rollback` to: the log's, and the debug records, which a move
+    /// anchors again and so are not the log's to restore.
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint { mark: self.mark(), records: self.debug_records.clone() }
+    }
+
+    /// Undoes every edit since `checkpoint`, newest first, and drops them from
+    /// the log: the function is what it was (`==`). A pass prices a change on
+    /// the function itself and takes it back, rather than on a copy.
+    ///
+    /// Only edits whose undoing the log holds can be undone: a move
+    /// (`move_to`, `move_run`) and an operand replaced (`set_operand`,
+    /// `set_operands`, `replace_all_uses_with`). Any other kind is an error and
+    /// the function is not touched. The epochs are counters and stay
+    /// counted.
+    pub fn rollback(
+        &mut self,
+        checkpoint: Checkpoint,
+    ) -> Result<(), String> {
+        let changes = self
+            .changes_since(checkpoint.mark)
+            .ok_or_else(|| "the checkpoint is of another history, or the log has dropped it".to_owned())?
+            .to_vec();
+        // An operand change is logged with the `Rewritten` that follows it.
+        for (at, change) in changes.iter().enumerate() {
+            let paired = |inst: InstId| {
+                at > 0
+                    && matches!(
+                        &changes[at - 1],
+                        Change::Operand { inst: one, .. } | Change::Operands { inst: one, .. } if *one == inst
+                    )
+            };
+            match change {
+                Change::Moved { .. } | Change::Operand { .. } | Change::Operands { .. } => {}
+                Change::Rewritten(inst) if paired(*inst) => {}
+                other => return Err(format!("{other:?} cannot be undone")),
+            }
+        }
+        for change in changes.iter().rev() {
+            match change {
+                Change::Moved { inst, from, from_next, .. } => {
+                    self.detach(*inst, true).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+                    let position = from_next.map_or(Position::End(*from), Position::Before);
+                    self.attach(*inst, position)?;
+                }
+                Change::Operand { inst, index, was } => {
+                    let at = Use { user: *inst, index: *index };
+                    let now =
+                        std::mem::replace(&mut self.instructions[inst.0 as usize].operands[*index as usize], *was);
+                    self.remove_use(now, at);
+                    self.add_use(*was, at);
+                }
+                Change::Operands { inst, was } => {
+                    let now = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
+                    for (index, operand) in now.into_iter().enumerate() {
+                        self.remove_use(operand, Use { user: *inst, index: index as u32 });
+                    }
+                    for (index, &operand) in was.iter().enumerate() {
+                        self.add_use(operand, Use { user: *inst, index: index as u32 });
+                    }
+                    self.instructions[inst.0 as usize].operands = was.to_vec();
+                }
+                _ => {}
+            }
+        }
+        self.rewind_log(changes.len(), checkpoint.mark);
+        self.debug_records = checkpoint.records;
         Ok(())
     }
 
@@ -376,10 +453,11 @@ impl Function {
             let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
             let list = &mut self.blocks[block_from.0 as usize].instructions;
             let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
+            let from_next = list.get(at + 1).copied();
             list.remove(at);
             self.parent[inst.0 as usize] = None;
             let (to, next) = self.attach(inst, Position::End(block))?;
-            self.log(Change::Moved { inst, block: to, next, from: block_from });
+            self.log(Change::Moved { inst, block: to, next, from: block_from, from_next });
         }
         Ok(())
     }

@@ -147,6 +147,8 @@ pub enum Change {
         block: BlockId,
         next: Option<InstId>,
         from: BlockId,
+        /// What followed it in `from`: where undoing the move puts it back.
+        from_next: Option<InstId>,
     },
     Rewritten(InstId),
     /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
@@ -595,6 +597,19 @@ impl Function {
             self.changes.0.drain(..from);
         }
         out
+    }
+
+    /// Drops the last `count` changes from the log, the function being at `to`
+    /// again.
+    pub(crate) fn rewind_log(
+        &mut self,
+        count: usize,
+        to: Mark,
+    ) {
+        let kept = self.changes.0.len() - count;
+        self.changes.0.truncate(kept);
+        self.lineage.logged = to.position();
+        self.taken = self.taken.min(self.lineage.logged);
     }
 
     pub(crate) fn log(

@@ -378,14 +378,15 @@ fn a_move_logs_what_the_position_named() {
     let (x, _) = named(f, "x");
     let (y, _) = named(f, "y");
     let block = f.entry().unwrap();
+    let ret = f.terminator(block).unwrap();
     f.take_changes();
     f.move_to(y, Position::Before(x)).unwrap();
     f.move_to(x, Position::End(block)).unwrap();
     assert_eq!(
         f.take_changes(),
         [
-            Change::Moved { inst: y, block, next: Some(x), from: block },
-            Change::Moved { inst: x, block, next: None, from: block }
+            Change::Moved { inst: y, block, next: Some(x), from: block, from_next: Some(ret) },
+            Change::Moved { inst: x, block, next: None, from: block, from_next: Some(ret) }
         ]
     );
 }
@@ -559,4 +560,108 @@ fn a_name_is_free_again_when_its_block_is_erased() {
     f.erase_block(first).unwrap();
     let again = f.create_block(Some("b"));
     assert_eq!(f.block(again).name.as_deref(), Some("b"));
+}
+
+const ROLLED: &str = "define i16 @f(i16 %a, i1 %c) {
+entry:
+  %x0 = add i16 %a, 1
+  %x1 = mul i16 %x0, 2
+  %x2 = add i16 %x1, %a
+  br i1 %c, label %b, label %d
+b:
+  %y0 = add i16 %x2, 3
+  %y1 = sub i16 %y0, %a
+  br label %d
+d:
+  %p = phi i16 [ %x2, %entry ], [ %y1, %b ]
+  %z = add i16 %p, %x0
+  ret i16 %z
+}
+";
+
+/// A move or an operand replaced, chosen by `seed`.
+fn edit(
+    f: &mut Function,
+    seed: &mut u64,
+) {
+    let mut next = |bound: usize| {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((*seed >> 33) as usize) % bound
+    };
+    let insts: Vec<InstId> = f.walk().map(|(_, inst)| inst).collect();
+    let pure: Vec<InstId> = insts.iter().copied().filter(|&inst| !f.instruction(inst).opcode.is_terminator()).collect();
+    let inst = pure[next(pure.len())];
+    match next(3) {
+        0 => {
+            let to = insts[next(insts.len())];
+            f.move_to(inst, Position::Before(to)).unwrap();
+        }
+        1 => {
+            let block = f.layout()[next(f.layout().len())];
+            f.move_to(inst, Position::End(block)).unwrap();
+        }
+        _ => {
+            let operands = f.instruction(inst).operands.len();
+            let with = Operand::Value(f.parameters()[0]);
+            if operands > 0 {
+                let at = next(operands);
+                if matches!(f.instruction(inst).operands[at], Operand::Value(_)) {
+                    f.set_operand(inst, at, with);
+                }
+            }
+        }
+    }
+}
+
+/// Every value's users, in order: the lists themselves are not.
+fn uses_of(f: &Function) -> Vec<Vec<Use>> {
+    (0..f.value_count() as u32)
+        .map(|value| {
+            let mut users = f.users(ValueId(value)).to_vec();
+            users.sort();
+            users
+        })
+        .collect()
+}
+
+/// A pass priced a change on a copy of the whole function (hoist, 139 M
+/// instructions on d_faces -O1). A rollback to every checkpoint of a random
+/// run of moves and operand replacements gives back a function equal to the
+/// one that was, uses and all.
+#[test]
+fn a_rollback_gives_back_the_function_that_was() {
+    for seed in 0..40_u64 {
+        let mut module = module(ROLLED);
+        let (context, f) = module.function_mut("f").expect("@f");
+        let mut state = seed;
+        let mut kept = vec![(f.checkpoint(), uses_of(f), print::body(context, f))];
+        for _ in 0..4 {
+            for _ in 0..1 + (seed % 5) {
+                edit(f, &mut state);
+            }
+            kept.push((f.checkpoint(), uses_of(f), print::body(context, f)));
+        }
+        while let Some((checkpoint, was, text)) = kept.pop() {
+            f.rollback(checkpoint).unwrap_or_else(|error| panic!("seed {seed}: {error}"));
+            assert_eq!(uses_of(f), was, "seed {seed}");
+            assert_eq!(print::body(context, f), text, "seed {seed}");
+            assert!(f.check_uses().is_empty(), "seed {seed}: {:?}", f.check_uses());
+        }
+    }
+}
+
+/// An edit the log cannot undo is an error and leaves the function as it was.
+#[test]
+fn a_rollback_over_an_erase_is_refused_and_touches_nothing() {
+    let mut module = module(TEXT);
+    let (context, f) = module.function_mut("f").expect("@f");
+    let checkpoint = f.checkpoint();
+    let (y, _) = named(f, "y");
+    let a = Operand::Value(f.parameters()[0]);
+    f.set_operand(y, 0, a);
+    let (x, _) = named(f, "x");
+    f.erase(x).unwrap();
+    let text = print::body(context, f);
+    assert!(f.rollback(checkpoint).is_err());
+    assert_eq!(print::body(context, f), text);
 }
