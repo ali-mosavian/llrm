@@ -8,7 +8,7 @@ use llrm_analysis::peelsize::Limits;
 use llrm_mir::module::Module;
 use llrm_mir::opcode::{BinaryOp, Opcode};
 
-use super::{PRICED, Unroll};
+use super::{CALLS, GRAPHED, PRICED, Unroll};
 use crate::testing::{f, managed, parsed, printed, results};
 
 /// `%acc * %n + %i` for `bound` trips, across a bridge to the latch; the
@@ -231,4 +231,16 @@ fn a_loop_priced_out_is_not_priced_again_after_another_is_expanded() {
     assert!(changed);
     assert_eq!(loops_of(&mut module), 1);
     assert_eq!(PRICED.with(|one| one.get()), 3);
+}
+
+/// Every loop asked for its shape built the blocks and predecessors of the
+/// whole function: N loops, N^2 (`branches` 1024: `mir unroll` 1,031 Minstr,
+/// 89 now). They are worked out once for the loops of a call.
+#[test]
+fn the_graph_is_worked_out_once_for_the_loops_of_a_call() {
+    GRAPHED.with(|one| one.set(0));
+    CALLS.with(|one| one.set(0));
+    let (_, _) = through(&chained([1000, 4, 4]), Unroll::default());
+    let (graphed, calls) = (GRAPHED.with(|one| one.get()), CALLS.with(|one| one.get()));
+    assert!(calls > 0 && graphed == calls, "{graphed} graphs for {calls} calls over three loops");
 }
