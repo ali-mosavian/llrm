@@ -188,3 +188,41 @@ b0:
 ";
     assert_eq!(supplied(part, &["r"]), [None]);
 }
+
+/// A store through a phi or a select of two slots' addresses, or through two
+/// variable indices, writes a slot that nothing exposes without naming it as
+/// its root: the scan did not see it, and a load of the slot was supplied by
+/// the store before (a miscompile of the stored pointer's facts).
+#[test]
+fn a_slot_written_through_a_joined_address_or_two_indices_has_no_exact_source() {
+    let joined = "define void @f(i1 %c, ptr %p, ptr %q) {
+b0:
+  %a = alloca ptr
+  %b = alloca ptr
+  store ptr %p, ptr %a
+  br i1 %c, label %l, label %r
+l:
+  br label %j
+r:
+  br label %j
+j:
+  %w = phi ptr [ %a, %l ], [ %b, %r ]
+  store ptr %q, ptr %w
+  %x = load ptr, ptr %a
+  ret void
+}
+";
+    assert_eq!(supplied(joined, &["x"]), [None]);
+    let two = "define void @f(ptr %p, ptr %q, i16 %i, i16 %j) {
+b0:
+  %a = alloca [4 x ptr]
+  store ptr %p, ptr %a
+  %g = getelementptr i8, ptr %a, i16 %i
+  %h = getelementptr i8, ptr %g, i16 %j
+  store ptr %q, ptr %h
+  %x = load ptr, ptr %a
+  ret void
+}
+";
+    assert_eq!(supplied(two, &["x"]), [None]);
+}

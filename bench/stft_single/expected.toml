@@ -1,4 +1,4 @@
-reason = "a double constant on an 8-byte boundary (Intel486 data sheet 240440-002, section 10.1 and Table 2.1): nbody data +4 to +8 bytes of padding, 1200 operands no longer 3 clocks over"
+reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -38,26 +38,26 @@ data_bytes = 4733
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 810
+code_bytes = 795
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 325.0158
 
 [c.Os]
-code_bytes = 779
+code_bytes = 783
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 322.3449
 
 [nib.O2]
 code_bytes = 2337
-data_bytes = 1092
+data_bytes = 1089
 bss_bytes = 0
 kernel_ms = 646.3399
 
 [nib.Os]
 code_bytes = 2401
-data_bytes = 1096
+data_bytes = 1089
 bss_bytes = 0
 kernel_ms = 653.1238
 

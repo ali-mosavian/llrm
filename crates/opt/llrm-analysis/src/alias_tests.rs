@@ -975,6 +975,26 @@ fn an_edit_visits_the_edited_body_and_its_callers_only() {
     assert_eq!(again, whole);
 }
 
+/// A run in which every body was edited updated what it kept, which was
+/// nothing: waking the readers of each body and comparing what changed cost 2.7
+/// and 5.2 Minstr more than the run from nothing on the `joins` axis at N=64
+/// (-O2), twice of six runs. It is the run from nothing, and the result is the
+/// same.
+#[test]
+fn a_run_in_which_every_body_is_edited_is_worked_out_from_nothing() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let mut memo = super::SummaryMemo::default();
+    let whole = super::summaries_updating(&procedures, None, &mut memo, None).unwrap();
+    let before = super::whole_runs();
+    let one = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    assert_eq!((super::whole_runs() - before, &one), (0, &whole), "one body edited is an update");
+    let all = BTreeSet::from(["f".to_owned(), "callee".to_owned()]);
+    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&all)).unwrap();
+    assert_eq!((super::whole_runs() - before, &again), (1, &whole), "every body edited is a run from nothing");
+}
+
 /// The facts a visit found are of the body as it was: an edited body is visited
 /// from its own, and the summaries are what a whole run of the edited module
 /// makes (host.c: one function differed before).
@@ -1499,4 +1519,36 @@ out:
     crate::alias::point_values(&parsed.unit()).unwrap();
     let visits = crate::alias::value_rounds() - before;
     assert!(visits < 40, "{visits} visits for a loop of three pointer instructions");
+}
+
+/// Every solve worked out what had escaped before each call, load and store
+/// (a bit set cloned for each: 54 M of d_faces' 425 M escape cost, answers
+/// nothing reads). A solve works out none; an answer is found when asked, once.
+#[test]
+fn what_escaped_before_an_instruction_is_found_when_asked_and_once() {
+    let parsed = Parsed::new(
+        "declare void @keep(ptr)
+
+define void @f(ptr %p) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  store i16 1, ptr %a
+  %x = load i16, ptr %b
+  call void @keep(ptr %a)
+  store i16 2, ptr %a
+  ret void
+}
+",
+    );
+    let before = crate::alias::before_answers();
+    let facts = parsed.facts();
+    assert_eq!(crate::alias::before_answers() - before, 0, "the solve answered what nobody asked");
+    let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
+    let first = facts.escaped_before.get(&call).expect("a call is asked of");
+    let again = facts.escaped_before.get(&call).expect("a call is asked of");
+    assert_eq!(first, again);
+    assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
+    let a = parsed.object("a");
+    assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
 }
