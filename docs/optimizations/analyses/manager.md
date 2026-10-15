@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:c5d1afcc70b98e091a860fa79492ea1f7d9bc24fb24887239a72bb16b16a2597 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:fe45df8e4cf1800de45111c480a2cbd42f8129ddb1bede820afb75c1e7894acd -->
 
 # manager
 
@@ -65,7 +65,8 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  Pointers         PointerValues
  CallEffects      PointerValues
  Writes           CallEffects
- Registers        -
+ TableLoads       -
+ Registers        TableLoads (updates)
  Followers        Registers
  Counted          Registers
  DominatedEdges   Registers

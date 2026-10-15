@@ -11,7 +11,9 @@ use llrm_mir::passes::{
 use llrm_mir::target::{Machine, Neutral};
 use llrm_support::hash::IndexMap;
 
-use super::{Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, ThroughMemory};
+use super::{
+    Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, TableLoads, ThroughMemory,
+};
 use crate::alias::{self, Procedure};
 use crate::cfg::Shape;
 use crate::consts::{self, Calls};
@@ -1102,4 +1104,110 @@ b0:
     let globals = Result::as_ref(&*globals).unwrap();
     let facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
     super::Table::of(&module, &program, globals, &facts, None).check_against_scratch();
+}
+
+const TABLE: &str = "@t = internal constant [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+
+define i16 @f(i16 %i) {
+b0:
+  %p = getelementptr inbounds i16, ptr @t, i16 %i
+  %x = load i16, ptr %p
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+";
+
+/// A pass that points the table load's index at a constant, keeping nothing.
+fn pin_the_index() -> Step {
+    step(
+        |unit, _| {
+            let function = &mut *unit.function;
+            let gep = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| matches!(
+                    function.instruction(inst).opcode,
+                    Opcode::GetElementPtr { .. }
+                ))
+                .unwrap();
+            let mut operands: Vec<Operand> = function.instruction(gep).operands.to_vec();
+            let last = operands.len() - 1;
+            let ty = unit.context.types.int(16);
+            operands[last] = Operand::Constant(unit.context.int(ty, 1));
+            function.set_operands(gep, operands.into());
+        },
+        PreservedAnalyses::none(),
+    )
+}
+
+/// `Registers` walked the whole body for its table loads at every update:
+/// 129 walks on d_faces -O1, 32 M of its 66 M. Asked after a change, it asks
+/// only of the loads the change reaches.
+#[test]
+fn a_registers_update_does_not_walk_the_body_for_its_table_loads() {
+    let mut module = parsed(&format!("{DOS}{TABLE}"));
+    let walks = Rc::new(RefCell::new(Vec::new()));
+    let ask = |walks: &Rc<RefCell<Vec<usize>>>| {
+        let walks = Rc::clone(walks);
+        step(
+            move |unit, analyses| {
+                analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+                walks.borrow_mut().push(consts::table_walks());
+            },
+            PreservedAnalyses::all(),
+        )
+    };
+    let mut passes = PassManager::default();
+    passes.add(ask(&walks));
+    passes.add(pin_the_index());
+    passes.add(ask(&walks));
+    passes.add(step(
+        |unit, _| {
+            let function = &mut *unit.function;
+            let add = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
+                .unwrap();
+            let operands = function.instruction(add).operands.iter().rev().copied().collect();
+            function.set_operands(add, operands);
+        },
+        PreservedAnalyses::none(),
+    ));
+    passes.add(ask(&walks));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let walks = walks.take();
+    assert_eq!(walks[2], walks[1], "the second update walked the body again: {walks:?}");
+}
+
+/// A load whose index becomes a constant is no longer a table load by an
+/// index: the update says so, as a new walk does.
+#[test]
+fn a_table_load_update_drops_the_load_whose_index_went() {
+    let mut module = parsed(&format!("{DOS}{TABLE}"));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let ask = |seen: &Rc<RefCell<Vec<(usize, usize)>>>| {
+        let seen = Rc::clone(seen);
+        step(
+            move |unit, analyses| {
+                let held = analyses.get::<TableLoads>(unit.context, unit.layout, unit.function);
+                let mut again = consts::table_loads(&crate::memory::Unit::within(
+                    unit.context,
+                    unit.layout,
+                    unit.function,
+                    analyses.outer(),
+                ));
+                again.sort_unstable();
+                assert_eq!(*held, again);
+                seen.borrow_mut().push((held.len(), again.len()));
+            },
+            PreservedAnalyses::all(),
+        )
+    };
+    let mut passes = PassManager::default();
+    passes.add(ask(&seen));
+    passes.add(pin_the_index());
+    passes.add(ask(&seen));
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    assert_eq!(seen.take(), vec![(1, 1), (0, 0)]);
 }

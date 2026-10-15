@@ -60,7 +60,8 @@
 //!  Pointers         PointerValues
 //!  CallEffects      PointerValues
 //!  Writes           CallEffects
-//!  Registers        -
+//!  TableLoads       -
+//!  Registers        TableLoads (updates)
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
@@ -1210,6 +1211,78 @@ pub fn call_effects(
 /// Every value known without solving memory: `consts::known` of no calls.
 pub struct Registers;
 
+/// The loads from a constant global by an index (`consts::is_table_load`), in
+/// order of instruction. A change reaches a load by the instruction itself or
+/// by the values its address is made of, so those loads, and only those, are
+/// asked again.
+pub struct TableLoads;
+
+impl Analysis for TableLoads {
+    type Result = Vec<InstId>;
+    const NAME: &'static str = "table-loads";
+    const INCREMENTAL: bool = true;
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let mut found = consts::table_loads(&Unit::within(context, layout, function, analyses.outer()));
+        found.sort_unstable();
+        found
+    }
+
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let unit = Unit::within(context, layout, function, analyses.outer());
+        let mut work: Vec<InstId> = Vec::new();
+        for change in changes {
+            match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => work.push(inst),
+                Change::Cloned { to, .. } => work.push(to),
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                }
+                Change::Parameters => return None,
+            }
+        }
+        let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
+        let mut asked: BTreeSet<InstId> = BTreeSet::new();
+        while let Some(inst) = work.pop() {
+            if function.parent(inst).is_none() {
+                continue;
+            }
+            if matches!(function.instruction(inst).opcode, Opcode::Load { .. }) {
+                asked.insert(inst);
+                continue;
+            }
+            if let Some(result) = function.instruction(inst).result {
+                for user in function.users(result) {
+                    if seen.insert(user.user) {
+                        work.push(user.user);
+                    }
+                }
+            }
+        }
+        let mut found: BTreeSet<InstId> = previous
+            .iter()
+            .copied()
+            .filter(|&inst| function.parent(inst).is_some() && !asked.contains(&inst))
+            .collect();
+        found.extend(asked.into_iter().filter(|&inst| consts::is_table_load(&unit, inst)));
+        Some(found.into_iter().collect())
+    }
+}
+
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
@@ -1239,17 +1312,17 @@ impl Analysis for Registers {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let tables = analyses.get::<TableLoads>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
         // A load from a table is known by the bounds of its whole index,
         // whatever it is made of: it is asked again with the values a
         // change touched.
-        let tables = consts::table_loads(&unit);
         let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
         // The values touched, and the facts that were made from them, which no
         // longer stand.
         let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
         let mut work = Vec::<ValueId>::new();
-        for &inst in &tables {
+        for &inst in tables.iter() {
             if let Some(result) = function.instruction(inst).result
                 && touched.insert(result)
             {
@@ -1676,10 +1749,13 @@ impl DominatedEdges {
             .with_registers(&registers)
             .with_exposed(&exposed);
         let solved = ranges::edges_solved(&unit, &registers, before);
-        if let Ok(states) = &solved
+        // Against the table worked out afresh: one kept past a change may hold
+        // what the body said before (a parameter's `range` is not a change).
+        if solved.is_ok()
             && llrm_support::env_set("LLRM_CHECK_REPLAY")
+            && let Ok(fresh) = ranges::edges_solved(&unit, &registers, None)
         {
-            crate::ranger::check(&unit, &registers, states);
+            crate::ranger::check(&unit, &registers, &fresh);
         }
         solved
     }

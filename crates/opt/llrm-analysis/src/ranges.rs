@@ -36,7 +36,12 @@
 //! latch are given the box, grown by powers of two until the latches stay in
 //! it. Two loops whose facts contradict at a block make it `unreachable`.
 //! `Bounds` holds the result: facts from the loops (`within`) over those from
-//! the edges. A change re-solves only the loops it reaches (`loops_reached`).
+//! the edges. A change re-solves only the loops it reaches (`loops_reached`). A
+//! loop with no counted proof and no phi to box (`box_candidates`) is left
+//! before its operations are listed: most loops of a large body are. The boxes
+//! are found by asking one value at one block (`ranger::LoopView`, which keeps
+//! an answer until a box it read changes), not by sweeping the loop for each
+//! latch.
 //!
 //! ```text
 //!   entry:  ...
@@ -239,7 +244,7 @@ fn applied(
 /// What `on_edge` changes of `known`, and only that: `None` where the edge is
 /// impossible. A caller that holds `known` narrows it in place, without a copy
 /// of every value it knows per edge.
-fn edge_delta(
+pub(crate) fn edge_delta(
     unit: &Unit,
     block: BlockId,
     successor: BlockId,
@@ -1084,10 +1089,16 @@ pub fn edges_solved(
             made: BTreeMap::new(),
         });
     };
-    let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    let immediate = unit.shape().dominance.immediate_dominators(function);
-    let order = loops::reverse_postorder(&graph, cfg::id(entry));
+    let shape = unit.shape();
+    // A change that left the CFG as it was (`reached_by`) leaves the order of
+    // the blocks as it was.
+    let order = match before {
+        Some((states, _)) if !llrm_support::env_set("LLRM_CHECK_REPLAY") => states.order.clone(),
+        _ => {
+            ORDERS_FOUND.with(|count| count.set(count.get() + 1));
+            loops::reverse_postorder(&cfg::graph(function), cfg::id(entry))
+        }
+    };
     // The blocks as they were: none to reuse where the order of blocks is not
     // the same.
     let before = before.filter(|(states, _)| states.order == order);
@@ -1096,19 +1107,17 @@ pub fn edges_solved(
     let mut moved: BTreeSet<i64> = BTreeSet::new();
     let mut made: BTreeMap<i64, u64> = BTreeMap::new();
     let assumed = unit.assumptions();
-    // The edges a terminator names twice, found once: a block's way in counts
-    // only where its one predecessor names it once, and counting a switch's
-    // operands for each of its N successors was N^2.
-    let twice = named_twice(unit);
-    let once = |parent: i64, block: i64| !twice.contains(&(parent, block));
+    // A block's way in counts only where its one predecessor names it once.
+    let once = |parent: i64, block: i64| !names_twice(unit, parent, block);
     for &at in &order {
         let block = cfg::block(at);
-        let sole = predecessors.get(&at).filter(|parents| parents.len() == 1).and_then(|parents| parents.first());
-        let from_parent = sole.is_some_and(|parent| known.contains_key(parent) && once(*parent, at));
-        let source = if from_parent { sole.copied() } else { immediate.get(&at).copied().flatten() };
+        let parents = function.predecessors(block);
+        let sole = (parents.len() == 1).then(|| cfg::id(parents[0]));
+        let from_parent = sole.is_some_and(|parent| known.contains_key(&parent) && once(parent, at));
+        let source = if from_parent { sole } else { shape.dominance.immediate(at) };
         if let Some((states, reached)) = before {
             let stale = reached.contains(&block)
-                || (from_parent && sole.is_some_and(|parent| reached.contains(&cfg::block(*parent))))
+                || (from_parent && sole.is_some_and(|parent| reached.contains(&cfg::block(parent))))
                 || source.is_some_and(|up| moved.contains(&up));
             if !stale
                 && let (Some(kept_own), Some(kept_below), Some(kept_made)) =
@@ -1123,7 +1132,7 @@ pub fn edges_solved(
         SOLVED.with(|count| count.set(count.get() + 1));
         let seeded = if at == cfg::id(entry) { declared_arguments(unit) } else { Intervals::default() };
         let mut made_of = llrm_support::hash::FxBuild::default().build_hasher();
-        let mut scoped = match sole.and_then(|parent| Some((*parent, known.get(parent)?))) {
+        let mut scoped = match sole.and_then(|parent| Some((parent, known.get(&parent)?))) {
             Some((parent, inherited)) if once(parent, at) => {
                 made.get(&parent).hash(&mut made_of);
                 match edge_delta_of(unit, cfg::block(parent), block, inherited, Some(facts))? {
@@ -1135,7 +1144,7 @@ pub fn edges_solved(
                 }
             }
             _ => {
-                let up = immediate.get(&at).copied().flatten();
+                let up = shape.dominance.immediate(at);
                 up.and_then(|up| made.get(&up)).hash(&mut made_of);
                 up.and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded)
             }
@@ -1180,31 +1189,24 @@ pub fn edges_solved(
     Ok(EdgeStates { order, own, below: known, made })
 }
 
-/// The (block, target) pairs a terminator names more than once, as ids: a
-/// conditional branch to one block twice, a switch with two cases to one block.
-fn named_twice(unit: &Unit) -> BTreeSet<(i64, i64)> {
+/// Whether `parent`'s terminator names `block` more than once: a conditional
+/// branch to one block twice, a switch with two cases to one block.
+fn names_twice(
+    unit: &Unit,
+    parent: i64,
+    block: i64,
+) -> bool {
     let function = unit.function;
-    let mut out = BTreeSet::new();
-    for &block in function.layout() {
-        let Some(last) = function.terminator(block) else { continue };
-        let targets = &function.instruction(last).operands;
-        // One or two targets (every `br`) are compared; more are sorted.
-        if targets.len() <= 3 {
-            if let [_, Operand::Block(one), Operand::Block(two)] = targets[..]
-                && one == two
-            {
-                out.insert((cfg::id(block), cfg::id(one)));
-            }
-            continue;
-        }
-        let mut named: Vec<BlockId> = targets
-            .iter()
-            .filter_map(|operand| if let Operand::Block(target) = operand { Some(*target) } else { None })
-            .collect();
-        named.sort_unstable();
-        out.extend(named.windows(2).filter(|pair| pair[0] == pair[1]).map(|pair| (cfg::id(block), cfg::id(pair[0]))));
+    let Some(last) = function.terminator(cfg::block(parent)) else { return false };
+    let targets = &function.instruction(last).operands;
+    // One or two targets (every `br`) are compared; more are counted.
+    if targets.len() <= 3 {
+        return matches!(
+            targets[..],
+            [_, Operand::Block(one), Operand::Block(two)] if one == two && cfg::id(one) == block
+        );
     }
-    out
+    targets.iter().filter(|operand| **operand == Operand::Block(cfg::block(block))).count() > 1
 }
 
 pub type Facts = IndexMap<i64, Intervals>;
@@ -1410,6 +1412,21 @@ pub fn loops_reached(
 
 thread_local! {
     static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LOOPS_SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ORDERS_FOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has found the order of a body's blocks to solve
+/// its edges' facts over, for a test that an update reads the one it had.
+pub fn orders_found() -> usize {
+    ORDERS_FOUND.with(std::cell::Cell::get)
+}
+
+/// How many loops this thread has found the operations of, to sweep: a loop
+/// with nothing counted and no phi to box has none, for a test that it is not
+/// asked of one.
+pub fn loops_swept() -> usize {
+    LOOPS_SWEPT.with(std::cell::Cell::get)
 }
 
 /// How many loops this thread has worked the bounds of, for a test that a
@@ -1557,6 +1574,13 @@ pub fn bounded_solved(
             }
             found
         };
+        // A loop with nothing counted and no phi to box has no facts: what its
+        // operations would be swept for is not worked out.
+        let candidates = box_candidates(unit, loop_, facts, &known, &at_entry);
+        if !counted && candidates.is_empty() {
+            continue;
+        }
+        LOOPS_SWEPT.with(|count| count.set(count.get() + 1));
         let outside = |value: ValueId| match function.value(value).def {
             ValueDef::Argument(_) => true,
             ValueDef::Instruction(inst) => {
@@ -2014,7 +2038,17 @@ pub fn bounded_solved(
             }
             Ok(Rc::new(settle(scoped, known, id)))
         };
-        let boxes = inductive_boxes(unit, loop_, facts, &known, &at_entry, &closed, &scope_at)?;
+        let context = crate::ranger::LoopContext::new(
+            unit,
+            facts,
+            &shape,
+            &assumed,
+            &graph,
+            &predecessors,
+            &positions,
+            &operations,
+        );
+        let boxes = inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?;
         if !counted && boxes.is_empty() {
             continue;
         }
@@ -2083,29 +2117,26 @@ fn check_scopes() -> bool {
     *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
 }
 
-/// Header phis, made by no counted proof, that every entry and every trip round
-/// the loop keeps inside one box `[-2^k, 2^k)`: a value in the box at the
-/// header is in it again at each latch, from the facts the edges and assumes in
-/// the loop give, and it starts there. The box is grown by powers of two, the
-/// phis assumed together, until the latches stay in it; a phi any latch gives
-/// no interval for is dropped.
-fn inductive_boxes(
+/// A header phi that may be boxed: its width, the hull of its entries'
+/// intervals and the (latch, value) pairs coming round.
+type Candidate = (ValueId, u32, Interval, Vec<(i64, Operand)>);
+
+const BOX_PHIS: usize = 8;
+
+/// The phis `inductive_boxes` tries: none where the loop is too large for it.
+fn box_candidates(
     unit: &Unit,
     loop_: &loops::Loop,
     facts: &IndexMap<ValueId, Known>,
     known: &Intervals,
     at_entry: &dyn Fn(i64) -> Intervals,
-    closed: &dyn Fn(Intervals) -> Intervals,
-    scope_at: &dyn Fn(i64, &Intervals, u64, bool) -> Result<Rc<Intervals>, String>,
-) -> Result<Intervals, String> {
-    const PHIS: usize = 8;
-    const ROUNDS: usize = 8;
+) -> Vec<Candidate> {
     const SIZE: usize = 512;
     let function = unit.function;
     let header = cfg::block(loop_.header);
     let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
     if size > SIZE {
-        return Ok(Intervals::default());
+        return Vec::new();
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
@@ -2145,16 +2176,36 @@ fn inductive_boxes(
             candidates.push((phi, width, hull, latches));
         }
     }
-    candidates.truncate(PHIS);
+    candidates.truncate(BOX_PHIS);
+    candidates
+}
+
+/// Header phis, made by no counted proof, that every entry and every trip round
+/// the loop keeps inside one box `[-2^k, 2^k)`: a value in the box at the
+/// header is in it again at each latch, from the facts the edges and assumes in
+/// the loop give, and it starts there. The box is grown by powers of two, the
+/// phis assumed together, until the latches stay in it; a phi any latch gives
+/// no interval for is dropped.
+fn inductive_boxes(
+    unit: &Unit,
+    loop_: &loops::Loop,
+    facts: &IndexMap<ValueId, Known>,
+    known: &Intervals,
+    candidates: &[Candidate],
+    closed: &dyn Fn(Intervals) -> Intervals,
+    scope_at: &dyn Fn(i64, &Intervals, u64, bool) -> Result<Rc<Intervals>, String>,
+    context: &crate::ranger::LoopContext,
+) -> Result<Intervals, String> {
+    const ROUNDS: usize = 8;
+    let header = cfg::block(loop_.header);
+    let view = crate::ranger::LoopView::new(context, known);
     let mut boxes: Intervals = candidates.iter().map(|(phi, _, hull, _)| (*phi, hull.clone())).collect();
     for _ in 0..ROUNDS {
         if boxes.is_empty() {
             break;
         }
-        let mut assumed = known.clone();
-        assumed.extend(boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
-        let assumed = closed(assumed);
-        let assumed_id = fresh_known();
+        view.assume(&boxes);
+        let round_boxes = boxes.clone();
         // What holds as each latch leaves for the header: the scope at its end
         // with its branch's condition applied, as SCEV takes a loop's exit
         // count from the latch test. A rotated loop's counter is bounded by
@@ -2162,19 +2213,34 @@ fn inductive_boxes(
         let mut scopes: BTreeMap<i64, Option<Intervals>> = BTreeMap::new();
         let mut grown = false;
         let mut dropped = Vec::new();
-        for (phi, width, _, latches) in &candidates {
+        for (phi, width, _, latches) in candidates {
             let Some(current) = boxes.get(phi).cloned() else { continue };
             let mut wanted = current.clone();
             let mut known_all = true;
             for (latch, value) in latches {
                 if !scopes.contains_key(latch) {
-                    let at_latch = scope_at(*latch, &assumed, assumed_id, false)?;
-                    let leaving = on_edge(unit, cfg::block(*latch), header, &at_latch, Some(facts))?;
+                    let leaving = edge_delta(unit, cfg::block(*latch), header, &view.swept_at(*latch), Some(facts))?;
                     scopes.insert(*latch, leaving);
                 }
                 // An edge no execution takes brings no value round.
-                let Some(scope) = &scopes[latch] else { continue };
-                match _operand(unit, *value, scope, facts).filter(|interval| interval.width == *width) {
+                let Some(delta) = &scopes[latch] else { continue };
+                let scope = crate::ranger::Leaving { delta, at: view.swept_at(*latch) };
+                let asked = _operand(unit, *value, &scope, facts).filter(|interval| interval.width == *width);
+                if check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                    let mut assumed = known.clone();
+                    assumed.extend(round_boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
+                    let assumed = closed(assumed);
+                    let at_latch = scope_at(*latch, &assumed, fresh_known(), false)?;
+                    let leaving = on_edge(unit, cfg::block(*latch), header, &at_latch, Some(facts))?;
+                    let table = leaving
+                        .and_then(|scope| _operand(unit, *value, &scope, facts))
+                        .filter(|interval| interval.width == *width);
+                    assert!(
+                        table == asked,
+                        "the loop view gives {asked:?} of {value:?} leaving block {latch}, the table {table:?}"
+                    );
+                }
+                match asked {
                     Some(interval) => {
                         wanted.low = wanted.low.min(interval.low);
                         wanted.high = wanted.high.max(interval.high);

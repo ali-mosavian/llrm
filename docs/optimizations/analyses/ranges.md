@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:0034710f6d95261433672f01144f471caf039512750977bf508c62ffa4fdcec2 -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:bfa32a3f2739a794fd7a8f7208a3733f60c0c5ddcd05fb0d029b43dcb4104600 -->
 
 # ranges
 
@@ -41,7 +41,12 @@ no counted proof that stay inside a box `[-2^k, 2^k)` on every entry and
 latch are given the box, grown by powers of two until the latches stay in
 it. Two loops whose facts contradict at a block make it `unreachable`.
 `Bounds` holds the result: facts from the loops (`within`) over those from
-the edges. A change re-solves only the loops it reaches (`loops_reached`).
+the edges. A change re-solves only the loops it reaches (`loops_reached`). A
+loop with no counted proof and no phi to box (`box_candidates`) is left
+before its operations are listed: most loops of a large body are. The boxes
+are found by asking one value at one block (`ranger::LoopView`, which keeps
+an answer until a box it read changes), not by sweeping the loop for each
+latch.
 
 ```text
   entry:  ...
