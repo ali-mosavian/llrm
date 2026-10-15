@@ -203,20 +203,68 @@ pub struct PointsTo {
     pub escaped_before: EscapedBefore,
 }
 
-/// Objects escaped before each call, load and store, kept as bits over one
-/// numbering and named only when asked: most solves never read them.
+/// Objects escaped before each call, load and store, named only when asked: the
+/// answer for an instruction is what reaches its block (`entering`), what the
+/// block's publishing instructions up to it publish, and what a call passes
+/// to its callee; found when asked and kept. Most solves never ask.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EscapedBefore {
     objects: Rc<IndexSet<ObjectRef>>,
-    at: IndexMap<InstId, Bits>,
+    /// What reaches the start of each block.
+    entering: IndexMap<i64, Bits>,
+    /// The instructions asked of (calls, loads and stores): their block and
+    /// place in it.
+    sites: IndexMap<InstId, (i64, usize)>,
+    /// What each block's instructions publish, by place, in order.
+    published: IndexMap<i64, Vec<(usize, Vec<usize>)>>,
+    /// What a call lets its callee reach without keeping it.
+    during: IndexMap<InstId, Vec<usize>>,
+    found: Answers,
 }
 
+/// What has been found of `EscapedBefore`: no part of what it says.
+#[derive(Clone, Debug, Default)]
+struct Answers(RefCell<HashMap<InstId, Rc<Bits>>>);
+
+impl PartialEq for Answers {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Answers {}
+
 impl EscapedBefore {
+    fn before(
+        &self,
+        at: &InstId,
+    ) -> Option<Rc<Bits>> {
+        if let Some(found) = self.found.0.borrow().get(at) {
+            return Some(Rc::clone(found));
+        }
+        let (block, place) = *self.sites.get(at)?;
+        // The state after an instruction holds the state before it: what a
+        // call publishes itself reaches it, as its own arguments do.
+        let mut state = self.entering[&block].clone();
+        for (_, objects) in self.published[&block].iter().take_while(|(index, _)| *index <= place) {
+            objects.iter().for_each(|one| state.insert(*one));
+        }
+        if let Some(reached) = self.during.get(at) {
+            reached.iter().for_each(|one| state.insert(*one));
+        }
+        let state = Rc::new(state);
+        self.found.0.borrow_mut().insert(*at, Rc::clone(&state));
+        Some(state)
+    }
+
     pub fn get(
         &self,
         at: &InstId,
     ) -> Option<BTreeSet<ObjectRef>> {
-        self.at.get(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
+        self.before(at).map(|bits| bits.iter().map(|one| self.objects[one].clone()).collect())
     }
 
     /// What escaped before `at`, unnamed: two instructions with equal bits have
@@ -224,8 +272,8 @@ impl EscapedBefore {
     pub fn bits(
         &self,
         at: &InstId,
-    ) -> Option<&Bits> {
-        self.at.get(at)
+    ) -> Option<Rc<Bits>> {
+        self.before(at)
     }
 
     /// Whether the access `reference` at `at`, through a pointer no fact
@@ -238,7 +286,7 @@ impl EscapedBefore {
         reference: &MemRef,
         cell: &MemRef,
     ) -> bool {
-        let Some(bits) = self.at.get(&at) else { return false };
+        let Some(bits) = self.before(&at) else { return false };
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
         let escaping = reference.provenance.as_ref().is_none_or(|one| {
@@ -1856,7 +1904,7 @@ fn _summarized(
         #[allow(clippy::type_complexity)]
         let mut others: Vec<(
             Option<GlobalId>,
-            Option<&Bits>,
+            Option<Rc<Bits>>,
             bool,
             bool,
             (BTreeSet<Slice>, BTreeSet<Slice>, bool),
@@ -2853,30 +2901,31 @@ fn escapes(
         .iter()
         .map(|(target, sources)| (number(target), sources.iter().map(number).collect::<Vec<_>>()))
         .collect::<HashMap<_, _>>();
-    // Close publication through pointer-valued fields of known objects.
-    let pointees = |objects: BTreeSet<ObjectRef>, cells: &IndexMap<CellKey, Provenance>| {
-        let mut reached = objects.iter().map(number).collect::<HashSet<_>>();
-        if reached.is_empty() {
-            return Vec::new();
+    // Close publication through pointer-valued fields of known objects: what
+    // an object reaches is found once, from the fields of every object a store
+    // put a pointer into.
+    let closures: RefCell<HashMap<usize, Rc<Vec<usize>>>> = RefCell::new(HashMap::default());
+    let closure = |object: usize| -> Rc<Vec<usize>> {
+        if let Some(found) = closures.borrow().get(&object) {
+            return Rc::clone(found);
         }
-        loop {
-            let before = reached.len();
-            for (key, provenance) in cells {
-                if let CellKey::Object(object, _, _) = key {
-                    if reached.contains(&number(object)) {
-                        reached.extend(provenance.slices.iter().map(|one| number(&one.object)));
-                    }
-                }
-            }
-            for object in reached.iter().copied().collect::<Vec<_>>() {
-                if let Some(fields) = pointer_fields.get(&object) {
-                    reached.extend(fields.iter().copied());
-                }
-            }
-            if reached.len() == before {
-                return reached.into_iter().collect();
+        let mut reached = HashSet::<usize>::default();
+        let mut work = vec![object];
+        while let Some(at) = work.pop() {
+            if reached.insert(at) {
+                work.extend(pointer_fields.get(&at).into_iter().flatten().copied());
             }
         }
+        let found = Rc::new(reached.into_iter().collect::<Vec<_>>());
+        closures.borrow_mut().insert(object, Rc::clone(&found));
+        found
+    };
+    let pointees = |objects: BTreeSet<ObjectRef>| {
+        let mut reached = HashSet::<usize>::default();
+        for object in objects.iter().map(number) {
+            reached.extend(closure(object).iter().copied());
+        }
+        reached.into_iter().collect::<Vec<_>>()
     };
 
     // Objects named by the initializers of the globals among `reached`, closed:
@@ -2920,7 +2969,6 @@ fn escapes(
     for block in &graph {
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
-        let mut cells = CellMap::new(IndexMap::default(), _key_place);
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
         for &inst in instructions(block.at) {
             let op = function.instruction(inst);
@@ -2997,7 +3045,8 @@ fn escapes(
             {
                 newly.extend(provenances(&op.operands, &values));
             }
-            match (&op.opcode, MemRef::of(unit, inst)) {
+            let access = if matches!(op.opcode, Opcode::Store { .. }) { MemRef::of(unit, inst) } else { None };
+            match (&op.opcode, access) {
                 (Opcode::Store { .. }, Some(reference)) => {
                     let destination = _resolved_reference(unit, &reference, &values);
                     let outside = destination
@@ -3008,13 +3057,6 @@ fn escapes(
                     if outside {
                         newly.extend(provenances(&op.operands[..1], &values));
                     }
-                    let source = _operand(unit, op.operands[0], &values);
-                    let keyed = MemRef { provenance: destination, ..reference };
-                    let key = _cell_key(&keyed);
-                    _kill(&mut cells, key.as_ref());
-                    if let (Some(key), Some(source)) = (key, source) {
-                        cells.insert(key, source, _key_place);
-                    }
                 }
                 // A call may leave a cell as it was: what it held stays
                 // reachable.
@@ -3022,72 +3064,89 @@ fn escapes(
                 _ => {}
             }
             let lent_numbers = lent.iter().map(number).collect::<HashSet<_>>();
-            let mut published = pointees(newly, &cells);
-            published.extend(pointees(lent, &cells).into_iter().filter(|one| !lent_numbers.contains(one)));
+            let mut published = pointees(newly);
+            published.extend(pointees(lent).into_iter().filter(|one| !lent_numbers.contains(one)));
             if !published.is_empty() {
                 mine.insert(inst, published);
             }
             if calls.contains(&inst) {
-                during.insert(inst, initialized(pointees(passing, &cells)));
+                during.insert(inst, initialized(pointees(passing)));
             }
         }
         publishes.insert(block.at, mine);
     }
     let objects = objects.into_inner();
-    let generated = publishes
-        .iter()
-        .map(|(at, mine)| {
-            let mut all = Bits::new(objects.len());
-            mine.values().flatten().for_each(|one| all.insert(*one));
-            (*at, all)
-        })
-        .collect::<IndexMap<_, _>>();
-    let mut out = graph.iter().map(|block| (block.at, Bits::new(objects.len()))).collect::<IndexMap<_, _>>();
-    let entering = |at: i64, out: &IndexMap<i64, Bits>| {
-        let mut state = Bits::new(objects.len());
-        predecessors.get(&at).unwrap_or(&none).iter().for_each(|one| state.union_with(&out[one]));
-        state
-    };
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for block in &graph {
-            let mut state = entering(block.at, &out);
-            state.union_with(&generated[&block.at]);
-            if state != out[&block.at] {
-                out.insert(block.at, state);
-                changing = true;
-            }
-        }
-    }
-    let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
-    // The state after an instruction holds the state before it: what a
-    // call publishes itself reaches it, as its own arguments do.
-    let mut before = IndexMap::<InstId, Bits>::default();
+    let width = objects.len();
+    let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
+    let mut published: IndexMap<i64, Vec<(usize, Vec<usize>)>> = IndexMap::default();
     for block in &graph {
-        let mut state = entering(block.at, &out);
-        for &inst in instructions(block.at) {
-            if let Some(escapes) = publishes[&block.at].get(&inst) {
-                escapes.iter().for_each(|one| state.insert(*one));
+        let mut all = Bits::new(width);
+        let mut mine: Vec<(usize, Vec<usize>)> = Vec::new();
+        for (place, inst) in instructions(block.at).iter().enumerate() {
+            if let Some(objects) = publishes[&block.at].get(inst) {
+                objects.iter().for_each(|one| all.insert(*one));
+                let mut sorted = objects.clone();
+                sorted.sort_unstable();
+                mine.push((place, sorted));
             }
-            if calls.contains(&inst)
-                || matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Load { .. } | Opcode::Store { .. }
-                )
-            {
-                let mut visible = state.clone();
-                if let Some(reached) = during.get(&inst) {
-                    reached.iter().for_each(|one| visible.insert(*one));
+        }
+        generated.push(all);
+        published.insert(block.at, mine);
+    }
+    // What reaches each block: the publications of every block with a path to
+    // it, a cycle's included in all of its members. The blocks in components
+    // that follow their predecessors, so that each is passed once (gcc's
+    // `ssa_propagation_engine` over reverse post order).
+    let index: IndexMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let parents: Vec<Vec<usize>> = graph
+        .iter()
+        .map(|block| predecessors.get(&block.at).unwrap_or(&none).iter().filter_map(|one| index.get(one).copied()).collect())
+        .collect();
+    let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); cyclic.len()];
+    for (at, one) in component.iter().enumerate() {
+        members[*one].push(at);
+    }
+    let mut through: Vec<Bits> = Vec::with_capacity(cyclic.len());
+    let mut reaching: Vec<Bits> = Vec::with_capacity(cyclic.len());
+    for (one, blocks) in members.iter().enumerate() {
+        let mut coming = Bits::new(width);
+        let mut own = Bits::new(width);
+        for &at in blocks {
+            own.union_with(&generated[at]);
+            for &parent in &parents[at] {
+                if component[parent] != one {
+                    coming.union_with(&through[component[parent]]);
                 }
-                before.insert(inst, visible);
+            }
+        }
+        let mut leaving = coming.clone();
+        leaving.union_with(&own);
+        // Every member of a cycle reaches every other, itself too.
+        if cyclic[one] {
+            coming = leaving.clone();
+        }
+        reaching.push(coming);
+        through.push(leaving);
+    }
+    let entering: IndexMap<i64, Bits> =
+        graph.iter().enumerate().map(|(at, block)| (block.at, reaching[component[at]].clone())).collect();
+    let mut sites = IndexMap::<InstId, (i64, usize)>::default();
+    for block in &graph {
+        for (place, &inst) in instructions(block.at).iter().enumerate() {
+            if calls.contains(&inst)
+                || matches!(function.instruction(inst).opcode, Opcode::Load { .. } | Opcode::Store { .. })
+            {
+                sites.insert(inst, (block.at, place));
             }
         }
     }
-    let mut every = Bits::new(objects.len());
-    out.values().for_each(|one| every.union_with(one));
+    let mut every = Bits::new(width);
+    generated.iter().for_each(|one| every.union_with(one));
+    let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     let escaped = named(&every);
-    let escaped_before = EscapedBefore { objects: Rc::new(objects), at: before };
+    let escaped_before =
+        EscapedBefore { objects: Rc::new(objects), entering, sites, published, during, found: Answers::default() };
     Ok(PointsTo { values: values.clone(), escaped, escaped_before })
 }
 
