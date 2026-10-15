@@ -1,4 +1,4 @@
-reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+reason = "a double constant is on 8 bytes: stft nib data +3/+7 bytes of padding; jpeg bq32 -1 instruction"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -51,13 +51,13 @@ kernel_ms = 322.3449
 
 [nib.O2]
 code_bytes = 2337
-data_bytes = 1089
+data_bytes = 1092
 bss_bytes = 0
 kernel_ms = 646.3399
 
 [nib.Os]
 code_bytes = 2401
-data_bytes = 1089
+data_bytes = 1096
 bss_bytes = 0
 kernel_ms = 653.1238
 
