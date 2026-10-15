@@ -104,10 +104,7 @@ fn bytes(
     high: i64,
 ) -> MemRef {
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
-    MemRef::reach(
-        u32::try_from(high - low).unwrap(),
-        Provenance::new(BTreeSet::from([slice]), BTreeSet::new()),
-    )
+    MemRef::reach(u32::try_from(high - low).unwrap(), Provenance::new(BTreeSet::from([slice]), BTreeSet::new()))
 }
 
 fn overlaps(
@@ -1444,9 +1441,10 @@ fn pointers_made_restrict_are_apart_and_a_lone_one_is_not() {
     assert!(restricted_overlap(none));
 }
 
-/// A `MemRef` is cloned for each cell a walk asks and each fact a solve carries:
-/// 250 k copies of a provenance's two sets in a d_faces -O1 compile, 1.3% of
-/// it. A clone shares them; the one that changes is the one that copies.
+/// A `MemRef` is cloned for each cell a walk asks and each fact a solve
+/// carries: 250 k copies of a provenance's two sets in a d_faces -O1 compile,
+/// 1.3% of it. A clone shares them; the one that changes is the one that
+/// copies.
 #[test]
 fn test_cloning_a_provenance_shares_its_sets_and_changing_one_copies_them() {
     let one = Provenance::one(ObjectRef::UNKNOWN);

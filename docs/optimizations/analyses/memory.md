@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memory.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memory.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:045d227923d6cb769fa4cd73ca695467bae89d3a7ef9b404ab4354c9b200cee3 -->
+<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:2579a55a851fe6de1f08cc0a660d32c56dbd965241361aaef9b893e509685cd8 -->
 
 # memory
 
@@ -42,7 +42,9 @@ WHOLE_HIGH` is "any byte". `Slice::intersects` is exact for one object (gcd
 of the strides) and, for two distinct objects that may alias, true. A
 `Provenance` is a set of slices plus the `restrict` roots (`noalias`
 parameters) a pointer is based on; two with disjoint nonempty restrict sets
-do not intersect.
+do not intersect. Its two sets are shared (`Arc`): a `MemRef` is cloned for
+each cell a walk asks, and `sources_mut` copies them for the one that
+changes.
 
 `MemRef` is an access, LLVM's `MemoryLocation`, with its pointer decomposed
 as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`

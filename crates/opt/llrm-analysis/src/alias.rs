@@ -2281,7 +2281,8 @@ pub fn initialized(
                 continue;
             }
             let Some(reference) = MemRef::of(unit, inst) else { continue };
-            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices.clone());
+            let slices =
+                facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices.clone());
             match op.opcode {
                 Opcode::Store { volatile: false, .. } => {
                     if let [one] = slices.iter().collect::<Vec<_>>()[..]

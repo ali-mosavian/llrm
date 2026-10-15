@@ -37,7 +37,9 @@
 //! of the strides) and, for two distinct objects that may alias, true. A
 //! `Provenance` is a set of slices plus the `restrict` roots (`noalias`
 //! parameters) a pointer is based on; two with disjoint nonempty restrict sets
-//! do not intersect.
+//! do not intersect. Its two sets are shared (`Arc`): a `MemRef` is cloned for
+//! each cell a walk asks, and `sources_mut` copies them for the one that
+//! changes.
 //!
 //! `MemRef` is an access, LLVM's `MemoryLocation`, with its pointer decomposed
 //! as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`
