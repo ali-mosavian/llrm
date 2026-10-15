@@ -1623,7 +1623,7 @@ mod tests {
         ];
         blocks.extend((2..tail).map(|at| block(at, vec![], vec![at + 1], vec![])));
         blocks.push(block(tail, vec![], vec![], vec![]));
-        let long = body("long", blocks);
+        let long = body("long", blocks.into_iter().collect());
         let at_of: IndexMap<i64, &Block> = long.blocks.iter().map(|block| (block.at, block)).collect();
         let before = super::walked();
         assert!(!_observed(&Reaches::new(&long, &at_of), &at_of, 0, 1, 7));
