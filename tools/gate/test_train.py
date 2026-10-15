@@ -248,3 +248,27 @@ def test_every_tip_of_a_run_is_built_on_the_commit_main_was_at_when_it_started(t
     assert bounced == [] and (tmp_path / "f").read_text() == "from a\n", "built on the pinned commit, where a merges"
     moved, bounced = train.build_tip([pr(1, sha=a)], tmp_path)
     assert [p.number for p, _ in bounced] == [1], "on the moved ref it conflicts: what the train used to do"
+
+
+def test_a_report_reaches_a_redirected_log_as_it_is_printed(tmp_path):
+    """Trains 4 to 7 printed nothing to their logs until they ended (stdout to a file is block-buffered), so every watch on them was silent
+    and a passed batch looked like a hung train."""
+    import os
+    import subprocess as sp
+
+    log = tmp_path / "log"
+    code = ("import sys; sys.path.insert(0, %r); import train, time; "
+            "train.run([train.Pr(1, 'a' * 40, [])], lambda prs: ('t', [(prs[0], 'conflicts')]), lambda t, s: None, lambda s: None); time.sleep(30)") % str(Path(train.__file__).parent)
+    with open(log, "w") as out:
+        child = sp.Popen([sys.executable, "-c", code], stdout=out, stderr=sp.STDOUT)
+        try:
+            for _ in range(100):
+                if "TRAIN" in log.read_text():
+                    break
+                import time as _time
+
+                _time.sleep(0.05)
+            assert "TRAIN BOUNCED #1" in log.read_text(), "printed but still in the buffer of a process that has not ended"
+        finally:
+            child.kill()
+            child.wait()

@@ -178,7 +178,7 @@ def search(prs: list[Pr], gated: Callable[[list[Pr], list[str]], Verdict], faile
     return green, culprits
 
 
-def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = print, blessed: Callable[[str, list[Pr]], tuple[str, Verdict | None]] | None = None) -> int:
+def run(prs: list[Pr], tip_of: Callable[[list[Pr]], tuple[str, list]], gate_at: Callable[[str, list[str] | None], Verdict], on_main: Callable[[list[str]], Verdict], report: Callable[[str], None] = lambda text: print(text, flush=True), blessed: Callable[[str, list[Pr]], tuple[str, Verdict | None]] | None = None) -> int:
     """One batch end to end. `tip_of(prs)` builds the tip, `gate_at(tip, steps)` gates it, `on_main(steps)` gates origin/main alone."""
     tip, bounced = tip_of(prs)
     for pr, why in bounced:
@@ -267,14 +267,14 @@ def main() -> int:
     ap.add_argument("--name", default="train", help="trains of different names run at once, each in its own worktrees and target")
     args = ap.parse_args()
     if problems := preflight():
-        print("TRAIN ENV: " + "; ".join(problems))
+        print("TRAIN ENV: " + "; ".join(problems), flush=True)
         return 3
     lock_path, tree, main_tree = places(args.name)
     lock = open(lock_path, "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
-        print("TRAIN BUSY: another train is running")
+        print("TRAIN BUSY: another train is running", flush=True)
         return 3
     git("fetch", "-q", "origin", "main")
     ready = []
@@ -282,7 +282,7 @@ def main() -> int:
         pr, info = describe(number)
         git("fetch", "-q", "origin", f"pull/{number}/head")
         if why := pr_problems(info, pr.sha, smoked=gate.smoked(pr.sha)):
-            print(f"TRAIN REFUSED #{number}: {'; '.join(why)}")
+            print(f"TRAIN REFUSED #{number}: {'; '.join(why)}", flush=True)
         else:
             ready.append(pr)
     code = 0
