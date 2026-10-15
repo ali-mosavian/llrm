@@ -1,13 +1,12 @@
-reason = "branch odds combine as gcc 13.4 does (predict.cc combine_predictions_for_bb), a build for size keeps phi copies in the predecessor, an edge copy must win by a tenth, a recursive call is not exceptional against a returning base case; worse rows: bintree -Os instructions +1.3..1.6% (clocks +0.8%)"
-blessed = "2026-10-12"
+reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+blessed = "2026-10-15"
 
 [c.O2]
-instructions = 1458578
-memory_operands = 97238
-code_bytes = 79
+instructions = 938297
+memory_operands = 222651
+code_bytes = 421
 data_bytes = 0
 bss_bytes = 0
-kernel_ms = 19.4563
 
 [c.Os]
 instructions = 1896157
