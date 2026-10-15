@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/spill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/spill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:23e3473e239ebbd4d5ffab7401b658893c8f128ccd2fe86a326129c2467483ff -->
+<!-- src: crates/opt/llrm-transforms/src/spill.rs sha256:bc7819056bbda1ddf241a5a65647094fb24a806d666055eab30e2a7a21fe31a3 -->
 
 # spill
 
@@ -96,6 +96,10 @@ Room { registers: 4, across_call: 2 }  =>  peak 0 (nothing spills)
 From unit test
 `test_a_constant_offset_into_a_frame_object_takes_no_register` in
 `spill_tests.rs`.
+
+`View::fit`, which lsr asks of every set it weighs, keeps the residents of
+the step before when a step wants the same, and diffs by sets when it does
+not.
 
 ## Provides
 `Room` (what the target holds), `Traffic` and `traffic`, the free

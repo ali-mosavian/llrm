@@ -44,9 +44,11 @@
 //! displacements in a frame; `hull_buckets` and `hull_span` serve a write and
 //! cells named by provenance alone (no root), by the hull of their slices in
 //! one object. `Index` does the same for lists of references:
-//! `near` returns the entries that name an object the reference may alias,
-//! every addressed one if the reference names an addressed object, and every
-//! entry without provenance; more than needed, never fewer.
+//! `all_near` asks a test of each such entry once, without building the list
+//! (a loop's loads asked its stores). `near` returns the entries that name an
+//! object the reference may alias, every addressed one if the reference names
+//! an addressed object, and every entry without provenance; more than needed,
+//! never fewer.
 //!
 //! Which linear memory holds no program data is the target's fact, and which
 //! address spaces hold program data the segment layout's; both come from the

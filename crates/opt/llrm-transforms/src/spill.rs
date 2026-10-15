@@ -92,6 +92,10 @@
 //! `test_a_constant_offset_into_a_frame_object_takes_no_register` in
 //! `spill_tests.rs`.
 //!
+//! `View::fit`, which lsr asks of every set it weighs, keeps the residents of
+//! the step before when a step wants the same, and diffs by sets when it does
+//! not.
+//!
 //! # Provides
 //! `Room` (what the target holds), `Traffic` and `traffic`, the free
 //! functions `spilled`, `spilled_in` and `forecast` over `Point`s, and the
@@ -1877,13 +1881,20 @@ impl Run {
             for (index, step) in block.steps.iter().enumerate() {
                 wanted.clear();
                 extra(at, index, &mut wanted);
-                for gone in now.iter().filter(|one| !wanted.contains(one)) {
-                    kinds[0].remove(*gone);
+                // Most steps want what the one before did: nothing to add or
+                // take away. Else each is asked of a set, not
+                // of the list.
+                if wanted != now {
+                    let (is_wanted, was): (std::collections::HashSet<K>, std::collections::HashSet<K>) =
+                        (wanted.iter().copied().collect(), now.iter().copied().collect());
+                    for gone in now.iter().filter(|one| !is_wanted.contains(one)) {
+                        kinds[0].remove(*gone);
+                    }
+                    for new in wanted.iter().filter(|one| !was.contains(one)) {
+                        kinds[0].add(*new, price(*new), &sweep.spilled);
+                    }
+                    std::mem::swap(&mut now, &mut wanted);
                 }
-                for new in wanted.iter().filter(|one| !now.contains(one)) {
-                    kinds[0].add(*new, price(*new), &sweep.spilled);
-                }
-                std::mem::swap(&mut now, &mut wanted);
                 sweep.fit(&mut kinds, 0, step.registers);
                 for cell in step.read.iter().filter(|cell| cell.member[0]) {
                     kinds[0].remove(key(cell.cell));
