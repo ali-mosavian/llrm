@@ -762,7 +762,7 @@ def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
         worse, better, stale = basecounts.judge(measured, base, basecounts.waivers())
         differing = basecounts.differences(old, worse, better)
     except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
-        return [f"BASE: dry run failed: {type(why).__name__}: {str(why)[-300:]}"]
+        return ["BASE: dry run failed: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:]]
     lines = [f"BASE {base_sha[:9]}: {len(worse)} worse, {len(better)} better; {len(differing)} differ from expected.toml" + (f"; {len(stale)} stale waivers" if stale else "")]
     lines += [f"BASE-WORSE {one[0]}: {one[1]} {one[3]} > {one[2]}" for one in worse]
     lines += [f"BASE-DIFF {one}" for one in differing] + [f"BASE-STALE {one}" for one in stale]
