@@ -74,7 +74,8 @@ SETTLE = 0.5            # seconds after text a step waited for appears
 
 LONGEST = 15            # the most a step waits, whatever it is waiting for
 LOOKS = 3               # successive looks at a screen that must show the same picture
-LOOK_EVERY = 0.03       # host seconds between looks: the guest runs between them, so looks back to back would all see one frame
+LOOK_EVERY = 0.03       # host seconds between polls
+LOOK_CPU = 0.1          # emulator CPU seconds between two looks that count: on a starved host the guest has not run between polls
 
 
 def expiry(session, seconds: float):
@@ -85,6 +86,12 @@ def expiry(session, seconds: float):
         return session.limit(seconds)
     deadline = time.monotonic() + seconds
     return lambda: time.monotonic() > deadline
+
+
+def guest_seconds(session) -> float:
+    """What the guest has run, as the emulator's CPU time (the wall clock where no emulator is behind the session): at host load 200 three
+    looks 0.03 s apart saw one half-drawn frame three times, and GORILLA's prompt3 differed by 56 pixels from BCOM45's."""
+    return dosbatch._cpu_seconds(session.process.pid) if getattr(session, "process", None) else time.monotonic()
 
 
 def ready(session, since: int, shown: str | None) -> None:
@@ -108,13 +115,15 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
     part has changed from `before`."""
     if not name:
         return
-    late, same, last = expiry(session, LONGEST), 0, None
+    late, same, last, at = expiry(session, LONGEST), 0, None, None
     while not late():
-        look = session.screen_hash()
-        same = same + 1 if look == last else 1
-        if same >= LOOKS and (before is None or look != before):
-            return
-        last = look
+        now = guest_seconds(session)
+        if at is None or now - at >= LOOK_CPU:
+            look, at = session.screen_hash(), now
+            same = same + 1 if look == last else 1
+            if same >= LOOKS and (before is None or look != before):
+                return
+            last = look
         time.sleep(LOOK_EVERY)
     raise TimeoutError(f"the screen never settled for {name}")
 
