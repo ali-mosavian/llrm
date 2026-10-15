@@ -5,7 +5,7 @@ The code-quality scoreboard for one file: QCport's `render/d_faces.c`, the per-f
     uv run --project tools python crates/target/llrm-x86-m32/vsgcc/dfaces/run.py [--levels O1 O2 O3 Os] [--json OUT]
     uv run --project tools --group dev pytest crates/target/llrm-x86-m32/vsgcc/dfaces
 
-About a minute. Products go to `$VSGCC_WORK` (default `~/scratch/vsgcc-work`); the QCport sources are read from `$QCPORT` (default `~/scratch/qbq-llrm/src`).
+About a minute. Products go to `$VSGCC_WORK`, as for the rest of vsgcc; the QCport sources are read from `$QCPORT`, the directory that holds `render/d_faces.c`.
 
 | File | Does |
 |---|---|
