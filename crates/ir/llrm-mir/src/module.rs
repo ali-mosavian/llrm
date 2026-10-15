@@ -282,6 +282,8 @@ pub struct Function {
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) changes: ChangeLog,
+    /// How many edits of each kind the function has had: no part of what it is.
+    pub(crate) epochs: crate::touched::Epochs,
     /// How many changes `take_changes` has handed out: the log keeps them, so
     /// an analysis computed before can still be brought up to date.
     pub(crate) taken: usize,
@@ -344,6 +346,7 @@ impl Function {
             value_uses: Vec::new(),
             block_uses: Vec::new(),
             changes: ChangeLog::default(),
+            epochs: crate::touched::Epochs::default(),
             taken: 0,
             debug_records: Vec::new(),
             debug_dropped: Vec::new(),
@@ -601,8 +604,17 @@ impl Function {
         &mut self,
         change: Change,
     ) {
+        let mut epochs = self.epochs;
+        epochs.bump(self, &change);
+        self.epochs = epochs;
         self.lineage.logged += 1;
         self.changes.0.push(change);
+    }
+
+    /// How many edits of each kind the function has had: a memo that read
+    /// these is true while they are as they were.
+    pub fn epochs(&self) -> crate::touched::Epochs {
+        self.epochs
     }
 
     /// Where the function stands now.
