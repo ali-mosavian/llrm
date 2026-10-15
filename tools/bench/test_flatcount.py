@@ -63,6 +63,8 @@ def test_the_emulators_count_and_dosboxs_agree_within_a_few_instructions_not_whe
 
 
 def test_a_flat_row_gets_clocks_only_where_the_emulator_ran_the_kernel_dosbox_counted(monkeypatch, tmp_path):
+    import types
+
     import bench
 
     ran = lambda instructions, clocks=7: types.SimpleNamespace(error="", region=types.SimpleNamespace(instructions=instructions, clocks=clocks))  # noqa: E731
