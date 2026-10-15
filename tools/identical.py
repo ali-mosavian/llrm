@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import re
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
@@ -29,7 +30,19 @@ import wrap  # noqa: E402
 KNOWN_PROGRAMS = 66
 KNOWN_QCPORT = 65
 MODULES = ("host", "render", "model", "game", "sound", "ui")
-CHECKS = ("CALLEES", "SIBLINGS", "POSTINGS", "HOLDERS", "JUMPS", "FLOATSKIP", "REPLAY", "PRESERVED", "UNREPORTED", "SPLIT", "LIVE", "BYTES", "GROUPS", "TWOADDR", "NAMED", "OVERLAPPING", "PLACING", "OCCUPIED", "IDLE", "SUMMARIES", "PROMOTED", "RECOLOR", "CROWDED", "SLOTS")
+# Oracles the corpus run does not set (each needs inputs the corpus lacks): the list only shrinks. Every other LLRM_CHECK_ oracle in the
+# source is set by the run, and a new one needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle
+# conflicted with the others on it.
+NOT_RUN = frozenset("CACHES CALLBACKS CLASSES CLOBBERED CLOBBERS COALESCE COLORS COUNTED CYCLES DATAFLOW EFFECT FACTS FOLDS FRAME INITIALIZED INTERVALS MODULES NEEDS OCCURRENCES POINTVALUES RANGES REQUIRED SCOPES SHAPE SIMULATION STALE THRASH UNCHANGED".split())
+
+
+def checks(root: Path = ROOT) -> tuple[str, ...]:
+    """The oracles the run sets: every quoted "LLRM_CHECK_X" in the crates' source (env_set, var_os) but those in NOT_RUN."""
+    found = {m for path in (root / "crates").rglob("*.rs") for m in re.findall(r'"LLRM_CHECK_([A-Z_0-9]+)"', path.read_text())}
+    return tuple(sorted(found - NOT_RUN))
+
+
+CHECKS = checks()
 
 
 def corpus(work: Path, qcport: Path | None, headers: Path | None, programs_only: bool = False) -> dict[str, tuple[Path, list[str]]]:

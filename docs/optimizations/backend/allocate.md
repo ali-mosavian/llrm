@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:249accb9ef2df90b2ed24b2e7884635ea3fd73ec5d0d865d9f9449ae0394c881 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:ad550ce0258560c79d9c313b9569b569a24fdf9c910854dc2cd6526aa3514512 -->
 
 # allocate
 
@@ -127,7 +127,9 @@ most, 200000).
 The last chance before a value is spilled is recoloring (`Coloring`,
 LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
 It is not tried where more values are live at one point of the value than
-there are registers for them (`crowded`): no moving about places it.
+there are registers for them (`crowded`): no moving about places it. It
+finds each group member's segments once and asks a point by search;
+`LLRM_CHECK_CROWDED` compares it with the scan of every segment.
 
 Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than
@@ -157,8 +159,10 @@ weighted by block frequency); the cheapest wins.
 Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
 the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 `Unfolded` that the spills admit is tried, plus `Whole` without
-splitting. A trial is kept only if it is cheaper and spilled none of its
-protected values. The frame is restored between trials.
+splitting, and only that shape is made: the rewritten bodies of the others
+cost 104 M of `d_faces` -O1's 7.1 G and were dropped unused. A trial is kept
+only if it is cheaper and spilled none of its protected values. The frame is
+restored between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width

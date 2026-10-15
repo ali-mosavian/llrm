@@ -122,7 +122,9 @@
 //! The last chance before a value is spilled is recoloring (`Coloring`,
 //! LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
 //! It is not tried where more values are live at one point of the value than
-//! there are registers for them (`crowded`): no moving about places it.
+//! there are registers for them (`crowded`): no moving about places it. It
+//! finds each group member's segments once and asks a point by search;
+//! `LLRM_CHECK_CROWDED` compares it with the scan of every segment.
 //!
 //! Last, `_recolored_hints` moves a value into a copy partner's register when
 //! that register is free over its whole interval and joins more copies than
@@ -1464,7 +1466,18 @@ impl Ord for Queued {
 
 const INF: f64 = f64::INFINITY;
 
-/// The fixed register each value reaches through the fewest copies.
+/// How many copies away a fixed register still reaches a value as its hint: the
+/// allocator's copy-hint propagation depth, as gcc exposes its limits as
+/// `--param`s. A chain of copies longer than this carries no hint further. The
+/// corpus (136 files at -O1, -O2, -O3, -Os and -Omax, 141,519 propagations)
+/// reaches 74 at the most (crc, an unrolled loop), 17 everywhere else, and 96%
+/// stop within 8; 128 is above the most. Without a bound a copy chain of N
+/// values is walked end to end after every spill (`cells`, N=448: 221 levels),
+/// N rounds of N steps.
+pub const HINT_DEPTH: usize = 128;
+
+/// The fixed register each value reaches through the fewest copies, up to
+/// `HINT_DEPTH` of them.
 ///
 /// A loop's sum placed before the return's copy to AX is otherwise seated
 /// where nothing asked, and whatever took AX leaves a move on the exit.
@@ -1472,11 +1485,61 @@ fn _wanted(
     hints: &IndexMap<u32, Vec<u32>>,
     fixed: &IndexMap<u32, RegId>,
 ) -> IndexMap<u32, RegId> {
+    let found = _wanted_within(hints, fixed, HINT_DEPTH);
+    if llrm_support::env_set("LLRM_CHECK_WANTED") {
+        // The unbounded walk reaches the same values by the same registers as
+        // far as the bound goes: every value the bounded one holds is
+        // held alike, and where the walk ended before the bound nothing
+        // more is reached.
+        let whole = _wanted_within(hints, fixed, usize::MAX);
+        assert!(
+            found.iter().all(|(value, register)| whole.get(value) == Some(register)),
+            "a value the bounded hint walk reached differs from the unbounded one"
+        );
+        let deepest = _wanted_depth(hints, fixed);
+        assert!(
+            deepest > HINT_DEPTH || found == whole,
+            "the hint walk ended within {HINT_DEPTH} levels ({deepest}) yet differs from the unbounded one"
+        );
+    }
+    found
+}
+
+/// How many levels the unbounded walk takes.
+fn _wanted_depth(
+    hints: &IndexMap<u32, Vec<u32>>,
+    fixed: &IndexMap<u32, RegId>,
+) -> usize {
+    let mut seen: BTreeSet<u32> = fixed.keys().copied().collect();
+    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
+    let mut levels = 0;
+    while !frontier.is_empty() {
+        levels += 1;
+        let mut reached = Vec::new();
+        for value in frontier {
+            for other in hints.get(&value).into_iter().flatten() {
+                if seen.insert(*other) {
+                    reached.push(*other);
+                }
+            }
+        }
+        frontier = reached;
+    }
+    levels
+}
+
+fn _wanted_within(
+    hints: &IndexMap<u32, Vec<u32>>,
+    fixed: &IndexMap<u32, RegId>,
+    depth: usize,
+) -> IndexMap<u32, RegId> {
     // Only the values that are reached are kept: a pinned value is looked up in
     // `fixed`, which is not copied.
     let mut wanted: IndexMap<u32, RegId> = IndexMap::with_capacity_and_hasher(hints.len(), Default::default());
     let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    while !frontier.is_empty() {
+    let mut levels = 0;
+    while !frontier.is_empty() && levels < depth {
+        levels += 1;
         let mut reached = Vec::new();
         for value in frontier {
             let register = match fixed.get(&value) {
@@ -3335,6 +3398,12 @@ fn _forced(
 
 thread_local! {
     static TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SHAPES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many other shapes of a body the search made (not those it allocated).
+pub fn shapes_made() -> usize {
+    SHAPES_MADE.with(std::cell::Cell::get)
 }
 
 /// How many allocations this thread has made to try another shape of a body
@@ -3455,6 +3524,88 @@ impl Coloring<'_> {
             }
             allowed.push(bits);
         }
+        // Segments are sorted and disjoint: a point is in one by search.
+        let covers = |segments: &[ranges::Segment], point: i64| {
+            let at = segments.partition_point(|segment| segment.end <= point);
+            segments.get(at).is_some_and(|segment| segment.start <= point)
+        };
+        // Each member's segments found once, not by hash for each point asked.
+        let lives: Vec<&[ranges::Segment]> = group.iter().map(|one| &self.live[one].segments[..]).collect();
+        // At each point one of them starts within `value`: those live there
+        // need a register each, and the ones whose registers all lie among
+        // some set of them, no more than the set has.
+        let mut seen: BTreeSet<i64> = BTreeSet::new();
+        for segments in &lives {
+            for segment in *segments {
+                let point = segment.start;
+                if !covers(&mine.segments, point) || !seen.insert(point) {
+                    continue;
+                }
+                let here: Vec<u64> = lives
+                    .iter()
+                    .zip(&allowed)
+                    .filter(|(segments, _)| covers(segments, point))
+                    .map(|(_, bits)| *bits)
+                    .collect();
+                // Equal sets ask the same: once each.
+                let mut sets = here.clone();
+                sets.sort_unstable();
+                sets.dedup();
+                for set in &sets {
+                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
+                    if within > set.count_ones() as usize {
+                        return true;
+                    }
+                }
+                let every = here.iter().fold(0u64, |all, bits| all | bits);
+                if here.len() > every.count_ones() as usize {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// `crowded` as it was asked of every point and member by scan: what
+    /// `LLRM_CHECK_CROWDED` compares it with.
+    fn crowded_reference(
+        &self,
+        value: u32,
+    ) -> bool {
+        let mine = &self.live[&value];
+        let mut group: Vec<u32> = vec![value];
+        for register in (self.order)(value) {
+            for other in self.union.meeting(&_whole(register), mine, self.live) {
+                if !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        // The registers each could end in: its own order less those a point
+        // inside it destroys, as a bit of the registers there are.
+        let mut registers: Vec<RegId> = Vec::new();
+        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
+        for one in &group {
+            let mut bits = 0u64;
+            for register in (self.order)(*one) {
+                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
+                    continue;
+                }
+                let whole = _whole(register);
+                let at = match registers.iter().position(|held| *held == whole) {
+                    Some(at) => at,
+                    None => {
+                        registers.push(whole);
+                        registers.len() - 1
+                    }
+                };
+                if at >= 64 {
+                    return false;
+                }
+                bits |= 1 << at;
+            }
+            allowed.push(bits);
+        }
         let live_at = |one: u32, point: i64| {
             self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
         };
@@ -3504,6 +3655,13 @@ impl Coloring<'_> {
     ) -> bool {
         if depth >= Self::DEPTH {
             return false;
+        }
+        if depth == 0 && llrm_support::env_set("LLRM_CHECK_CROWDED") {
+            assert_eq!(
+                self.crowded(value),
+                self.crowded_reference(value),
+                "value#{value}: crowded by search differs from by scan"
+            );
         }
         if depth == 0 && self.crowded(value) {
             if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
@@ -3860,30 +4018,87 @@ impl RegAlloc {
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
             let mut candidates: Vec<(Shape, LirBody, BTreeSet<u32>, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
-            let (separated, opened) = constrain::addressed(&body, &spilled);
-            if !opened.is_empty() {
-                candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
-            }
-            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
-            if !opened.is_empty() {
-                candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
-            }
-            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
-            if !keep.is_empty() {
-                let folded = _scoped_foldable_indexes(&scoped, &keep);
-                let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
+            if cpu.exhaustive {
+                let (separated, opened) = constrain::addressed(&body, &spilled);
                 if !opened.is_empty() {
-                    candidates.push((Shape::ScopedOpened, opened_body, reloads.clone(), keep.clone(), keep.clone()));
+                    candidates.push((Shape::Addressed, separated, reloads.clone(), BTreeSet::new(), opened));
                 }
-                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
-            }
-            for candidate in _retainable_bases(&body, &spilled) {
-                let keep = BTreeSet::from([candidate]);
-                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
+                if !opened.is_empty() {
+                    candidates.push((Shape::Unfolded, unfolded, reloads.clone(), BTreeSet::new(), BTreeSet::new()));
+                }
+                let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
+                if !keep.is_empty() {
+                    let folded = _scoped_foldable_indexes(&scoped, &keep);
+                    let (opened_body, opened) = spiller::unfolded_indexes(&scoped, &folded);
+                    if !opened.is_empty() {
+                        candidates.push((
+                            Shape::ScopedOpened,
+                            opened_body,
+                            reloads.clone(),
+                            keep.clone(),
+                            keep.clone(),
+                        ));
+                    }
+                    candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep.clone()));
+                }
+                for candidate in _retainable_bases(&body, &spilled) {
+                    let keep = BTreeSet::from([candidate]);
+                    candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                }
+            } else {
+                // Only the first shape of `Shape::PICKED` the spills admit is
+                // allocated, so only it is made (LLVM makes no shape the run
+                // does not take).
+                for want in Shape::PICKED {
+                    match want {
+                        Shape::Retainable => {
+                            if let Some(candidate) = _retainable_bases(&body, &spilled).into_iter().next() {
+                                let keep = BTreeSet::from([candidate]);
+                                candidates.push((Shape::Retainable, body.clone(), reloads.clone(), keep.clone(), keep));
+                            }
+                        }
+                        Shape::Scoped => {
+                            let (scoped, keep) = splitkit::loop_bases(&body, &spilled);
+                            if !keep.is_empty() {
+                                candidates.push((Shape::Scoped, scoped, reloads.clone(), keep.clone(), keep));
+                            }
+                        }
+                        Shape::Addressed => {
+                            let (separated, opened) = constrain::addressed(&body, &spilled);
+                            if !opened.is_empty() {
+                                candidates.push((
+                                    Shape::Addressed,
+                                    separated,
+                                    reloads.clone(),
+                                    BTreeSet::new(),
+                                    opened,
+                                ));
+                            }
+                        }
+                        Shape::Unfolded => {
+                            let (unfolded, opened) = spiller::unfolded_indexes(&body, &spilled);
+                            if !opened.is_empty() {
+                                candidates.push((
+                                    Shape::Unfolded,
+                                    unfolded,
+                                    reloads.clone(),
+                                    BTreeSet::new(),
+                                    BTreeSet::new(),
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                    if !candidates.is_empty() {
+                        break;
+                    }
+                }
             }
             // Splitting is priced one value at a time, against registers its
             // pieces may later lose; the whole output without it is the check.
             let whole = candidates.len();
+            SHAPES_MADE.with(|count| count.set(count.get() + whole));
             candidates.push((Shape::Whole, body.clone(), reloads.clone(), BTreeSet::new(), BTreeSet::new()));
             drop(building);
             // Unless the search is exhaustive (-Omax): the first shape of

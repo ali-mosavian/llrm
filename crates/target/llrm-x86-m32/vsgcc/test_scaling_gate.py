@@ -1148,12 +1148,13 @@ def test_the_spiller_leaves_alone_the_blocks_with_no_update_to_merge(tmp_path):
     """branches(1024) at -O2: merging a spilled value's updates (`spill short updates`, `spill local updates`) rewrote every block of the body
     for each spill, though only the blocks that define a stored value by a plain move, or update it, can have a run to merge, and gave
     each a new list of instructions, so that every check of what changed after it (`postings::following`, `ranges::changes`) compared the
-    instructions of the whole body: 2,726 and 1,639 Minstr. The other blocks are the very same blocks: 654 and 603 (what is left is the copy
-    of the list of blocks, a rewrite each). A bound of 1,000 on each fails the first."""
+    instructions of the whole body: 2,726 and 1,639 Minstr. The other blocks are the very same blocks: 47 and 46 (what is left is the copy
+    of the list of blocks, a rewrite each; the step once read 327 and 316 on the same body, and a floor of 20 shows it still merges). A bound
+    of 1,000 on each fails the first."""
     source = tmp_path / "branches1024.c"
     source.write_text(scaling.AXES["branches"](1024))
     own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
-    assert own["spill short updates"] > 50.0, f"premise: updates were merged ({own['spill short updates']:.1f} Minstr)"
+    assert own["spill short updates"] > 20.0, f"premise: updates were merged ({own['spill short updates']:.1f} Minstr)"
     assert own["spill short updates"] <= 1000.0 and own["spill local updates"] <= 1000.0, own
 
 
@@ -1194,6 +1195,38 @@ def test_a_step_below_the_share_floor_is_still_recorded_from_a_few_minstr(monkey
     monkeypatch.setattr(gate, "generated", lambda axis, n: "")
     got = gate.pass_costs("cases", "O1", tmp_path)
     assert "cases O1 tiny" in got and "cases O1 a" in got, got
+
+
+def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_point(tmp_path):
+    """QCport d_alias at -O1: `Coloring::crowded` (Hall's condition before a recolor) asked, at each point where a value of its group starts,
+    each member of the group whether it is live there, looking the member's interval up by hash each time and searching its segments
+    linearly: `regalloc recolor` 78.5 Minstr (d_faces 159). The members' segments are found once and searched by position: 58.5 (116). A
+    bound of 70 fails the first. Needs QCPORT and QCPORT_INC."""
+    qcport, headers = os.environ.get("QCPORT"), os.environ.get("QCPORT_INC")
+    if not (qcport and headers):
+        pytest.skip("QCPORT and QCPORT_INC are not set")
+    base = Path(qcport).expanduser()
+    include = [flag for d in ("host", "render", "model", "game", "sound", "ui", "qgl") for flag in ("-I", str(base / d))]
+    include += ["-I", str(Path(headers).expanduser())]
+    command = gate.levels_time.command("llrm", "O1", base / "render" / "d_alias.c")
+    # QCport is Open Watcom C for the 16-bit target: no -m32 -march.
+    command = [command[0], "-O1", *include, command[-1], "-o", os.devnull]
+    own = gate.own_work(command)
+    assert own["regalloc recolor"] > 20.0, f"premise: recolor ran ({own['regalloc recolor']:.1f} Minstr)"
+    assert own["regalloc recolor"] <= 70.0, own["regalloc recolor"]
+
+
+def test_the_copy_hint_walk_is_bounded_by_the_hint_depth(tmp_path):
+    """cells at -O2 (a chain of copies 221 values long from two pins at N=448): `_wanted`, the walk from the pins over the copy hints,
+    ran end to end after every spill, N rounds of N steps: `after wanted` 191 Minstr at 448 and 794 at 896 (x4.2). The walk stops at
+    `allocate::HINT_DEPTH` copies (128; the corpus reaches 74 at the most): 112 and 232 (x2.1). A bound of x2.8 fails the first."""
+    rows = {}
+    for n in (448, 896):
+        source = tmp_path / f"cells{n}.c"
+        source.write_text(scaling.AXES["cells"](n))
+        rows[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["after wanted"]
+    assert rows[448] > 20.0, f"premise: the walk ran ({rows[448]:.1f} Minstr)"
+    assert rows[896] / rows[448] <= 2.8, rows
 
 
 def test_a_loop_of_many_stores_and_loads_does_not_refit_every_resident_at_every_step(tmp_path):
