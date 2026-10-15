@@ -217,7 +217,7 @@ pub fn foreign_provenance(
     program: Option<&ProgramProxy>,
 ) -> Option<Provenance> {
     let slice = foreign(reference, Some(known), program)?;
-    Some(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })
+    Some(Provenance::new(BTreeSet::from([slice]), BTreeSet::new()))
 }
 
 /// What `reference` may name under `facts`: its linear bytes when its
@@ -230,7 +230,7 @@ fn refined<'a>(
     program: Option<&ProgramProxy>,
 ) -> Result<Option<Cow<'a, Provenance>>, RegionError> {
     if let Some(slice) = foreign(reference, facts, program) {
-        return Ok(Some(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() })));
+        return Ok(Some(Cow::Owned(Provenance::new(BTreeSet::from([slice]), BTreeSet::new()))));
     }
     reference.provenance.as_ref().map(|provenance| narrowed(reference, provenance, facts)).transpose()
 }
@@ -345,7 +345,7 @@ fn narrowed<'a>(
         return Err(RegionError::NarrowedSliceUnrepresentable);
     };
     let slice = Slice::new(source.object.clone(), low, high, 1, width).map_err(RegionError::InvalidNarrowedSlice)?;
-    Ok(Cow::Owned(Provenance { slices: BTreeSet::from([slice]), restrict: provenance.restrict.clone() }))
+    Ok(Cow::Owned(Provenance::new(BTreeSet::from([slice]), provenance.restrict.clone())))
 }
 
 /// Whether one reference lands in foreign memory and the other in program

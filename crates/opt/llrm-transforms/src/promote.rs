@@ -281,10 +281,7 @@ pub fn _reference(
     match key {
         Key::Leaf(leaf) => MemRef::reach(
             width,
-            Provenance {
-                slices: BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]),
-                restrict: leaf.restrict.clone(),
-            },
+            Provenance::new(BTreeSet::from([slice(leaf.object.clone(), leaf.low, leaf.high)]), leaf.restrict.clone()),
         ),
         Key::Ref(reference) => MemRef { width, ..reference.clone() },
     }

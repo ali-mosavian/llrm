@@ -630,16 +630,44 @@ pub fn gcd(
 
 /// `restrict` holds the `noalias`
 /// parameters a pointer is based on.
+///
+/// Shared: a `MemRef` is cloned for each cell a walk asks and each fact a solve
+/// carries, and cloning the two sets of a provenance each time was 250 k deep
+/// copies of a d_faces -O1 compile.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct Provenance {
+pub struct Provenance(std::sync::Arc<Sources>);
+
+/// What a provenance names.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Sources {
     pub slices: BTreeSet<Slice>,
     pub restrict: BTreeSet<Identity>,
 }
 
+impl std::ops::Deref for Provenance {
+    type Target = Sources;
+
+    fn deref(&self) -> &Sources {
+        &self.0
+    }
+}
+
 impl Provenance {
+    pub fn new(
+        slices: BTreeSet<Slice>,
+        restrict: BTreeSet<Identity>,
+    ) -> Self {
+        Self(std::sync::Arc::new(Sources { slices, restrict }))
+    }
+
+    /// The sets to change: copied first if another provenance shares them.
+    pub fn sources_mut(&mut self) -> &mut Sources {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+
     /// `Provenance.one` with the whole-object bounds and no restrict roots.
     pub fn one(object: impl Into<ObjectRef>) -> Self {
-        Self { slices: BTreeSet::from([Slice::whole(object)]), restrict: BTreeSet::new() }
+        Self::new(BTreeSet::from([Slice::whole(object)]), BTreeSet::new())
     }
 
     pub fn one_with_slice(
@@ -650,7 +678,7 @@ impl Provenance {
         width: i64,
         restrict: BTreeSet<Identity>,
     ) -> Result<Self, SliceError> {
-        Ok(Self { slices: BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict })
+        Ok(Self::new(BTreeSet::from([Slice::new(object, low, high, stride, width)?]), restrict))
     }
 
     pub fn shifted(
@@ -666,17 +694,17 @@ impl Provenance {
                 if whole || bounded_whole { one.clone() } else { one.shifted(amount) }
             })
             .collect();
-        Self { slices, restrict: self.restrict.clone() }
+        Self::new(slices, self.restrict.clone())
     }
 
     pub fn union(
         &self,
         other: &Self,
     ) -> Self {
-        Self {
-            slices: self.slices.union(&other.slices).cloned().collect(),
-            restrict: self.restrict.union(&other.restrict).cloned().collect(),
-        }
+        Self::new(
+            self.slices.union(&other.slices).cloned().collect(),
+            self.restrict.union(&other.restrict).cloned().collect(),
+        )
     }
 
     pub fn intersects(

@@ -106,7 +106,7 @@ fn bytes(
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
     MemRef::reach(
         u32::try_from(high - low).unwrap(),
-        Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() },
+        Provenance::new(BTreeSet::from([slice]), BTreeSet::new()),
     )
 }
 
@@ -336,10 +336,10 @@ b30:
 ",
     );
     let facts = parsed.facts();
-    let expected = Provenance {
-        slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(),
-        restrict: BTreeSet::new(),
-    };
+    let expected = Provenance::new(
+        UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(),
+        BTreeSet::new(),
+    );
     assert_eq!(facts.values[&parsed.value("current")], expected);
     assert_eq!(facts.values[&parsed.value("advanced")], expected);
 }
@@ -1442,4 +1442,18 @@ fn pointers_made_restrict_are_apart_and_a_lone_one_is_not() {
     assert!(!restricted_overlap(both));
     assert!(restricted_overlap(first));
     assert!(restricted_overlap(none));
+}
+
+/// A `MemRef` is cloned for each cell a walk asks and each fact a solve carries:
+/// 250 k copies of a provenance's two sets in a d_faces -O1 compile, 1.3% of
+/// it. A clone shares them; the one that changes is the one that copies.
+#[test]
+fn test_cloning_a_provenance_shares_its_sets_and_changing_one_copies_them() {
+    let one = Provenance::one(ObjectRef::UNKNOWN);
+    let copy = one.clone();
+    assert!(std::ptr::eq(&one.slices, &copy.slices) && std::ptr::eq(&one.restrict, &copy.restrict));
+    let mut changed = one.clone();
+    changed.sources_mut().restrict.insert(Identity::Value(7));
+    assert!(one.restrict.is_empty() && changed.restrict.len() == 1);
+    assert!(std::ptr::eq(&one.slices, &copy.slices));
 }

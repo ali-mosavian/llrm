@@ -158,7 +158,7 @@ use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
-pub const EMPTY: Provenance = Provenance { slices: BTreeSet::new(), restrict: BTreeSet::new() };
+pub static EMPTY: LazyLock<Provenance> = LazyLock::new(|| Provenance::new(BTreeSet::new(), BTreeSet::new()));
 
 /// One actual argument of a call: a provenance, a `(pointer value,
 /// displacement)` pair, or nothing a pointer is.
@@ -403,7 +403,7 @@ fn _resolved_reference(
                 .expect("a slice keeps its positive shape")
         })
         .collect();
-    Some(Provenance { slices, restrict: source.restrict })
+    Some(Provenance::new(slices, source.restrict.clone()))
 }
 
 /// One procedure's transitive memory effects in its own object space.
@@ -1136,7 +1136,7 @@ pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
             }
             continue;
         };
-        for one in provenance.slices {
+        for one in provenance.slices.iter().cloned() {
             let unknown = one.object.kind == MemoryKind::Unknown;
             if outlives(&one) && !(unknown && !read) {
                 if read {
@@ -1977,7 +1977,7 @@ pub fn calls_annotated(
     let reference = |one: &Slice| {
         MemRef::reach(
             u32::try_from(one.width).expect("a slice width is a memory width"),
-            Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() },
+            Provenance::new(BTreeSet::from([one.clone()]), BTreeSet::new()),
         )
     };
 
@@ -2281,7 +2281,7 @@ pub fn initialized(
                 continue;
             }
             let Some(reference) = MemRef::of(unit, inst) else { continue };
-            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices);
+            let slices = facts.reference(unit, &reference).map_or_else(|| UNKNOWN.slices.clone(), |one| one.slices.clone());
             match op.opcode {
                 Opcode::Store { volatile: false, .. } => {
                     if let [one] = slices.iter().collect::<Vec<_>>()[..]
@@ -2350,7 +2350,7 @@ fn _union<'a>(parts: impl IntoIterator<Item = Option<&'a Provenance>>) -> Option
 /// important disjointness facts; only the changing subrange is forgotten.
 fn _widened(provenance: &Provenance) -> Provenance {
     let slices = provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object)).collect();
-    Provenance { slices, restrict: provenance.restrict.clone() }
+    Provenance::new(slices, provenance.restrict.clone())
 }
 
 fn _cell_key(reference: &MemRef) -> Option<CellKey> {
@@ -2398,7 +2398,7 @@ fn _direct(
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
             let mut restrict = source.restrict.clone();
             restrict.insert(Identity::Value(result.0));
-            Ok(Some(Provenance { slices: source.slices, restrict }))
+            Ok(Some(Provenance::new(source.slices.clone(), restrict)))
         }
         // A callee whose result is `noalias` returns a pointer to an object
         // nothing else points to: its own, apart from every other.
@@ -2786,7 +2786,7 @@ fn escapes(
         let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
         let targets = _resolved_reference(unit, &reference, &values)
             .into_iter()
-            .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
+            .flat_map(|provenance| provenance.slices.iter().map(|one| one.object).collect::<Vec<_>>())
             .collect::<BTreeSet<_>>();
         for target in targets {
             pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
@@ -2866,7 +2866,7 @@ fn escapes(
         operands
             .iter()
             .filter_map(|&one| _operand(unit, one, values))
-            .flat_map(|one| one.slices.into_iter().map(|slice| slice.object))
+            .flat_map(|one| one.slices.iter().map(|slice| slice.object).collect::<Vec<_>>())
             .collect::<Vec<_>>()
     };
     let mut publishes: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
@@ -3068,7 +3068,7 @@ fn _lost(
                 out.extend(
                     _operand(unit, operand, values)
                         .into_iter()
-                        .flat_map(|one| one.slices.into_iter().map(|slice| slice.object)),
+                        .flat_map(|one| one.slices.iter().map(|slice| slice.object).collect::<Vec<_>>()),
                 );
             }
         } else if let Operand::Constant(id) = operand {
@@ -3359,8 +3359,8 @@ pub fn annotated_with(
                     let model = |number: &BigInt| {
                         i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
                     };
-                    got = Some(Provenance {
-                        slices: BTreeSet::from([Slice::new(
+                    got = Some(Provenance::new(
+                        BTreeSet::from([Slice::new(
                             source.object.clone(),
                             model(&low)?,
                             model(&high)?,
@@ -3368,8 +3368,8 @@ pub fn annotated_with(
                             width,
                         )
                         .expect("a nonempty positive-stride slice is valid")]),
-                        restrict: current.restrict.clone(),
-                    });
+                        current.restrict.clone(),
+                    ));
                 }
             }
         }

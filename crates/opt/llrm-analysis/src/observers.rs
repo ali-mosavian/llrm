@@ -173,7 +173,7 @@ fn _published(
         // points-to resolves. A variable index into a local is not a name.
         if !reference.named() {
             published.extend(
-                provenance.slices.into_iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown),
+                provenance.slices.iter().map(|one| one.object).filter(|one| one.kind != MemoryKind::Unknown),
             );
         }
     }
