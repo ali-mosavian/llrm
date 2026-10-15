@@ -306,6 +306,13 @@ impl LIRTransform for Peephole {
     }
 }
 
+thread_local! { static LAST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+fn tick(name: &str) {
+    let now = llrm_support::debug::work();
+    let before = LAST.with(|l| l.replace(now));
+    if name != "start" { eprintln!("PP {name} {}", now - before); }
+}
+
 impl Peephole {
     fn once(
         &mut self,
@@ -314,18 +321,28 @@ impl Peephole {
         // Before the rest: a thrashed copy is one fewer instruction for
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
+        tick("start");
         let mut seen = needs::Contents::default();
         let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| Ok(regthrash::thrashed(body)))?;
+        tick("1: let body = gated(&mut seen, needs::COPY, phielim");
         let body = frame_copies(&body, &self.cpu, &self.classes)?;
+        tick("2: let body = frame_copies(&body, &self.cpu, &self.");
         let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
+        tick("3: let body = gated(&mut seen, needs::COPY, body, |");
         let body = extensions(self.rules, &body);
+        tick("4: let body = extensions(self.rules, &body);");
         let body = copysink::sunk(&body);
+        tick("5: let body = copysink::sunk(&body);");
         let body = spillforward::forwarded(&body);
+        tick("6: let body = spillforward::forwarded(&body);");
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
         let body = crate::backend::postrasink::sunk(&body);
+        tick("7: let body = crate::backend::postrasink::sunk(&bod");
         let body = storecombine::combined(&body);
+        tick("8: let body = storecombine::combined(&body);");
         let body = pushed_constants(self.rules, &body);
+        tick("9: let body = pushed_constants(self.rules, &body);");
         let body = far_loads(
             self.rules,
             &fused_calls(
@@ -348,15 +365,23 @@ impl Peephole {
                 ),
             ),
         );
+        tick("10: );");
         let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
             crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
         })?;
+        tick("11: })?;");
         let body = addresses(&body, &self.cpu)?;
+        tick("12: let body = addresses(&body, &self.cpu)?;");
         let body = stepped_after_compare(self.rules, &body);
+        tick("13: let body = stepped_after_compare(self.rules, &bo");
         let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
+        tick("14: let body = gated(&mut seen, needs::INSERTED | ne");
         let body = borrows(self.rules, &increments(self.rules, &body));
+        tick("15: let body = borrows(self.rules, &increments(self.");
         let body = doubled(self.rules, &body, &self.cpu)?;
+        tick("16: let body = doubled(self.rules, &body, &self.cpu)");
         let body = narrowed_arithmetic(self.rules, &body);
+        tick("17: let body = narrowed_arithmetic(self.rules, &body");
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
@@ -365,18 +390,25 @@ impl Peephole {
         } else {
             body
         };
+        tick("18: };");
         let body = zeroed_loads(self.rules, &body, &self.cpu)?;
+        tick("19: let body = zeroed_loads(self.rules, &body, &self");
         let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
+        tick("20: let body = sharedstores::shared(&body, &self.cpu");
         let body = machinecse::eliminated(&body)?;
+        tick("21: let body = machinecse::eliminated(&body)?;");
         let body = waits(&zero_compares(
             self.rules,
             &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
         ));
+        tick("22: ));");
         let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        tick("23: let body = popped_arguments(&machinedce::elimina");
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
         let body = self._frame(body);
+        tick("24: let body = self._frame(body);");
         let native = self.cpu.dword_address_form().is_some_and(|form| !form.secondary);
         if native {
             return Ok(body);
@@ -1873,10 +1905,22 @@ pub fn secondary_bases<'a>(
         None
     };
 
+    // The values whose one definition is an inserted instruction reading only
+    // `original`, by `original`: a candidate looks at those alone, not at every
+    // definition of the body (D^2 for D definitions: 36.7 M of 145 M in the
+    // peephole of d_faces' 1,836-instruction function).
+    let mut read_by: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for (value, definition) in &definitions {
+        if let Some(definition) = definition
+            && definition.inserted()
+            && let [only] = definition.uses[..]
+        {
+            read_by.entry(only).or_default().push(*value);
+        }
+    }
     let derived = |value: u32, original: u32, source: &Reg| -> Option<(Arc<Insn>, Vec<Arc<Insn>>)> {
-        let definition = definitions.get(&value).cloned().flatten();
-        let consumers = uses.get(&value).cloned().unwrap_or_default();
-        let definition = definition?;
+        let definition = definitions.get(&value).cloned().flatten()?;
+        let consumers = uses.get(&value).map_or(&[][..], Vec::as_slice);
         if !definition.inserted() || definition.uses != [original] || consumers.len() != 1 {
             return None;
         }
@@ -1923,7 +1967,7 @@ pub fn secondary_bases<'a>(
                 }
             }
         }
-        if seen != 0 { Some((definition, consumers)) } else { None }
+        if seen != 0 { Some((definition, consumers.to_vec())) } else { None }
     };
 
     let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
@@ -1972,8 +2016,8 @@ pub fn secondary_bases<'a>(
             continue;
         }
         let mut group = Vec::new();
-        for (value, made) in &definitions {
-            if *value == candidate || made.is_none() {
+        for value in read_by.get(&candidate).into_iter().flatten() {
+            if *value == candidate {
                 continue;
             }
             if let Some((made, found)) = derived(*value, candidate, &source) {
