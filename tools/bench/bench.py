@@ -759,10 +759,11 @@ def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
         head = measure.git("rev-parse", "HEAD")
         base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
         with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
-            base = basecounts.base_counts(
+            base, was = basecounts.base_counts(
                 base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
             )
-        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers())
+        now = basecounts.programs(ROOT)
+        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers(), {name for name in now if was.get(name) == now[name]})
         differing = basecounts.differences(old, worse, better)
     except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
         return ["BASE: dry run failed: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:]]
