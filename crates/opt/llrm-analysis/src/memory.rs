@@ -1398,6 +1398,16 @@ impl MemRef {
         pointer: Operand,
         width: u32,
     ) -> Self {
+        Self::at_tracing(unit, pointer, width, None)
+    }
+
+    /// `at`, noting in `chain` each value whose definition it read.
+    fn at_tracing(
+        unit: &Unit,
+        pointer: Operand,
+        width: u32,
+        mut chain: Option<&mut Vec<ValueId>>,
+    ) -> Self {
         let space = unit.space(pointer).unwrap_or(0);
         let index_bits = unit.layout.pointer(space).index_bits;
         let mut made = Self {
@@ -1424,6 +1434,9 @@ impl MemRef {
         let mut disp: i128 = 0;
         let mut root = pointer;
         loop {
+            if let (Some(chain), Operand::Value(value)) = (chain.as_deref_mut(), root) {
+                chain.push(value);
+            }
             let Some(step) = step(unit, root) else { break };
             match step {
                 Step::Through(inner) => root = inner,
@@ -1461,6 +1474,16 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
+        crate::references::of(unit, inst).map(|one| (*one).clone())
+    }
+
+    /// The access `inst` makes, decomposed afresh: what `references` keeps for the
+    /// loads and stores, with the values its pointer chain read.
+    pub(crate) fn decomposed(
+        unit: &Unit,
+        inst: InstId,
+        chain: &mut Vec<ValueId>,
+    ) -> Option<Self> {
         let instruction = unit.function.instruction(inst);
         let (pointer, ty, volatile) = match instruction.opcode {
             Opcode::Load { volatile, .. } => (instruction.operands[0], instruction.ty, volatile),
@@ -1474,7 +1497,7 @@ impl MemRef {
             typed: typed(unit, inst),
             lineage: lineage(unit, inst),
             volatile,
-            ..Self::at(unit, pointer, width)
+            ..Self::at_tracing(unit, pointer, width, Some(chain))
         })
     }
 
