@@ -240,6 +240,8 @@ excess = 0.01        # an axis' superlinear work (the second difference c(2N) - 
 step_excess = 0.005  # a step's, of the compile's cost at 2N; the same build measured 3 times spreads D by 0.0005 of it (axes 0.0009 of theirs, 2026-10-09), so 10x above noise
 pass_slack = 1.05    # a step's cost at 2N
 linear = 2.1         # where the base read no such step: what gcc's passes reach
+step_rise = 1.5      # a step's cost at 2N may not rise by more than this, whatever its share of the compile ...
+step_floor = 20.0    # ... when it rose by this many Minstr too (a small step's count moves with run order, not growth)
 high = 0.025         # a step needs this share of the compile's work to fail (the scaling_gate reads steps down to 1.5%)
 
 # Rows the user accepted a rise on, each at a ceiling equal to what the decision measured: a row above its ceiling fails as ever.

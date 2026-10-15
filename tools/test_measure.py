@@ -449,3 +449,40 @@ def test_measure_runs_half_the_cores_of_jobs_by_default_and_what_JOBS_says_other
     monkeypatch.setattr(measure.gate.os, "cpu_count", lambda: 32)
     measure.main()
     assert seen == [16]
+
+
+def test_a_step_that_rose_one_and_a_half_times_fails_whatever_its_share_of_the_compile():
+    """`hir to mir` of the `cases` axis went 907 -> 13,840 Minstr (x15) unseen: it was 0.4% of a compile, and a step needed `high` of the
+    compile's work to fail. The share does not excuse a rise of 1.5x and 20 Minstr."""
+    tol = measure.tolerances()
+    key = "cases O1 hir to mir"
+    base = {key: [100.0, 400.0, 1500.0, 400_000.0]}  # 0.4% of the compile at 2N
+    now = {key: [400.0, 1600.0, 6000.0, 405_000.0]}  # x4: quadratic, and still 1.5% of the compile (under `high`)
+    lines, bad = measure.step_rises(base, now, tol)
+    assert bad and "whatever its share" in bad[0] and "x4.000" in bad[0], bad
+    small = {key: [100.0, 400.0, 1500.0, 400_000.0]}
+    assert measure.step_rises(base, small, tol)[1] == [], "an unchanged small step passes"
+    near = {key: [100.0, 400.0, 1500.0 * 1.4, 400_000.0]}
+    assert measure.step_rises(base, near, tol)[1] == [], "x1.4 is within the slack"
+    tiny = {"cases O1 ra": [1.0, 4.0, 6.0, 400_000.0]}
+    grown = {"cases O1 ra": [1.0, 4.0, 18.0, 400_000.0]}
+    assert measure.step_rises(tiny, grown, tol)[1] == [], "x3 of 6 Minstr is +12 Minstr: under the floor, run-order noise"
+
+
+def test_a_row_the_user_accepted_may_rise_past_the_step_limit_up_to_its_ceiling():
+    tol = {**measure.tolerances(), "accepted": [{"row": "cases O1", "why": "decided", "step_rise": 5.0}]}
+    key = "cases O1 hir to mir"
+    base = {key: [100.0, 400.0, 1500.0, 400_000.0]}
+    assert measure.step_rises(base, {key: [100.0, 400.0, 6000.0, 405_000.0]}, tol)[1] == []
+    assert measure.step_rises(base, {key: [100.0, 400.0, 9000.0, 405_000.0]}, tol)[1] != []
+
+
+def test_the_cases_regression_as_measured_fails_the_gate_at_the_size_the_gate_uses():
+    """`hir to mir` on `cases` at -O1: 62, 230, 884 Minstr at 64, 128, 256 cases (measured on main after #1720/#1721; x4 per doubling), against
+    the base's 907 Minstr at 1024 scaled linearly (0.886 per case). `cases` is gated at N=128 (scaling_gate.SIZES), whose 2N is 256."""
+    key = "cases O1 hir to mir"
+    base = {key: [56.7, 113.4, 226.8, 1800.0]}
+    now = {key: [61.9, 229.7, 884.1, 2900.0]}
+    assert measure.step_rises(base, now, measure.tolerances())[1], "x3.9 at 2N went unseen"
+    axis = measure.axis_rises({"cases O1": [100, 200, 400]}, {"cases O1": [100, 400, 1600]}, measure.tolerances())
+    assert axis[1], "its axis (the whole compile's second difference) fails as well"
