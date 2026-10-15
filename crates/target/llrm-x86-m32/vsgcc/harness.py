@@ -194,14 +194,14 @@ MISALIGNED = 3
 
 
 def misalignment(address, size):
-    """The extra clocks a 486 takes for a data operand of `size` bytes at `address`: a word or dword that crosses a doubleword
-    boundary, or a quad or ten-byte operand not on one, takes 3 more (the figure Intel gives the 486 and Pentium for an operand
-    that is not aligned; recalled, as the other 486 rows of this model, to be checked against 240440-002)."""
+    """The extra clocks a 486 takes for a data operand of `size` bytes at `address`: Intel486 data sheet 240440-002, section
+    10.1, Instruction Clock Count Assumptions, 2: "Accesses are aligned. Add three clocks to each misaligned access." What
+    misaligned means is Table 2.1, Data Type Alignment Requirements: a word 2, a dword and a single real 4, a double and an
+    extended real 8."""
     if size <= 1:
         return 0
-    if size <= 4:
-        return MISALIGNED if address % 4 + size > 4 else 0
-    return MISALIGNED if address % 4 else 0
+    required = 2 if size == 2 else 4 if size <= 4 else 8
+    return MISALIGNED if address % required else 0
 
 
 def operand_address(uc, ins):
