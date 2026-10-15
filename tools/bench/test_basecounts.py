@@ -48,22 +48,63 @@ def test_waivers_are_read_one_file_each(tmp_path):
     assert [(w["file"], w["to"]) for w in bc.waivers(tmp_path)] == [("a.toml", 7), ("b.toml", 9)]
 
 
-def test_the_base_is_measured_once_per_tree_and_method_and_a_missing_level_is_measured_again(tmp_path):
+def test_the_base_is_measured_once_per_tree_and_a_missing_level_is_measured_again(tmp_path):
     made = []
 
     def measure_with(directory, opts):
         made.append((directory, tuple(opts)))
-        return {(name, "c", opt): row(1) for name in ("fib",) for opt in opts} | {("fib", "bas", "O2"): row(9)}
+        rows = {("fib", "c", opt): row(1) for opt in opts} | {("fib", "bas", "O2"): row(9)}
+        return rows, {"fib": "h1"}
 
-    args = dict(tree_of=lambda sha: "t" + sha, build=lambda sha: Path("/b") / sha, measure_with=measure_with, cache=tmp_path, which="m")
-    first = bc.base_counts("s1", ["O2"], **args)
-    assert bc.base_counts("s1", ["O2"], **args) == first and made == [(Path("/b/s1"), ("O2",))]
-    assert ("fib", "bas", "O2") not in first, "the reference compilers' rows are not the base's"
+    args = dict(tree_of=lambda sha: "t" + sha, build=lambda sha: Path("/b") / sha, measure_with=measure_with, cache=tmp_path)
+    rows, hashes = bc.base_counts("s1", ["O2"], **args)
+    assert bc.base_counts("s1", ["O2"], **args) == (rows, hashes) and made == [(Path("/b/s1"), ("O2",))]
+    assert ("fib", "bas", "O2") not in rows, "the reference compilers' rows are not the base's"
+    assert hashes == {"fib": "h1"}
     bc.base_counts("s1", ["O2", "Os"], **args)
     assert made[-1] == (Path("/b/s1"), ("O2", "Os")) and len(made) == 2
     bc.base_counts("s2", ["O2"], **args)
     assert len(made) == 3, "another tree is another base"
-    assert (tmp_path / "ts1-m.json").is_file() and json.loads((tmp_path / "ts1-m.json").read_text())["fib/c/Os"]["instructions"] == 1
+    assert json.loads((tmp_path / "ts1-own.json").read_text())["rows"]["fib/c/Os"]["instructions"] == 1
+
+
+def test_a_program_that_differs_between_the_base_and_the_head_is_not_judged_and_the_baseline_file_is_not_part_of_it(tmp_path):
+    """The base is measured by its own harness and programs: a row of an edited program compares two programs, not two compilers."""
+    (tmp_path / "bench/fib").mkdir(parents=True)
+    (tmp_path / "bench/fib/bench.toml").write_text("repetitions = 1\n")
+    (tmp_path / "bench/fib/fib.c").write_text("int a;\n")
+    first = bc.programs(tmp_path)
+    (tmp_path / "bench/fib/expected.toml").write_text("blessed\n")
+    assert bc.programs(tmp_path) == first, "a baseline is not the program"
+    (tmp_path / "bench/fib/fib.c").write_text("int b;\n")
+    assert bc.programs(tmp_path) != first
+    base = {("fib", "c", "O2"): row(100), ("sieve", "c", "O2"): row(100)}
+    got = {("fib", "c", "O2"): row(500), ("sieve", "c", "O2"): row(500)}
+    worse, _, _ = bc.judge(got, base, [], same={"sieve"})
+    assert [one[0] for one in worse] == ["sieve c -O2"], "fib's program changed: not judged"
+
+
+def test_the_base_is_measured_by_its_own_trees_bench_not_the_heads(monkeypatch, tmp_path):
+    """The head's harness may pass flags the base's compiler does not know (an old base died on `-mbss-begin`): the base runs its own."""
+    import subprocess
+
+    tree = tmp_path / "b/tree"
+    (tree / "tools/bench").mkdir(parents=True)
+    (tree / "tools/bench/bench.py").write_text("# an old bench.py: no judge-skipping flag\n")
+    (tree / "bench").mkdir()
+    seen = []
+
+    def fake(command, **kw):
+        seen.append((command, kw["cwd"], kw["env"]["LLRM_BIN"]))
+        Path(command[command.index("--json") + 1]).write_text(json.dumps({"fib/c/O2": row(7)}))
+        return subprocess.CompletedProcess(command, 1, "", "")  # an old bench exits 1 on problems: the rows are what counts
+
+    monkeypatch.setattr(bc.subprocess, "run", fake)
+    rows, hashes = bc.measure_in_subprocess(tmp_path / "b/target/release", ["O2"], tmp_path / "w")
+    assert rows == {("fib", "c", "O2"): row(7)} and hashes == {}
+    command, cwd, binary = seen[0]
+    assert command[1] == str(tree / "tools/bench/bench.py") and cwd == tree and binary == str(tmp_path / "b/target/release")
+    assert "--no-judge" not in command, "a bench.py without the flag is not given it"
 
 
 def test_the_two_judges_name_where_they_differ():
