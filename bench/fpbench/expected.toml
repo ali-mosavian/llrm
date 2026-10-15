@@ -1,44 +1,43 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "x87: a store or compare of a live value no longer copies it (fist, fcom/fcomp st(i)), and by default a float conversion stays in its register without a store and load (gcc's -fexcess-precision=fast; -fexcess-precision=standard rounds): float rows fewer instructions and bytes; jpeg_fixed bq32 -O2 +1 instruction is an integer program (layout-dependent copy path), not x87"
+blessed = "2026-10-15"
 
 [bas.O2]
-instructions = 21692
+instructions = 21608
 memory_operands = 5066
-code_bytes = 713
+code_bytes = 685
 data_bytes = 23
 bss_bytes = 0
 
 [bas.Os]
-instructions = 21763
+instructions = 21679
 memory_operands = 5120
-code_bytes = 707
+code_bytes = 679
 data_bytes = 23
 bss_bytes = 0
-kernel_ms = 0.3015
 
 [bq16.O2]
-instructions = 22562
+instructions = 22478
 memory_operands = 5119
-code_bytes = 722
+code_bytes = 694
 data_bytes = 23
 bss_bytes = 0
 
 [bq16.Os]
-instructions = 22631
+instructions = 22547
 memory_operands = 5173
-code_bytes = 716
+code_bytes = 688
 data_bytes = 23
 bss_bytes = 0
 
 [bq32.O2]
-instructions = 21498
-code_bytes = 829
+instructions = 21414
+code_bytes = 801
 data_bytes = 29
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 21771
-code_bytes = 816
+instructions = 21687
+code_bytes = 788
 data_bytes = 29
 bss_bytes = 0
 
@@ -58,19 +57,18 @@ bss_bytes = 0
 kernel_ms = 0.2643
 
 [nib.O2]
-instructions = 19914
+instructions = 19890
 memory_operands = 3003
-code_bytes = 483
+code_bytes = 475
 data_bytes = 16
 bss_bytes = 0
 
 [nib.Os]
-instructions = 19929
+instructions = 19905
 memory_operands = 3003
-code_bytes = 484
+code_bytes = 475
 data_bytes = 16
 bss_bytes = 0
-kernel_ms = 0.2669
 
 [ow.O2]
 instructions = 21603

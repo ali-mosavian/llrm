@@ -1798,8 +1798,10 @@ fn names_in_order(result: &LirBody) -> Vec<String> {
     result.insns().iter().map(|one| name(one).to_owned()).filter(|name| name.starts_with('f')).collect()
 }
 
-/// d_faces ifloor: `(long)x` and then `x` again was `fld x; fld st(0); fistp m`: a copy and a popping store. The 387 stores a
-/// word or a dword without popping (`fist`; here its truncating pseudo `fistt`), as gcc's reg-stack and LLVM's X86FloatingPoint do.
+/// d_faces ifloor: `(long)x` and then `x` again was `fld x; fld st(0); fistp
+/// m`: a copy and a popping store. The 387 stores a word or a dword without
+/// popping (`fist`; here its truncating pseudo `fistt`), as gcc's reg-stack and
+/// LLVM's X86FloatingPoint do.
 #[test]
 fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
     let cells = _cells([-4, -8, -12], 4);
@@ -1816,18 +1818,19 @@ fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
 #[test]
 fn test_a_quadword_conversion_store_of_a_live_value_keeps_its_copy() {
     let (x, wide, out) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
-    let body = _body(vec![
-        _load(1, &x),
-        sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]),
-        _store(&out, 1),
-    ]);
+    let body =
+        _body(vec![_load(1, &x), sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]), _store(&out, 1)]);
     let names = names_in_order(&with_frame(&body, &mut Frame::new(-24)));
     assert_eq!(names, ["fnstcw", "fld", "fld", "fldcw", "fistp", "fldcw", "fstp"], "{names:?}");
 }
 
-fn compare_body(left_lives: bool, right_lives: bool) -> LirBody {
+fn compare_body(
+    left_lives: bool,
+    right_lives: bool,
+) -> LirBody {
     let (a, b, store_a, store_b) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4), frame_cell(-16, 4));
-    // negated loads: a plain load beside its one reader is fused into the compare as a memory operand
+    // negated loads: a plain load beside its one reader is fused into the
+    // compare as a memory operand
     let mut body = _body(vec![_load(3, &a), fchs(1, 3), _load(4, &b), fchs(2, 4)]);
     let mut insns = body.blocks[0].insns.to_vec();
     insns.push(Arc::new(Insn::new(
@@ -1848,8 +1851,9 @@ fn compare_body(left_lives: bool, right_lives: bool) -> LirBody {
     body
 }
 
-/// d_faces ifloor: `x < 0.0` was `fldz; fld st(1); fxch st(1); fcompp` and a `fstp st(0)` after; `fcom` and `fcomp` take any
-/// slot, so the live value is compared where it lies.
+/// d_faces ifloor: `x < 0.0` was `fldz; fld st(1); fxch st(1); fcompp` and a
+/// `fstp st(0)` after; `fcom` and `fcomp` take any slot, so the live value is
+/// compared where it lies.
 #[test]
 fn test_a_compare_against_a_value_read_again_does_not_copy_it() {
     let one_lives = names_in_order(&with_frame(&compare_body(false, true), &mut Frame::new(-16)));

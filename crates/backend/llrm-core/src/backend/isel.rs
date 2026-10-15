@@ -4528,6 +4528,13 @@ impl Selector<'_, '_, '_> {
                 let held = self.float(operand, at, out)?;
                 self.values.insert(result, held.value);
             }
+            // Narrowing is exact where the register already holds the value
+            // wider, as gcc's `-fexcess-precision=fast` leaves it, unless the
+            // rounding is asked for.
+            CastOp::FPTrunc if !self.cpu.float_store => {
+                let held = self.float(operand, at, out)?;
+                self.values.insert(result, held.value);
+            }
             // A float's own precision: the narrower format's rounding, to the
             // same width.
             CastOp::FPTrunc | CastOp::FPRound => {
@@ -4641,7 +4648,7 @@ impl Selector<'_, '_, '_> {
             8 => 53,
             _ => 64,
         };
-        if source_bytes * 8 <= mantissa {
+        if source_bytes * 8 <= mantissa || !self.cpu.float_store {
             self.float_loaded(into, "fild", cell, width, false, at, out);
             return Ok(());
         }

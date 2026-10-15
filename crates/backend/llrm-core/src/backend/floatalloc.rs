@@ -44,12 +44,12 @@
 //! ```
 //!
 //! A store or a compare that reads a value still live does not copy it first:
-`fst`, `fist` (a word or a dword; `fistt` for `fisttp`) leave the value on
-the stack, and `fcom`/`fcomp st(i)` compare it where it lies, as gcc's
-reg-stack and LLVM's `X86FloatingPoint` do. A quadword conversion has only
-its popping form and keeps the copy.
-
-More than eight operands on the stack is refused. Order, rounding and
+//! `fst`, `fist` (a word or a dword; `fistt` for `fisttp`) leave the value on
+//! the stack, and `fcom`/`fcomp st(i)` compare it where it lies, as gcc's
+//! reg-stack and LLVM's `X86FloatingPoint` do. A quadword conversion has only
+//! its popping form and keeps the copy.
+//!
+//! More than eight operands on the stack is refused. Order, rounding and
 //! storage conversions are not changed.
 //!
 //! Afterwards `fisttp` is made as a 387 has it: `fistp` between `fldcw` of a
@@ -707,10 +707,19 @@ impl _Stack {
         let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
         if self.survives(source) {
             let sized = |widths: &[u32]| {
-                what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if widths.contains(&u32::from(dest.width))))
+                what.dests
+                    .iter()
+                    .all(
+                        |dest| matches!(
+                            dest,
+                            Loc::Mem(dest) if widths.contains(&u32::from(dest.width))
+                        ),
+                    )
             };
-            // The value stays: the store that does not pop it (`fst`, `fist`; the 387 has `fist` for a word and a dword
-            // only), not a copy and a popping store, as gcc's reg-stack and LLVM's X86FloatingPoint have it.
+            // The value stays: the store that does not pop it (`fst`, `fist`;
+            // the 387 has `fist` for a word and a dword only), not
+            // a copy and a popping store, as gcc's reg-stack and LLVM's
+            // X86FloatingPoint have it.
             let kept = match name.as_deref() {
                 Some("fstp") if sized(&[4, 8]) => Some("fst"),
                 Some("fistp") if sized(&[2, 4]) => Some("fist"),
@@ -754,8 +763,10 @@ impl _Stack {
         left: u32,
         right: u32,
     ) -> Result<(), Raised> {
-        // Right still read, left not: left on top, `fcomp st(i)` pops it and leaves right where it lies. Both still read:
-        // `fcom st(i)`. As gcc's reg-stack and LLVM's X86FloatingPoint compare against any slot, not a copy of it.
+        // Right still read, left not: left on top, `fcomp st(i)` pops it and
+        // leaves right where it lies. Both still read: `fcom st(i)`. As
+        // gcc's reg-stack and LLVM's X86FloatingPoint compare against any slot,
+        // not a copy of it.
         if right != left && !self.survives(right) == false {
             let top_left = index_of(&self.values, left) == 0 || {
                 let slot = index_of(&self.values, left);
@@ -1160,7 +1171,11 @@ pub fn allocated<'a>(
 /// instructions, x87 loads, exchanges, compares, sign changes, branches)
 /// needs none.
 fn _needs(one: &Insn) -> Option<Mode> {
-    if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))) {
+    if one
+        .what
+        .as_ref()
+        .is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt")))
+    {
         return Some(Mode::Chop);
     }
     let branches = one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
@@ -1373,7 +1388,9 @@ fn _truncating(
                     current = needed;
                 }
             }
-            if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))) {
+            if one.what.as_ref().is_some_and(|what| {
+                what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))
+            }) {
                 let mut made = (**one).clone();
                 let kept = name_is(one.what.as_ref().expect("checked above"), "fistt");
                 made.what = Some(Semantics {

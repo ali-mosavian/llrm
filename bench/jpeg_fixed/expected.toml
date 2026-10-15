@@ -1,4 +1,4 @@
-reason = "memcpyopt makes the 170 byte copy in runtime/qb/fin.c one memcpy at -Os (-Os is bytes): jpeg_fixed bq32 -Os +6 instructions of 89M, jpeg_single bq32 -O2 +3, code bytes smaller"
+reason = "x87: a store or compare of a live value no longer copies it (fist, fcom/fcomp st(i)), and by default a float conversion stays in its register without a store and load (gcc's -fexcess-precision=fast; -fexcess-precision=standard rounds): float rows fewer instructions and bytes; jpeg_fixed bq32 -O2 +1 instruction is an integer program (layout-dependent copy path), not x87"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84338433
+instructions = 84338434
 code_bytes = 6496
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89432828
+instructions = 89432825
 code_bytes = 6039
 data_bytes = 29209
 bss_bytes = 0

@@ -143,6 +143,10 @@ pub struct Profile {
     /// and clang's nothing is improved after selection and allocation
     /// (`flow::machine_with`).
     pub optimized: bool,
+    /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
+    /// rounds to its type, where otherwise x87 keeps the wider value in its
+    /// register, as gcc's `-fexcess-precision=fast` does.
+    pub float_store: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -286,6 +290,7 @@ impl Profile {
             search: true,
             routes: true,
             optimized: true,
+            float_store: false,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -413,7 +418,7 @@ fn _profile(
 /// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<
-        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool), &'static Profile>,
+        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool, bool), &'static Profile>,
     >,
 > = LazyLock::new(Default::default);
 
@@ -468,7 +473,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -481,12 +486,13 @@ pub fn tuned_optimizing(
     exhaustive: bool,
     routes: bool,
     optimized: bool,
+    float_store: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -496,6 +502,7 @@ pub fn tuned_optimizing(
         exhaustive,
         routes,
         optimized,
+        float_store,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);

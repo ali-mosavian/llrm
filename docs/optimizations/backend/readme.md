@@ -34,7 +34,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 92 documented,
 | executed | A finished body's executed work per call, estimated without a profile. | Not a pass: `assemble.rs` calls it on each finished body to choose | [executed](executed.md) |
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
-| floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. |  | [floatalloc](floatalloc.md) |
+| floatalloc | Converts floating values held in flat x87 registers to stack form: `fld`, `fxch`, `fstp st(i)` and `st(i)` operands. | After `floatassign` in the machine phases, once per function, on bodies with | [floatalloc](floatalloc.md) |
 | floatassign | Decides which floating values hold one of the eight flat x87 registers and which live in memory, and makes every spill, restore and memory operand explicit. | Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per | [floatassign](floatassign.md) |
 | floatfold | A float load that only one arithmetic instruction reads becomes that instruction's memory operand: `fld [m]; faddp` is `fadd [m]`. | Machine phase after `pressuresink` and before `floatassign`, once per | [floatfold](floatfold.md) |
 | floatregions | Where the x87 stack cannot reach, and the error type the x87 allocator raises. | `floatassign`, `floatalloc`, `pressuresink`. | [floatregions](floatregions.md) |

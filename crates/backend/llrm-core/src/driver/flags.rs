@@ -10,7 +10,7 @@ use llrm_transforms::pipeline;
 use crate::abi::machine::Machine;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -178,6 +178,11 @@ pub struct Flags {
     /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow
     /// promise of it.
     pub wrapv: bool,
+    /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion,
+    /// and in BASIC what is stored to a SINGLE or DOUBLE variable, is
+    /// rounded to its type, as the language says; off (gcc's `fast`), x87 keeps
+    /// the wider value in its register.
+    pub float_store: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
@@ -200,6 +205,7 @@ impl Default for Flags {
     fn default() -> Self {
         Self {
             wrapv: false,
+            float_store: false,
             level: Level::O2,
             passes: Vec::new(),
             march: None,
@@ -299,6 +305,8 @@ impl Flags {
                     Some(Format::parse(&flag["-fobject-format=".len()..]).map_err(|error| format!("{flag}: {error}"))?)
             }
             "-fwrapv" | "-fno-wrapv" => self.wrapv = flag == "-fwrapv",
+            "-fexcess-precision=standard" | "-ffloat-store" => self.float_store = true,
+            "-fexcess-precision=fast" | "-fno-float-store" => self.float_store = false,
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
             _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
@@ -436,6 +444,7 @@ impl Flags {
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
             abi: self.abi.clone(),
+            float_store: self.float_store,
             ..super::Options::new(machine, arch, selection)
         }
     }

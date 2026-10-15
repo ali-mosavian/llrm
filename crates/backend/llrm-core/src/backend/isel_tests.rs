@@ -88,6 +88,28 @@ fn listing(
     listing_on("486", text, name)
 }
 
+/// The procedure's instructions where the conversions round to their types
+/// (`-fexcess-precision=standard`).
+fn listing_float_store(
+    text: &str,
+    name: &str,
+) -> Vec<String> {
+    let profile =
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+            .expect("the 486 profile");
+    let module = assemble::assembled(
+        &parsed(text),
+        &qb(),
+        "T_TEXT",
+        ProfileOrName::Profile(profile),
+        &crate::backend::target::BASIC,
+    )
+    .expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let from = text.find(&format!("{name} proc")).expect("the procedure");
+    text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
+}
+
 /// The procedure's instructions as `cpu` prices them.
 fn listing_on(
     cpu: &str,
@@ -1224,10 +1246,8 @@ small:
             "fstp qword ptr [bp-24]",
             "call far ptr scale",
             "add sp, 16",
-            "fst dword ptr [bp-4]",
-            "fld dword ptr [bp-4]",
             "fst dword ptr out",
-            "fstp dword ptr [bp-4]",
+            "fst dword ptr [bp-4]",
             "push dword ptr [bp-4]",
             "fstp qword ptr [bp-32]",
             "call far ptr show",
@@ -3591,7 +3611,8 @@ fn test_a_float_to_a_byte_is_a_stored_word_low_byte() {
 }
 ";
     let got = listing(text, "f");
-    // the value is read by both conversions: the first stores without popping it
+    // the value is read by both conversions: the first stores without popping
+    // it
     let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fist")).collect();
     assert!(stores.len() == 2 && stores.iter().all(|one| one.contains(" word ptr")), "{got:#?}");
 }
@@ -4328,14 +4349,19 @@ define i32 @f() addrspace(1) {
 }
 
 /// `(double)long_double` was rounded through a dword (fstp dword) whatever
-/// the target: a long double narrowed to double lost 29 bits (#103). A
-/// narrowing rounds to the target's width.
+/// the target: a long double narrowed to double lost 29 bits (#103). With
+/// `-fexcess-precision=standard` a narrowing rounds to the target's width.
 #[test]
 fn test_a_narrowing_float_rounds_to_its_targets_width() {
     let text = "define double @f(x86_fp80 %x) addrspace(1) {\n  %d = fptrunc x86_fp80 %x to double\n  ret double %d\n}\ndefine float @g(double %x) addrspace(1) {\n  %d = fptrunc double %x to float\n  ret float %d\n}\n";
     assert!(text.contains("fptrunc x86_fp80"), "the shape that was rounded to a float");
-    assert!(listing(text, "f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", listing(text, "f"));
-    assert!(listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+    let rounded = |name| listing_float_store(text, name);
+    assert!(rounded("f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", rounded("f"));
+    assert!(rounded("g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", rounded("g"));
+    // by default the register keeps the wider value, as gcc's
+    // -fexcess-precision=fast: no round trip through memory
+    assert!(!listing(text, "f").iter().any(|line| line.starts_with("fstp")), "{:?}", listing(text, "f"));
+    assert!(!listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
 }
 
 /// A long double is compared from a register: fcom has no 10-byte memory
