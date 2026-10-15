@@ -209,38 +209,63 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
     return tree
 
 
+SNAPSHOTS_KEPT = 6
+
+
+def snapshot(release: Path, sha: str, kind: str = "") -> Path:
+    """The files of `release` linked into a directory of `sha`'s own (a hard link keeps the inode: the next build of another commit in the
+    shared tree writes new files and leaves these as they were). A base was measured from the release directory itself, and when a session
+    checked out another base in the tree meanwhile its binaries read as older than the source: "stale binaries" in the measure step of
+    train 5. No dep-info is linked, so nothing is compared with a tree that has moved on. The oldest snapshots beyond SNAPSHOTS_KEPT go."""
+    into = BUILD / "snapshots" / f"{kind}{sha[:12]}"
+    into.mkdir(parents=True, exist_ok=True)
+    for one in sorted(release.iterdir()) if release.is_dir() else []:
+        if one.is_file() and one.suffix != ".d":
+            staged = into / f".{one.name}.new"
+            staged.unlink(missing_ok=True)
+            os.link(one, staged)
+            os.replace(staged, into / one.name)
+    os.utime(into)
+    for old in sorted((p for p in into.parent.iterdir() if p != into), key=lambda p: p.stat().st_mtime)[: max(0, len(list(into.parent.iterdir())) - SNAPSHOTS_KEPT)]:
+        shutil.rmtree(old, ignore_errors=True)
+    return into
+
+
 def built(sha: str) -> Path:
-    """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
-    BUILD.mkdir(parents=True, exist_ok=True)
-    (BUILD / ".used").touch()
-    if BUILD.parent == BUILDS:
-        for tree in pruned(BUILDS, BUILD, BUILD_CAP):
-            print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
-    tree = checked_out(sha, BUILD / "tree")
-    env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
-    env.pop("LLRM_BIN", None)
-    done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
-    if done.returncode:
-        raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
-    return BUILD / "target" / PROFILE
+    """`sha` built in a tree and target directory of its own (reused, so each build is an increment) while holding the build lock, and
+    its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it."""
+    with locked("build"):
+        BUILD.mkdir(parents=True, exist_ok=True)
+        (BUILD / ".used").touch()
+        if BUILD.parent == BUILDS:
+            for tree in pruned(BUILDS, BUILD, BUILD_CAP):
+                print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
+        tree = checked_out(sha, BUILD / "tree")
+        env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
+        env.pop("LLRM_BIN", None)
+        done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+        if done.returncode:
+            raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
+        return snapshot(BUILD / "target" / PROFILE, sha, PROFILE)
 
 
 SYSTEM_BUILD = "env -u RUSTFLAGS cargo build --release -q --bin llrm-c --features system-alloc"
 
 
 def built_system(sha: str) -> Path | None:
-    """`sha`'s llrm-c with the system allocator in a target of its own (reused), its release directory; None where `sha` has no
-    `system-alloc` feature (a base from before it)."""
-    BUILD.mkdir(parents=True, exist_ok=True)
-    tree = checked_out(sha, BUILD / "tree")
-    env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target-system")}
-    env.pop("LLRM_BIN", None)
-    if "system-alloc" not in (tree / "Cargo.toml").read_text():
-        return None
-    done = subprocess.run(["bash", "-c", SYSTEM_BUILD], cwd=tree, env=env, capture_output=True, text=True)
-    if done.returncode:
-        raise SystemExit(f"measure: {sha[:9]} does not build with the system allocator:\n{done.stderr[-2000:]}")
-    return BUILD / "target-system" / "release"
+    """`sha`'s llrm-c with the system allocator in a target of its own (reused), a snapshot of its release directory (as `built`'s); None
+    where `sha` has no `system-alloc` feature (a base from before it)."""
+    with locked("build"):
+        BUILD.mkdir(parents=True, exist_ok=True)
+        tree = checked_out(sha, BUILD / "tree")
+        env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target-system")}
+        env.pop("LLRM_BIN", None)
+        if "system-alloc" not in (tree / "Cargo.toml").read_text():
+            return None
+        done = subprocess.run(["bash", "-c", SYSTEM_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+        if done.returncode:
+            raise SystemExit(f"measure: {sha[:9]} does not build with the system allocator:\n{done.stderr[-2000:]}")
+        return snapshot(BUILD / "target-system" / "release", sha, "system-")
 
 
 def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, list[float]] | None:
@@ -250,18 +275,17 @@ def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, li
     one = stored_path(sha, which, tree_of(sha))
     have = json.loads(one.read_text()) if one.is_file() else {}
     if missing := sorted(cells - have.keys()):
-        with locked("build"):
-            if (binary := build(sha)) is None:
-                return None
-            previous = os.environ.get("LLRM_BIN")
-            os.environ["LLRM_BIN"] = str(binary)
-            try:
-                for cell in missing:
-                    axis, level = cell.split(" ")
-                    with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
-                        have[cell] = {k: [round(v, 3) for v in got] for k, got in scaling_gate.pass_costs(axis, level, Path(tmp)).items()}
-            finally:
-                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        if (binary := build(sha)) is None:
+            return None
+        previous = os.environ.get("LLRM_BIN")
+        os.environ["LLRM_BIN"] = str(binary)
+        try:
+            for cell in missing:
+                axis, level = cell.split(" ")
+                with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
+                    have[cell] = {k: [round(v, 3) for v in got] for k, got in scaling_gate.pass_costs(axis, level, Path(tmp)).items()}
+        finally:
+            os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
         CACHE.mkdir(parents=True, exist_ok=True)
         one.write_text(json.dumps(have, separators=(",", ":")) + "\n")
     return {k: v for cell in cells for k, v in have[cell].items()}
@@ -315,7 +339,8 @@ def locked(name: str, every: float = 60.0):
 
 def base_measurement(base: str, jobs: int, build=built) -> dict:
     """`base`'s measurement by this tree's method: stored, else made with `base` built by `build`. Sessions that miss the same base at
-    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time."""
+    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time
+    (`built` holds the build lock for the build, and measures from a snapshot)."""
     which = method()
     if (got := stored(base, which)) is not None:
         return got
@@ -323,13 +348,12 @@ def base_measurement(base: str, jobs: int, build=built) -> dict:
         if (got := stored(base, which)) is not None:
             return got
         print(f"measure: no measurement of {base[:9]} by this method; building and measuring it", flush=True)
-        with locked("build"):
-            previous = os.environ.get("LLRM_BIN")
-            os.environ["LLRM_BIN"] = str(build(base))
-            try:
-                data = measure_all(jobs)
-            finally:
-                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        previous = os.environ.get("LLRM_BIN")
+        os.environ["LLRM_BIN"] = str(build(base))
+        try:
+            data = measure_all(jobs)
+        finally:
+            os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
         save(base, data)
         return data
 
