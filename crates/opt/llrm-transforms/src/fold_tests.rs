@@ -328,6 +328,75 @@ b3:
     );
 }
 
+/// Only the first operation a join feeds was folded on its edges in a run, and
+/// the next round took the next: `d_faces` -O1 needed a round for each of 4
+/// joins (and every other pass ran again for each). Every join's is folded in
+/// one run, as one propagation settles them all in GCC's CCP and LLVM's SCCP.
+#[test]
+fn test_every_join_operation_is_folded_in_one_run() {
+    check(
+        "define i16 @f(i1 %c, i1 %d, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+  %s = add i16 %p, 10
+  br i1 %d, label %b4, label %b5
+
+b4:
+  br label %b6
+
+b5:
+  br label %b6
+
+b6:
+  %q = phi i16 [ 3, %b4 ], [ 4, %b5 ]
+  %u = add i16 %q, 20
+  %y = add i16 %s, %u
+  %z = add i16 %y, %x
+  ret i16 %z
+}
+",
+        "define i16 @f(i1 %c, i1 %d, i16 %x) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+  %s1 = phi i16 [ 11, %b1 ], [ 12, %b2 ]
+  br i1 %d, label %b4, label %b5
+
+b4:
+  br label %b6
+
+b5:
+  br label %b6
+
+b6:
+  %q = phi i16 [ 3, %b4 ], [ 4, %b5 ]
+  %u1 = phi i16 [ 23, %b4 ], [ 24, %b5 ]
+  %y = add i16 %s1, %u1
+  %z = add i16 %y, %x
+  ret i16 %z
+}
+",
+        &[&[0, 0, 5], &[1, 1, 5], &[1, 0, -20]],
+    );
+}
+
 /// Nothing known, nothing changes.
 #[test]
 fn test_a_body_of_unknowns_is_unchanged() {
