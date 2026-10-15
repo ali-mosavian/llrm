@@ -305,7 +305,13 @@ pub fn live_among(
     body: &LirBody,
     values: &BTreeSet<u32>,
 ) -> Box<dyn allocate::LiveAt> {
-    match Occurrences::scan(body, &|value| values.contains(&value)).rows(body) {
+    // Where they occur is read from the postings the body is followed with, not
+    // found by a pass over every instruction.
+    let found = crate::backend::postings::following(body, |postings| Occurrences::of(postings, values));
+    if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        found.check_against_scan(body, &|value| values.contains(&value));
+    }
+    match found.rows(body) {
         Some(rows) => Box::new(rows),
         None => Box::new(allocate::live_rows_by(body, |value| values.contains(&value))),
     }
