@@ -2106,18 +2106,26 @@ pub fn gcd(
     one
 }
 
-/// The values a loop does not define.
-#[derive(Clone, Debug, Default)]
-pub struct Invariant {
-    defined: llrm_mir::dense::IdSet<ValueId>,
+/// The values a loop does not define: asked of the value's own definition, not
+/// of a set made of every instruction of the loop (each proof made it several
+/// times: a nest of loops each held the whole nest's values).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Invariant<'a> {
+    over: Option<(&'a Function, &'a BTreeSet<i64>)>,
 }
 
-impl Invariant {
+impl Invariant<'_> {
     pub fn contains(
         &self,
         value: ValueId,
     ) -> bool {
-        !self.defined.contains(&value)
+        let Some((function, inside)) = self.over else { return true };
+        match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => {
+                !function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)))
+            }
+            llrm_mir::module::ValueDef::Argument(_) => true,
+        }
     }
 
     /// A constant, or a value the loop does not define.
@@ -2134,16 +2142,11 @@ impl Invariant {
 }
 
 /// What the blocks `inside` do not define.
-pub fn invariant(
-    function: &Function,
-    inside: &BTreeSet<i64>,
-) -> Invariant {
-    let defined = inside
-        .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions())
-        .filter_map(|&inst| function.instruction(inst).result)
-        .collect();
-    Invariant { defined }
+pub fn invariant<'a>(
+    function: &'a Function,
+    inside: &'a BTreeSet<i64>,
+) -> Invariant<'a> {
+    Invariant { over: Some((function, inside)) }
 }
 
 /// The header phis that one invariant or constant step advances on every
@@ -3007,7 +3010,7 @@ struct Walk<'a> {
     loop_: &'a Loop,
     counters: &'a IndexMap<ValueId, Affine>,
     priced: bool,
-    still: Invariant,
+    still: Invariant<'a>,
     facts: std::borrow::Cow<'a, IndexMap<ValueId, Known>>,
 }
 
