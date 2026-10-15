@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:5842ebcb18f88eaadd1a8cb5c11a62f89edc5fffc67dd5c277091ccc5d290905 -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:81e361de86862d8d2c649662076120e244349db33791ea0c6ee306df7a7d9fcc -->
 
 # postrasink
 
@@ -45,8 +45,8 @@ and no store of a saved register, and the prologue can be placed after the
 test, as gcc and LLVM do. A store of a slot only one successor reads can be
 the only thing that made a frame necessary on the other path.
 
-`latched` is the other way round: a block of copies alone on an edge, whose
-one predecessor branches to it and elsewhere, has them run before that
+`latched` is the other way round: a block of copies alone on a back edge,
+whose one predecessor branches to it and elsewhere, has them run before that
 branch when the other way out does not read what they write, and the edge
 block keeps only its jump (a back edge's `mov; jmp` becomes a `jl`).
 

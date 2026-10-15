@@ -40,8 +40,8 @@
 //! test, as gcc and LLVM do. A store of a slot only one successor reads can be
 //! the only thing that made a frame necessary on the other path.
 //!
-//! `latched` is the other way round: a block of copies alone on an edge, whose
-//! one predecessor branches to it and elsewhere, has them run before that
+//! `latched` is the other way round: a block of copies alone on a back edge,
+//! whose one predecessor branches to it and elsewhere, has them run before that
 //! branch when the other way out does not read what they write, and the edge
 //! block keeps only its jump (a back edge's `mov; jmp` becomes a `jl`).
 //!
