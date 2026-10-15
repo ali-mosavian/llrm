@@ -1670,15 +1670,18 @@ impl DominatedEdges {
         let shape = analyses.get::<Shape>(context, layout, function);
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        ranges::edges_solved(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_registers(&registers)
-                .with_exposed(&exposed),
-            &registers,
-            before,
-        )
+        let unit = Unit::within(context, layout, function, analyses.outer())
+            .with_shape(&shape)
+            .with_assumptions(&assumptions)
+            .with_registers(&registers)
+            .with_exposed(&exposed);
+        let solved = ranges::edges_solved(&unit, &registers, before);
+        if let Ok(states) = &solved
+            && llrm_support::env_set("LLRM_CHECK_REPLAY")
+        {
+            crate::ranger::check(&unit, &registers, states);
+        }
+        solved
     }
 }
 

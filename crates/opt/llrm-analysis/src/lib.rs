@@ -125,6 +125,7 @@ pub mod occurrence;
 pub mod parameter_ranges;
 pub mod peelsize;
 pub mod pointerfacts;
+pub mod ranger;
 pub mod ranges;
 pub mod regions;
 pub mod sliceset;

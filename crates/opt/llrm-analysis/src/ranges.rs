@@ -113,6 +113,8 @@
 //! loops), [`crate::assumptions`], [`crate::cfg`] (shape and dominance).
 //!
 //! # See also
+//! [`crate::ranger`], the edges' facts of one value at one block on request,
+//! checked against `edges_solved` under `LLRM_CHECK_REPLAY`.
 //! GCC's ranger (`gimple-range-cache.cc`, `ranger_cache::range_on_entry`);
 //! LLVM's LazyValueInfo and ScalarEvolution value ranges.
 
@@ -241,7 +243,7 @@ fn edge_delta(
     unit: &Unit,
     block: BlockId,
     successor: BlockId,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<Intervals>, String> {
     if !unit.function.successors(block).contains(&successor) {
@@ -253,11 +255,11 @@ fn edge_delta(
 /// `edge_delta` of an edge known to be one: a block's way in is asked of its
 /// predecessor, which names it, and a switch of N cases listed its N successors
 /// again for each.
-fn edge_delta_of(
+pub(crate) fn edge_delta_of(
     unit: &Unit,
     block: BlockId,
     successor: BlockId,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: Option<&IndexMap<ValueId, Known>>,
 ) -> Result<Option<Intervals>, String> {
     #[cfg(test)]
@@ -281,11 +283,11 @@ fn edge_delta_of(
 /// What a condition changes of `known`: the intervals it sets, none where it
 /// sets none; `None` where the condition cannot hold. Everything it reads is of
 /// `known` as it was.
-fn narrowed_delta(
+pub(crate) fn narrowed_delta(
     unit: &Unit,
     condition: Operand,
     holds: bool,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Intervals> {
     let result = Intervals::default();
@@ -380,7 +382,7 @@ fn _refine_through(
     unit: &Unit,
     value: ValueId,
     interval: &Interval,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: &IndexMap<ValueId, Known>,
     result: &mut Intervals,
     depth: usize,
@@ -448,7 +450,7 @@ fn _unsigned_span(interval: &Interval) -> (BigInt, BigInt) {
 pub fn _operand(
     unit: &Unit,
     operand: Operand,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let width = unit.int_bits(operand)?;
@@ -459,8 +461,8 @@ pub fn _operand(
     let Operand::Value(value) = operand else {
         return None;
     };
-    if let Some(interval) = known.get(&value).filter(|interval| interval.width == width) {
-        return Some(interval.clone());
+    if let Some(interval) = known.lookup(&value).filter(|interval| interval.width == width) {
+        return Some(interval.into_owned());
     }
     if let Some(interval) = declared_argument(unit, value).filter(|interval| interval.width == width) {
         return Some(interval);
@@ -530,7 +532,7 @@ fn declared_arguments(unit: &Unit) -> Intervals {
 }
 
 /// What a `range` on parameter `value` says of it.
-fn declared_argument(
+pub(crate) fn declared_argument(
     unit: &Unit,
     value: ValueId,
 ) -> Option<Interval> {
@@ -600,7 +602,7 @@ fn computes(
 pub fn _computed(
     unit: &Unit,
     inst: InstId,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let op = unit.function.instruction(inst);
@@ -714,7 +716,7 @@ fn _fixed_product(
     unit: &Unit,
     inst: InstId,
     width: u32,
-    known: &Intervals,
+    known: &dyn Lookup,
     facts: &IndexMap<ValueId, Known>,
 ) -> Option<Interval> {
     let operands = &unit.function.instruction(inst).operands;
@@ -964,6 +966,33 @@ impl std::ops::Index<&ValueId> for Intervals {
 }
 
 type Scope = Rc<Intervals>;
+
+/// What is known of a value where a bound is asked: a table's entry, or an
+/// answer worked out on request (`ranger`).
+pub trait Lookup {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>>;
+}
+
+impl Lookup for Intervals {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        self.get(value).map(Cow::Borrowed)
+    }
+}
+
+impl<T: Lookup + ?Sized> Lookup for Rc<T> {
+    fn lookup(
+        &self,
+        value: &ValueId,
+    ) -> Option<Cow<'_, Interval>> {
+        (**self).lookup(value)
+    }
+}
 
 /// `dominated_edges`' state at each block, as the solve left it: what the
 /// block's operations leave (`own`) and what holds below it once its assumes

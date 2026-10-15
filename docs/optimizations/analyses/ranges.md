@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:344f3fdc1c061362c14ffc08eaf475d20b5bcf359a2fb0579507d18880fd6c49 -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:0034710f6d95261433672f01144f471caf039512750977bf508c62ffa4fdcec2 -->
 
 # ranges
 
@@ -118,5 +118,7 @@ llrm-transforms `algebraic`, `hoist`, `loopexit`, `indvars`, `decide`,
 loops), [`crate::assumptions`](assumptions.md), [`crate::cfg`](cfg.md) (shape and dominance).
 
 ## See also
+[`crate::ranger`](ranger.md), the edges' facts of one value at one block on request,
+checked against `edges_solved` under `LLRM_CHECK_REPLAY`.
 GCC's ranger (`gimple-range-cache.cc`, `ranger_cache::range_on_entry`);
 LLVM's LazyValueInfo and ScalarEvolution value ranges.
