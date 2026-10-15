@@ -323,9 +323,11 @@ fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
         w[0].strip_prefix("inc ")
             .is_some_and(|register| w[1..3].iter().any(|line| *line == format!("cmp {register}, 2")))
             && w[3].starts_with("jne ")
-    }) || lines
-        .windows(3)
-        .any(|w| w[0].starts_with("inc ") && w[1].starts_with("add ") && w[2].starts_with("jne "));
+    }) || lines.windows(3).any(|w| {
+        w[2].starts_with("jne ")
+            && (w[0].starts_with("inc ") && w[1].starts_with("add ")
+                || w[0].starts_with("add ") && w[1].starts_with("inc "))
+    });
     assert!(stepped, "{text}");
 }
 
