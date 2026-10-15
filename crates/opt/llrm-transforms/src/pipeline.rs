@@ -1080,8 +1080,7 @@ impl FunctionPass for Fixed {
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
 /// and fails where it changes the body.
 fn settled_checked() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_SETTLED").is_some())
+    llrm_support::env_set("LLRM_CHECK_SETTLED")
 }
 
 /// One body's run through `Fixed`.
