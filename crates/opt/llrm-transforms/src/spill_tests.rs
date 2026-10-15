@@ -900,9 +900,92 @@ fn test_a_value_read_where_it_was_is_not_edited_in_the_live_sets() {
     // `b` no longer reaches block 1; `c` is read nowhere.
     let computed: IdMap<ValueId, Range> = [(a, range(&[0, 1])), (b, range(&[0]))].into_iter().collect();
     super::RANGES_EDITED.with(|one| one.set(0));
-    super::renewed(&mut found, &mut placed, &named, computed);
+    super::renewed(&mut found, &mut placed, &named, computed, &mut Default::default());
     assert_eq!(super::RANGES_EDITED.with(|one| one.get()), 2, "b and c are edited, a is not");
     assert_eq!(found.live_in[&0], BTreeSet::from([a, b]));
     assert_eq!(found.live_in[&1], BTreeSet::from([a]));
     assert!(placed.get(&c).is_none());
+}
+
+/// An update dropped the live points of every block and the next loop to ask
+/// worked them out again: on a 128-deep nest the pressure model's own time went
+/// 7.5 times up when the nest doubled. The points of a block the edit did not
+/// reach, and that no live set moved in, stay.
+#[test]
+fn test_an_update_keeps_the_live_points_of_the_blocks_it_did_not_touch() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::module::Function;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    struct Probe(std::rc::Rc<std::cell::Cell<(usize, usize)>>);
+    impl FunctionPass for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            analyses: &mut Analyses,
+        ) -> PreservedAnalyses {
+            let ask = |unit: &Unit, analyses: &mut Analyses| {
+                let pressure = analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+                let before = super::POINTS_MADE.with(|one| one.get());
+                for &block in unit.function.layout() {
+                    pressure.points(unit.function, block);
+                }
+                super::POINTS_MADE.with(|one| one.get()) - before
+            };
+            let first = ask(unit, analyses);
+            let function: &mut Function = unit.function;
+            let ret = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                .unwrap();
+            let ty = unit.context.types.int(16);
+            let operand = function.instruction(ret).operands[0];
+            let made = function.create_instruction(
+                Opcode::Binary(BinaryOp::Add),
+                ty,
+                vec![operand; 2],
+                Flags::default(),
+                None,
+            );
+            function.insert(made, Position::Before(ret)).expect("a position");
+            let result = function.instruction(made).result.expect("a value");
+            function.set_operands(ret, vec![llrm_mir::module::Operand::Value(result)]);
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+            let second = ask(unit, analyses);
+            self.0.set((first, second));
+            PreservedAnalyses::none()
+        }
+    }
+
+    let mut module = module(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+
+b1:
+  %b = add i16 %a, 2
+  br label %b2
+
+b2:
+  %c = add i16 %b, 3
+  br label %b3
+
+b3:
+  %d = add i16 %c, %a
+  ret i16 %d
+}
+",
+    );
+    let seen = std::rc::Rc::new(std::cell::Cell::new((0, 0)));
+    crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&seen)));
+    let (first, second) = seen.get();
+    assert_eq!(first, 4, "premise: every block's points worked out the first time");
+    assert_eq!(second, 1, "only the block the edit was in");
 }

@@ -1410,6 +1410,8 @@ impl Pressure {
         if let Some(found) = self.points.0.borrow().get(&at) {
             return std::rc::Rc::clone(found);
         }
+        #[cfg(test)]
+        POINTS_MADE.with(|one| one.set(one.get() + 1));
         let found = std::rc::Rc::new(liveness::live_points(function, &self.found, block));
         self.points.0.borrow_mut().insert(at, std::rc::Rc::clone(&found));
         found
@@ -1502,8 +1504,14 @@ impl llrm_mir::passes::Analysis for Pressure {
                 }
             }
         }
-        let (mut found, placed) = std::rc::Rc::try_unwrap(previous)
-            .map_or_else(|kept| (kept.found.clone(), kept.placed.clone()), |owned| (owned.found, owned.placed));
+        // What was asked of the blocks (their live points, their steps) is kept
+        // past the update for the blocks it did not touch, where nothing else
+        // holds it: the caches were dropped and made again for every block at
+        // every edit, the size of the function's live sets each time.
+        let (mut found, placed, caches) = match std::rc::Rc::try_unwrap(previous) {
+            Ok(owned) => (owned.found, owned.placed, Some((owned.points, owned.stepped))),
+            Err(kept) => (kept.found.clone(), kept.placed.clone(), None),
+        };
         let mut placed = placed
             .0
             .unwrap_or_else(
@@ -1564,7 +1572,8 @@ impl llrm_mir::passes::Analysis for Pressure {
                 break computed;
             }
         };
-        renewed(&mut found, &mut placed, &named, computed);
+        let mut touched = BTreeSet::<i64>::new();
+        renewed(&mut found, &mut placed, &named, computed, &mut touched);
         if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
             let fresh = Pressure::of(context, function, Room::of(analyses.outer()).index_scales);
             let flat = |sets: &BTreeMap<i64, BTreeSet<ValueId>>| {
@@ -1579,7 +1588,52 @@ impl llrm_mir::passes::Analysis for Pressure {
                 "LLRM_CHECK_PRESSURE: the updated live sets differ from a fresh solve"
             );
         }
-        Some(Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed))))
+        let mut made =
+            Pressure::with(context, function, Room::of(analyses.outer()).index_scales, found, Placed(Some(placed)));
+        if let Some((points, stepped)) = caches {
+            // The blocks the edits were in, with the blocks whose live sets
+            // moved.
+            for change in changes {
+                use Change as C;
+                let inst = match change {
+                    C::Inserted { block, .. } | C::Moved { block, .. } | C::Erased { block, .. } => {
+                        touched.insert(cfg::id(*block));
+                        if let C::Moved { from, .. } = change {
+                            touched.insert(cfg::id(*from));
+                        }
+                        continue;
+                    }
+                    C::Cloned { to: inst, .. }
+                    | C::Rewritten(inst)
+                    | C::Operand { inst, .. }
+                    | C::Operands { inst, .. } => *inst,
+                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters => continue,
+                };
+                touched.extend(function.parent(inst).map(cfg::id));
+            }
+            if std::rc::Rc::strong_count(&points.0) == 1 && std::rc::Rc::strong_count(&stepped.steps) == 1 {
+                points.0.borrow_mut().retain(|at, _| !touched.contains(at));
+                stepped.steps.borrow_mut().retain(|at, _| !touched.contains(at));
+                stepped.moves.borrow_mut().retain(|(from, to), _| !touched.contains(from) && !touched.contains(to));
+                made.points = points;
+                made.stepped = stepped;
+            }
+        }
+        if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
+            for (at, kept) in made.points.0.borrow().iter() {
+                let block = cfg::block(*at);
+                let fresh = liveness::live_points(function, &made.found, block);
+                assert!(
+                    kept.len() == fresh.len()
+                        && kept
+                            .iter()
+                            .zip(&fresh)
+                            .all(|(a, b)| a.inst == b.inst && a.before == b.before && a.across == b.across),
+                    "LLRM_CHECK_PRESSURE: the live points of b{at} kept past the update differ from a fresh walk"
+                );
+            }
+        }
+        Some(made)
     }
 }
 
@@ -1588,11 +1642,14 @@ impl llrm_mir::passes::Analysis for Pressure {
 /// nearly all are read where they were (quicksort -O3, 13 updates: 1,300
 /// named, 91 changed), and taking each out of its sets and putting it back
 /// was the update's cost.
+///
+/// The blocks whose live sets changed are put in `touched`.
 fn renewed(
     found: &mut Liveness,
     placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
     named: &IdSet<ValueId>,
     mut computed: IdMap<ValueId, liveness::Range>,
+    touched: &mut BTreeSet<i64>,
 ) {
     for value in named.iter() {
         let now = computed.remove(&value).unwrap_or_default();
@@ -1603,9 +1660,16 @@ fn renewed(
             None => now.into.is_empty() && now.out.is_empty(),
         };
         if !kept {
-            set_range(found, placed, value, now);
+            set_range(found, placed, value, now, touched);
         }
     }
+}
+
+// Blocks whose live points were worked out, for a test that an update keeps
+// those of the blocks it did not touch.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static POINTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Edits made to a value's live blocks by `Pressure::update_owned`, for a test
@@ -1621,16 +1685,19 @@ fn set_range(
     placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
     value: ValueId,
     now: liveness::Range,
+    touched: &mut BTreeSet<i64>,
 ) {
     #[cfg(test)]
     RANGES_EDITED.with(|one| one.set(one.get() + 1));
     let (into, out) = placed.remove(&value).unwrap_or_default();
+    touched.extend(into.iter().chain(&out));
     for at in into {
         found.live_in.get_mut(&at).map(|set| set.remove(&value));
     }
     for at in out {
         found.live_out.get_mut(&at).map(|set| set.remove(&value));
     }
+    touched.extend(now.into.iter().chain(&now.out));
     if now.into.is_empty() && now.out.is_empty() {
         return;
     }
