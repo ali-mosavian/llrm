@@ -318,6 +318,9 @@ impl ProgramPass for Interprocedural {
             &mut |_, _, _| Ok(()),
         )?;
         self.proved = Some(proved);
+        for (at, one) in modules.into_iter().enumerate() {
+            analyses.carry(at, one.carried());
+        }
         analyses.invalidate();
         Ok(())
     }
@@ -341,6 +344,9 @@ impl ProgramPass for Stamp {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         stamped_all(program, &mut modules)?;
+        for (at, one) in modules.into_iter().enumerate() {
+            analyses.carry(at, one.carried());
+        }
         analyses.invalidate();
         Ok(())
     }
@@ -356,6 +362,9 @@ pub fn managers(
     (0..program.modules.len())
         .map(|at| {
             let mut one = ModuleAnalyses::new(analyses.proxy(program, at));
+            if let Some(before) = analyses.uncarry(at) {
+                one = one.carrying(before);
+            }
             one.require::<Summaries>();
             // As the first run's: a body sent back through reads what no code
             // outside reaches.

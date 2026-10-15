@@ -292,6 +292,7 @@ impl ModuleAnalysis for Summaries {
         let declarations = analyses.get::<Declarations>(module);
         let scratch = analyses.from_scratch();
         let logged = analyses.edit_log().len();
+        let epoch = analyses.log_epoch();
         // Bodies reported edited since the last run, where the globals' facts
         // and the declarations are what it was made under and no body was
         // added, removed or renamed: only those are looked at. The full scan
@@ -371,6 +372,7 @@ impl ModuleAnalysis for Summaries {
         memo.declarations = Some(declarations);
         memo.slots = Some(Rc::clone(&procedures.slots));
         memo.logged = logged;
+        memo.log_epoch = epoch;
         drop(procedures);
         memo.facts = body_facts;
         found
@@ -391,9 +393,11 @@ impl Summaries {
         known: &Option<IndexMap<String, Summary>>,
         logged: usize,
     ) -> Option<Result<IndexMap<String, Summary>, String>> {
+        let epoch = analyses.log_epoch();
         let memo = analyses.memo::<SummariesMemo>();
         let since = memo.logged;
         let steady = memo.slots.is_some()
+            && memo.log_epoch == epoch
             && since <= logged
             && memo.globals.as_ref().is_some_and(|then| Rc::ptr_eq(then, globals_held))
             && memo.declarations.as_ref().is_some_and(|then| Rc::ptr_eq(then, declarations));
@@ -465,6 +469,7 @@ impl Summaries {
             memo.marks.insert(id, facts[&id].mark);
         }
         memo.logged = logged;
+        memo.log_epoch = epoch;
         drop(table);
         memo.facts = facts;
         Some(found)
@@ -528,6 +533,8 @@ struct SummariesMemo {
     slots: Option<Rc<Slots>>,
     /// How much of the module analyses' edit log the last run had read.
     logged: usize,
+    /// The `ModuleAnalyses::log_epoch` that `logged` is a position in.
+    log_epoch: u64,
 }
 
 /// The named bodies of a module, in the order the summaries number them.
