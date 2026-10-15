@@ -222,15 +222,24 @@ def land(tip: str, prs: list[Pr], report: Callable[[str], None]) -> int:
     return 0
 
 
+def places(name: str = "train", home: Path | None = None) -> tuple[Path, Path, Path]:
+    """The lock and the two worktrees (the tip's and main's) of the train called `name`: trains of other names share none of them, so they
+    run side by side (each gets its own target and logs from its tree's name, #1784)."""
+    scratch = (home or Path.home()) / "scratch"
+    return scratch / f"{name}.lock", scratch / f"{name}-tree", scratch / f"{name}-main"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("prs", nargs="+", type=int)
     ap.add_argument("--max", type=int, default=5)
+    ap.add_argument("--name", default="train", help="trains of different names run at once, each in its own worktrees and target")
     args = ap.parse_args()
     if problems := preflight():
         print("TRAIN ENV: " + "; ".join(problems))
         return 3
-    lock = open(Path.home() / "scratch/train.lock", "w")
+    lock_path, tree, main_tree = places(args.name)
+    lock = open(lock_path, "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -246,19 +255,17 @@ def main() -> int:
         else:
             ready.append(pr)
     code = 0
-    tree = Path.home() / "scratch/train-tree"
     if tree.exists():
         git("worktree", "remove", "--force", str(tree), check=False)
     git("worktree", "add", "--detach", str(tree), BASE)
     try:
-        main_tree = Path.home() / "scratch/train-main"
         if main_tree.exists():
             git("worktree", "remove", "--force", str(main_tree), check=False)
         git("worktree", "add", "--detach", str(main_tree), BASE)
         for batch in batches(ready, args.max):
             code |= run(batch, lambda some: build_tip(some, tree), lambda tip, steps: full_gate(tip, tree, steps), lambda steps: full_gate(git("rev-parse", BASE).stdout.strip(), main_tree, steps), blessed=lambda tip, some: bless(tip, some, tree))
     finally:
-        for one in (tree, Path.home() / "scratch/train-main"):
+        for one in (tree, main_tree):
             git("worktree", "remove", "--force", str(one), check=False)
     return code
 
