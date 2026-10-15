@@ -354,6 +354,7 @@ The budgets are counts, not times, so a test can assert them exactly. `llrm-supp
 | allocator `full_interval_builds` | intervals | 1 per function |
 | clean-up `block_visits` per sub-pass | peephole and jumps drivers | ≤ blocks on the first visit, then ≤ dirty blocks |
 | slopes | `scaling.py`, counted instructions | ≤ gcc's slope + 0.05 per axis |
+| `HINT_DEPTH` | `allocate::HINT_DEPTH`, the copies a fixed register's hint reaches a value through | 128 (a named limit, as gcc's `--param`s; the corpus reaches 74 at most, 99.99% of 141,519 walks ≤ 17); `LLRM_CHECK_WANTED` asserts the bounded walk equals the unbounded one where the walk ended within it |
 
 A budget test fails like any other test, with the counter, the budget and the fixture named. Each budget is set at the end of the stage that reaches it, and never raised without a measured reason in the PR. The existing relative gate (`measure` in `tools/gate/tiers.toml`, against the merge-base) stays.
 

@@ -1466,7 +1466,18 @@ impl Ord for Queued {
 
 const INF: f64 = f64::INFINITY;
 
-/// The fixed register each value reaches through the fewest copies.
+/// How many copies away a fixed register still reaches a value as its hint: the
+/// allocator's copy-hint propagation depth, as gcc exposes its limits as
+/// `--param`s. A chain of copies longer than this carries no hint further. The
+/// corpus (136 files at -O1, -O2, -O3, -Os and -Omax, 141,519 propagations)
+/// reaches 74 at the most (crc, an unrolled loop), 17 everywhere else, and 96%
+/// stop within 8; 128 is above the most. Without a bound a copy chain of N
+/// values is walked end to end after every spill (`cells`, N=448: 221 levels),
+/// N rounds of N steps.
+pub const HINT_DEPTH: usize = 128;
+
+/// The fixed register each value reaches through the fewest copies, up to
+/// `HINT_DEPTH` of them.
 ///
 /// A loop's sum placed before the return's copy to AX is otherwise seated
 /// where nothing asked, and whatever took AX leaves a move on the exit.
@@ -1474,11 +1485,61 @@ fn _wanted(
     hints: &IndexMap<u32, Vec<u32>>,
     fixed: &IndexMap<u32, RegId>,
 ) -> IndexMap<u32, RegId> {
+    let found = _wanted_within(hints, fixed, HINT_DEPTH);
+    if llrm_support::env_set("LLRM_CHECK_WANTED") {
+        // The unbounded walk reaches the same values by the same registers as
+        // far as the bound goes: every value the bounded one holds is
+        // held alike, and where the walk ended before the bound nothing
+        // more is reached.
+        let whole = _wanted_within(hints, fixed, usize::MAX);
+        assert!(
+            found.iter().all(|(value, register)| whole.get(value) == Some(register)),
+            "a value the bounded hint walk reached differs from the unbounded one"
+        );
+        let deepest = _wanted_depth(hints, fixed);
+        assert!(
+            deepest > HINT_DEPTH || found == whole,
+            "the hint walk ended within {HINT_DEPTH} levels ({deepest}) yet differs from the unbounded one"
+        );
+    }
+    found
+}
+
+/// How many levels the unbounded walk takes.
+fn _wanted_depth(
+    hints: &IndexMap<u32, Vec<u32>>,
+    fixed: &IndexMap<u32, RegId>,
+) -> usize {
+    let mut seen: BTreeSet<u32> = fixed.keys().copied().collect();
+    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
+    let mut levels = 0;
+    while !frontier.is_empty() {
+        levels += 1;
+        let mut reached = Vec::new();
+        for value in frontier {
+            for other in hints.get(&value).into_iter().flatten() {
+                if seen.insert(*other) {
+                    reached.push(*other);
+                }
+            }
+        }
+        frontier = reached;
+    }
+    levels
+}
+
+fn _wanted_within(
+    hints: &IndexMap<u32, Vec<u32>>,
+    fixed: &IndexMap<u32, RegId>,
+    depth: usize,
+) -> IndexMap<u32, RegId> {
     // Only the values that are reached are kept: a pinned value is looked up in
     // `fixed`, which is not copied.
     let mut wanted: IndexMap<u32, RegId> = IndexMap::with_capacity_and_hasher(hints.len(), Default::default());
     let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    while !frontier.is_empty() {
+    let mut levels = 0;
+    while !frontier.is_empty() && levels < depth {
+        levels += 1;
         let mut reached = Vec::new();
         for value in frontier {
             let register = match fixed.get(&value) {

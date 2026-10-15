@@ -1213,3 +1213,16 @@ def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_poi
     own = gate.own_work(command)
     assert own["regalloc recolor"] > 20.0, f"premise: recolor ran ({own['regalloc recolor']:.1f} Minstr)"
     assert own["regalloc recolor"] <= 70.0, own["regalloc recolor"]
+
+
+def test_the_copy_hint_walk_is_bounded_by_the_hint_depth(tmp_path):
+    """cells at -O2 (a chain of copies 221 values long from two pins at N=448): `_wanted`, the walk from the pins over the copy hints,
+    ran end to end after every spill, N rounds of N steps: `after wanted` 191 Minstr at 448 and 794 at 896 (x4.2). The walk stops at
+    `allocate::HINT_DEPTH` copies (128; the corpus reaches 74 at the most): 112 and 232 (x2.1). A bound of x2.8 fails the first."""
+    rows = {}
+    for n in (448, 896):
+        source = tmp_path / f"cells{n}.c"
+        source.write_text(scaling.AXES["cells"](n))
+        rows[n] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["after wanted"]
+    assert rows[448] > 20.0, f"premise: the walk ran ({rows[448]:.1f} Minstr)"
+    assert rows[896] / rows[448] <= 2.8, rows
