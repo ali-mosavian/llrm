@@ -1544,7 +1544,8 @@ impl Analysis for Counted {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
-        let reached = reached_by(function, changes)?.blocks;
+        let reach = reached_with_cfg(function, changes)?;
+        let reached = reach.blocks;
         let shape = analyses.get::<Shape>(context, layout, function);
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         if !shape.loops.iter().map(|one| one.header).eq(previous.keys().copied()) {
@@ -1557,8 +1558,15 @@ impl Analysis for Counted {
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_exposed(&exposed);
+        // A change to the CFG moves a loop's blocks or what enters it only by
+        // a terminator it rewrites, in the loop or in a block that enters it;
+        // and the guards over its entry (`guards::guards`) are the
+        // branches of the blocks that dominate it.
         Some(induction::counted_renewed(&unit, previous, |one| {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
+                || (reach.cfg
+                    && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
+                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(*r), one.header))))
         }))
     }
 }
