@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sink.rs sha256:ffa8c74b14d8b07f0620315de22a9de33fae93300557fb0e94687157db70481d -->
+<!-- src: crates/opt/llrm-transforms/src/sink.rs sha256:8dc1d74421b7943c6d29ae70a67f759df667f356786c43a2cdb7044517a9c51b -->
 
 # sink
 
@@ -23,6 +23,10 @@ paths (each instruction's price at the frequency of `B` less that of `T`)
 must exceed one register copy for each execution of the moved work where it
 now runs. A 3% skip in sum_three at -m16 -O2 cost an instruction; a skip of
 over half is what d_faces has.
+
+The memory accesses and the block frequencies are asked of the manager when
+a move first needs them, so a body with nothing that passes the shape of
+the function asks for none.
 
 Blocks are taken last first, and each from its end, so what a sunk
 instruction read is next in line: the `gep` of a sunk load goes with it.

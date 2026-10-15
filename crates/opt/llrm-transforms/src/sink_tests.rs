@@ -148,3 +148,33 @@ b2:
     let one = block(&after, "b1");
     assert!(one.find("getelementptr").unwrap() < one.find("load").unwrap(), "{after}");
 }
+
+/// A function with nothing below a branch that a path skips asked for the
+/// memory accesses and the loop trips all the same, the pointer solve and call
+/// effects among them: 31 M of the `cases` axis at -Os, N=256, which the
+/// lowering of its switch after the pass made again.
+#[test]
+fn test_a_function_with_nothing_to_move_asks_for_no_analysis() {
+    let text = "define i32 @f(i32 %c) {
+b0:
+  %cold = icmp slt i32 %c, 0
+  br i1 %cold, label %b1, label %b2
+
+b1:
+  ret i32 1
+
+b2:
+  ret i32 0
+}
+";
+    let mut module = parsed(&format!("{HEAD}{text}"));
+    llrm_mir::passes::trace_recomputes(true);
+    managed(&mut module, Sink { size: false });
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let asked: Vec<_> = counts
+        .iter()
+        .filter(|(name, pass, _, _)| *pass == "sink" && matches!(*name, "points-to" | "call-effects" | "annotated"))
+        .collect();
+    assert!(asked.is_empty(), "asked for by a pass with nothing to move: {asked:?}");
+}

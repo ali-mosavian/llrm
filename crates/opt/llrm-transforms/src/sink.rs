@@ -19,6 +19,10 @@
 //! now runs. A 3% skip in sum_three at -m16 -O2 cost an instruction; a skip of
 //! over half is what d_faces has.
 //!
+//! The memory accesses and the block frequencies are asked of the manager when
+//! a move first needs them, so a body with nothing that passes the shape of
+//! the function asks for none.
+//!
 //! Blocks are taken last first, and each from its end, so what a sunk
 //! instruction read is next in line: the `gep` of a sunk load goes with it.
 //! Blocks and edges are as they were.
@@ -227,11 +231,27 @@ pub fn sunk(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
-    let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let dominators = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
     let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
     let outer = std::rc::Rc::clone(analyses.outer());
-    let frequency = crate::hoist::_frequency(unit, analyses, &outer, size);
+    // What is asked of the manager only where a move passes the shape of the
+    // function: a body with nothing that can move asks for none of it, and it
+    // is then no more than the pass's own cost (`cases` at -Os asked for
+    // the memory accesses and the loop trips of each function, 31 M that the
+    // lowering of its switch after the pass made again).
+    let analyses = std::cell::RefCell::new(analyses);
+    let accesses: std::cell::OnceCell<Option<std::rc::Rc<Accesses>>> = std::cell::OnceCell::new();
+    let accesses = || {
+        accesses
+            .get_or_init(|| {
+                Accesses::managed(unit.context, unit.layout, unit.function, &mut analyses.borrow_mut()).ok()
+            })
+            .as_deref()
+    };
+    let unusable = std::cell::Cell::new(false);
+    let frequency: std::cell::OnceCell<Option<std::collections::BTreeMap<i64, i64>>> = std::cell::OnceCell::new();
+    let frequency =
+        || frequency.get_or_init(|| crate::hoist::_frequency(unit, &mut analyses.borrow_mut(), &outer, size));
     let edges = Edges::of(unit.function);
     let costs = if size { outer.target().size_costs() } else { crate::profit::costs(&outer) };
     let mut saved = 0i64;
@@ -240,7 +260,7 @@ pub fn sunk(
     // than disturbing the allocation can cost (below).
     let mut trial = unit.function.clone();
     let mut plan: Vec<(InstId, InstId)> = Vec::new();
-    let weight = |block: BlockId| frequency.as_ref().and_then(|map| map.get(&cfg::id(block)).copied());
+    let weight = |block: BlockId| frequency().as_ref().and_then(|map| map.get(&cfg::id(block)).copied());
     let blocks: Vec<BlockId> = unit.function.layout().to_vec();
     let mut sunk_set: IdSet<InstId> = IdSet::new();
     for &home in blocks.iter().rev() {
@@ -284,10 +304,6 @@ pub fn sunk(
                 // left it, and a move there only shuffles the allocation.
                 let gains = loops.depth(candidate) <= loops.depth(home)
                     && readers.iter().all(|&reader| loops.depth(reader) <= loops.depth(candidate))
-                    && match (weight(candidate), weight(home)) {
-                        (Some(there), Some(here)) => there <= here,
-                        _ => true,
-                    }
                     && edges.escapes(home, candidate)
                     && !matches!(
                         trial
@@ -297,10 +313,30 @@ pub fn sunk(
                             .map(|&one| &trial.instruction(one).opcode)
                             .find(|opcode| **opcode != Opcode::Phi),
                         Some(Opcode::LandingPad { .. }) | None
-                    );
+                    )
+                    && match (weight(candidate), weight(home)) {
+                        (Some(there), Some(here)) => there <= here,
+                        _ => true,
+                    };
                 if gains
                     && (!load
-                        || _unwritten(unit, &trial, &accesses, &outer, &edges, home, candidate, &insts[at + 1..], inst))
+                        || match accesses() {
+                            Some(accesses) => _unwritten(
+                                unit,
+                                &trial,
+                                accesses,
+                                &outer,
+                                &edges,
+                                home,
+                                candidate,
+                                &insts[at + 1..],
+                                inst,
+                            ),
+                            None => {
+                                unusable.set(true);
+                                false
+                            }
+                        })
                 {
                     place = Some(candidate);
                     break;
@@ -337,13 +373,14 @@ pub fn sunk(
             sunk_set.insert(inst);
         }
     }
-    if plan.is_empty() {
+    // Where the accesses could not be found nothing moves.
+    if plan.is_empty() || unusable.get() {
         return false;
     }
     // What the moves save must outweigh what disturbing the allocation can
     // cost: one register copy for each execution of the moved work, where it
     // now runs (a 3% skip in sum_three at -m16 -O2 cost an instruction).
-    if frequency.is_some() && saved < costs.r#move * ran {
+    if frequency().is_some() && saved < costs.r#move * ran {
         llrm_support::debug!("sink", "refused: saves {saved}, a copy where it runs is {}", costs.r#move * ran);
         return false;
     }
