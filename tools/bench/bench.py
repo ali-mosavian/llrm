@@ -425,6 +425,9 @@ def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Pa
     """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
     instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE: DOSBox counts a long REP in slices of its
     cycle budget, scroll's 58,321 against 21,015), and a price of another run is no price. Reported, not gated."""
+    if instructions > flatcount.LIMIT // 2:
+        print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
+        return {}
     ran = flatcount.run(image, region.upper(), cwd)
     if ran.error or ran.region is None:
         print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)

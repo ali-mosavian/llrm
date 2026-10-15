@@ -36,6 +36,7 @@ FLAT_CODE, FLAT_DATA = 0x00CF9A000000FFFF, 0x00CF92000000FFFF  # base 0, 4 GiB, 
 
 
 WORD = (1 << 16) - 1  # a DPMI call's 16-bit register halves
+LIMIT = 400_000_000  # instructions the emulator runs before it gives up: a kernel of 10^9 (grep over 10 MB) is not priced
 AGREE = 0.005  # the emulator's count and DOSBox's differ by this much of the count or less, or 64 instructions
 
 
@@ -62,7 +63,7 @@ def _segments(image: Path) -> list[tuple[int, bytes, int]]:
     return out
 
 
-def run(image: Path, region: str, cwd: Path, limit: int = 400_000_000) -> icount.Run:
+def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
     """`image` from its entry; the counts are of the function `region` (a symbol) and what it calls. Files the program opens live in `cwd`."""
     result = icount.Run()
     entry_of = symbol(image, region)
@@ -204,5 +205,11 @@ def run(image: Path, region: str, cwd: Path, limit: int = 400_000_000) -> icount
     if state["done"]:
         result.region = counts
     elif not result.error:
-        result.error = "the region was entered but never returned" if state["ret"] is not None else "the region was never entered"
+        entered = state["ret"] is not None
+        if result.exit_code is not None:
+            result.error = "the program exited " + ("before the kernel returned" if entered else "without entering the kernel")
+        elif entered:
+            result.error = f"the kernel had not returned at the emulator's limit of {limit} instructions"
+        else:
+            result.error = "the region was never entered"
     return result

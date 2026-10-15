@@ -63,8 +63,6 @@ def test_the_emulators_count_and_dosboxs_agree_within_a_few_instructions_not_whe
 
 
 def test_a_flat_row_gets_clocks_only_where_the_emulator_ran_the_kernel_dosbox_counted(monkeypatch, tmp_path):
-    import types
-
     import bench
 
     ran = lambda instructions, clocks=7: types.SimpleNamespace(error="", region=types.SimpleNamespace(instructions=instructions, clocks=clocks))  # noqa: E731
@@ -76,3 +74,15 @@ def test_a_flat_row_gets_clocks_only_where_the_emulator_ran_the_kernel_dosbox_co
     assert bench.flat_clocks(key, tmp_path / "x.elf", "BenchFib", 100, tmp_path) == {}
     line = bench.clock_lines({("fib", "bq32", "O2"): {"clocks": 7, "instructions": 100}}, ["fib"])
     assert line == ["fib bq32 -O2: 7 clocks, 100 instructions"], "a flat row has no memory operands count"
+
+
+def test_a_kernel_that_does_not_return_says_which_reason_it_stopped_for(tmp_path):
+    """grep's kernel (10 MB through DOS, ~10^9 instructions) read `entered but never returned`: it had hit the emulator's limit."""
+    loop = flatcount.run(image(tmp_path, b"\xeb\xfe"), "BENCHK", tmp_path, limit=1000)  # jmp $
+    assert loop.region is None and "limit of 1000 instructions" in loop.error, loop.error
+    quit_ = flatcount.run(image(tmp_path, b"\xb8\x00\x4c\x00\x00\xcd\x21\xc3"), "BENCHK", tmp_path)  # mov eax,4c00h; int 21h
+    assert quit_.region is None and "exited before the kernel returned" in quit_.error, quit_.error
+    import bench
+
+    huge = flatcount.LIMIT
+    assert bench.flat_clocks(("grep", "bq32", "O2"), tmp_path / "x.elf", "BenchGrep", huge, tmp_path) == {}, "no emulator run for a kernel that long"
