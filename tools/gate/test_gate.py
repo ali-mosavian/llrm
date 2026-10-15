@@ -1102,3 +1102,19 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
         named = (full if step == "pytest" else {step: quick})[step].split()
         assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
     assert "tests/test_loops.py" in full["pytest-programs"] and "tests/test_programs_compile.py" in full["pytest-programs"]
+
+def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
+    """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
+    import os
+    import subprocess as sp
+
+    (tmp_path / "uv").write_text(
+        "#!/bin/sh\n"
+        + "".join(f"echo 'FAIL row{n}: instructions 10 > 9 (worse)'\n" for n in range(20))
+        + "echo 'BETTER rowa: instructions 8 < 9'\necho 'BETTER rowb: instructions 8 < 9'\necho '424 measurements: 20 problems, 2 better'\n"
+    )
+    (tmp_path / "uv").chmod(0o755)
+    command = gate.commands(gate.plan(["bench/fib/fib.c"], "full"), gate.load(), gate.packages())["bench"]
+    done = sp.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
+    assert done.returncode != 0
+    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "BETTER rowa" in done.stdout and "20 problems" in done.stdout, done.stdout
