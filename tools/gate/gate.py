@@ -483,7 +483,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
-        f'out=$(uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | grep -aE "^(FAIL|BETTER|SKIP) |measurements:"; '
+        f'out=$(LLRM_BENCH_BASE=dry uv run -q --project tools python tools/bench/bench.py{" --batch" if os.environ.get("LLRM_BENCH_BATCH") == "1" else ""}); echo "$out" | grep -aE "^(FAIL|BETTER|SKIP|BASE[A-Z-]*:? )|measurements:"; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
     def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
@@ -562,6 +562,7 @@ def expected(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     out = {
         **({"lib": (None, False), "doc": (None, False)} if libs else {}),
         "integration": (sum(1 for t in root_tests() if t != "timing" and t not in whole and t not in skip_bins), False),
+        "facts": (1, False),  # one binary that must report: a log with none (a build that ran no test) is incomplete, not a pass
         "run": (1, True),
         "scans": (None, True),
         "rfmt-post": (None, False),
