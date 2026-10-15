@@ -38,6 +38,7 @@ The flags are rows of `PASSES` in [`flags.rs`](https://github.com/ali-mosavian/l
 | Channel | Line |
 |---|---|
 | `regalloc` | `NAME: N insns, S spilled, cost C, F forced` after the base allocation; `  trial SHAPE (splitting B): ...` per trial, `  kept the trial` when it won; `last resort for value#V: R evicts [...]`; `out of budget` |
+| `events` | one line per allocator decision: `pop vV STAGE weight W`, `vV takes free R`, `vV evicts [(victim, weight)] from R`, `vV loses R to the rewrite` |
 | `spill` | `NAME: spill V with {...}`: the value and the siblings sharing its slot |
 | `split` | `NAME: split V at {block: [(from,to)]}`: the region carved |
 | `ssaspill` | `loop at B peaks at N`: the pressure inside each loop |
