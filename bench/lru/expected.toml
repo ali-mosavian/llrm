@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "A constant several edges of a phi carry is made once (phiconst): lru c -6 bytes at -O2 and -Os; no row worse"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 144
@@ -48,14 +48,14 @@ bss_bytes = 0
 [c.O2]
 instructions = 124
 memory_operands = 55
-code_bytes = 384
+code_bytes = 378
 data_bytes = 0
 bss_bytes = 78
 
 [c.Os]
 instructions = 123
 memory_operands = 55
-code_bytes = 347
+code_bytes = 341
 data_bytes = 0
 bss_bytes = 78
 

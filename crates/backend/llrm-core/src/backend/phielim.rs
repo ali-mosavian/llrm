@@ -752,7 +752,7 @@ fn _defined_in(
 /// The move of an immediate into `value` where it is `block`'s one definition
 /// of it and nothing reads it there: a constant a phi takes from its
 /// predecessor.
-fn _constant_made_in(
+pub(crate) fn _constant_made_in(
     block: &LirBlock,
     value: u32,
 ) -> Option<Semantics> {
@@ -913,7 +913,7 @@ fn _copy(
 ///
 /// Never None: that would mean "ask the node", whose bytes the neighbour
 /// already claims.
-fn _nothing(
+pub(crate) fn _nothing(
     beside: Option<&Insn>,
     at: i64,
 ) -> (i64, i64) {
