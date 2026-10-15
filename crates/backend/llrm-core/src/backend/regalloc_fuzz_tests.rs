@@ -1031,6 +1031,42 @@ fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
     assert!(searched > 0, "premise: some body had a shape to try");
 }
 
+/// The search made every shape the spills suggested (a rewritten body for each
+/// of 3-13 of them) and allocated one: `d_faces` -O1 spent 104 M of 7.1 G on
+/// shapes it dropped. Unless it is exhaustive it makes the one it allocates.
+#[test]
+fn test_a_search_that_is_not_exhaustive_makes_only_the_shape_it_allocates() {
+    use crate::backend::allocate::{shapes_made, trials};
+    let shape = Shape { pool: 12, ops: 11 };
+    let (mut made_directed, mut made_all) = (0, 0);
+    for seed in 0..40 {
+        let run = |exhaustive: bool| {
+            let (body, _) = body(seed, &shape);
+            let cpu =
+                crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, exhaustive).expect("a profile");
+            let mut phase = RegAlloc::new(
+                None,
+                None,
+                ProfileOrName::Profile(cpu),
+                &*target::BUILT_IN,
+                &crate::backend::classes::RegisterClasses::m16(),
+            )
+            .expect("a phase");
+            let before = (shapes_made(), trials());
+            phase.transform(body).expect("allocated");
+            (shapes_made() - before.0, trials() - before.1)
+        };
+        let (made, allocated) = run(false);
+        assert!(made <= 1 && made <= allocated, "seed {seed}: {made} shapes made, {allocated} allocated");
+        made_directed += made;
+        made_all += run(true).0;
+    }
+    assert!(
+        made_all > made_directed,
+        "premise: some body suggests more shapes than the one taken ({made_all} against {made_directed})"
+    );
+}
+
 /// The search tried every shape its spills suggested, twice each: up to 12
 /// allocations of one body, and 80% of compiling `d_faces`. Unless it is
 /// exhaustive it allocates the shape the spills suggest and the body without
