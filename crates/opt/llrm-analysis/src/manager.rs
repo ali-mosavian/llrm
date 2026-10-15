@@ -139,7 +139,7 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
-use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
+use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
@@ -1135,6 +1135,73 @@ pub struct Annotated;
 impl Analysis for Annotated {
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
+    const SOUND: bool = true;
+    const NAMES_VALUES: bool = true;
+
+    /// What it says of an instruction that is still there holds: the access is
+    /// the same pointer and bytes (a fresh `root` may be further back, where
+    /// the value that took a replaced one's place is itself a GEP, which is
+    /// less to know, not wrong), and it names no value that is gone. One made
+    /// since has no entry (unknown), one erased is not asked.
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        _context: &Context,
+        function: &Function,
+    ) -> bool {
+        let live = |value: ValueId| match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => !function.is_erased(inst),
+            _ => true,
+        };
+        let names_live = |one: &MemRef| {
+            [one.pointer, one.root, one.segment].iter().flatten().all(|operand| match operand {
+                Operand::Value(value) => live(*value),
+                _ => true,
+            }) && one.base.is_none_or(live)
+        };
+        match (old, fresh) {
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, one)| {
+                function.is_erased(*inst)
+                    || (names_live(one)
+                        && fresh.get(inst).is_some_and(|now| {
+                            now.pointer == one.pointer
+                                && now.width == one.width
+                                && now.volatile == one.volatile
+                                && now.typed == one.typed
+                        }))
+            }),
+            (old, fresh) => old == fresh,
+        }
+    }
+
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(ValueId) -> Option<Operand>,
+        _context: &Context,
+        _function: &Function,
+    ) -> Option<Self::Result> {
+        let follow = |operand: Option<Operand>| match operand {
+            Some(Operand::Value(value)) => Some(Some(substituted(value).unwrap_or(Operand::Value(value)))),
+            other => Some(other),
+        };
+        let refs = old.as_ref().ok()?;
+        let mut made = IndexMap::default();
+        for (inst, one) in refs {
+            let mut one = one.clone();
+            one.pointer = follow(one.pointer)?;
+            one.root = follow(one.root)?;
+            one.segment = follow(one.segment)?;
+            if let Some(base) = one.base {
+                one.base = match substituted(base) {
+                    None => Some(base),
+                    Some(Operand::Value(now)) => Some(now),
+                    Some(_) => return None,
+                };
+            }
+            made.insert(*inst, one);
+        }
+        Some(Ok(made))
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -1274,7 +1341,7 @@ impl Analysis for Registers {
                 | Change::BlockErased(_)
                 | Change::Operand { .. }
                 | Change::Operands { .. }
-                | Change::Substituted(_) => {
+                | Change::Substituted { .. } => {
                     continue;
                 }
                 // An argument's fact is of its position.
@@ -1489,7 +1556,7 @@ fn reached_through(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
