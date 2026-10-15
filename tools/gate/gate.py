@@ -508,6 +508,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
         + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
+        # The smoke tier runs no integration step: the scans that are root test binaries (seeded_maps escaped it in #1792) are run here
+        # (target_facts is the facts step's).
+        + "".join(f"; {cargo} --test {Path(one['file']).stem} || rc=1" for one in cfg["scan"] if p.tier == "smoke" and one.get("step") == "integration" and Path(one["file"]).stem != "target_facts")
         + "; exit $rc",
         "bench": bench,
         "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",

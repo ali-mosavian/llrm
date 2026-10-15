@@ -1118,3 +1118,15 @@ def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_pa
     done = sp.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
     assert done.returncode != 0
     assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "BETTER rowa" in done.stdout and "20 problems" in done.stdout, done.stdout
+
+
+def test_smoke_runs_the_source_scans_that_are_root_test_binaries_and_the_other_tiers_do_not_twice():
+    """#1792 put a std HashMap in settled.rs: smoke-green, red in the train's integration step (tests/seeded_maps.rs), a source scan only
+    that step ran."""
+    cfg, pkgs = gate.load(), gate.packages()
+    binaries = [Path(one["file"]).stem for one in cfg["scan"] if one.get("step") == "integration" and Path(one["file"]).stem != "target_facts"]
+    assert "seeded_maps" in binaries and "no_local_paths" in binaries
+    smoke = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke"), cfg, pkgs)["scans"]
+    assert all(f"--test {name} " in smoke for name in binaries) and "--test target_facts" not in smoke, smoke
+    for tier in ("fast", "full"):
+        assert "--test seeded_maps" not in gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], tier), cfg, pkgs)["scans"], tier
