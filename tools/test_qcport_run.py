@@ -32,6 +32,23 @@ def test_the_link_names_the_objects_beside_it_and_puts_the_libraries_in_the_orde
     assert lines[0] == "format dos" and "name /work/side/QCPORT.EXE" in lines
 
 
+def test_the_toolchain_files_are_found_where_the_toolchain_is_here_not_where_the_listing_was_made():
+    """CI's qcport step stopped at `cannot open /home/alim/scratch/qctc/bcpp31/LIB/C0M.OBJ`: the Borland build's listing names the
+    start-up and libraries by the development host's path."""
+    lines = qcport_run.linked(LISTING, Path("/work/side"), [], Path("/runner/bcpp31/lib")).splitlines()
+    assert "file '/runner/bcpp31/lib/C0M.OBJ'" in lines
+    assert [line for line in lines if line.startswith("library")] == ["library '/runner/bcpp31/lib/FP87.LIB'", "library '/runner/bcpp31/lib/MATHM.LIB'", "library '/runner/bcpp31/lib/CM.LIB'"]
+    assert "file '/work/side/bench.obj'" in lines
+
+
+def test_a_run_that_drew_nothing_says_what_the_emulator_and_the_program_last_said(tmp_path):
+    """CI's qcport said `a run drew nothing` for both builds and the work directory was gone with the runner: nothing to read."""
+    (tmp_path / "dosbox.out").write_text("\n".join(f"line {n}" for n in range(30)))
+    got = qcport_run.tails(tmp_path, lines=3)
+    assert got[1:] == ["    line 27", "    line 28", "    line 29"] and "dosbox.out" in got[0]
+    assert "no output at all" in qcport_run.tails(tmp_path / "..")[0]
+
+
 def test_the_same_drawing_is_no_difference():
     drawn = {"frames": "62", "polys": "37637", "md5": "ba64"}
     assert qcport_run.verdict(drawn, dict(drawn)) == []
