@@ -8,14 +8,19 @@
 //! are dropped. The values are ordered signed or unsigned, whichever makes
 //! the narrower span: a `-1, 0, 1` switch is three adjacent values.
 //!
-//! Switch conversion (`tree-switch-conversion.cc` `switch_conversion::expand`,
-//! gcc's `-ftree-switch-conversion`, -O2 and up). Every case target is the
-//! join `J` or an empty block that jumps to it, and every phi of `J` takes a
-//! constant from each. With more than two distinct targets, a span of at most
-//! 8 values per case label (a range counts twice:
-//! `param_switch_conversion_branch_ratio`), and not better as bit tests, the
-//! phis become loads from a private constant array indexed by `x - min`, behind
-//! one `x - min <= span` test; a hole holds the default's constant.
+//! Switch conversion (gcc's `-ftree-switch-conversion`, -O2 and up; LLVM's
+//! `SimplifyCFG::SwitchToLookupTable`). Every case target is the join `J` or
+//! an empty block that jumps to it, and every phi of `J` takes a constant from
+//! each. Where bit tests are not better (`switch_conversion::expand`), the
+//! phis become loads from a private constant array indexed by `x - min`,
+//! behind one `x - min <= span` test; a hole holds the default's constant.
+//! One decision makes it: at least three case values at a density of 10% of
+//! the span (40% tuned for size; LLVM's `isSwitchDense`), and the lookup
+//! priced under the tree it replaces by the target's costs. A path of the
+//! tree is the average depth of a balanced tree of compare and branch, and a
+//! move for each phi; the table's the range test and a load for each phi, a
+//! widening where its cells are narrower. Tuned for size the costs are bytes
+//! and the whole tree is set against the code and the data of the table.
 //!
 //! Bit tests (`bit_test_cluster`). A run of clusters narrower than a word with
 //! at most 3 targets, and 3 cases for one target, 5 for two or 6 for three, is
@@ -65,12 +70,11 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
 
 use crate::edges;
 
-/// gcc's `param_switch_conversion_branch_ratio`.
-const BRANCH_RATIO: u128 = 8;
 /// gcc's `bit_test_cluster::m_max_case_bit_tests`.
 const MOST_TARGETS: usize = 3;
 
@@ -101,6 +105,7 @@ impl FunctionPass for SwitchLower {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let mut threshold = None;
+        let mut costs: Option<OperationCosts> = None;
         let word = unit.layout.largest_legal_integer().min(64);
         let pointer = unit.layout.pointer(0).bits;
         let mut changed = false;
@@ -109,12 +114,23 @@ impl FunctionPass for SwitchLower {
             // Asked of the target once a function has a switch to lower.
             let threshold = *threshold
                 .get_or_insert_with(|| if self.jump_tables { analyses.outer().target().costs().jump_table } else { 0 });
+            let costs = self
+                .convert
+                .then(
+                    || costs
+                        .get_or_insert_with(|| {
+                            let target = analyses.outer().target();
+                            if self.size { target.size_costs() } else { target.costs() }
+                        })
+                        .clone(),
+                );
             let mut lowering = Lowering {
                 unit: &mut *unit,
                 switch,
                 word,
                 pointer,
                 threshold,
+                costs,
                 size: self.size,
                 flip: 0,
                 edges: Vec::new(),
@@ -146,6 +162,17 @@ impl Cluster {
     fn single(&self) -> bool {
         self.low == self.high && self.tests.is_empty()
     }
+}
+
+/// One phi of the join, as the array it becomes: `width` bits a cell, widened
+/// to its `bits` by `extend`.
+struct Table {
+    phi: InstId,
+    ty: TypeId,
+    bits: u32,
+    width: u32,
+    extend: CastOp,
+    cells: Vec<u128>,
 }
 
 struct Switch {
@@ -224,6 +251,9 @@ struct Lowering<'a, 'b> {
     /// The fewest cases of a jump table, 0 where the target has none, and
     /// whether the code is tuned for size.
     threshold: i64,
+    /// What the target prices the operations at, in clocks or, tuned for
+    /// size, bytes: asked only to decide a lookup table.
+    costs: Option<OperationCosts>,
     size: bool,
     /// The order's flip: a key is the value xor this.
     flip: u128,
@@ -349,14 +379,59 @@ impl Lowering<'_, '_> {
         let count: u128 = clusters.iter().map(|one| 1 + u128::from(one.high != one.low)).sum();
         let span = clusters[clusters.len() - 1].high - clusters[0].low;
         let word = u128::from(self.word);
-        if (span < word && distinct.len() <= MOST_TARGETS && beneficial(count as usize, distinct.len()))
-            || distinct.len() <= 2
-            || span > count * BRANCH_RATIO
-        {
+        // gcc's `expand`: bit tests first where they are better.
+        if span < word && distinct.len() <= MOST_TARGETS && beneficial(count as usize, distinct.len()) {
             return false;
         }
-        self.tabled(clusters, join, &columns);
+        let tables: Vec<Table> = columns
+            .iter()
+            .map(|(phi, ty, hole, values)| {
+                let bits = self.unit.context.types.int_bits(*ty).expect("an integer phi");
+                let mut cells = vec![*hole; span as usize + 1];
+                for (one, &value) in clusters.iter().zip(values) {
+                    cells[(one.low - clusters[0].low) as usize..=(one.high - clusters[0].low) as usize].fill(value);
+                }
+                let (width, extend) = cell_width(&cells, bits);
+                Table { phi: *phi, ty: *ty, bits, width, extend, cells }
+            })
+            .collect();
+        if !self.table_pays(clusters, &tables) {
+            return false;
+        }
+        self.tabled(clusters, join, tables);
         true
+    }
+
+    /// LLVM's `SwitchToLookupTable`: a table of at least three cases at a
+    /// density of 10% of the span (40% tuned for size, `isSwitchDense`), where
+    /// the target prices the lookup under the compares of the tree it would
+    /// otherwise be: the clocks of a path (the average depth of a balanced tree
+    /// of compares and a move for each phi, against the range test and a load
+    /// for each), or, tuned for size, the bytes of all of it with the table's.
+    fn table_pays(
+        &self,
+        clusters: &[Cluster],
+        tables: &[Table],
+    ) -> bool {
+        let values: u128 = clusters.iter().map(|one| one.high - one.low + 1).sum();
+        let span = clusters[clusters.len() - 1].high - clusters[0].low + 1;
+        let density: u128 = if self.size { 40 } else { 10 };
+        let Some(costs) = &self.costs else { return false };
+        if values < 3 || values * 100 < span * density {
+            return false;
+        }
+        let (clusters, phis) = (clusters.len() as i64, tables.len() as i64);
+        let compare = costs.add + costs.branch;
+        let range = 2 * costs.add + costs.branch;
+        let loads: i64 =
+            tables.iter().map(|one| costs.load + if one.width < one.bits { costs.extend } else { 0 }).sum();
+        if self.size {
+            let tree = clusters * (compare + phis * costs.r#move + costs.branch);
+            let data: i64 = tables.iter().map(|one| span as i64 * i64::from(one.width) / 8).sum();
+            return range + loads + data < tree;
+        }
+        let depth = i64::from(u64::BITS - (clusters as u64).leading_zeros());
+        range + loads < depth * compare + phis * costs.r#move
     }
 
     /// The tables, the range test and the loads that replace the switch.
@@ -364,7 +439,7 @@ impl Lowering<'_, '_> {
         &mut self,
         clusters: &[Cluster],
         join: BlockId,
-        columns: &[(InstId, TypeId, u128, Vec<u128>)],
+        tables: Vec<Table>,
     ) {
         let (block, default) = (self.switch.block, self.switch.default);
         let (low, span) = (clusters[0].low, clusters[clusters.len() - 1].high - clusters[0].low);
@@ -384,13 +459,8 @@ impl Lowering<'_, '_> {
         };
         let address = self.unit.context.types.ptr(0);
         let zero = Operand::Constant(self.unit.context.int(wide, 0));
-        for (phi, ty, hole, values) in columns {
-            let bits = self.unit.context.types.int_bits(*ty).expect("an integer phi");
-            let mut cells = vec![*hole; span as usize + 1];
-            for (one, &value) in clusters.iter().zip(values) {
-                cells[(one.low - low) as usize..=(one.high - low) as usize].fill(value);
-            }
-            let (width, extend) = cell_width(&cells, bits);
+        for Table { phi, ty, bits, width, extend, cells } in tables {
+            let (bits, width) = (bits, width);
             let cell = self.unit.context.types.int(width);
             let array = self.unit.context.types.intern(Type::Array { element: cell, count: cells.len() as u64 });
             let members: Vec<ConstantId> = cells.iter().map(|&one| self.unit.context.int(cell, one as i128)).collect();
@@ -405,10 +475,10 @@ impl Lowering<'_, '_> {
             );
             let mut loaded = self.put(load, Opcode::Load { align: None, volatile: false }, cell, vec![place]);
             if width < bits {
-                loaded = self.put(load, Opcode::Cast(extend), *ty, vec![loaded]);
+                loaded = self.put(load, Opcode::Cast(extend), ty, vec![loaded]);
             }
             // The cases' entries go, the default's stays, the load joins.
-            let operands = self.unit.function.instruction(*phi).operands.clone();
+            let operands = self.unit.function.instruction(phi).operands.clone();
             // The switch's block keeps one edge, the default's, where that
             // goes to the join.
             let mut kept = false;
@@ -425,7 +495,7 @@ impl Lowering<'_, '_> {
                 }
             }
             out.extend([loaded, Operand::Block(load)]);
-            self.unit.function.set_operands(*phi, out);
+            self.unit.function.set_operands(phi, out);
         }
         self.jump(load, join);
     }

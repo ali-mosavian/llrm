@@ -7,6 +7,11 @@ use llrm_analysis::testing::DOS;
 use super::SwitchLower;
 use crate::testing::{Tuned, managed_on, parsed, results};
 
+/// A 486's prices, in clocks.
+fn i486() -> crate::profit::OperationCosts {
+    crate::profit::OperationCosts { add: 1, branch: 3, load: 1, r#move: 1, extend: 3, ..Default::default() }
+}
+
 fn lowered(
     text: &str,
     inputs: impl IntoIterator<Item = i128>,
@@ -31,6 +36,26 @@ fn lowered_by(
         managed_on(&mut module, SwitchLower { convert: true, jump_tables: true, size: false }, machine());
     }
     let after = managed_on(&mut module, SwitchLower { convert: false, jump_tables: true, size: false }, machine());
+    let inputs: Vec<[i128; 1]> = inputs.into_iter().map(|one| [one]).collect();
+    let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
+    assert_eq!(results(&module, &inputs), results(&before, &inputs), "{after}");
+    after
+}
+
+/// `lowered` with a lookup table priced by `costs`, and in bytes by `sizes`
+/// where `size`.
+fn priced(
+    text: &str,
+    inputs: impl IntoIterator<Item = i128>,
+    costs: crate::profit::OperationCosts,
+    sizes: crate::profit::OperationCosts,
+    size: bool,
+) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let machine = || Tuned { costs: costs.clone(), sizes: sizes.clone(), ..Default::default() };
+    managed_on(&mut module, SwitchLower { convert: true, jump_tables: false, size }, machine());
+    let after = managed_on(&mut module, SwitchLower { convert: false, jump_tables: false, size }, machine());
     let inputs: Vec<[i128; 1]> = inputs.into_iter().map(|one| [one]).collect();
     let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
     assert_eq!(results(&module, &inputs), results(&before, &inputs), "{after}");
@@ -337,4 +362,47 @@ d:
 ";
     let after = lowered_by(text, -2..10, true, 5);
     assert!(after.contains("switch table"), "{after}");
+}
+
+/// x_switch_ranges: 58 case values over a span of 114 in 7 clusters were a tree
+/// of compares (2.09x clang's instructions): LLVM's lookup table at 51%
+/// density, priced under that tree.
+#[test]
+fn test_a_character_class_is_a_lookup_table() {
+    let mut cases: Vec<(i128, i128)> = Vec::new();
+    cases.extend((48..58).map(|c| (c, 1)));
+    cases.extend((97..103).map(|c| (c, 2)));
+    cases.extend((103..123).map(|c| (c, 3)));
+    cases.extend((65..91).map(|c| (c, 4)));
+    cases.extend([(9, 5), (10, 5), (32, 5), (95, 6)]);
+    let after = lowered(&joined("i32", &cases, 0), -3..130, true);
+    assert!(after.contains("load i8") && !after.contains("switch i32"), "{after}");
+}
+
+/// The price decides: where the load costs more than the compares of the tree
+/// the table is not made.
+#[test]
+fn test_a_table_the_target_prices_over_the_tree_is_not_made() {
+    let cases: Vec<(i128, i128)> = (0..12).map(|at| (at, at * 7 + 1)).collect();
+    let text = joined("i32", &cases, 1);
+    let cheap = priced(&text, -3..20, i486(), i486(), false);
+    assert!(cheap.contains("load"), "{cheap}");
+    let dear = priced(&text, -3..20, crate::profit::OperationCosts { load: 40, ..i486() }, i486(), false);
+    assert!(!dear.contains("load"), "{dear}");
+}
+
+/// LLVM's density: 10% of the span (40% tuned for size): 3 cases over 20 is a
+/// table never, 4 over 30 is one only tuned for speed's 10%... and 40% in
+/// bytes.
+#[test]
+fn test_the_least_density_is_a_tenth_and_two_fifths_tuned_for_size() {
+    // 6 values over a span of 30: 20%.
+    let cases: Vec<(i128, i128)> = [0, 6, 12, 18, 24, 29].iter().map(|&at| (at, at + 1)).collect();
+    let text = joined("i32", &cases, 1);
+    let bytes =
+        crate::profit::OperationCosts { add: 3, branch: 2, load: 6, r#move: 5, extend: 3, ..Default::default() };
+    let speed = priced(&text, -2..40, i486(), bytes.clone(), false);
+    assert!(speed.contains("load"), "{speed}");
+    let size = priced(&text, -2..40, i486(), bytes, true);
+    assert!(!size.contains("load"), "{size}");
 }
