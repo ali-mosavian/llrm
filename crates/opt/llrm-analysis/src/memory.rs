@@ -569,6 +569,26 @@ impl Slice {
             .expect("shifting a valid slice retains its positive shape")
     }
 
+    /// Whether every byte `other` names is one `self` names. A pointer at or
+    /// past the end of the object names no byte of it, so it lies within any
+    /// slice of the object.
+    pub fn contains(
+        &self,
+        other: &Self,
+    ) -> bool {
+        if self.object != other.object {
+            return false;
+        }
+        if self.object.extent.is_some_and(|extent| other.low >= extent) {
+            return true;
+        }
+        let ends = (self.high - 1 + self.width, other.high - 1 + other.width);
+        if self.stride == other.stride && self.width >= other.width {
+            return other.low >= self.low && other.high <= self.high && (other.low - self.low) % self.stride == 0;
+        }
+        self.stride <= self.width && self.low <= other.low && ends.1 <= ends.0
+    }
+
     pub fn intersects(
         &self,
         other: &Self,
@@ -878,14 +898,14 @@ impl Provenance {
         Self { slices: self.slices.union(&other.slices), restrict: self.restrict.union(&other.restrict) }
     }
 
-    /// Whether every byte `other` may reach is one `self` may reach, by slice
-    /// and restrict root: a fresh solve's answer is covered by a held one
-    /// that holds it.
+    /// Whether every slice of `other` lies within one of `self`'s: a kept
+    /// answer covers a fresh one that knows more. Restrict roots are ignored;
+    /// it asks only where a pointer may point.
     pub fn covers(
         &self,
         other: &Self,
     ) -> bool {
-        other.slices.is_subset(&self.slices) && other.restrict.is_subset(&self.restrict)
+        other.slices.iter().all(|two| self.slices.iter().any(|one| one.contains(two)))
     }
 
     pub fn intersects(
@@ -2249,6 +2269,12 @@ mod tests {
         assert_eq!(both.slices.iter().collect::<Vec<_>>(), expect.iter().collect::<Vec<_>>());
         assert!(both.covers(&one) && both.covers(&two) && !one.covers(&two));
         assert!(one.covers(&one) && one.covers(&some(&[])) && !some(&[]).covers(&one));
+        // A kept [-2^31, 2^31) covers a fresh [0, 1); a pointer one past the
+        // end of a 32-byte object lies within a slice of it.
+        let global = MemoryObject { identity: Some(Identity::Int(9)), extent: Some(32), ..object(MemoryKind::Global) };
+        let held = |low, high| Provenance::one_with_slice(global.clone(), low, high, 1, 1, BTreeSet::new()).unwrap();
+        assert!(held(-(1 << 31), 1 << 31).covers(&held(0, 1)) && !held(0, 1).covers(&held(-(1 << 31), 1 << 31)));
+        assert!(held(0, 32).covers(&held(32, 33)));
         assert_eq!(some(&[1, 3]), one);
     }
 
