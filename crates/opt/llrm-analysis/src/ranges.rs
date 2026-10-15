@@ -135,13 +135,13 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_support::hash::{HashMap, IndexMap};
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::{self, Known};
 use crate::graph::loops;
 use crate::induction;
 use crate::memory::{MemRef, Unit};
+use crate::num::Num as BigInt;
 
 /// A non-wrapping mathematical interval at a fixed width.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

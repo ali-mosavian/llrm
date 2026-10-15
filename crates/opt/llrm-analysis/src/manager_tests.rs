@@ -461,7 +461,7 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     {
         let (context, function) = module.function_mut("f").unwrap();
         let before = analyses.get::<super::Counted>(context, &layout, function);
-        assert_eq!(trips(&before, "h1", function), Some(num_bigint::BigInt::from(5)));
+        assert_eq!(trips(&before, "h1", function), Some(crate::num::Num::from(5)));
         let lim = value(function, "lim");
         let lim =
             function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(lim)).unwrap();
@@ -476,11 +476,7 @@ fn a_change_outside_a_loop_reaches_the_loop_that_reads_it() {
     if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
         assert_eq!(crate::induction::proved() - proved, 1, "only the loop the change reaches is proved again");
     }
-    assert_eq!(
-        trips(&after, "h1", function),
-        Some(num_bigint::BigInt::from(7)),
-        "the loop that reads the changed bound"
-    );
+    assert_eq!(trips(&after, "h1", function), Some(crate::num::Num::from(7)), "the loop that reads the changed bound");
     assert_eq!(
         *after,
         *Analyses::new(outer).get::<super::Counted>(context, &layout, function),

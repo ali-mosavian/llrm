@@ -120,6 +120,7 @@ pub mod memory;
 pub mod memoryssa;
 pub mod nearest;
 pub mod noreturn;
+pub mod num;
 pub mod observers;
 pub mod occurrence;
 pub mod parameter_ranges;

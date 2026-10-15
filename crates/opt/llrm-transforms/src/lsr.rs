@@ -204,6 +204,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, CountedLoop, IvUse, Recurrence, Scev, UseKind, Users};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -215,7 +216,6 @@ use llrm_mir::passes::{Analyses, Analysis, Dominators, FunctionPass, Loops, Oute
 use llrm_mir::target::{AddressForm, Machine, OperationCosts};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::counting::{self, Seeds};

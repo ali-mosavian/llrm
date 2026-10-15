@@ -160,6 +160,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
 use llrm_mir::context::Context;
@@ -169,7 +170,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::HashMap;
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::lcssa::{arms, from_arms, operations};

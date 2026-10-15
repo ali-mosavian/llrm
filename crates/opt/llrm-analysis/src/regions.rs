@@ -95,7 +95,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::module::{Operand, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::cellmap::Bucket;
@@ -103,6 +102,7 @@ use crate::memory::{
     AliasClass, MemRef, MemoryKind, ObjectRef, Provenance, Slice, SliceError, alias_class, classes_may_alias,
     objects_may_alias,
 };
+use crate::num::Num as BigInt;
 use crate::ranges::{Interval, covering};
 
 const FLOOR: i64 = -(1_i64 << 31);

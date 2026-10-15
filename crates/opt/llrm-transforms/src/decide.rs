@@ -99,6 +99,7 @@ use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -108,7 +109,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::edges;
 use crate::transform;

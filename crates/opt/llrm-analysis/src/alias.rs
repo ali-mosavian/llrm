@@ -140,7 +140,6 @@ use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
-use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
@@ -152,6 +151,7 @@ use crate::memory::{
     self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, unmodeled_write, wrapped,
 };
+use crate::num::Num as BigInt;
 use crate::ranges;
 use crate::regions::{self, ByteRange};
 use crate::sliceset::{self, Shared, SliceSet};

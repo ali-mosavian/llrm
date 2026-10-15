@@ -59,7 +59,7 @@ fn test_generated_recurrences_expand_to_what_the_loop_computes() {
             let ret = function.terminator(b2).expect("a return");
             let at = Position::Before(ret);
             let n = Operand::Value(function.parameters()[5]);
-            let one = crate::counting::constant(context, &num_bigint::BigInt::from(1), 16);
+            let one = crate::counting::constant(context, &llrm_analysis::num::Num::from(1), 16);
             let wide = context.types.int(width);
             let narrow = context.types.int(16);
             let last = placed(context, function, Opcode::Binary(BinaryOp::Sub), narrow, vec![n, one], at);

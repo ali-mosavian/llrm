@@ -1803,7 +1803,7 @@ pub fn stamped(
                 .all(
                     |one| proofs(one).iter().any(|proof| {
                         !proof.stops
-                            && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))
+                            && (proof.count.is_some() || proof.step.magnitude() == llrm_analysis::num::Num::from(1_u8))
                     }),
                 )
         };

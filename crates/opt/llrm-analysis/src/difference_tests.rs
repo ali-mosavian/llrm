@@ -4,11 +4,11 @@ use std::collections::BTreeMap;
 
 use llrm_mir::module::ValueId;
 use llrm_mir::opcode::IntPredicate::{self, *};
-use num_bigint::BigInt;
 
 use super::proves;
 use crate::guards::Guard;
 use crate::induction::{Monomial, Scev};
+use crate::num::Num as BigInt;
 
 const W: u32 = 16;
 

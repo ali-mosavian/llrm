@@ -93,12 +93,12 @@ use llrm_mir::module::{GlobalKind, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::program::Program;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::Known;
 use crate::effects;
 use crate::memory::Unit;
+use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval};
 
 const ROUNDS: usize = 8;

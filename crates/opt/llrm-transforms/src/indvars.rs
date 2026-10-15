@@ -135,6 +135,7 @@ use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -143,7 +144,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 use num_traits::Zero;
 
 use crate::counting;

@@ -73,12 +73,12 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::{self, Calls, Cells};
 use crate::floatfacts::{self, Finite, Format, Operation, Rule};
 use crate::memory::{MemRef, Unit};
+use crate::num::Num as BigInt;
 use crate::ranges;
 
 pub type Bounds = (BigInt, BigInt);

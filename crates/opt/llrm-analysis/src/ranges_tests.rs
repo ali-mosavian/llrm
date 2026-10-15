@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use super::{
     _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, edges_solved,
@@ -16,6 +15,7 @@ use super::{
 };
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
+use crate::num::Num as BigInt;
 use crate::ranges::Intervals;
 use crate::testing::{DOS, block, function, layout, parsed, value};
 

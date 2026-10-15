@@ -92,12 +92,12 @@
 //! `Dominators` and `Loops`: only call attributes change.
 
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, ranges};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
-use num_bigint::BigInt;
 
 pub struct Ports;
 

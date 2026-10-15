@@ -116,6 +116,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::consts::{self, Known};
 use llrm_analysis::manager::{DemandedBits, Ranges, Registers};
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
@@ -125,7 +126,6 @@ use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::counting;
 

@@ -59,6 +59,7 @@
 //! [`crate::splitcopy`] is the opposite for a local.
 
 use llrm_analysis::memory::{MemRef, Unit};
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::regions;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -67,7 +68,6 @@ use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
-use num_bigint::BigInt;
 
 use crate::counting;
 use crate::fill::{_copy, How, copy_price};

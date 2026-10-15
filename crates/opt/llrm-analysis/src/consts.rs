@@ -94,7 +94,6 @@ use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::{HashMap, IndexMap};
-use num_bigint::BigInt;
 
 use crate::avail;
 use crate::cellmap::CellMap;
@@ -102,6 +101,7 @@ use crate::cfg;
 use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
 use crate::memoryssa::{self, Accesses};
+use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval};
 use crate::regions::{
     ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span,
