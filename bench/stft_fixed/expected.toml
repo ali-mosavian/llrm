@@ -1,8 +1,8 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed nib -O2, quicksort bq32 -O2, grep c -O2 (-27 B) improve at clocks prices; matmul -O2 gains one reload per inner trip"
+blessed = "2026-10-16"
 
 [bas.O2]
-code_bytes = 1776
+code_bytes = 1775
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1261.3369
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 1263.1086
 
 [bq16.O2]
-code_bytes = 1758
+code_bytes = 1757
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1526.7033
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 98394523
-code_bytes = 1636
+instructions = 98005660
+code_bytes = 1637
 data_bytes = 4709
 bss_bytes = 0
 

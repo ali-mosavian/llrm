@@ -1,8 +1,8 @@
-reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
-blessed = "2026-10-15"
+reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed nib -O2, quicksort bq32 -O2, grep c -O2 (-27 B) improve at clocks prices; matmul -O2 gains one reload per inner trip"
+blessed = "2026-10-16"
 
 [bas.O2]
-code_bytes = 5212
+code_bytes = 5174
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5244
+code_bytes = 5206
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
@@ -38,7 +38,7 @@ data_bytes = 29697
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3220
+code_bytes = 3224
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
