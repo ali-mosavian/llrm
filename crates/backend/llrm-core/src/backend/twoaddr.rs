@@ -58,6 +58,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::analysis::intervals as ranges;
+use crate::backend::allocate::LiveAt;
 use crate::backend::{allocate, coalesce, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
@@ -101,7 +102,10 @@ pub fn tied(body: &LirBody) -> LirBody {
         counter - 1
     };
 
-    let (_, leaving) = allocate::live(body);
+    // What is live at each block's end is read from the rows of bits and what
+    // the block's own instructions change laid over them: a set of every live
+    // value copied for each block was quadratic in the values live at once.
+    let rows = allocate::live_rows(body);
     let copies = _copy_destinations(body);
     // Of each swap's two sources, those live after it: all `_commuted` reads of
     // liveness.
@@ -109,19 +113,24 @@ pub fn tied(body: &LirBody) -> LirBody {
         .blocks
         .iter()
         .map(|block| {
-            let mut alive = leaving[&block.at].clone();
+            let mut changed: crate::support::hash::HashMap<u32, bool> = Default::default();
+            let alive = |changed: &crate::support::hash::HashMap<u32, bool>, value: u32| {
+                changed.get(&value).copied().unwrap_or_else(|| rows.live_out(block.at, value))
+            };
             let mut live_after: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
             for one in block.insns.iter().rev() {
                 if let Some((_, first, second)) = _swappable(one) {
                     live_after.insert(
                         ranges::key(one),
-                        [first, second].into_iter().filter(|value| alive.contains(value)).collect(),
+                        [first, second].into_iter().filter(|value| alive(&changed, *value)).collect(),
                     );
                 }
                 for value in &one.defines {
-                    alive.remove(value);
+                    changed.insert(*value, false);
                 }
-                alive.extend(one.uses.iter().copied());
+                for value in &one.uses {
+                    changed.insert(*value, true);
+                }
             }
             live_after
         })
@@ -194,12 +203,11 @@ fn _reused(body: &LirBody) -> LirBody {
             *defined.entry(*value).or_insert(0) += 1;
         }
     }
-    let (_, leaving) = allocate::live(body);
+    let rows = allocate::live_rows(body);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns: Vec<Arc<Insn>> = block.insns.to_vec();
-        let out = &leaving[&block.at];
         // Where each value is read and written in the block, in order: what the
         // scans below ask, in a log of the block's length.
         let mut reads: IndexMap<u32, BTreeSet<usize>> = IndexMap::default();
@@ -240,7 +248,7 @@ fn _reused(body: &LirBody) -> LirBody {
                 continue;
             }
             if defined.get(&into.value) != Some(&1)
-                || out.contains(&into.value)
+                || rows.live_out(block.at, into.value)
                 || reads.get(&into.value).unwrap_or(&none).range(..at).next().is_some()
             {
                 continue;
