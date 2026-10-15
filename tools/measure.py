@@ -92,6 +92,7 @@ VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 
+import benchlist  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
 
@@ -124,7 +125,7 @@ def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
     files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
-    files += sorted((ROOT / "bench").glob("*/*.c")) + sorted((VSGCC / "kernels").glob("*/*.c"))
+    files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
     if qcport := os.environ.get("QCPORT"):
         files += sorted(Path(qcport).expanduser().glob("*/*.c"))
     digest = hashlib.sha256()

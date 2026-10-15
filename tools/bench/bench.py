@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))  # wrap.py: the comparison with gcc and clang's
 
 import cpulimit  # noqa: E402
+import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
@@ -128,8 +129,7 @@ def directory_name(directory: Path) -> str:
 
 
 def benchmarks(selected: list[str]) -> list[Path]:
-    dirs = [one for one in sorted(BENCH.glob("*/bench.toml"))] + [one for one in sorted(BENCH.glob("parity/*/bench.toml"))]
-    found = [one.parent for one in dirs]
+    found = benchlist.directories(BENCH)
     return [one for one in found if not selected or one.name in selected or str(one.relative_to(BENCH)) in selected]
 
 
