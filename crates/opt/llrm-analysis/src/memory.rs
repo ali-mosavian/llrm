@@ -1292,6 +1292,24 @@ pub fn object_of(
     }
 }
 
+/// Whether `root` is an object's own address: `object_of(unit, root).is_some()`
+/// without making the object (its extent, exposure and interning), which a
+/// reference built for each access had been doing: 1.8% of a d_faces -O1
+/// compile.
+pub fn is_object(
+    unit: &Unit,
+    root: Operand,
+) -> bool {
+    match root {
+        Operand::Value(_) => unit.defining(root).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Alloca { .. })),
+        Operand::Constant(id) => {
+            matches!(unit.context.get(id).kind, ConstantKind::Global(global)
+                if matches!(unit.globals.get(global.0 as usize).map(|one| &one.kind), Some(GlobalKind::Variable(_))))
+        }
+        Operand::Block(_) => false,
+    }
+}
+
 /// The object a global variable is.
 pub fn global_object(
     unit: &Unit,
@@ -1434,7 +1452,7 @@ impl MemRef {
         } else if let Some(address) = flat_constant(unit, root) {
             (made.origin, made.linear) = (address, true);
         }
-        made.object = object_of(unit, root).is_some();
+        made.object = is_object(unit, root);
         made
     }
 
