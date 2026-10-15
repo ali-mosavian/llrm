@@ -456,7 +456,7 @@ fn crossings_among(
             },
         );
     let mut out = Vec::new();
-    let names = named_in(body, value);
+    let names = blocks.names(value);
     // The phis a block's successor arrives with, found by the successor's
     // address: a scan of every block for each edge was the square of the
     // blocks.
@@ -975,7 +975,7 @@ fn analysed_along(
     live: &dyn allocate::LiveAt,
 ) -> Analysis {
     let (body, graph) = (blocks.body, &blocks.graph);
-    let names = named_in(body, value);
+    let names = blocks.names(value);
     let mut seen: BTreeSet<usize> = names.keys().copied().collect();
     let mut stack: Vec<usize> = names.keys().copied().collect();
     let mut through: BTreeSet<usize> = BTreeSet::new();
@@ -1293,7 +1293,14 @@ struct Blocks<'a> {
     graph: std::sync::Arc<crate::analysis::graph::Graph>,
     /// No block has phis.
     plain: bool,
+    /// Where the value last asked of is named, which every candidate register
+    /// of a split asks again.
+    names: std::cell::RefCell<Option<(u32, std::rc::Rc<Names>)>>,
 }
+
+/// The positions in each block, by the block's place in the body, that name a
+/// value.
+type Names = std::collections::BTreeMap<usize, Vec<usize>>;
 
 impl<'a> Blocks<'a> {
     fn of(body: &'a LirBody) -> Self {
@@ -1301,7 +1308,23 @@ impl<'a> Blocks<'a> {
             body,
             graph: crate::analysis::graph::Graph::of(body),
             plain: body.blocks.iter().all(|block| block.phis.is_empty()),
+            names: Default::default(),
         }
+    }
+
+    /// `named_in` of `value`, found once for as long as it is the one asked of.
+    fn names(
+        &self,
+        value: u32,
+    ) -> std::rc::Rc<Names> {
+        if let Some((was, found)) = self.names.borrow().as_ref() {
+            if *was == value {
+                return std::rc::Rc::clone(found);
+            }
+        }
+        let found = std::rc::Rc::new(named_in(self.body, value));
+        *self.names.borrow_mut() = Some((value, std::rc::Rc::clone(&found)));
+        found
     }
 
     fn block(
@@ -1524,7 +1547,8 @@ fn _benefit(
     saving: &dyn Fn(&Insn) -> f64,
 ) -> f64 {
     let body = blocks.body;
-    let saved: f64 = named_in(body, value)
+    let saved: f64 = blocks
+        .names(value)
         .iter()
         .map(|(block, positions)| {
             let at = body.blocks[*block].at;
@@ -1693,10 +1717,11 @@ pub fn local(
     if one.live_in || one.live_out || !analysis.through.is_empty() {
         return None;
     }
-    let block = body.blocks.iter().find(|block| block.at == one.block)?;
-    let named: Vec<usize> = (0..block.insns.len())
-        .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
-        .collect();
+    let place = body.blocks.iter().position(|block| block.at == one.block)?;
+    let block = &body.blocks[place];
+    // Its references, from the postings: not every instruction of the block
+    // asked.
+    let named: Vec<usize> = named_in(body, value).remove(&place).unwrap_or_default();
     let slot = |position: usize| index.slot(block, position);
     let mut best: Option<(usize, usize, usize, usize)> = None;
     let mut tried = BTreeSet::new();
@@ -1862,6 +1887,34 @@ mod tests {
         let analysis = super::analysed(&body, 3, &(&live.0, &live.1));
         assert_eq!(analysis.uses.len(), 3, "premise: made, read in the loop, read after it");
         assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, from the postings");
+    }
+
+    /// Each candidate register of a split asked the postings again where the
+    /// value is named (`analysed_along`, `crossings_among` and `_benefit`):
+    /// the occurrences are found once for the value asked of.
+    #[test]
+    fn test_where_a_value_is_named_is_found_once_for_all_the_candidates_of_a_split() {
+        let body = _pointer_across_a_loop();
+        let blocks = super::Blocks::of(&body);
+        let (first, again) = (blocks.names(3), blocks.names(3));
+        assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask found the occurrences again");
+        assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, once");
+        assert_eq!(blocks.names(4).len(), 2, "another value is found for itself");
+    }
+
+    /// Each split made the frequency of every block of the function again
+    /// from its loop depths (`split placed`: 18 M of `d_faces` -O1): they are
+    /// a fact of the blocks' shape, found once.
+    #[test]
+    fn test_the_block_levels_of_a_placement_are_found_once_for_every_split_of_a_function() {
+        let body = _pointer_across_a_loop();
+        let bundles = crate::backend::spillplacement::edge_bundles(&body);
+        let runs = || body.facts.0.runs::<crate::backend::spillplacement::Levels>();
+        let before = runs();
+        let first = crate::backend::spillplacement::Placement::new(&body, &bundles);
+        let second = crate::backend::spillplacement::Placement::new(&body, &bundles);
+        assert_eq!(runs() - before, 1, "the levels were worked out for each placement");
+        assert!(std::sync::Arc::ptr_eq(&first.frequency, &second.frequency));
     }
 
     /// A carve asked whether its value is a constant or an address by three
