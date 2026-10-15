@@ -1286,6 +1286,25 @@ fn test_the_interference_among_a_web_is_bits_not_a_tree_of_pairs() {
     assert!(rows > 0, "premise: some value of a web interferes");
 }
 
+/// The whole interference graph of a body was written a pair at a time into
+/// rows that were trees, as the web's was: values live together are N^2 pairs
+/// (`joins` 1024: `lir coalesce` 73 Ginstr, slope 2.8). The rows are bits from
+/// the start while the body's values fit a matrix.
+#[test]
+fn test_the_interference_of_a_whole_body_is_bits_not_a_tree_of_pairs() {
+    use crate::backend::coalesce::_interference_among;
+    use crate::backend::neighbours::Neighbours;
+    let mut rows = 0;
+    for seed in 0..40u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        for near in _interference_among(&plain, None).values() {
+            rows += 1;
+            assert!(matches!(near, Neighbours::Dense { .. }), "seed {seed}: a row of the graph is a tree");
+        }
+    }
+    assert!(rows > 0, "premise: some value interferes");
+}
+
 /// The no-split allocation of a body the base allocation split nothing in is
 /// the base allocation again, and was made for every body with a spill (10% of
 /// the trials over QCport, the bench and the 66 programs, none of them won).
