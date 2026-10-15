@@ -36,6 +36,7 @@ pub mod spaces;
 pub mod splice;
 pub mod target;
 pub mod tbaa;
+pub mod touched;
 pub mod types;
 pub mod valuetracking;
 pub mod verify;
@@ -65,5 +66,7 @@ mod pass_tests;
 mod program_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod touched_tests;
 #[cfg(test)]
 mod valuetracking_tests;
