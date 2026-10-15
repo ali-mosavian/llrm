@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/alias.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/alias.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:b7196ef5dc13c90c19f97e8a037446ece76195f7bcc3d3d4431a2b9f3439fbaa -->
+<!-- src: crates/opt/llrm-analysis/src/alias.rs sha256:44884d435595655b94b4e0e299767b7ba76b2682bbcbca211daf360168324e65 -->
 
 # alias
 
@@ -48,14 +48,17 @@ memory: one abstract location per object.
  call @unknown(ptr %q)            %q's object escapes from here on
 ```
 
-Escape solve (`points_to`, `escapes`). Over the value solve, a forward
-gen/kill dataflow finds what has been published, per instruction
-(`EscapedBefore`): objects handed to a call that keeps them (not
-`nocapture`; a summary's `captures` stand where the callee has one), stored
-somewhere other than a frame, returned, or converted to an integer something
-reads, closed over pointers stored in what was published and over the
-initializers of published globals. A frame object not escaped before an
-access cannot be reached by a pointer no fact follows
+Escape solve (`points_to`, `escapes`). Over the value solve, what each
+instruction publishes is found once for the instructions that can publish
+(a call, a return, a stored pointer, one an instruction takes and does not
+carry on: `could_publish`), what reaches each block is a pass over the
+components of the CFG, and what had escaped before an instruction is
+worked out when asked and kept (`EscapedBefore`): objects handed to a call
+that keeps them (not `nocapture`; a summary's `captures` stand where the
+callee has one), stored somewhere other than a frame, returned, or converted
+to an integer something reads, closed over pointers stored in what was
+published and over the initializers of published globals. A frame object not
+escaped before an access cannot be reached by a pointer no fact follows
 (`EscapedBefore::apart`, LLVM's `EarliestEscapeInfo`).
 
 Summaries (`summaries`). Each body's `Summary` is the slices it reads and
