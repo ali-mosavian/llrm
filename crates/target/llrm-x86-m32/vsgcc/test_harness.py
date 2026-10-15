@@ -158,3 +158,26 @@ def test_every_x87_encoding_has_a_clock_price():
                 ins = Decoder(bits, bytes([opcode, modrm, 0, 0, 0, 0, 0, 0])).decode()
                 if ins.code != Code.INVALID:
                     harness.cost(ins, False, True, 1)
+
+
+def test_a_dword_at_an_odd_address_is_counted_as_misaligned():
+    """The 486 pays for an access across an alignment boundary and the table showed nothing of it: a loop of `mov eax, [ebx+1]` and
+    one of `mov eax, [ebx]` cost the same in instructions, memory operands and (nearly) clocks."""
+    from iced_x86 import Decoder
+    from unicorn import UC_ARCH_X86, UC_MODE_32, Uc
+    from unicorn.x86_const import UC_X86_REG_EBX, UC_X86_REG_ESI, UC_X86_REG_EDI
+
+    uc = Uc(UC_ARCH_X86, UC_MODE_32)
+    uc.reg_write(UC_X86_REG_EBX, 0x1000)
+    uc.reg_write(UC_X86_REG_ESI, 0x2001)
+    uc.reg_write(UC_X86_REG_EDI, 0x3000)
+
+    def count(code):
+        return harness.misaligned_operands(uc, Decoder(32, code, ip=0).decode())
+
+    assert count(bytes.fromhex("8b4301")) == 1      # mov eax, [ebx+1]
+    assert count(bytes.fromhex("8b03")) == 0        # mov eax, [ebx]
+    assert count(bytes.fromhex("0fb74301")) == 1    # movzx eax, word [ebx+1]
+    assert count(bytes.fromhex("0fb74302")) == 0    # movzx eax, word [ebx+2]
+    assert count(bytes.fromhex("8a4301")) == 0      # mov al, [ebx+1]: a byte is never across
+    assert count(bytes.fromhex("a5")) == 1          # movsd: the source esi is odd, the destination edi is not

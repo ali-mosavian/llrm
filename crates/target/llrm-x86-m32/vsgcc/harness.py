@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import CpuidFeature, Decoder, MemorySize, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
+from iced_x86 import CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
@@ -188,6 +188,34 @@ def multiplier_of(uc, ins):
             address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
         return int.from_bytes(bytes(uc.mem_read(address & 0xFFFFFFFF, 4)), "little")
     return 0
+
+
+def memory_address(uc, ins, operand):
+    """The address memory operand `operand` of `ins` names, before the instruction runs (flat model: segments are ignored)."""
+    kind = ins.op_kind(operand)
+    if kind in (OpKind.MEMORY_ESDI, OpKind.MEMORY_ESEDI):
+        return uc.reg_read(UC_X86_REG_EDI)
+    if kind in (OpKind.MEMORY_SEG_SI, OpKind.MEMORY_SEG_ESI):
+        return uc.reg_read(UC_X86_REG_ESI)
+    address = ins.memory_displacement
+    if ins.memory_base != Register.NONE:
+        address += uc.reg_read(UNICORN[ins.memory_base])
+    if ins.memory_index != Register.NONE:
+        address += uc.reg_read(UNICORN[ins.memory_index]) * ins.memory_index_scale
+    return address & 0xFFFFFFFF
+
+
+def misaligned_operands(uc, ins):
+    """How many of the instruction's memory operands the 486 reads or writes across an alignment boundary: an address that is not
+    a multiple of the operand's size, the size taken as 4 at most (a qword or a tbyte is two or three dword accesses, and
+    misses only when it does not start on a dword)."""
+    count = 0
+    for operand in range(ins.op_count):
+        if ins.op_kind(operand) in MEMORY:
+            size = min(4, MemorySizeExt.size(ins.memory_size))
+            if size > 1 and memory_address(uc, ins, operand) % size:
+                count += 1
+    return count
 
 
 def cost(ins, taken, first_rep, mem, multiplier=None):
@@ -396,6 +424,8 @@ def run(prog, variant, hot=False, limit=300_000_000):
             return
         total["ins"] += 1
         total["mem"] += mem
+        if mem:
+            total["misaligned"] += misaligned_operands(uc, ins)
         hits[address] += 1
         st["prev"] = address
         # Read before it runs: the 486's multiply costs what its multiplier is.
@@ -409,7 +439,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
     assert total["ins"], f"{prog} {variant}: the kernel was never entered"
     eax = uc.reg_read(UC_X86_REG_EAX)
     code = b"".join(bytes(uc.mem_read(a, 1)) for a in ())
-    return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], nops=total["nops"], clocks=total["clocks"], reports=reports,
+    return dict(prog=prog, variant=variant, ins=total["ins"], mem=total["mem"], misaligned=total["misaligned"], nops=total["nops"], clocks=total["clocks"], reports=reports,
                 hits=hits, edges=edges, kern=kern, main=main, code_end=code_end, uc=uc, cache=cache, syms=syms)
 
 
@@ -451,7 +481,7 @@ def main():
     prog, variant = sys.argv[1], sys.argv[2]
     r = run(prog, variant)
     expect = [int(x) for x in (source_dir(prog) / f"{prog}.out").read_text().split()]
-    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
+    print(json.dumps(dict(prog=prog, variant=variant, ins=r["ins"], mem=r["mem"], misaligned=r["misaligned"], nops=r["nops"], clocks=r["clocks"], code=code_bytes(prog, variant), ok=r["reports"] == expect, got=r["reports"][:4])))
 
 
 if __name__ == "__main__":
