@@ -14,7 +14,8 @@ strategies choose where a piece holds the value, in order:
   some candidate register is free across, when that is at least two and not
   all of them (`tryLocalSplit`).
 - `placed`: by region (`tryRegionSplit`). The positions that name the value are
-  found once for all its candidates (`Blocks::names`). For each candidate register,
+  found once for all its candidates (`Blocks::names`) and the blocks' frequencies
+  are a fact of the function's shape (`spillplacement::Levels`). For each candidate register,
   [`crate::backend::spillplacement`](spillplacement.md) settles which edge bundles hold the
   value in a register, weighting blocks by frequency against the
   interference of that register. The best candidate's region comes first,

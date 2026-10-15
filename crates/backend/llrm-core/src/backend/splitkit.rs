@@ -1900,6 +1900,20 @@ mod tests {
         assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask found the occurrences again");
         assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, once");
         assert_eq!(blocks.names(4).len(), 2, "another value is found for itself");
+
+    /// Each split made the frequency of every block of the function again
+    /// from its loop depths (`split placed`: 18 M of `d_faces` -O1): they are
+    /// a fact of the blocks' shape, found once.
+    #[test]
+    fn test_the_block_levels_of_a_placement_are_found_once_for_every_split_of_a_function() {
+        let body = _pointer_across_a_loop();
+        let bundles = crate::backend::spillplacement::edge_bundles(&body);
+        let runs = || body.facts.0.runs::<crate::backend::spillplacement::Levels>();
+        let before = runs();
+        let first = crate::backend::spillplacement::Placement::new(&body, &bundles);
+        let second = crate::backend::spillplacement::Placement::new(&body, &bundles);
+        assert_eq!(runs() - before, 1, "the levels were worked out for each placement");
+        assert!(std::sync::Arc::ptr_eq(&first.frequency, &second.frequency));
     }
 
     /// A carve asked whether its value is a constant or an address by three
