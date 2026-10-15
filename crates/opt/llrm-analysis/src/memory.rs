@@ -1547,7 +1547,7 @@ pub struct MemRef {
 /// The accesses worked out for a version of a function, and which version.
 struct Held {
     key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::HashMap<InstId, Option<MemRef>>>>,
+    seen: std::rc::Rc<std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Option<MemRef>>>>,
 }
 
 /// The most versions kept: the analyses of one function ask in a run, and a
@@ -1653,7 +1653,7 @@ impl MemRef {
                 if held.len() >= ACCESS_VERSIONS {
                     held.remove(0);
                 }
-                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_support::hash::HashMap::default()));
+                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_mir::dense::IdMap::new()));
                 held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
                 seen
             }),
