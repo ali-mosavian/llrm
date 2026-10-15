@@ -2003,6 +2003,17 @@ impl Selector<'_, '_, '_> {
         body.bits = self.arch.object().bitness;
         body.registers = Some(llrm_lir::registers::Regs(self.arch.registers()));
         body.float_stack = self.arch.float_stack();
+        body.float_widths = Arc::new(
+            self.values
+                .iter()
+                .filter_map(|(&value, &held)| match self.module.context.types.get(self.function.value(value).ty) {
+                    Type::Float(FloatKind::Float) => Some((held, 4)),
+                    Type::Float(FloatKind::Double) => Some((held, 8)),
+                    Type::Float(FloatKind::X86Fp80) => Some((held, 10)),
+                    _ => None,
+                })
+                .collect(),
+        );
         body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
         body.ordered = true;
