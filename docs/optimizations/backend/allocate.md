@@ -133,6 +133,13 @@ Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than
 the one it has, so each joined copy becomes a deleted move.
 
+A value a spill or split rewrite takes its register from (its interval now
+overlaps another's in the same register) goes back to the `Assign` stage, as
+LLVM queues an unassigned interval at `RS_Assign`, so it may evict lighter
+holders before it is split or spilled. Left at `Done` it was spilled at once:
+the inner counter of the 8x8 matmul kernel, weight 34 against its
+loop-invariant neighbours' 0.3-0.6.
+
 ### Candidates
 The first run (`regalloc base`) is a full allocation of the prepared body.
 If it spilled, and the profile has `search` (`-fallocation-search`; off at
