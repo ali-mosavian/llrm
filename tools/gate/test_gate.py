@@ -1082,3 +1082,75 @@ def test_smoke_fails_a_pr_that_tracks_build_products_and_does_not_build_for_it(t
     git("add", "d1.o")
     assert gate.products_main(tmp_path) == 1
     assert gate.commands(gate.plan(["docs/x.md"], "smoke"), gate.load(), gate.packages())["products"].startswith("python3 -c")
+
+
+def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_not_run_pytest_programs_files_twice():
+    """#1765 and #1766 were smoke-green and failed tools/test_identical.py (1.7 s) and tests/test_readme.py (0.3 s) in the train. And the
+    pytest step passed `tests/*.py` as explicit files, which run though `--ignore` names them: test_loops.py and test_programs_compile.py
+    (pytest-programs' own) ran twice."""
+    cfg, pkgs = gate.load(), gate.packages()
+    smoke = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke")
+    assert "pytest-quick" in smoke.steps and "pytest-quick" not in gate.plan(["docs/x.md"], "smoke").steps
+    quick = gate.commands(smoke, cfg, pkgs)["pytest-quick"]
+    for slow in cfg["smoke"]["slow_pytest"]:
+        assert (gate.ROOT / slow).exists(), slow
+        assert f"--ignore={slow}" in quick or slow in ("tests/test_loops.py",), slow
+    assert "tests/test_readme.py" in quick.split() and "--ignore=tools/test_identical.py" not in quick and " tools " in quick
+    assert "pytest-quick-durations.json" in quick and "pytest-durations.json" not in quick, "its own durations file, not the full step's"
+    full = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full"), cfg, pkgs)
+    for step in ("pytest", "pytest-quick"):
+        named = (full if step == "pytest" else {step: quick})[step].split()
+        assert "tests/test_loops.py" not in named and "tests/test_programs_compile.py" not in named and "tests/*.py" not in named, step
+    assert "tests/test_loops.py" in full["pytest-programs"] and "tests/test_programs_compile.py" in full["pytest-programs"]
+
+def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
+    """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
+    import os
+    import subprocess as sp
+
+    (tmp_path / "uv").write_text(
+        "#!/bin/sh\n"
+        + "".join(f"echo 'FAIL row{n}: instructions 10 > 9 (worse)'\n" for n in range(20))
+        + "echo 'BETTER rowa: instructions 8 < 9'\necho 'BETTER rowb: instructions 8 < 9'\necho '424 measurements: 20 problems, 2 better'\n"
+    )
+    (tmp_path / "uv").chmod(0o755)
+    command = gate.commands(gate.plan(["bench/fib/fib.c"], "full"), gate.load(), gate.packages())["bench"]
+    done = sp.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
+    assert done.returncode != 0
+    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "BETTER rowa" in done.stdout and "20 problems" in done.stdout, done.stdout
+
+
+def test_smoke_runs_the_source_scans_that_are_root_test_binaries_and_the_other_tiers_do_not_twice():
+    """#1792 put a std HashMap in settled.rs: smoke-green, red in the train's integration step (tests/seeded_maps.rs), a source scan only
+    that step ran."""
+    cfg, pkgs = gate.load(), gate.packages()
+    binaries = [Path(one["file"]).stem for one in cfg["scan"] if one.get("step") == "integration" and Path(one["file"]).stem != "target_facts"]
+    assert "seeded_maps" in binaries and "no_local_paths" in binaries
+    smoke = gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], "smoke"), cfg, pkgs)["scans"]
+    assert all(f"--test {name} " in smoke for name in binaries) and "--test target_facts" not in smoke, smoke
+    for tier in ("fast", "full"):
+        assert "--test seeded_maps" not in gate.commands(gate.plan(["crates/backend/llrm-core/src/lib.rs"], tier), cfg, pkgs)["scans"], tier
+
+
+def test_the_facts_step_fails_on_a_failing_target_facts_and_on_a_run_that_ran_no_test(tmp_path):
+    """The step printed `facts 1 0` (1 s wall, 0 cpu) and was taken on trust: it runs tests/target_facts.rs, and a failure or a run that
+    reported nothing fails it."""
+    import os
+
+    cfg, pkgs = gate.load(), gate.packages()
+    plan = gate.plan(["tools/bench/bench.py"], "smoke")
+    command, check = gate.commands(plan, cfg, pkgs)["facts"], gate.expected(plan, cfg, pkgs)["facts"]
+    assert "--test target_facts" in command and check == (1, False)
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for outcome, body in {
+        "ok": "echo 'running 11 tests'; echo 'test result: ok. 11 passed; 0 failed'; exit 0",
+        "failed": "echo 'test result: FAILED. 10 passed; 1 failed'; exit 101",
+        "silent": "exit 0",
+    }.items():
+        (stubs / "cargo").write_text(f"#!/bin/sh\n{body}\n")
+        (stubs / "cargo").chmod(0o755)
+        logs = tmp_path / outcome
+        logs.mkdir()
+        _, code, _, _ = gate.run_step("facts", command, logs, {**os.environ, "PATH": f"{stubs}:{os.environ['PATH']}"}, check)
+        assert code == {"ok": 0, "failed": 101, "silent": 78}[outcome], (outcome, code)
