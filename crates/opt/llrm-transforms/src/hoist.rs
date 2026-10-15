@@ -31,7 +31,9 @@
 //! across the loop is charged its release. At -Os the run is priced in bytes,
 //! every block once. The moved function's liveness is the kept one's with the
 //! values the run moved solved again (`profit::spill_forecast_after`;
-//! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
+//! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own); the
+//! blocks the move leaves as they were are replayed from the kept function's
+//! sweep, not swept again.
 //!
 //! A hoisted load is priced by what it saves each trip. A floating load its one
 //! reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
@@ -253,7 +255,7 @@ fn _affordable(
     costs: &OperationCosts,
     room: crate::spill::Room,
     frequency: &std::collections::BTreeMap<i64, i64>,
-    held: &mut Option<i64>,
+    held: &mut Option<Kept>,
 ) -> Vec<InstId> {
     // Each clone is priced from this, its liveness solved again for the values
     // the run moves alone (the whole function was solved for each of 28
@@ -289,10 +291,10 @@ fn _affordable(
                     &|inst| crate::spill::kept_across(outer, unit.context, unit.function, inst),
                     frequency,
                 ),
-                None => Some(crate::spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 }),
+                None => Some(crate::spill::Forecast::nothing()),
             };
-            let Some(kept) = work.zip(forecast).map(|(work, forecast)| work + forecast.cost) else { return run };
-            kept
+            let Some((work, forecast)) = work.zip(forecast) else { return run };
+            Kept { price: work + forecast.cost, memo: forecast.memo }
         }
     };
     // Where no register is priced the price is the work alone, a sum over the
@@ -335,10 +337,10 @@ fn _affordable(
                     costs,
                     frequency
                 ),
-                Some(kept + by),
+                Some(kept.price + by),
                 "the work of the moved function is not the kept work and what each instruction's move changes"
             );
-            kept + by
+            kept.price + by
         } else {
             let Some(work) = profit::weighted(
                 unit.context,
@@ -369,6 +371,7 @@ fn _affordable(
                 unit.layout,
                 hoisted,
                 base,
+                &kept.memo,
                 changes,
                 costs,
                 room,
@@ -418,7 +421,8 @@ fn _affordable(
         }
         llrm_support::debug!(
             "hoist",
-            "kept {kept}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}",
+            "kept {}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}",
+            kept.price,
             floats.len(),
             crossing,
             forecast.spilled
@@ -454,11 +458,11 @@ fn _affordable(
                 floats.iter().copied().skip(left).chain(unworthy.iter()).collect()
             }
         };
-        if beyond.is_empty() && moved - uncounted <= kept {
-            *held = Some(work + forecast.cost);
+        if beyond.is_empty() && moved - uncounted <= kept.price {
+            *held = Some(Kept { price: work + forecast.cost, memo: forecast.memo });
             return run;
         }
-        let costly = moved - uncounted > kept;
+        let costly = moved - uncounted > kept.price;
         let mut stay: BTreeSet<ValueId> =
             if costly { crossing.into_iter().filter(|&value| !free(value)).collect() } else { BTreeSet::new() };
         stay.extend(beyond.iter());
@@ -579,6 +583,13 @@ fn _displacement(
     matches!(op.opcode, Opcode::GetElementPtr { .. })
         && op.operands[1..].iter().all(|one| matches!(one, Operand::Constant(_)))
         && crate::spill::address_only(function, value, 3)
+}
+
+/// What a function costs as it stands, and what its forecast found block by
+/// block, for the forecast of a clone of it to replay.
+struct Kept {
+    price: i64,
+    memo: crate::spill::Memo,
 }
 
 /// Whether a scalar local is still held in a slot only loaded and stored:

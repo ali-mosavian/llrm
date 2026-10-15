@@ -219,6 +219,47 @@ pub struct Forecast<S> {
     pub spilled: S,
     /// The most residents past a point's registers, before any spill.
     pub peak: i64,
+    /// What the sweep found block by block, where it was asked to keep it.
+    pub memo: Memo,
+}
+
+/// What a sweep found in each block, and the prices it used: for the sweep of
+/// a function that differs from the one swept in a few values to replay the
+/// blocks those leave alone.
+#[derive(Clone, Default)]
+pub struct Memo {
+    blocks: IdMap<BlockId, std::rc::Rc<BlockMemo>>,
+    prices: std::rc::Rc<BTreeMap<ValueId, i64>>,
+}
+
+/// One block's sweep: what it read, and what it spilled.
+struct BlockMemo {
+    insts: Vec<InstId>,
+    /// The values the block touches: live in it, read in it or made in it.
+    touched: Vec<ValueId>,
+    /// Their cells.
+    cells: Vec<ValueId>,
+    /// Which of those cells were spilled when the block began.
+    entered_spilled: Vec<ValueId>,
+    /// What it spilled, at what price each.
+    spills: Vec<(i64, ValueId)>,
+    /// The most residents past a point's registers in it.
+    peak: i64,
+}
+
+/// What a sweep of a function that is `memo`'s with some values changed may
+/// replay: the values changed, and the pressure `memo` was found over.
+pub struct Reuse<'a> {
+    pub memo: &'a Memo,
+    pub base: &'a Pressure,
+    pub dirty: &'a IdSet<ValueId>,
+}
+
+impl<S: Default> Forecast<S> {
+    /// What a function that needs no fitting costs.
+    pub fn nothing() -> Self {
+        Self { cost: 0, spilled: S::default(), peak: 0, memo: Memo::default() }
+    }
 }
 
 /// The cells spilled so far.
@@ -347,7 +388,7 @@ fn fitted<K: Ord + Copy, S: Spilled<K>>(
             spilled.add(one);
         }
     }
-    Forecast { cost, spilled, peak }
+    Forecast { cost, spilled, peak, memo: Memo::default() }
 }
 
 /// Whether `inst` leaves only the registers a call does.
@@ -895,6 +936,13 @@ fn _cell(
 }
 
 #[cfg(test)]
+#[cfg(test)]
+thread_local! {
+    /// (blocks swept, blocks replayed from a memo) by `swept`, for a test that
+    /// a forecast of a function a motion changed sweeps what changed.
+    pub(crate) static BLOCKS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
 thread_local! {
     /// `traffic` calls, for a test that a pass finds the traffic of a function
     /// only when it asks.
@@ -1875,7 +1923,45 @@ impl<'a> View<'a> {
             words(self.context, self.layout, self.function, value)
         });
         let price = |cell: ValueId| traffic.get(&cell).map_or(0, |one| one.price(costs));
-        self.swept(&price)
+        self.swept(&price, None, false)
+    }
+
+    /// `forecast`, keeping what each block found; where `reuse` is given, the
+    /// blocks it says are as they were are not swept again but replayed.
+    pub fn forecast_kept(
+        &self,
+        costs: &OperationCosts,
+        frequency: &BTreeMap<i64, i64>,
+        reuse: Option<&Reuse>,
+    ) -> Forecast<IdSet<ValueId>> {
+        let traffic = traffic(self.function, frequency, &self.pressure.cells, costs, &|_| true, &|value| {
+            words(self.context, self.layout, self.function, value)
+        });
+        let prices: BTreeMap<ValueId, i64> = traffic.iter().map(|(cell, one)| (*cell, one.price(costs))).collect();
+        let price = |cell: ValueId| prices.get(&cell).copied().unwrap_or(0);
+        let reuse = reuse.map(|reuse| {
+            // A cell is dirty where its price is not what it was, or a value
+            // of it is.
+            let mut cells = IdSet::<ValueId>::new();
+            for (cell, now) in &prices {
+                if reuse.memo.prices.get(cell).copied().unwrap_or(0) != *now {
+                    cells.insert(*cell);
+                }
+            }
+            for (cell, was) in reuse.memo.prices.iter() {
+                if !prices.contains_key(cell) && *was != 0 {
+                    cells.insert(*cell);
+                }
+            }
+            for value in reuse.dirty.iter() {
+                cells.insert(_cell(&self.pressure.cells, value));
+                cells.insert(_cell(&reuse.base.cells, value));
+            }
+            (reuse, cells)
+        });
+        let mut found = self.swept(&price, reuse.as_ref().map(|(reuse, cells)| (*reuse, cells)), true);
+        found.memo.prices = std::rc::Rc::new(prices);
+        found
     }
 
     /// The forecast over the points of every site, found without a set copied
@@ -1885,6 +1971,8 @@ impl<'a> View<'a> {
     fn swept(
         &self,
         price: &dyn Fn(ValueId) -> i64,
+        reuse: Option<(&Reuse, &IdSet<ValueId>)>,
+        record: bool,
     ) -> Forecast<IdSet<ValueId>> {
         let (context, layout, function, room) = (self.context, self.layout, self.function, self.room);
         let counted = |value: ValueId| self.pressure.counted.contains(&value);
@@ -1912,8 +2000,42 @@ impl<'a> View<'a> {
                     },
                 )
         };
+        sweep.logging = record;
+        let mut memo = Memo::default();
         for &block in function.layout() {
+            if let Some((reuse, cells)) = reuse
+                && let Some(old) = reuse.memo.blocks.get(&block)
+                && self.replayable(old, reuse, cells, block, &sweep.spilled)
+            {
+                for &(each, cell) in &old.spills {
+                    sweep.cost += each;
+                    sweep.spilled.add(cell);
+                }
+                sweep.peak = sweep.peak.max(old.peak);
+                memo.blocks.insert(block, std::rc::Rc::clone(old));
+                #[cfg(test)]
+                BLOCKS.with(|count| count.set((count.get().0, count.get().1 + 1)));
+                continue;
+            }
+            #[cfg(test)]
+            BLOCKS.with(|count| count.set((count.get().0 + 1, count.get().1)));
             let liveness::Steps { first, steps } = liveness::live_steps(function, &self.pressure.found, block);
+            let entered = record.then(|| {
+                let mut touched: Vec<ValueId> = first.clone();
+                for step in &steps {
+                    touched.extend(step.read.iter().copied());
+                    touched.extend(step.made);
+                }
+                touched.sort_unstable();
+                touched.dedup();
+                let mut cells: Vec<ValueId> = touched.iter().map(|&value| class(value).0).collect();
+                cells.sort_unstable();
+                cells.dedup();
+                let entered_spilled = cells.iter().copied().filter(|cell| sweep.spilled.contains(cell)).collect();
+                (touched, cells, entered_spilled)
+            });
+            sweep.spills.clear();
+            sweep.block_peak = i64::MIN;
             for kind in &mut kinds {
                 kind.clear();
             }
@@ -1960,9 +2082,97 @@ impl<'a> View<'a> {
                     }
                 }
             }
+            if let Some((touched, cells, entered_spilled)) = entered {
+                memo.blocks.insert(
+                    block,
+                    std::rc::Rc::new(BlockMemo {
+                        insts: function.block(block).instructions().to_vec(),
+                        touched,
+                        cells,
+                        entered_spilled,
+                        spills: std::mem::take(&mut sweep.spills),
+                        peak: sweep.block_peak,
+                    }),
+                );
+            }
         }
-        Forecast { cost: sweep.cost, spilled: sweep.spilled, peak: sweep.peak }
+        Forecast { cost: sweep.cost, spilled: sweep.spilled, peak: sweep.peak, memo }
     }
+
+    /// Whether the sweep of `block` is what `old` found: the same
+    /// instructions with the same live sets, no value or cell it touches
+    /// changed, and the cells it touches spilled as they were.
+    fn replayable(
+        &self,
+        old: &BlockMemo,
+        reuse: &Reuse,
+        dirty_cells: &IdSet<ValueId>,
+        block: BlockId,
+        spilled: &IdSet<ValueId>,
+    ) -> bool {
+        let at = cfg::id(block);
+        let (now, then) = (&self.pressure.found, &reuse.base.found);
+        self.function.block(block).instructions() == &old.insts[..]
+            && now.live_in.get(&at) == then.live_in.get(&at)
+            && now.live_out.get(&at) == then.live_out.get(&at)
+            && !old.touched.iter().any(|value| reuse.dirty.contains(value))
+            && !old.cells.iter().any(|cell| dirty_cells.contains(cell))
+            && old.entered_spilled.iter().all(|cell| spilled.contains(cell))
+            && old.cells.iter().filter(|cell| spilled.contains(cell)).count() == old.entered_spilled.len()
+    }
+}
+
+/// The values whose facts a sweep reads may differ between `base` and `now`,
+/// a function `changes` made of the base's: the results of what they moved,
+/// what they made, erased or rewrote and what that reads, and each value whose
+/// cell, count or address is not what it was.
+pub fn dirty(
+    base: &Pressure,
+    now: &Pressure,
+    function: &Function,
+    changes: &[llrm_mir::module::Change],
+) -> IdSet<ValueId> {
+    use llrm_mir::module::Change;
+    let mut dirty = IdSet::<ValueId>::new();
+    let operand = |dirty: &mut IdSet<ValueId>, operand: &Operand| {
+        if let Operand::Value(value) = operand {
+            dirty.insert(*value);
+        }
+    };
+    let inst = |dirty: &mut IdSet<ValueId>, inst: InstId| {
+        let op = function.instruction(inst);
+        dirty.extend(op.result);
+        op.operands.iter().for_each(|one| operand(dirty, one));
+    };
+    for change in changes {
+        match change {
+            // Where an instruction is is what the blocks' instructions say, and
+            // what it reads stays what it reads.
+            Change::Moved { inst: one, .. } => dirty.extend(function.instruction(*one).result),
+            Change::Inserted { inst: one, .. } | Change::Erased { inst: one, .. } | Change::Rewritten(one) => {
+                inst(&mut dirty, *one)
+            }
+            Change::Cloned { to, .. } => inst(&mut dirty, *to),
+            Change::Operand { inst: one, was, .. } => {
+                operand(&mut dirty, was);
+                inst(&mut dirty, *one);
+            }
+            Change::Operands { inst: one, was } => {
+                was.iter().for_each(|one| operand(&mut dirty, one));
+                inst(&mut dirty, *one);
+            }
+            Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters | Change::Substituted { .. } => {}
+        }
+    }
+    for value in (0..function.value_count() as u32).map(ValueId) {
+        if base.cells.get(&value) != now.cells.get(&value)
+            || base.counted.contains(&value) != now.counted.contains(&value)
+            || base.addressed.contains(&value) != now.addressed.contains(&value)
+        {
+            dirty.insert(value);
+        }
+    }
+    dirty
 }
 
 /// A cell that starts or stops being a resident, and of which kinds of point.
@@ -2095,12 +2305,25 @@ struct Sweep<K, S> {
     spilled: S,
     cost: i64,
     peak: i64,
+    /// What the block being swept has spilled and how far past its registers
+    /// it went.
+    spills: Vec<(i64, K)>,
+    logging: bool,
+    block_peak: i64,
     key: std::marker::PhantomData<K>,
 }
 
 impl<K: Ord + Copy + std::hash::Hash, S: Spilled<K>> Sweep<K, S> {
     fn new() -> Self {
-        Self { spilled: S::default(), cost: 0, peak: 0, key: std::marker::PhantomData }
+        Self {
+            spilled: S::default(),
+            cost: 0,
+            peak: 0,
+            spills: Vec::new(),
+            logging: false,
+            block_peak: 0,
+            key: std::marker::PhantomData,
+        }
     }
 
     /// `fitted`'s step at one point of kind `which`: spill the cells that
@@ -2114,6 +2337,7 @@ impl<K: Ord + Copy + std::hash::Hash, S: Spilled<K>> Sweep<K, S> {
     ) {
         let excess = kinds[which].order.len() as i64 - registers.max(0);
         self.peak = self.peak.max(excess);
+        self.block_peak = self.block_peak.max(excess);
         if excess <= 0 {
             return;
         }
@@ -2121,6 +2345,9 @@ impl<K: Ord + Copy + std::hash::Hash, S: Spilled<K>> Sweep<K, S> {
         touched(victims.len());
         for (each, cell) in victims {
             self.cost += each;
+            if self.logging {
+                self.spills.push((each, cell));
+            }
             self.spilled.add(cell);
             for kind in kinds.iter_mut() {
                 kind.purge(cell);

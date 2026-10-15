@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:88d2b71b0f134a0d644b0cc7ad46f0d98649ba15e208d74aa585fd00cb0d5671 -->
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:9643013cfa7eb7931622f29eefd3afd346fbf6b9da378449537fd90a4521e152 -->
 
 # hoist
 
@@ -36,7 +36,9 @@ fold, or a value rebuilt at each read, is not charged. A floating value held
 across the loop is charged its release. At -Os the run is priced in bytes,
 every block once. The moved function's liveness is the kept one's with the
 values the run moved solved again (`profit::spill_forecast_after`;
-`LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
+`LLRM_CHECK_VIEW` holds it to the forecast of the function on its own); the
+blocks the move leaves as they were are replayed from the kept function's
+sweep, not swept again.
 
 A hoisted load is priced by what it saves each trip. A floating load its one
 reader takes from memory (x87 `fmul m32`) is not an instruction of the loop

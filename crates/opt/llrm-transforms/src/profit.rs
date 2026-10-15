@@ -568,20 +568,22 @@ pub fn spill_forecast(
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
     if !room.priced() {
-        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
+        return Some(spill::Forecast::nothing());
     }
     Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
 
 /// `spill_forecast` of a function that `changes` made of the one `base` is of,
-/// its liveness solved again for the values they name alone. `LLRM_CHECK_VIEW`
-/// holds it to the forecast of the function on its own.
+/// its liveness solved again for the values they name alone and the blocks they
+/// leave as `kept` (the forecast of that one) found them not swept again.
+/// `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own.
 #[allow(clippy::too_many_arguments)]
 pub fn spill_forecast_after(
     context: &Context,
     layout: &DataLayout,
     function: &Function,
     base: &std::rc::Rc<spill::Pressure>,
+    kept: &spill::Memo,
     changes: &[llrm_mir::module::Change],
     costs: &OperationCosts,
     room: Room,
@@ -591,14 +593,21 @@ pub fn spill_forecast_after(
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
     if !room.priced() {
-        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
+        return Some(spill::Forecast::nothing());
     }
     let Some(pressure) =
         spill::Pressure::updated(std::rc::Rc::clone(base), changes, context, function, room.index_scales)
     else {
         return spill_forecast(context, layout, function, costs, room, across, frequency);
     };
-    let found = spill::View::over(&pressure, context, layout, function, room, across).forecast(costs, frequency);
+    // The blocks the changes leave as they were are not swept again.
+    let dirty = spill::dirty(base, &pressure, function, changes);
+    let reuse = spill::Reuse { memo: kept, base, dirty: &dirty };
+    let found = spill::View::over(&pressure, context, layout, function, room, across).forecast_kept(
+        costs,
+        frequency,
+        Some(&reuse),
+    );
     if llrm_support::env_set("LLRM_CHECK_VIEW") {
         let whole = spill::View::of(context, layout, function, room, across).forecast(costs, frequency);
         let spilled =
@@ -629,9 +638,9 @@ pub fn spill_forecast_over(
     #[cfg(test)]
     PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
     if !room.priced() {
-        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
+        return Some(spill::Forecast::nothing());
     }
-    Some(spill::View::over(pressure, context, layout, function, room, across).forecast(costs, frequency))
+    Some(spill::View::over(pressure, context, layout, function, room, across).forecast_kept(costs, frequency, None))
 }
 
 /// Semantic work plus finite-capacity whole-range spill traffic.

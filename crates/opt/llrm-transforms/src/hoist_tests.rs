@@ -807,3 +807,21 @@ fn test_a_486_keeps_loads_in_a_loop_that_its_adds_take_from_memory() {
     let held = invariant_floats_on_a_486(16);
     assert!(held < 8, "{held} of 16 loads hoisted onto a stack of 8");
 }
+
+/// A clone of the function with a run moved was swept block by block as
+/// whole, 208 M of the 6 G d_faces -Os compiles in; the blocks the move leaves
+/// as they were are replayed from the sweep of the function it was made of.
+#[test]
+fn test_a_motion_sweeps_the_blocks_it_changed_and_replays_the_rest() {
+    let mut after = parsed(&two_inner_loops());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::spill::BLOCKS.with(|count| count.set((0, 0)));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let (swept, replayed) = crate::spill::BLOCKS.with(std::cell::Cell::get);
+    assert!(swept > 0, "nothing was swept");
+    assert!(replayed > 0, "{swept} blocks swept and none replayed");
+}
