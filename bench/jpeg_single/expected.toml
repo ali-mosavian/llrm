@@ -1,50 +1,50 @@
-reason = "x87 compare: the left goes on top (one exchange at most) and the compare names the right's slot (fcompp, fcomp st(i) or fcom st(i)), no 3-exchange rotation: jpeg_single bq32 -1.0% instructions, fewer code bytes"
+reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
 blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 5202
+code_bytes = 5212
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4843
+code_bytes = 4853
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5234
+code_bytes = 5244
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4875
+code_bytes = 4885
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 62341030
-code_bytes = 6268
+instructions = 63443161
+code_bytes = 6278
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 63514226
-code_bytes = 5858
+instructions = 64616356
+code_bytes = 5868
 data_bytes = 29697
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3123
+code_bytes = 3220
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 308.3791
 
 [c.Os]
-code_bytes = 2874
+code_bytes = 2947
 data_bytes = 634
 bss_bytes = 15849
 kernel_ms = 310.1458
