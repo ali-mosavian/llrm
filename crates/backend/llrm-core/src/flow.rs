@@ -185,10 +185,8 @@ pub fn checked(
     let verifying = crate::support::debug::verifying();
     let owned =
         if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
-    let (n_before, w_before) = (body.insns().len(), llrm_support::debug::work());
     let transformed = crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body))
         .map_err(Checked::Refused)?;
-    eprintln!("RUN {stage} insns {n_before} work {}", llrm_support::debug::work() - w_before);
     let body = if verifying {
         crate::support::debug::timed("lir verify", || {
             verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)

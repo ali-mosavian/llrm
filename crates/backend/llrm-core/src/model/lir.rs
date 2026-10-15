@@ -140,6 +140,11 @@ pub struct Insn {
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
+    /// What it reads and writes as `peephole::_register_effects` says, for each
+    /// of its four ways of asking (`may_write`, `flags`): hashing the whole
+    /// instruction to find the remembered answer cost more than the answer
+    /// each of the peephole's passes asked again.
+    pub register_effects: [Derived<(u32, Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)>)>; 4],
     /// Its identity (`Insn::id`): given when first asked, never again to
     /// another instruction.
     pub ident: Derived<u64>,
@@ -428,6 +433,7 @@ impl Insn {
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
+            register_effects: Default::default(),
             ident: Derived::default(),
         }
     }
