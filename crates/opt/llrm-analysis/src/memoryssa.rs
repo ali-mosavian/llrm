@@ -403,6 +403,18 @@ impl Accesses {
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
+    /// The manager's accesses where `unit` has them (`Unit::with_plain`), else
+    /// what `make` makes of it.
+    pub fn shared_or<'u>(
+        unit: &'u Unit,
+        make: impl FnOnce() -> Self,
+    ) -> std::borrow::Cow<'u, Self> {
+        match unit.plain {
+            Some(shared) => std::borrow::Cow::Borrowed(shared),
+            None => std::borrow::Cow::Owned(make()),
+        }
+    }
+
     /// `footprint` gives a call's reads and writes, where known.
     fn new(
         unit: &Unit,

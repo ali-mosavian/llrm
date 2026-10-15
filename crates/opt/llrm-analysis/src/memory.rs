@@ -939,18 +939,6 @@ impl<'a> Unit<'a> {
         Self { plain: Some(plain), ..self }
     }
 
-    /// The accesses `Accesses::plain` makes of this unit under `calls`: the
-    /// manager's where the unit has them, else made here.
-    pub fn plain_accesses(
-        &self,
-        calls: &crate::consts::Calls,
-    ) -> std::borrow::Cow<'_, crate::memoryssa::Accesses> {
-        match self.plain {
-            Some(shared) => std::borrow::Cow::Borrowed(shared),
-            None => std::borrow::Cow::Owned(crate::memoryssa::Accesses::plain(self, calls)),
-        }
-    }
-
     pub fn with_exposed(
         self,
         exposed: &'a BTreeSet<ValueId>,

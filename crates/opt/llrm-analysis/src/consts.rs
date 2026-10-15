@@ -1029,7 +1029,7 @@ fn _pointer_stores(
     calls: &Calls,
 ) -> llrm_mir::dense::IdMap<ValueId, Operand> {
     let function = unit.function;
-    let accesses = unit.plain_accesses(calls);
+    let accesses = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let candidates = function
         .walk()
         .filter_map(|(block, inst)| Some((block, inst, avail::loaded_into(unit, &accesses, inst)?)))
@@ -1293,7 +1293,7 @@ pub fn cells_read(
     };
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
-    let accesses = unit.plain_accesses(calls);
+    let accesses = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let known = known.iter().map(|(value, fact)| (value, fact.clone())).collect::<IndexMap<_, _>>();
     let unit = &unit.with_registers(&known);
     let graph = memoryssa::built(unit, &accesses).with_known(_intervals(&known));
@@ -1376,7 +1376,7 @@ pub fn known_walked_over(
     let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     let function = unit.function;
-    let plain = unit.plain_accesses(calls);
+    let plain = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let left = exit_loads(unit, &plain, &registers, exits);
     let wanted = |result: ValueId| _width(unit, Operand::Value(result)).is_some();
     let solve = |accesses: &Accesses| {

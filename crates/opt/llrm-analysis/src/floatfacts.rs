@@ -1156,7 +1156,7 @@ fn _solved_over(
     // `known_walked` does.
     let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
     let walked_unit = annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
-    let accesses = walked_unit.plain_accesses(calls);
+    let accesses = Accesses::shared_or(&walked_unit, || Accesses::plain(&walked_unit, calls));
     // Only a load some store of a possibly known value may reach is walked: 842
     // of d_faces' float loads were, 88 had a provider, and the rest cost 58 M
     // instructions to find none.
