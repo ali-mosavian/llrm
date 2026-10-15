@@ -226,7 +226,7 @@ turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
-measure = ["perf"]
+measure = ["counter"]
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
 "bin:differential" = ["qb45"]
@@ -241,6 +241,12 @@ needs = [{ env = "QB45_DIR", default = "~/work/42-labs/mini-qb/dosbox/qb45", mar
 [capability.qb45demos]
 require = []
 needs = [{ env = "QB45_DEMOS_DIR", default = "~/scratch/gor", marker = "NIBBLES.BAS" }]
+
+# Something that counts instructions: hardware counters (`perf stat`), or valgrind's callgrind where there are none (crates/target/llrm-x86-m32/
+# vsgcc/levels_time.py `counted`). The measure step runs on either; the step costs it judges need the compiler's own counter, perf.
+[capability.counter]
+require = []
+needs = [{ run = "perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,' || command -v valgrind >/dev/null" }]
 
 # Hardware instruction counters (`perf stat`): a VM often has none.
 [capability.perf]

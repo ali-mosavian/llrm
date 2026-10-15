@@ -1192,3 +1192,22 @@ def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_trace
     monkeypatch.setattr(gate, "expected", lambda *a, **k: {})
     code, _ = gate.execute(gate.Plan("fast", "docs", ["docs"], None, [], ["docs/x.md"]))
     assert code == 0
+
+
+def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_nothing(tmp_path):
+    """CI had no counters (perf prints <not supported> on a hosted VM) and `measure` was left out of every run: callgrind counts there."""
+    import shutil
+
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name in ("sh", "grep"):
+        (tools / name).symlink_to(shutil.which(name))
+    (tools / "perf").write_text("#!/bin/sh\necho '<not supported>,,instructions:u,0,100.00,,'\n")
+    (tools / "perf").chmod(0o755)
+    env = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": str(tools), "QB45_DIR": ""}
+    assert {"perf", "counter"} <= gate.missing_capabilities(env).keys()
+    (tools / "valgrind").write_text("#!/bin/sh\n")
+    (tools / "valgrind").chmod(0o755)
+    got = gate.missing_capabilities(env)
+    assert "perf" in got and "counter" not in got
+    assert gate.load()["requires"]["measure"] == ["counter"]
