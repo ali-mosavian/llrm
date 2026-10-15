@@ -11,6 +11,17 @@ import train  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _git_as_on_a_bare_runner(monkeypatch):
+    """No git configuration of the host's, and an identity of the test's: every merge the train makes in these tests failed on a CI runner
+    (no user.name), so every PR looked like a conflict ('conflicts with the batch before it'), and main's CI was red on it."""
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for who in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{who}_NAME", "train test")
+        monkeypatch.setenv(f"GIT_{who}_EMAIL", "train@test")
+
+
+@pytest.fixture(autouse=True)
 def _own_logs(tmp_path, monkeypatch):
     """A test that gates writes its logs under its own directory, not the real ~/scratch/train-logs."""
     monkeypatch.setattr(train, "LOGS", tmp_path / "train-logs")
