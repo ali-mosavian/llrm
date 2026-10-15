@@ -104,6 +104,18 @@ pub struct Frequency {
     flow: IndexMap<(i64, i64), f64>,
 }
 
+// Blocks looked at to find what enters a bridge, for a test that the search
+// is not over every block for each.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn tick() {
+    #[cfg(test)]
+    SCANNED.with(|one| one.set(one.get() + 1));
+}
+
 impl Frequency {
     /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds
     /// and the trip counts and on no instruction, so the last answer stands
@@ -325,11 +337,26 @@ impl Frequency {
         // A bridge runs as often as the edges into it are taken; a chain of
         // them is settled from its first.
         let mut pending: Vec<i64> = blocks.iter().map(|one| one.at).filter(|at| bridge(*at).is_some()).collect();
+        // The blocks that enter each, in the order of `blocks`: a scan of all
+        // of them for each bridge was quadratic in a function of N cases. A few
+        // bridges are scanned for, as the map costs more than they do.
+        let mut entering: IndexMap<i64, Vec<&crate::model::lir::Block>> = IndexMap::default();
+        let mapped = pending.len() > 16;
+        for from in blocks.iter().filter(|_| mapped) {
+            for to in from.succ.iter().copied().collect::<BTreeSet<_>>() {
+                entering.entry(to).or_default().push(from);
+            }
+        }
         while !pending.is_empty() {
             let before = pending.len();
             pending.retain(|at| {
                 let mut runs = 0.0;
-                for from in blocks.iter().filter(|from| from.succ.contains(at)) {
+                let found: Vec<&crate::model::lir::Block> = if mapped {
+                    entering.get(at).cloned().unwrap_or_default()
+                } else {
+                    blocks.iter().filter(|from| from.succ.contains(at)).collect()
+                };
+                for from in found.into_iter().inspect(|_| tick()) {
                     let Some(found) = block.get(&from.at).copied() else { return true };
                     runs += if bridge(from.at).is_some() {
                         found
@@ -604,6 +631,24 @@ mod tests {
         }
         // 5 runs of the header, one of them leaving: 4 take the back edge.
         assert!((after.block(9) - 4.0).abs() < 1e-9, "the copies run {}", after.block(9));
+    }
+
+    /// Each bridge looked through every block for what enters it: N cases, N
+    /// bridges, N^2 (`cases` 1024: `Frequency::over` 3 calls of ~60 Minstr).
+    #[test]
+    fn test_what_enters_a_bridge_is_found_without_a_scan_of_every_block() {
+        let bridges = 40;
+        let mut blocks = vec![block(1, "jne", Operation::Branch, vec![100, 200])];
+        blocks
+            .extend((0..bridges).map(|at| {
+                block(200 + at, "jmp", Operation::Jump, vec![if at + 1 < bridges { 201 + at } else { 100 }])
+            }));
+        blocks.push(block(100, "ret", Operation::Return, vec![]));
+        let body = LirBody::new("f", 1, blocks.into_iter().collect(), IndexMap::default(), IndexMap::default());
+        super::SCANNED.with(|one| one.set(0));
+        let _ = Frequency::of(&body);
+        let scanned = super::SCANNED.with(|one| one.get());
+        assert!(scanned <= 3 * bridges as usize, "{scanned} blocks looked at for {bridges} bridges");
     }
 
     /// A table left as it was after an edge moved (block 3 reached only through

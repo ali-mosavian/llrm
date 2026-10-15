@@ -1196,17 +1196,45 @@ pub fn _merged(
     one: &Interval,
     other: &Interval,
 ) -> Interval {
-    let mut runs: Vec<Segment> = one.segments.iter().chain(&other.segments).copied().collect();
-    runs.sort_by_key(|x| (x.start, x.end));
-    let mut out = vec![runs[0]];
-    for seg in &runs[1..] {
-        let last = out.last_mut().expect("seeded with the first");
-        if seg.start <= last.end {
-            *last = Segment { start: last.start, end: last.end.max(seg.end) };
-            continue;
+    // The shorter one's segments go into the longer, found by a search, and
+    // the stretches between them are copied: a web that takes one value at a
+    // time, N values, sorted N segments N times (`cases` 1024: 10.5 M segments
+    // through the sort).
+    let (big, small) = if one.segments.len() >= other.segments.len() {
+        (&one.segments, &other.segments)
+    } else {
+        (&other.segments, &one.segments)
+    };
+    let mut out: Vec<Segment> = Vec::with_capacity(big.len() + small.len());
+    let push = |out: &mut Vec<Segment>, seg: Segment| match out.last_mut() {
+        Some(last) if seg.start <= last.end => *last = Segment { start: last.start, end: last.end.max(seg.end) },
+        _ => out.push(seg),
+    };
+    // A stretch of the longer one, the segments of which are apart as a rule:
+    // copied whole unless two touch.
+    let run = |out: &mut Vec<Segment>, stretch: &[Segment]| {
+        if stretch.windows(2).any(|pair| pair[1].start <= pair[0].end) {
+            stretch.iter().for_each(|kept| push(out, *kept));
+        } else if let Some((first, rest)) = stretch.split_first() {
+            push(out, *first);
+            // What the segment put in before reaches still joins the ones after
+            // it; past that, they are apart and are copied.
+            let mut joined = 0;
+            while joined < rest.len() && out.last().is_some_and(|last| rest[joined].start <= last.end) {
+                push(out, rest[joined]);
+                joined += 1;
+            }
+            out.extend_from_slice(&rest[joined..]);
         }
-        out.push(*seg);
+    };
+    let mut at = 0;
+    for seg in small {
+        let to = at + big[at..].partition_point(|b| (b.start, b.end) < (seg.start, seg.end));
+        run(&mut out, &big[at..to]);
+        push(&mut out, *seg);
+        at = to;
     }
+    run(&mut out, &big[at..]);
     let weight = if other.weight > one.weight { other.weight } else { one.weight };
     Interval { value: one.value, segments: out, weight }
 }
@@ -1402,6 +1430,60 @@ mod tests {
         let third = intervals::Interval::new(3, vec![segment(4, 9)]);
         assert!(!one.overlaps(&third), "the original said nothing about this range");
         assert!(both.overlaps(&third), "the merged interval must cover what it swallowed");
+    }
+
+    /// `_merged` put the shorter interval's segments into the longer by search
+    /// (a web taking one value at a time sorted all its segments for each, N^2
+    /// at `cases` 1024). It must give what sorting and joining all the segments
+    /// gives, whatever overlaps or touches: a wide segment put in swallows the
+    /// segments after it that it reaches, touching ones included.
+    #[test]
+    fn test_merging_by_search_gives_what_sorting_the_segments_gives() {
+        let reference = |one: &intervals::Interval, other: &intervals::Interval| {
+            let mut runs: Vec<intervals::Segment> = one.segments.iter().chain(&other.segments).copied().collect();
+            runs.sort_by_key(|x| (x.start, x.end));
+            let mut out = vec![runs[0]];
+            for seg in &runs[1..] {
+                let last = out.last_mut().unwrap();
+                if seg.start <= last.end {
+                    *last = intervals::Segment { start: last.start, end: last.end.max(seg.end) };
+                } else {
+                    out.push(*seg);
+                }
+            }
+            out
+        };
+        // Sorted segments that may touch each other, from a small generator.
+        fn draw(
+            seed: &mut u64,
+            limit: u64,
+        ) -> u64 {
+            *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (*seed >> 33) % limit
+        }
+        fn made(
+            seed: &mut u64,
+            count: u64,
+            reach: u64,
+        ) -> Vec<intervals::Segment> {
+            let mut at = draw(seed, 5) as i64;
+            (0..count)
+                .map(|_| {
+                    let start = at + draw(seed, 4) as i64;
+                    let end = start + 1 + draw(seed, reach) as i64;
+                    at = end + draw(seed, 3) as i64;
+                    intervals::Segment { start, end }
+                })
+                .collect()
+        }
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        for round in 0..400 {
+            let (long, short, reach) = (1 + draw(&mut seed, 12), 1 + draw(&mut seed, 4), 1 + draw(&mut seed, 30));
+            let (a, b) = (made(&mut seed, long, 3), made(&mut seed, short, reach));
+            let (one, other) = (intervals::Interval::new(1, a), intervals::Interval::new(2, b));
+            assert_eq!(_merged(&one, &other).segments, reference(&one, &other), "round {round}");
+            assert_eq!(_merged(&other, &one).segments, reference(&other, &one), "round {round} swapped");
+        }
     }
 
     #[test]
