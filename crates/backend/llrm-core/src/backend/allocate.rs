@@ -1476,88 +1476,6 @@ const INF: f64 = f64::INFINITY;
 /// N rounds of N steps.
 pub const HINT_DEPTH: usize = 128;
 
-/// The fixed register each value reaches through the fewest copies, up to
-/// `HINT_DEPTH` of them.
-///
-/// A loop's sum placed before the return's copy to AX is otherwise seated
-/// where nothing asked, and whatever took AX leaves a move on the exit.
-fn _wanted(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-) -> IndexMap<u32, RegId> {
-    let found = _wanted_within(hints, fixed, HINT_DEPTH);
-    if llrm_support::env_set("LLRM_CHECK_WANTED") {
-        // The unbounded walk reaches the same values by the same registers as
-        // far as the bound goes: every value the bounded one holds is
-        // held alike, and where the walk ended before the bound nothing
-        // more is reached.
-        let whole = _wanted_within(hints, fixed, usize::MAX);
-        assert!(
-            found.iter().all(|(value, register)| whole.get(value) == Some(register)),
-            "a value the bounded hint walk reached differs from the unbounded one"
-        );
-        let deepest = _wanted_depth(hints, fixed);
-        assert!(
-            deepest > HINT_DEPTH || found == whole,
-            "the hint walk ended within {HINT_DEPTH} levels ({deepest}) yet differs from the unbounded one"
-        );
-    }
-    found
-}
-
-/// How many levels the unbounded walk takes.
-fn _wanted_depth(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-) -> usize {
-    let mut seen: BTreeSet<u32> = fixed.keys().copied().collect();
-    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    let mut levels = 0;
-    while !frontier.is_empty() {
-        levels += 1;
-        let mut reached = Vec::new();
-        for value in frontier {
-            for other in hints.get(&value).into_iter().flatten() {
-                if seen.insert(*other) {
-                    reached.push(*other);
-                }
-            }
-        }
-        frontier = reached;
-    }
-    levels
-}
-
-fn _wanted_within(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-    depth: usize,
-) -> IndexMap<u32, RegId> {
-    // Only the values that are reached are kept: a pinned value is looked up in
-    // `fixed`, which is not copied.
-    let mut wanted: IndexMap<u32, RegId> = IndexMap::with_capacity_and_hasher(hints.len(), Default::default());
-    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    let mut levels = 0;
-    while !frontier.is_empty() && levels < depth {
-        levels += 1;
-        let mut reached = Vec::new();
-        for value in frontier {
-            let register = match fixed.get(&value) {
-                Some(register) => _whole(*register),
-                None => wanted[&value],
-            };
-            for other in hints.get(&value).into_iter().flatten() {
-                if !fixed.contains_key(other) && !wanted.contains_key(other) {
-                    wanted.insert(*other, register);
-                    reached.push(*other);
-                }
-            }
-        }
-        frontier = reached;
-    }
-    wanted
-}
-
 /// The registers wanted by the values that want one and have none yet, where
 /// they are live: found by looking at every such value until enough is asked
 /// since the intervals last moved, then by a tree over where they are live.
@@ -2107,7 +2025,9 @@ fn _allocated(
     for Reverse(Queued(_, _, one)) in &queue {
         *waiting.entry(*one).or_insert(0) += 1;
     }
-    let mut wanted = _wanted(&facts.hints, &fixed);
+    // The fixed register each value reaches through the fewest copies, up to
+    // `HINT_DEPTH` of them, kept up to date by what each rewrite names.
+    let mut walk = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
     let mut claims = Claims::default();
     let mut fenced: BTreeSet<u32> = fixed.keys().copied().chain(protected.iter().copied()).collect();
     let mut seen = 0;
@@ -2154,11 +2074,11 @@ fn _allocated(
                 }
             }
             if votes.is_empty() {
-                if let Some(register) = wanted.get(&value) {
+                if let Some(register) = walk.wanted().get(&value) {
                     *votes.entry(*register).or_insert(0) += 1;
                 }
             }
-            let claimed = claims.by(&wanted, &facts.live, value, &mine, &r#where);
+            let claimed = claims.by(walk.wanted(), &facts.live, value, &mine, &r#where);
             order.sort_by_key(|register| {
                 (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
             });
@@ -2545,7 +2465,13 @@ fn _allocated(
             }
             required_seen = Some(crate::analysis::facts::Stamp::of(&body));
         });
-        wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
+        llrm_support::debug::timed("after wanted", || {
+            walk.update(&facts.hints, &fixed, changes.as_ref().map(|changes| &changes.touched));
+        });
+        if llrm_support::env_set("LLRM_CHECK_WANTED") {
+            let whole = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
+            assert!(walk.wanted() == whole.wanted(), "{}: the hint walk kept up to date differs from one made afresh", body.name);
+        }
         claims = Claims::default();
         match &changes {
             // Only the intervals of the values the rewrite named moved.
