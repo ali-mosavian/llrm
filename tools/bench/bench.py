@@ -758,8 +758,7 @@ def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
 
         head = measure.git("rev-parse", "HEAD")
         base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
-        # the build lock too: measure.py builds its bases in one tree and target, and the binaries must stay while they are measured
-        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"), measure.locked("build"):
+        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
             base = basecounts.base_counts(
                 base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
             )
