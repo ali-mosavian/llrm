@@ -38,6 +38,9 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   was kept this way at the start of each round of a fixed point, so the facts are
   worked out afresh once a round. `ThroughMemory` is `SOUND`: on `d_faces` -O1 it is derived 49 times
   instead of 62 and the compile takes 1.3% fewer instructions.
+- `NAMES_VALUES`: the result holds values (a `MemRef`'s pointer or root), not
+  facts keyed by them, so uses replaced by an equal value end its keeping:
+  the replaced value is erased and it would name one that is gone.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
   something was kept as sound, what was derived from it is not compared with

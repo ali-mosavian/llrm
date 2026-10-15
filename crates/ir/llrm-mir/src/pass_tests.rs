@@ -897,12 +897,16 @@ fn sound_edits_are_read_from_the_log_not_promised_by_a_pass() {
     let before = function.mark();
     function.replace_value(value_of(function, b), Operand::Value(value_of(function, a)));
     function.erase(b).expect("unused now");
-    assert!(sound_edits(function, function.changes_since(before).unwrap()), "found again, then erased");
+    assert!(sound_edits(function, function.changes_since(before).unwrap(), false), "found again, then erased");
+    assert!(
+        !sound_edits(function, function.changes_since(before).unwrap(), true),
+        "the same, for a result that names values"
+    );
     let before = function.mark();
     function.set_operand(c, 0, Operand::Value(value_of(function, a)));
-    assert!(!sound_edits(function, function.changes_since(before).unwrap()), "an operand set to another value");
+    assert!(!sound_edits(function, function.changes_since(before).unwrap(), false), "an operand set to another value");
     let before = function.mark();
     let ret = function.terminator(function.entry().unwrap()).unwrap();
     function.erase(ret).expect("the last instruction");
-    assert!(!sound_edits(function, function.changes_since(before).unwrap()), "a terminator erased");
+    assert!(!sound_edits(function, function.changes_since(before).unwrap(), false), "a terminator erased");
 }

@@ -293,6 +293,11 @@ pub trait Analysis: 'static {
     /// is asked of an erased one. `covers` is the check.
     const SOUND: bool = false;
 
+    /// Whether the result holds values (a pointer, a root), not facts keyed by
+    /// them: uses replaced by an equal value (`Substituted`) then leave it
+    /// naming one that is gone, and it is not kept past them.
+    const NAMES_VALUES: bool = false;
+
     /// Whether `old`, derived before sound edits, says nothing `fresh`, derived
     /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
     /// sound.
@@ -981,6 +986,7 @@ fn check_replay() -> bool {
 pub fn sound_edits(
     function: &Function,
     changes: &[crate::module::Change],
+    names_values: bool,
 ) -> bool {
     use crate::module::Change;
     use crate::module::Operand;
@@ -1000,6 +1006,8 @@ pub fn sound_edits(
     };
     for change in changes {
         match *change {
+            // A result that names values would name the replaced one.
+            Change::Substituted(_) if names_values => return false,
             Change::Substituted(value) => {
                 replaced.insert(value);
             }
@@ -1133,7 +1141,7 @@ impl Analyses {
             if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
                 return None;
             }
-            if A::SOUND && sound_edits(function, changes) {
+            if A::SOUND && sound_edits(function, changes, A::NAMES_VALUES) {
                 if check_replay() {
                     let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
