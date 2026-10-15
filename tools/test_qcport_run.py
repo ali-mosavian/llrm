@@ -41,6 +41,14 @@ def test_the_toolchain_files_are_found_where_the_toolchain_is_here_not_where_the
     assert "file '/work/side/bench.obj'" in lines
 
 
+def test_a_run_that_drew_nothing_says_what_the_emulator_and_the_program_last_said(tmp_path):
+    """CI's qcport said `a run drew nothing` for both builds and the work directory was gone with the runner: nothing to read."""
+    (tmp_path / "dosbox.out").write_text("\n".join(f"line {n}" for n in range(30)))
+    got = qcport_run.tails(tmp_path, lines=3)
+    assert got[1:] == ["    line 27", "    line 28", "    line 29"] and "dosbox.out" in got[0]
+    assert "no output at all" in qcport_run.tails(tmp_path / "..")[0]
+
+
 def test_the_same_drawing_is_no_difference():
     drawn = {"frames": "62", "polys": "37637", "md5": "ba64"}
     assert qcport_run.verdict(drawn, dict(drawn)) == []

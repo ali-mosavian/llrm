@@ -99,6 +99,16 @@ def verdict(reference: dict[str, str], built: dict[str, str]) -> list[str]:
     return [f"{key}: Borland {reference.get(key)}, llrm {built.get(key)}" for key in ("frames", "polys", "md5") if reference.get(key) != built.get(key)]
 
 
+def tails(directory: Path, lines: int = 12) -> list[str]:
+    """What the emulator and the program last said, for a run that drew nothing: the work directory is gone with a CI runner."""
+    out = []
+    for name in ("dosbox.out", "dosbox.log", "error.log", "cport.txt"):
+        one = directory / name
+        if one.is_file() and (text := one.read_text(errors="replace").strip()):
+            out += [f"  {directory.name}/{name}:"] + [f"    {line}" for line in text.splitlines()[-lines:]]
+    return out or [f"  {directory.name}: no output at all ({sorted(p.name for p in directory.iterdir())[:12]})"]
+
+
 def progress(directory: Path) -> int:
     """How much the run has written: the emulator's log grows as the program steps, so a stalled run's does not."""
     return sum(one.stat().st_size for one in directory.iterdir() if one.is_file())
@@ -173,6 +183,8 @@ def main() -> int:
     differences = verdict(reference, built)
     if differences:
         print("QCport built by llrm-c draws differently from the Borland build:", *differences, f"({work})", sep="\n  ")
+        if not (reference.get("polys") and built.get("polys")):
+            print("\n".join(line for side in sides.values() for line in tails(side)))
         return 1
     print(f"QCport: {len(sources)} modules by llrm-c draw what the Borland build draws: {built['frames']} frames, {built['polys']} polys, bmp {built['md5'][:8]}")
     dosbatch.discard(work)
