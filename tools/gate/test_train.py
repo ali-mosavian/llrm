@@ -176,3 +176,99 @@ def test_trains_of_different_names_share_no_lock_worktree_or_target(tmp_path):
     first, second = train.places("train", tmp_path), train.places("train5", tmp_path)
     assert train.places("train", tmp_path) == (tmp_path / "scratch/train.lock", tmp_path / "scratch/train-tree", tmp_path / "scratch/train-main")
     assert not set(first) & set(second) and len({p.name for p in (*first, *second)}) == 6
+
+
+def test_prs_that_bless_the_same_benchmark_do_not_bounce_each_other_and_the_batchs_file_stands(tmp_path):
+    """Train 5 bounced four of its five PRs: each blessed its own counts in bench/jpeg_fixed/expected.toml, and two edits of one file conflict."""
+    git = _repo(tmp_path)
+    (tmp_path / "bench/j").mkdir(parents=True)
+    (tmp_path / "bench/j/expected.toml").write_text("instructions = 100\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "bench")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    a = _branch(git, tmp_path, "a", "bench/j/expected.toml", "instructions = 90\n")
+    b = _branch(git, tmp_path, "b", "bench/j/expected.toml", "instructions = 95\n")
+    c = _branch(git, tmp_path, "c", "f", "from c\n")
+    git("checkout", "-q", "--detach", "main")
+    tip, bounced = train.build_tip([pr(1, sha=a), pr(2, sha=b), pr(3, sha=c)], tmp_path)
+    assert bounced == [], bounced
+    assert (tmp_path / "bench/j/expected.toml").read_text() == "instructions = 90\n" and (tmp_path / "f").read_text() == "from c\n"
+    assert git("rev-parse", "HEAD") == tip and not git("status", "--porcelain")
+
+
+def test_the_bless_step_runs_bench_in_the_trees_own_target(monkeypatch, tmp_path):
+    """Train 5's bless step ran bench in the shared target, whose binaries another tree had built: `stale binaries in .../release`, and
+    the batch failed its strict bench gate."""
+    seen = []
+
+    def fake(command, **kw):
+        seen.append(kw["env"]["CARGO_TARGET_DIR"])
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(train, "git", lambda *a, **k: subprocess.CompletedProcess(a, 0, "", ""))
+    monkeypatch.setattr(train.subprocess, "run", fake)
+    monkeypatch.setenv("CARGO_TARGET_DIR", "/t/target")
+    train.bless("a" * 40, [pr(1)], tmp_path / "train5-tree")
+    assert seen == ["/t/target-train5-tree"]
+
+
+def test_a_member_a_rebuilt_tip_leaves_out_is_reported_dropped_and_never_offered():
+    """Train 4 offered `PRs=#1765 #1768 #1780` for a tip holding #1768 and #1780: after the bisect it rebuilt the tip of the green rest, and
+    a member that conflicted only there was dropped without a word and still listed."""
+    said = []
+    one, two, three = pr(1), pr(2), pr(3)
+
+    def tip_of(some):
+        names = "".join(str(p.number) for p in some)
+        if len(some) < 3 and two in some:  # 2 conflicts once it is merged without 3
+            return f"tip{names.replace('2', '')}", [(two, "conflicts")]
+        return f"tip{names}", []
+
+    def gate_at(tip, steps):
+        return train.Verdict("3" not in tip, [] if "3" not in tip else ["bench"], "FAIL x\n")
+
+    code = train.run([one, two, three], tip_of, gate_at, lambda steps: train.Verdict(True), said.append)
+    assert not any("#2" in line and "PRs=" in line for line in said), said
+    assert any(line.startswith("TRAIN DROPPED #2") for line in said), said
+    assert code == 0 and any(line == "TRAIN PASS TIP=tip1 PRs=#1" for line in said), said
+
+
+def test_every_tip_of_a_run_is_built_on_the_commit_main_was_at_when_it_started(tmp_path):
+    """Train 4's tips were built on origin/main as it moved: the one rebuilt after the bisect sat on a main that had gained #1819, #1765
+    conflicted with it there and was dropped. A tip is built on the pinned commit, whatever the ref says now."""
+    git = _repo(tmp_path)
+    pinned = git("rev-parse", "HEAD")
+    a = _branch(git, tmp_path, "a", "f", "from a\n")
+    git("checkout", "-q", "main")
+    (tmp_path / "f").write_text("main moved\n")
+    git("commit", "-q", "-am", "main moves")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "--detach", "main")
+    tip, bounced = train.build_tip([pr(1, sha=a)], tmp_path, pinned)
+    assert bounced == [] and (tmp_path / "f").read_text() == "from a\n", "built on the pinned commit, where a merges"
+    moved, bounced = train.build_tip([pr(1, sha=a)], tmp_path)
+    assert [p.number for p, _ in bounced] == [1], "on the moved ref it conflicts: what the train used to do"
+
+
+def test_a_report_reaches_a_redirected_log_as_it_is_printed(tmp_path):
+    """Trains 4 to 7 printed nothing to their logs until they ended (stdout to a file is block-buffered), so every watch on them was silent
+    and a passed batch looked like a hung train."""
+    import os
+    import subprocess as sp
+
+    log = tmp_path / "log"
+    code = ("import sys; sys.path.insert(0, %r); import train, time; "
+            "train.run([train.Pr(1, 'a' * 40, [])], lambda prs: ('t', [(prs[0], 'conflicts')]), lambda t, s: None, lambda s: None); time.sleep(30)") % str(Path(train.__file__).parent)
+    with open(log, "w") as out:
+        child = sp.Popen([sys.executable, "-c", code], stdout=out, stderr=sp.STDOUT)
+        try:
+            for _ in range(100):
+                if "TRAIN" in log.read_text():
+                    break
+                import time as _time
+
+                _time.sleep(0.05)
+            assert "TRAIN BOUNCED #1" in log.read_text(), "printed but still in the buffer of a process that has not ended"
+        finally:
+            child.kill()
+            child.wait()
