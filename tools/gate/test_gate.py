@@ -1164,7 +1164,8 @@ def test_a_comma_list_allows_only_those_capabilities_to_be_missing(tmp_path):
     """CI allowed any missing tool ("1") and passed Turbo, CodeView, QB 4.5 and QCport by skipping them; now it allows `perf` and nothing else."""
     env = {"HOME": str(tmp_path), "TCPP30_DIR": str(tmp_path / "none"), "GATE_ALLOW_MISSING": "perf"}
     assert "turbo" not in gate.missing_capabilities(env)
-    assert gate.missing_capabilities({**env, "GATE_ALLOW_MISSING": "perf,turbo"}).keys() == {"turbo"}
+    allowed = gate.missing_capabilities({**env, "GATE_ALLOW_MISSING": "perf,turbo"}).keys()  # perf too where this host has no counters
+    assert "turbo" in allowed and allowed <= {"turbo", "perf"}
 
 
 def test_the_hosted_workflow_allows_only_perf_to_be_missing():
@@ -1192,9 +1193,10 @@ def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_tha
 
 
 def test_a_group_may_point_a_variable_somewhere_else():
-    """QCPORT is QCport's src for the reference step and the qb-quake variant for dfaces: one variable, two checkouts."""
+    """test_identical read the qb-quake variant as QCport (10 modules of 65) when QCPORT was its src: dfaces has a variable of its own."""
     assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
-    assert gate.private_env("/p", "python")["QCPORT"] == "/p/qbq-llrm/src"
+    assert gate.private_env("/p", "python")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "python")["DFACES_SRC"] == "/p/qbq-llrm/src"
     assert "QCPORT" not in gate.private_env("/p", "unit")
 def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
     """CI's jobs come from `gate.py plan --json` (ci.yml lists no step): the steps of its groups, with the build, are the steps `gate.py run`
@@ -1208,7 +1210,7 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
         ci = json.loads(out.stdout)
         in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
         assert ci["tier"] == local.tier, files
-        assert in_groups + sorted(ci["skipped"]) == sorted(s for s in local.steps if s != "build"), (files, ci)
+        assert sorted(in_groups + list(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
     assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
