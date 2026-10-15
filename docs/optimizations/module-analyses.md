@@ -49,7 +49,9 @@ The pass manager cuts a pipeline into segments at each program pass, and the pro
 
 The summaries are made once the interprocedural step is done, and `manager.freeze` holds them past every later pass that says it adds no memory operation (`FunctionPass::adds_memory_operations`), as gcc's passes after IPA read the summaries it made there. Six of those passes (loop-simplify, LCSSA, fold, algebraic, indvars, dead) used the default, `true`, so each edit of theirs dropped the summaries and made them again. They say `false` now; `LLRM_CHECK_STALE=1` recomputes the frozen analyses after such a pass and asserts the held ones still cover them. A pass added to that stretch of the pipeline says what it does, and the test `the_passes_after_the_summaries_add_no_memory_operation` names the list.
 
-d_faces -O1 with one allocation, instructions: 4863 M to 4551 M (-6.4%); -O2 5425 M to 5098 M; -Os 5159 M to 5018 M. The object is the same at every level; `tools/identical.py` compares the 66 programs and QCport's 65 modules at -O1, -O2, -Os and -Omax with the check switches on. `globals-aa` ran 12 times, now 6, and `summaries` direct, values and points-to fell from 123, 104 and 96 M to 51, 50 and 38 M.
+d_faces with one allocation, instructions, on main 736e47aab: -O1 4310 M to 4118 M (-4.5%), -O2 4867 M to 4663 M, -O3 5615 M to 5431 M, -Os 4694 M to 4607 M. The object is the same at every level; `tools/identical.py` compares the 66 programs and QCport's 65 modules at -O1, -O2, -O3, -Os and -Omax with the check switches on. `globals-aa` ran 12 times, now 6 (212 to 111 M), and `summaries` direct, values and points-to fell from 123, 104 and 96 M to 51, 50 and 38 M.
+
+A run in which every body is dirty is worked out from nothing (`alias::summaries_updating`): updating what was kept, where nothing is, woke readers and compared changes for 2.7 and 5.2 Minstr more than the run from nothing on the `joins` axis at N=64 (-O2). `alias::whole_runs` counts them for the test.
 
 ## Check switch
 
