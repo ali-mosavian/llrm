@@ -2841,25 +2841,31 @@ fn _stable_loads_from(
         if uses[value].iter().any(|one| one.group.is_some()) {
             continue;
         }
-        let flow = flow.get_or_init(|| Flow::of(body));
         let held = if _exact_frame(cell) || _fixed_data(cell).is_some() {
+            let flow = flow.get_or_init(|| Flow::of(body));
             // Only what may write the cell is asked of, and the blocks between
             // the load and its uses are gone over.
             let writers = writers.get_or_init(|| Writers::of(body));
-            let mut events: crate::support::hash::HashMap<usize, Vec<(usize, bool)>> =
-                crate::support::hash::HashMap::default();
-            let near = if _exact_frame(cell) { writers.near(cell) } else { writers.near_fixed(cell) };
+            let mut events = Events::default();
+            let near = if _exact_frame(cell) {
+                writers.near(cell)
+            } else {
+                let (explicit, background) = writers.near_fixed(cell, body.spares.is_empty());
+                events.background = background;
+                explicit
+            };
             for (block, position) in near {
                 if !_keeps(&body.blocks[block].insns[position], define, cell, true, body) {
-                    events.entry(block).or_default().push((position, false));
+                    events.own.entry(block).or_default().push((position, false));
                 }
             }
-            events.entry(define_at.0).or_default().push((define_at.1, true));
-            for list in events.values_mut() {
+            events.own.entry(define_at.0).or_default().push((define_at.1, true));
+            for list in events.own.values_mut() {
                 list.sort_unstable();
             }
             _holds_at(flow, &events, &use_places[value])
         } else {
+            let flow = flow.get_or_init(|| Flow::of(body));
             _unchanged(body, flow, define, cell, &uses[value])
         };
         if llrm_support::env_set("LLRM_CHECK_UNCHANGED") {
@@ -2908,9 +2914,10 @@ impl<'a> Flow<'a> {
 /// body: the loads asked about are many and an instruction that writes none of
 /// their cells is nearly every instruction.
 struct Writers {
-    /// (block, position) of what may write memory no exact frame cell names: a
-    /// call, an unmodeled write, a store to a based, indexed or unplaced
-    /// cell.
+    /// (block, position) of what may write memory no exact frame cell names and
+    /// no fixed data cell: a call, an unmodeled write, a store to a based,
+    /// indexed or unplaced cell. (A store to a fixed data cell never meets a
+    /// frame cell: other regions in `overlap::may_overlap`.)
     wild: Vec<(usize, usize)>,
     /// The stores to an exact frame cell, by its first byte.
     exact: std::collections::BTreeMap<i64, Vec<(usize, usize)>>,
@@ -2918,13 +2925,84 @@ struct Writers {
     widest: i64,
     /// What may write memory no fixed cell of a frame or a data segment names:
     /// a call, an unmodeled write, a store through a register or to an
-    /// unplaced cell. (`wild` also holds the stores to fixed data cells, which
-    /// a frame cell is asked about as it always was.)
+    /// unplaced cell.
     hard_wild: Vec<(usize, usize)>,
-    /// The stores to a fixed data cell, by its space and symbol, then its
-    /// first byte.
-    fixed: std::collections::BTreeMap<(u8, i64), std::collections::BTreeMap<i64, Vec<(usize, usize)>>>,
+    /// The stores to a fixed data cell, by its space and symbol.
+    fixed: crate::support::hash::HashMap<(u8, i64), Group>,
     widest_fixed: i64,
+    /// What writes fixed data cells of more than one space and symbol: asked of
+    /// every fixed cell one by one.
+    mixed: Vec<(usize, usize)>,
+    /// The same by block, in position order, of what writes the cells of one
+    /// symbol: of every symbol, and of the external symbols alone.
+    stores: Lists,
+    externals: Lists,
+}
+
+/// The stores to the fixed data cells of one space and symbol.
+#[derive(Default)]
+struct Group {
+    /// (first byte, (block, position)) in program order.
+    places: Vec<(i64, (usize, usize))>,
+    /// The same by first byte, made when asked.
+    by_byte: std::cell::OnceCell<Vec<(i64, (usize, usize))>>,
+    /// What writes cells of this symbol alone, in program order.
+    only: Vec<(usize, usize)>,
+}
+
+/// Positions in a block, in order.
+type Lists = Vec<Vec<usize>>;
+
+/// What kills a fixed data cell without being named for it (LLVM's
+/// `AliasSetTracker` keeps an unknown-alias set for the same reason): a store
+/// to another external symbol meets an external symbol's cell, a store to any
+/// symbol meets a segment's cell, and a store to another segment's cell meets
+/// nothing of it. The answer is the regions' (`overlap::may_overlap`), whatever
+/// the displacements.
+struct Background<'a> {
+    lists: &'a Lists,
+    /// What writes the cell's own symbol: asked of by bytes, not here.
+    excluded: &'a [(usize, usize)],
+}
+
+/// What may change a cell and where it is made to hold.
+#[derive(Default)]
+struct Events<'a> {
+    /// Per block, (position, true for the load, false for a write), in order.
+    own: crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
+    /// The writes every block's list of positions stands for.
+    background: Option<Background<'a>>,
+}
+
+impl Events<'_> {
+    /// The last event of `block` before `position` (the last of all when
+    /// `None`): its position and whether it is the load.
+    fn before(
+        &self,
+        block: usize,
+        position: Option<usize>,
+    ) -> Option<(usize, bool)> {
+        let own = self.own.get(&block).and_then(|list| {
+            list.iter().rev().find(|(at, _)| position.is_none_or(|bound| *at < bound)).map(|(at, load)| (*at, *load))
+        });
+        let background = self
+            .background
+            .as_ref()
+            .and_then(
+                |background| {
+                    let list = background.lists.get(block)?;
+                    let mut end = position.map_or(list.len(), |bound| list.partition_point(|at| *at < bound));
+                    while end > 0 && background.excluded.binary_search(&(block, list[end - 1])).is_ok() {
+                        end -= 1;
+                    }
+                    end.checked_sub(1).map(|last| (list[last], false))
+                },
+            );
+        match (own, background) {
+            (Some(own), Some(background)) => Some(if background.0 > own.0 { background } else { own }),
+            (one, other) => one.or(other),
+        }
+    }
 }
 
 impl Writers {
@@ -2936,6 +3014,9 @@ impl Writers {
             hard_wild: Vec::new(),
             fixed: Default::default(),
             widest_fixed: 1,
+            mixed: Vec::new(),
+            stores: vec![Vec::new(); body.blocks.len()],
+            externals: vec![Vec::new(); body.blocks.len()],
         };
         for (block, one_block) in body.blocks.iter().enumerate() {
             for (position, one) in one_block.insns.iter().enumerate() {
@@ -2951,16 +3032,21 @@ impl Writers {
                     );
                 let mut wild = one.call.is_some() || one.unmodeled_write();
                 let mut hard = wild;
+                let mut key: Option<(u8, i64)> = None;
+                let mut several = false;
                 for cell in dests {
                     if _exact_frame(cell) {
                         let addr = cell.addr.expect("an exact frame cell has an address");
                         found.exact.entry(addr.disp).or_default().push((block, position));
                         found.widest = found.widest.max(i64::from(cell.width));
-                    } else if let Some(key) = _fixed_data(cell) {
+                    } else if let Some(one_key) = _fixed_data(cell) {
                         let addr = cell.addr.expect("a fixed data cell has an address");
-                        found.fixed.entry(key).or_default().entry(addr.disp).or_default().push((block, position));
+                        found.fixed.entry(one_key).or_default().places.push((addr.disp, (block, position)));
                         found.widest_fixed = found.widest_fixed.max(i64::from(cell.width));
-                        wild = true;
+                        if key.is_some_and(|had| had != one_key) {
+                            several = true;
+                        }
+                        key = Some(one_key);
                     } else {
                         wild = true;
                         hard = true;
@@ -2971,6 +3057,20 @@ impl Writers {
                 }
                 if hard {
                     found.hard_wild.push((block, position));
+                }
+                if let Some(key) = key {
+                    if several {
+                        found.mixed.push((block, position));
+                    } else {
+                        let group = found.fixed.get_mut(&key).expect("its group is made");
+                        if group.only.last() != Some(&(block, position)) {
+                            group.only.push((block, position));
+                            found.stores[block].push(position);
+                            if key.0 == 1 {
+                                found.externals[block].push(position);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2995,29 +3095,56 @@ impl Writers {
         found
     }
 
-    /// `near` for a fixed data cell: the stores to other data cells that are
-    /// not a frame's or another symbol's meet it only by their bytes, and one
-    /// of another symbol may.
+    /// `near` for a fixed data cell: what the cell's own symbol is written by
+    /// meets it by bytes; what writes another symbol meets it as the regions
+    /// say (`Background`) where the body has no `spares` pair (`by_regions`),
+    /// else is named one by one.
     fn near_fixed(
         &self,
         cell: &Mem,
-    ) -> Vec<(usize, usize)> {
+        by_regions: bool,
+    ) -> (Vec<(usize, usize)>, Option<Background<'_>>) {
         let key = _fixed_data(cell).expect("a fixed data cell");
         let low = cell.addr.expect("a fixed data cell has an address").disp;
         let high = low + i64::from(cell.width.max(1));
         let mut found = self.hard_wild.clone();
-        for (other, cells) in &self.fixed {
-            if *other == key {
-                for places in cells.range(low - self.widest_fixed + 1..high).map(|(_, places)| places) {
-                    found.extend(places.iter().copied());
+        found.extend(self.mixed.iter().copied());
+        let group = self.fixed.get(&key);
+        if let Some(group) = group {
+            let by_byte = group
+                .by_byte
+                .get_or_init(
+                    || {
+                        let mut sorted = group.places.clone();
+                        sorted.sort_unstable();
+                        sorted
+                    },
+                );
+            let first = by_byte.partition_point(|(byte, _)| *byte < low - self.widest_fixed + 1);
+            found.extend(by_byte[first..].iter().take_while(|(byte, _)| *byte < high).map(|(_, place)| *place));
+        }
+        // A `spares` pair (the optimizer's proof that a write is apart from a
+        // load) lets a store to another space than the cell's keep it: those
+        // are then named one by one. The stores to an external symbol meet an
+        // external symbol's cell whatever a pair says.
+        let (lists, named) = match (key.0, by_regions) {
+            (1, true) => (Some(&self.stores), None),
+            (1, false) => (Some(&self.externals), Some(0)),
+            (_, true) => (Some(&self.externals), None),
+            (_, false) => (None, Some(1)),
+        };
+        let excluded = group.map_or(&[][..], |group| &group.only);
+        let background = lists.map(|lists| Background { lists, excluded });
+        if let Some(space) = named {
+            for (other, group) in &self.fixed {
+                if other.0 == space {
+                    found.extend(group.only.iter().copied());
                 }
-            } else {
-                found.extend(cells.values().flatten().copied());
             }
         }
         found.sort_unstable();
         found.dedup();
-        found
+        (found, background)
     }
 }
 
@@ -3040,17 +3167,16 @@ fn _fixed_data(cell: &Mem) -> Option<(u8, i64)> {
 /// uses and not over the whole body.
 fn _holds_at(
     flow: &Flow,
-    events: &crate::support::hash::HashMap<usize, Vec<(usize, bool)>>,
+    events: &Events,
     uses: &[(usize, usize)],
 ) -> bool {
     use crate::support::hash::{HashMap, HashSet};
     // Whether the cell holds out of a block that has an event: after its last.
-    let decided = |block: usize| events.get(&block).and_then(|list| list.last()).map(|(_, load)| *load);
+    let decided = |block: usize| events.before(block, None).map(|(_, load)| load);
     let mut needed: Vec<usize> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::default();
     for &(block, position) in uses {
-        let before = events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position));
-        if before.is_none() && seen.insert(block) {
+        if events.before(block, Some(position)).is_none() && seen.insert(block) {
             needed.push(block);
         }
     }
@@ -3084,11 +3210,9 @@ fn _holds_at(
             }
         }
     }
-    uses.iter().all(|&(block, position)| {
-        match events.get(&block).and_then(|list| list.iter().rev().find(|(at, _)| *at < position)) {
-            Some((_, load)) => *load,
-            None => held[&block],
-        }
+    uses.iter().all(|&(block, position)| match events.before(block, Some(position)) {
+        Some((_, load)) => load,
+        None => held[&block],
     })
 }
 

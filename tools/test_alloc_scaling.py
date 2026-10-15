@@ -448,3 +448,21 @@ def test_a_carve_works_on_the_positions_that_name_the_value_not_on_the_block():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["split carving"] < 150, f"cells N=448 -O2: split carving cost {run['split carving']} Minstr (150 allowed; 333 before): {run}"
+
+
+def test_a_load_is_asked_of_the_stores_to_its_own_symbol_and_not_of_every_store_in_the_body():
+    """Every load of a global was asked, one by one, whether each of the body's stores to other globals keeps it: 300 loads against
+    300 stores took `spill stable loads` 1,226 Minstr at -O2 -m32 (5,102 at 600), most of it `may_overlap` building the same answer
+    for every pair. The stores to another external symbol meet it by region and are found by block, not named for each load."""
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    n = 300
+    lines = ["extern void sink(int *);", *(f"int a{k}, k{k};" for k in range(n)), "void taken(void){"]
+    lines += [f" sink(&a{k}); sink(&k{k});" for k in range(n)]
+    lines += ["}", "int fn(int m){ int s=0,i; for(i=0;i<m;i++){"]
+    lines += [f" a{k} += i; s += k{k};" for k in range(n)]
+    lines += [" } return s; }"]
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "stores.c"
+        source.write_text("\n".join(lines) + "\n")
+        run = steps(compiler, source, "-O2")
+    assert run["spill stable loads"] < 500, f"300 stores and 300 loads: spill stable loads cost {run['spill stable loads']} Minstr (500 allowed; 1,226 before)"
