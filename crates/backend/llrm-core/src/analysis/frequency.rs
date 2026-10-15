@@ -660,7 +660,7 @@ mod tests {
         let targets: Vec<i64> = (0..cases).map(|case| 10 + case).collect();
         let mut blocks = vec![block(1, "jmp", Operation::Jump, targets.clone())];
         blocks.extend(targets.iter().map(|&at| block(at, "ret", Operation::Return, vec![])));
-        let body = LirBody::new("f", 1, blocks, IndexMap::default(), IndexMap::default());
+        let body = LirBody::new("f", 1, blocks.into_iter().collect(), IndexMap::default(), IndexMap::default());
         crate::model::lir::ASKED.with(|one| one.set(0));
         let table = Frequency::of(&body);
         let asked = crate::model::lir::ASKED.with(|one| one.get());

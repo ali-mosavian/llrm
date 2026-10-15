@@ -1367,7 +1367,7 @@ fn starting_a_trace_does_not_look_at_every_block_waiting() {
     blocks.push(block(1000, vec![_return(1000)], vec![]));
     blocks.extend((0..arms).map(|case| block(1010 + 10 * case, vec![_return(1010 + 10 * case)], vec![])));
     EXAMINED.with(|one| one.set(0));
-    let placed_body = placed(&body("f", 0, blocks)).unwrap();
+    let placed_body = placed(&body("f", 0, blocks.into_iter().collect())).unwrap();
     assert_eq!(placed_body.blocks.len(), 2 * arms as usize + 3);
     let looked = EXAMINED.with(|one| one.get());
     assert!(looked <= 8 * arms as usize, "{looked} entries looked at for {arms} arms");

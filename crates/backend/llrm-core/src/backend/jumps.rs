@@ -842,10 +842,6 @@ pub fn placed(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
     _placed(body, false)
 }
 
-/// `placed`, for short code where `size`, else by estimated frequency: the
-/// likelier edge falls through, a diamond's likelier arm falls into its
-/// join, an arm leaves its join only for a block before it that reaches the
-/// join `LIKELY`, and a new trace starts at the busiest block left.
 // Entries of the search for the next trace that `_placed` looked at.
 #[cfg(test)]
 thread_local! {
@@ -898,6 +894,10 @@ impl Ord for Nearest {
     }
 }
 
+/// `placed`, for short code where `size`, else by estimated frequency: the
+/// likelier edge falls through, a diamond's likelier arm falls into its
+/// join, an arm leaves its join only for a block before it that reaches the
+/// join `LIKELY`, and a new trace starts at the busiest block left.
 fn _placed(
     body: &LirBody,
     size: bool,
