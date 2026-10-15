@@ -122,7 +122,9 @@
 //! The last chance before a value is spilled is recoloring (`Coloring`,
 //! LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
 //! It is not tried where more values are live at one point of the value than
-//! there are registers for them (`crowded`): no moving about places it.
+//! there are registers for them (`crowded`): no moving about places it. It
+//! finds each group member's segments once and asks a point by search;
+//! `LLRM_CHECK_CROWDED` compares it with the scan of every segment.
 //!
 //! Last, `_recolored_hints` moves a value into a copy partner's register when
 //! that register is free over its whole interval and joins more copies than
@@ -3436,6 +3438,88 @@ impl Coloring<'_> {
             }
             allowed.push(bits);
         }
+        // Segments are sorted and disjoint: a point is in one by search.
+        let covers = |segments: &[ranges::Segment], point: i64| {
+            let at = segments.partition_point(|segment| segment.end <= point);
+            segments.get(at).is_some_and(|segment| segment.start <= point)
+        };
+        // Each member's segments found once, not by hash for each point asked.
+        let lives: Vec<&[ranges::Segment]> = group.iter().map(|one| &self.live[one].segments[..]).collect();
+        // At each point one of them starts within `value`: those live there
+        // need a register each, and the ones whose registers all lie among
+        // some set of them, no more than the set has.
+        let mut seen: BTreeSet<i64> = BTreeSet::new();
+        for segments in &lives {
+            for segment in *segments {
+                let point = segment.start;
+                if !covers(&mine.segments, point) || !seen.insert(point) {
+                    continue;
+                }
+                let here: Vec<u64> = lives
+                    .iter()
+                    .zip(&allowed)
+                    .filter(|(segments, _)| covers(segments, point))
+                    .map(|(_, bits)| *bits)
+                    .collect();
+                // Equal sets ask the same: once each.
+                let mut sets = here.clone();
+                sets.sort_unstable();
+                sets.dedup();
+                for set in &sets {
+                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
+                    if within > set.count_ones() as usize {
+                        return true;
+                    }
+                }
+                let every = here.iter().fold(0u64, |all, bits| all | bits);
+                if here.len() > every.count_ones() as usize {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// `crowded` as it was asked of every point and member by scan: what
+    /// `LLRM_CHECK_CROWDED` compares it with.
+    fn crowded_reference(
+        &self,
+        value: u32,
+    ) -> bool {
+        let mine = &self.live[&value];
+        let mut group: Vec<u32> = vec![value];
+        for register in (self.order)(value) {
+            for other in self.union.meeting(&_whole(register), mine, self.live) {
+                if !group.contains(&other) {
+                    group.push(other);
+                }
+            }
+        }
+        // The registers each could end in: its own order less those a point
+        // inside it destroys, as a bit of the registers there are.
+        let mut registers: Vec<RegId> = Vec::new();
+        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
+        for one in &group {
+            let mut bits = 0u64;
+            for register in (self.order)(*one) {
+                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
+                    continue;
+                }
+                let whole = _whole(register);
+                let at = match registers.iter().position(|held| *held == whole) {
+                    Some(at) => at,
+                    None => {
+                        registers.push(whole);
+                        registers.len() - 1
+                    }
+                };
+                if at >= 64 {
+                    return false;
+                }
+                bits |= 1 << at;
+            }
+            allowed.push(bits);
+        }
         let live_at = |one: u32, point: i64| {
             self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
         };
@@ -3485,6 +3569,13 @@ impl Coloring<'_> {
     ) -> bool {
         if depth >= Self::DEPTH {
             return false;
+        }
+        if depth == 0 && llrm_support::env_set("LLRM_CHECK_CROWDED") {
+            assert_eq!(
+                self.crowded(value),
+                self.crowded_reference(value),
+                "value#{value}: crowded by search differs from by scan"
+            );
         }
         if depth == 0 && self.crowded(value) {
             if llrm_support::env_set("LLRM_CHECK_RECOLOR") {

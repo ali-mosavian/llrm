@@ -1194,3 +1194,22 @@ def test_a_step_below_the_share_floor_is_still_recorded_from_a_few_minstr(monkey
     monkeypatch.setattr(gate, "generated", lambda axis, n: "")
     got = gate.pass_costs("cases", "O1", tmp_path)
     assert "cases O1 tiny" in got and "cases O1 a" in got, got
+
+
+def test_a_last_chance_recolor_precheck_does_not_look_each_value_up_for_each_point(tmp_path):
+    """QCport d_alias at -O1: `Coloring::crowded` (Hall's condition before a recolor) asked, at each point where a value of its group starts,
+    each member of the group whether it is live there, looking the member's interval up by hash each time and searching its segments
+    linearly: `regalloc recolor` 78.5 Minstr (d_faces 159). The members' segments are found once and searched by position: 58.5 (116). A
+    bound of 70 fails the first. Needs QCPORT and QCPORT_INC."""
+    qcport, headers = os.environ.get("QCPORT"), os.environ.get("QCPORT_INC")
+    if not (qcport and headers):
+        pytest.skip("QCPORT and QCPORT_INC are not set")
+    base = Path(qcport).expanduser()
+    include = [flag for d in ("host", "render", "model", "game", "sound", "ui", "qgl") for flag in ("-I", str(base / d))]
+    include += ["-I", str(Path(headers).expanduser())]
+    command = gate.levels_time.command("llrm", "O1", base / "render" / "d_alias.c")
+    # QCport is Open Watcom C for the 16-bit target: no -m32 -march.
+    command = [command[0], "-O1", *include, command[-1], "-o", os.devnull]
+    own = gate.own_work(command)
+    assert own["regalloc recolor"] > 20.0, f"premise: recolor ran ({own['regalloc recolor']:.1f} Minstr)"
+    assert own["regalloc recolor"] <= 70.0, own["regalloc recolor"]
