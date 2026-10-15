@@ -574,6 +574,22 @@ def test_a_row_names_the_size_it_is_at_so_2n_is_not_read_off_the_halves():
     assert "2N=128" in " ".join(lines) and "2N=128" in " ".join(bad), (lines, bad)
 
 
+def test_a_step_then_linear_row_is_not_a_superlinear_slope_and_a_quadratic_one_is():
+    """`live O1 peephole` read 16.2/23.4/44.9 Minstr at n=32/64/128: copyprop and regthrash ran at 32 only, so the work steps and is linear
+    from 64 on; its second difference (7.1) was called a slope. The last doubling is x1.92: linear."""
+    tol = measure.tolerances()
+    key = "live O1 lir peephole"
+    base = {key: [10.0, 23.4, 44.9, 50.0]}  # the same work from n=64; at n=32 the base ran less
+    step = {key: [16.2, 23.4, 44.9, 50.0]}
+    assert measure.step_rises(base, step, tol)[1] == [], "a step is not a slope"
+    assert measure.grown(16.2, 23.4, 44.9) == 0.0 and measure.superlinear(16.2, 23.4, 44.9) > 0
+    base_linear = {key: [10.0, 20.0, 40.0, 50.0]}
+    quadratic = {key: [10.0, 40.0, 160.0, 170.0]}
+    assert measure.step_rises(base_linear, quadratic, tol)[1], "N^2 still fails"
+    assert measure.grown(10.0, 40.0, 160.0) > 0
+    mixed = {key: [10.0, 22.0, 56.0, 60.0]}  # 20% of the work at 2N is the quadratic term: x2.5 in the last doubling
+    assert measure.step_rises(base_linear, mixed, tol)[1], "a real quadratic part is not hidden"
+
 def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tree_does_not_change(tmp_path, monkeypatch):
     """Train 5's measure step died on `stale binaries in .../measure-build/.../release`: another base was checked out in the shared tree
     and built while this one was measured, and the release directory it measured from changed under it."""
