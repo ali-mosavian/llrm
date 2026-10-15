@@ -99,6 +99,16 @@ def batches(prs: list[Pr], most: int) -> list[list[Pr]]:
     return out + ([now] if now else [])
 
 
+def conflicted(tree: Path) -> list[str]:
+    return git("diff", "--name-only", "--diff-filter=U", cwd=tree).stdout.split()
+
+
+def baseline_only(tree: Path) -> bool:
+    """Whether every file a merge conflicts in is a benchmark's expected.toml."""
+    files = conflicted(tree)
+    return bool(files) and all(re.fullmatch(r"bench/.+/expected\.toml", name) for name in files)
+
+
 def build_tip(prs: list[Pr], tree: Path) -> tuple[str, list[tuple[Pr, str]]]:
     """origin/main with each PR merged in order in `tree` (a worktree, left at the result): (the tip, [(PR, why) bounced]). A merge that
     conflicts is undone and bounced; the rest go on."""
@@ -106,6 +116,12 @@ def build_tip(prs: list[Pr], tree: Path) -> tuple[str, list[tuple[Pr, str]]]:
     bounced = []
     for pr in prs:
         done = git("merge", "--no-ff", "-q", "-m", f"train: #{pr.number}", pr.sha, cwd=tree, check=False)
+        if done.returncode and baseline_only(tree):
+            # Each PR blesses its own bench counts, so two that touch one benchmark conflict on its expected.toml (every PR of a train did, and
+            # all but one bounced). The batch's file stands; a count the PR made better is blessed by the train, one it made worse fails.
+            git("checkout", "--ours", "--", *conflicted(tree), cwd=tree)
+            git("add", "-A", cwd=tree)
+            done = git("commit", "-q", "--no-edit", cwd=tree, check=False)
         if done.returncode:
             git("merge", "--abort", cwd=tree, check=False)
             bounced.append((pr, "conflicts with the batch before it"))
@@ -119,16 +135,21 @@ class Verdict:
     text: str = ""
 
 
+def tree_env(env: dict, tree: Path) -> dict:
+    """`env` with one target per tree: the tip's gate and the re-run on main shared one, and main's pytest read the tip's llrm-c, which
+    names the tip's tree (the first run's failure was overwritten, and the second failed on that path)."""
+    if target := env.get("CARGO_TARGET_DIR"):
+        env = {**env, "CARGO_TARGET_DIR": f"{target}-{tree.name}"}
+    return env
+
+
 def full_gate(tip: str, tree: Path, steps: list[str] | None = None, strict: bool = False) -> Verdict:
     """The full tier at `tip` (checked out in `tree`), or only `steps` of it. The bench step runs in batch mode (a better count passes)
     unless `strict`."""
     git("checkout", "-q", "--detach", tip, cwd=tree)
     command = [sys.executable, "tools/gate/gate.py", "run", "--tier", "full", "--expect", tip, *(["--steps", *steps] if steps else [])]
     env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"} | ({} if strict else {"LLRM_BENCH_BATCH": "1"})
-    if target := env.get("CARGO_TARGET_DIR"):
-        # One target and one set of gate logs per tree: the tip's gate and the re-run on main shared both, and main's pytest read the tip's
-        # llrm-c, which names the tip's tree (the first run's failure was overwritten, and the second failed on that path).
-        env["CARGO_TARGET_DIR"] = f"{target}-{tree.name}"
+    env = tree_env(env, tree)
     done = subprocess.run(command, cwd=tree, capture_output=True, text=True, env=env)
     text = done.stdout + done.stderr
     LOGS.mkdir(parents=True, exist_ok=True)
@@ -194,7 +215,7 @@ def bless(tip: str, prs: list[Pr], tree: Path) -> tuple[str, Verdict | None]:
     (a better count then fails): (the tip to offer, the verdict of that gate; None when nothing got better). Nothing worse is ever written."""
     git("checkout", "-q", "--detach", tip, cwd=tree)
     names = " ".join(f"#{p.number}" for p in prs)
-    env = {k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}
+    env = tree_env({k: v for k, v in os.environ.items() if k != "LLRM_BENCH_BATCH"}, tree)
     done = subprocess.run([sys.executable, "tools/bench/bench.py", "--batch", "--bless", "--reason", f"train: {names}"], cwd=tree, capture_output=True, text=True, env=env)
     if done.returncode:
         return tip, Verdict(False, ["bench"], done.stdout + done.stderr)
