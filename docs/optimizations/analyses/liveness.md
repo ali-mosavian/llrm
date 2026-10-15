@@ -29,7 +29,10 @@ block.
 
 `live_of` follows only the values it is given (a manager analysis brought up
 to date for what a change named), from their reads, and gives their sets
-alone.
+alone. `ranges_of` gives the same by value, as sorted lists of blocks; the
+update of the spill model's pressure edits only the values whose blocks moved
+(of the values a pass names nearly all are read where they were).
+A phi's arm is followed through a phi the pass left alone as the model had that phi (live out of its block or not) and the function now reads it, so a touched value names its own arms and not the chain of phis round it (quicksort -O3: 19 values became 108). `LLRM_CHECK_PRESSURE=1` checks each update against a fresh solve.
 
 ```text
    B0:  %a = ...                 %a live_out(B0), live_in(B1) (read in B1)

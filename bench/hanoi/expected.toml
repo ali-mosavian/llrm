@@ -1,4 +1,4 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -33,13 +33,13 @@ bss_bytes = 0
 
 [bq32.O2]
 instructions = 335853
-code_bytes = 237
+code_bytes = 236
 data_bytes = 21
 bss_bytes = 0
 
 [bq32.Os]
 instructions = 376812
-code_bytes = 217
+code_bytes = 216
 data_bytes = 21
 bss_bytes = 0
 

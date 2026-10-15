@@ -127,6 +127,7 @@ Sources read:
 | our option / `-f` name | gcc flag | gcc level (opts.cc line) | ours |
 |---|---|---|---|
 | `dead` / `tree-dce` | `-ftree-dce` | -O1 ([590](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L590)) | every level above -O0 |
+| `sink` / `tree-sink` | `-ftree-sink` | -O1 ([593](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L593)) | every level above -O0 |
 | `promote` / `tree-sra` | `-ftree-sra` | -O1, not -Og ([614](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L614)) | every level above -O0, -Og too |
 | `drop_stores` / `tree-dse` | `-ftree-dse` | -O1, not -Og ([612](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L612)) | every level above -O0, -Og too |
 | `hoist` / `move-loop-invariants` | `-fmove-loop-invariants` | -O1, not -Og ([607](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L607)) | every level above -O0, -Og too |
