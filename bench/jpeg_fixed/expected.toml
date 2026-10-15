@@ -1,4 +1,4 @@
-reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
+reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -38,13 +38,13 @@ data_bytes = 29209
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3423
+code_bytes = 3416
 data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 443.7384
 
 [c.Os]
-code_bytes = 3086
+code_bytes = 3079
 data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 445.4513

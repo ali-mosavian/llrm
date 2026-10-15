@@ -1,5 +1,5 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "displaced values re-enqueued at Assign (LLVM RS_Assign); tie shift"
+blessed = "2026-10-15"
 
 [bas.O2]
 code_bytes = 1259
@@ -38,13 +38,13 @@ data_bytes = 4733
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 810
+code_bytes = 795
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 325.0158
 
 [c.Os]
-code_bytes = 779
+code_bytes = 783
 data_bytes = 39
 bss_bytes = 5122
 kernel_ms = 322.3449
