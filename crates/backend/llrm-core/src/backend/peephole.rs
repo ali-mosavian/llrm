@@ -385,14 +385,16 @@ impl Peephole {
     }
 }
 
-/// A call's `add sp,2*n` as `n` pops into a dead scratch register, as BCC
-/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`).
-/// The add's flags must be dead: a pop sets none.
+/// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
+/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`). A
+/// pop takes back the mode's word: 2 bytes in 16-bit code, 4 in 32-bit. The
+/// add's flags must be dead: a pop sets none.
 pub fn popped_arguments(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
     let regs = body.regs();
+    let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
     let exits = liveness::dead_at_exit(body);
@@ -410,9 +412,9 @@ pub fn popped_arguments(
                 {
                     match what.sources.as_slice() {
                         [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % 2 == 0 && *value > 0 =>
+                            if *first == sp && value % unit == 0 && *value > 0 =>
                         {
-                            value / 2
+                            value / unit
                         }
                         _ => 0,
                     }
@@ -431,7 +433,12 @@ pub fn popped_arguments(
                     let pop = || {
                         Arc::new(with_what(
                             one,
-                            semantics(Operation::Pop, "pop", vec![Loc::Reg(reg(register, 2))], vec![]),
+                            semantics(
+                                Operation::Pop,
+                                "pop",
+                                vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
+                                vec![],
+                            ),
                         ))
                     };
                     insns.extend((0..words).map(|_| pop()));
