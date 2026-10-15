@@ -1,5 +1,5 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "work-priced post-RA fixes: the hoisted zeroing of a word register adds an instruction at loop entry (stft bq32 -O2/-Os +7..+13 of ~1e8) and turns the loop's movzx into a mov; the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib -Os -9,297 instructions, jpeg code bytes)"
+blessed = "2026-10-16"
 
 [bas.O2]
 code_bytes = 1776
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 98394523
+instructions = 98394530
 code_bytes = 1636
 data_bytes = 4709
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 99053715
+instructions = 99053728
 code_bytes = 1583
 data_bytes = 4709
 bss_bytes = 0
