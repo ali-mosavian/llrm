@@ -320,11 +320,23 @@ impl Region {
         let found = Blocks::of(body);
         let graph = &found.graph;
         let mut out = Self::default();
+        let names = named_in(body, value);
         for (at, ranges) in &self.spans {
             let block = found.block(*at);
-            let named: Vec<usize> = (0..block.insns.len())
-                .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
-                .collect();
+            // Where the value is named: from the postings, not a walk of the
+            // block.
+            let named: Vec<usize> =
+                graph.position.get(at).and_then(|place| names.get(place)).cloned().unwrap_or_default();
+            if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+                let walked: Vec<usize> = (0..block.insns.len())
+                    .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
+                    .collect();
+                assert_eq!(
+                    named, walked,
+                    "{}: value#{value} is named in block {at:#x} not as a walk has it",
+                    body.name
+                );
+            }
             let outside_in = block.at != body.entry
                 && graph
                     .position
@@ -444,6 +456,7 @@ fn crossings_among(
             },
         );
     let mut out = Vec::new();
+    let names = named_in(body, value);
     // The phis a block's successor arrives with, found by the successor's
     // address: a scan of every block for each edge was the square of the
     // blocks.
@@ -451,12 +464,26 @@ fn crossings_among(
     for position in among {
         let block = &body.blocks[position];
         if let Some(ranges) = region.spans.get(&block.at) {
-            let before = _live_before(block, value, live.live_out(block.at, value));
+            let exit = live.live_out(block.at, value);
+            let named = names.get(&position).map_or(&[][..], Vec::as_slice);
+            let before = |at: usize| {
+                let found = _live_before_at(block, named, value, exit, at);
+                if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+                    assert_eq!(
+                        found,
+                        _live_before(block, value, exit)[at],
+                        "{}: value#{value} is live before position {at} of block {:#x} not as the scan has it",
+                        body.name,
+                        block.at
+                    );
+                }
+                found
+            };
             for (from, to) in ranges {
-                if *from > 0 && before[*from] {
+                if *from > 0 && before(*from) {
                     out.push((Crossing::Inside { block: block.at, position: *from }, true));
                 }
-                if written && *to < block.insns.len() && before[*to] {
+                if written && *to < block.insns.len() && before(*to) {
                     out.push((Crossing::Inside { block: block.at, position: *to }, false));
                 }
             }
@@ -480,6 +507,33 @@ fn crossings_among(
         out.push((Crossing::Inside { block: body.entry, position: 0 }, true));
     }
     out
+}
+
+/// Whether `value` is live just before `position` of `block`, from the
+/// positions that name it (`named`, sorted) and not from a walk of the block
+/// back from its end: the state before the group `position` is in is that
+/// of the first group from there on that names the value, or `out`.
+fn _live_before_at(
+    block: &LirBlock,
+    named: &[usize],
+    value: u32,
+    out: bool,
+    position: usize,
+) -> bool {
+    if position >= block.insns.len() {
+        return out;
+    }
+    let from = allocate::_group_start(block, position);
+    let Some(&first) = named.get(named.partition_point(|at| *at < from)) else {
+        return out;
+    };
+    let start = allocate::_group_start(block, first);
+    let mut end = start + 1;
+    while end < block.insns.len() && allocate::_group_start(block, end) == start {
+        end += 1;
+    }
+    let group = &block.insns[start..end];
+    group.iter().any(|one| one.uses.contains(&value)) || !group.iter().any(|one| one.defines.contains(&value)) && out
 }
 
 /// Whether `value` is live just before each position of `block`, and at its
@@ -620,25 +674,69 @@ pub fn carved_moving(
         .chain(region.spans.keys().copied())
         .map(|at| graph.position[&at])
         .collect();
+    let names = named_in(body, value);
     for &place in &touched {
         let block = &body.blocks[place];
-        let mut insns: Vec<Arc<Insn>> = Vec::new();
-        let mut shift: Vec<usize> = Vec::with_capacity(block.insns.len() + 1);
+        let length = block.insns.len();
         let end = _tail(block);
-        for position in 0..=block.insns.len() {
-            let beside = block.insns.get(position).or(block.insns.last());
-            if let (Some(beside), Some(copies)) = (beside, inserted.get(&(block.at, position))) {
-                insns.extend(copies.iter().map(|entering| copy(beside, *entering)));
+        // The instructions the region covers that name the value are renamed;
+        // those that do not are as they were.
+        let mut kept: Vec<Arc<Insn>> = block.insns.to_vec();
+        for &position in names.get(&place).map_or(&[][..], Vec::as_slice) {
+            if region.covers(block.at, position) {
+                kept[position] = _renamed(&block.insns[position], &rename);
             }
-            if position == end {
-                if let (Some(beside), Some(copies)) = (beside, inserted.get(&(block.at, usize::MAX))) {
-                    insns.extend(copies.iter().map(|entering| copy(beside, *entering)));
+        }
+        if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+            for position in 0..length {
+                if region.covers(block.at, position) && Arc::ptr_eq(&kept[position], &block.insns[position]) {
+                    assert_eq!(
+                        format!("{:?}", _renamed(&block.insns[position], &rename)),
+                        format!("{:?}", block.insns[position]),
+                        "{}: value#{value} is named at position {position} of block {:#x} not as the postings have it",
+                        body.name,
+                        block.at
+                    );
+                }
+            }
+        }
+        // Copies go before the positions `inserted` names, those before the
+        // terminator after the ones at its position.
+        let points: BTreeSet<usize> = inserted
+            .range((block.at, 0)..=(block.at, usize::MAX))
+            .map(|((_, position), _)| if *position == usize::MAX { end } else { *position })
+            .collect();
+        let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(length + points.len());
+        let mut shift: Vec<usize> = Vec::with_capacity(length + 1);
+        let mut cursor = 0;
+        for &point in &points {
+            for position in cursor..point {
+                shift.push(insns.len() + (position - cursor));
+            }
+            insns.extend_from_slice(&kept[cursor..point]);
+            let beside = block.insns.get(point).or(block.insns.last());
+            if let Some(beside) = beside {
+                for key in [point, usize::MAX] {
+                    if key == usize::MAX && point != end {
+                        continue;
+                    }
+                    if let Some(copies) = inserted.get(&(block.at, key)) {
+                        insns.extend(copies.iter().map(|entering| copy(beside, *entering)));
+                    }
                 }
             }
             shift.push(insns.len());
-            if let Some(one) = block.insns.get(position) {
-                insns.push(if region.covers(block.at, position) { _renamed(one, &rename) } else { Arc::clone(one) });
+            if point < length {
+                insns.push(Arc::clone(&kept[point]));
             }
+            cursor = point + 1;
+        }
+        for position in cursor..length {
+            shift.push(insns.len() + (position - cursor));
+        }
+        insns.extend_from_slice(&kept[cursor.min(length)..]);
+        if cursor <= length {
+            shift.push(insns.len());
         }
         moved.insert(block.at, shift);
         // A block nothing was put in and no instruction of which changed is the
