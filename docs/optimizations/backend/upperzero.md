@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:a645f5ef725d6185adf3029cd1ae8d87b7d13c0d49f3d8ce96a5389218cda514 -->
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:a0735aff6be5598c6af4fc0ac77066ddbb782c309790e520d8828b10d0a8a4bc -->
 
 # upperzero
 
@@ -49,6 +49,13 @@ The exchange moves the zero upper half from `ecx` to `esi`, so a `movzx` of
 From unit test `test_an_exchange_swaps_the_zero_upper_halves` in
 `upperzero.rs`.
 
+`hoisted` (m32 and other targets with the rule `zero_extensions`) puts the
+same `movzx` in front of a loop for a word register whose widening `movzx`
+the loop repeats, where the loop writes the register's low word only: the
+widening is then a copy (`peephole.peep`, `zero_extended_copy`). The frame
+register is zeroed when the body writes it (no frame pointer: its cells are
+esp-relative later) and no instruction reads it whole by name.
+
 ## Provides
 `before`, the zero roots before each instruction, keyed by instruction
 identity. `preheaded` places `movzx` in loop preheaders for roots a caller
@@ -58,6 +65,7 @@ asks for.
 `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when
 the body has such a cell (`needs::UNHELD`) and not on a native target, whose
 addresses read whole registers.
+`hoisted` runs before the zero-extension rules of the same phase.
 
 ## Used by
 [`crate::backend::exactaddress`](exactaddress.md) (`before`, `preheaded`), and the rewrite

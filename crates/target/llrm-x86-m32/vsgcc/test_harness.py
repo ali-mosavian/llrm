@@ -13,7 +13,7 @@ RESULTS = harness.OUT / "results.jsonl"   # a run of run.sh, if there was one: r
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
-    """A work directory of its own with what these tests run: the stub and the gcc and clang objects of scroll, fib and x_ll_div."""
+    """A work directory of its own with what these tests run: the stub and the gcc and clang objects of scroll, fib, x_ll_div and nbody."""
     import os
     import subprocess
     import sys
@@ -30,7 +30,7 @@ def built(tmp_path_factory):
     previous = harness.OUT
     harness.OUT = work
     harness.record_stub(work)
-    for prog in ("scroll", "fib", "x_ll_div"):
+    for prog in ("scroll", "fib", "x_ll_div", "nbody"):
         done = subprocess.run([str(HERE / "build.sh"), prog], capture_output=True, text=True, env=env)
         assert done.returncode == 0 and "FAIL" not in done.stdout, (prog, done.stdout, done.stderr)
     yield work
@@ -183,3 +183,11 @@ def test_a_dword_at_an_odd_address_is_counted_as_misaligned():
     assert count(bytes.fromhex("a5")) == 1          # movsd: the source esi is odd, the destination edi is not
     assert count(bytes.fromhex("dd4304")) == 1      # fld qword [ebx+4]: a double wants 8
     assert count(bytes.fromhex("dd4308")) == 0      # fld qword [ebx+8]
+
+
+def test_nbody_executes_no_misaligned_operand_at_any_level(built):
+    """main was entered with esp 4 off the System V boundary, so llrm's aligned frames (it keeps the call boundary, as gcc and clang do)
+    stood at 4 mod 8: nbody -O3 read 14,616 misaligned operands, +43,848 clocks (354,259 -> 398,107, +12.4%), a regression no code change made.
+    With the entry right, a hole of 12 bytes for spills moved the arrays of -O1/-O2/-Os to 4 mod 8: 18,404 operands, +55,212 clocks."""
+    for variant in ("llrmO1", "llrm", "llrmO3", "llrmOs"):
+        assert harness.run("nbody", variant)["misaligned"] == 0, variant

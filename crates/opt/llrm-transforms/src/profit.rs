@@ -98,8 +98,8 @@ use llrm_analysis::{induction, memory};
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
-use llrm_mir::module::{Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
@@ -150,6 +150,34 @@ pub fn advance(
     }
 }
 
+/// Whether the one reader of `value` is a floating operation in `block` that
+/// takes its operand from memory, so that a load of it is that operation's own
+/// memory form and not an instruction of its own. A reader in another block
+/// reads a register the load made.
+fn folds_into_users(
+    function: &Function,
+    value: ValueId,
+    block: BlockId,
+) -> bool {
+    let users = function.users(value);
+    // One reader: a load read twice is held in a register, not read twice.
+    users.len() == 1
+        && users.iter().all(|user| {
+            let one = function.instruction(user.user);
+            function.parent(user.user) == Some(block)
+                && match one.opcode {
+                    Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv)
+                    | Opcode::FCmp(_) => true,
+                    // Widening a float loaded is the load's own form (`fld
+                    // m32`).
+                    Opcode::Cast(CastOp::FPExt) => {
+                        one.result.is_some_and(|wide| folds_into_users(function, wide, block))
+                    }
+                    _ => false,
+                }
+        })
+}
+
 /// Target price for semantic work, or None when it cannot be priced.
 pub fn operation(
     context: &Context,
@@ -164,7 +192,16 @@ pub fn operation(
         Opcode::Load { .. }
             if instruction.result.is_some_and(|value| floating(context, function, Operand::Value(value))) =>
         {
-            costs.float_load
+            let home = function.parent(one);
+            if costs.folds_loads
+                && instruction
+                    .result
+                    .is_some_and(|value| home.is_some_and(|home| folds_into_users(function, value, home)))
+            {
+                costs.float_load_folded
+            } else {
+                costs.float_load
+            }
         }
         Opcode::Load { .. } => costs.load,
         Opcode::Store { .. } if floating(context, function, instruction.operands[0]) => costs.float_store,
