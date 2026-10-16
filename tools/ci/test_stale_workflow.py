@@ -37,16 +37,16 @@ def test_a_run_on_a_parent_older_than_the_last_workflow_change_is_stale(tmp_path
     """#1866 passed on the workflow from before #1890 and #1898: its merge parent lacked both."""
     root = repo(tmp_path)
     old = git(root, "rev-parse", "HEAD")
-    commit(root, ".github/workflows/ci.yml", "new")
+    commit(root, "tools/ci/workflow-version", "2")
     git(root, "update-ref", "refs/remotes/origin/main", "main")
     merge_commit(root, old)
     assert stale_workflow.verdict(root) == (old[:12], "stale")
 
 
-def test_a_run_on_a_parent_with_the_last_workflow_change_is_fresh_though_main_moved_on(tmp_path):
+def test_a_run_on_a_parent_with_the_last_semantics_change_is_fresh_though_workflow_files_moved_on(tmp_path):
     root = repo(tmp_path)
-    parent = commit(root, "tools/gate/gate.py", "new")
-    commit(root, "docs/x.md", "later, not a workflow file")
+    parent = commit(root, "tools/ci/workflow-version", "2")
+    commit(root, ".github/workflows/ci.yml", "later: cheaper, same semantics")
     git(root, "update-ref", "refs/remotes/origin/main", "main")
     merge_commit(root, parent)
     assert stale_workflow.verdict(root) == (parent[:12], "fresh")
@@ -57,3 +57,9 @@ def test_a_pull_request_whose_base_is_not_main_is_stacked(tmp_path):
     git(root, "update-ref", "refs/remotes/origin/main", "main")
     merge_commit(root, git(root, "rev-parse", "HEAD"))
     assert stale_workflow.verdict(root, base_ref="feature")[1] == "stacked"
+
+
+def test_the_marker_is_an_integer_and_the_rule_for_bumping_it_is_documented():
+    root = Path(__file__).resolve().parents[2]
+    assert int((root / stale_workflow.MARKER).read_text()) >= 1
+    assert "workflow-version" in (root / "docs/working/ci.md").read_text() and "only makes it cheaper" in (root / "docs/working/ci.md").read_text()

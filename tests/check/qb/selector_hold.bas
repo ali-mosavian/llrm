@@ -1,4 +1,5 @@
-' RUN: llrm-qb %s --dialect qb45 --runtime qb45 -Os -march=i486 -fno-inline-functions -S -o /dev/stdout
+' RUN: llrm-qb %s -fallocation-search -fallocation-routes --dialect qb45 --runtime qb45 -Os -march=i486 -fno-inline-functions -S -o /dev/stdout
+' The search and the second route hold this; one allocation does not (#1886).
 ' A loop that fits the selector registers holds its arrays' segments in them: loaded once before it, not before
 ' each use. With typed writes the segment loads proved stable, and a tie in static loads made them per trip
 ' (+300 instructions at -Os, same bytes).
