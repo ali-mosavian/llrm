@@ -83,7 +83,10 @@ def main():
             built[(name, kind)] = ("built", "")
             jobs.append(dosbatch.Job(f"{stem}{kind[0]}", "exe", exe, budget_ms=60000))
             built[(name, kind, "job")] = f"{stem}{kind[0]}"
-    results = dosbatch.run(jobs, a.work / "dos") if jobs else {}
+    # Each program alone in a directory of its own: the tests leave files behind that the next one trips over.
+    results = {}
+    for job in jobs:
+        results.update(dosbatch.run([job], a.work / "dos" / job.stem))
     table = []
     for name in sorted({k[0] for k in built}):
         row = {}

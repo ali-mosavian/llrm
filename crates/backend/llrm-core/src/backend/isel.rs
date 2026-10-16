@@ -5646,6 +5646,15 @@ impl Selector<'_, '_, '_> {
                 .map(|register| if register.is_gpr() { register.full_register32() } else { register })
                 .collect()
         });
+        // Inline code changes what its block declares, which a function that keeps
+        // those registers for its own caller saves before it.
+        let disturbs: BTreeSet<RegId> = match &callee {
+            Callee::Inline(..) => disturbs
+                .into_iter()
+                .chain(call_clobbers(&contract, self.segments, &self.cpu.general))
+                .collect(),
+            _ => disturbs,
+        };
         // A callee that takes part clobbers what it wrote, and no more.
         let (changed, disturbs, known) = match &callee {
             Callee::Direct(name, _) => match self.callee_facts.written(name) {

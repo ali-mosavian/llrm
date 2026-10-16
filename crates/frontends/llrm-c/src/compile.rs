@@ -1246,6 +1246,31 @@ mod tests {
         assert!(!returns(&["-m16", "-mabi=cdecl", "-funsigned-char"]));
     }
 
+    /// Inline code that changes SI (`__modify [__si]`) in a function whose
+    /// convention keeps SI for its caller: the function did not save it, so
+    /// `_fstrrev` handed its caller back a corrupted SI.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_register_inline_code_changes_is_saved_by_the_function_that_keeps_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("keep.c");
+        std::fs::write(
+            &source,
+            "extern void clobber(void);\n#pragma aux clobber = \"mov si,1\" __modify __exact [__si]\n\
+             void run(void) { clobber(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records keep.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "keep", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("push si") && asm.contains("pop si"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
