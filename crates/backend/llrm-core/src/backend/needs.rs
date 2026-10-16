@@ -38,6 +38,20 @@ use crate::backend::{exactaddress, upperzero};
 use crate::model::ir::{Loc, Operation};
 use crate::model::lir::{Insn, Insns, LirBody};
 
+thread_local! {
+    static VISITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A pass walked `blocks` blocks of a body to answer a question about them.
+pub fn visited(blocks: usize) {
+    VISITS.with(|visits| visits.set(visits.get() + blocks as u64));
+}
+
+/// Blocks walked so far, on this thread.
+pub fn visits() -> u64 {
+    VISITS.with(std::cell::Cell::get)
+}
+
 /// A register-to-register `mov`: what copy propagation forwards and register
 /// thrashing renames.
 pub const COPY: u8 = 1;

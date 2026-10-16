@@ -4974,3 +4974,30 @@ fn test_a_sub_pass_that_finds_nothing_keeps_every_block() {
     assert!(same(&addresses(&input, "386").unwrap()), "addresses");
     assert!(same(&crate::backend::storecombine::combined(&input)), "storecombine");
 }
+
+/// Each sub-pass walked every block for the lanes dead after each of its
+/// instructions before looking for a candidate: 290 block walks per sub-pass
+/// on d_faces -O1 for 6 to 15 blocks of use. A block with no candidate is not
+/// walked.
+#[test]
+fn test_a_block_with_no_candidate_is_not_walked() {
+    let blocks: Vec<crate::model::lir::Block> = (0..20_i64)
+        .map(|at| -> crate::model::lir::Block {
+            let copy = insn(
+                at * 2,
+                Some((at * 2, at * 2 + 2)),
+                Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+                vec![],
+                vec![],
+            );
+            let succ = if at < 19 { vec![(at + 1) * 2] } else { vec![] };
+            block(at * 2, vec![Arc::new(copy)], succ).into()
+        })
+        .collect();
+    let input = body("walk", 0, blocks);
+    let before = crate::backend::needs::visits();
+    let _ = high_extracts(&input, "386").unwrap();
+    let _ = addresses(&input, "386").unwrap();
+    let _ = popped_arguments(&input, crate::backend::cpu::profile("386").unwrap()).unwrap();
+    assert_eq!(crate::backend::needs::visits() - before, 0, "block walks of 20 blocks with nothing to match");
+}

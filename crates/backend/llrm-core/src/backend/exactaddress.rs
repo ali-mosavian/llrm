@@ -80,9 +80,9 @@ use crate::analysis::loops;
 use crate::backend::affine::{self, Step};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::lanes::Lanes;
-use crate::backend::peephole::{_flag_lanes, _lanes, _read_before_redefined, _register_effects, DeadAfter, id};
+use crate::backend::liveness;
+use crate::backend::peephole::{_flag_lanes, _lanes, _read_before_redefined, _register_effects, Dead, id};
 use crate::backend::upperzero::{self, Roots};
-use crate::backend::{liveness, regthrash};
 use crate::model::ir::{self, Held, Loc, Mem, Reg, Semantics, Space};
 use crate::model::lir::{Insn, LirBlock, LirBody};
 use crate::model::passes::AddressForm;
@@ -266,7 +266,7 @@ fn readers(
     block: &LirBlock,
     first: usize,
     register: RegId,
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
 ) -> Option<Vec<usize>> {
     let lanes = _lanes(regs, register);
     let root = full32(register);
@@ -301,7 +301,7 @@ fn stages(
     first: usize,
     register: Reg,
     value: u32,
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
     cpu: &Profile,
 ) -> Vec<Stage> {
     let root = full32(register.register);
@@ -483,7 +483,7 @@ fn fold(
     block: &LirBlock,
     first: usize,
     root: RegId,
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
     live_out: &BTreeSet<u32>,
     form: &AddressForm,
     cpu: &Profile,
@@ -563,7 +563,7 @@ fn folds(
     let (_, live_out) = crate::backend::allocate::live(body);
     let mut found = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead_after = Dead::new(regs, body.bits, block, exits[&block.at].clone());
         let outside = live_out.get(&block.at).cloned().unwrap_or_default();
         let mut claimed: HashSet<usize> = HashSet::default();
         for (at, one) in block.insns.iter().enumerate() {

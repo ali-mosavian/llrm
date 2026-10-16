@@ -138,6 +138,73 @@ use crate::support::hash::{HashMap, HashSet};
 use crate::support::hash::{IndexMap, IndexSet};
 /// Python's `dict[int, set]` keyed by `id(one)`.
 pub type DeadAfter = HashMap<usize, Lanes>;
+/// `DeadAfter` of one block, worked out when a pass first asks about an
+/// instruction in it: a block with no candidate is not walked.
+pub struct Dead<'a> {
+    regs: Regs,
+    bits: u32,
+    block: &'a LirBlock,
+    exit: Lanes,
+    map: std::cell::OnceCell<DeadAfter>,
+}
+
+impl<'a> Dead<'a> {
+    pub fn new(
+        regs: Regs,
+        bits: u32,
+        block: &'a LirBlock,
+        exit: Lanes,
+    ) -> Self {
+        Self { regs, bits, block, exit, map: std::cell::OnceCell::new() }
+    }
+}
+
+impl std::ops::Index<&usize> for Dead<'_> {
+    type Output = Lanes;
+
+    fn index(
+        &self,
+        one: &usize,
+    ) -> &Lanes {
+        &self.map.get_or_init(|| {
+            crate::backend::needs::visited(1);
+            regthrash::_dead_after(self.regs, self.bits, self.block, self.exit.clone())
+        })[one]
+    }
+}
+
+/// `_flags_dead_after`, worked out when first asked.
+pub struct FlagsDead<'a> {
+    regs: Regs,
+    bits: u32,
+    block: &'a LirBlock,
+    out: bool,
+    set: std::cell::OnceCell<HashSet<usize>>,
+}
+
+impl<'a> FlagsDead<'a> {
+    pub fn new(
+        regs: Regs,
+        bits: u32,
+        block: &'a LirBlock,
+        out: bool,
+    ) -> Self {
+        Self { regs, bits, block, out, set: std::cell::OnceCell::new() }
+    }
+
+    pub fn contains(
+        &self,
+        one: &usize,
+    ) -> bool {
+        self.set
+            .get_or_init(|| {
+                crate::backend::needs::visited(1);
+                _flags_dead_after(self.regs, self.bits, self.block, self.out)
+            })
+            .contains(one)
+    }
+}
+
 /// Python's `Counter[int]`: read with a 0 default.
 pub type Counter = IndexMap<u32, i64>;
 
@@ -401,7 +468,7 @@ pub fn popped_arguments(
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead_after = Dead::new(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
             let sp = Loc::Reg(reg(RegId::SP, 2));
@@ -422,12 +489,15 @@ pub fn popped_arguments(
                 }
                 _ => 0,
             };
-            let dead = &dead_after[&id(one)];
-            let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
+            let scratch = (words > 0)
+                .then(|| {
+                    let dead = &dead_after[&id(one)];
+                    regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead))
+                })
+                .flatten();
             match scratch {
                 Some(register)
-                    if words > 0
-                        && Lanes::flags(arithmetic).is_subset(dead)
+                    if Lanes::flags(arithmetic).is_subset(&dead_after[&id(one)])
                         && !one.frame_adjust
                         && cpu.pops_arguments(words)? =>
                 {
@@ -490,7 +560,7 @@ pub fn frame_copies<'a>(
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead_after = Dead::new(regs, body.bits, block, exits[&block.at].clone());
         let mut insns = block.insns.to_vec();
         for index in 0..insns.len().saturating_sub(1) {
             let (pushed, popped) = (Arc::clone(&insns[index]), Arc::clone(&insns[index + 1]));
@@ -721,7 +791,7 @@ pub fn high_extracts<'a>(
     let exits = liveness::dead_at_exit(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let dead_after = Dead::new(regs, body.bits, block, exits[&block.at].clone());
         let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
             if run.len() == 3 {
                 if let Some(changed) =
@@ -748,7 +818,7 @@ fn _register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -850,7 +920,7 @@ fn _selected_register_high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
     virtual_uses: &Counter,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
@@ -956,7 +1026,7 @@ fn _high_extract(
     regs: Regs,
     bits: u32,
     parts: &[Arc<Insn>],
-    dead_after: &DeadAfter,
+    dead_after: &Dead<'_>,
 ) -> Option<Vec<Arc<Insn>>> {
     let (load, shift) = (&parts[0], &parts[1]);
     if parts.iter().any(|one| {
@@ -1660,7 +1730,7 @@ fn _loaded_addresses(
     uses: &Counter,
     cpu: &Profile,
 ) -> Result<Block, String> {
-    let dead = _flags_dead_after(regs, bits, block, flags_dead_out);
+    let dead = FlagsDead::new(regs, bits, block, flags_dead_out);
     let mut insns = block.insns.to_vec();
     let work: Vec<usize> =
         insns.iter().enumerate().filter(|(_, one)| !_skippable_nothing(one)).map(|(index, _)| index).collect();
@@ -1820,7 +1890,7 @@ pub fn addresses<'a>(
     for block in &body.blocks {
         let flags_dead_out = flags_out.get(&block.at).is_some_and(Lanes::is_empty);
         let block = _loaded_addresses(regs, body.bits, block, flags_dead_out, &virtual_uses, target_cpu)?;
-        let dead = _flags_dead_after(regs, body.bits, &block, flags_dead_out);
+        let dead = FlagsDead::new(regs, body.bits, &block, flags_dead_out);
         let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
         let insns = _code_windows(&block.insns, block.insns.len(), |rest| -> Result<_, String> {
             Ok(match _affine_address(regs, body.bits, rest, &dead, target_cpu)? {
@@ -2115,7 +2185,7 @@ fn _affine_address(
     regs: Regs,
     mode: u32,
     parts: &[Arc<Insn>],
-    dead: &HashSet<usize>,
+    dead: &FlagsDead<'_>,
     cpu: &Profile,
 ) -> Result<Option<(usize, Vec<Arc<Insn>>)>, String> {
     let Some(copy) = parts.first() else {
