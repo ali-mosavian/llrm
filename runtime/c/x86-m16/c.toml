@@ -37,8 +37,8 @@ interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "i
 accumulator = "ax"
 flags = "flags"
 segments = ["ds", "es", "cs", "ss"]
-clobbered = ["ax", "bx", "cx", "dx", "si", "di", "es"]
-fixed = ["bp", "sp", "ds", "cs", "st0"]
+clobbered = ["ax", "bx", "cx", "dx", "si", "di", "sp", "es"]
+fixed = ["bp", "ds", "cs", "st0"]
 universe = "3ffff:3"
 quad = ["ax", "bx", "cx", "dx"]
 

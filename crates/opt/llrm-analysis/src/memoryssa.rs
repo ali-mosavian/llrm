@@ -22,6 +22,11 @@
 //! asked (and the registers they know) is each graph's own. The manager's
 //! `PlainAccesses` is the one set `ThroughMemory` and `FloatFacts` share.
 //!
+//! Edits that make, erase or move no memory op or terminator, rewrite no
+//! terminator and make or erase no block leave the structure as it was
+//! (`structure_kept`): the manager's accesses carry it past them, and
+//! `LLRM_CHECK_CLOBBERS` builds it afresh to compare.
+//!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
 //! flowchart TB
@@ -192,8 +197,37 @@ pub struct Accesses {
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
     source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
+    /// What the manager's plain accesses were made from: the references
+    /// annotated, the calls' writes, and the module facts that decide a call.
+    plain_source: Option<PlainSource>,
     /// The graph's structure, made when first asked.
     graph: GraphCell,
+}
+
+/// What `PlainAccesses` reads.
+#[derive(Clone)]
+pub struct PlainSource {
+    pub annotated: Rc<<Annotated as Analysis>::Result>,
+    pub writes: Rc<<crate::manager::Writes as Analysis>::Result>,
+    pub outer: Rc<llrm_mir::passes::Outer>,
+}
+
+impl std::fmt::Debug for PlainSource {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("PlainSource")
+    }
+}
+
+impl PartialEq for PlainSource {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.annotated == other.annotated && self.writes == other.writes && Rc::ptr_eq(&self.outer, &other.outer)
+    }
 }
 
 /// The `Structure` of the one body state these accesses are of, kept for
@@ -203,6 +237,14 @@ pub struct Accesses {
 struct GraphCell(std::cell::RefCell<Option<(llrm_mir::module::Mark, Rc<Structure>)>>);
 
 impl GraphCell {
+    /// This cell's structure, as true of the body at `mark`.
+    fn carried(
+        &self,
+        mark: llrm_mir::module::Mark,
+    ) -> Self {
+        Self(std::cell::RefCell::new(self.0.borrow().as_ref().map(|(_, kept)| (mark, Rc::clone(kept)))))
+    }
+
     fn of(
         &self,
         function: &Function,
@@ -329,17 +371,21 @@ impl Analysis for Accesses {
     ) -> Option<Self::Result> {
         let held = previous.as_ref().ok()?;
         let (was_annotated, was_calls) = held.source.as_ref()?;
-        let only_moves = changes
-            .iter()
-            .all(
-                |change| match *change {
-                    // What an operand was is the record of a `Rewritten`, which
-                    // decides.
-                    Change::Moved { .. } | Change::Operand { .. } | Change::Operands { .. } => true,
-                    Change::Rewritten(inst) => matches!(function.instruction(inst).opcode, Opcode::Store { .. }),
-                    _ => false,
-                },
-            );
+        let inert = |inst: InstId| {
+            let opcode = &function.instruction(inst).opcode;
+            !llrm_mir::touched::touches_memory(opcode) && !opcode.is_terminator()
+        };
+        let only_moves = changes.iter().all(|change| match *change {
+            // What an operand was is the record of a `Rewritten`, which
+            // decides.
+            Change::Moved { .. } | Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => {
+                true
+            }
+            Change::Rewritten(inst) => matches!(function.instruction(inst).opcode, Opcode::Store { .. }) || inert(inst),
+            Change::Inserted { inst, .. } | Change::Erased { inst, .. } => inert(inst),
+            Change::Cloned { to, .. } => inert(to),
+            _ => false,
+        });
         if !only_moves {
             return None;
         }
@@ -347,11 +393,70 @@ impl Analysis for Accesses {
         let calls = analyses.get::<CallEffects>(context, layout, function);
         let unchanged = (Rc::ptr_eq(&annotated, was_annotated) || *annotated == **was_annotated)
             && (Rc::ptr_eq(&calls, was_calls) || *calls == **was_calls);
-        unchanged.then(|| previous.clone())
+        if !unchanged {
+            return None;
+        }
+        Some(if structure_kept(changes, function) { Ok(Rc::new(held.carried(function))) } else { previous.clone() })
     }
 }
 
+/// Whether `changes` leave the graph's structure as it was, given that what
+/// each access touches is: no memory op or terminator made, erased or moved
+/// (the accesses' order and the blocks' edges are the structure), no
+/// terminator rewritten, no block made or erased. LLVM's `MemorySSAUpdater`
+/// leaves the same untouched.
+pub(crate) fn structure_kept(
+    changes: &[Change],
+    function: &Function,
+) -> bool {
+    let inert = |inst: InstId| {
+        let opcode = &function.instruction(inst).opcode;
+        !llrm_mir::touched::touches_memory(opcode) && !opcode.is_terminator()
+    };
+    changes
+        .iter()
+        .all(
+            |change| match *change {
+                Change::Inserted { inst, .. } | Change::Erased { inst, .. } | Change::Moved { inst, .. } => inert(inst),
+                Change::Cloned { to, .. } => inert(to),
+                Change::Rewritten(inst) => !function.instruction(inst).opcode.is_terminator(),
+                Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => true,
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => false,
+            },
+        )
+}
+
 impl Accesses {
+    pub fn plain_source(&self) -> Option<&PlainSource> {
+        self.plain_source.as_ref()
+    }
+
+    pub fn with_plain_source(
+        self,
+        source: PlainSource,
+    ) -> Self {
+        Self { plain_source: Some(source), ..self }
+    }
+
+    /// These accesses for the body as it stands, with the structure they made
+    /// of the body before.
+    pub(crate) fn carried(
+        &self,
+        function: &Function,
+    ) -> Self {
+        let carried = Self { graph: self.graph.carried(function.mark()), ..self.clone() };
+        if llrm_support::env_set("LLRM_CHECK_CLOBBERS")
+            && let Some((_, kept)) = &*carried.graph.0.borrow()
+        {
+            let fresh = structure_of(function, &carried);
+            let shown = |one: &Structure| {
+                format!("{:?} {:?} {:?} {:?} {:?}", one.accesses, one.sites, one.phis, one.ends, one.span)
+            };
+            assert_eq!(shown(kept), shown(&fresh), "the structure kept past the edits is not the one the body makes");
+        }
+        carried
+    }
+
     /// `unit`'s accesses as `alias` resolves them: each reference with its
     /// provenance, each call's effect instantiated from `known` callees.
     pub fn resolved(
@@ -448,7 +553,14 @@ impl Accesses {
             };
             touched.insert(inst, found);
         }
-        Self { references, touched, fills: IndexMap::default(), source: None, graph: GraphCell::default() }
+        Self {
+            references,
+            touched,
+            fills: IndexMap::default(),
+            source: None,
+            plain_source: None,
+            graph: GraphCell::default(),
+        }
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
