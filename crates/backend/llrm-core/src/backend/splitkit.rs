@@ -13,8 +13,17 @@
 //!   value in a register, weighting blocks by frequency against the
 //!   interference of that register. The best candidate's region comes first,
 //!   and the compact region the use clusters form takes the uses left over.
+//!   Each candidate meets a live block once: a dense table of the value's
+//!   blocks (`cost::Frame`, LLVM's `SplitAnalysis` block table) holds their
+//!   frequencies, references and neighbours, a candidate's interference is
+//!   asked per block when first needed, and a [`Region`] is built only for the
+//!   best candidate and the compact one. `LLRM_CHECK_SPLIT` holds the result to
+//!   the region-per-candidate scan (`placed_scan`).
 //! - `per_block`: if no region is found, each block naming the value at least
 //!   twice holds it from its first reference to its last (`tryBlockSplit`).
+//!
+//! A [`Split`] finds the value's live blocks and references once for all of
+//! these strategies and `pays`.
 //!
 //! `pays` keeps a region only if the references it holds save more than the
 //! copies it adds. A reference saves what a reload would cost, less what its
@@ -931,6 +940,32 @@ struct Analysis {
     through: Vec<i64>,
 }
 
+/// What the strategies of one split read of the value (LLVM's
+/// `SplitAnalysis`): the blocks it is live in and where it is named, found
+/// once for `local`, `placed`, `per_block` and `pays`.
+pub struct Split<'a> {
+    value: u32,
+    blocks: Blocks<'a>,
+    analysis: Analysis,
+}
+
+impl<'a> Split<'a> {
+    pub fn of(
+        body: &'a LirBody,
+        value: u32,
+        live: &dyn allocate::LiveAt,
+    ) -> Self {
+        let blocks = Blocks::of(body);
+        let analysis = analysed_in(&blocks, value, live);
+        Self { value, blocks, analysis }
+    }
+
+    /// `countLiveBlocks`.
+    pub fn live_blocks(&self) -> usize {
+        self.analysis.uses.len() + self.analysis.through.len()
+    }
+}
+
 /// LLVM's `countLiveBlocks`: the blocks `value` is named in or lives through.
 pub fn live_blocks(
     body: &LirBody,
@@ -1187,7 +1222,8 @@ impl Occupied<'_> {
                 .unwrap_or_default(),
             Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
                 let mut gathered = gathered.borrow_mut();
-                let found = gathered.entry(whole).or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
+                let found =
+                    gathered.entry(whole).or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
                 let (all, reach) = &**found;
                 let from = reach.partition_point(|end| *end <= span.0);
                 let to = from + all[from..].partition_point(|one| one.start < span.1);
@@ -1247,12 +1283,13 @@ impl Occupied<'_> {
     ) -> Cursor<'_> {
         let whole = allocate::_whole(register);
         let held = match &self.held {
-            Holders::Built { segments, reach } => segments.get(&whole).map(|all| Holding::Borrowed(all, &reach[&whole])),
+            Holders::Built { segments, reach } => {
+                segments.get(&whole).map(|all| Holding::Borrowed(all, &reach[&whole]))
+            }
             Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
                 let mut gathered = gathered.borrow_mut();
-                let found = gathered
-                    .entry(whole)
-                    .or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
+                let found =
+                    gathered.entry(whole).or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
                 Some(Holding::Shared(std::rc::Rc::clone(found)))
             }
             Holders::Union { .. } => None,
@@ -1669,8 +1706,20 @@ pub fn pays(
     live: &dyn allocate::LiveAt,
     saving: &dyn Fn(&Insn) -> f64,
 ) -> bool {
-    let depths = ranges::depths_shared(body);
-    _benefit(&Blocks::of(body), value, region, &|at| ranges::level(depths[&at]), live, saving) > 0.0
+    Split::of(body, value, live).pays(region, live, saving)
+}
+
+impl Split<'_> {
+    /// `pays`, with the value's blocks found already.
+    pub fn pays(
+        &self,
+        region: &Region,
+        live: &dyn allocate::LiveAt,
+        saving: &dyn Fn(&Insn) -> f64,
+    ) -> bool {
+        let depths = ranges::depths_shared(self.blocks.body);
+        _benefit(&self.blocks, self.value, region, &|at| ranges::level(depths[&at]), live, saving) > 0.0
+    }
 }
 
 /// Whether `region` holds all of `value`'s range: every block it is named in
@@ -1734,65 +1783,83 @@ pub fn placed(
     width: u32,
     saving: &dyn Fn(&Insn) -> f64,
 ) -> Vec<Region> {
-    let blocks = Blocks::of(body);
-    let analysis = analysed_in(&blocks, value, live);
-    if analysis.uses.is_empty() {
-        return Vec::new();
-    }
-    if !blocks.plain {
-        return placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving);
-    }
-    let mut placement = spillplacement::Placement::new(body, bundles);
-    let frame = cost::Frame::new(&blocks, &analysis, &placement, index, value);
-    // The compact region: the use clusters, with no register's interference.
-    let mut none = |_: usize| None;
-    let mut compact_held = None;
-    if frame.rows() > frame.uses() {
-        placement.prepare();
-        if frame.constrain(&mut placement, &mut none) {
-            let active = frame.grow(&mut placement, None);
+    Split::of(body, value, live).placed(index, live, bundles, candidates, occupied, width, saving)
+}
+
+impl Split<'_> {
+    /// `placed`, with the value's blocks found already.
+    #[allow(clippy::too_many_arguments)]
+    pub fn placed(
+        &self,
+        index: &Indexes,
+        live: &dyn allocate::LiveAt,
+        bundles: &spillplacement::Bundles,
+        candidates: &[RegId],
+        occupied: &Occupied,
+        width: u32,
+        saving: &dyn Fn(&Insn) -> f64,
+    ) -> Vec<Region> {
+        let (blocks, analysis, value) = (&self.blocks, &self.analysis, self.value);
+        let body = blocks.body;
+        if analysis.uses.is_empty() {
+            return Vec::new();
+        }
+        if !blocks.plain {
+            return placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving);
+        }
+        let mut placement = spillplacement::Placement::new(body, bundles);
+        let frame = cost::Frame::new(blocks, analysis, &placement, index, value);
+        // The compact region: the use clusters, with no register's
+        // interference.
+        let mut none = |_: usize| None;
+        let mut compact_held = None;
+        if frame.rows() > frame.uses() {
+            placement.prepare();
+            if frame.constrain(&mut placement, &mut none) {
+                let active = frame.grow(&mut placement, None);
+                let settled = placement.finished();
+                compact_held = Some(frame.held(&active, &settled, &mut none));
+            }
+        }
+        let mut best: Option<(f64, cost::Held)> = None;
+        let mut tried = BTreeSet::new();
+        for register in candidates {
+            if !tried.insert(allocate::_whole(*register)) {
+                continue;
+            }
+            let mut asked = frame.interference(occupied, *register, width, index);
+            let mut blocked = |row: usize| asked.at(row);
+            placement.prepare();
+            if !frame.constrain(&mut placement, &mut blocked) {
+                continue;
+            }
+            let active = frame.grow(&mut placement, Some(&mut blocked));
             let settled = placement.finished();
-            compact_held = Some(frame.held(&active, &settled, &mut none));
+            let held = frame.held(&active, &settled, &mut blocked);
+            let saved = frame.price(&held, live, &placement, saving);
+            if saved > 0.0 && best.as_ref().is_none_or(|(found, _)| saved > *found) {
+                best = Some((saved, held));
+            }
         }
-    }
-    let mut best: Option<(f64, cost::Held)> = None;
-    let mut tried = BTreeSet::new();
-    for register in candidates {
-        if !tried.insert(allocate::_whole(*register)) {
-            continue;
+        let mut regions = Vec::new();
+        let mut compact = compact_held.unwrap_or_else(|| frame.nothing());
+        if let Some((_, held)) = &best {
+            frame.take_out(&mut compact, held);
+            regions.push(frame.region(held));
         }
-        let mut asked = frame.interference(occupied, *register, width, index);
-        let mut blocked = |row: usize| asked.at(row);
-        placement.prepare();
-        if !frame.constrain(&mut placement, &mut blocked) {
-            continue;
+        if frame.price(&compact, live, &placement, saving) > 0.0 {
+            regions.push(frame.region(&compact));
         }
-        let active = frame.grow(&mut placement, Some(&mut blocked));
-        let settled = placement.finished();
-        let held = frame.held(&active, &settled, &mut blocked);
-        let saved = frame.price(&held, live, &placement, saving);
-        if saved > 0.0 && best.as_ref().is_none_or(|(found, _)| saved > *found) {
-            best = Some((saved, held));
+        if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+            assert_eq!(
+                regions,
+                placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving),
+                "{}: the regions of value#{value} differ from the scan",
+                body.name
+            );
         }
+        regions
     }
-    let mut regions = Vec::new();
-    let mut compact = compact_held.unwrap_or_else(|| frame.nothing());
-    if let Some((_, held)) = &best {
-        frame.take_out(&mut compact, held);
-        regions.push(frame.region(held));
-    }
-    if frame.price(&compact, live, &placement, saving) > 0.0 {
-        regions.push(frame.region(&compact));
-    }
-    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
-        assert_eq!(
-            regions,
-            placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving),
-            "{}: the regions of value#{value} differ from the scan",
-            body.name
-        );
-    }
-    regions
 }
 
 /// `placed`, a `Region` made and priced for every candidate: what
@@ -1877,48 +1944,61 @@ pub fn local(
     occupied: &Occupied,
     width: u32,
 ) -> Option<Region> {
-    let analysis = analysed(body, value, live);
-    let [one] = analysis.uses.as_slice() else { return None };
-    if one.live_in || one.live_out || !analysis.through.is_empty() {
-        return None;
-    }
-    let place = body.blocks.iter().position(|block| block.at == one.block)?;
-    let block = &body.blocks[place];
-    // Its references, from the postings: not every instruction of the block
-    // asked.
-    let named: Vec<usize> = named_in(body, value).remove(&place).unwrap_or_default();
-    let slot = |position: usize| index.slot(block, position);
-    let mut best: Option<(usize, usize, usize, usize)> = None;
-    let mut tried = BTreeSet::new();
-    for register in candidates {
-        if !tried.insert(allocate::_whole(*register)) {
-            continue;
+    Split::of(body, value, live).local(index, candidates, occupied, width)
+}
+
+impl Split<'_> {
+    /// `local`, with the value's blocks found already.
+    pub fn local(
+        &self,
+        index: &Indexes,
+        candidates: &[RegId],
+        occupied: &Occupied,
+        width: u32,
+    ) -> Option<Region> {
+        let (analysis, body) = (&self.analysis, self.blocks.body);
+        let [one] = analysis.uses.as_slice() else { return None };
+        if one.live_in || one.live_out || !analysis.through.is_empty() {
+            return None;
         }
-        let mut start = 0;
-        while start < named.len() {
-            let mut end = start;
-            while end + 1 < named.len()
-                && occupied
-                    .interference(*register, width, (slot(named[start]), index.window_end(block, named[end + 1])))
-                    .is_none()
-            {
-                end += 1;
+        let place = body.blocks.iter().position(|block| block.at == one.block)?;
+        let block = &body.blocks[place];
+        // Its references, from the postings: not every instruction of the block
+        // asked.
+        let named: Vec<usize> = self.blocks.names(self.value).get(&place).cloned().unwrap_or_default();
+        let slot = |position: usize| index.slot(block, position);
+        let mut best: Option<(usize, usize, usize, usize)> = None;
+        let mut tried = BTreeSet::new();
+        for register in candidates {
+            if !tried.insert(allocate::_whole(*register)) {
+                continue;
             }
-            let count = end - start + 1;
-            let span = named[end] - named[start];
-            if count >= 2
-                && count < named.len()
-                && best.is_none_or(|(had, wide, _, _)| (count, Reverse(span)) > (had, Reverse(wide)))
-            {
-                best = Some((count, span, named[start], named[end] + 1));
+            let mut start = 0;
+            while start < named.len() {
+                let mut end = start;
+                while end + 1 < named.len()
+                    && occupied
+                        .interference(*register, width, (slot(named[start]), index.window_end(block, named[end + 1])))
+                        .is_none()
+                {
+                    end += 1;
+                }
+                let count = end - start + 1;
+                let span = named[end] - named[start];
+                if count >= 2
+                    && count < named.len()
+                    && best.is_none_or(|(had, wide, _, _)| (count, Reverse(span)) > (had, Reverse(wide)))
+                {
+                    best = Some((count, span, named[start], named[end] + 1));
+                }
+                start = end + 1;
             }
-            start = end + 1;
         }
+        let (_, _, from, to) = best?;
+        let mut region = Region::default();
+        region.add(block.at, from, to);
+        Some(region)
     }
-    let (_, _, from, to) = best?;
-    let mut region = Region::default();
-    region.add(block.at, from, to);
-    Some(region)
 }
 
 /// `tryBlockSplit`: each block naming the value at least twice holds it
@@ -1928,20 +2008,27 @@ pub fn per_block(
     value: u32,
     live: &dyn allocate::LiveAt,
 ) -> Vec<Region> {
-    let analysis = analysed(body, value, live);
-    if analysis.uses.len() + analysis.through.len() < 2 {
-        return Vec::new();
+    Split::of(body, value, live).per_block()
+}
+
+impl Split<'_> {
+    /// `per_block`, with the value's blocks found already.
+    pub fn per_block(&self) -> Vec<Region> {
+        let analysis = &self.analysis;
+        if analysis.uses.len() + analysis.through.len() < 2 {
+            return Vec::new();
+        }
+        analysis
+            .uses
+            .iter()
+            .filter(|one| one.references >= 2)
+            .map(|one| {
+                let mut region = Region::default();
+                region.add(one.block, one.first, one.last + 1);
+                region
+            })
+            .collect()
     }
-    analysis
-        .uses
-        .iter()
-        .filter(|one| one.references >= 2)
-        .map(|one| {
-            let mut region = Region::default();
-            region.add(one.block, one.first, one.last + 1);
-            region
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -2065,6 +2152,60 @@ mod tests {
         assert!(std::rc::Rc::ptr_eq(&first, &again), "the second ask found the occurrences again");
         assert_eq!(body.facts.0.counted("split-names"), 3, "the three instructions naming v3, once");
         assert_eq!(blocks.names(4).len(), 2, "another value is found for itself");
+    }
+
+    /// Every strategy of a split found the blocks the value is live in and
+    /// where it is named for itself (`split local`, `placed`, `per block` and
+    /// `pays`: d_faces -O2, 4 of the 5 times the split's analysis was made; the
+    /// allocator's `split` was 241 M, 125 M with one). A `Split` reads them
+    /// once.
+    #[test]
+    fn test_a_split_reads_where_the_value_is_named_once_for_all_its_strategies() {
+        let body = _pointer_across_a_loop();
+        let live = crate::backend::allocate::live(&body);
+        let sets = (&live.0, &live.1);
+        let index = intervals::indexed(&body);
+        let bundles = crate::backend::spillplacement::bundles(&body);
+        let masks = crate::backend::allocate::Masks::default();
+        let occupied = super::Occupied::new(IndexMap::default(), &masks);
+        let before = body.facts.0.counted("split-names");
+        let split = super::Split::of(&body, 3, &sets);
+        let _ = split.local(&index, &[RegId::AX], &occupied, 2);
+        let regions = split.placed(&index, &sets, &bundles, &[RegId::AX], &occupied, 2, &|_| 1.0);
+        let _ = split.per_block();
+        let _ = regions.iter().map(|one| split.pays(one, &sets, &|_| 1.0)).count();
+        assert_eq!(body.facts.0.counted("split-names") - before, 3, "the three instructions naming v3, once");
+        // The functions of the same names make one of their own each time.
+        let before = body.facts.0.counted("split-names");
+        let _ = super::local(&body, 3, &index, &sets, &[RegId::AX], &occupied, 2);
+        let _ = super::per_block(&body, 3, &sets);
+        assert!(body.facts.0.counted("split-names") - before >= 6, "premise: each asks for itself");
+    }
+
+    /// A candidate register met each block of the value's range three times
+    /// (the constraints, the growth and the region each asked the union and
+    /// the points that destroy it), and a `Region` was made and priced for
+    /// every candidate, where LLVM makes one for the best. A candidate meets a
+    /// block once, and only the best makes a region.
+    #[test]
+    fn test_a_candidate_meets_each_block_once_and_only_the_best_makes_a_region() {
+        let body = _pointer_across_a_loop();
+        let live = crate::backend::allocate::live(&body);
+        let sets = (&live.0, &live.1);
+        let index = intervals::indexed(&body);
+        let bundles = crate::backend::spillplacement::bundles(&body);
+        let masks = crate::backend::allocate::Masks::default();
+        let occupied = super::Occupied::new(IndexMap::default(), &masks);
+        let rows = super::Split::of(&body, 3, &sets).live_blocks();
+        let registers = [RegId::AX, RegId::BX, RegId::CX, RegId::DX];
+        let (asked, made) =
+            (super::cost::ASKED.with(std::cell::Cell::get), super::cost::MADE.with(std::cell::Cell::get));
+        let found = super::placed(&body, 3, &index, &sets, &bundles, &registers, &occupied, 2, &|_| 1.0);
+        let asked = super::cost::ASKED.with(std::cell::Cell::get) - asked;
+        let made = super::cost::MADE.with(std::cell::Cell::get) - made;
+        assert!(!found.is_empty(), "premise: a register that is free holds the value");
+        assert!(asked <= registers.len() * rows, "{asked} asks of {} candidates x {rows} blocks", registers.len());
+        assert!(made <= found.len(), "{made} regions made for {} handed on", found.len());
     }
 
     /// Each split made the frequency of every block of the function again

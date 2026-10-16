@@ -2197,38 +2197,29 @@ fn _allocated(
                     );
                 }
             }
-            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
+            let analysed = llrm_support::debug::timed("split spread", || splitkit::Split::of(&body, value, &live_sets));
+            let spread = analysed.live_blocks();
             let occupied = splitkit::Occupied::of(&union, &facts.live, value, &facts.masks);
             let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
             let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || {
-                splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)
+                analysed.local(&facts.index, &order, &occupied, width)
             }) {
                 Some(found) => vec![found],
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
-                        splitkit::placed(
-                            &body,
-                            value,
-                            &facts.index,
-                            sets,
-                            &bundles,
-                            &order,
-                            &occupied,
-                            width,
-                            &_held_saving,
-                        )
+                        analysed.placed(&facts.index, sets, &bundles, &order, &occupied, width, &_held_saving)
                     });
                     if placed.is_empty() {
-                        llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets))
+                        llrm_support::debug::timed("split per block", || analysed.per_block())
                     } else {
                         placed
                     }
                 }
             };
             let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || {
-                regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets, &_held_saving)).collect()
+                regions.into_iter().filter(|region| analysed.pays(region, sets, &_held_saving)).collect()
             });
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
@@ -3136,9 +3127,7 @@ impl Masks {
         width: u32,
     ) -> Destroyers<'_> {
         match self.reaching(register) {
-            Some(one) => Destroyers {
-                lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }],
-            },
+            Some(one) => Destroyers { lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }] },
             None => Destroyers { lists: [&[], &[], &[]] },
         }
     }

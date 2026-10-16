@@ -11,6 +11,14 @@ use super::*;
 
 const NONE: u32 = u32::MAX;
 
+// What a test counts: the interference asked of a register in a block, and the
+// regions made.
+#[cfg(test)]
+thread_local! {
+    pub(super) static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(super) static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A block of the value's live range, with what each candidate asks of it.
 pub(super) struct Row {
     position: usize,
@@ -67,11 +75,7 @@ impl Held {
         let (ranges, count) = match count {
             2 => {
                 let (first, second) = if found[0] <= found[1] { (found[0], found[1]) } else { (found[1], found[0]) };
-                if second.0 <= first.1 {
-                    ([(first.0, first.1.max(second.1)), (0, 0)], 1)
-                } else {
-                    ([first, second], 2)
-                }
+                if second.0 <= first.1 { ([(first.0, first.1.max(second.1)), (0, 0)], 1) } else { ([first, second], 2) }
             }
             _ => (found, count),
         };
@@ -172,21 +176,25 @@ impl<'a> Frame<'a> {
                 frame.named.extend_from_slice(found);
             }
             frame.row_of[position] = frame.rows.len() as u32;
-            frame.rows.push(Row {
-                position,
-                at,
-                len: block.insns.len(),
-                span: index.span[&at],
-                entry,
-                exit,
-                frequency: placement.frequency[&at],
-                uses,
-                live_in,
-                live_out,
-                named: started..frame.named.len(),
-                tail: _last_split(block),
-                next: 0..0,
-            });
+            frame
+                .rows
+                .push(
+                    Row {
+                        position,
+                        at,
+                        len: block.insns.len(),
+                        span: index.span[&at],
+                        entry,
+                        exit,
+                        frequency: placement.frequency[&at],
+                        uses,
+                        live_in,
+                        live_out,
+                        named: started..frame.named.len(),
+                        tail: _last_split(block),
+                        next: 0..0,
+                    },
+                );
         };
         for one in &analysis.uses {
             row(&mut frame, one.block, Some((one.first, one.last, one.references)), one.live_in, one.live_out);
@@ -208,9 +216,7 @@ impl<'a> Frame<'a> {
         frame.in_order.reserve(frame.rows.len());
         loop {
             let take = match (one.start < one.end, other.start < other.end) {
-                (true, true) => {
-                    frame.rows[one.start as usize].position < frame.rows[other.start as usize].position
-                }
+                (true, true) => frame.rows[one.start as usize].position < frame.rows[other.start as usize].position,
                 (true, false) => true,
                 (false, true) => false,
                 (false, false) => break,
@@ -379,6 +385,8 @@ impl<'a> Frame<'a> {
         &self,
         held: &Held,
     ) -> Region {
+        #[cfg(test)]
+        MADE.with(|made| made.set(made.get() + 1));
         let mut spans: Vec<(i64, Vec<(usize, usize)>)> = Vec::new();
         for (at, row) in self.rows.iter().enumerate() {
             if held.count[at] > 0 {
@@ -402,11 +410,8 @@ impl<'a> Frame<'a> {
         if held.count.iter().all(|count| *count == 0) {
             return 0.0;
         }
-        let whole = self
-            .rows
-            .iter()
-            .enumerate()
-            .all(|(at, row)| held.count[at] == 1 && held.ranges[at][0] == (0, row.len));
+        let whole =
+            self.rows.iter().enumerate().all(|(at, row)| held.count[at] == 1 && held.ranges[at][0] == (0, row.len));
         if whole {
             return 0.0;
         }
@@ -439,13 +444,21 @@ impl<'a> Frame<'a> {
     ) -> f64 {
         let (body, graph) = (self.blocks.body, &self.blocks.graph);
         let value = self.value;
-        let written = self.rows.iter().enumerate().any(|(at, row)| {
-            let ranges = held.of_row(at);
-            self.named[row.named.clone()].iter().any(|position| {
-                body.blocks[row.position].insns[*position].defines.contains(&value)
-                    && ranges.iter().any(|(from, to)| *position >= *from && *position < *to)
-            })
-        });
+        let written = self
+            .rows
+            .iter()
+            .enumerate()
+            .any(
+                |(at, row)| {
+                    let ranges = held.of_row(at);
+                    self.named[row.named.clone()]
+                        .iter()
+                        .any(
+                            |position| body.blocks[row.position].insns[*position].defines.contains(&value)
+                                && ranges.iter().any(|(from, to)| *position >= *from && *position < *to),
+                        )
+                },
+            );
         // A block is in a crossing only if the region has it or has a successor
         // of it, in the order the blocks come.
         let mut near: Vec<usize> = Vec::new();
@@ -460,9 +473,7 @@ impl<'a> Frame<'a> {
         let frequency = |row: u32, at: i64| {
             if row == NONE { placement.frequency[&at] } else { self.rows[row as usize].frequency }
         };
-        let enters = |row: u32| {
-            row != NONE && held.of_row(row as usize).first().is_some_and(|one| one.0 == 0)
-        };
+        let enters = |row: u32| row != NONE && held.of_row(row as usize).first().is_some_and(|one| one.0 == 0);
         let mut crossings: Vec<f64> = Vec::new();
         for position in near {
             let block = &body.blocks[position];
@@ -516,12 +527,7 @@ impl<'a> Frame<'a> {
         width: u32,
         index: &'b Indexes,
     ) -> Blocked<'b> {
-        Blocked {
-            frame: self,
-            cursor: occupied.cursor(register, width),
-            index,
-            asked: vec![None; self.rows.len()],
-        }
+        Blocked { frame: self, cursor: occupied.cursor(register, width), index, asked: vec![None; self.rows.len()] }
     }
 }
 
@@ -539,8 +545,10 @@ impl Blocked<'_> {
         row: usize,
     ) -> Option<(i64, i64)> {
         let (frame, cursor, index) = (self.frame, &self.cursor, self.index);
-        *self.asked[row].get_or_insert_with(|| {
-            cursor.at(frame.rows[row].span).map(|slots| _positions(index, frame.block(row), slots))
-        })
+        *self
+            .asked[row]
+            .get_or_insert_with(
+                || cursor.at(frame.rows[row].span).map(|slots| _positions(index, frame.block(row), slots)),
+            )
     }
 }
