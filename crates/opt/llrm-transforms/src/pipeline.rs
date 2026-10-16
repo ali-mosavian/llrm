@@ -298,17 +298,23 @@ impl Options {
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a
     /// loop is copied out completely only where the code does not grow;
-    /// nothing is inlined that `early-inlining-insns` (6) over
-    /// `max-inline-insns-auto` (15) of the -O2 threshold does not admit,
-    /// value numbering that inserts nothing (`-ftree-fre`; no
-    /// `-ftree-pre`), and no sibling calls, peeling or unswitching. Pattern
-    /// fill is on (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
+    /// nothing is inlined but the last call of a function (gcc has no
+    /// `-finline-small-functions` below -O2), no allocation search or second
+    /// route (gcc has neither: compile -34% on d_faces), value numbering that
+    /// inserts nothing (`-ftree-fre`; no `-ftree-pre`), and no sibling
+    /// calls, peeling or unswitching. Pattern fill is on
+    /// (`LoopIdiomRecognize` is in LLVM's O1 pipeline,
     /// PassBuilderPipelines.cpp L562): the one departure from gcc's -O1
     /// here, the user's decision of 2026-10-10 (docs/reference/levels.md).
     pub fn basic() -> Self {
         Self {
             limits: Limits { grows: false, ..Self::default().limits },
-            inline: inline::Threshold::new(Self::default().inline.limit * 6 / 15),
+            // gcc's -O1 has `-finline-functions-called-once` and no
+            // `-finline-small-functions`, and no allocation search or second
+            // route: with them off compile is 34% less on d_faces.
+            inline: inline::Threshold::new(0),
+            search: false,
+            routes: false,
             ipa_ranges: false,
             loop_intervals: false,
             pre: false,
@@ -361,10 +367,12 @@ impl Options {
     }
 
     /// -Omax: every pass the default has on, LLVM's -O3 budgets, twice the
-    /// target's unroll budget and a 250 inline threshold.
+    /// target's unroll budget, loops of up to 64 trips copied out completely
+    /// (gcc's `max-completely-peel-times` is 16; clang has no cap) and a 250
+    /// inline threshold.
     pub fn aggressive() -> Self {
         Self {
-            limits: Limits { target_percent: 200, ..Limits::default() },
+            limits: Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() },
             inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
             unswitch: true,
             split: true,
@@ -993,6 +1001,8 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
+            // A named point: what was kept as sound is worked out afresh.
+            analyses.refresh_soft();
             let before = run.version;
             run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
