@@ -46,8 +46,8 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `mir unroll-jam`: outer unroll at most 4 | x | x | x | on | on | x |
 | *MIR, whole module (`mir interprocedural`; stages as `LLRM_DEBUG=runs` names them)* | | | | | | |
 | `mir interprocedural` | x | on | on | on | on | on |
-| `inline`, `ipa-inline`: threshold | x | 90 | 225 | 250 | 250 | 90 |
-| `inline`: body budget, operations (m32 / m16) | x | 2 / 3 | 6 / 9 | 6 / 10 | 6 / 10 | 2 / 3 |
+| `inline`, `ipa-inline`: threshold | x | 0, only the last call | 225 | 250 | 250 | 0, only the last call |
+| `inline`: body budget, operations (m32 / m16) | x | x | 6 / 9 | 6 / 10 | 6 / 10 | x |
 | `inline`: hint / hot-call threshold | x | 325 / 525 | 325 / 525 | 325 / 525 | 325 / 525 | 325 / 525 |
 | `inline`: function called once | x | on | on | on | on | on |
 | `inline-trial`: clocks an inline must save per byte it adds | x | 16 | 16 | 16 | 16 | 16 |
@@ -58,7 +58,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `ipa-cp.` (clone for constants, growth allowed) | x | x | x | on | on | x |
 | `ipa-range` | x | x | on | on | on | x |
 | `ipa-deadargs` | x | on | on | on | on | on |
-| `ipa-recursive`: body budget, operations (m32 / m16); depth 8, size 450 | x | 2 / 3 | 6 / 9 | 6 / 10 | 6 / 10 | 2 / 3 |
+| `ipa-recursive`: body budget, operations (m32 / m16); depth 8, size 450 | x | x | 6 / 9 | 6 / 10 | 6 / 10 | x |
 | `ipa-pure` | x | on | on | on | on | on |
 | `ipa-noreturn` | x | on | on | on | on | on |
 | *MIR, after the interprocedural step* | | | | | | |
@@ -88,9 +88,9 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | Second selection and machine run without callee facts, cheaper kept | x | x | x | x | on | x |
 | `lir frame` | on | on | on | on | on | on |
 | `lir far-indirect-calls` | on | on | on | on | on | on |
-| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
-| `candidate spiller` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
-| `candidate cost` | x | spill traffic >= 0.5% | spill traffic >= 0.5% | spill traffic >= 0.5% | on | spill traffic >= 0.5% |
+| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
+| `candidate spiller` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
+| `candidate cost` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate allocator alone` | on | on | on | on | on | on |
 | `lir phielim` | on | on | on | on | on | on |
 | `lir pressuresink` | on | on | on | on | on | on |
@@ -100,7 +100,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `lir twoaddr` | on | on | on | on | on | on |
 | `lir coalesce` | on | on | on | on | on | on |
 | `lir regalloc` | on | on | on | on | on | on |
-| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | <= 2 | <= 2 | <= 2 | <= 12 | <= 2 |
+| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | x | <= 2 | <= 2 | <= 12 | x |
 | `lir parcopy` | on | on | on | on | on | on |
 | `lir peephole` | on | on | on | on | on | on |
 | `lir loopslots` | on | on | on | on | on | on |
@@ -133,7 +133,9 @@ Sources read:
 | `strength` / `strength-reduce` | `-ftree-slsr` | -O1 ([594](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L594)) | same |
 | `lsr` pointer for a stepped-some-trips counter (`induction::step_cycle`, `mirror.rs`) | none: gcc's `ivopts` and LLVM's LSR reduce an affine counter only | none | -O2 and up, not -Os; a target whose addresses take no scale: a counter that only some trips step (`if (...) ++i;`) read as `a[i]` gets a pointer that moves with it (quicksort -m16 -O2: memory operands -25%, 486 clocks -5.0%; 2026-10-11) |
 | `inline.last` / `inline-functions-called-once` | `-finline-functions-called-once` | -O1, not -Og ([606](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L606)) | every level above -O0, -Og too |
-| `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 ([627](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L627), [652](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L652)) | every level above -O0 |
+| `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 ([627](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L627), [652](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L652)) | every level above -O0 | -O2 and up: at -O1 and -Og only the last call of a function goes in (`-finline-functions-called-once`), as gcc's. Measured on the -O1 it replaced: d_faces compile -0.6%, executed code and the 71 vsgcc programs unchanged (0 rows) |
+| `search` / `allocation-search` | none: gcc allocates once | no counterpart | -O2 and up. -O1 and -Og allocate once (d_faces -O1 compile -18%; d_faces clocks +2.5%, vsgcc geomean clocks -0.1%, 0 rows newly lost to gcc or clang; allocation-routes follows) |
+| `routes` / `allocation-routes` | none | no counterpart | -O2 and up. -O1 and -Og make the allocator's route alone (d_faces -O1 compile -23%, d_faces executed code unchanged; vsgcc geomean clocks +0.44% with search off as well, sieve +25%, x_dct +15%, 0 rows newly lost). The spiller's route alone costs the same compile (3,634 against 3,686 Minstr) and gives vsgcc +0.14% clocks, +0.04% code but d_faces code +4.4%: route B's own item |
 | `forward`, `drop_loads` / `gcse` | `-fgcse`, `-ftree-fre` | -O2 for `-fgcse` ([624](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L624)); `-ftree-fre` -O1 ([592](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L592)) | every level above -O0: value numbering that removes what is redundant on every path (a load a dominating load or store holds) and inserts nothing |
 | `pre` / `tree-pre` | `-ftree-pre` | -O2 ([646](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L646)) | -O2 and up: `gvn` also makes a partial redundancy full by inserting the computation or load on the path that lacks it. At -O1 the sift of x_heapsort reloaded the two cells its compare had loaded: 47542 clocks, 46162 with FRE (gcc -O1: 40567). User decision 2026-10-11 : -O1 compile +2.5% geomean (`tools/measure.py`) for -11.8% clocks; gcc -O1 has -ftree-fre |
 | (`algebraic`, `_narrowed_binary`) | InstCombine's `visitTrunc` | every level above -O0 | `trunc (add (ext x), c)` is `add x, c` whatever else reads the wide sum, where the narrow op needs no cut of its own (it was for a single-use sum). User decision 2026-10-12 (relayed by the coordinator): ring's compile +3.4% on the combined tip (1.033-1.035 at each level, over the 1.02 per-file limit) for ring -8% clocks and -8 bytes: its counter is read as a counter again, so `counted`, `lsr` and `indvars` work on it |
