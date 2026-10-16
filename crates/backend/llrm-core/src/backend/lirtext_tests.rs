@@ -420,3 +420,32 @@ fn a_kept_copy_name_is_dropped_when_the_value_is_defined_again() {
     let text = dump_of(&twice);
     assert!(text.contains("  t30        = mov.i16     i") && text.contains("  t30        = mov.i16     t5"), "{text}");
 }
+
+/// Several values merged into one number have the name they all had, else none:
+/// the name of one of them would be another's.
+#[test]
+fn a_merged_web_keeps_a_name_only_if_every_member_has_it() {
+    let names =
+        ValueNames::of([(1, "sum".to_owned()), (2, "sum".to_owned()), (3, "n".to_owned()), (4, "sum".to_owned())]);
+    // `ValueNames::of` renames the second `sum`; read the names it made.
+    let (first, second) = (names.get(1).unwrap().0.to_owned(), names.get(2).unwrap().0.to_owned());
+    assert_ne!(first, second);
+    assert_eq!(names.joined(&[(1, 1)]).get(1).map(|(name, _)| name), Some("sum"), "a number joined to itself");
+    assert_eq!(names.joined(&[(2, 1)]).get(1), None, "two different names");
+    assert_eq!(names.joined(&[(3, 1)]).get(1), None, "two different names");
+    assert_eq!(names.joined(&[(5, 1)]).get(1), None, "one member has no name");
+    assert_eq!(names.joined(&[(5, 1)]).get(5), None);
+    let same = ValueNames::of([(1, "i".to_owned())]);
+    assert_eq!(same.joined(&[(1, 1)]).get(1).map(|(name, _)| name), Some("i"));
+}
+
+/// A number no instruction names is gone, and a pass may give it to a new
+/// value, which must not read as the old one.
+#[test]
+fn a_name_goes_with_its_number() {
+    let names = ValueNames::of([(1, "i".to_owned()), (2, "j".to_owned())]);
+    let present: std::collections::BTreeSet<u32> = [1].into_iter().collect();
+    let kept = names.only(&present);
+    assert_eq!(kept.get(1).map(|(name, _)| name), Some("i"));
+    assert_eq!(kept.get(2), None);
+}

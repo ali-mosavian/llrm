@@ -178,6 +178,44 @@ impl ValueNames {
         Self(Arc::new(found))
     }
 
+    /// The names after `joins` (each `(gone, kept)`): a web of merged values
+    /// has the name its members all have, else none. A merge leaves one number
+    /// for what were several values, and the name of one of them would be
+    /// another's.
+    #[must_use]
+    pub fn joined(
+        &self,
+        joins: &[(u32, u32)],
+    ) -> Self {
+        let mut found = (*self.0).clone();
+        let mut members: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+        for &(gone, kept) in joins.iter().filter(|(gone, kept)| gone != kept) {
+            members.entry(kept).or_insert_with(|| vec![kept]).push(gone);
+        }
+        for (kept, all) in members {
+            let names: Vec<Option<&str>> =
+                all.iter().map(|one| self.0.get(one).map(|(name, _)| name.as_str())).collect();
+            if names[0].is_none() || names.iter().any(|name| *name != names[0]) {
+                found.remove(&kept);
+            }
+            for gone in all.into_iter().filter(|one| *one != kept) {
+                found.remove(&gone);
+            }
+        }
+        Self(Arc::new(found))
+    }
+
+    /// The names of the values in `present` alone: a number no instruction
+    /// names is gone, and a pass may give it to a new value.
+    #[must_use]
+    pub fn only(
+        &self,
+        present: &BTreeSet<u32>,
+    ) -> Self {
+        let kept = self.0.iter().filter(|(value, _)| present.contains(value)).map(|(k, v)| (*k, v.clone()));
+        Self(Arc::new(kept.collect()))
+    }
+
     /// The name of `value`, and whether it was given by a copy rather than
     /// by MIR.
     pub fn get(
@@ -1247,6 +1285,28 @@ impl LirBody {
             }
         }
         self.last_label.set(next);
+    }
+
+    /// Every value number the body names.
+    pub fn value_numbers(&self) -> BTreeSet<u32> {
+        let mut found = BTreeSet::new();
+        for block in &self.blocks {
+            for phi in block.phis.iter() {
+                found.insert(phi.result);
+                found.extend(phi.incoming.iter().map(|(_, value)| *value));
+            }
+            for insn in block.insns.iter() {
+                found.extend(insn.defines.iter().chain(&insn.uses));
+                found.extend(insn.requires.iter().chain(&insn.delivers).map(|(held, _)| held.value));
+                for one in insn.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
+                    found.extend(llrm_lir::values(one).into_iter().map(|held| held.value));
+                    if let crate::model::ir::Loc::Held(held) = one {
+                        found.insert(held.value);
+                    }
+                }
+            }
+        }
+        found
     }
 
     /// How many times each value is defined: once in SSA, any number after

@@ -336,9 +336,11 @@ pub fn joined(
         let found = _find(&mut parent, one);
         swap.insert(one, found);
     }
+    let joins: Vec<(u32, u32)> = swap.iter().map(|(&gone, &kept)| (gone, kept)).collect();
     let swap = |value: u32| swap.get(&value).copied().unwrap_or(value);
     LirBody {
         inputs: body.inputs.iter().map(|value| swap(*value)).collect(),
+        names: body.names.joined(&joins),
         ..body.with_blocks(
             body.blocks
                 .iter()
