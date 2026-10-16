@@ -1,6 +1,7 @@
-// flags: -O0 | -O2 | -Os
+// flags: -O0 -fexcess-precision=standard | -O2 -fexcess-precision=standard | -Os -fexcess-precision=standard
 // An integer compared with a float is converted to the float's type first, which rounds it (C11 6.3.1.8, 6.3.1.4p2): 16777217L is
-// 16777216.0f, equal to the float (gcc.c-torture 920710-1). `ficomp` read the integer exactly and found them different; against a
+// 16777216.0f, equal to the float (gcc.c-torture 920710-1). That conversion rounds only under -fexcess-precision=standard, as in gcc;
+// by default x87 keeps the integer exact in its register. `ficomp` read the integer exactly and found them different; against a
 // double a 32-bit integer is exact and the compare is exact, as is a 64-bit one only to 53 bits.
 extern void report(long value);
 
