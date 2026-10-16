@@ -2304,13 +2304,14 @@ mod tests {
     }
 
     /// The caller of such a function removes the arguments but the address: gcc
-    /// added 8 after pushing 12 bytes.
+    /// added 8 after pushing 12 bytes (here 4 more, the pad to the 8-byte
+    /// call boundary, and the address 4 less).
     #[test]
     fn test_m32_sysv_caller_does_not_remove_the_result_address_the_callee_popped() {
         let body = sysv_body("_calls");
         let after = body.iter().skip_while(|line| **line != "call _away").skip(1).cloned().collect::<Vec<_>>();
-        assert!(after.iter().any(|line| line == "add esp, 8"), "{body:?}");
-        assert!(!after.iter().any(|line| line == "add esp, 12"), "{body:?}");
+        assert!(after.iter().any(|line| line == "add esp, 12"), "{body:?}");
+        assert!(!after.iter().any(|line| line == "add esp, 16"), "{body:?}");
     }
 
     /// An ELF object has no `_` before a C name and no `_` after a default one:
