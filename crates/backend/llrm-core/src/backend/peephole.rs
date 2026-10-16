@@ -683,15 +683,22 @@ fn _code_windows<E>(
     insns: &[Arc<Insn>],
     width: usize,
     mut rewrite: impl FnMut(&[Arc<Insn>]) -> Result<Option<(usize, Vec<Arc<Insn>>)>, E>,
-) -> Result<Vec<Arc<Insn>>, E> {
+) -> Result<Option<Vec<Arc<Insn>>>, E> {
     let code: Vec<usize> = (0..insns.len()).filter(|&at| !insns[at].is_meta()).collect();
-    let only: Vec<Arc<Insn>> = code.iter().map(|&at| Arc::clone(&insns[at])).collect();
-    let mut out = Vec::with_capacity(insns.len());
+    // Without a meta instruction the code is the block: nothing is copied to
+    // find that nothing matches.
+    let only: std::borrow::Cow<[Arc<Insn>]> = if code.len() == insns.len() {
+        std::borrow::Cow::Borrowed(insns)
+    } else {
+        std::borrow::Cow::Owned(code.iter().map(|&at| Arc::clone(&insns[at])).collect())
+    };
+    let mut out: Option<Vec<Arc<Insn>>> = None;
     let (mut next, mut at) = (0, 0);
     while at < code.len() {
-        out.extend(insns[next..code[at]].iter().cloned());
         match rewrite(&only[at..(at + width).min(code.len())])? {
             Some((consumed, replacement)) => {
+                let out = out.get_or_insert_with(|| Vec::with_capacity(insns.len()));
+                out.extend(insns[next..code[at]].iter().cloned());
                 let last = code[at + consumed - 1];
                 out.extend(replacement);
                 out.extend(insns[code[at] + 1..last].iter().filter(|one| one.is_meta()).cloned());
@@ -699,14 +706,14 @@ fn _code_windows<E>(
                 at += consumed;
             }
             None => {
-                out.push(Arc::clone(&insns[code[at]]));
-                next = code[at] + 1;
                 at += 1;
             }
         }
     }
-    out.extend(insns[next..].iter().cloned());
-    Ok(out)
+    Ok(out.map(|mut out| {
+        out.extend(insns[next..].iter().cloned());
+        out
+    }))
 }
 
 /// Two adjacent immediate word pushes have one dword's stack layout
@@ -809,7 +816,10 @@ pub fn high_extracts<'a>(
                 None => _high_extract(regs, body.bits, pair, &dead_after).map(|changed| (2, changed)),
             })
         })?;
-        blocks.push(block.with_insns(insns));
+        blocks.push(match insns {
+            Some(insns) => block.with_insns(insns),
+            None => block.clone(),
+        });
     }
     Ok(body.with_blocks(blocks))
 }
@@ -1900,7 +1910,10 @@ pub fn addresses<'a>(
                 _ => None,
             })
         })?;
-        blocks.push(block.with_insns(insns));
+        blocks.push(match insns {
+            Some(insns) => block.with_insns(insns),
+            None => block.clone(),
+        });
     }
     Ok(body.with_blocks(blocks))
 }
