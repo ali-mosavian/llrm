@@ -1407,3 +1407,16 @@ x:
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
+
+/// `dse` ran before `gvn`: the stores gvn forwards past were seen by it a round
+/// later, and the dead code that left a round after that, so a recursive body
+/// reached `tailrec` in the third round and `rectwo` ran 2.7x the clocks, `fib`
+/// 1.4x, when the rounds were two. As clang's DSE follows its GVN
+/// (PassBuilderPipelines.cpp L787-L820).
+#[test]
+fn dse_follows_gvn_in_the_round() {
+    let order = pipeline::passes();
+    let at =
+        |name: &str| order.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} is not in {order:?}"));
+    assert!(at("gvn") < at("dse"), "{order:?}");
+}
