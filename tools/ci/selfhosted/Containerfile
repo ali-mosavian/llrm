@@ -8,6 +8,11 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       linux-tools-generic linux-tools-common libicu74 libssl3t64 && rm -rf /var/lib/apt/lists/*
 # /usr/bin/perf is a wrapper wanting tools of the host's exact kernel; the real binary works on any.
 RUN ln -sf "$(ls /usr/lib/linux-tools/*/perf | tail -1)" /usr/local/bin/perf
+# What .github/actions/setup installs on every hosted job, baked in (its apt step then finds it installed). Refresh: install.sh.
+RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+ && echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" > /etc/apt/sources.list.d/llvm20.list \
+ && apt-get update -qq && apt-get install -y -qq gcc-multilib autoconf automake libtool pkg-config nasm valgrind libpng-dev zlib1g-dev \
+      libncurses-dev gdb binutils llvm-20 clang-20 lld-20 && rm -rf /var/lib/apt/lists/*
 RUN useradd -m -s /bin/bash runner && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner
 USER runner
 WORKDIR /home/runner
@@ -15,5 +20,7 @@ RUN curl -fsSL -o r.tgz "https://github.com/actions/runner/releases/download/v${
  && echo "${RUNNER_SHA256}  r.tgz" | sha256sum -c - && tar xzf r.tgz && rm r.tgz
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
 ENV PATH=/home/runner/.cargo/bin:$PATH
+COPY --chown=runner rust-toolchain.toml /home/runner/rust-toolchain.toml
+RUN cd /home/runner && rustup toolchain install && rustup toolchain install nightly --profile minimal --component rustfmt && rm rust-toolchain.toml
 # The jit config arrives in ACTIONS_RUNNER_INPUT_JITCONFIG; the runner exits after its one job.
 ENTRYPOINT ["./run.sh"]

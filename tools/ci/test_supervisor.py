@@ -28,3 +28,9 @@ def test_every_slot_gets_its_own_cores():
     """nproc inside a container reported 32 under --cpus: JOBS=$(nproc) oversubscribed. A cpuset of 8 makes it 8."""
     src = Path(supervisor.__file__).read_text()
     assert "--cpuset-cpus" in src and "--cpus=" not in src
+
+
+def test_the_workspace_is_the_hosted_one():
+    """The target cache from a hosted build holds /home/runner/work paths in llrm-c; on tinytim's /home/runner/_work every wccq spawn failed
+    "No such file or directory" (30 python-group test files red)."""
+    assert supervisor.WORK == "work"

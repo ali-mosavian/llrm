@@ -19,6 +19,8 @@ FIRST_CPU = int(os.environ.get("FIRST_CPU", "8"))  # cores 0-7 stay with interac
 MEMORY = os.environ.get("SLOT_MEMORY", "64g")
 IMAGE = os.environ.get("RUNNER_IMAGE", "localhost/llrm-runner:latest")
 PAT = open(os.environ.get("PAT_FILE", "/etc/ghrunner/pat")).read().strip()
+# The hosted runners' workspace is /home/runner/work: the target cache holds paths baked into binaries (LLRM_WCCQ_DIR) and is shared.
+WORK = "work"
 LABELS = ["self-hosted", "tinytim", "linux", "x64"]
 
 
@@ -73,7 +75,7 @@ def slot(n: int) -> None:
     while True:
         name = f"tinytim-{n}-{os.urandom(3).hex()}"
         try:
-            jit = api("POST", "actions/runners/generate-jitconfig", {"name": name, "runner_group_id": 1, "labels": LABELS, "work_folder": "_work"})
+            jit = api("POST", "actions/runners/generate-jitconfig", {"name": name, "runner_group_id": 1, "labels": LABELS, "work_folder": WORK})
             LIVE.add(name)
             started = time.time()
             subprocess.run(
