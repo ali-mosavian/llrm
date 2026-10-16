@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:3d73f63fa01ffc6d3f179da9a4cbb990898b25421dba622b036d6bdb329759f7 -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:2d34c836aaa588bb1f312f31d58dd5c460d8182be6a14fc08d0d993530045982 -->
 
 # lirtext
 
@@ -22,6 +22,9 @@ shape on the page; its header says `loop` and, for an innermost loop whose
 trip count is known, the count. Operand and instruction text is
 `llrm_lir::text`.
 
+A value is called by its name where MIR gave it one (`lsr.iv`), else `t12`;
+a copy of a named value keeps the name (`LirBody::names`).
+
 A note is printed only where it says something: `spill` and `reload` for
 frame traffic, `copy` for a phi's parallel copy, `remat`, `frame` for a
 frame adjustment, `N% taken` on a branch whose odds isel stated, `elided`
@@ -38,18 +41,18 @@ first appeared in a dump:
 
 ```lir
 ═══ _f@3 · RegAlloc · m16 ══════════════════════════════════════════════════════
-fn _f@3(v5@ax) -> @eax
+fn _f@3(t5@ax) -> @eax
 
 B0  entry  → B1                                                   ×1.0
-    #20  v1         = elided      v5
+    #24  t1         = elided      t5
      #2  bx         = mov.i2      1
      #3  cx         = mov.i2      0
      #4               jmp         B1
 
     B1  ← B0 B3  → B3 B2  loop                                        ×32.0
-         #5  ax         = sub.i2      ax, 1
-         #6               cmp.i2      ax, -1
-         #7               jne         B3 else B2                            ; 97% taken
+         #8  ax         = sub.i2      ax, 1
+         #9               cmp.i2      ax, -1
+        #10               jne         B3 else B2                            ; 97% taken
 ```
 
 ## Used by

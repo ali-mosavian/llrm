@@ -1114,6 +1114,8 @@ fn phased_to(
         }
         if llrm_support::env_set("ISEL_DUMP") {
             use std::io::IsTerminal as _;
+            // Kept, so a copy's name survives the pass that removes the copy.
+            body.names = body.with_inherited_names();
             let mode = if std::env::var("ISEL_DUMP").is_ok_and(|how| how == "verbose") {
                 crate::backend::lirtext::Mode::Verbose
             } else {

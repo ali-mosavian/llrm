@@ -143,6 +143,52 @@ impl PartialEq for Label {
 
 impl Eq for Label {}
 
+/// The names values carry, by number: what a dump calls a value instead of
+/// `t12`. Shared, so a body made from another costs nothing, and equal whatever
+/// it holds, like `DebugTags`: a name is said, never compared.
+#[derive(Clone, Debug, Default)]
+pub struct ValueNames(Arc<std::collections::BTreeMap<u32, String>>);
+
+impl PartialEq for ValueNames {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for ValueNames {}
+
+impl ValueNames {
+    /// `named` values; a name two values share (`lsr.iv` in two loops) is
+    /// kept by the lower number and suffixed `.2`, `.3` on the others, so a
+    /// name means one value.
+    pub fn of(named: impl IntoIterator<Item = (u32, String)>) -> Self {
+        let mut found: std::collections::BTreeMap<u32, String> = named.into_iter().collect();
+        let mut uses: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+        for name in found.values_mut() {
+            let times = uses.entry(name.clone()).or_insert(0);
+            *times += 1;
+            if *times > 1 {
+                *name = format!("{name}.{times}");
+            }
+        }
+        Self(Arc::new(found))
+    }
+
+    pub fn get(
+        &self,
+        value: u32,
+    ) -> Option<&str> {
+        self.0.get(&value).map(String::as_str)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// `call` is a shared owned reference
@@ -1039,6 +1085,8 @@ pub struct LirBody {
     pub facts: crate::analysis::facts::Kept,
     /// The last number a dump gave an instruction (`LirBody::number_insns`).
     pub last_label: Label,
+    /// What values are called in a dump (`ValueNames`).
+    pub names: ValueNames,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -1198,6 +1246,38 @@ impl LirBody {
         self.last_label.set(next);
     }
 
+    /// The names, and those a copy gives: a value defined by a plain move of a
+    /// named value is that value under another number, and keeps its name
+    /// through the passes that make it (a split, a phi copy). Changes nothing
+    /// of the body.
+    pub fn with_inherited_names(&self) -> ValueNames {
+        let mut found = (*self.names.0).clone();
+        let copies: Vec<(u32, u32)> = self
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|insn| insn.what.as_ref())
+            .filter_map(|what| match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+                (Operation::Move, [crate::model::ir::Loc::Held(to)], [crate::model::ir::Loc::Held(from)]) => {
+                    Some((to.value, from.value))
+                }
+                _ => None,
+            })
+            .collect();
+        loop {
+            let before = found.len();
+            for (to, from) in &copies {
+                if let (false, Some(name)) = (found.contains_key(to), found.get(from).cloned()) {
+                    found.insert(*to, name);
+                }
+            }
+            if found.len() == before {
+                break;
+            }
+        }
+        ValueNames(Arc::new(found))
+    }
+
     /// Constructs Python's five-required-field `LirBody` form.
     #[must_use]
     pub fn new(
@@ -1234,6 +1314,7 @@ impl LirBody {
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
             last_label: Label::default(),
+            names: ValueNames::default(),
         }
     }
 
@@ -1297,6 +1378,7 @@ impl LirBody {
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
             last_label: self.last_label.clone(),
+            names: self.names.clone(),
         }
     }
 

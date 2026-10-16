@@ -2038,6 +2038,9 @@ impl Selector<'_, '_, '_> {
         body.float_stack = self.arch.float_stack();
         body.sealed_arguments = !self.unsealed;
         body.inputs = self.inputs.clone();
+        body.names = crate::model::lir::ValueNames::of(
+            self.values.iter().filter_map(|(id, number)| Some((*number, self.function.value(*id).name.clone()?))),
+        );
         body.ordered = true;
         body.loop_trip_counts = self.trip_counts(&block_at);
         body.odds = odds;

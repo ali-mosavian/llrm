@@ -8,7 +8,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::{Held, Imm, Loc, Operation, Reg, Semantics};
 
 use super::lirtext::{Calls, Mode, Style, lir_stage_with};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Insn, LirBlock, LirBody, Phi, ValueNames};
 use crate::support::hash::IndexMap;
 
 const BB1: i64 = 0x40;
@@ -126,14 +126,14 @@ fn dump(mode: Mode) -> String {
 }
 
 /// Printed `nothing` for an operation selection had removed, hiding that it
-/// still defined `v5` from `v2`.
+/// still defined `t5` from `t2`.
 #[test]
 fn an_elided_operation_still_says_what_it_defines_and_reads() {
     let one = Insn { defines: vec![5], uses: vec![2], widths: vec![(5, 2)], ..insn(3, crate::model::lir::inert()) };
     let block = LirBlock::new(0, vec![Arc::new(one)]);
     let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
     let text = lir_stage_with("T", &[("f".to_owned(), body)], &Calls::default(), Mode::Compact, Style::Plain);
-    assert!(text.contains("     #1  v5         = elided      v2\n"), "{text}");
+    assert!(text.contains("     #1  t5         = elided      t2\n"), "{text}");
 }
 
 /// Said `0x0012  jl   ; inserted` with no target, a call with neither callee
@@ -141,25 +141,25 @@ fn an_elided_operation_still_says_what_it_defines_and_reads() {
 #[test]
 fn a_body_says_where_it_goes_what_it_calls_and_nothing_else() {
     let expected = "\
-fn f(v1@ax) -> @eax   ; calls clobber eax ecx
+fn f(t1@ax) -> @eax   ; calls clobber eax ecx
 frame  slot0 [bp-4] 2 B
 
 B0  entry  → B1
-     #2  v2         = mov.i2      1
+     #2  t2         = mov.i2      1
      #3               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
-         #4  v5         = phi         B0: v2, B1: v4
-         #5  v4         = sub.i2      v5, 1
-         #6               cmp.i2      v4, -1
+         #4  t5         = phi         B0: t2, B1: t4
+         #5  t4         = sub.i2      t5, 1
+         #6               cmp.i2      t4, -1
          #7               jne         B1 else B2
 
 B2  ← B1  → exit
-     #8  v7         = load.i2     [slot0]                               ; reload
-     #9  v10@eax    = call        fib(v7@ax)
-    #10  v11@eax    = call        fib(v7@ax)
-    #11  v12@eax    = call        log(v7@ax)                            ; also clobbers esi
-    #12               ret         v12@eax
+     #8  t7         = load.i2     [slot0]                               ; reload
+     #9  t10@eax    = call        fib(t7@ax)
+    #10  t11@eax    = call        fib(t7@ax)
+    #11  t12@eax    = call        log(t7@ax)                            ; also clobbers esi
+    #12               ret         t12@eax
 
 ";
     let text = dump(Mode::Compact);
@@ -267,7 +267,7 @@ fn an_inserted_instruction_changes_one_line_of_the_diff() {
     let added: Vec<_> = new.iter().filter(|line| !old.contains(line)).collect();
     assert!(removed.is_empty(), "{removed:#?}");
     assert_eq!(added.len(), 1, "{added:#?}");
-    assert!(added[0].contains("#13") && added[0].contains("v9"), "{added:#?}");
+    assert!(added[0].contains("#13") && added[0].contains("t9"), "{added:#?}");
 }
 
 fn dump_of(body: &LirBody) -> String {
@@ -316,5 +316,30 @@ fn a_phi_is_numbered_and_keeps_its_number() {
     assert_eq!(phi.label.get(), 4);
     let renamed = Phi { result: 9, ..phi.clone() };
     assert_eq!(renamed.label.get(), 4);
-    assert!(dump_of(&body).contains("     #4  v5         = phi"), "{}", dump_of(&body));
+    assert!(dump_of(&body).contains("     #4  t5         = phi"), "{}", dump_of(&body));
+}
+
+/// Every value printed `v12`, whatever it was. A value MIR named prints as it
+/// is named, a copy of it too, and a name two values share means one.
+#[test]
+fn a_named_value_prints_by_name_and_its_copy_keeps_it() {
+    let mut body = body();
+    body.names = ValueNames::of([(2, "i".to_owned()), (5, "i".to_owned())]);
+    let copy = Insn::new(
+        20,
+        Some((20, 20)),
+        Some(what(Operation::Move, "mov", vec![held(30, 2)], vec![held(2, 2)], None)),
+        vec![],
+        vec![],
+    );
+    let mut insns: Vec<Arc<Insn>> = body.blocks[0].insns.iter().cloned().collect();
+    insns.insert(2, Arc::new(copy));
+    let mut blocks = body.blocks.clone();
+    blocks[0] = blocks[0].with_insns(insns);
+    let body = body.with_blocks(blocks);
+    let text = dump_of(&body);
+    assert!(text.contains("  i          = mov.i2      1"), "{text}");
+    assert!(text.contains("  i          = mov.i2      i"), "the copy keeps the name\n{text}");
+    assert!(text.contains("i.2        = phi         B0: i, B1: t4"), "{text}");
+    assert!(!text.contains("v2") && !text.contains("v30"), "{text}");
 }

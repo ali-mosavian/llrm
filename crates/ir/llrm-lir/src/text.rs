@@ -5,23 +5,23 @@
 //! # How it works
 //! `render` gives an instruction as a destination, an opcode and operands.
 //! The opcode carries the type and bytes of the operation (`sub.i2`, `fld.f8`),
-//! so operands do not repeat it; a source of another width says so (`v10:i1`).
-//! Virtual registers are `v12`; real ones are named by width (`al`, `ax`,
-//! `eax`, `st0`); a virtual register placed in a real one is `v12@ax`. Memory
-//! is `[es:v3@bx+v4*4+8]`: segment, base, index times scale, displacement;
-//! a frame cell is a slot (`[slot0]`, `[slot0+2]`) where the caller names
-//! slots, else `[bp-4]`. A move to memory is `store`, from memory `load`, and
-//! a memory destination is the first operand, not a result. Immediates are
-//! decimal, a mask hex, an address `&place`. Branches and jumps name their
-//! blocks (`jl B5 else B4`, `switch v3 [0..2->B5, 3->B6]`), a call its callee
-//! and register arguments.
+//! so operands do not repeat it; a source of another width says so (`t10:i1`).
+//! Virtual registers are named by their source name or `t12`; real ones are
+//! named by width (`al`, `ax`, `eax`, `st0`); a virtual register placed in a
+//! real one is `t12@ax`. Memory is `[es:t3@bx+t4*4+8]`: segment, base, index
+//! times scale, displacement; a frame cell is a slot (`[slot0]`, `[slot0+2]`)
+//! where the caller names slots, else `[bp-4]`. A move to memory is `store`,
+//! from memory `load`, and a memory destination is the first operand, not a
+//! result. Immediates are decimal, a mask hex, an address `&place`. Branches
+//! and jumps name their blocks (`jl B5 else B4`, `switch v3 [0..2->B5,
+//! 3->B6]`), a call its callee and register arguments.
 //!
 //! ```text
-//! v11     = sub.i4     v2, 2
-//!           cmp.i4     v46, 5
+//! t11     = sub.i4     t2, 2
+//!           cmp.i4     t46, 5
 //!           jl         B5 else B4
-//! v13@eax = call       fib(v12@ax)
-//!           store.i2   [slot0], v47
+//! t13@eax = call       fib(t12@ax)
+//!           store.i2   [slot0], t47
 //! ```
 //!
 //! # Used by
@@ -39,6 +39,8 @@ use crate::{AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 pub struct Syntax<'a> {
     /// A block's name, by its address.
     pub block: &'a dyn Fn(i64) -> String,
+    /// A value's name, by its number: its source name, else `t12`.
+    pub value: &'a dyn Fn(u32) -> String,
     /// A frame cell as the slot it lies in (`slot0`, `slot0+2`), where the
     /// caller has named the frame's slots.
     pub frame: &'a dyn Fn(&Addr) -> Option<String>,
@@ -53,7 +55,14 @@ pub struct Syntax<'a> {
 impl Syntax<'_> {
     /// Names blocks by address and says nothing else.
     pub fn plain() -> Syntax<'static> {
-        Syntax { block: &|at| format!("B@{at}"), frame: &|_| None, callee: None, arguments: &[], otherwise: None }
+        Syntax {
+            block: &|at| format!("B@{at}"),
+            value: &|number| format!("t{number}"),
+            frame: &|_| None,
+            callee: None,
+            arguments: &[],
+            otherwise: None,
+        }
     }
 }
 
@@ -98,12 +107,14 @@ pub fn bits(
     }
 }
 
-/// `v12`, or `v12@ax` where it is placed.
+/// A value by its name (`t12`, `n`), or `t12@ax` where it is placed.
 pub fn held(
     value: Held,
     placed: RegId,
+    name: &dyn Fn(u32) -> String,
 ) -> String {
-    if placed == RegId::None { format!("v{}", value.value) } else { format!("v{}@{}", value.value, register(placed)) }
+    let named = name(value.value);
+    if placed == RegId::None { named } else { format!("{named}@{}", register(placed)) }
 }
 
 /// A displacement with its sign, none for zero.
@@ -162,7 +173,7 @@ pub fn memory(
         (None, None) => (String::new(), true),
     };
     let segment = match (&cell.selector, cell.addr.as_ref()) {
-        (Some(selector), _) => format!("{}:", held(*selector, RegId::None)),
+        (Some(selector), _) => format!("{}:", held(*selector, RegId::None, syntax.value)),
         (None, Some(addr)) if addr.segment != iced_x86::Register::None => {
             format!("{}:", register(RegId::new(addr.segment)))
         }
@@ -174,13 +185,13 @@ pub fn memory(
     }
     let framed = cell.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame);
     match (&cell.base, cell.through) {
-        (Some(base), through) => terms.push(held(*base, through)),
+        (Some(base), through) => terms.push(held(*base, through, syntax.value)),
         (None, through) if through != RegId::None && !framed => terms.push(register(through)),
         _ => {}
     }
     let scaled = |text: String| if cell.scale == 1 { text } else { format!("{text}*{}", cell.scale) };
     match (&cell.index, cell.index_through) {
-        (Some(index), through) => terms.push(scaled(held(*index, through))),
+        (Some(index), through) => terms.push(scaled(held(*index, through, syntax.value))),
         (None, through) if through != RegId::None => terms.push(scaled(register(through))),
         _ => {}
     }
@@ -249,8 +260,8 @@ fn used(
             Some(index) => format!("st{index}"),
             None => register(one.register),
         },
-        Loc::Held(value) if differs() => format!("v{}{}", value.value, width()),
-        Loc::Held(value) => format!("v{}", value.value),
+        Loc::Held(value) if differs() => format!("{}{}", (syntax.value)(value.value), width()),
+        Loc::Held(value) => (syntax.value)(value.value),
         Loc::Imm(value) if differs() => format!("{}{}", immediate(value, mask), width()),
         Loc::Imm(value) => immediate(value, mask),
         Loc::Mem(cell) if differs() => format!("{}{}", memory(cell, syntax), width()),

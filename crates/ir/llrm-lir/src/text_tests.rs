@@ -54,6 +54,7 @@ fn text(one: &Semantics) -> String {
         one,
         &Syntax {
             block: &block,
+            value: &|number| format!("v{number}"),
             frame: &|_| None,
             callee: Some(("fib", false)),
             arguments: &["v12@ax".to_owned()],
@@ -230,7 +231,14 @@ fn a_mask_prints_in_hex_at_its_width_and_other_immediates_in_decimal() {
 #[test]
 fn a_named_slot_replaces_the_frame_displacement() {
     let slot = |addr: &Addr| Some(format!("slot{}", (-addr.disp - 2) / 2));
-    let syntax = Syntax { block: &block, frame: &slot, callee: None, arguments: &[], otherwise: None };
+    let syntax = Syntax {
+        block: &block,
+        value: &|n| format!("v{n}"),
+        frame: &slot,
+        callee: None,
+        arguments: &[],
+        otherwise: None,
+    };
     let load = what(Operation::Move, "mov", vec![value(3, 2)], vec![frame(-4, 2)]);
     assert_eq!(render(&load, &syntax).to_string(), "v3 = load.i2 [slot1]");
     let save = what(Operation::Move, "mov", vec![frame(-2, 2)], vec![value(3, 2)]);
