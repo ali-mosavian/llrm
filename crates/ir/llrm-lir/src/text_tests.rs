@@ -264,3 +264,20 @@ fn a_frame_address_does_not_name_the_frame_register_twice() {
     };
     assert_eq!(render(&lea, &syntax).to_string(), "v4 = lea.i16 &slot5");
 }
+
+/// A ten-byte source of a float operation printed `t2:i80`: x87's extended real
+/// is a float whichever operation reads it.
+#[test]
+fn an_extended_real_operand_is_f80() {
+    let multiply = what(
+        Operation::FloatArith,
+        "fmul",
+        vec![st_loc()],
+        vec![Loc::Held(Held { value: 2, width: 10 }), frame(-8, 8)],
+    );
+    assert_eq!(text(&multiply), "st0 = fmul.f64 v2:f80, [bp-8]");
+}
+
+fn st_loc() -> Loc {
+    Loc::st(0)
+}
