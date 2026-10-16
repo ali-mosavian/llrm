@@ -778,6 +778,29 @@ mod tests {
         assert_eq!(without_path(&recorded), without_path(&committed));
     }
 
+    /// `far_pointer == NULL`, where `NULL` is `((void *)0)`: the constant was
+    /// converted from a near pointer, to the data segment's offset 0, so a far
+    /// null pointer compared unequal to it (clib's `memtest` said so of
+    /// `_fmemchr`; `signal`'s `SIG_DFL` likewise). A number used as a pointer
+    /// keeps its bits, with segment 0.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_constant_number_used_as_a_far_pointer_has_segment_zero() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("null.c");
+        std::fs::write(
+            &source,
+            "int isnull(void far *p) { return p == (void *)0; }\nint isdefault(void far *p) { return p == (void far *)2; }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records null.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
+        assert!(!asm.contains("DGROUP"), "{asm}");
+    }
+
     /// A far pointer made from a long in memory had its segment as a word-wide
     /// view of the shifted dword, a second width of one value: the
     /// allocator loaded ES again on every iteration of the loop that stores
