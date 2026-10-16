@@ -1433,12 +1433,15 @@ pub struct Standing<'h> {
     /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
+    /// The blocks, edges and loops of the body, as `held` has them or derived
+    /// once: they stand while the body's blocks and edges do (`reshaped`).
+    shape: Option<std::rc::Rc<crate::cfg::Shape>>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None }
+        Self { held: Some(registers), bounds: None, derived: None, shape: None }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1446,12 +1449,36 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None }
+        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None }
+        Self { held: None, bounds: None, derived: None, shape: None }
+    }
+
+    /// `self`, the shape of the body as the manager found it.
+    pub fn with_shape(
+        mut self,
+        shape: std::rc::Rc<crate::cfg::Shape>,
+    ) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+
+    /// The shape of `function`, found once while its blocks and edges stand.
+    pub fn shape(
+        &mut self,
+        function: &Function,
+    ) -> std::rc::Rc<crate::cfg::Shape> {
+        std::rc::Rc::clone(self.shape.get_or_insert_with(|| std::rc::Rc::new(crate::cfg::Shape::of(function))))
+    }
+
+    /// The body's blocks or edges changed: its shape, and with it what was
+    /// found of it, no longer holds.
+    pub fn reshaped(&mut self) {
+        self.shape = None;
+        self.changed();
     }
 
     /// The body changed: what was found of it no longer holds.

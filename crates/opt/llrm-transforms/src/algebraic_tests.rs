@@ -957,6 +957,27 @@ fn test_a_signed_division_of_a_non_negative_dividend_is_unsigned() {
     }
 }
 
+/// A dividend proved non-negative is divided unsigned by any constant at any
+/// width, whatever the target's pointers are: `sdiv` stayed `cdq; idiv` at the
+/// 16-bit target and the 32-bit one made `div` of it (bench/frames, `rest % 10`
+/// of a long: 13.78 M clocks against 10.83 M once it was unsigned and selection
+/// could use the reciprocal).
+#[test]
+fn test_a_non_negative_dividend_is_unsigned_by_any_constant_on_every_target() {
+    for (width, bound) in [(32, 100000), (16, 30000)] {
+        let text = format!(
+            "define i{width} @f(i{width} range(i{width} 0, {bound}) %x) {{\nb0:\n  %r = sdiv i{width} %x, 10\n  %s = srem i{width} %x, 10\n  %t = add i{width} %r, %s\n  ret i{width} %t\n}}\n"
+        );
+        let inputs: Vec<Vec<i128>> = [0, 1, 9, 10, 11, 99, 29999].iter().map(|&one| vec![one]).collect();
+        for done in [checked(&text, &inputs), checked_flat(&text, &inputs)] {
+            assert!(
+                done.contains("udiv") && done.contains("urem") && !done.contains("sdiv") && !done.contains("srem"),
+                "i{width}: {done}"
+            );
+        }
+    }
+}
+
 /// What a branch proves reaches the division: `rest > 0` holds in the loop that
 /// divides `rest` by ten.
 #[test]
@@ -1134,9 +1155,10 @@ fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size(
     );
     let (before, after) = simplified_in(text, true, FLAT);
     assert_eq!(bare(&after), bare(&before));
-    // A 16-bit segment's dword divides through prefixes: it stays.
-    let (before, after) = simplified_for(text, false);
-    assert_eq!(bare(&after), bare(&before));
+    // Nor does a 16-bit segment's prefixes keep it signed: selection prices
+    // them.
+    let (_, after) = simplified_for(text, false);
+    assert!(bare(&after).contains("udiv") && !bare(&after).contains("sdiv"), "{}", bare(&after));
     // A negative divisor stays: the signed reciprocal negates.
     unchanged("define i32 @f(i32 range(i32 0, 100) %x) {\nb0:\n  %r = sdiv i32 %x, -10\n  ret i32 %r\n}\n");
 }
