@@ -29,28 +29,31 @@ header = "crates/frontends/llrm-c/src/borland.h"
 # (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
 interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]
 
+# Every family names the OS the target is, `-bt=dos`: the front end otherwise predefines the host's (`__LINUX__`).
 # Borland's medium model: far code, near data, cdecl, signed char (long double is the x87 type: llrm-c adds -fld),
 # byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for
 # inline assembly: qcport's own uses 387 instructions. Borland's ABI is the only one here: wccq
 # also lays bit fields out as BCC 3.1 does, with no switch.
 [frontend.abi.cdecl]
 convention = "cdecl16"
-flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", "-bt=dos"]
 cdecl = "cdecl16"
 registers = "watcall16"
 
 # Open Watcom's own: no -ecc, so an unmarked function takes its registers; `__watcall` keeps Open Watcom's meaning, which Borland's
-# runtime does not have (borland.h moves its declarations to cdecl).
+# runtime does not have (borland.h moves its declarations to cdecl). Its structs pack to 2, its own default, and it has none of
+# Borland's names to undo: its header is empty.
 [frontend.abi.watcom]
 convention = "cdecl16"
-flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-s", "-zl", "-zq", "-dLLRM_WATCOM_ABI"]
+header = "crates/frontends/llrm-c/src/watcom.h"
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"
 registers = "watcall16"
 
 # gcc-ia16's: -ecc makes every function cdecl, which is its stack convention.
 [frontend.abi.ia16]
 convention = "ia16"
-flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq"]
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-ecc", "-s", "-zl", "-zq", "-bt=dos"]
 cdecl = "ia16"
 registers = "watcall16"
 
@@ -58,6 +61,6 @@ registers = "watcall16"
 # (the Borland runtime's declarations and every function that names a convention stay cdecl).
 [frontend.abi.regparm3]
 convention = "regparm3"
-flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-s", "-zl", "-zq"]
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-zp1", "-ei", "-s", "-zl", "-zq", "-bt=dos"]
 cdecl = "cdecl16"
 registers = "regparm3"
