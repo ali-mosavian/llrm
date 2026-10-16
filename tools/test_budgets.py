@@ -45,7 +45,7 @@ AXES = tuple(SIZES)
 
 
 def run(source: str, axis: str, stage: str) -> str:
-    """The compiler's stderr with `stage` on (`counts` or `time`) for `source`, compiled as the axis is."""
+    """The compiler's stderr with `stage` on (`counts`, `time` or both) for `source`, compiled as the axis is."""
     compiler = llrmbin.bin_dir() / "llrm-c"
     flags = ["-m16"] if axis.endswith("-m16") else ["-m32", "-march=i486"]
     with tempfile.TemporaryDirectory() as work:
@@ -84,8 +84,8 @@ def measured(axis: str) -> tuple[dict, dict, dict, dict]:
     """(events at N, at 2N, steps at N, at 2N less the empty file's) for one axis: one compile of each size, counts and steps."""
     n = SIZES[axis]
     with ThreadPoolExecutor(2) as pool:
-        texts = list(pool.map(lambda size: (run(source_of(axis, size), axis, "counts"), run(source_of(axis, size), axis, "time")), (n, 2 * n)))
-    return parsed_counts(texts[0][0]), parsed_counts(texts[1][0]), texts[0][1], texts[1][1]
+        texts = list(pool.map(lambda size: run(source_of(axis, size), axis, "counts,time"), (n, 2 * n)))
+    return parsed_counts(texts[0]), parsed_counts(texts[1]), texts[0], texts[1]
 
 
 @cache
