@@ -137,16 +137,21 @@ fn _once(body: &LirBody) -> Option<LirBody> {
         let mut dead = exits[&block.at].clone();
         let mut redundant: HashSet<usize> = HashSet::default();
         for one in block.insns.iter().rev() {
-            let Some(effect) = liveness::effect(regs, body.bits, one) else {
-                dead.clear();
-                continue;
-            };
-            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(regs, one) {
+            let removed = liveness::with_effect(regs, body.bits, one, |effect| {
+                let Some(effect) = effect else {
+                    dead.clear();
+                    return false;
+                };
+                if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && _pure(regs, one) {
+                    return true;
+                }
+                dead = effect.dead_before(&dead);
+                false
+            });
+            if removed {
                 redundant.insert(id(one));
                 changed = true;
-                continue;
             }
-            dead = effect.dead_before(&dead);
         }
         blocks.push(if redundant.is_empty() {
             block.clone()

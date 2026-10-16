@@ -155,6 +155,11 @@ pub fn with_effect<R>(
     if *was == bits { with(answer.as_ref()) } else { with(worked_out(regs, bits, one).as_ref()) }
 }
 
+fn checking_effects() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_EFFECT"))
+}
+
 /// `one`'s effect as it decodes, else as its contract declares; None when
 /// unknown. Worked out once for the instruction, whoever asks.
 pub fn effect(
@@ -165,7 +170,7 @@ pub fn effect(
     let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(regs, bits, one)));
     // Asked at another width than the first time: not the answer kept.
     let found = if *was == bits { answer.clone() } else { worked_out(regs, bits, one) };
-    if llrm_support::env_set("LLRM_CHECK_EFFECT") {
+    if checking_effects() {
         assert!(
             format!("{found:?}") == format!("{:?}", worked_out(regs, bits, one)),
             "an instruction's kept effect is not the one its fields give"

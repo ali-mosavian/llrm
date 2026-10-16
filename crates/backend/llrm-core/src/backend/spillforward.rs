@@ -120,6 +120,10 @@ fn _held(
     let Some(what) = &one.what else {
         return (Facts::default(), false, None);
     };
+    // With no fact held, only a move can make one.
+    if facts.is_empty() && what.op != Operation::Move {
+        return (facts, false, None);
+    }
     if [Operation::Branch, Operation::Jump].contains(&what.op)
         && what.dests.is_empty()
         && what.sources.is_empty()
