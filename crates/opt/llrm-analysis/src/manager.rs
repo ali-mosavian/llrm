@@ -1721,6 +1721,121 @@ impl Analysis for ThroughMemory {
             (old, fresh) => old == fresh,
         }
     }
+    fn step0(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        changes: &[Change],
+        analyses: &mut Analyses,
+    ) {
+        use llrm_mir::dense::IdSet;
+        let (Ok(old), Ok(fresh)) = (old, fresh) else { return };
+        let touched = function.touched_by(changes);
+        let mut loads: Vec<(InstId, ValueId)> = Vec::new();
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            if matches!(op.opcode, Opcode::Load { volatile: false, .. })
+                && let Some(result) = op.result
+            {
+                loads.push((inst, result));
+            }
+        }
+        let mut cone = IdSet::<ValueId>::new();
+        let mut work: Vec<ValueId> =
+            touched.named.iter().chain(touched.values_added.iter()).chain(touched.operands_changed.iter()).collect();
+        while let Some(value) = work.pop() {
+            if !cone.insert(value) {
+                continue;
+            }
+            for user in function.users(value) {
+                if let Some(result) = function.instruction(user.user).result {
+                    work.push(result);
+                }
+            }
+        }
+        let mut touched_mem = IdSet::<InstId>::new();
+        touched_mem
+            .extend(touched.memory_added.iter().chain(touched.memory_moved.iter()).chain(touched.memory_rewritten.iter()));
+        let providers = (|| {
+            let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).ok()?.clone();
+            let references = analyses.get::<Annotated>(context, layout, function);
+            let references = Result::as_ref(&*references).ok()?;
+            let shape = analyses.get::<Shape>(context, layout, function);
+            let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
+            let registers = analyses.get::<Registers>(context, layout, function);
+            let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+            let unit = Unit::within(context, layout, function, analyses.outer())
+                .with_references(references)
+                .with_shape(&shape)
+                .with_assumptions(&assumptions)
+                .with_registers(&registers)
+                .with_exposed(&exposed);
+            let plain = crate::memoryssa::Accesses::plain(&unit, &calls);
+            let placed: IndexMap<ValueId, Known> = fresh.iter().map(|(v, k)| (*v, k.clone())).collect();
+            Some(consts::load_providers(&unit.with_registers(&placed), &plain, &|_| true))
+        })();
+        let (rounds, far, retries) = consts::STEP0.with(std::cell::Cell::get);
+        let sites_of = |value: ValueId| -> Vec<InstId> {
+            match providers.as_ref().and_then(|p| p.get(&value)) {
+                Some(consts::Provider::Whole(sites)) => sites.clone(),
+                Some(consts::Provider::Bytes(bytes)) => bytes.iter().flatten().map(|(site, _)| *site).collect(),
+                None => Vec::new(),
+            }
+        };
+        let (mut unknown_kept, mut unknown_fresh, mut differ) = (0, 0, 0);
+        let (mut requery, mut requery_equal, mut missed) = (0, 0, 0);
+        let (mut by_cone, mut by_mem, mut by_stored) = (0, 0, 0);
+        for &(_, load) in &loads {
+            let (was, now) = (old.get(&load), fresh.get(&load));
+            unknown_kept += was.is_none() as u32;
+            unknown_fresh += now.is_none() as u32;
+            let same = was == now;
+            differ += !same as u32;
+            let sites = sites_of(load);
+            let in_cone = cone.contains(&load);
+            let on_mem = sites.iter().any(|site| touched_mem.contains(site));
+            let on_stored = sites.iter().any(|site| {
+                function.instruction(*site).operands.iter().any(|operand| {
+                    matches!(operand, llrm_mir::module::Operand::Value(value) if cone.contains(value))
+                })
+            });
+            by_cone += in_cone as u32;
+            by_mem += on_mem as u32;
+            by_stored += on_stored as u32;
+            if in_cone || on_mem || on_stored {
+                requery += 1;
+                requery_equal += same as u32;
+            } else {
+                missed += !same as u32;
+            }
+        }
+        let diff_values = fresh.iter().filter(|(v, k)| old.get(*v) != Some(*k)).count();
+        let (mut stores, mut stores_known, mut calls) = (0, 0, 0);
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            match op.opcode {
+                Opcode::Store { .. } => {
+                    stores += 1;
+                    let known = match op.operands.first() {
+                        Some(llrm_mir::module::Operand::Constant(_)) => true,
+                        Some(llrm_mir::module::Operand::Value(value)) => fresh.contains_key(value),
+                        _ => false,
+                    };
+                    stores_known += known as u32;
+                }
+                Opcode::Call(_) | Opcode::Invoke(_) => calls += 1,
+                _ => {}
+            }
+        }
+        eprintln!(
+            "STEP0 changes={} loads={} unk_kept={} unk_fresh={} differ={} requery={} requery_equal={} missed={} by_cone={} by_mem={} by_stored={} mem_ops={} mem_removed={} cfg={} values={} diff_values={} cone={} rounds={} far={} retries={} stores={} stores_known={} calls={}",
+            changes.len(), loads.len(), unknown_kept, unknown_fresh, differ, requery, requery_equal, missed,
+            by_cone, by_mem, by_stored, touched_mem.len(), touched.memory_removed.len(), !touched.cfg.is_empty() || touched.terminators_made,
+            fresh.len(), diff_values, cone.len(), rounds, far, retries, stores, stores_known, calls
+        );
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,

@@ -319,6 +319,18 @@ pub trait Analysis: 'static {
     /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
     /// sound.
     #[allow(unused_variables)]
+    /// STEP0 (throwaway): measure a replay.
+    fn step0(
+        _old: &Self::Result,
+        _fresh: &Self::Result,
+        _context: &Context,
+        _layout: &DataLayout,
+        _function: &Function,
+        _changes: &[crate::module::Change],
+        _analyses: &mut Analyses,
+    ) {
+    }
+
     fn covers(
         old: &Self::Result,
         fresh: &Self::Result,
@@ -1276,6 +1288,11 @@ impl Analyses {
                 } else {
                     result
                 };
+                if std::env::var_os("LLRM_STEP0").is_some() {
+                    let mut scratch = Analyses::new(Rc::clone(&self.outer));
+                    let fresh = A::run(context, layout, function, &mut scratch);
+                    A::step0(&result, &fresh, context, layout, function, changes, &mut scratch);
+                }
                 if check_replay() {
                     let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(

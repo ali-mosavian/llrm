@@ -1373,6 +1373,11 @@ pub fn known_walked(
 /// `known_walked`, with what counted float loops leave in memory when they exit
 /// (`floatfacts::loop_exits`): a load after one, reaching what the loop's exit
 /// reaches, holds what it left there.
+thread_local! {
+    /// STEP0: (rounds used by the last solve, far stores, far retries).
+    pub static STEP0: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
 pub fn known_walked_over(
     unit: &Unit,
     calls: &Calls,
@@ -1393,7 +1398,8 @@ pub fn known_walked_over(
         let mut facts = registers.clone();
         let mut placed = registers.clone();
         let mut providers = load_providers(&unit.with_registers(&placed), accesses, &wanted);
-        for _round in 0..4 {
+        for round in 0..4 {
+            STEP0.with(|s| s.set((round as u32 + 1, s.get().1, s.get().2)));
             let mut changing = true;
             while changing {
                 changing = false;
@@ -1470,6 +1476,7 @@ pub fn known_walked_over(
         })
         .collect();
     let mut allowed: Option<llrm_mir::dense::IdSet<ValueId>> = None;
+    let mut far_retries = 0_u32;
     let facts = loop {
         let assumed: Vec<(InstId, ValueId)> = far_stores
             .iter()
@@ -1486,8 +1493,10 @@ pub fn known_walked_over(
         let resolved: llrm_mir::dense::IdSet<ValueId> =
             assumed.iter().map(|(_, segment)| *segment).filter(|segment| facts.contains_key(segment)).collect();
         if assumed.iter().all(|(_, segment)| resolved.contains(segment)) {
+            STEP0.with(|s| s.set((s.get().0, far_stores.len() as u32, far_retries)));
             break facts;
         }
+        far_retries += 1;
         allowed = Some(resolved);
     };
     constant_cycles::propagated(unit, facts, None, None)
