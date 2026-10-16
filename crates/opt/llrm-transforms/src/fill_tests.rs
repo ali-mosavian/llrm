@@ -781,6 +781,83 @@ fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
     assert_eq!(stores(unique, true), 1, "size: nine bytes against twelve");
 }
 
+/// `text`'s @f under `Merge`: its printed form, as run before.
+fn merged_text(text: &str) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut module = before.clone();
+    let after = managed(&mut module, Merge { size: false });
+    assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
+    after
+}
+
+/// lru's init stored a dword of zeros, then a word over its high half: the
+/// dword was not merged with the word, since the two meet at a byte and a store
+/// that is written over keeps its order. The earlier is cut to the bytes the
+/// later leaves it, and the two make one store (gcc's `merged_store_group`):
+/// lru -O3 ran 175 clocks against 169.
+#[test]
+fn a_store_a_later_one_overlaps_is_cut_and_both_make_one() {
+    let dword = merged_text(&local("  store i32 0, ptr %a\n  store i16 2, ptr %p2\n"));
+    assert_eq!(dword.matches("store").count(), 1, "{dword}");
+    assert!(dword.contains("store i32 131072"), "{dword}");
+    // Other widths: a word and a byte over its high byte.
+    let word = merged_text(&local("  store i16 0, ptr %a\n  store i8 5, ptr %p1\n"));
+    assert_eq!(word.matches("store").count(), 1, "{word}");
+    assert!(word.contains("store i16 1280"), "{word}");
+}
+
+/// A store written over whole by a later one of the same window, with nothing
+/// reading between, is dead.
+#[test]
+fn a_store_a_later_one_writes_over_whole_goes() {
+    let text = merged_text(&local("  store i16 1, ptr %a\n  store i16 2, ptr %a\n  store i16 3, ptr %p2\n"));
+    assert_eq!(text.matches("store").count(), 1, "{text}");
+    assert!(text.contains("store i32 196610"), "{text}");
+}
+
+/// What overlaps at the front, or in the middle, is left as it is.
+#[test]
+fn a_store_cut_at_its_front_or_middle_keeps_its_order() {
+    let front = merged_text(&local("  store i32 7, ptr %p2\n  store i32 0, ptr %a\n"));
+    assert_eq!(front.matches("store").count(), 2, "{front}");
+    let middle = merged_text(&local("  store i32 7, ptr %a\n  store i8 1, ptr %p1\n"));
+    assert_eq!(middle.matches("store").count(), 2, "{middle}");
+}
+
+/// A `memset` of other bytes stands between stores without breaking the run.
+#[test]
+fn a_memset_of_other_bytes_between_two_stores_does_not_end_the_run() {
+    let text = |memset: &str| {
+        format!(
+            "{MEMSET}define i16 @f(i16 %n, i16 %q) {{
+b0:
+  %a = alloca [8 x i8]
+  %b = alloca [8 x i8]
+  %p2 = getelementptr i8, ptr %a, i16 2
+  %p4 = getelementptr i8, ptr %a, i16 4
+  store i16 4, ptr %a
+{memset}  store i16 6, ptr %p2
+  %r = getelementptr i8, ptr %a, i16 %q
+  %v = load i8, ptr %r
+  %w = zext i8 %v to i16
+  %m = getelementptr i8, ptr %b, i16 %q
+  %x = load i8, ptr %m
+  %y = zext i8 %x to i16
+  %z = add i16 %w, %y
+  ret i16 %z
+}}"
+        )
+    };
+    let other = merged_text(&text("  call void @llvm.memset.p0.i16(ptr %b, i8 -1, i16 8, i1 false)\n"));
+    assert_eq!(other.matches("store").count(), 1, "{other}");
+    // The same object, over bytes a store before it wrote: the run ends.
+    let same = merged_text(&text("  call void @llvm.memset.p0.i16(ptr %a, i8 -1, i16 2, i1 false)\n"));
+    assert_eq!(same.matches("store").count(), 2, "{same}");
+    // The same object, past them: it stands.
+    let past = merged_text(&text("  call void @llvm.memset.p0.i16(ptr %p4, i8 -1, i16 4, i1 false)\n"));
+    assert_eq!(past.matches("store").count(), 1, "{past}");
+}
+
 /// lru's init: `lhead` and `ltail` are adjacent arrays of one struct, a loop of
 /// `trips` stores `-1` to each.
 fn adjacent_fills(trips: i32) -> String {

@@ -56,15 +56,19 @@
 //!
 //! `Merge` is a separate pass over straight-line code in each block. A run of
 //! at least two non-volatile stores of one repeated byte to adjacent bytes of
-//! one object (no other memory access between them) is one memset placed where
-//! the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
-//! or 16 bytes, or fewer only where the memset needs fewer widest-integer
-//! stores). A run of adjacent constants that are not one byte repeated becomes
-//! stores of the widest legal integer, when that is no more code bytes (a value
-//! stored more than once lives in a register, which is cheaper). `Merge` runs
-//! after the scalar passes have settled: no pass asks a memset what a cell
-//! holds, so merging sooner would lose a store's value to the forwarding after
-//! it.
+//! one object (no memory access of those bytes between them: another object's
+//! `memset` or `memcpy`, or bytes of this one the stores do not write, may
+//! stand) is one memset placed where the last stood, if profitable (LLVM's
+//! `isProfitableToUseMemset`: four stores or 16 bytes, or fewer only where the
+//! memset needs fewer widest-integer stores). A run of adjacent constants that
+//! are not one byte repeated becomes stores of the widest legal integer, when
+//! that is no more code bytes (a value stored more than once lives in a
+//! register, which is cheaper). `Merge` runs after the scalar passes have
+//! settled: no pass asks a memset what a cell holds, so merging sooner would
+//! lose a store's value to the forwarding after it. Of two stores in a run that
+//! overlap, the later wins the bytes it covers (gcc's `merged_store_group`):
+//! the earlier is cut to the rest of its tail, and goes if it is written over
+//! whole.
 //!
 //! # Example
 //! Before:
@@ -139,6 +143,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
@@ -251,6 +256,8 @@ pub fn merged(
     size: bool,
 ) -> bool {
     let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
+    // Stores a later store of the same window writes over whole.
+    let mut dead: Vec<InstId> = Vec::new();
     let wides: Vec<_Wide>;
     {
         let unit = Unit::within(context, layout, function, outer);
@@ -263,15 +270,19 @@ pub fn merged(
             for cell in &open {
                 *stored.entry((cell.value, (cell.high - cell.low) as u32)).or_default() += 1;
             }
-            let (filled, rest) = _adjacent(&unit, open);
+            let (filled, rest, overwritten) = _adjacent(&unit, open);
             runs.extend(filled);
             left.extend(rest);
+            dead.extend(overwritten);
         };
         for block in function.layout() {
             let mut open: Vec<_Cell> = Vec::new();
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
                 if let Some(cell) = _cell(&unit, inst, order) {
                     open.push(cell);
+                } else if _elsewhere(&unit, inst, &open) {
+                    // Writes and reads bytes of other objects: the stores
+                    // stand either side of it.
                 } else if !memory::speculatable(unit.context, callees, function, inst)
                     || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
                 {
@@ -330,7 +341,50 @@ pub fn merged(
             function.erase(one.store).expect("a store has no result");
         }
     }
-    !runs.is_empty() || !wides.is_empty()
+    for store in &dead {
+        function.erase(*store).expect("a store has no result");
+    }
+    !runs.is_empty() || !wides.is_empty() || !dead.is_empty()
+}
+
+/// Whether `inst` is a `memset`, `memcpy` or `memmove` of bytes that none of
+/// the stores in `open` is to: it neither reads nor writes them, so the stores
+/// either side of it may be merged. gcc's store merging chains stores by their
+/// base object and lets what touches other bytes stand between them. A pointer
+/// into an object `open` stores to must have a constant length that clears
+/// every store; into another object, any length does.
+fn _elsewhere(
+    unit: &Unit,
+    inst: InstId,
+    open: &[_Cell],
+) -> bool {
+    let function = unit.function;
+    let op = function.instruction(inst);
+    let Opcode::Call(_) = op.opcode else { return false };
+    let Some(callee) = memory::callee(unit.context, function, inst) else { return false };
+    let Some(name) = unit.globals.get(callee.0 as usize).and_then(|global| global.name.as_deref()) else {
+        return false;
+    };
+    let objects = match Intrinsic::named(name) {
+        Some(Intrinsic::MemSet) => 1,
+        Some(Intrinsic::MemCpy | Intrinsic::MemMove) => 2,
+        _ => return false,
+    };
+    if unit.int_constant(op.operands[3]) != Some(0) {
+        return false;
+    }
+    let length = unit.int_constant(op.operands[2]).and_then(|length| i64::try_from(length).ok());
+    op.operands[..objects].iter().all(|&pointer| {
+        let reference = MemRef::at(unit, pointer, 1);
+        let Some(root) =
+            reference.root.filter(|_| reference.object && reference.base.is_none() && reference.segment.is_none())
+        else {
+            return false;
+        };
+        open.iter()
+            .filter(|cell| cell.root == root)
+            .all(|cell| length.is_some_and(|length| reference.disp + length <= cell.low || cell.high <= reference.disp))
+    })
 }
 
 /// The store `inst` is, where it writes one repeated byte at a constant
@@ -396,7 +450,7 @@ fn _repeated(
 fn _adjacent(
     unit: &Unit,
     open: Vec<_Cell>,
-) -> (Vec<(Vec<_Cell>, u32, u32)>, Vec<Vec<_Cell>>) {
+) -> (Vec<(Vec<_Cell>, u32, u32)>, Vec<Vec<_Cell>>, Vec<InstId>) {
     let mut objects: Vec<Vec<_Cell>> = Vec::new();
     for cell in open {
         match objects.iter_mut().find(|object| object[0].root == cell.root) {
@@ -404,13 +458,15 @@ fn _adjacent(
             None => objects.push(vec![cell]),
         }
     }
-    // Two stores to one byte keep their order: leave the object alone.
     let mut groups: Vec<Vec<_Cell>> = Vec::new();
-    for mut object in objects {
+    let mut overwritten: Vec<InstId> = Vec::new();
+    for object in objects {
+        // Two stores to one byte keep their order: the earlier is cut to the
+        // bytes the later ones leave it (`_trimmed`), or the object is left
+        // alone.
+        let Some((mut object, dead)) = _trimmed(object) else { continue };
+        overwritten.extend(dead);
         object.sort_by_key(|one| one.low);
-        if object.windows(2).any(|pair| pair[1].low < pair[0].high) {
-            continue;
-        }
         // A near and a far pointer to one object are two memsets' operands.
         for cell in object {
             match groups
@@ -453,7 +509,44 @@ fn _adjacent(
         flush(&mut run, &mut rest);
         left.push(rest);
     }
-    (runs, left)
+    (runs, left, overwritten)
+}
+
+/// `object`'s stores, the earlier of two that overlap cut short at the bytes
+/// the later writes (gcc's `merged_store_group` lets a later store win the
+/// bytes it covers): none where an earlier store would lose its first bytes or
+/// its middle, or all of them.
+fn _trimmed(mut object: Vec<_Cell>) -> Option<(Vec<_Cell>, Vec<InstId>)> {
+    object.sort_by_key(|one| one.order);
+    let mut dead: Vec<InstId> = Vec::new();
+    for later in 1..object.len() {
+        for earlier in 0..later {
+            let (low, high) = (object[later].low, object[later].high);
+            let one = &mut object[earlier];
+            if one.low == one.high || high <= one.low || one.high <= low {
+                continue;
+            }
+            // Written over whole: nothing reads it between.
+            if low <= one.low && one.high <= high {
+                one.high = one.low;
+                dead.push(one.store);
+                continue;
+            }
+            // Only the tail goes: the cell keeps its address and its first
+            // byte.
+            if low <= one.low || high < one.high {
+                return None;
+            }
+            let bytes = (low - one.low) as u32;
+            one.high = low;
+            one.value &= (1u128 << (8 * bytes)) - 1;
+            let first = one.value & 0xFF;
+            one.byte = (0..bytes).all(|at| (one.value >> (8 * at)) & 0xFF == first).then_some(first);
+        }
+    }
+    object.retain(|one| one.low != one.high);
+    object.sort_by_key(|one| one.low);
+    object.windows(2).all(|pair| pair[0].high <= pair[1].low).then_some((object, dead))
 }
 
 /// Stores of the widest legal integer in place of adjacent smaller constant

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:2e22e2e7307feca6e5fa80da10242eb213e98b676453e34f82b95462d43843e5 -->
+<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:b4308ba981a79ce64fc631dbad4bd78205f97c1d7bd2bb970e72f9bba7c9f2e2 -->
 
 # fill
 
@@ -61,15 +61,19 @@ manager's `Declared`.
 
 `Merge` is a separate pass over straight-line code in each block. A run of
 at least two non-volatile stores of one repeated byte to adjacent bytes of
-one object (no other memory access between them) is one memset placed where
-the last stood, if profitable (LLVM's `isProfitableToUseMemset`: four stores
-or 16 bytes, or fewer only where the memset needs fewer widest-integer
-stores). A run of adjacent constants that are not one byte repeated becomes
-stores of the widest legal integer, when that is no more code bytes (a value
-stored more than once lives in a register, which is cheaper). `Merge` runs
-after the scalar passes have settled: no pass asks a memset what a cell
-holds, so merging sooner would lose a store's value to the forwarding after
-it.
+one object (no memory access of those bytes between them: another object's
+`memset` or `memcpy`, or bytes of this one the stores do not write, may
+stand) is one memset placed where the last stood, if profitable (LLVM's
+`isProfitableToUseMemset`: four stores or 16 bytes, or fewer only where the
+memset needs fewer widest-integer stores). A run of adjacent constants that
+are not one byte repeated becomes stores of the widest legal integer, when
+that is no more code bytes (a value stored more than once lives in a
+register, which is cheaper). `Merge` runs after the scalar passes have
+settled: no pass asks a memset what a cell holds, so merging sooner would
+lose a store's value to the forwarding after it. Of two stores in a run that
+overlap, the later wins the bytes it covers (gcc's `merged_store_group`):
+the earlier is cut to the rest of its tail, and goes if it is written over
+whole.
 
 ## Example
 Before:
