@@ -33,6 +33,8 @@ import wrap  # noqa: E402
 KNOWN_PROGRAMS = 66
 KNOWN_QCPORT = 65
 KNOWN_RUN = 97
+KNOWN_BENCH = 120
+BENCH_LEVELS = ("O2", "Os", "O3")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
 # Oracles the corpus run does not set (each needs inputs the corpus lacks): the list only shrinks. Every other LLRM_CHECK_ oracle in the
 # source is set by the run, and a new one needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle
@@ -99,13 +101,36 @@ def stale(binary: str, rev: str, what: str, root: Path = ROOT) -> str | None:
     return None
 
 
-def same(job: tuple[str, str, Path, list[str]], old: str, new: str, work: Path) -> tuple[str, str, str | None]:
-    name, level, source, flags = job
+def bench_compiles(work: Path, levels: tuple[str, ...] = BENCH_LEVELS) -> dict[str, tuple[str, list[str]]]:
+    """Name -> (tool, arguments): every compile of llrm's own the bench harness makes of each program in each language, with the
+    harness's flags (`bench.compiles`, the one place they are spelled), at each of `levels`. The programs of vsgcc and tests/run are
+    compiled with other flags than the bench's (-fno-inline-functions, a volatile pointer to the kernel), so a change to what the bench
+    measures was 'identical' on a corpus that never compiled it so."""
+    sys.path.insert(0, str(HERE / "bench"))
+    import bench  # imported here: it needs the emulators and the built binaries
+
+    found: dict[str, tuple[str, list[str]]] = {}
+    for directory in bench.benchmarks([]):
+        for variant in bench.variants(directory):
+            for opt in levels:
+                stem = f"{variant.name.replace('/', '_')}.{variant.language}.{opt}"
+                for n, (tool, arguments, _) in enumerate(bench.compiles(variant, opt, work, stem)):
+                    found[f"bench/{variant.name}/{variant.language}/{opt}#{n}"] = (tool, arguments)
+    if len({name.split("#")[0] for name in found}) < KNOWN_BENCH:
+        sys.exit(f"identical: {len(found)} bench compiles, {KNOWN_BENCH} programs are known")
+    return found
+
+
+def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -> tuple[str, str, str | None]:
+    """One compile by `old` and by `new` (the tool beside each llrm-c): the objects are the same bytes. `arguments` end in `-o OBJ`."""
+    name, level, tool, arguments = job
     outs = []
     for tag, compiler in (("old", old), ("new", new)):
         out = work / f"{name.replace('/', '_')}{level}.{tag}.obj"
         env = {**os.environ, **{f"LLRM_CHECK_{one}": "1" for one in CHECKS}} if tag == "new" else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
-        done = subprocess.run([compiler, *([level] if level else []), *flags, str(source), "-o", str(out)], capture_output=True, text=True, env=env)
+        at = len(arguments) - 1 - arguments[::-1].index("-o")
+        command = [str(Path(compiler).with_name(tool)), *arguments[:at], "-o", str(out), *arguments[at + 2 :]]
+        done = subprocess.run(command, capture_output=True, text=True, env=env)
         if done.returncode:
             return name, level, f"{tag} failed: {done.stderr[-200:]}"
         outs.append(out.read_bytes())
@@ -121,6 +146,7 @@ def main() -> int:
     parser.add_argument("--old-head", default="origin/main", help="the revision OLD was built from")
     parser.add_argument("--new-head", default="HEAD", help="the revision NEW was built from")
     parser.add_argument("--stale-ok", action="store_true", help="do not check the binaries' ages against the heads")
+    parser.add_argument("--no-bench", action="store_true", help="leave out the bench harness's own compiles")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     args = parser.parse_args()
     if not args.stale_ok:
@@ -132,7 +158,15 @@ def main() -> int:
         work = Path(tmp)
         files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)
         levels = args.levels.split(",")
-        jobs = [(name, level, source, flags) for name, (source, flags) in files.items() for level in (levels if not name.startswith("run/") else [""])]
+        jobs = [
+            (name, level, "llrm-c", [*([level] if level else []), *flags, str(source), "-o", "OBJ"])
+            for name, (source, flags) in files.items()
+            for level in (levels if not name.startswith("run/") else [""])
+        ]
+        if not args.no_bench:
+            benches = bench_compiles(work)
+            jobs += [(name, "", tool, arguments) for name, (tool, arguments) in benches.items()]
+            files = files | {name: None for name in benches}
         with ThreadPoolExecutor(args.jobs) as pool:
             results = list(pool.map(lambda job: same(job, args.old, args.new, work), jobs))
     bad = [r for r in results if r[2]]

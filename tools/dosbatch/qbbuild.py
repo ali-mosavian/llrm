@@ -86,6 +86,13 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     return built
 
 
+def compile_arguments(source: Path, flags: tuple[str, ...], target: str, obj: Path) -> list[str]:
+    """llrm-qb's arguments for `source` (already the target's port) on `target`: the one place they are spelled, for the build and for
+    whatever must compile what the build compiles."""
+    extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
+    return [str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)]
+
+
 def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None, before: tuple[str, ...] = (), image: Path | None = None) -> Built:
     """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
     stem = name or source.stem
@@ -93,11 +100,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     # a program that needs hand porting to the flat target (DEF SEG is ignored there) has NAME.flat.bas beside it
     source = flat_source(source) if target == FLAT else source
     extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
-    done = dosbatch.subprocess.run(
-        [str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", *qbruntime.frontend_flags(source), *flags, *extra, "-o", str(obj)],
-        capture_output=True,
-        text=True,
-    )
+    done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), *compile_arguments(source, flags, target, obj)], capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")

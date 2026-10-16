@@ -183,26 +183,62 @@ def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | 
     return counted, sized
 
 
+def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
+    """The flags the harness gives the compiler for `variant` at -`opt`: the kernel stays a call (inlined into main it has no entry to
+    count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one (a private SUB called once) by turning
+    called-once inlining off too. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it."""
+    flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
+        flags.append("-fno-inline-functions-called-once")
+    return flags
+
+
+def nib_flags() -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile."""
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+
+
+def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
+    """Every compile of llrm's own the harness makes of `variant` at -`opt`, as (tool, arguments, object): what `build` runs, from the same
+    flags, for whatever must compile the bench's programs as the bench does (tools/identical.py). The Nib program's compile is what
+    nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
+    obj = work / f"{stem}.obj"
+    if variant.language == "nib":
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+    if variant.language == FLAT:
+        source = qbbuild.flat_source(variant.source)
+        return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
+    tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
+    arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+    if variant.language in OURS_BASIC:
+        arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
+    extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
+    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    if variant.language == "c":
+        extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
+    flags = compile_flags(variant, opt, kept is not None)
+    out = [(tool, [str(kept[1] if kept else variant.source), *arguments, *extra, *flags, "-o", str(obj)], obj)]
+    if kept:
+        counted = work / f"{stem}.counted.obj"
+        out.append((tool, [str(kept[0]), *arguments, *extra, *flags, "-o", str(counted)], counted))
+    return out
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | None = None) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
-    # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
-    more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
-    flags = [f"-{opt}", "-fno-inline-functions", *more]
     source, counted = variant.source, None
-    if variant.language == "c" and (kept := kept_a_call(variant, work, stem)) is not None:
-        flags.remove("-fno-inline-functions")
+    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    flags = compile_flags(variant, opt, kept is not None)
+    if kept is not None:
         counted, source = kept
-    # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
-    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
-        flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
