@@ -3082,6 +3082,35 @@ impl<'a, 't> Body<'a, 't> {
         if default && !parms.is_empty() && !quad {
             return self.refuse(format!("{name} is inline code with parameters in the default registers"));
         }
+        // `__parm __caller []`: every parameter on the stack, popped by the caller, the code
+        // run between the pushes and the pop.
+        if !default && listed.is_empty() && !parms.is_empty() {
+            if !code.fixups.is_empty() {
+                return self.refuse(format!("{name} is inline code with a parameter on the stack and symbols"));
+            }
+            let mut operands = Vec::new();
+            for (node, type_) in &parms {
+                operands.push(value_ref(self.value_as(node, type_)?));
+            }
+            let callee = llrm_mir::intrinsics::code_name(&code.data, &[]);
+            self.callable(&callee);
+            let order = (0..operands.len() as i64).rev().collect();
+            let int = self.types.int(4, false);
+            let result = self.value(int);
+            self.call_site(
+                Some(&callee),
+                Some(result),
+                operands,
+                order,
+                StackCleanup::Caller,
+                CallDistance::Near,
+                None,
+                Vec::new(),
+                Vec::new(),
+                None,
+            );
+            return Ok(Got::Returned(None));
+        }
         if !default && listed.len() < parms.len() {
             return self.refuse(format!("{name} is inline code with a parameter on the stack"));
         }
