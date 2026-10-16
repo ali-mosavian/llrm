@@ -96,6 +96,13 @@ impl Reach {
     }
 }
 
+/// Log entries and operands the digest's edge search has looked at, for a test
+/// that its work is linear in the edits.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Touched {
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
@@ -433,6 +440,8 @@ impl Function {
                 thens.binary_search_by_key(&inst.0, |one| one.0).ok()
             };
             for change in changes.iter().rev() {
+                #[cfg(test)]
+                VISITED.with(|visited| visited.set(visited.get() + 1));
                 match change {
                     Change::Operand { inst, index, was } => {
                         if let Some(at) = find(&mut thens, *inst) {
@@ -521,6 +530,8 @@ impl Function {
         exists: bool,
         out: &mut Vec<(BlockId, BlockId, Edge)>,
     ) {
+        #[cfg(test)]
+        VISITED.with(|visited| visited.set(visited.get() + then.len() + self.instruction(inst).operands.len()));
         // The blocks named, once each and in order: a switch of N arms names
         // N, which a scan of the list for each would make N^2.
         let targets = |operands: &[Operand]| -> (Vec<BlockId>, IdSet<BlockId>) {

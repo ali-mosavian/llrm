@@ -257,3 +257,33 @@ fn the_edges_of_a_many_armed_switch_are_found_without_a_scan_per_arm() {
     assert!(touched.cfg.iter().all(|&(from, _, edge)| from == entry && edge != Edge::Added), "{:?}", touched.cfg);
     assert_eq!(touched.cfg.len(), arms, "each arm's block but d: {:?}", touched.cfg.len());
 }
+
+/// The edge search looked at the whole log once for each terminator it touched
+/// (`cases(N)` at -O1: `analysis dominated-edges` read 3.4x a doubling where
+/// the walk it replaced read 2.0): its work is now linear in the edits, and
+/// doubling the terminators touched doubles the entries and operands it reads.
+#[test]
+fn the_edge_search_reads_the_log_once_not_once_for_each_terminator_touched() {
+    let visits = |blocks: usize| {
+        let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  br label %b0\n");
+        for k in 0..blocks {
+            text += &format!("b{k}:\n  br label %b{}\n", k + 1);
+        }
+        text += &format!("b{blocks}:\n  ret i32 %a\nexit:\n  ret i32 0\n}}\n");
+        let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let f = module.function_mut("f").expect("@f").1;
+        let exit = block(f, "exit");
+        let mark = f.mark();
+        for k in 0..blocks {
+            let br = f.terminator(block(f, &format!("b{k}"))).unwrap();
+            f.set_operand(br, 0, Operand::Block(exit));
+        }
+        crate::touched::VISITED.with(|visited| visited.set(0));
+        let touched = f.touched_since(mark).expect("history");
+        assert_eq!(touched.cfg.len(), 2 * blocks, "each terminator's edge moved");
+        crate::touched::VISITED.with(std::cell::Cell::get)
+    };
+    let (small, big) = (visits(64), visits(128));
+    assert!(small > 0, "premise: the edges were searched");
+    assert!(big as f64 <= 2.3 * small as f64, "{small} -> {big} entries and operands read for 64 -> 128 terminators");
+}
