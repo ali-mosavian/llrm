@@ -911,8 +911,8 @@ fn test_floating_loop_phis_swap_in_parallel_on_the_critical_backedge() {
             block(0, insns[..2].to_vec(), vec![16]).into(),
             LirBlock {
                 phis: vec![
-                    Phi { result: 3, incoming: vec![(0, 1), (16, 4)] },
-                    Phi { result: 4, incoming: vec![(0, 2), (16, 3)] },
+                    Phi { result: 3, incoming: vec![(0, 1), (16, 4)], label: Default::default() },
+                    Phi { result: 4, incoming: vec![(0, 2), (16, 3)], label: Default::default() },
                 ]
                 .into(),
                 ..block(16, insns[2..].to_vec(), vec![16, 48])
@@ -1514,7 +1514,7 @@ fn test_a_loop_accumulator_stays_on_the_stack_across_the_back_edge() {
     body.blocks = vec![
         block(0, insns[..1].to_vec(), vec![16]).into(),
         LirBlock {
-            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)] }].into(),
+            phis: vec![Phi { result: 2, incoming: vec![(0, 1), (16, 4)], label: Default::default() }].into(),
             ..block(16, insns[1..4].to_vec(), vec![16, 48])
         }
         .into(),

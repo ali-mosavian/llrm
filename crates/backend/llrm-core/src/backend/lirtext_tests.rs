@@ -61,7 +61,7 @@ fn body() -> LirBody {
     };
     let looping = LirBlock {
         succ: vec![BB1, BB2].into(),
-        phis: vec![Phi { result: 5, incoming: vec![(0, 2), (BB1, 4)] }].into(),
+        phis: vec![Phi { result: 5, incoming: vec![(0, 2), (BB1, 4)], label: Default::default() }].into(),
         ..LirBlock::new(
             BB1,
             vec![
@@ -133,7 +133,7 @@ fn an_elided_operation_still_says_what_it_defines_and_reads() {
     let block = LirBlock::new(0, vec![Arc::new(one)]);
     let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
     let text = lir_stage_with("T", &[("f".to_owned(), body)], &Calls::default(), Mode::Compact, Style::Plain);
-    assert!(text.contains("    0  v5         = elided      v2\n"), "{text}");
+    assert!(text.contains("     #1  v5         = elided      v2\n"), "{text}");
 }
 
 /// Said `0x0012  jl   ; inserted` with no target, a call with neither callee
@@ -145,21 +145,21 @@ fn f(v1@ax) -> @eax   ; calls clobber eax ecx
 frame  slot0 [bp-4] 2 B
 
 B0  entry  → B1
-    0  v2         = mov.i16     1
-    1               jmp         B1
+     #2  v2         = mov.i16     1
+     #3               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
-        0  v5         = phi         B0: v2, B1: v4
-        1  v4         = sub.i16     v5, 1
-        2               cmp.i16     v4, -1
-        3               jne         B1 else B2
+         #4  v5         = phi         B0: v2, B1: v4
+         #5  v4         = sub.i16     v5, 1
+         #6               cmp.i16     v4, -1
+         #7               jne         B1 else B2
 
 B2  ← B1  → exit
-    0  v7         = load.i16    [slot0]                                 ; reload
-    1  v10@eax    = call        fib(v7@ax)
-    2  v11@eax    = call        fib(v7@ax)
-    3  v12@eax    = call        log(v7@ax)                              ; also clobbers esi
-    4               ret         v12@eax
+     #8  v7         = load.i16    [slot0]                               ; reload
+     #9  v10@eax    = call        fib(v7@ax)
+    #10  v11@eax    = call        fib(v7@ax)
+    #11  v12@eax    = call        log(v7@ax)                            ; also clobbers esi
+    #12               ret         v12@eax
 
 ";
     let text = dump(Mode::Compact);
@@ -246,4 +246,75 @@ fn a_block_is_indented_by_the_loops_around_it() {
     assert!(header("B1").contains("loop") && !header("B1").contains("trips"), "{text}");
     assert!(header("B3").contains("loop 100 trips"), "{text}");
     assert!(!header("B4").contains("loop"), "{text}");
+}
+
+/// The same body with one instruction added mid-block: every other line is as
+/// it was, and the new one has a number nothing had. Numbered by position, the
+/// dump moved every line after the insertion, and a diff of two stages read as
+/// a rewrite.
+#[test]
+fn an_inserted_instruction_changes_one_line_of_the_diff() {
+    let before = body();
+    let first = dump_of(&before);
+    let mut insns: Vec<Arc<Insn>> = before.blocks[1].insns.iter().cloned().collect();
+    insns.insert(1, Arc::new(insn(5, what(Operation::Move, "mov", vec![held(9, 2)], vec![held(4, 2)], None))));
+    let mut blocks = before.blocks.clone();
+    blocks[1] = blocks[1].with_insns(insns);
+    let after = before.with_blocks(blocks);
+    let second = dump_of(&after);
+    let (old, new): (Vec<_>, Vec<_>) = (first.lines().collect(), second.lines().collect());
+    let removed: Vec<_> = old.iter().filter(|line| !new.contains(line)).collect();
+    let added: Vec<_> = new.iter().filter(|line| !old.contains(line)).collect();
+    assert!(removed.is_empty(), "{removed:#?}");
+    assert_eq!(added.len(), 1, "{added:#?}");
+    assert!(added[0].contains("#13") && added[0].contains("v9"), "{added:#?}");
+}
+
+fn dump_of(body: &LirBody) -> String {
+    lir_stage_with("T", &[("f".to_owned(), body.clone())], &Calls::default(), Mode::Compact, Style::Plain)
+}
+
+/// A clone made to be changed keeps its number; a copy of an instruction put
+/// where another is gets its own.
+#[test]
+fn a_clone_keeps_its_number_and_a_duplicate_gets_a_new_one() {
+    let body = body();
+    body.number_insns();
+    let original = Arc::clone(&body.blocks[0].insns[1]);
+    let changed = Insn { covers: Some((7, 7)), ..(*original).clone() };
+    assert_eq!(changed.label.get(), original.label.get());
+    let mut insns: Vec<Arc<Insn>> = body.blocks[0].insns.iter().cloned().collect();
+    insns.push(Arc::new(original.as_ref().clone()));
+    let mut blocks = body.blocks.clone();
+    blocks[0] = blocks[0].with_insns(insns);
+    let widened = body.with_blocks(blocks);
+    widened.number_insns();
+    let labels: Vec<u32> = widened.blocks[0].insns.iter().map(|insn| insn.label.get()).collect();
+    assert_eq!(labels, [1, 2, 3, 13], "the copy of #2 is a new instruction");
+}
+
+/// Labels are not part of what an instruction is: numbering a body for a dump
+/// must not change what a pass that compares instructions or lists finds.
+#[test]
+fn numbering_changes_neither_equality_nor_a_list() {
+    let (numbered, bare) = (body(), body());
+    numbered.number_insns();
+    assert_eq!(numbered, bare);
+    let list = numbered.blocks[2].insns.clone();
+    numbered.number_insns();
+    assert!(numbered.blocks[2].insns.same_as(&list), "numbering rebuilt a list");
+    assert!(Arc::ptr_eq(&numbered.blocks[2].insns[0], &list[0]));
+}
+
+/// A phi has a number like an instruction, kept when a pass rebuilds it: values
+/// merge there, so it is where a diff of two stages matters most.
+#[test]
+fn a_phi_is_numbered_and_keeps_its_number() {
+    let body = body();
+    body.number_insns();
+    let phi = &body.blocks[1].phis[0];
+    assert_eq!(phi.label.get(), 4);
+    let renamed = Phi { result: 9, ..phi.clone() };
+    assert_eq!(renamed.label.get(), 4);
+    assert!(dump_of(&body).contains("     #4  v5         = phi"), "{}", dump_of(&body));
 }

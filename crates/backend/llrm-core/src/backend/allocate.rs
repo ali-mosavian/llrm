@@ -5858,7 +5858,8 @@ mod tests {
         let mut first = block(0, vec![define]);
         first.succ = vec![0x10].into();
         let mut second = block(0x10, vec![]);
-        second.phis = vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)] }].into();
+        second.phis =
+            vec![crate::model::lir::Phi { result: 2, incoming: vec![(0, 1)], label: Default::default() }].into();
         let body = LirBody::new("phi", 0, vec![first.into(), second.into()], IndexMap::default(), IndexMap::default());
         let (live_in, live_out) = live(&body);
         assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");

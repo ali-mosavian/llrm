@@ -104,6 +104,45 @@ impl PartialEq for DebugTags {
 
 impl Eq for DebugTags {}
 
+/// An instruction's number in a dump (`#12`), 0 until a dump numbers it. It
+/// names the instruction through the passes: a clone keeps it, so a pass that
+/// rewrites `#3` leaves `#3`, and a number is never given twice. Equal whatever
+/// it holds, like `DebugTags`, so no pass compares instructions differently
+/// for it; set through a shared reference, so numbering a body rebuilds no
+/// list and no `Arc<Insn>` the kept results are keyed on.
+#[derive(Debug, Default)]
+pub struct Label(std::sync::atomic::AtomicU32);
+
+impl Label {
+    pub fn get(&self) -> u32 {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set(
+        &self,
+        number: u32,
+    ) {
+        self.0.store(number, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+impl Clone for Label {
+    fn clone(&self) -> Self {
+        Self(std::sync::atomic::AtomicU32::new(self.get()))
+    }
+}
+
+impl PartialEq for Label {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Label {}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// `call` is a shared owned reference
@@ -148,6 +187,8 @@ pub struct Insn {
     /// Its identity (`Insn::id`): given when first asked, never again to
     /// another instruction.
     pub ident: Derived<u64>,
+    /// Its number in a dump (`Label`).
+    pub label: Label,
 }
 
 /// A fact worked out from an instruction's fields, kept on it for every pass
@@ -435,6 +476,7 @@ impl Insn {
             effect: Derived::default(),
             register_effects: Default::default(),
             ident: Derived::default(),
+            label: Label::default(),
         }
     }
 
@@ -530,6 +572,8 @@ impl Insn {
 pub struct Phi {
     pub result: u32,
     pub incoming: Vec<(i64, u32)>,
+    /// Its number in a dump (`Label`).
+    pub label: Label,
 }
 
 impl Repr for Phi {
@@ -993,6 +1037,8 @@ pub struct LirBody {
     /// The facts worked out of this body and the bodies made from it
     /// (`analysis::facts`).
     pub facts: crate::analysis::facts::Kept,
+    /// The last number a dump gave an instruction (`LirBody::number_insns`).
+    pub last_label: Label,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -1119,6 +1165,39 @@ impl LirBody {
             .collect()
     }
 
+    /// Gives every instruction and phi without a number the next one, in block
+    /// then instruction order, and a second instruction holding a number
+    /// already seen a new one. Numbers are never reused: the next is past
+    /// every number this body, or the body it came from, has given. Changes
+    /// no list.
+    pub fn number_insns(&self) {
+        // A block's phis come first, as they print.
+        let labels = || {
+            self.blocks
+                .iter()
+                .flat_map(
+                    |block| {
+                        let phis = block.phis.iter().map(|phi| (&phi.label, None));
+                        phis.chain(block.insns.iter().map(|insn| (&insn.label, Some(Arc::as_ptr(insn)))))
+                    },
+                )
+        };
+        let mut next = labels().map(|(label, _)| label.get()).max().unwrap_or(0).max(self.last_label.get());
+        let (mut seen, mut done) = (BTreeSet::new(), BTreeSet::new());
+        for (label, shared) in labels() {
+            if shared.is_some_and(|one| !done.insert(one)) {
+                continue;
+            }
+            let held = label.get();
+            if held == 0 || !seen.insert(held) {
+                next += 1;
+                label.set(next);
+                seen.insert(next);
+            }
+        }
+        self.last_label.set(next);
+    }
+
     /// Constructs Python's five-required-field `LirBody` form.
     #[must_use]
     pub fn new(
@@ -1154,6 +1233,7 @@ impl LirBody {
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
+            last_label: Label::default(),
         }
     }
 
@@ -1216,6 +1296,7 @@ impl LirBody {
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
+            last_label: self.last_label.clone(),
         }
     }
 
@@ -1538,7 +1619,7 @@ mod tests {
         use crate::model::ir::Loc;
         use crate::support::pyrepr::{self, Repr};
 
-        let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming }.repr();
+        let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming, label: Default::default() }.repr();
         assert_eq!(phi(vec![(1, 2), (4, 5)]), "Phi(result=3, incoming=((1, 2), (4, 5)))");
         assert_eq!(phi(vec![(1, 2)]), "Phi(result=3, incoming=((1, 2),))");
         assert_eq!(phi(vec![]), "Phi(result=3, incoming=())");

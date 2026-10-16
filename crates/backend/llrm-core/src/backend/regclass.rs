@@ -1022,7 +1022,12 @@ mod tests {
             ]
             .into(),
             succ: vec![1, 2].into(),
-            phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }].into(),
+            phis: vec![Phi {
+                result: segment,
+                incoming: vec![(0, entry_segment), (1, segment)],
+                label: Default::default(),
+            }]
+            .into(),
             cold: false,
         };
         let exit = LirBlock {

@@ -2046,7 +2046,7 @@ mod tests {
         use crate::model::lir::Phi;
         let mut join =
             block(0x20, vec![_insn(0x20, sem(Operation::Return, "ret", vec![], vec![], None), &[], &[])], &[]);
-        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)] }].into();
+        join.phis = vec![Phi { result: 7, incoming: vec![(0x10, 3), (0x0, 4)], label: Default::default() }].into();
         let body = body(
             "phi",
             vec![
