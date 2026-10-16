@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:8a0f1ab2f5988672daf31886fd664211e729571cde4cd009ffdda28cb7248bc3 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:79fc40f1ad986584666de2f16a5e072df20de61ca7e00ba33b360d2668977e85 -->
 
 # manager
 
@@ -120,6 +120,25 @@ From unit test
 `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
 in
 `manager_tests.rs`.
+
+## Order check
+A result a pass reads is a function of the body, not of when something first
+asked for it (#1909: a `ThroughMemory` asked early and kept past sound edits
+made `fold` weaker, 18 KB of asm against 34 KB). `LLRM_CHECK_ORDER=SEED`
+asks some analyses early at each body pass's entry, which ones by the seed,
+and the object must be the lazy compile's. `tests/analysis_order.rs` runs it
+on matmul. The wide sweep is a command, not a gate; run it before a release
+and when an analysis starts to be kept:
+
+```text
+for s in 1 2 3 4 5 6 7 8; do
+  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+done
+```
+
+`tools/identical.py` keeps a `LLRM_CHECK_*` value already set; the bench
+BASIC and Nib programs under the harness flags are compiled the same way
+with and without the seed.
 
 ## Provides
 The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
