@@ -174,10 +174,11 @@ impl FunctionPass for AsksTwice {
 /// `algebraic` dropped the shape and ranges before each rule that asks for
 /// them, edited or not: 9 of its 16 range computations on d_faces -O1 followed
 /// no edit since the one before, 4 of them 1.4 M each. A drop for an edit
-/// nobody made costs nothing now.
+/// nobody made costs nothing now, whichever way it is asked: `invalidate` itself
+/// keeps a result derived from the body as it stands.
 #[test]
 fn a_drop_for_an_edit_nobody_made_keeps_what_is_held() {
-    for (if_edited, computed) in [(false, 2), (true, 1)] {
+    for (if_edited, computed) in [(false, 1), (true, 1)] {
         COMPUTED.set(0);
         let mut passes = PassManager::default();
         passes.add(Look(PreservedAnalyses::all()));
