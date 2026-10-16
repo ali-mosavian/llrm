@@ -22,6 +22,7 @@ pub mod forest;
 pub mod hash;
 pub mod interpret;
 pub mod intrinsics;
+pub mod journal;
 pub mod lexer;
 pub mod lint;
 pub mod loops;
@@ -59,6 +60,8 @@ mod build_tests;
 mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
+#[cfg(test)]
+mod journal_tests;
 #[cfg(test)]
 mod lint_tests;
 #[cfg(test)]

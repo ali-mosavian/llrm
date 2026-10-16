@@ -216,19 +216,26 @@ static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// function is another one, as its edits from then on are its own.
 #[derive(Debug)]
 pub(crate) struct Lineage {
-    uid: u64,
-    logged: usize,
+    pub(crate) uid: u64,
+    pub(crate) logged: usize,
+    /// Where each rollback cut the log: a mark past a cut taken since the mark
+    /// was made points into history that no longer happened.
+    cuts: Vec<usize>,
 }
 
 impl Default for Lineage {
     fn default() -> Self {
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: 0 }
+        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: 0, cuts: Vec::new() }
     }
 }
 
 impl Clone for Lineage {
     fn clone(&self) -> Self {
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: self.logged }
+        Self {
+            uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            logged: self.logged,
+            cuts: Vec::new(),
+        }
     }
 }
 
@@ -247,6 +254,8 @@ impl PartialEq for Lineage {
 pub struct Mark {
     uid: u64,
     at: usize,
+    /// How many rollbacks the function had had.
+    cuts: usize,
 }
 
 impl Mark {
@@ -313,6 +322,8 @@ pub struct Function {
     /// removed or added; empty while none moved.
     pub(crate) parameter_origins: Vec<Option<usize>>,
     pub(crate) lineage: Lineage,
+    /// The checkpoints open: what the edits since each saved.
+    pub(crate) journal: crate::journal::Journal,
     /// The names of the live values and blocks, for `unique_name`.
     pub(crate) names: NameIndex,
 }
@@ -368,6 +379,7 @@ impl Function {
             debug_dropped: Vec::new(),
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
+            journal: Default::default(),
             names: NameIndex::default(),
         }
     }
@@ -641,9 +653,25 @@ impl Function {
         self.epochs
     }
 
+    /// The log cut back to `logged` after a rollback, with `taken` as it was.
+    pub(crate) fn cut_log(
+        &mut self,
+        logged: usize,
+        taken: usize,
+    ) {
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        match logged.checked_sub(kept_from) {
+            Some(keep) => self.changes.0.truncate(keep),
+            None => self.changes.0.clear(),
+        }
+        self.lineage.logged = logged;
+        self.taken = taken;
+        self.lineage.cuts.push(logged);
+    }
+
     /// Where the function stands now.
     pub fn mark(&self) -> Mark {
-        Mark { uid: self.lineage.uid, at: self.lineage.logged }
+        Mark { uid: self.lineage.uid, at: self.lineage.logged, cuts: self.lineage.cuts.len() }
     }
 
     /// A copy to edit and put in this function's place, which carries on its
@@ -652,7 +680,7 @@ impl Function {
     /// one kept beside it (`clone` is that: its edits are its own).
     pub fn fork(&self) -> Self {
         let mut copy = self.clone();
-        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged, cuts: self.lineage.cuts.clone() };
         copy
     }
 
@@ -679,8 +707,10 @@ impl Function {
         mark: Mark,
     ) -> Option<&[Change]> {
         let kept_from = self.lineage.logged - self.changes.0.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at))
-            .then(|| &self.changes.0[mark.at - kept_from..])
+        (mark.uid == self.lineage.uid
+            && (kept_from..=self.lineage.logged).contains(&mark.at)
+            && self.lineage.cuts.get(mark.cuts..).is_some_and(|cut| cut.iter().all(|&at| at >= mark.at)))
+        .then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 
