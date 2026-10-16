@@ -10,7 +10,7 @@
 # A pull request from a fork cannot read the secret: its private groups fail, named. Only `perf` may be missing, and only on a hosted
 # runner (no counters on a VM: `measure` and the scaling tests are not run there); any other capability missing is a red job, not a skip.
 #
-# Runners: the heavy groups (tools/ci/pick_runners.py HEAVY) and build prefer tinytim, six ephemeral rootless-podman runners
+# Runners: only the groups that need hardware perf counters (tools/ci/pick_runners.py PERF: perf, cost) prefer tinytim, six ephemeral rootless-podman runners
 # (tools/ci/selfhosted, docs/working/ci.md). `plan` reads the repository variable TINYTIM_HEARTBEAT ("epoch idle", written each minute by
 # the supervisor): missing, older than 3 minutes or zero idle means every job runs on ubuntu-24.04. Only main and this repository's own pull requests get tinytim.
 #
