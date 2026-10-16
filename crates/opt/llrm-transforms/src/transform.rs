@@ -559,16 +559,31 @@ pub fn _undisturbed(
 #[derive(Default)]
 pub struct Forwarding {
     walked: std::cell::OnceCell<Vec<avail::Forward>>,
+    /// One walk down the dominator tree (EarlyCSE), not MemorySSA's walk for
+    /// every load.
+    scoped: bool,
 }
 
 impl Forwarding {
+    pub fn new(scoped: bool) -> Self {
+        Self { walked: Default::default(), scoped }
+    }
+
     fn served(
         &self,
         unit: &memory::Unit,
         accesses: &Accesses,
         want: &IdSet<InstId>,
     ) -> Vec<avail::Forward> {
-        self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone()
+        self.walked
+            .get_or_init(|| {
+                if self.scoped {
+                    avail::forwardable_scoped(unit, accesses, want)
+                } else {
+                    avail::forwardable_walk(unit, accesses, want)
+                }
+            })
+            .clone()
     }
 }
 

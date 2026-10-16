@@ -174,6 +174,312 @@ pub fn stored_cell(
     })
 }
 
+/// What a set of blocks may write: each write once by the bytes it names, and
+/// whether any instruction may write anything.
+#[derive(Default)]
+struct Written {
+    unknown: bool,
+    by_frame: HashMap<crate::regions::Frame, Vec<MemRef>>,
+    spans: std::collections::HashSet<(crate::regions::Frame, i128, i128)>,
+    wild: Vec<MemRef>,
+}
+
+impl Written {
+    fn add(
+        &mut self,
+        unit: &Unit,
+        accesses: &Accesses,
+        block: llrm_mir::module::BlockId,
+    ) {
+        for &inst in unit.function.block(block).instructions() {
+            match accesses.writes(inst) {
+                Some(writes) => {
+                    for write in writes {
+                        match crate::regions::displaced_span(write) {
+                            Some((frame, low, high)) => {
+                                if self.spans.insert((frame.clone(), low, high)) {
+                                    self.by_frame.entry(frame).or_default().push(write.clone());
+                                }
+                            }
+                            None => self.wild.push(write.clone()),
+                        }
+                    }
+                }
+                None => self.unknown = true,
+            }
+        }
+    }
+}
+
+/// What one walk down the dominator tree knows of memory: the cells a store or
+/// a load left a value in, the writes that may have changed one taken out.
+struct Scope<'a> {
+    unit: &'a Unit<'a>,
+    entries: Vec<Held>,
+    /// By the frame a cell's displacement counts from; the cells with none
+    /// are `wild`.
+    buckets: HashMap<crate::regions::Frame, Vec<usize>>,
+    wild: Vec<usize>,
+    /// What the paths into a join may write, checked against an entry only if
+    /// a load asks for it.
+    epochs: Vec<Written>,
+    log: Vec<Undo>,
+}
+
+struct Held {
+    cell: MemRef,
+    value: Operand,
+    ty: llrm_mir::types::TypeId,
+    frame: Option<crate::regions::Frame>,
+    alive: bool,
+    /// How many `epochs` there were when it was added: the later ones are
+    /// writes it has not been checked against.
+    epoch: usize,
+}
+
+enum Undo {
+    Added(usize),
+    Killed(usize),
+    Epoch,
+}
+
+impl Scope<'_> {
+    fn frame(cell: &MemRef) -> Option<crate::regions::Frame> {
+        crate::regions::displaced_span(cell).map(|(frame, _, _)| frame)
+    }
+
+    fn add(
+        &mut self,
+        cell: MemRef,
+        value: Operand,
+        ty: llrm_mir::types::TypeId,
+    ) {
+        let frame = Self::frame(&cell);
+        let at = self.entries.len();
+        match &frame {
+            Some(frame) => self.buckets.entry(frame.clone()).or_default().push(at),
+            None => self.wild.push(at),
+        }
+        let epoch = self.epochs.len();
+        self.entries.push(Held { cell, value, ty, frame, alive: true, epoch });
+        self.log.push(Undo::Added(at));
+    }
+
+    fn kill(
+        &mut self,
+        at: usize,
+    ) {
+        if self.entries[at].alive {
+            self.entries[at].alive = false;
+            self.log.push(Undo::Killed(at));
+        }
+    }
+
+    fn kill_all(&mut self) {
+        for at in 0..self.entries.len() {
+            self.kill(at);
+        }
+    }
+
+    /// Writes that may have happened since the entries held were made.
+    fn push_epoch(
+        &mut self,
+        written: Written,
+    ) {
+        if written.unknown {
+            self.kill_all();
+            return;
+        }
+        self.epochs.push(written);
+        self.log.push(Undo::Epoch);
+    }
+
+    /// Whether `held` may have been changed by a write of an epoch after it.
+    fn changed_since(
+        &self,
+        held: &Held,
+    ) -> bool {
+        self.epochs[held.epoch..].iter().any(|written| {
+            let writes: Box<dyn Iterator<Item = &MemRef>> = match &held.frame {
+                Some(frame) => Box::new(written.by_frame.get(frame).into_iter().flatten().chain(written.wild.iter())),
+                None => Box::new(written.by_frame.values().flatten().chain(written.wild.iter())),
+            };
+            let mut writes = writes;
+            writes.any(|write| may_clobber(self.unit, None, &held.cell, write))
+        })
+    }
+
+    /// Takes out what writing `write` may change.
+    fn clobber(
+        &mut self,
+        write: &MemRef,
+    ) {
+        let reached: Vec<usize> = match Self::frame(write) {
+            Some(frame) => {
+                self.buckets.get(&frame).into_iter().flatten().chain(self.wild.iter()).copied().collect()
+            }
+            None => (0..self.entries.len()).collect(),
+        };
+        for at in reached {
+            let held = &self.entries[at];
+            if held.alive && !held.cell.unwritable() && may_clobber(self.unit, None, &held.cell, write) {
+                self.kill(at);
+            }
+        }
+    }
+
+    /// The value a load of `cell` of type `ty` reads, if one is held.
+    fn lookup(
+        &mut self,
+        cell: &MemRef,
+        ty: llrm_mir::types::TypeId,
+    ) -> Option<Operand> {
+        let candidates: Vec<usize> = match Self::frame(cell) {
+            Some(frame) => self.buckets.get(&frame).into_iter().flatten().copied().collect(),
+            None => self.wild.clone(),
+        };
+        let at = candidates
+            .into_iter()
+            .rev()
+            .find(|&at| {
+                let held = &self.entries[at];
+                held.alive && held.ty == ty && same_bytes(self.unit, &held.cell, cell)
+            })?;
+        let held = &self.entries[at];
+        if !held.cell.unwritable() && self.changed_since(held) {
+            self.kill(at);
+            return None;
+        }
+        Some(self.entries[at].value)
+    }
+
+    fn undo(
+        &mut self,
+        mark: usize,
+    ) {
+        while self.log.len() > mark {
+            match self.log.pop().expect("a logged change") {
+                Undo::Killed(at) => self.entries[at].alive = true,
+                Undo::Epoch => {
+                    self.epochs.pop();
+                }
+                Undo::Added(at) => {
+                    let held = self.entries.pop().expect("the last added");
+                    debug_assert_eq!(self.entries.len(), at);
+                    match held.frame {
+                        Some(frame) => {
+                            self.buckets.get_mut(&frame).expect("its bucket").pop();
+                        }
+                        None => {
+                            self.wild.pop();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Loads in `want` that a known value can serve, in one walk down the
+/// dominator tree and no walk of MemorySSA for any load: LLVM's EarlyCSE.
+/// What a block holds of memory is carried to a block that only it reaches and
+/// it dominates; a block with other ways in starts with nothing. A load of
+/// cells a store or an earlier load left a value in is that value, until a
+/// write that may change those bytes. The sources `forwardable_walk` has
+/// that this has not are the join of equal stores and a load across a join.
+pub fn forwardable_scoped(
+    unit: &Unit,
+    accesses: &Accesses,
+    want: &IdSet<InstId>,
+) -> Vec<Forward> {
+    WALKED.with(|walked| walked.set(walked.get() + 1));
+    let function = unit.function;
+    let shape = unit.shape();
+    let tree = shape.dominance.tree();
+    let mut children: HashMap<llrm_mir::module::BlockId, Vec<llrm_mir::module::BlockId>> = HashMap::default();
+    let mut roots = Vec::new();
+    for &block in function.layout() {
+        match tree.immediate_dominator(block).filter(|_| tree.is_reachable(block)) {
+            Some(parent) => children.entry(parent).or_default().push(block),
+            None => roots.push(block),
+        }
+    }
+    let mut scope = Scope {
+        unit,
+        entries: Vec::new(),
+        buckets: HashMap::default(),
+        wild: Vec::new(),
+        epochs: Vec::new(),
+        log: Vec::new(),
+    };
+    let mut found = Vec::new();
+    // Blocks to enter, each with the block it is entered from.
+    let mut stack: Vec<(llrm_mir::module::BlockId, Option<llrm_mir::module::BlockId>, Option<usize>)> =
+        roots.into_iter().rev().map(|block| (block, None, None)).collect();
+    while let Some((block, from, mark)) = stack.pop() {
+        if let Some(mark) = mark {
+            // The block's subtree is done.
+            scope.undo(mark);
+            continue;
+        }
+        let mark = scope.log.len();
+        stack.push((block, None, Some(mark)));
+        match from {
+            // The way in is the dominator's alone: its state holds.
+            Some(parent) if function.predecessors(block) == [parent] => {}
+            // Other ways in: what the dominator held, less what any path from
+            // it to here may write.
+            Some(parent) => {
+                let mut seen: std::collections::BTreeSet<llrm_mir::module::BlockId> = Default::default();
+                let mut work: Vec<llrm_mir::module::BlockId> = function.predecessors(block).to_vec();
+                while let Some(at) = work.pop() {
+                    if at == parent || !seen.insert(at) {
+                        continue;
+                    }
+                    work.extend(function.predecessors(at).iter().copied());
+                }
+                let mut written = Written::default();
+                for &between in &seen {
+                    written.add(unit, accesses, between);
+                }
+                scope.push_epoch(written);
+            }
+            None => scope.kill_all(),
+        }
+        for &inst in function.block(block).instructions() {
+            if let Some((cell, result)) = loaded_into(unit, accesses, inst) {
+                let ty = function.instruction(inst).ty;
+                if !want.contains(&inst) {
+                    continue;
+                }
+                match scope.lookup(&cell, ty) {
+                    Some(value) => found.push(Forward { at: inst, value }),
+                    None => scope.add(cell, Operand::Value(result), ty),
+                }
+            } else if let Some((cell, value)) = stored_from(unit, accesses, inst) {
+                scope.clobber(&cell);
+                if let Some(ty) = unit.operand_type(value) {
+                    scope.add(cell, value, ty);
+                }
+            } else {
+                match accesses.writes(inst) {
+                    Some([]) => {}
+                    Some(writes) => {
+                        for write in writes {
+                            scope.clobber(write);
+                        }
+                    }
+                    None => scope.kill_all(),
+                }
+            }
+        }
+        if let Some(kids) = children.get(&block) {
+            stack.extend(kids.iter().rev().map(|&kid| (kid, Some(block), None)));
+        }
+    }
+    found
+}
+
 /// Loads in `want` that a known value can serve, by the MemorySSA walk.
 pub fn forwardable_walk(
     unit: &Unit,

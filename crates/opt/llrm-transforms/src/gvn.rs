@@ -273,7 +273,7 @@ pub fn optimized(
         // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
         // load is served wherever it is redundant and nothing is numbered
         // twice.
-        _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
+        _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape, !pre && scoped_gvn())?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
@@ -372,10 +372,11 @@ fn _numbered(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
+    scoped: bool,
 ) -> Result<(bool, bool), String> {
     // The walk over the function as it comes in: the same for both runs below,
     // each of which changes a copy.
-    let forwarding = transform::Forwarding::default();
+    let forwarding = transform::Forwarding::new(scoped);
     // Whether some load was served across a store: the one thing the second
     // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
@@ -683,3 +684,8 @@ pub fn joined(
 #[cfg(test)]
 #[path = "gvn_tests.rs"]
 mod tests;
+
+/// `LLRM_SCOPED_GVN`: -O1's forwarding as one walk down the dominator tree.
+fn scoped_gvn() -> bool {
+    std::env::var_os("LLRM_SCOPED_GVN").is_some()
+}
