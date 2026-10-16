@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:a35f6e8cdbdef94965b65d50ccad8b4f7762e09e3efe15a7a436d13cada9f2f3 -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:85abc6b268358f68c3bc6bef2ccd5592cf1c2720660aefd6b5c2af72d8882769 -->
 
 # interprocedural
 
@@ -18,7 +18,11 @@ bodies that differ rather than recomputed
 (`docs/optimizations/module-analyses.md`). A procedure has every caller in
 the program when the program does not export it (`unexported`); the roots
 are the exported bodies. Each stage re-runs the pipeline over the bodies it
-changed under a stage name (`LLRM_DEBUG=runs` and `--dump` use it).
+changed under a stage name (`LLRM_DEBUG=runs` and `--dump` use it). A pass
+that found nothing on a body starts again only where what it read has
+changed ([`crate::settled`](settled.md)); `ipa-cp.` and `ipa-deadargs.` vouch for their
+edits of a caller that are no more than a call's new name or one argument
+fewer.
 
 The stages, in order:
 

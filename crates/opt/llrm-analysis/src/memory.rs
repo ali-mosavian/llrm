@@ -1067,6 +1067,9 @@ pub struct Unit<'a> {
     /// What calling back into the module does, the module's `Callbacks`;
     /// without it each `calls_annotated` adds up every entry's summary.
     pub callbacks: Option<&'a Option<crate::alias::Summary>>,
+    /// Where `callbacks` is read from when it is asked for and was not given: a
+    /// body that never asks is not one that read it (`llrm_mir::passes::read`).
+    pub callbacks_from: Option<&'a llrm_mir::passes::Outer>,
     /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
     /// a level without them (`Outer::loop_intervals`) they are empty on
     /// purpose.
@@ -1134,6 +1137,7 @@ impl<'a> Unit<'a> {
             plain: None,
             point_values: None,
             callbacks: None,
+            callbacks_from: None,
             loop_intervals: true,
             congruent: None,
             proved: None,
@@ -1145,6 +1149,16 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
+    }
+
+    /// What calling back into the module does: the held `callbacks`, or the
+    /// module's where the unit was made over its facts.
+    pub fn callbacks(&self) -> Option<&'a Option<crate::alias::Summary>> {
+        self.callbacks.or_else(|| {
+            self.callbacks_from
+                .and_then(|outer| outer.cached_ref::<crate::manager::Callbacks>())
+                .and_then(|one| one.as_ref().ok())
+        })
     }
 
     pub fn with_callbacks(
