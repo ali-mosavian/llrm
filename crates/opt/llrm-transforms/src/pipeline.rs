@@ -1006,7 +1006,7 @@ impl Fixed {
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        let mut history = BTreeSet::from([print::fingerprint(unit.function)]);
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
@@ -1061,7 +1061,7 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
-            if !history.insert(print::body(unit.context, unit.function)) {
+            if !history.insert(print::fingerprint(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }

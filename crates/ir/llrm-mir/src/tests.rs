@@ -767,3 +767,106 @@ fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
     let (small, large) = (visits(40), visits(80));
     assert!(large < 3 * small, "{small} blocks walked for 40 loops, {large} for 80");
 }
+
+/// Allocations the calling thread made, for the test below.
+mod counted {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static MADE: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(
+            &self,
+            layout: Layout,
+        ) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+        ) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+            size: usize,
+        ) -> *mut u8 {
+            MADE.with(|made| made.set(made.get() + 1));
+            unsafe { System.realloc(pointer, layout, size) }
+        }
+    }
+
+    pub fn made() -> usize {
+        MADE.with(Cell::get)
+    }
+}
+
+#[global_allocator]
+static COUNTING: counted::Counting = counted::Counting;
+
+/// The fixed point told a state it had been in by printing the body and keeping
+/// the text: 1.4% of a d_faces compile in formatting and comparing. A digest
+/// of the body stands for its text, and makes no allocation a line of it.
+#[test]
+fn a_body_is_told_apart_by_a_digest_that_agrees_with_its_text_and_prints_nothing() {
+    let mut seen = 0;
+    for (path, text) in fixtures(false) {
+        let Ok(module) = parse::module(&text) else { continue };
+        // A constant is numbered by its context: bodies of one module.
+        let mut text_of = std::collections::HashMap::<u128, String>::new();
+        let mut digest_of = std::collections::HashMap::<String, u128>::new();
+        for global in &module.globals {
+            let crate::module::GlobalKind::Function(function) = &global.kind else { continue };
+            let (body, digest) = (print::body(&module.context, function), print::fingerprint(function));
+            assert_eq!(
+                *digest_of.entry(body.clone()).or_insert(digest),
+                digest,
+                "{}: one text, two digests",
+                path.display()
+            );
+            assert_eq!(
+                *text_of.entry(digest).or_insert(body.clone()),
+                body,
+                "{}: one digest, two texts",
+                path.display()
+            );
+            seen += 1;
+        }
+    }
+    assert!(seen > 50, "premise: the fixtures hold functions ({seen})");
+
+    let mut body = String::from("define i16 @f(i16 %x) {\nb0:\n  %a0 = add i16 %x, 1\n");
+    for k in 1..300 {
+        body += &format!("  %a{k} = add i16 %a{}, {k}\n", k - 1);
+    }
+    body += "  ret i16 %a299\n}\n";
+    let module = parse::module(&body).expect("parses");
+    let function = module
+        .globals
+        .iter()
+        .find_map(
+            |one| match &one.kind {
+                crate::module::GlobalKind::Function(function) => Some(function),
+                _ => None,
+            },
+        );
+    let function = function.expect("a function");
+    let before = counted::made();
+    let _ = print::fingerprint(function);
+    let made = counted::made() - before;
+    assert!(made <= 40, "a digest of 300 instructions made {made} allocations");
+    let before = counted::made();
+    let _ = print::body(&module.context, function);
+    assert!(counted::made() - before > 300, "premise: printing allocates a string a line");
+}
