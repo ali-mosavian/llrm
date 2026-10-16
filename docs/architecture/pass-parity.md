@@ -137,30 +137,30 @@ The mid-end is 8.6x clang's optimizer at -O1 (2,009 M against an estimated 233 M
 
 ## Compile cost against clang and gcc
 
-`tools/compile-gap.py` (needs `QCPORT`) compiles d_faces and the bench programs `-S` with `-fno-inline-functions` at each level and prints user-space instructions of llrm, clang and gcc (`perf stat`, best of three), then llrm's phases for d_faces in **own** instructions (`LLRM_DEBUG=time`'s `[instr]` table: a step's analyses are listed under their own names, so no instruction counts twice) beside clang's `-ftime-report` shares applied to its instruction count. Wall-clock columns of the same report move with the load of the host (a loaded run read `annotated` at 5x); the instruction columns do not. Main 254855801 with #1912 (one allocation per function below -Omax), d_faces, M instructions:
+`tools/compile-gap.py` (needs `QCPORT`) builds llrm-c with the `dist` profile (fat LTO, one codegen unit: the shipped binary; a `release` build reads 11% to 20% more instructions, so compile-time claims quote `dist` and gates stay on `release`), compiles d_faces and the bench programs `-S` with `-fno-inline-functions` at each level, and prints user-space instructions of llrm, clang and gcc (`perf stat`, best of three). For d_faces it then prints llrm's phases in **own** instructions (`LLRM_DEBUG=time`'s `[instr]` table: a step's analyses are listed under their own names, so no instruction counts twice) beside clang's `-ftime-report` shares applied to its instruction count. Wall-clock columns of the same report move with the load of the host (a loaded run read `annotated` at 5x); the instruction columns do not. Main 254855801 with #1912 (one allocation per function below -Omax), d_faces, M instructions:
 
 | level | llrm | clang | gcc | llrm own: mir / analysis / regalloc / lir / isel | clang optimizer / codegen |
 |---|---|---|---|---|---|
-| -O1 | 2,705 | 481 | 662 | 913 / 642 / 479 / 379 / 58 | 186 / 232 |
-| -O2 | 3,511 | 556 | 1,162 | 1,491 / 808 / 516 / 409 / 63 | 275 / 225 |
-| -O3 | 3,873 | 559 | 1,445 | 1,730 / 889 / 527 / 429 / 67 | 264 / 228 |
-| -Os | 3,803 | 553 | 968 | 1,542 / 1,034 / 539 / 363 / 59 | 247 / 226 |
+| -O1 | 2,423 | 481 | 662 | 820 / 556 / 445 / 339 / 51 | 189 / 233 |
+| -O2 | 3,147 | 557 | 1,162 | 1,342 / 701 / 479 / 366 / 55 | 272 / 221 |
+| -O3 | 3,471 | 558 | 1,445 | 1,561 / 772 / 490 / 382 / 62 | 277 / 218 |
+| -Os | 3,416 | 553 | 968 | 1,385 / 914 / 500 / 325 / 52 | 254 / 232 |
 
-llrm compiles d_faces in 5.6x to 6.9x clang's instructions. Per-program gaps are small except where a loop nest is fully unrolled: at -O3 matmul 943/251/708, nbody 257/93/157, quicksort 153/79/108 (llrm/clang/gcc); every other program and level is within 0.9x to 1.9x of clang. matmul -O3's output is the size of clang's (486 against 432 lines); its cost is the 6.4x larger body (894 to 1,422 instructions) the cleanup rounds run over, 39% of the pipeline's work in steps that found nothing.
+llrm compiles d_faces in 5.0x to 6.2x clang's instructions. Per-program gaps are small except where a loop nest is fully unrolled: at -O3 matmul 781/251/708, nbody 192/93/157, quicksort 119/79/108 (llrm/clang/gcc); every other program and level is within 0.8x to 1.5x of clang. matmul -O3's output is the size of clang's (486 against 432 lines); its cost is the 6.4x larger body (894 to 1,422 instructions) the cleanup rounds run over, 39% of the pipeline's work in steps that found nothing.
 
 Levers at -O2, own instructions against the clang counterpart's share of its optimizer or codegen (an upper bound: no pass reaches zero):
 
 | lever | llrm own | clang's | ceiling |
 |---|---|---|---|
-| `gvn` | 357 | ~47 (GVN, EarlyCSE) | 310 (8.8%) |
-| the analyses (`bounded` 111, `annotated` 83, `through-memory` 76, `pointer-values` 74, others) | 808 | inside its passes | up to 808 (23%); `annotated` alone is 83 (2.4%) |
-| loop passes: `lsr` 149, `hoist` 138, `indvars` 72 | 359 | ~53 (LSR, LICM, IndVars) | ~300 (8.5%) |
-| `interprocedural` 121, `jumpthread` 62, `decide` 81 | 264 | ~35 | ~230 (6.5%) |
-| allocation (`regalloc`, `split`, `spill`, `facts`) | 516 | ~60 | ~450 (13%) |
-| `lir` (`peephole` 117, `jumps` 74, ...) | 409 | ~35 | ~370 (10%) |
-| the pipeline's own steps (`mir pipeline`) | 86 | none | 86 (2.4%) |
+| `gvn` | 325 | ~47 (GVN, EarlyCSE) | 278 (8.8%) |
+| the analyses (`bounded` 99, `through-memory` 69, `annotated` 67, `pointer-values` 62, others) | 701 | inside its passes | up to 701 (22%); `annotated` alone is 67 (2.1%) |
+| loop passes: `lsr` 128, `hoist` 123, `indvars` 62 | 313 | ~53 (LSR, LICM, IndVars) | ~260 (8.3%) |
+| `interprocedural` 108, `jumpthread` 57, `decide` 73 | 238 | ~35 | ~200 (6.4%) |
+| allocation (`regalloc`, `split`, `spill`, `facts`) | 479 | ~60 | ~420 (13%) |
+| `lir` (`peephole` 106, `jumps` 64, ...) | 366 | ~35 | ~330 (10.5%) |
+| module analyses with no timer of their own (`mir pipeline`: `Summaries`, `GlobalsAA`) | 81 | none | 81 (2.6%) |
 
-The ceilings of the rows above the analyses sum to 1,746 M of 3,511: reaching every one leaves 1,765 M, 3.2x clang's 557, and taking half of the analyses' 808 as well leaves 1,361 M, 2.4x. The rest of the gap is not in a pass of the list: it is the 425 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 54 M of summaries and 59 M of `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
+The ceilings of the rows above the analyses sum to 1,569 M of 3,147: reaching every one leaves 1,578 M, 2.8x clang's 557, and taking half of the analyses' 701 as well leaves 1,228 M, 2.2x. The rest of the gap is not in a pass of the list: it is the 385 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 100 M of summaries and `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
 
 An earlier version of this table read inclusive times (`annotated` 37 ms is its 8 ms plus the analyses it asks for) as if own; the rows above do not overlap.
 
