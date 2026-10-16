@@ -1,5 +1,5 @@
-reason = "a signed short counter read as an index is widened to the index's width (indvars) and symbol+base+index*scale is one mode: bq32 jpeg_fixed/jpeg_single -15 B code"
-blessed = "2026-10-16"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
+blessed = "2026-10-15"
 
 [bas.O2]
 code_bytes = 5531
@@ -12,54 +12,6 @@ code_bytes = 5182
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.065
-
-[bq16.O2]
-code_bytes = 5567
-data_bytes = 29147
-bss_bytes = 0
-kernel_ms = 1078.9088
-
-[bq16.Os]
-code_bytes = 5217
-data_bytes = 29147
-bss_bytes = 0
-kernel_ms = 1084.7928
-
-[bq32.O2]
-instructions = 84336081
-code_bytes = 6431
-data_bytes = 29209
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 89430471
-code_bytes = 5975
-data_bytes = 29209
-bss_bytes = 0
-
-[c.O2]
-code_bytes = 3416
-data_bytes = 474
-bss_bytes = 15849
-kernel_ms = 443.7384
-
-[c.Os]
-code_bytes = 3079
-data_bytes = 474
-bss_bytes = 15849
-kernel_ms = 445.4513
-
-[nib.O2]
-code_bytes = 6341
-data_bytes = 17158
-bss_bytes = 0
-kernel_ms = 585.5367
-
-[nib.Os]
-code_bytes = 5924
-data_bytes = 17158
-bss_bytes = 0
-kernel_ms = 591.7214
 
 [bcc.O2]
 code_bytes = 3287
