@@ -183,6 +183,8 @@ pub mod lanes;
 pub mod layout;
 pub mod lifetimes;
 pub mod lirtext;
+#[cfg(test)]
+mod lirtext_tests;
 pub mod live;
 pub mod liveness;
 pub mod liveunion;

@@ -49,7 +49,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 94 documented,
 | lanes | A set of register and flag lanes, as a 128-bit mask. | `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`, | [lanes](lanes.md) |
 | layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
-| lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
+| lirtext | LIR as text: the one printer of a body, used by every dump, check message and test. | `assemble` after each machine phase when `ISEL_DUMP` is set, the checks of | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |
 | liveness | Which physical register and flag lanes are live into and dead out of each block, and what one instruction reads and writes. | `peephole` and the sub-passes it runs (`regthrash`, `copysink`, | [liveness](liveness.md) |
 | liveunion | Answers which values already hold a register where an interval lies, so the allocator can test an assignment without visiting every holder. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |

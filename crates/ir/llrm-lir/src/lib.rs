@@ -26,6 +26,10 @@ pub use root::root;
 pub mod registers;
 pub use registers::{FRAME, STACK};
 
+pub mod text;
+#[cfg(test)]
+mod text_tests;
+
 /// One physical register operand, at the instruction's width.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Reg {

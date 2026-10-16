@@ -1113,9 +1113,27 @@ fn phased_to(
             body = body.with_phi_copies_noted();
         }
         if llrm_support::env_set("ISEL_DUMP") {
+            use std::io::IsTerminal as _;
+            let mode = if std::env::var("ISEL_DUMP").is_ok_and(|how| how == "verbose") {
+                crate::backend::lirtext::Mode::Verbose
+            } else {
+                crate::backend::lirtext::Mode::Compact
+            };
+            let style = if std::io::stdout().is_terminal() {
+                crate::backend::lirtext::Style::Color
+            } else {
+                crate::backend::lirtext::Style::Plain
+            };
+            let named = crate::backend::lirtext::Calls { names: calls.clone(), far: far.clone() };
             println!(
                 "{}",
-                crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())])
+                crate::backend::lirtext::lir_stage_with(
+                    phase.class_name(),
+                    &[(body.name.clone(), body.clone())],
+                    &named,
+                    mode,
+                    style
+                )
             );
         }
     }
