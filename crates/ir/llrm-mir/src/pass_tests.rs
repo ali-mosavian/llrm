@@ -199,7 +199,6 @@ struct Steady;
 impl Analysis for Steady {
     type Result = usize;
     const NAME: &'static str = "steady";
-    const SKIPS: bool = true;
     fn run(
         _: &Context,
         _: &DataLayout,
