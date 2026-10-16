@@ -173,3 +173,117 @@ fn adopting_a_fork_keeps_the_marks_taken_before_it() {
     changed.sort_by_key(|value| value.0);
     assert_eq!(changed, [named(f, "x").1, named(f, "y").1]);
 }
+
+/// A rewrite reached only the blocks of the uses it feeds: the walk the
+/// analyses each kept for themselves marked every block or none.
+#[test]
+fn an_edit_reaches_the_blocks_that_read_what_it_makes_and_no_others() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (yes, no, join) = (block(f, "yes"), block(f, "no"), block(f, "join"));
+    let mark = f.mark();
+    let (y, _) = named(f, "y");
+    f.set_operand(y, 1, Operand::Value(f.parameters()[0]));
+    let reach = f.touched_since(mark).expect("history").reach(f);
+    assert_eq!(reach.blocks.iter().collect::<std::collections::BTreeSet<_>>(), [yes, join].into_iter().collect());
+    assert!(!reach.blocks.contains(&no));
+    assert_eq!(reach.conditions.iter().collect::<Vec<_>>(), [join]);
+    assert!(!reach.cfg_changed());
+}
+
+/// A branch retargeted is a change of the CFG, whether or not the log says
+/// the instruction was rewritten.
+#[test]
+fn a_retargeted_branch_is_a_change_of_the_cfg_in_the_reach() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, join) = (f.entry().unwrap(), block(f, "join"));
+    let mark = f.mark();
+    let br = f.terminator(entry).unwrap();
+    f.set_operand(br, 1, Operand::Block(join));
+    assert!(f.touched_since(mark).expect("history").reach(f).cfg_changed());
+}
+
+/// An operand replaced: the digest names the value it read before as well as
+/// the one it reads now, and the instruction's own result. The pressure update
+/// kept a private list of these.
+#[test]
+fn a_replaced_operand_names_the_value_it_read_and_the_one_it_reads() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (x, result) = named(f, "x");
+    let a = f.parameters()[0];
+    let c = f.parameters()[1];
+    let mark = f.mark();
+    f.set_operand(x, 0, Operand::Value(c));
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.named.iter().collect::<std::collections::BTreeSet<_>>(), [a, c, result].into_iter().collect());
+}
+
+/// A switch of many arms retargeted, then its whole list replaced: the digest
+/// names exactly the edges that differ from the mark's, and costs a scan of the
+/// log once, not once for each terminator and each arm (`cases(N)` at -O1:
+/// `analysis dominated-edges` read 3.4x a doubling with a pass per arm).
+#[test]
+fn the_edges_of_a_many_armed_switch_are_found_without_a_scan_per_arm() {
+    let arms = 200_usize;
+    let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n");
+    for k in 0..arms {
+        text += &format!("    i32 {k}, label %b{k}\n");
+    }
+    text += "  ]\nd:\n  ret i32 0\n";
+    for k in 0..arms {
+        text += &format!("b{k}:\n  br label %d\n");
+    }
+    text += "}\n";
+    let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+    let (first, last) = (block(f, "b0"), block(f, &format!("b{}", arms - 1)));
+    let mark = f.mark();
+    let switch = f.terminator(entry).unwrap();
+    // Arm 0 now goes to the last arm's block; every other arm is as it was.
+    let at = f.instruction(switch).operands.iter().position(|one| *one == Operand::Block(first)).unwrap();
+    f.set_operand(switch, at, Operand::Block(last));
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.cfg, [(entry, first, Edge::Removed)]);
+    // The list replaced by one naming `d` alone: every other edge goes.
+    let mut operands = f.instruction(switch).operands.clone();
+    for operand in operands.iter_mut().filter(|one| matches!(one, Operand::Block(_))) {
+        *operand = Operand::Block(d);
+    }
+    f.set_operands(switch, operands);
+    let touched = f.touched_since(mark).expect("history");
+    assert!(touched.cfg.iter().all(|&(from, _, edge)| from == entry && edge != Edge::Added), "{:?}", touched.cfg);
+    assert_eq!(touched.cfg.len(), arms, "each arm's block but d: {:?}", touched.cfg.len());
+}
+
+/// The edge search looked at the whole log once for each terminator it touched
+/// (`cases(N)` at -O1: `analysis dominated-edges` read 3.4x a doubling where
+/// the walk it replaced read 2.0): its work is now linear in the edits, and
+/// doubling the terminators touched doubles the entries and operands it reads.
+#[test]
+fn the_edge_search_reads_the_log_once_not_once_for_each_terminator_touched() {
+    let visits = |blocks: usize| {
+        let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  br label %b0\n");
+        for k in 0..blocks {
+            text += &format!("b{k}:\n  br label %b{}\n", k + 1);
+        }
+        text += &format!("b{blocks}:\n  ret i32 %a\nexit:\n  ret i32 0\n}}\n");
+        let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let f = module.function_mut("f").expect("@f").1;
+        let exit = block(f, "exit");
+        let mark = f.mark();
+        for k in 0..blocks {
+            let br = f.terminator(block(f, &format!("b{k}"))).unwrap();
+            f.set_operand(br, 0, Operand::Block(exit));
+        }
+        crate::touched::VISITED.with(|visited| visited.set(0));
+        let touched = f.touched_since(mark).expect("history");
+        assert_eq!(touched.cfg.len(), 2 * blocks, "each terminator's edge moved");
+        crate::touched::VISITED.with(std::cell::Cell::get)
+    };
+    let (small, big) = (visits(64), visits(128));
+    assert!(small > 0, "premise: the edges were searched");
+    assert!(big as f64 <= 2.3 * small as f64, "{small} -> {big} entries and operands read for 64 -> 128 terminators");
+}
