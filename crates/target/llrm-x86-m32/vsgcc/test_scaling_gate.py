@@ -633,14 +633,20 @@ def test_a_blocks_edges_changed_is_asked_of_what_made_them_not_of_the_maps_on_th
     assert cost <= 700, cost
 
 
-def test_a_loop_takes_the_values_it_reads_and_the_edges_above_it_once_on_the_branches_axis(tmp_path):
-    """`analysis bounded` gave each loop every interval known above it and narrowed them by the edges above it for
-    every block and every round of its boxes: on `branches` at N=1024 that was 3,900 Minstr (slope 1.95). A loop that
-    takes what it reads and narrows by the edges above it once reads 880. More than 1,300 fails."""
-    source = tmp_path / "branches_1024.c"
-    source.write_text(scaling.AXES["branches"](1024))
-    cost = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis bounded"]
-    assert cost <= 1300, cost
+def test_a_value_is_not_looked_for_above_its_definition_on_the_branches_axis(tmp_path):
+    """`analysis bounded` on `branches` read 108 -> 289 -> 864 -> 2,852 Minstr at N=256, 512, 1024, 2048 (2.7, 3.0, 3.3 per doubling):
+    each value asked at its own block walked the dominators to the entry for what is held above where it is made, and a value
+    defined far above was walked to again by every query. Once for each (value, block): 77 -> 161 -> 346 -> 770 (2.1, 2.2).
+    A doubling from 512 to 1024 above 2.5 fails."""
+    own = {}
+    for label, size in (("empty", 0), ("n", 512), ("2n", 1024)):
+        source = tmp_path / f"branches_{label}.c"
+        source.write_text("" if size == 0 else scaling.AXES["branches"](size))
+        own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    small, big = (own[label].get("analysis bounded", 0.0) - own["empty"].get("analysis bounded", 0.0) for label in ("n", "2n"))
+    assert small > 0, "premise: the stage ran"
+    assert big <= 2.5 * small, f"analysis bounded {small:.0f} -> {big:.0f} Minstr"
+
 
 def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
     """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
