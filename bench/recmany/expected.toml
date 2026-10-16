@@ -1,17 +1,2 @@
 reason = "ch default (user decision 2026-10-12): the copied header test and the guard's early-return epilogue add code bytes; executed instructions equal or fewer"
 blessed = "2026-10-12"
-
-[c.O2]
-instructions = 42021
-memory_operands = 15001
-code_bytes = 237
-data_bytes = 0
-bss_bytes = 0
-
-[c.Os]
-instructions = 43524
-memory_operands = 16503
-code_bytes = 183
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.5813

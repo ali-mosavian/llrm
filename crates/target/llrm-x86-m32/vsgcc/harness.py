@@ -15,7 +15,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from iced_x86 import CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
+from iced_x86 import Code, CpuidFeature, Decoder, MemorySize, MemorySizeExt, Mnemonic, OpKind, Formatter, FormatterSyntax, FlowControl, Register, RegisterExt
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc
 from unicorn.x86_const import UC_X86_REG_EAX, UC_X86_REG_EBX, UC_X86_REG_ECX, UC_X86_REG_EDX, UC_X86_REG_EBP, UC_X86_REG_ESI, UC_X86_REG_EDI, UC_X86_REG_ESP, UC_X86_REG_EIP
 
@@ -23,6 +23,8 @@ REPO = Path(__file__).resolve().parents[4]
 OUT = Path(os.environ.get("VSGCC_WORK", Path.home() / "scratch/vsgcc-work"))   # build products and results, never in the tree
 BENCH = REPO / "bench"
 KERNELS = Path(__file__).resolve().parent / "kernels"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clocks  # noqa: E402
 
 
 def source_dir(prog):
@@ -222,99 +224,141 @@ def misaligned_operands(uc, ins):
     return count
 
 
-def cost(ins, taken, first_rep, mem, multiplier=None):
+SHIFTS = (Mnemonic.SHL, Mnemonic.SHR, Mnemonic.SAR, Mnemonic.ROL, Mnemonic.ROR)
+ALU = (Mnemonic.ADD, Mnemonic.SUB, Mnemonic.AND, Mnemonic.OR, Mnemonic.XOR, Mnemonic.ADC, Mnemonic.SBB)
+SETS = (Mnemonic.SETA, Mnemonic.SETAE, Mnemonic.SETB, Mnemonic.SETBE, Mnemonic.SETE, Mnemonic.SETNE, Mnemonic.SETG, Mnemonic.SETGE,
+        Mnemonic.SETL, Mnemonic.SETLE, Mnemonic.SETS, Mnemonic.SETNS)
+IMMEDIATES = (OpKind.IMMEDIATE8, OpKind.IMMEDIATE8TO32, OpKind.IMMEDIATE32, OpKind.IMMEDIATE16, OpKind.IMMEDIATE8TO16,
+              OpKind.IMMEDIATE8TO64, OpKind.IMMEDIATE32TO64)
+ONE_SHIFTS = {getattr(Code, f"{m}_RM{w}_1") for m in ("SHL", "SHR", "SAR", "ROL", "ROR") for w in (8, 16, 32)}
+
+
+def _operand_bytes(ins):
+    """Width of the instruction's r/m operand."""
+    if ins.op_count and ins.op_kind(0) == OpKind.REGISTER:
+        return {1: 1, 2: 2, 4: 4}.get(RegisterExt.size(ins.op_register(0)), 4)
+    return max(1, MemorySizeExt.size(ins.memory_size))
+
+
+def cost(ins, taken, first_rep, mem, multiplier=None, prefixes=0):
+    """The 486's clocks of `ins`, each from the compiler's own `timings.times` (clocks.py), and `prefixes` operand- and address-size
+    prefixes (clocks.prefixes of its bytes) at the table's clock each. A branch is `taken` or not; a string instruction is the
+    `first_rep` of its repeat or one more; `multiplier` is the operand a MUL reads."""
+    return _form_clocks(ins, taken, first_rep, multiplier) + prefixes * clocks.PREFIX
+
+
+def _form_clocks(ins, taken, first_rep, multiplier):
     m = ins.mnemonic
     n = ins.op_count
     k0 = ins.op_kind(0) if n else None
     k1 = ins.op_kind(1) if n > 1 else None
     dst_mem = k0 in MEMORY
     src_mem = k1 in MEMORY
-    if m in (Mnemonic.MOV,):
-        return 1
+    imm = k1 in IMMEDIATES
+    if m == Mnemonic.MOV:
+        if k0 == OpKind.REGISTER and RegisterExt.is_segment_register(ins.op_register(0)):
+            return clocks.clocks("mov_seg_r")
+        return clocks.clocks("mov_mr" if dst_mem else "mov_rm" if src_mem else "mov_ri" if imm else "mov_rr")
     if m == Mnemonic.LEA:
-        return 1
+        return clocks.clocks("lea")
     if m in (Mnemonic.MOVZX, Mnemonic.MOVSX):
-        return 3
-    if m in (Mnemonic.ADD, Mnemonic.SUB, Mnemonic.AND, Mnemonic.OR, Mnemonic.XOR, Mnemonic.ADC, Mnemonic.SBB):
-        return 3 if dst_mem else (2 if src_mem else 1)
+        return clocks.clocks("movzx")
+    if m in ALU:
+        return clocks.clocks("alu_mr" if dst_mem else "alu_rm" if src_mem else "alu_ri" if imm else "alu_rr")
     if m in (Mnemonic.CMP, Mnemonic.TEST):
-        return 2 if (dst_mem or src_mem) else 1
+        return clocks.clocks("alu_rm" if dst_mem or src_mem else "alu_ri" if imm else "alu_rr")
     if m in (Mnemonic.INC, Mnemonic.DEC, Mnemonic.NEG, Mnemonic.NOT):
-        return 3 if dst_mem else 1
+        return clocks.clocks("alu_mr" if dst_mem else "alu_rr")
     if m == Mnemonic.PUSH:
-        return 4 if dst_mem else 1
+        return clocks.clocks("push_m" if dst_mem else "push_i" if k0 in IMMEDIATES else "push_r")
     if m == Mnemonic.POP:
-        return 6 if dst_mem else 1
-    if m in (Mnemonic.SHL, Mnemonic.SHR, Mnemonic.SAR, Mnemonic.ROL, Mnemonic.ROR):
-        return (4 if dst_mem else 2) if k1 != OpKind.REGISTER else (5 if dst_mem else 3)
+        if k0 == OpKind.REGISTER and RegisterExt.is_segment_register(ins.op_register(0)):
+            return clocks.clocks("pop_seg")
+        return clocks.clocks("pop_m" if dst_mem else "pop_r")
+    if m in SHIFTS:
+        if k1 is not None and k1 == OpKind.REGISTER:
+            return clocks.UNTABLED["shift_cl_mem" if dst_mem else "shift_cl"]
+        if dst_mem:
+            return clocks.UNTABLED["shift_imm_mem"]
+        return clocks.clocks("shift_r1" if ins.code in ONE_SHIFTS else "shift_ri")
     if m in (Mnemonic.IMUL, Mnemonic.MUL):
         # Data dependent: 13 to 42 by the multiplier; 13 was the least, which made every product cheap.
         return multiply_clocks(multiplier if multiplier is not None else 0, m == Mnemonic.IMUL)
-    if m == Mnemonic.DIV:
-        return 40
-    if m == Mnemonic.IDIV:
-        return 43
-    if m in (Mnemonic.CDQ, Mnemonic.CWD, Mnemonic.CWDE, Mnemonic.CBW, Mnemonic.XCHG, Mnemonic.SETA, Mnemonic.SETAE, Mnemonic.SETB, Mnemonic.SETBE, Mnemonic.SETE, Mnemonic.SETNE, Mnemonic.SETG, Mnemonic.SETGE, Mnemonic.SETL, Mnemonic.SETLE, Mnemonic.SETS, Mnemonic.SETNS):
-        return 3 if m in (Mnemonic.CDQ, Mnemonic.CWD, Mnemonic.CWDE, Mnemonic.CBW) else (3 if m == Mnemonic.XCHG else 4 if dst_mem else 3)
+    if m in (Mnemonic.DIV, Mnemonic.IDIV):
+        width = _operand_bytes(ins)
+        signed = m == Mnemonic.IDIV
+        if width == 1:
+            return clocks.UNTABLED["idiv_b" if signed else "div_b"]
+        return clocks.audited(f"{'sdiv' if signed else 'udiv'}_w{2 if width == 2 else 4}")
+    if m in (Mnemonic.CDQ, Mnemonic.CWD, Mnemonic.CWDE, Mnemonic.CBW):
+        return clocks.clocks("cdq")
+    if m == Mnemonic.XCHG:
+        return clocks.clocks("xchg_rr")
+    if m in SETS:
+        return clocks.clocks("setcc")
     if m == Mnemonic.CALL:
-        return 3
+        return clocks.clocks("call_far", far=True) if k0 in (OpKind.FAR_BRANCH16, OpKind.FAR_BRANCH32) else clocks.clocks("call_near")
     if m == Mnemonic.RET:
-        return 5
+        return clocks.clocks("ret_pop") if n else clocks.clocks("ret_near")
+    if m == Mnemonic.RETF:
+        return clocks.clocks("ret_pop", far=True) if n else clocks.clocks("ret_far", far=True)
     if m == Mnemonic.ENTER:
-        return 14
+        return clocks.UNTABLED["enter"]
     if m == Mnemonic.LEAVE:
-        return 5
+        return clocks.clocks("leave")
     if m == Mnemonic.JMP:
-        return 3
+        return clocks.clocks("jmp_short" if k0 in (OpKind.NEAR_BRANCH16, OpKind.NEAR_BRANCH32, OpKind.NEAR_BRANCH64) else "jmp_indirect")
     if ins.flow_control == FlowControl.CONDITIONAL_BRANCH:
-        return 3 if taken else 1
+        return clocks.clocks("jcc") if taken else clocks.clocks("jcc_not_taken")
     if m in (Mnemonic.STOSB, Mnemonic.STOSW, Mnemonic.STOSD):
-        return 1 + (7 if first_rep else 0)
+        return clocks.clocks("rep_stos_cell") + (clocks.clocks("rep_stos") if first_rep else 0)
     if m in (Mnemonic.MOVSB, Mnemonic.MOVSW, Mnemonic.MOVSD):
-        return 3 + (12 if first_rep else 0)
+        return clocks.clocks("rep_movs_cell") + (clocks.clocks("rep_movs") if first_rep else 0)
     if m in (Mnemonic.CMPSB, Mnemonic.CMPSW, Mnemonic.CMPSD):
-        return 7 + (5 if first_rep else 0)
+        return clocks.UNTABLED["cmps"] + (clocks.UNTABLED["cmps_first"] if first_rep else 0)
     if m in (Mnemonic.SCASB, Mnemonic.SCASW, Mnemonic.SCASD):
-        return 6 + (5 if first_rep else 0)
+        return clocks.UNTABLED["scas"] + (clocks.UNTABLED["scas_first"] if first_rep else 0)
     if m in (Mnemonic.LODSB, Mnemonic.LODSW, Mnemonic.LODSD):
-        return 2
+        return clocks.UNTABLED["loads"]
     if m in (Mnemonic.FLD, Mnemonic.FLD1, Mnemonic.FLDZ):
-        return 4 if m != Mnemonic.FLD else (3 if dst_mem else 4)
+        return clocks.clocks("x87_load") if m == Mnemonic.FLD and dst_mem else clocks.UNTABLED["fld_reg"]
     if m in (Mnemonic.FST, Mnemonic.FSTP):
-        return 7 if dst_mem else 3
+        return clocks.clocks("x87_store") if dst_mem else clocks.UNTABLED["fst_reg"]
     if m in (Mnemonic.FADD, Mnemonic.FSUB, Mnemonic.FSUBR, Mnemonic.FADDP, Mnemonic.FSUBP, Mnemonic.FSUBRP):
-        return 10
+        return clocks.clocks("x87_add_m" if dst_mem else "x87_add")
     if m in (Mnemonic.FMUL, Mnemonic.FMULP):
-        return 16
+        return clocks.clocks("x87_mul_m" if dst_mem else "x87_mul")
     if m in (Mnemonic.FDIV, Mnemonic.FDIVP, Mnemonic.FDIVR, Mnemonic.FDIVRP):
-        return 73
+        return clocks.clocks("x87_div_m" if dst_mem else "x87_div")
     if m == Mnemonic.FSQRT:
-        return 83
+        return clocks.UNTABLED["fsqrt"]
     if m == Mnemonic.FXCH:
-        return 4
-    if m in (Mnemonic.FILD,):
-        return 13
+        return clocks.clocks("x87_exchange")
+    if m == Mnemonic.FILD:
+        return clocks.UNTABLED["fild"]
     if m in (Mnemonic.FIST, Mnemonic.FISTP):
-        return 29
+        return clocks.UNTABLED["fist"]
     if m in (Mnemonic.FCOM, Mnemonic.FCOMP, Mnemonic.FUCOM, Mnemonic.FUCOMP, Mnemonic.FCOMPP, Mnemonic.FUCOMPP):
-        return 4
+        return clocks.UNTABLED["fcom"]
     if m in (Mnemonic.FCHS, Mnemonic.FABS):
-        return 6 if m == Mnemonic.FCHS else 3
-    if m in (Mnemonic.FNSTSW, Mnemonic.FNSTCW, Mnemonic.FLDCW):
-        return 3 if m == Mnemonic.FNSTSW else 4
+        return clocks.UNTABLED["fchs" if m == Mnemonic.FCHS else "fabs"]
+    if m == Mnemonic.FNSTSW:
+        return clocks.UNTABLED["fnstsw"]
+    if m in (Mnemonic.FNSTCW, Mnemonic.FLDCW):
+        return clocks.clocks("x87_control_store") if m == Mnemonic.FNSTCW else clocks.clocks("x87_control_load")
     # Integer memory operands (Intel 240440-002, the 486 table; the least of each range, which does not
     # favour the compiler that uses them): m32int / m16int. They were unpriced and fell through to 1 clock,
     # which made gcc's `fimul` (x_matmul_f) free.
     if m in (Mnemonic.FIADD, Mnemonic.FISUB, Mnemonic.FISUBR):
-        return 19 if ins.memory_size == MemorySize.INT32 else 20
+        return clocks.UNTABLED["fiadd32" if ins.memory_size == MemorySize.INT32 else "fiadd16"]
     if m == Mnemonic.FIMUL:
-        return 22 if ins.memory_size == MemorySize.INT32 else 23
+        return clocks.UNTABLED["fimul32" if ins.memory_size == MemorySize.INT32 else "fimul16"]
     if m in (Mnemonic.FIDIV, Mnemonic.FIDIVR):
-        return 84 if ins.memory_size == MemorySize.INT32 else 85
+        return clocks.UNTABLED["fidiv32" if ins.memory_size == MemorySize.INT32 else "fidiv16"]
     if m in X87_CLOCKS:
         return X87_CLOCKS[m]
     if m == Mnemonic.SAHF:
-        return 2
+        return clocks.clocks("sahf")
     if X87.intersection(ins.cpuid_features()):
         raise ValueError(f"the model has no price for the x87 instruction {Formatter(FormatterSyntax.INTEL).format(ins)}")
     return 1
@@ -395,11 +439,12 @@ def run(prog, variant, hot=False, limit=300_000_000):
             st["prev"] = None
         info = cache.get(address)
         if info is None:
-            ins = Decoder(32, bytes(uc.mem_read(address, min(size, 15))), ip=address).decode()
+            raw = bytes(uc.mem_read(address, min(size, 15)))
+            ins = Decoder(32, raw, ip=address).decode()
             mem = 0 if ins.mnemonic == Mnemonic.LEA else sum(1 for i in range(ins.op_count) if ins.op_kind(i) in MEMORY)
             rep = ins.has_rep_prefix or ins.has_repe_prefix or ins.has_repne_prefix
-            info = cache[address] = (ins, mem, rep, ins.mnemonic == Mnemonic.RET)
-        ins, mem, rep, ret = info
+            info = cache[address] = (ins, mem, rep, ins.mnemonic == Mnemonic.RET, clocks.prefixes(raw))
+        ins, mem, rep, ret, prefixed = info
         if rep and uc.reg_read(UC_X86_REG_ECX) == 0:
             return
         prev = st["prev"]
@@ -419,7 +464,7 @@ def run(prog, variant, hot=False, limit=300_000_000):
             taken = False
         # clocks of the previous instruction need to know taken; charge it now
         if prev is not None and pins[0].mnemonic != Mnemonic.NOP:
-            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"))
+            total["clocks"] += cost(pins[0], taken, st.get("firstrep", True), pins[1], st.get("multiplier"), pins[4])
         st["firstrep"] = not (rep and prev == address)
         if ins.mnemonic == Mnemonic.NOP:   # alignment padding (clang): counted apart, not work
             total["nops"] += 1

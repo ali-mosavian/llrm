@@ -1103,3 +1103,43 @@ b0:
     let facts = std::mem::take(&mut analyses.memo::<super::SummariesMemo>().facts);
     super::Table::of(&module, &program, globals, &facts, None).check_against_scratch();
 }
+
+/// Each pass that edited threw away what was known through memory, though
+/// finding a value again (`replace_value`) and erasing what it replaced keep
+/// every other value's meaning: `d_faces` -O1 derived it 58 times where 29 of
+/// the 36 repeats gave what it had. A result that is sound stands past such
+/// edits, and is derived again past one that changes a meaning.
+#[test]
+fn a_result_kept_as_sound_stands_past_edits_that_keep_every_values_meaning() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %x) {{
+entry:
+  %a = add i16 %x, 1
+  %b = add i16 %x, 1
+  %c = add i16 %a, %b
+  ret i16 %c
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let (context, function) = module.function_mut("f").unwrap();
+    let first = analyses.get::<ThroughMemory>(context, &layout, function);
+    let inst_of = |function: &llrm_mir::module::Function, name: &str| {
+        let value = value(function, name);
+        function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(value)).unwrap()
+    };
+    // %b is %a: found again and replaced, then erased.
+    let (a, b) = (value(function, "a"), inst_of(function, "b"));
+    function.replace_value(value(function, "b"), Operand::Value(a));
+    function.erase(b).expect("unused now");
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    let kept = analyses.get::<ThroughMemory>(context, &layout, function);
+    assert!(Rc::ptr_eq(&first, &kept), "an edit that keeps every meaning derived it again");
+    // %a is made another number: a meaning changed.
+    let one = Operand::Value(value(function, "x"));
+    function.set_operand(inst_of(function, "a"), 0, one);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    let again = analyses.get::<ThroughMemory>(context, &layout, function);
+    assert!(!Rc::ptr_eq(&kept, &again), "an operand set to another value kept what was said of it");
+}

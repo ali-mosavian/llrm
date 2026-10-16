@@ -628,36 +628,30 @@ def write_expected(directory: Path, measured: dict, name: str, reason: str) -> b
 
 
 def against(label: str, got: dict, want: dict | None, waived: list[dict] = ()) -> list[str]:
-    """What fails the gate for one measurement: no baseline, a count above it (worse) unless a waiver (tools/bench/waivers) names its row,
-    counter and this count, one below it (better, to bless)."""
+    """What fails the gate for one measurement: a count above its baseline (worse) unless a waiver (tools/bench/waivers) names its row,
+    counter and this count. A count below it passes: it is the next base. The baseline of a row of ours is the base's measurement
+    (basecounts.py); of a reference, its stored one. A row with none (a new program) is not judged."""
     if want is None:
-        return [f"{label}: no baseline; run --bless --reason"]
+        return []
     problems = []
     for counter in (*COUNTERS, *SIZES):
         if counter not in got:
             continue
         if counter not in want:
-            problems.append(f"{label}: no baseline for {counter}; run --bless --reason")
-        elif got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
             continue
-        elif got[counter] > want[counter]:
+        if got[counter] > want[counter] and any(w["label"] == label and w["counter"] == counter and w["to"] == got[counter] for w in waived):
+            continue
+        if got[counter] > want[counter]:
             problems.append(f"{label}: {counter} {got[counter]} > {want[counter]} (worse)")
-        elif got[counter] < want[counter]:
-            problems.append(f"{label}: {counter} {got[counter]} < {want[counter]} (better: --bless --reason)")
     return problems
 
 
 def time_against(label: str, got: dict, want: dict | None) -> list[str]:
-    """A timed-only program has no count to ratchet: its own kernel time gates, with the time tolerance, up (worse) and down (bless)."""
-    if want is None or "kernel_ms" not in got:
+    """A timed-only program has no count to gate: its own kernel time does, with the time tolerance, against the base's (worse only)."""
+    if want is None or "kernel_ms" not in got or "kernel_ms" not in want:
         return []
-    if "kernel_ms" not in want:
-        return [f"{label}: no baseline for kernel_ms; run --bless --time --reason"]
-    slack = max(TIME_TOLERANCE * want["kernel_ms"], TIME_SLACK_MS)
-    if got["kernel_ms"] > want["kernel_ms"] + slack:
+    if got["kernel_ms"] > want["kernel_ms"] + max(TIME_TOLERANCE * want["kernel_ms"], TIME_SLACK_MS):
         return [f"{label}: kernel_ms {got['kernel_ms']} > {want['kernel_ms']} (worse)"]
-    if got["kernel_ms"] < want["kernel_ms"] - slack:
-        return [f"{label}: kernel_ms {got['kernel_ms']} < {want['kernel_ms']} (better: --bless --reason)"]
     return []
 
 
@@ -689,13 +683,20 @@ def drift_problems(label: str, got: dict, stored: dict | None) -> list[str]:
     return problems
 
 
-def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
-    """What fails the gate."""
+def judge(measured: dict, selected: list[str], opts: list[str], base: dict | None = None, same: set[str] | None = None) -> list[str]:
+    """What fails the gate. `base`: the base's rows of ours (basecounts.base_counts), what a row of ours may not exceed; `same`: the programs
+    the base and this tree have alike (a row of another program compares two programs, not two compilers). The references' rows come from
+    each benchmark's expected.toml."""
     problems = []
     waived = basecounts.waivers(ROOT)
     for directory in benchmarks(selected):
         name = str(directory.relative_to(BENCH))
         baseline = read_expected(directory)
+        for language in basecounts.OURS:
+            baseline.pop(language, None)
+        for (one, language, opt), row in (base or {}).items():
+            if one == name and (same is None or name in same):
+                baseline.setdefault(language, {})[opt] = row
         for variant in variants(directory):
             for opt in opts:
                 got = measured[(name, variant.language, opt)]
@@ -707,6 +708,8 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
                 else:
+                    if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
+                        problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")
                     want = baseline.get(variant.language, {}).get(opt)
                     problems += against(label, got, want, waived)
                     if variant.timed_only:
@@ -720,12 +723,6 @@ def judge(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
                     if (name, reference, level) in measured:
                         problems += drift_problems(f"{name} {reference} -{level}", measured[(name, reference, level)], baseline.get(reference, {}).get(level))
     return problems
-
-
-def split_better(problems: list[str]) -> tuple[list[str], list[str]]:
-    """(what still fails, the counts that got better): a train lets a better count pass and blesses it afterwards."""
-    better = [one for one in problems if "(better:" in one]
-    return [one for one in problems if one not in better], better
 
 
 def clock_lines(measured: dict, selected: list[str]) -> list[str]:
@@ -769,27 +766,19 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
-def base_dry_run(measured: dict, args, old: list[str]) -> list[str]:
-    """The verdict against the base's counts, beside the committed baselines': printed, never failing the gate (until both agree on
-    enough PRs, then the baselines go: tools/bench/basecounts.py). Where they disagree the lines say so."""
-    try:
-        import measure
+def base_rows(args) -> tuple[dict, set[str], str]:
+    """(the base's rows of ours, the programs the base and this tree have alike, the base's commit): the base is the merge-base with
+    origin/main, built and measured by its own tree (basecounts.py), once per tree."""
+    import measure
 
-        head = measure.git("rev-parse", "HEAD")
-        base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
-        with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
-            base, was = basecounts.base_counts(
-                base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base")
-            )
-        now = basecounts.programs(ROOT)
-        worse, better, stale = basecounts.judge(measured, base, basecounts.waivers(), {name for name in now if was.get(name) == now[name]})
-        differing = basecounts.differences(old, worse, better)
-    except BaseException as why:  # noqa: BLE001: a dry run must not fail the gate
-        return ["BASE: dry run failed: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:]]
-    lines = [f"BASE {base_sha[:9]}: {len(worse)} worse, {len(better)} better; {len(differing)} differ from expected.toml" + (f"; {len(stale)} stale waivers" if stale else "")]
-    lines += [f"BASE-WORSE {one[0]}: {one[1]} {one[3]} > {one[2]}" for one in worse]
-    lines += [f"BASE-DIFF {one}" for one in differing] + [f"BASE-STALE {one}" for one in stale]
-    return lines
+    head = measure.git("rev-parse", "HEAD")
+    base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
+    with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
+        base, was = basecounts.base_counts(
+            base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time), args.time
+        )
+    now = basecounts.programs(ROOT)
+    return base, {name for name in now if was.get(name) == now[name]}, base_sha
 
 
 def main() -> int:
@@ -798,15 +787,14 @@ def main() -> int:
     parser.add_argument("--opt", nargs="+", default=["O2", "Os"])
     parser.add_argument("--time", action="store_true", help="also the kernel's time in DOSBox from RDTSC, net of start-up; gates the time ratio to each reference")
     parser.add_argument("--references", action="store_true", help="measure Open Watcom and BCC (C) and BC 4.5 (BASIC) again: they must equal the stored ones, or --bless records them")
-    parser.add_argument("--bless", action="store_true")
-    parser.add_argument("--batch", action="store_true", help="the merge train's mode: a count below its baseline is listed as BETTER, not failed; with --bless, only when nothing else fails")
+    parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")
     parser.add_argument("--reason", default="")
     parser.add_argument("--no-judge", action="store_true", help="measure, write --json and stop: the base's counts are made this way")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
-    if args.bless and not args.reason:
-        parser.error("--bless needs --reason: every change to expected.toml says why")
+    if args.bless and not (args.reason and args.references):
+        parser.error("--bless records the references, so it needs --references and --reason: every change to expected.toml says why")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     if args.references:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
@@ -814,28 +802,25 @@ def main() -> int:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.no_judge:
         return 0
-    if args.bless and args.batch:
-        # blessing a batch writes only numbers that went down: anything worse, missing or broken is not blessed over
-        if (left := split_better(judge(measured, args.select, args.opt))[0]):
-            print(*(f"FAIL {one}" for one in left), sep="\n")
-            print(f"not blessing: {len(left)} problems that are not a better count")
-            return 1
     if args.bless:
-        names = {key[0] for key in measured}
+        references = {key: value for key, value in measured.items() if key[1] not in basecounts.OURS}
         changed = 0
         for directory in benchmarks(args.select):
             name = str(directory.relative_to(BENCH))
-            broken = [f"{key}: {value['error']}" for key, value in measured.items() if key[0] == name and key[1] in (*LANGUAGES, *BASIC_LANGUAGES) and "error" in value and "known" not in value]
+            broken = [f"{key}: {value['error']}" for key, value in references.items() if key[0] == name and key[1] in BASIC_LANGUAGES and "error" in value and "known" not in value]
             if broken:
                 print(f"not blessing {name}: {broken}")
                 return 1
-            changed += write_expected(directory, measured, name, args.reason)
-        print(f"blessed {len(names)} benchmarks, {changed} files changed")
-        for used in basecounts.consume_waivers(ROOT, measured):
-            print(f"waiver spent: {used}")
+            changed += write_expected(directory, references, name, args.reason)
+        print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
-    problems, better = split_better(judge(measured, args.select, args.opt)) if args.batch else (judge(measured, args.select, args.opt), [])
+    try:
+        base, same, base_sha = base_rows(args)
+    except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
+        print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
+        return 1
+    problems = judge(measured, args.select, args.opt, base, same)
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")
@@ -843,11 +828,10 @@ def main() -> int:
         print(*clock_lines(measured, args.select), sep="\n")
     for one in problems:
         print("FAIL", one)
-    for one in better:
-        print("BETTER", one)
-    if os.environ.get("LLRM_BENCH_BASE") == "dry":
-        print(*base_dry_run(measured, args, [*problems, *better]), sep="\n")
-    print(f"{len(measured)} measurements: {len(problems)} problems" + (f", {len(better)} better" if args.batch else ""))
+    stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused
+    print(f"BASE {base_sha[:9]}: {len(base)} rows" + (f"; {len(stale)} stale waivers (delete them)" if stale else ""))
+    print(*(f"BASE-STALE {one}" for one in stale), sep="\n")
+    print(f"{len(measured)} measurements: {len(problems)} problems")
     return 1 if problems else 0
 
 
