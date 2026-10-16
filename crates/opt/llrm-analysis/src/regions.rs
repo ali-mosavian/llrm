@@ -934,7 +934,8 @@ b0:
         // The short is bytes 0-1; the wide at -1 is bytes -1 to 2, at 0 bytes
         // 0-3, at 1 bytes 1-4.
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, -1, 2))));
-        // At 2 it is bytes 2-5: it may miss the short, and the types say it does.
+        // At 2 it is bytes 2-5: it may miss the short, and the types say it
+        // does.
         assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, -1, 3))));
     }
 
