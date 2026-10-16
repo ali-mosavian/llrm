@@ -640,3 +640,14 @@ def test_a_pr_that_makes_a_row_worse_than_its_base_fails_and_only_a_waiver_for_t
     monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: waiver)
     assert own(bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})) == []
     assert own(bench.judge(rows(102), ["fib"], ["O2"], base, {"fib"})) == ["fib c -O2: instructions 102 > 100 (worse)"]
+
+
+def test_a_waived_count_is_excused_in_the_ratio_to_each_reference_too():
+    """#1816 waived matmul c -O2 and still failed `instructions vs ow 0.258x > blessed 0.255x`: the ratio is the count over a constant, so a
+    waived count always moved it and a waiver on a row with references could not pass."""
+    want, ref = {"instructions": 100}, {"instructions": 400}
+    waiver = [{"label": "matmul c -O2", "counter": "instructions", "to": 103, "reason": "r", "file": "w.toml"}]
+    assert bench.ratio_problems("matmul c -O2", "ow", {"instructions": 103}, want, ref)
+    assert bench.ratio_problems("matmul c -O2", "ow", {"instructions": 103}, want, ref, waiver) == []
+    assert bench.ratio_problems("matmul c -O2", "ow", {"instructions": 104}, want, ref, waiver), "another count"
+    assert bench.ratio_problems("matmul bas -O2", "ow", {"instructions": 103}, want, ref, waiver), "another row"
