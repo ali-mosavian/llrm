@@ -985,14 +985,10 @@ def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_
     assert gate.smoked("abc123") and not gate.smoked("abc124")
 
 
-def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
-    plan = gate.plan(["tools/gate/gate.py"], "full")
-    monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
-    plain = gate.commands(plan, gate.load(), gate.packages())["bench"]
-    monkeypatch.setenv("LLRM_BENCH_BATCH", "1")
-    batch = gate.commands(plan, gate.load(), gate.packages())["bench"]
-    assert "--batch" not in plain and "bench.py --batch" in batch
-    assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"
+def test_the_bench_step_needs_zero_problems_and_has_no_batch_mode():
+    """The train's batch mode (a better count passes, the train blesses it) is gone with the committed counts: a better count always passes."""
+    command = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["bench"]
+    assert "--batch" not in command and "BETTER" not in command and '" 0 problems"' in command
 
 
 def test_a_step_that_gets_little_cpu_on_a_loaded_host_is_not_stalled(tmp_path, monkeypatch):
@@ -1109,20 +1105,20 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
 
 
 def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
-    """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
+    """Train 3's bench step said `424 measurements: 22 problems` under only the last lines: `tail -3` cut the 20 FAIL rows."""
     import os
     import subprocess as sp
 
     (tmp_path / "uv").write_text(
         "#!/bin/sh\n"
         + "".join(f"echo 'FAIL row{n}: instructions 10 > 9 (worse)'\n" for n in range(20))
-        + "echo 'BETTER rowa: instructions 8 < 9'\necho 'BETTER rowb: instructions 8 < 9'\necho '424 measurements: 20 problems, 2 better'\n"
+        + "echo '424 measurements: 20 problems'\n"
     )
     (tmp_path / "uv").chmod(0o755)
     command = gate.commands(gate.plan(["bench/fib/fib.c"], "full"), gate.load(), gate.packages())["bench"]
     done = sp.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
     assert done.returncode != 0
-    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "BETTER rowa" in done.stdout and "20 problems" in done.stdout, done.stdout
+    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "20 problems" in done.stdout, done.stdout
 
 
 def test_smoke_runs_the_source_scans_that_are_root_test_binaries_and_the_other_tiers_do_not_twice():
