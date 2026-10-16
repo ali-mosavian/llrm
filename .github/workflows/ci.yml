@@ -101,11 +101,8 @@ jobs:
           GROUPS_JSON: ${{ steps.plan.outputs.groups }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Runs queued or running now (this one included): the hosted slots are spoken for when several are ahead.
-          backlog=0
-          for status in queued in_progress; do
-            backlog=$((backlog + $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?status=$status&per_page=1" -q .total_count 2>/dev/null || echo 0)))
-          done
+          # The hosted jobs waiting for a runner now: a new job queues behind them.
+          backlog=$(python3 tools/ci/hosted_backlog.py)
           json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$ELIGIBLE" "$backlog")
           echo "$json"
           echo "build=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["build"]))')" >> "$GITHUB_OUTPUT"

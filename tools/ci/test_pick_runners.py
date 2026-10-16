@@ -55,7 +55,15 @@ def test_when_runs_are_queued_ahead_the_other_jobs_overflow_to_idle_tinytim():
     """12 runs queued and 20 hosted jobs running: a job waited 36 minutes for a hosted slot."""
     groups = ["perf", "python", "unit", "bench-1"]
     quiet = pick(groups, f"{NOW} 3", True, NOW, backlog=1)["groups"]
-    busy = pick(groups, f"{NOW} 3", True, NOW, backlog=9)["groups"]
+    busy = pick(groups, f"{NOW} 3", True, NOW, backlog=20)["groups"]
     assert quiet["python"] == quiet["unit"] == HOSTED
     assert busy["perf"] == busy["python"] == busy["unit"] == TINYTIM and busy["bench-1"] == HOSTED, "perf first, then by length, while runners are idle"
-    assert pick(groups, "", True, NOW, backlog=9)["groups"]["python"] == HOSTED, "no tinytim, no overflow"
+    assert pick(groups, "", True, NOW, backlog=20)["groups"]["python"] == HOSTED, "no tinytim, no overflow"
+
+
+def test_the_hosted_backlog_counts_only_queued_jobs_that_wait_for_a_hosted_runner():
+    """12 queued runs left hosted idle (a job started in 3 s): runs ahead overflowed jobs to the slower tinytim for nothing."""
+    from hosted_backlog import waiting
+
+    jobs = [{"status": "queued", "labels": ["ubuntu-24.04"]}, {"status": "queued", "labels": ["self-hosted", "tinytim"]}, {"status": "in_progress", "labels": ["ubuntu-24.04"]}, {"status": "queued"}]
+    assert waiting(jobs) == 2 and waiting([]) == 0

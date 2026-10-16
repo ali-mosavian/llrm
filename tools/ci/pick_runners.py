@@ -17,9 +17,9 @@ TINYTIM = ["self-hosted", "tinytim"]
 # The jobs that need hardware instruction counters: only tinytim has them. Everything else is hosted (tinytim is shared with every session's
 # builds: the same build ran 82-103 s hosted and 243-669 s there at the same cache state).
 PERF = ("perf", "cost")
-# GitHub runs 20 hosted jobs of this account at once; a pull request is 10-20 jobs. When this many runs are already queued or running,
-# a job would wait for a hosted slot longer than tinytim's slowness costs it, so the other jobs overflow to idle tinytim runners.
-OVERFLOW_AT = 4
+# GitHub runs 20 hosted jobs of this account at once. When this many hosted jobs are already waiting (tools/ci/hosted_backlog.py), a job
+# would wait for a slot longer than tinytim's slowness (2-4x) costs it, so the other jobs overflow to idle tinytim runners.
+OVERFLOW_AT = 8
 OVERFLOW_ORDER = ("python", "reference", "run", "dos", "integration", "tools", "unit", "bench-1", "bench-2", "bench-3", "bench-4", "bench-5", "bench-6")
 MAX_AGE = 180
 
