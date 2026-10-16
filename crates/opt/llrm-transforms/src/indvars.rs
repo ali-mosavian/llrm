@@ -141,7 +141,6 @@ use llrm_analysis::cfg::Around;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, Affine, AffineOperand};
-use llrm_analysis::manager::Registers;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
@@ -200,22 +199,24 @@ impl FunctionPass for IndVars {
         let mut standing = match bounded.as_deref() {
             Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds),
             _ => llrm_analysis::memory::Standing::held(&held),
-        };
+        }
+        .with_shape(analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function));
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
         if evaluated {
-            standing.changed();
+            standing.reshaped();
         }
         let folded = crate::exitfold::folded_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if folded {
-            standing.changed();
+            standing.reshaped();
         }
         let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if valued {
-            standing.changed();
+            standing.reshaped();
         }
-        let sunk = crate::exitsink::sunk(unit.function);
+        let shape = standing.shape(unit.function);
+        let sunk = crate::exitsink::sunk(unit.function, &shape);
         if sunk {
             standing.changed();
         }
@@ -228,11 +229,12 @@ impl FunctionPass for IndVars {
             if self.exit_values { None } else { self.unrolls },
         );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
-        let rewound = rewound(
+        let rewound = rewound_with(
             unit.context,
             unit.layout,
             unit.function,
-            analyses,
+            &outer,
+            &mut standing,
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
@@ -263,7 +265,7 @@ fn congruent(
     if !alike_phis(function) {
         return false;
     }
-    let shape = cfg::Shape::of(function);
+    let shape = standing.shape(function);
     let mut merged = Vec::new();
     {
         let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -334,7 +336,7 @@ fn exit_values(
     standing: &mut llrm_analysis::memory::Standing,
 ) -> bool {
     let mut changed = false;
-    let shape = cfg::Shape::of(function);
+    let shape = standing.shape(function);
     let mut found = Vec::new();
     {
         let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -551,15 +553,29 @@ pub fn rewound(
     registers: i64,
     costs: &OperationCosts,
 ) -> bool {
+    rewound_with(context, layout, function, analyses.outer(), &mut memory::Standing::underived(), registers, costs)
+}
+
+/// `rewound`, what is known of the body as `standing` says: the manager's
+/// where the run before it changed nothing, found once for the body where it
+/// did.
+pub fn rewound_with(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &passes::Outer,
+    standing: &mut memory::Standing,
+    registers: i64,
+    costs: &OperationCosts,
+) -> bool {
     if registers == 0 || costs.add > costs.r#move || costs.memory_update > costs.load + costs.store {
         return false;
     }
-    let mut fresh = analyses.fresh();
-    let facts = fresh.get::<Registers>(context, layout, function);
-    let shape = fresh.get::<cfg::Shape>(context, layout, function);
+    let shape = standing.shape(function);
     let plan = {
-        let unit = memory::Unit::within(context, layout, function, analyses.outer()).with_shape(&shape);
-        _rewinding(&unit, &facts, registers)
+        let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        let facts = standing.of(&unit);
+        _rewinding(&unit, facts, registers)
     };
     let Some(plan) = plan else {
         return false;
@@ -774,7 +790,7 @@ pub fn widened_with(
 ) -> bool {
     let mut changed = false;
     'again: loop {
-        let shape = cfg::Shape::of(function);
+        let shape = standing.shape(function);
         for loop_ in shape.loops.clone() {
             let found = {
                 let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
