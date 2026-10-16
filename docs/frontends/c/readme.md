@@ -90,6 +90,11 @@ A program that includes `llrm_os.h` finds it without `-I`: the header is the
 target's OS layer interface. The target's physical addresses are defined as
 `PHYSICAL_<NAME>`.
 
+## Numbers as pointers
+
+A number used as a pointer (`NULL`, Open Watcom's `SIG_DFL` = `(handler)2`) is the pointer with those bits, whatever
+pointer it is used as: as a far pointer its segment is 0, not the data segment a near pointer would be given.
+
 ## `__attribute__`
 
 gcc's `__attribute__((...))` is read where gcc allows it on a declaration: before the type and after a declarator
