@@ -1315,6 +1315,34 @@ mod tests {
         assert!(loads.windows(2).all(|two| two[0] < two[1]), "{asm}");
     }
 
+    /// `__parm __caller []` inline code (`EnterDebuggerWithMessage`) finds its
+    /// argument on the stack and the caller takes it back. It was refused ("a
+    /// parameter on the stack"): `assert`, `dbgrpt` and `enterdb` did not
+    /// compile.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_finds_its_argument_on_the_stack_and_the_caller_pops_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("brk.c");
+        std::fs::write(
+            &source,
+            "extern void brk(const char __far *);\n#pragma aux brk __parm __caller [] = \"int 3\" \"jmp short L1\" 'W' 'V' \"L1:\"\n\
+             void t(const char __far *m) { brk(m); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brk.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "brk", None, &options).unwrap()).unwrap();
+        let (push, code, pop) =
+            (asm.find("push dx").expect(&asm), asm.find("db 0cch").expect(&asm), asm.find("add sp, 4").expect(&asm));
+        assert!(push < code && code < pop, "{asm}");
+    }
+
     /// A far pointer made from a long in memory had its segment as a word-wide
     /// view of the shifted dword, a second width of one value: the
     /// allocator loaded ES again on every iteration of the loop that stores

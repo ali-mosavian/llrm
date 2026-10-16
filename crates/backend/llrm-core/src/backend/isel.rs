@@ -5183,8 +5183,9 @@ impl Selector<'_, '_, '_> {
             bytes[offset..offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
             patched.push((offset, disp, addend));
         }
+        let pushed = arguments.get(patched.len()..).unwrap_or_default();
         self.inline_places.insert(at, patched);
-        self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
+        self.called(inst, convention, Callee::Inline(name, bytes), pushed, at, out)
     }
 
     /// The low and the high word of a dword: the words it was joined from, else
@@ -5564,7 +5565,10 @@ impl Selector<'_, '_, '_> {
             Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => {
                 self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?
             }
-            Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            // Arguments the code finds on the stack are popped after it.
+            Callee::Inline(..) => {
+                crate::abi::runtime::Contract { caller_cleanup: pushed, ..crate::abi::runtime::inline_code(&name) }
+            }
             _ if extra > 0 => self.abi.contract(&name, false, excess).map_err(Unselected)?,
             _ => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
         };

@@ -103,6 +103,11 @@ the register Open Watcom's compiler picks (a segment register always; otherwise 
 front end's. What it cannot
 express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
 
+Beyond plain registers: a parameter may be in `es`, a byte register takes the low byte of a byte or a word, a struct
+of 1, 2 or 4 bytes is answered as the integer of its size, a 64-bit value in four registers has the target's top word
+first (`quad` in `[frontend.registers]`), and `__parm __caller []` code finds its arguments on the stack, pushed in
+order and popped by the caller.
+
 ## The start-up and init segments
 
 With `-fentry-requests` (a program linked against Open Watcom's library; llrm's own runtime has no `_cstart_`) a module that defines `main` asks its linker for the start-up (`_cstart_`) and, where `main`
