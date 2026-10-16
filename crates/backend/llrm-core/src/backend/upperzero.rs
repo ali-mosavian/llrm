@@ -66,7 +66,6 @@
 //! [`crate::backend::exactaddress`] (`before`, `preheaded`), and the rewrite
 //! guards of the peephole (`upper_zero`).
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
@@ -361,7 +360,7 @@ pub fn hoisted(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let natural = loops::loops(&body.blocks, Some(body.entry));
     let zero = before(body);
-    let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
+    let untouched = |inside: &loops::Body, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))
@@ -445,7 +444,7 @@ pub fn established(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
-    let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
+    let untouched = |inside: &loops::Body, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))

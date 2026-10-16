@@ -51,7 +51,7 @@
 //! LLVM ScalarEvolution add recurrences read by `DependenceAnalysis`; gcc's
 //! `dr_analyze_innermost` and `access_fn` of `tree-data-ref.cc`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use llrm_mir::context::signed as signed_bits;
 use llrm_mir::dense::IdMap;
@@ -193,7 +193,7 @@ impl Lin {
 
 struct Addresses<'a> {
     unit: &'a memory::Unit<'a>,
-    variant: &'a BTreeSet<i64>,
+    variant: &'a llrm_mir::forest::Body,
     /// The counters of the loops, as functions of the iteration number.
     counters: IdMap<ValueId, Lin>,
 }
@@ -202,7 +202,7 @@ impl<'a> Addresses<'a> {
     fn new(
         unit: &'a memory::Unit<'a>,
         counters: &[&Loop],
-        variant: &'a BTreeSet<i64>,
+        variant: &'a llrm_mir::forest::Body,
     ) -> Self {
         let function = unit.function;
         let mut me = Self { unit, variant, counters: IdMap::new() };
@@ -346,8 +346,8 @@ fn defined(
 pub fn references(
     unit: &memory::Unit,
     counters: &[&Loop],
-    variant: &BTreeSet<i64>,
-    scanned: &BTreeSet<i64>,
+    variant: &llrm_mir::forest::Body,
+    scanned: &llrm_mir::forest::Body,
     roots: &mut Roots,
 ) -> Option<Vec<Reference>> {
     assert!(counters.len() <= 2, "an access is affine in at most two counters");

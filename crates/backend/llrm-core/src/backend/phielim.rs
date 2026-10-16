@@ -26,7 +26,10 @@
 //!
 //! Otherwise a predecessor with several successors makes the edge critical. A
 //! copy there may run in the predecessor only if no other path reads either end
-//! of it (`_observed`) and, where block odds are known, the edge is not cheaper
+//! of it (`_observed`: whether a block that reads it is reachable from the
+//! predecessor's other successors without entering the successor, searched
+//! from both ends so that the smaller region is walked) and, where block odds
+//! are known, the edge is not cheaper
 //! (`EdgePrices::cheaper_on_edge`: the edge's chance times copies plus a `jmp`
 //! against the copies run every time). Otherwise the copy goes in a new block
 //! on the edge, which holds its copies and a jump to the successor:
@@ -251,6 +254,7 @@ pub fn eliminated_priced(
     };
 
     let once = _read_once(body);
+    let flow = Flow::of(body);
     // One per predecessor->successor edge. Every move a phi becomes on
     // that edge is simultaneous with the others and with none outside it.
     let mut groups: IndexMap<(i64, i64), i64> = IndexMap::default();
@@ -292,7 +296,7 @@ pub fn eliminated_priced(
                             || !floating.contains(&phi.result)
                                 && (_observed(&reaches, &at_of, w, block.at, phi.result)
                                     || _observed(&reaches, &at_of, w, block.at, v))
-                                && _read_past_loop(&at_of, block.at, w, v))
+                                && _read_past_loop(&flow, block.at, w, v))
                         && _defined_in_place(at_of[&w], v, phi.result)
                         && !_live_after(&at_of, block.at, w, v, phi.result)
                 }) {
@@ -470,6 +474,20 @@ pub struct Reaches {
     readers: IndexMap<u32, Vec<usize>>,
     /// A successor with no block: the walk's answer there is "read".
     open: bool,
+    /// Each block's successors and predecessors, by place; and marks for the
+    /// searches, made once.
+    next: Vec<Vec<usize>>,
+    before: Vec<Vec<usize>>,
+    marks: std::cell::RefCell<Marks>,
+}
+
+/// Which blocks a search from each end has been to: a mark is the search's
+/// number, so no search clears what an earlier one left.
+#[derive(Default)]
+struct Marks {
+    search: u32,
+    forward: Vec<u32>,
+    backward: Vec<u32>,
 }
 
 impl Reaches {
@@ -487,8 +505,23 @@ impl Reaches {
             .iter()
             .map(|block| block.succ.iter().filter_map(|at| index.get(at).copied()).collect())
             .collect();
+        let mut before: Vec<Vec<usize>> = vec![Vec::new(); count];
+        for (at, list) in successors.iter().enumerate() {
+            for &to in list {
+                before[to].push(at);
+            }
+        }
+        let marks = std::cell::RefCell::new(Marks { search: 0, forward: vec![0; count], backward: vec![0; count] });
         if open {
-            return Self { index, reach: Vec::new(), readers: IndexMap::default(), open };
+            return Self {
+                index,
+                reach: Vec::new(),
+                readers: IndexMap::default(),
+                open,
+                next: successors,
+                before,
+                marks,
+            };
         }
         let mut reach = vec![vec![0_u64; words]; count];
         for (at, row) in reach.iter_mut().enumerate() {
@@ -529,10 +562,80 @@ impl Reaches {
                 }
             }
         }
-        Self { index, reach, readers, open }
+        Self { index, reach, readers, open, next: successors, before, marks }
     }
 
     /// Whether no block reachable from `starts` reads `value`.
+    /// Whether a block that reads `value` can be reached from `starts` without
+    /// entering `barrier`, searched from both ends a block at a time: the
+    /// answer is found, or shown not to be, in the smaller of the two regions.
+    /// `None` where a successor has no block (the caller walks).
+    fn read_beyond(
+        &self,
+        starts: &[i64],
+        barrier: i64,
+        value: u32,
+    ) -> Option<bool> {
+        if self.open {
+            return None;
+        }
+        let barrier = self.index.get(&barrier).copied();
+        let begin: Vec<usize> = starts.iter().filter_map(|at| self.index.get(at).copied()).collect();
+        let Some(readers) = self.readers.get(&value) else { return Some(false) };
+        let mut marks = self.marks.borrow_mut();
+        marks.search += 1;
+        let search = marks.search;
+        let (mut forward, mut backward): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
+        for &at in &begin {
+            if Some(at) != barrier && marks.forward[at] != search {
+                marks.forward[at] = search;
+                forward.push(at);
+            }
+        }
+        for &at in readers {
+            if Some(at) != barrier && marks.backward[at] != search {
+                marks.backward[at] = search;
+                backward.push(at);
+            }
+        }
+        // Met at a block either end has reached.
+        if forward.iter().any(|&at| marks.backward[at] == search) {
+            return Some(true);
+        }
+        let (mut ahead, mut behind) = (0, 0);
+        while ahead < forward.len() && behind < backward.len() {
+            // One block from the end whose frontier is the smaller.
+            if forward.len() - ahead <= backward.len() - behind {
+                let at = forward[ahead];
+                ahead += 1;
+                for &to in &self.next[at] {
+                    if Some(to) == barrier || marks.forward[to] == search {
+                        continue;
+                    }
+                    marks.forward[to] = search;
+                    if marks.backward[to] == search {
+                        return Some(true);
+                    }
+                    forward.push(to);
+                }
+            } else {
+                let at = backward[behind];
+                behind += 1;
+                for &from in &self.before[at] {
+                    if Some(from) == barrier || marks.backward[from] == search {
+                        continue;
+                    }
+                    marks.backward[from] = search;
+                    if marks.forward[from] == search {
+                        return Some(true);
+                    }
+                    backward.push(from);
+                }
+            }
+        }
+        Some(false)
+    }
+
     fn unread_from(
         &self,
         starts: &[i64],
@@ -564,7 +667,7 @@ pub fn _observed(
     into: i64,
     value: u32,
 ) -> bool {
-    let mut pending: Vec<i64> = at_of[&where_].succ.iter().copied().filter(|&at| at != into).collect();
+    let pending: Vec<i64> = at_of[&where_].succ.iter().copied().filter(|&at| at != into).collect();
     // A phi reads on the incoming edge, before any instruction in its block.
     if pending.iter().any(|at| {
         at_of.get(at).is_some_and(|block| block.phis.iter().any(|phi| phi.incoming.contains(&(where_, value))))
@@ -575,6 +678,29 @@ pub fn _observed(
     if reaches.unread_from(&pending, value) {
         return false;
     }
+    if let Some(answer) = reaches.read_beyond(&pending, into, value) {
+        if llrm_support::env_set("LLRM_CHECK_OBSERVED") {
+            assert_eq!(
+                answer,
+                _observed_walk(at_of, &pending, where_, into, value),
+                "LLRM_CHECK_OBSERVED: b{where_} to b{into}, v{value}"
+            );
+        }
+        return answer;
+    }
+    _observed_walk(at_of, &pending, where_, into, value)
+}
+
+/// The blocks reachable from `pending` without entering `into`, walked for a
+/// read of `value`.
+fn _observed_walk(
+    at_of: &IndexMap<i64, &Block>,
+    pending: &[i64],
+    _where: i64,
+    into: i64,
+    value: u32,
+) -> bool {
+    let mut pending: Vec<i64> = pending.to_vec();
     let mut seen: BTreeSet<i64> = pending.iter().copied().collect();
     while let Some(at) = pending.pop() {
         WALKED.with(|walked| walked.set(walked.get() + 1));
@@ -677,7 +803,7 @@ fn _live_after(
 /// result with an argument they do not interfere (`tree-ssa-coalesce`) whoever
 /// else reads the argument.
 fn _read_past_loop(
-    at_of: &IndexMap<i64, &Block>,
+    flow: &Flow,
     header: i64,
     from: i64,
     value: u32,
@@ -690,27 +816,63 @@ fn _read_past_loop(
         if !inside.insert(at) {
             continue;
         }
-        let preds: Vec<i64> = at_of.values().filter(|block| block.succ.contains(&at)).map(|block| block.at).collect();
+        let preds = flow.preds.get(&at).map_or(&[][..], Vec::as_slice);
         if preds.is_empty() && at != header {
             return false;
         }
-        pending.extend(preds);
+        pending.extend(preds.iter().copied());
     }
-    at_of.values().all(|block| {
-        let in_loop = inside.contains(&block.at);
-        let phis_ok = block.phis.iter().all(|phi| {
-            phi.incoming.iter().all(|&(edge, read)| read != value || (edge == from && (block.at == header || !in_loop)))
-        });
-        let insns_ok = !block
-            .insns
-            .iter()
-            .any(
-                |one| (one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
-                    && in_loop
-                    && block.at != from,
-            );
-        phis_ok && insns_ok
-    })
+    // Only the reads of the value are looked at, not every block of the body.
+    let phis_ok = flow
+        .phi_reads
+        .get(&value)
+        .into_iter()
+        .flatten()
+        .all(|&(block, edge)| edge == from && (block == header || !inside.contains(&block)));
+    let insns_ok =
+        flow.insn_reads.get(&value).into_iter().flatten().all(|&block| !(inside.contains(&block) && block != from));
+    phis_ok && insns_ok
+}
+
+/// Where the values are read and which blocks lead to which: found once for
+/// the body, for the walks of `_read_past_loop`, each of which looked at every
+/// block of the body.
+struct Flow {
+    preds: IndexMap<i64, Vec<i64>>,
+    /// Per value, the blocks whose instructions read it (or require it).
+    insn_reads: IndexMap<u32, Vec<i64>>,
+    /// Per value, the (block, edge) of each phi that reads it.
+    phi_reads: IndexMap<u32, Vec<(i64, i64)>>,
+}
+
+impl Flow {
+    fn of(body: &LirBody) -> Self {
+        let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
+        let mut insn_reads: IndexMap<u32, Vec<i64>> = IndexMap::default();
+        let mut phi_reads: IndexMap<u32, Vec<(i64, i64)>> = IndexMap::default();
+        for block in &body.blocks {
+            for &to in &block.succ {
+                let list = preds.entry(to).or_default();
+                if !list.contains(&block.at) {
+                    list.push(block.at);
+                }
+            }
+            for one in &block.insns {
+                for &value in one.uses.iter().chain(one.requires.iter().map(|(held, _)| &held.value)) {
+                    let list = insn_reads.entry(value).or_default();
+                    if list.last() != Some(&block.at) {
+                        list.push(block.at);
+                    }
+                }
+            }
+            for phi in &block.phis {
+                for &(edge, read) in &phi.incoming {
+                    phi_reads.entry(read).or_default().push((block.at, edge));
+                }
+            }
+        }
+        Self { preds, insn_reads, phi_reads }
+    }
 }
 
 /// Whether the instruction defining `value` may define `result` instead: not
@@ -1628,6 +1790,234 @@ mod tests {
         let before = super::walked();
         assert!(!_observed(&Reaches::new(&long, &at_of), &at_of, 0, 1, 7));
         assert_eq!(super::walked() - before, 0, "a walk down {tail} blocks that read nothing");
+    }
+
+    /// `_observed` as it was, a walk out from the successors for a read.
+    fn walked(
+        at_of: &IndexMap<i64, &Block>,
+        where_: i64,
+        into: i64,
+        value: u32,
+    ) -> bool {
+        let mut pending: Vec<i64> = at_of[&where_].succ.iter().copied().filter(|&at| at != into).collect();
+        if pending.iter().any(|at| {
+            at_of.get(at).is_some_and(|block| block.phis.iter().any(|phi| phi.incoming.contains(&(where_, value))))
+        }) {
+            return true;
+        }
+        let mut seen: BTreeSet<i64> = pending.iter().copied().collect();
+        while let Some(at) = pending.pop() {
+            let Some(block) = at_of.get(&at) else { return true };
+            if block
+                .insns
+                .iter()
+                .any(|one| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
+            {
+                return true;
+            }
+            for &successor in &block.succ {
+                if at_of
+                    .get(&successor)
+                    .is_some_and(|follower| follower.phis.iter().any(|phi| phi.incoming.contains(&(block.at, value))))
+                {
+                    return true;
+                }
+                if successor != into && seen.insert(successor) {
+                    pending.push(successor);
+                }
+            }
+        }
+        false
+    }
+
+    /// `_read_past_loop` as it was: every block of the body looked at for each
+    /// ask (a nest of 128 loops: 417 M instructions for 263 asks).
+    fn read_past_loop_by_scan(
+        at_of: &IndexMap<i64, &Block>,
+        header: i64,
+        from: i64,
+        value: u32,
+    ) -> bool {
+        let mut inside: BTreeSet<i64> = BTreeSet::from([header]);
+        let mut pending = vec![from];
+        while let Some(at) = pending.pop() {
+            if !inside.insert(at) {
+                continue;
+            }
+            let preds: Vec<i64> =
+                at_of.values().filter(|block| block.succ.contains(&at)).map(|block| block.at).collect();
+            if preds.is_empty() && at != header {
+                return false;
+            }
+            pending.extend(preds);
+        }
+        at_of
+            .values()
+            .all(
+                |block| {
+                    let in_loop = inside.contains(&block.at);
+                    let phis_ok = block.phis.iter().all(|phi| {
+                        phi.incoming
+                            .iter()
+                            .all(|&(edge, read)| read != value || (edge == from && (block.at == header || !in_loop)))
+                    });
+                    let insns_ok = !block.insns.iter().any(|one| {
+                        (one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value))
+                            && in_loop
+                            && block.at != from
+                    });
+                    phis_ok && insns_ok
+                },
+            )
+    }
+
+    /// The indexes of reads and of predecessors give what looking at every
+    /// block gave, on graphs of every shape.
+    #[test]
+    fn test_a_read_past_a_loop_is_found_from_the_reads_as_the_scan_finds_it() {
+        let mut seed = 0x1234_5678_9abc_def1_u64;
+        let mut next = move |bound: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % bound
+        };
+        let push = |at: i64, value: u32| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Push, "push", vec![], vec![held(value, 2)], None),
+                vec![],
+                vec![value],
+            ))
+        };
+        for _ in 0..300 {
+            let size = 2 + next(9) as i64;
+            let succs: Vec<Vec<i64>> =
+                (0..size).map(|_| (0..next(3)).map(|_| next(size as u64) as i64).collect()).collect();
+            let blocks: Vec<Block> = (0..size)
+                .map(|at| {
+                    let insns = if next(3) == 0 { vec![push(at, 7 + next(3) as u32)] } else { Vec::new() };
+                    let preds: Vec<i64> = (0..size).filter(|from| succs[*from as usize].contains(&at)).collect();
+                    let phis = match preds.get(next(4) as usize) {
+                        Some(&from) => vec![Phi { result: 20 + at as u32, incoming: vec![(from, 7 + next(3) as u32)] }],
+                        None => Vec::new(),
+                    };
+                    Block::from(block(at, insns, succs[at as usize].clone(), phis))
+                })
+                .collect();
+            let graph = body("random", blocks);
+            let at_of: IndexMap<i64, &Block> = graph.blocks.iter().map(|block| (block.at, block)).collect();
+            let flow = super::Flow::of(&graph);
+            for from in 0..size {
+                for &header in &succs[from as usize] {
+                    for value in 7..10 {
+                        assert_eq!(
+                            super::_read_past_loop(&flow, header, from, value),
+                            read_past_loop_by_scan(&at_of, header, from, value),
+                            "b{from} to b{header}, v{value} in {succs:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A read reachable only through the block the copy goes into is no read:
+    /// the answer was found by walking all of the blocks the start reaches (a
+    /// chain of any length before it joins `into`); from the reader's end there
+    /// is nothing to walk.
+    #[test]
+    fn test_a_read_only_through_the_block_copied_into_is_no_walk() {
+        let push = |at: i64, value: u32| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Push, "push", vec![], vec![held(value, 2)], None),
+                vec![],
+                vec![value],
+            ))
+        };
+        let into = 100_000;
+        let chain = 2000;
+        let mut blocks: Vec<Block> = vec![block(0, vec![], vec![into, 1], vec![]).into()];
+        blocks.extend(
+            (1..=chain).map(|at| Block::from(block(at, vec![], vec![if at == chain { into } else { at + 1 }], vec![]))),
+        );
+        blocks.push(block(into, vec![push(into, 7)], vec![], vec![]).into());
+        let graph = body("chain", blocks);
+        let at_of: IndexMap<i64, &Block> = graph.blocks.iter().map(|block| (block.at, block)).collect();
+        let reaches = Reaches::new(&graph, &at_of);
+        let before = super::walked();
+        assert!(!_observed(&reaches, &at_of, 0, into, 7));
+        assert_eq!(super::walked(), before, "the chain was walked");
+    }
+
+    /// The walk visited every block a start reaches before it said no: a read
+    /// that only a path through `into` reaches, or none, cost the whole
+    /// region (nest of 128 loops: 224 M instructions for 1,516 asks). Searched
+    /// from both ends it is the smaller region, and the answer is the same on
+    /// every graph.
+    #[test]
+    fn test_a_read_beyond_a_block_is_found_from_either_end_as_the_walk_finds_it() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move |bound: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % bound
+        };
+        let push = |at: i64, value: u32| {
+            Arc::new(Insn::new(
+                at,
+                Some((at, at + 1)),
+                what(Operation::Push, "push", vec![], vec![held(value, 2)], None),
+                vec![],
+                vec![value],
+            ))
+        };
+        for _ in 0..300 {
+            let size = 2 + next(9) as i64;
+            let succs: Vec<Vec<i64>> =
+                (0..size).map(|_| (0..next(3)).map(|_| next(size as u64) as i64).collect()).collect();
+            let blocks: Vec<Block> = (0..size)
+                .map(|at| {
+                    let insns = if next(3) == 0 { vec![push(at, 7 + next(3) as u32)] } else { Vec::new() };
+                    // A phi reads on an edge there is.
+                    let preds: Vec<i64> = (0..size).filter(|from| succs[*from as usize].contains(&at)).collect();
+                    let phis = match preds.get(next(4) as usize) {
+                        Some(&from) => vec![Phi { result: 20 + at as u32, incoming: vec![(from, 7 + next(3) as u32)] }],
+                        None => Vec::new(),
+                    };
+                    Block::from(block(at, insns, succs[at as usize].clone(), phis))
+                })
+                .collect();
+            let graph = body("random", blocks);
+            let at_of: IndexMap<i64, &Block> = graph.blocks.iter().map(|block| (block.at, block)).collect();
+            let reaches = Reaches::new(&graph, &at_of);
+            for block in &graph.blocks {
+                for &into in &block.succ {
+                    for value in 7..10 {
+                        assert_eq!(
+                            _observed(&reaches, &at_of, block.at, into, value),
+                            walked(&at_of, block.at, into, value),
+                            "b{} to b{into}, v{value} in {:?}",
+                            block.at,
+                            graph
+                                .blocks
+                                .iter()
+                                .map(|one| (
+                                    one.at,
+                                    one.succ.to_vec(),
+                                    one.insns.iter().map(|i| i.uses.clone()).collect::<Vec<_>>(),
+                                    one.phis.iter().map(|p| p.incoming.clone()).collect::<Vec<_>>()
+                                ))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -77,6 +77,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+pub use llrm_mir::forest::Body;
 pub use llrm_support::graph::{Dominance, Dominates, Node, dominance, dominators, predecessors, reverse_postorder};
 use llrm_support::hash::IndexMap;
 
@@ -89,7 +90,7 @@ pub struct Loop {
     /// every block whose own edge goes back to the header
     pub latches: BTreeSet<i64>,
     /// every block in the loop, the header included
-    pub body: BTreeSet<i64>,
+    pub body: Body,
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
@@ -109,31 +110,6 @@ pub fn back_edges<N: Node>(
     found
 }
 
-/// Everything that reaches the latch without going back through the header.
-///
-/// The header goes in before the walk starts, which is what stops it.
-pub fn _body(
-    latch: i64,
-    header: i64,
-    preds: &BTreeMap<i64, BTreeSet<i64>>,
-) -> BTreeSet<i64> {
-    let mut body = BTreeSet::from([header]);
-    if latch == header {
-        return body;
-    }
-    body.insert(latch);
-    let mut pending = vec![latch];
-    while let Some(at) = pending.pop() {
-        for &one in preds.get(&at).into_iter().flatten() {
-            if !body.contains(&one) {
-                body.insert(one);
-                pending.push(one);
-            }
-        }
-    }
-    body
-}
-
 /// Every natural loop, innermost first where they nest.
 ///
 /// Back edges sharing a header are one loop whose body is the union of
@@ -143,18 +119,17 @@ pub fn loops<N: Node>(
     entry: Option<i64>,
 ) -> Vec<Loop> {
     let doms = dominance(blocks, entry);
-    let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
-
-    let mut latches: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    let mut bodies: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
-    for (latch, header) in back_edges(blocks, &*doms) {
-        latches.entry(header).or_default().insert(latch);
-        bodies.entry(header).or_default().extend(_body(latch, header, &preds));
-    }
-
-    let mut found = latches
-        .iter()
-        .map(|(&header, latch)| Loop { header, latches: latch.clone(), body: bodies[&header].clone() })
+    let nodes: Vec<(i64, &[i64])> = blocks.iter().map(|block| (block.at(), block.succ())).collect();
+    let forest =
+        std::rc::Rc::new(llrm_mir::forest::forest(&nodes, entry, &|at| doms.reachable(at), &|dominator, at| {
+            doms.dominates(dominator, at)
+        }));
+    let mut found = (0..forest.loops.len())
+        .map(|index| Loop {
+            header: forest.loops[index].header,
+            latches: forest.loops[index].latches.iter().copied().collect(),
+            body: Body::new(&forest, index),
+        })
         .collect::<Vec<_>>();
     found.sort_by_key(|loop_| loop_.body.len());
     found

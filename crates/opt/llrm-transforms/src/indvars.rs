@@ -137,6 +137,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::cfg::Around;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, Affine, AffineOperand};
@@ -637,12 +638,9 @@ fn _rewinding(
     }
     let dominance = &shape.dominance;
     let live = liveness::live(function);
-    let graph = cfg::graph(function);
     for inner in found {
-        let Some(parent) = found
-            .iter()
-            .filter(|parent| inner.body.is_subset(&parent.body) && inner.body != parent.body)
-            .min_by_key(|parent| parent.body.len())
+        let Some(parent) =
+            inner.body.parent_header().and_then(|header| found.iter().find(|parent| parent.header == header))
         else {
             continue;
         };
@@ -665,11 +663,7 @@ fn _rewinding(
         {
             continue;
         }
-        let exiting = graph
-            .iter()
-            .filter(|block| inner.body.contains(&block.at))
-            .flat_map(|block| block.succ.iter().filter(|at| !inner.body.contains(at)).map(move |at| (block.at, *at)))
-            .collect::<Vec<_>>();
+        let exiting = inner.exits(function);
         let exits = exiting.iter().map(|(_, target)| *target).collect::<BTreeSet<_>>();
         let [exit] = exits.into_iter().collect::<Vec<_>>()[..] else {
             continue;

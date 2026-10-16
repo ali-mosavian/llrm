@@ -104,7 +104,10 @@ fn test_disconnected_cycle_has_no_dominators_or_natural_loops() {
 #[test]
 fn test_dead_edge_into_latch_is_not_part_of_live_loop() {
     let chain = [block(0, &[1]), block(1, &[2, 3]), block(2, &[1]), block(3, &[]), block(9, &[2])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[2]), body: set(&[1, 2]) }]);
+    assert_eq!(
+        loops(&chain, None),
+        vec![Loop { header: 1, latches: set(&[2]), body: Body::from_blocks(set(&[1, 2])) }]
+    );
 }
 
 #[test]
@@ -249,7 +252,7 @@ fn test_the_forest_visits_each_block_once_however_deep_the_nest() {
         let found = forest_of(&blocks, Some(0));
         let forest_visits = llrm_mir::forest::forest_visits() - before;
         let flood = flooded(&blocks, Some(0));
-        assert_eq!(named(&found), flood);
+        assert_eq!(flat(&named(&found)), flood);
         (forest_visits, FLOOD_VISITS.with(|one| one.get()))
     };
     let (small_forest, small_flood) = visits(30);
@@ -282,12 +285,17 @@ fn test_the_forest_is_the_loops_a_flood_names_on_any_graph() {
             .collect();
         let found = forest_of(&graph, Some(0));
         let want = flooded(&graph, Some(0));
-        assert_eq!(named(&found), want, "{:?}", graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>());
+        assert_eq!(
+            flat(&named(&found)),
+            want,
+            "{:?}",
+            graph.iter().map(|one| (one.at, one.succ.clone())).collect::<Vec<_>>()
+        );
         for at in 0..size {
-            let depth = want.iter().filter(|one| one.body.contains(&at)).count() as u32;
+            let depth = want.iter().filter(|one| one.2.contains(&at)).count() as u32;
             assert_eq!(found.depth(at), depth, "depth of {at}");
             for (index, one) in found.loops.iter().enumerate() {
-                let holds = want.iter().find(|loop_| loop_.header == one.header).unwrap().body.contains(&at);
+                let holds = want.iter().find(|loop_| loop_.0 == one.header).unwrap().2.contains(&at);
                 assert_eq!(found.contains(index, at), holds, "loop {} holding {at}", one.header);
             }
         }

@@ -1460,7 +1460,7 @@ pub fn bounded_solved(
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
-        let mut inside = loop_.body.clone();
+        let mut inside: BTreeSet<i64> = loop_.body.iter().copied().collect();
         if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
             inside.remove(&loop_.header);
         }

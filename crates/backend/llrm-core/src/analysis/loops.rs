@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-pub use llrm_mir::forest::{Forest, TreeLoop};
+pub use llrm_mir::forest::{Body, Forest, TreeLoop};
 pub use llrm_support::graph::{Dominance, Node};
 
 use crate::model::lir::LirBlock;
@@ -150,7 +150,7 @@ pub struct Loop {
     /// every block whose own edge goes back to the header
     pub latches: BTreeSet<i64>,
     /// every block in the loop, the header included
-    pub body: BTreeSet<i64>,
+    pub body: Body,
 }
 
 /// (latch, header) for every edge to a block that dominates its source.
@@ -214,7 +214,10 @@ pub fn loops<N: Node>(
         || {
             let named = named(&forest_of(blocks, entry));
             if llrm_support::env_set("LLRM_CHECK_LOOPS") {
-                assert!(named == flooded(blocks, entry), "LLRM_CHECK_LOOPS: the forest's loops differ from a flood");
+                assert!(
+                    flat(&named) == flooded(blocks, entry),
+                    "LLRM_CHECK_LOOPS: the forest's loops differ from a flood"
+                );
             }
             Rc::new(named)
         },
@@ -223,12 +226,12 @@ pub fn loops<N: Node>(
 }
 
 /// The loops as `loops` gives them: bodies named, innermost first.
-fn named(forest: &Forest) -> Vec<Loop> {
+fn named(forest: &Rc<Forest>) -> Vec<Loop> {
     let mut found: Vec<Loop> = (0..forest.loops.len())
         .map(|index| Loop {
             header: forest.loops[index].header,
             latches: forest.loops[index].latches.iter().copied().collect(),
-            body: forest.blocks(index).collect(),
+            body: Body::new(forest, index),
         })
         .collect();
     found.sort_by_key(|loop_| loop_.body.len());
@@ -260,7 +263,7 @@ pub fn forest_of<N: Node>(
 fn flooded<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
-) -> Vec<Loop> {
+) -> Vec<(i64, BTreeSet<i64>, BTreeSet<i64>)> {
     let doms = dominance(blocks, entry);
     let preds = predecessors(&blocks.iter().filter(|block| doms.reachable(block.at())).collect::<Vec<_>>());
 
@@ -271,12 +274,15 @@ fn flooded<N: Node>(
         bodies.entry(header).or_default().extend(_body(latch, header, &preds));
     }
 
-    let mut found = latches
-        .iter()
-        .map(|(&header, latch)| Loop { header, latches: latch.clone(), body: bodies[&header].clone() })
-        .collect::<Vec<_>>();
-    found.sort_by_key(|loop_| loop_.body.len());
+    let mut found =
+        latches.iter().map(|(&header, latch)| (header, latch.clone(), bodies[&header].clone())).collect::<Vec<_>>();
+    found.sort_by_key(|loop_| loop_.2.len());
     found
+}
+
+/// The loops as sets, to hold them to a flood.
+pub(crate) fn flat(loops: &[Loop]) -> Vec<(i64, BTreeSet<i64>, BTreeSet<i64>)> {
+    loops.iter().map(|one| (one.header, one.latches.clone(), one.body.to_set())).collect()
 }
 
 /// Blocks left in a cycle once every natural loop's back edge is cut.

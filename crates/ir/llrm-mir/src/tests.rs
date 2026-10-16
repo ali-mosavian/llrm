@@ -747,7 +747,7 @@ fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
         assert!(one.blocks.contains(&latch) && one.blocks.contains(&header));
         assert_eq!(info.depth(latch), (at + 1) as u32);
     }
-    assert!(info.loops[depth - 1].blocks.iter().any(|block| function.block(block).name.as_deref() == Some("body")));
+    assert!(info.loops[depth - 1].blocks.iter().any(|&block| function.block(block).name.as_deref() == Some("body")));
 }
 
 /// Twice the nest, twice the walk: the blocks a function's loops are found in

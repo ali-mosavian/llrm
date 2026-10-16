@@ -36,6 +36,10 @@ pub struct Forest {
     ats: Vec<i64>,
     /// Each block's innermost loop by place in `ats`; `NONE` outside any.
     innermost: Vec<u32>,
+    /// Where an address stands in `ats`, by its distance from the lowest, when
+    /// the addresses lie close (a block's number in its function does): a
+    /// lookup is then an index, not a search.
+    table: Vec<u32>,
 }
 
 const NONE: u32 = u32::MAX;
@@ -46,7 +50,15 @@ impl Forest {
         &self,
         at: i64,
     ) -> Option<usize> {
-        let slot = self.ats.binary_search(&at).ok()?;
+        let slot = if self.table.is_empty() {
+            self.ats.binary_search(&at).ok()?
+        } else {
+            let place = *self.table.get(usize::try_from(at.checked_sub(self.ats[0])?).ok()?)?;
+            if place == NONE {
+                return None;
+            }
+            place as usize
+        };
         (self.innermost[slot] != NONE).then(|| self.innermost[slot] as usize)
     }
 
@@ -85,6 +97,192 @@ impl Forest {
                 now = self.loops[one].own.iter();
             }
         })
+    }
+}
+
+/// The blocks of one loop, those of the loops inside it too, as the forest
+/// holds them: whether a block is in it is a lookup, and they are named, in
+/// ascending order, the first time they are walked.
+#[derive(Clone)]
+pub struct Body {
+    forest: std::rc::Rc<Forest>,
+    index: usize,
+    /// Blocks put in since, by a pass that keeps the loops up to date as it
+    /// edits (a block put on an edge); none in a loop as found.
+    added: std::collections::BTreeSet<i64>,
+    named: std::rc::Rc<std::cell::OnceCell<Vec<i64>>>,
+}
+
+impl Body {
+    pub fn new(
+        forest: &std::rc::Rc<Forest>,
+        index: usize,
+    ) -> Self {
+        Self {
+            forest: std::rc::Rc::clone(forest),
+            index,
+            added: std::collections::BTreeSet::new(),
+            named: std::rc::Rc::default(),
+        }
+    }
+
+    /// A body of the blocks named, in no function: a loop made for a caller
+    /// that has the blocks and not a forest.
+    pub fn from_blocks(blocks: impl IntoIterator<Item = i64>) -> Self {
+        let mut ats: Vec<i64> = blocks.into_iter().collect();
+        ats.sort_unstable();
+        ats.dedup();
+        let header = ats.first().copied().unwrap_or(0);
+        let forest = Forest {
+            loops: vec![TreeLoop {
+                header,
+                latches: Vec::new(),
+                parent: None,
+                children: Vec::new(),
+                own: ats.clone(),
+                size: ats.len(),
+                depth: 1,
+                enter: 0,
+                last: 0,
+            }],
+            innermost: vec![0; ats.len()],
+            table: lookup(&ats),
+            ats,
+        };
+        Self::new(&std::rc::Rc::new(forest), 0)
+    }
+
+    pub fn contains(
+        &self,
+        at: &i64,
+    ) -> bool {
+        self.forest.contains(self.index, *at) || self.added.contains(at)
+    }
+
+    /// This loop's place in its forest's `loops`.
+    pub fn index(&self) -> usize {
+        self.index
+    }
+
+    /// The forest this loop is in.
+    pub fn forest(&self) -> &std::rc::Rc<Forest> {
+        &self.forest
+    }
+
+    /// Puts `at` in; whether it was not.
+    pub fn insert(
+        &mut self,
+        at: i64,
+    ) -> bool {
+        if self.contains(&at) {
+            return false;
+        }
+        self.added.insert(at);
+        self.named = std::rc::Rc::default();
+        true
+    }
+
+    pub fn len(&self) -> usize {
+        self.forest.loops[self.index].size + self.added.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Whether every block of `other` is in this one: for loops of one forest,
+    /// whether `other` is this loop or inside it.
+    pub fn is_superset(
+        &self,
+        other: &Body,
+    ) -> bool {
+        if std::rc::Rc::ptr_eq(&self.forest, &other.forest) && self.added.is_empty() && other.added.is_empty() {
+            let (outer, inner) = (&self.forest.loops[self.index], &self.forest.loops[other.index]);
+            return outer.enter <= inner.enter && inner.enter <= outer.last;
+        }
+        other.len() <= self.len() && other.iter().all(|at| self.contains(at))
+    }
+
+    /// How many loops hold this one, itself counted.
+    pub fn depth(&self) -> u32 {
+        self.forest.loops[self.index].depth
+    }
+
+    /// The header of the loop holding this one, the nearest.
+    pub fn parent_header(&self) -> Option<i64> {
+        self.forest.loops[self.index].parent.map(|parent| self.forest.loops[parent].header)
+    }
+
+    /// Whether every block of this one is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Body,
+    ) -> bool {
+        other.is_superset(self)
+    }
+
+    /// The blocks as a set, for a caller that changes them.
+    pub fn to_set(&self) -> std::collections::BTreeSet<i64> {
+        self.iter().copied().collect()
+    }
+
+    /// The blocks in ascending order.
+    pub fn iter(&self) -> std::slice::Iter<'_, i64> {
+        self.named
+            .get_or_init(|| {
+                let mut found: Vec<i64> = self.forest.blocks(self.index).chain(self.added.iter().copied()).collect();
+                found.sort_unstable();
+                found
+            })
+            .iter()
+    }
+}
+
+impl std::fmt::Debug for Body {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for Body {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl PartialEq<std::collections::BTreeSet<i64>> for Body {
+    fn eq(
+        &self,
+        other: &std::collections::BTreeSet<i64>,
+    ) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl Eq for Body {}
+
+impl std::hash::Hash for Body {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.len().hash(state);
+        self.iter().for_each(|one| one.hash(state));
+    }
+}
+
+impl<'a> IntoIterator for &'a Body {
+    type Item = &'a i64;
+    type IntoIter = std::slice::Iter<'a, i64>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -238,7 +436,23 @@ pub fn forest(
         let children = loops[index].children.clone();
         pending.extend(children.into_iter().rev().map(|child| (child, false)));
     }
-    Forest { loops, ats, innermost }
+    let table = lookup(&ats);
+    Forest { loops, ats, innermost, table }
+}
+
+/// `ats`' places by distance from the first, when they lie within four times
+/// their number of it.
+fn lookup(ats: &[i64]) -> Vec<u32> {
+    let (Some(&first), Some(&last)) = (ats.first(), ats.last()) else { return Vec::new() };
+    let span = (last - first) as usize + 1;
+    if span > 4 * ats.len() + 64 {
+        return Vec::new();
+    }
+    let mut table = vec![NONE; span];
+    for (place, &at) in ats.iter().enumerate() {
+        table[(at - first) as usize] = place as u32;
+    }
+    table
 }
 
 thread_local! {

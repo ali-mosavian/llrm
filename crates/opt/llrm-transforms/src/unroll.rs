@@ -365,7 +365,8 @@ fn _shape(
         return None;
     };
     let header = loop_.header;
-    let [entry] = predecessors[&header].difference(&loop_.body).copied().collect::<Vec<_>>()[..] else {
+    let [entry] = predecessors[&header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>()[..]
+    else {
         return None;
     };
     let succ = &blocks[&header].succ;
@@ -455,7 +456,7 @@ fn _from(
 fn _expanded(
     function: &mut Function,
     shape: &Shape,
-    body: &BTreeSet<i64>,
+    body: &llrm_mir::forest::Body,
     count: i64,
 ) -> Result<(), String> {
     let header_phis = _phis(function, shape.header);

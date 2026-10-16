@@ -295,7 +295,7 @@ fn _moved(
         }
     }
     let Some(&latch) = loop_.latches.first() else { return Ok(moved) };
-    let outside = predecessors[&source].difference(&loop_.body).copied().collect::<Vec<_>>();
+    let outside = predecessors[&source].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
     if loop_.latches.len() != 1
         || source != loop_.header
         || outside.len() != 1

@@ -222,7 +222,8 @@ pub fn specialized(
     let cfg::Shape { dominance, loops: found, .. } = cfg::Shape::of(&closed);
     let predecessors = loops::predecessors(&graph);
     for loop_ in found {
-        let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside =
+            predecessors[&loop_.header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
         if outside.len() != 1
             || loop_.body.iter().map(|&at| operations(&closed, cfg::block(at)).len()).sum::<usize>() > 128
         {
