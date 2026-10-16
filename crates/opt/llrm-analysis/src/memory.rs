@@ -1622,20 +1622,6 @@ pub struct MemRef {
     pub provenance: Option<Provenance>,
 }
 
-/// The accesses worked out for a version of a function, and which version.
-struct Held {
-    key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Option<MemRef>>>>,
-}
-
-/// The most versions kept: the analyses of one function ask in a run, and a
-/// call summary asks of its callees in between.
-const ACCESS_VERSIONS: usize = 8;
-
-thread_local! {
-    static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
 impl MemRef {
     /// This reference with each value that `to` gives another operand named by
     /// it: the reference to the same bytes by the value that replaced one found
@@ -1769,50 +1755,28 @@ impl MemRef {
 
     /// The access instruction `inst` makes: a load's or a store's. It is a fact
     /// of the function's text alone (the pointer's chain of casts and offsets,
-    /// the access's type and width), so it is worked out once for each version
-    /// of the function, whichever of the analyses that read it asks first: a
-    /// quarter of the compile of d_faces was this, asked again by `escapes`,
-    /// `annotated`, `slotstores`, the summaries and the memory walks.
+    /// the access's type and width), so `references` keeps it across the
+    /// edits that do not reach its chain: asked by `escapes`, `annotated`,
+    /// `slotstores`, the summaries and the memory walks. A second table of
+    /// copies for each version of the function cost 89 M of d_faces' -O1
+    /// compile (3,295 to 3,206 M) and held nothing `references` does not.
     pub fn of(
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
-        let key = (unit.function.mark(), unit.spaces());
-        let held = ACCESSES.with(|held| {
-            let held = held.borrow();
-            held.iter().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
-        });
-        let seen = match held {
-            Some(seen) => seen,
-            None => ACCESSES.with(|held| {
-                let mut held = held.borrow_mut();
-                if held.len() >= ACCESS_VERSIONS {
-                    held.remove(0);
-                }
-                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_mir::dense::IdMap::new()));
-                held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
-                seen
-            }),
-        };
-        let found = seen.borrow().get(&inst).cloned();
-        let Some(mut found) = found else {
-            let made = crate::references::of(unit, inst).map(|one| (*one).clone());
-            seen.borrow_mut().insert(inst, made.clone());
-            return made;
-        };
+        let mut found = (*crate::references::of(unit, inst)?).clone();
+        crate::references::copy_made();
         // Metadata is attached without a change logged: the type is asked
         // again.
-        if let Some(access) = &mut found {
-            access.typed = typed(unit, inst);
-            access.lineage = lineage(unit, inst);
-        }
+        found.typed = typed(unit, inst);
+        found.lineage = lineage(unit, inst);
         if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
             assert!(
-                found == Self::derived(unit, inst),
+                Some(&found) == Self::derived(unit, inst).as_ref(),
                 "the held access of {inst:?} is not what deriving it again gives"
             );
         }
-        found
+        Some(found)
     }
 
     fn derived(

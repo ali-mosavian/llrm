@@ -51,7 +51,7 @@ the object, `low` and `width` are not enough, ask these, not the field.
 as BasicAA's `DecomposeGEPExpression` does: a `root`, a constant `disp`
 wrapped to the index width, and at most one variable index (`base`,
 `scale`), plus the width, `!tbaa` type and its ancestors (`lineage`), and
-`volatile`. `MemRef::of` builds it from a load or store (once for each version of the function: an instruction's access is a fact of its text; `LLRM_CHECK_ACCESSES` derives it again to compare), `filled` from a
+`volatile`. `MemRef::of` builds it from a load or store (kept by `references` across the edits that do not reach its chain: an instruction's access is a fact of its text; `LLRM_CHECK_ACCESSES` derives it again to compare), `filled` from a
 constant-length `memset`, `reach` from provenance alone (what a call's
 effect names). `named` says the bytes are fixed outright; `unwritable` that
 every object it may reach is `constant`.

@@ -76,6 +76,17 @@ use crate::memory::{MemRef, Unit};
 
 thread_local! {
     static BUILT: Cell<usize> = const { Cell::new(0) };
+    static COPIED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The copies of a kept reference `MemRef::of` has made on this thread.
+pub fn copied() -> usize {
+    COPIED.with(Cell::get)
+}
+
+/// A copy of a kept reference was made.
+pub(crate) fn copy_made() {
+    COPIED.with(|count| count.set(count.get() + 1));
 }
 
 /// The decompositions this thread has made.

@@ -124,3 +124,25 @@ fn test_a_value_replaced_by_another_drops_the_accesses_that_read_it() {
         }
     }
 }
+
+/// `MemRef::of` kept a second table of copies for each version of the function
+/// (an `IdMap` of accesses, refilled after every edit): each access of a new
+/// version was copied twice, once to answer and once into that table. 71,679
+/// inserts, 61.8 M of d_faces' 3,295 M at -O1, for a table that held nothing
+/// `references` does not. One copy an ask, whatever the version.
+#[test]
+fn test_an_ask_copies_the_kept_reference_once_after_an_edit_too() {
+    let mut module = module();
+    let _ = asked(&module);
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let y = value(function, "y");
+        let add =
+            function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(y)).unwrap();
+        function.set_operand(add, 1, Operand::Value(value(function, "x")));
+    }
+    let before = copied();
+    let (_, _, _) = asked(&module);
+    // Two accesses, asked three times each.
+    assert_eq!(copied() - before, 6, "an ask of a new version copied more than once");
+}
