@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """llrm-c's compile cost against clang's and gcc's, per level, on d_faces and chosen bench programs.
 
-    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-c]
+    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-c]   (builds the dist llrm-c if none is given)
 
 Prints user-space instructions of `-S` compiles (perf stat; best of 3 by cycles) for the three compilers, then for d_faces
 llrm's phases in own instructions (`LLRM_DEBUG=time`'s `[instr]`, summed by phase) beside clang's `-ftime-report`
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import os
 import re
 import subprocess
@@ -66,11 +67,27 @@ def clang_phases(level: str, args: list[str]) -> list[float]:
     return min(runs, key=lambda one: one[5])
 
 
+def dist_build() -> str:
+    """The tree's llrm-c as shipped (fat LTO, one codegen unit): compile-time claims quote it, as a release build
+    reads about 10% to 20% more instructions; gates stay on release."""
+    built = subprocess.run(
+        ["cargo", "build", "--profile", "dist", "--bin", "llrm-c", "--message-format=json"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if built.returncode:
+        sys.exit(f"dist build failed\n{built.stderr[-400:]}")
+    for line in reversed(built.stdout.splitlines()):
+        if '"executable":"' in line and '"name":"llrm-c"' in line:
+            return json.loads(line)["executable"]
+    sys.exit("no llrm-c in the build")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("llrm", nargs="?", default=str(ROOT / "crates/target/release/llrm-c"))
+    parser.add_argument("llrm", nargs="?", help="an llrm-c to measure; by default the tree's, built with the dist profile")
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     args = parser.parse_args()
+    args.llrm = args.llrm or dist_build()
     qc = Path(os.environ["QCPORT"]).expanduser()
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     inputs = {"d_faces": (str(qc / "render/d_faces.c"), KEYWORDS + includes)}
