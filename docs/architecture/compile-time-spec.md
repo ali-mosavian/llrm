@@ -30,11 +30,11 @@ Measured at -O1 on the fn, from `LLRM_DEBUG=time` and `runs` for llrm and from t
 | full analysis computation, per IR instruction | ~260 (1.95 G / 2508 / ~3000) | points-to ~3 k per constraint | | **≤ 300** for function-wide facts; points-to and memory SSA **≤ 3 k**; an update costs ≤ that per instruction it reaches |
 | spill or split event | ~4 M | spills in one LRA pass | ~0.2 M for the whole allocator; 28 k per `InlineSpiller::spill` | **≤ 0.2 M**, and ≤ 40 per LIR instruction of the edited range |
 | split candidate costed | ~200 k | | 23 k | **≤ 30 k** |
-| LIR clean-up, per block visit | ~8 k (0.98 G / 13 runs / ~40 sub-passes / ~240 blocks) | ~57 k per block per pass | ~5 k | **≤ 10 k per changed block**; after a pass's first visit, unchanged blocks are not visited |
+| LIR clean-up, per block visit | ~10 k (250 M peephole, jumps and floatassign / 290 blocks / 44 peephole sub-passes, once per function) | ~57 k per block per pass | ~5 k | **≤ 10 k per changed block**; after a pass's first visit, unchanged blocks are not visited |
 | allocations of a function | up to 6 | 1 | 1 | **1** |
 | LIR pipeline runs of a function | up to 3 | 1 | 1 | **1** |
 
-LIR clean-up already costs what LLVM's does per block visit. Its gap is the number of visits: 13 runs × ~40 sub-passes × every block, against about 10 passes once. MIR's gap is both: 60x per pass run, mostly analyses recomputed inside the run.
+LIR clean-up already costs what LLVM's does per block visit. Its gap is the number of visits: 44 peephole sub-passes each walk every block once (jumps adds 2 rounds over 11 functions; floatassign runs fully in 4 of 11), against about 10 passes once. No block is revisited; 33 of the 44 sub-passes change 6 or fewer of 290 blocks. MIR's gap is both: 60x per pass run, mostly analyses recomputed inside the run.
 
 ### 1.3 Budget per job, and what it makes d_faces
 
