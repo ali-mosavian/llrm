@@ -633,19 +633,19 @@ def test_a_blocks_edges_changed_is_asked_of_what_made_them_not_of_the_maps_on_th
     assert cost <= 700, cost
 
 
-def test_a_value_is_not_looked_for_above_its_definition_on_the_branches_axis(tmp_path):
+def test_the_bounds_of_a_body_cost_a_linear_work_on_the_branches_axis(tmp_path):
     """`analysis bounded` on `branches` read 108 -> 289 -> 864 -> 2,852 Minstr at N=256, 512, 1024, 2048 (2.7, 3.0, 3.3 per doubling):
-    each value asked at its own block walked the dominators to the entry for what is held above where it is made, and a value
-    defined far above was walked to again by every query. Once for each (value, block): 77 -> 161 -> 346 -> 770 (2.1, 2.2).
-    A doubling from 512 to 1024 above 2.5 fails."""
+    a value asked in its own block walked the dominators to the entry, one defined far above was walked to again by every query,
+    and each loop scanned every block and every loop (`layout().contains`, `loops_reached`). 77 -> 158 -> 331 -> 706 -> 1,374 at
+    N=256..4096 after (2.1 per doubling). Two steps of 4x from 1024 to 4096 above 4.5 (2.12 per doubling) fail; it read 4.7."""
     own = {}
-    for label, size in (("empty", 0), ("n", 512), ("2n", 1024)):
+    for label, size in (("empty", 0), ("n", 1024), ("4n", 4096)):
         source = tmp_path / f"branches_{label}.c"
         source.write_text("" if size == 0 else scaling.AXES["branches"](size))
         own[label] = gate.own_work(gate.levels_time.command("llrm", "O2", source))
-    small, big = (own[label].get("analysis bounded", 0.0) - own["empty"].get("analysis bounded", 0.0) for label in ("n", "2n"))
+    small, big = (own[label].get("analysis bounded", 0.0) - own["empty"].get("analysis bounded", 0.0) for label in ("n", "4n"))
     assert small > 0, "premise: the stage ran"
-    assert big <= 2.5 * small, f"analysis bounded {small:.0f} -> {big:.0f} Minstr"
+    assert big <= 4.5 * small, f"analysis bounded {small:.0f} -> {big:.0f} Minstr for 1024 -> 4096"
 
 
 def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):

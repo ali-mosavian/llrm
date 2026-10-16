@@ -2175,7 +2175,7 @@ pub fn basics(
     let function = unit.function;
     let header = cfg::block(loop_.header);
     let mut out = IndexMap::default();
-    if !function.layout().contains(&header) {
+    if !function.is_placed(header) {
         return out;
     }
     let inside = &loop_.body;
@@ -2382,7 +2382,7 @@ pub fn pointers(
     let inside = &loop_.body;
     let within = |inst: InstId| function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)));
     let mut out = Vec::new();
-    if !function.layout().contains(&header) {
+    if !function.is_placed(header) {
         return out;
     }
     for &inst in function.block(header).instructions() {

@@ -560,3 +560,29 @@ fn a_name_is_free_again_when_its_block_is_erased() {
     let again = f.create_block(Some("b"));
     assert_eq!(f.block(again).name.as_deref(), Some("b"));
 }
+
+/// `is_placed` answers in O(1) what a scan of the layout did
+/// (`induction::basics` asked it of every loop's header: N blocks scanned per
+/// loop, a quarter of `analysis bounded` at N=4096): it follows create, insert,
+/// erase and `delete_body`.
+#[test]
+fn a_block_is_placed_from_its_insertion_to_its_erasure() {
+    let text = "define i16 @f(i1 %c) {\nentry:\n  br i1 %c, label %yes, label %no\n\nyes:\n  ret i16 1\n\nno:\n  ret i16 2\n}\n";
+    let mut module = module(text);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let no = f.successors(entry)[1];
+    let made = f.create_block(None);
+    let agrees =
+        |f: &Function| (0..=made.0).map(BlockId).all(|block| f.is_placed(block) == f.layout().contains(&block));
+    assert!(!f.is_placed(made) && agrees(f), "a new block is in no layout");
+    f.insert_block(made, Some(entry)).expect("placed");
+    assert!(f.is_placed(made) && agrees(f), "an inserted one is");
+    let ret = f.terminator(no).unwrap();
+    f.move_to(ret, Position::End(made)).expect("moved");
+    f.replace_block_uses_with(no, made);
+    f.erase_block(no).expect("empty");
+    assert!(!f.is_placed(no) && agrees(f), "an erased one is not");
+    f.delete_body();
+    assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
+}
