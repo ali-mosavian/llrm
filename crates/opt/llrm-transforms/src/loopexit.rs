@@ -36,7 +36,10 @@
 //!   computes for itself is `lsr`'s.
 //!
 //! The pass repeats one loop at a time until nothing changes, deriving what is
-//! known of the body again after each.
+//! known of the body again after each. A loop looked at and left is not looked
+//! at again until a turn finds nothing, which then looks at every loop once
+//! more; the bounds of the body are worked out once a turn, for the first loop
+//! that needs them.
 //!
 //! # Example
 //! `s = 0; for (i = 0; i < 4; i++) s += i; return s`. Before:
@@ -186,15 +189,25 @@ pub fn evaluated_with(
     standing: &mut Standing,
 ) -> Result<bool, String> {
     let mut changed = false;
+    // Loops looked at and left, which a turn does not look at again. A full
+    // turn, after one finds nothing, confirms them against what the changes
+    // since have made of the facts.
+    let mut left = BTreeSet::new();
+    let mut full = false;
     loop {
-        let found = _evaluation(context, layout, function, outer, standing)?;
+        let found = _evaluation(context, layout, function, outer, standing, &mut left, full)?;
         match found {
+            None if !full && !left.is_empty() => {
+                full = true;
+                continue;
+            }
             None => return Ok(changed),
             Some(Evaluation::Deleted { header, exit, exits }) => _deleted(context, function, header, exit, &exits)?,
             Some(Evaluation::Constant { exit, following, swap }) => {
                 _substituted_exits(context, function, exit, &following, &swap)?
             }
         }
+        full = false;
         standing.reshaped();
         changed = true;
     }
@@ -207,6 +220,8 @@ fn _evaluation(
     function: &Function,
     outer: &Outer,
     standing: &mut Standing,
+    left: &mut BTreeSet<BlockId>,
+    full: bool,
 ) -> Result<Option<Evaluation>, String> {
     let shape = standing.shape(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
@@ -216,11 +231,19 @@ fn _evaluation(
         Some(bounds) => unit.with_bounds(bounds),
         None => unit,
     };
+    // Worked out once for the turn, for the first loop that asks.
+    let mut derived = None;
     for loop_ in shape.loops.iter() {
         let Some(&latch) = loop_.latches.first() else { continue };
         if loop_.body.len() != 2 || loop_.latches.len() != 1 || !edges::phis(function, cfg::block(latch)).is_empty() {
             continue;
         }
+        if !full && left.contains(&cfg::block(loop_.header)) {
+            continue;
+        }
+        #[cfg(test)]
+        EXAMINED.with(|count| count.set(count.get() + 1));
+        left.insert(cfg::block(loop_.header));
         let counters = induction::basics(&unit, &loop_);
         if counters.is_empty() {
             continue;
@@ -232,7 +255,7 @@ fn _evaluation(
             continue;
         };
         let Some(proof) = proofs.iter().find(|proof| proof.preheader.is_some()) else { continue };
-        let exits = _exit_terms(&unit, &loop_, &counters, &count, &facts)?;
+        let exits = _exit_terms(&unit, &loop_, &counters, &count, &facts, &mut derived)?;
         if exits.is_empty() {
             continue;
         }
@@ -243,10 +266,12 @@ fn _evaluation(
             .collect::<BTreeSet<_>>();
         if exits.keys().copied().collect::<BTreeSet<_>>() != phied || !_disposable(&unit, &loop_) {
             if let Some(found) = _constant_exits(function, &loop_, &exits, exit, &facts)? {
+                left.remove(&header);
                 return Ok(Some(found));
             }
             continue;
         }
+        left.remove(&header);
         return Ok(Some(Evaluation::Deleted { header, exit, exits }));
     }
     Ok(None)
@@ -305,12 +330,13 @@ fn _deleted(
 
 /// Sum a linear increment over N iterations using N(N-1)/2, before modular
 /// reduction.
-fn _exit_terms(
-    unit: &Unit,
+fn _exit_terms<'u>(
+    unit: &Unit<'u>,
     loop_: &Loop,
     counters: &IndexMap<ValueId, Affine>,
     count: &BigInt,
     facts: &IndexMap<ValueId, Known>,
+    derived: &mut Option<std::borrow::Cow<'u, ranges::Bounds>>,
 ) -> Result<IndexMap<ValueId, Terms>, String> {
     let function = unit.function;
     let phis = edges::phis(function, cfg::block(loop_.header));
@@ -325,7 +351,7 @@ fn _exit_terms(
             }));
         }
     }
-    let widened = _widened_counters(unit, loop_, counters, facts)?;
+    let widened = _widened_counters(unit, loop_, counters, facts, derived)?;
     headers.extend(widened.keys().copied());
     let mut counters = counters.clone();
     counters.extend(widened);
@@ -425,11 +451,12 @@ fn _exit_terms(
 
 /// Each counter a `sext` widens where ranges bound it at its own width,
 /// as the wide recurrence it is.
-fn _widened_counters(
-    unit: &Unit,
+fn _widened_counters<'u>(
+    unit: &Unit<'u>,
     loop_: &Loop,
     counters: &IndexMap<ValueId, Affine>,
     facts: &IndexMap<ValueId, Known>,
+    derived: &mut Option<std::borrow::Cow<'u, ranges::Bounds>>,
 ) -> Result<IndexMap<ValueId, Affine>, String> {
     let function = unit.function;
     let extensions = loop_
@@ -441,7 +468,14 @@ fn _widened_counters(
     if extensions.is_empty() {
         return Ok(IndexMap::default());
     }
-    let bounds = ranges::bounds(unit)?;
+    let bounds = match derived {
+        Some(bounds) => bounds,
+        None => {
+            #[cfg(test)]
+            BOUNDED.with(|count| count.set(count.get() + 1));
+            derived.insert(ranges::bounds(unit)?)
+        }
+    };
     let mut widened = IndexMap::default();
     for (at, inst) in extensions {
         let op = function.instruction(inst);
@@ -645,6 +679,13 @@ fn _disposable(
                 }
             },
         )
+}
+
+/// Loops `_evaluation` has looked at on this thread.
+#[cfg(test)]
+thread_local! {
+    static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BOUNDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

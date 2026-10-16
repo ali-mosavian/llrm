@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopexit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopexit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:e31e998179724cf58c9178022b415eaa7d3e3d9f709ebc23e98daf8494921b86 -->
+<!-- src: crates/opt/llrm-transforms/src/loopexit.rs sha256:11b6dcd0ee37e1a04884cb44cd005b4add926e1ee24bb871a483c5f6af1f658c -->
 
 # loopexit
 
@@ -41,7 +41,10 @@ With the exit values, one of two things happens.
   computes for itself is `lsr`'s.
 
 The pass repeats one loop at a time until nothing changes, deriving what is
-known of the body again after each.
+known of the body again after each. A loop looked at and left is not looked
+at again until a turn finds nothing, which then looks at every loop once
+more; the bounds of the body are worked out once a turn, for the first loop
+that needs them.
 
 ## Example
 `s = 0; for (i = 0; i < 4; i++) s += i; return s`. Before:
