@@ -142,7 +142,7 @@ use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
 use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
 use llrm_support::debug::counted;
@@ -1315,7 +1315,15 @@ impl Analysis for TableLoads {
             }
             if let Some(result) = function.instruction(inst).result {
                 for user in function.users(result) {
-                    if seen.insert(user.user) {
+                    // A load's address is read through casts and offsets and
+                    // no other instruction (`memory::step`).
+                    let chain = matches!(
+                        function.instruction(user.user).opcode,
+                        Opcode::Load { .. }
+                            | Opcode::GetElementPtr { .. }
+                            | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                    );
+                    if chain && seen.insert(user.user) {
                         work.push(user.user);
                     }
                 }

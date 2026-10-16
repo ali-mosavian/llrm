@@ -1268,6 +1268,19 @@ def test_the_copy_hint_walk_follows_the_rewrites_of_a_chain_and_does_not_start_a
     assert 0.0 < walk <= 14.0, f"{walk:.1f} Minstr"
 
 
+def test_table_loads_update_follows_a_change_through_the_pointer_chain_not_every_user(tmp_path):
+    """After an edit `analysis table-loads` followed the users of each changed value to the end, through every add and phi, to find the
+    loads it reaches: on `branches` at -O1 it read 6.0, 15.4, 44.9 Minstr at N=128, 256, 512 (2.6x, then 2.9x a doubling), each update
+    walking the function. A load's address is read through casts and offsets only, so only those are followed: 3.7, 7.3, 14.6 (2.0x).
+    The ratio is bounded."""
+    cost = {}
+    for n in (256, 512):
+        source = tmp_path / f"branches_{n}.c"
+        source.write_text(scaling.AXES["branches"](n))
+        cost[n] = gate.own_work(gate.levels_time.command("llrm", "O1", source))["analysis table-loads"]
+    assert 0.0 < cost[256] and cost[512] / cost[256] <= 2.3, cost
+
+
 def test_no_premise_is_an_absolute_floor():
     """`analysis loops > 5.0 Minstr` (20 when written, 3.0 after a later change) and four more failed on tinytim with nothing wrong: a floor in Minstr
     goes stale when another change makes the stage cheaper. A premise says the stage ran (> 0); the bound the test is about is a ratio or a
