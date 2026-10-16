@@ -1192,6 +1192,34 @@ mod tests {
         assert!(lea < pop, "{asm}");
     }
 
+    /// A 64-bit parameter in `[__ax __bx __cx __dx]` (the same set as the default
+    /// list) was refused ("parameters in the default registers", "does not fit its
+    /// registers"), as was the same set for the answer: `ulltoa` and `lltoa` did
+    /// not compile. Open Watcom's compiler puts the top word in ax, the bottom in dx.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_quad_word_in_four_registers_has_its_top_word_in_ax() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("quad.c");
+        std::fs::write(
+            &source,
+            "extern void put(unsigned long long);\n#pragma aux put = \"nop\" __parm [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             extern unsigned long long get(void);\n#pragma aux get = \"nop\" __value [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             unsigned long long hold;\nvoid use(void) { put(0x0001000200030004ULL); hold = get(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records quad.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "quad", None, &options).unwrap()).unwrap();
+        let loads = ["mov ax, 1", "mov bx, 2", "mov cx, 3", "mov dx, 4"].map(|one| asm.find(one).expect(&asm));
+        assert!(loads.windows(2).all(|two| two[0] < two[1]), "{asm}");
+    }
+
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
     /// and `__argc` where `main` takes arguments: they pull in the start-up
     /// and the module that builds `argv`. Without them a program linked against

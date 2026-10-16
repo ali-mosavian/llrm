@@ -3070,7 +3070,16 @@ impl<'a, 't> Body<'a, 't> {
         let listed: Vec<&str> =
             symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
         let default = symbol.register_list == self.unit.default_registers;
-        if default && !parms.is_empty() {
+        // The default list and a pragma's `[__ax __bx __cx __dx]` are the same set; a lone
+        // 64-bit parameter is the latter.
+        let quad = match parms.as_slice() {
+            [(_, one)] => {
+                let ty = self.ty(one)?;
+                self.types.get(ty).width == 8
+            }
+            _ => false,
+        };
+        if default && !parms.is_empty() && !quad {
             return self.refuse(format!("{name} is inline code with parameters in the default registers"));
         }
         if !default && listed.len() < parms.len() {
@@ -3131,6 +3140,18 @@ impl<'a, 't> Body<'a, 't> {
                     let bottom = self.resized(whole, false, word);
                     for (register, part) in [(high, top), (low, bottom)] {
                         let register: &'static str = register;
+                        inputs.push((register, vec![(part, false)]));
+                    }
+                }
+                // Four words: ax holds the top one, dx the bottom (measured with Open Watcom's
+                // compiler, for either order the pragma lists them in).
+                (four, 8) if four.len() == 4 && ["ax", "bx", "cx", "dx"].iter().all(|one| four.contains(one)) => {
+                    let quad = self.types.int(8, false);
+                    let whole = self.resized(value, false, quad);
+                    for (register, shift) in [("ax", 48), ("bx", 32), ("cx", 16), ("dx", 0)] {
+                        let moved = self.constant(quad, Number::Int(shift.into()));
+                        let moved = self.op(Op::Shr, quad, vec![value_ref(whole), value_ref(moved)]);
+                        let part = self.resized(moved, false, word);
                         inputs.push((register, vec![(part, false)]));
                     }
                 }
@@ -3276,6 +3297,20 @@ impl<'a, 't> Body<'a, 't> {
                 let low = self.resized(low, false, dword);
                 let joined = self.op(Op::Or, dword, vec![value_ref(high), value_ref(low)]);
                 self.fitted(joined, ty)
+            }
+            four if four.len() == 4 && ["ax", "bx", "cx", "dx"].iter().all(|one| four.contains(one)) => {
+                let quad = self.types.int(8, false);
+                let mut joined = None;
+                for (register, shift) in [("ax", 48), ("bx", 32), ("cx", 16), ("dx", 0)] {
+                    let word = self.resized(part(register), false, quad);
+                    let moved = self.constant(quad, Number::Int(shift.into()));
+                    let word = self.op(Op::Shl, quad, vec![value_ref(word), value_ref(moved)]);
+                    joined = Some(match joined {
+                        Some(high) => self.op(Op::Or, quad, vec![value_ref(high), value_ref(word)]),
+                        None => word,
+                    });
+                }
+                self.fitted(joined.expect("four words"), ty)
             }
             _ => return self.refuse(format!("{name} answers in {} registers", answer.len())),
         };
