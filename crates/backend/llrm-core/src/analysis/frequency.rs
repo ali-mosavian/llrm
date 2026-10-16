@@ -15,7 +15,7 @@ use llrm_analysis::branchprob;
 
 use crate::analysis::facts::Fact;
 use crate::analysis::loops;
-use crate::model::lir::{Block, LirBlock, LirBody};
+use crate::model::lir::{Block, LirBlock, LirBody, Shared};
 use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::support::hash::IndexMap;
 
@@ -24,7 +24,7 @@ use crate::support::hash::IndexMap;
 /// reload leaves a frequency as it was.
 pub struct Cfg {
     entry: i64,
-    shape: Vec<(i64, Vec<i64>)>,
+    shape: Vec<(i64, Shared<i64>)>,
     odds: BlockOdds,
     trips: Vec<(i64, i64)>,
 }
@@ -33,7 +33,7 @@ impl Cfg {
     fn of(body: &LirBody) -> Self {
         Self {
             entry: body.entry,
-            shape: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
+            shape: body.blocks.iter().map(|block| (block.at, block.succ.clone())).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
         }
@@ -460,6 +460,22 @@ mod tests {
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
+    }
+
+    /// A copy of a body copied its odds edge by edge and was compared with
+    /// them edge by edge: a third of the 330 M the allocator spent asking for
+    /// the block frequencies of `unrolled` at N=64. A copy shares them, and a
+    /// change reaches only the body it is made in.
+    #[test]
+    fn test_a_copy_of_a_body_shares_its_odds_until_one_is_changed() {
+        let body = counted(Some(5), 124.0 / 128.0);
+        let copy = body.clone();
+        assert!(copy.odds.taken.shares(&body.odds.taken), "the copy has odds of its own");
+        let mut moved = body.clone();
+        moved.odds.taken.insert((2, 2), 1);
+        assert!(!moved.odds.taken.shares(&body.odds.taken), "the change was made in the shared odds");
+        assert_ne!(moved.odds, body.odds);
+        assert_ne!(body.odds.taken.get(&(2, 2)), Some(&1), "the change reached the body it was not made in");
     }
 
     /// A body that carries its frequencies is asked for them by every fact of
