@@ -1003,6 +1003,7 @@ impl Fixed {
         // The change each pass last left the body at, unchanged: handed that
         // body again it would change nothing, so it is skipped.
         let mut settled: Vec<Option<(usize, usize)>> = vec![None; self.passes.len()];
+        let mut marks: Vec<Option<usize>> = vec![None; self.passes.len()];
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
@@ -1022,7 +1023,7 @@ impl Fixed {
             analyses.refresh_soft();
             let before = run.version;
             run.rounds += 1;
-            for (one, settled) in self.passes.iter_mut().zip(&mut settled) {
+            for ((one, settled), mark) in self.passes.iter_mut().zip(&mut settled).zip(&mut marks) {
                 if let Some((version, stretches)) = *settled {
                     if version == run.version {
                         run.skipped += 1;
@@ -1040,7 +1041,25 @@ impl Fixed {
                     }
                 }
                 let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
-                *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
+                let seen = mark.map(|stretches| {
+                    run.classify(unit);
+                    run.reached_since(stretches)
+                });
+                let regions = mark.map(|stretches| {
+                    run.classify(unit);
+                    run.infos[stretches..].iter().fold(Some((0u32, 0u32, 0usize, 0usize, 0usize)), |all, one| match (all, one) {
+                        (Some(a), Some(b)) => Some((a.0 | b.0, a.1 | b.1, a.2 + b.2, a.3 + b.3, b.4)),
+                        _ => None,
+                    })
+                });
+                let changed = run.step(&mut **one, &name, unit, analyses);
+                if std::env::var_os("LLRM_FP").is_some() {
+                    eprintln!("[fp] {} {:?} {} {:?}", name, seen, if changed { "changed" } else { "idle" }, regions);
+                }
+                run.classify(unit);
+                *mark = Some(run.stretches.len());
+                *settled = (!changed).then(|| (run.version, run.stretches.len()));
+                let _ = &mark;
             }
             // Ask at the original pipeline boundary: fully converging the
             // scalar passes first destroys matmul's exact counted-loop shape.
@@ -1136,6 +1155,7 @@ impl FunctionPass for Fixed {
             useful_with_analyses: 0,
             classified: unit.function.mark(),
             stretches: Vec::new(),
+            infos: Vec::new(),
             unreached: 0,
             slice: None,
             persisted: 0,
@@ -1199,6 +1219,7 @@ struct Run {
     /// it reached (`footprint::of`), found once for every pass that asks.
     classified: llrm_mir::module::Mark,
     stretches: Vec<llrm_mir::footprint::Footprint>,
+    infos: Vec<Option<(u32, u32, usize, usize, usize)>>,
     /// Passes not run because no edit since they found nothing reached what
     /// they read.
     unreached: usize,
@@ -1226,15 +1247,18 @@ impl Run {
         unit: &Unit,
     ) {
         let now = unit.function.mark();
+        let mut info = None;
         let reached = if !now.same_history(self.classified) {
             llrm_mir::footprint::Footprint::ALL
         } else if now.position() != self.classified.position() {
-            unit.function
-                .changes_since(self.classified)
-                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes))
+            unit.function.changes_since(self.classified).map_or(llrm_mir::footprint::Footprint::ALL, |changes| {
+                info = classes(unit.function, changes);
+                llrm_mir::footprint::of(unit.function, changes)
+            })
         } else {
             return;
         };
+        self.infos.push(info);
         self.stretches.push(reached);
         self.classified = now;
     }
@@ -1437,3 +1461,73 @@ impl Run {
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
+
+
+/// Experiment: classes of the instructions edited since `mark`, directly and
+/// through their users, and how many blocks they sit in (of how many, how many
+/// in loops).
+fn classes(
+    function: &llrm_mir::module::Function,
+    changes: &[llrm_mir::module::Change],
+) -> Option<(u32, u32, usize, usize, usize)> {
+    use llrm_mir::module::{Change, Operand};
+    use llrm_mir::opcode::Opcode;
+    let class = |inst: llrm_mir::module::InstId| -> u32 {
+        match &function.instruction(inst).opcode {
+            Opcode::Phi => 1,
+            Opcode::Br | Opcode::Switch | Opcode::Invoke(_) => 2,
+            op if op.is_terminator() => 4,
+            Opcode::Load { .. } => 8,
+            Opcode::Store { .. } => 16,
+            Opcode::Call(_) => 32,
+            Opcode::Alloca { .. } => 64,
+            Opcode::GetElementPtr { .. } => 128,
+            Opcode::Cast(_) => 256,
+            _ => 512,
+        }
+    };
+    let mut direct = 0u32;
+    let mut roots = Vec::new();
+    for change in changes {
+        match *change {
+            Change::BlockCreated(_) | Change::BlockErased(_) => direct |= 1024,
+            Change::Parameters => direct |= 2048,
+            Change::Inserted { inst, .. } | Change::Moved { inst, .. } | Change::Rewritten(inst) | Change::Erased { inst, .. } => {
+                direct |= class(inst);
+                roots.push(inst);
+            }
+            Change::Cloned { to, .. } => {
+                direct |= class(to);
+                roots.push(to);
+            }
+            _ => {}
+        }
+    }
+    let mut reached = direct;
+    let mut seen = std::collections::HashSet::new();
+    let mut work = roots.clone();
+    while let Some(at) = work.pop() {
+        if !seen.insert(at.0) || function.is_erased(at) {
+            continue;
+        }
+        if let Some(result) = function.instruction(at).result {
+            for user in function.users(result) {
+                reached |= class(user.user);
+                if !function.instruction(user.user).opcode.is_terminator() {
+                    work.push(user.user);
+                }
+            }
+        }
+    }
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let in_loop: std::collections::HashSet<i64> = shape.loops.iter().flat_map(|one| one.body.iter().copied()).collect();
+    let mut blocks = std::collections::HashSet::new();
+    for &root in &roots {
+        if let Some(block) = function.parent(root) {
+            blocks.insert(block.0);
+        }
+    }
+    let loopy = blocks.iter().filter(|&&b| in_loop.contains(&llrm_analysis::cfg::id(llrm_mir::module::BlockId(b)))).count();
+    let _ = Operand::Block;
+    Some((direct, reached, blocks.len(), loopy, function.layout().len()))
+}
