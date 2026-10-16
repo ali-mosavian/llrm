@@ -1,22 +1,6 @@
 reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
 blessed = "2026-10-14"
 
-[bas.O2]
-instructions = 42392
-memory_operands = 11171
-code_bytes = 197
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 0.5882
-
-[bas.Os]
-instructions = 42407
-memory_operands = 11184
-code_bytes = 192
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 0.5884
-
 [ow.O2]
 instructions = 75663
 memory_operands = 14048

@@ -1,22 +1,6 @@
 reason = "m16 C is built with the inlining gcc, clang and the m32 table have: the kernel is called through a volatile pointer, not built with -fno-inline-functions, which also kept a recursive function from inlining itself (rectwo -O2 2333728 -> 1463465 clocks, fib 404985 -> 266306, frames 11.94M -> 9.98M); sizes are of the kernel noinline with main as written"
 blessed = "2026-10-15"
 
-[bas.O2]
-instructions = 122
-memory_operands = 28
-code_bytes = 327
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 0.0199
-
-[bas.Os]
-instructions = 110
-memory_operands = 28
-code_bytes = 286
-data_bytes = 13
-bss_bytes = 0
-kernel_ms = 0.0198
-
 [ow.O2]
 instructions = 325
 memory_operands = 8

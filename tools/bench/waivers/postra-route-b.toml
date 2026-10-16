@@ -1,6 +1,0 @@
-reason = "#1789: the hoisted zeroing of a word register adds one instruction at a loop entry (stft_single bq32 -O2 +1 of 7.2e7) and turns the loop's movzx into a mov; the same fixes remove instructions and bytes in jpeg, queens nib and shellsort"
-
-[[row]]
-label = "stft_single bq32 -O2"
-counter = "instructions"
-to = 72232467

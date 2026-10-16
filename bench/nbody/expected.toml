@@ -1,20 +1,6 @@
 reason = "#1804 (hoist prices a float load its reader folds as the reader's own memory form): bas rows re-recorded by hand, since --bless now records references only: nbody -O2 +2.1% instructions and +6.9% memory operands at 20 B less code and -1.4% clocks; nbody -Os -6.5% instructions; nbody_single -Os +33% memory operands at -2.4% instructions and 8 B less code"
 blessed = "2026-10-16"
 
-[bas.O2]
-instructions = 56403
-memory_operands = 27822
-code_bytes = 882
-data_bytes = 31
-bss_bytes = 0
-
-[bas.Os]
-instructions = 51661
-memory_operands = 26065
-code_bytes = 708
-data_bytes = 31
-bss_bytes = 0
-
 [ow.O2]
 instructions = 53725
 memory_operands = 22281

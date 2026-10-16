@@ -1271,6 +1271,13 @@ def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_mis
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
 
 
+def test_the_tools_group_restores_a_pull_requests_base_counts_and_a_push_to_main_records_its_own():
+    """The bench step was 20 of the tools group's 22 minutes: it built and measured the base every run."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
+    assert "LLRM_BENCH_RECORD: ${{ github.event_name == 'push'" in workflow and "key: ${{ steps.basecounts.outputs.head }}" in workflow
+
+
 def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
     """Without QCPORT the cost rows of QCport's 65 modules are left out and measure judges the programs alone, as green."""
     p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
