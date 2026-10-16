@@ -212,7 +212,7 @@ b3:
 fn test_stores_on_both_arms_join_in_a_phi() {
     forwarded(DIAMOND, INPUTS);
     assert!(
-        promote(DIAMOND).contains("b3:\n  %0 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %0, 1\n"),
+        promote(DIAMOND).contains("b3:\n  %a.1 = phi i16 [ 7, %b1 ], [ %d, %b2 ]\n  %y = add i16 %a.1, 1\n"),
         "{}",
         promote(DIAMOND)
     );
@@ -879,7 +879,7 @@ j:
     stores.insert(seen[1], 1);
     stores.insert(seen[2], 0);
     types.reverse();
-    let plan = super::Plan { variables: vec![None, None], types, stores, loads };
+    let plan = super::Plan { variables: vec![None, None], names: vec![None, None], types, stores, loads };
     let live = super::live_in(function, &plan);
     let names = |cell: usize| -> Vec<String> {
         function
@@ -893,4 +893,47 @@ j:
     // way there too.
     assert_eq!(names(0), ["entry", "j"], "t is read at j, past the arms that write it and the edge that does not");
     assert!(names(1).is_empty(), "u is written before it is read, in its arm: {:?}", names(1));
+}
+
+const COUNTER: &str = "define i16 @f(i16 %0) {
+b0:
+  %i = alloca i16
+  store i16 0, ptr %i
+  br label %b1
+
+b1:
+  %1 = load i16, ptr %i
+  %2 = icmp slt i16 %1, %0
+  br i1 %2, label %b2, label %b3
+
+b2:
+  %3 = load i16, ptr %i
+  %4 = add i16 %3, 1
+  store i16 %4, ptr %i
+  br label %b1
+
+b3:
+  ret i16 %1
+}
+";
+
+/// The values a promoted variable takes are its name and a version, so a dump
+/// says `i.1` and `i.2` where it said `%0` and `%4`; a value that had a name
+/// keeps it, and promoting twice does not name a version twice.
+#[test]
+fn a_promoted_variables_values_are_named_after_it() {
+    let once = promote(COUNTER);
+    assert!(once.contains("%i.1 = phi i16 [ 0, %b0 ], [ %i.2, %b2 ]"), "{once}");
+    assert!(once.contains("%i.2 = add i16 %i.1, 1"), "{once}");
+    let mut again = run(COUNTER, false);
+    promote_all(&mut again, false).unwrap();
+    assert_eq!(printed(&again).matches("= phi").count(), 1);
+    assert!(!printed(&again).contains("i.11"), "{}", printed(&again));
+}
+
+/// A name is a version of the variable in the order the walk meets values:
+/// the same text on every run.
+#[test]
+fn the_versions_are_the_same_on_every_run() {
+    assert_eq!(promote(COUNTER), promote(COUNTER));
 }

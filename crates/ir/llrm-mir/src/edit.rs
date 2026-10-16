@@ -114,12 +114,8 @@ impl Function {
     /// `name`, or `name` with the least number appended that no live value
     /// or block of the function holds, as LLVM's symbol table makes names.
     /// The name is taken from then on.
-    fn unique_name(
-        &mut self,
-        name: &str,
-    ) -> String {
-        let Names { held, taken_below } = self
-            .names
+    fn registry(&mut self) -> &mut Names {
+        self.names
             .0
             .get_or_insert_with(
                 || {
@@ -132,7 +128,14 @@ impl Function {
                     }
                     Names { held, taken_below: Default::default() }
                 },
-            );
+            )
+    }
+
+    fn unique_name(
+        &mut self,
+        name: &str,
+    ) -> String {
+        let Names { held, taken_below } = self.registry();
         let unique = if !held.contains_key(name) {
             name.to_owned()
         } else {
@@ -169,6 +172,24 @@ impl Function {
                 names.taken_below.clear();
             }
         }
+    }
+
+    /// Calls `value`, if it has no name, the first of `name.1`, `name.2`, ...
+    /// that nothing holds: the next version of what `name` is. A name is no
+    /// part of what a value is: nothing is logged.
+    pub fn name_version(
+        &mut self,
+        value: ValueId,
+        name: &str,
+    ) {
+        if self.values[value.0 as usize].name.is_some() {
+            return;
+        }
+        let held = &mut self.registry().held;
+        let version = (1..).map(|n| format!("{name}.{n}")).find(|candidate| !held.contains_key(candidate));
+        let version = version.expect("some version is free");
+        *held.entry(version.clone()).or_default() += 1;
+        self.values[value.0 as usize].name = Some(version);
     }
 
     /// A new instruction, placed nowhere yet; its result, if its type is not

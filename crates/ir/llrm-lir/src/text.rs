@@ -148,17 +148,30 @@ fn place(addr: &Addr) -> (String, bool) {
     }
 }
 
-/// An address as a value: `&seg1+0x10`.
-fn address(address: &AddressRef) -> String {
-    let (name, decimal) = address.addr.as_ref().map_or_else(|| (String::new(), false), place);
-    let reached =
-        if address.through == RegId::None { String::new() } else { format!("+{}", register(address.through)) };
+/// An address as a value: `&seg1+0x10`, `&slot1`. A frame address is reached
+/// through the frame register by definition, so it does not say so.
+fn address(
+    address: &AddressRef,
+    syntax: &Syntax<'_>,
+) -> String {
+    let framed = address.addr.as_ref().is_some_and(|addr| addr.space == Space::Frame);
+    let slot = address.addr.as_ref().filter(|_| framed).and_then(|addr| (syntax.frame)(addr));
+    let (name, decimal) = match (&slot, address.addr.as_ref()) {
+        (Some(slot), _) => (slot.clone(), true),
+        (None, Some(addr)) => place(addr),
+        (None, None) => (String::new(), false),
+    };
+    let reached = if address.through == RegId::None || framed {
+        String::new()
+    } else {
+        format!("+{}", register(address.through))
+    };
     let indexed = if address.index_through == RegId::None {
         String::new()
     } else {
         format!("+{}*{}", register(address.index_through), address.scale)
     };
-    let offset = address.addr.as_ref().map_or(address.offset, |addr| addr.disp);
+    let offset = if slot.is_some() { 0 } else { address.addr.as_ref().map_or(address.offset, |addr| addr.disp) };
     format!("&{name}{reached}{indexed}{}", displacement(offset, decimal))
 }
 
@@ -216,9 +229,10 @@ pub fn memory(
 pub fn immediate(
     value: &Imm,
     mask: bool,
+    syntax: &Syntax<'_>,
 ) -> String {
     if let Some(addr) = &value.address {
-        return address(&AddressRef { addr: Some(*addr), ..AddressRef::new(None) });
+        return address(&AddressRef { addr: Some(*addr), ..AddressRef::new(None) }, syntax);
     }
     if !mask || value.value.unsigned_abs() < 10 {
         return value.value.to_string();
@@ -263,11 +277,11 @@ fn used(
         },
         Loc::Held(value) if differs() => format!("{}{}", (syntax.value)(value.value), width()),
         Loc::Held(value) => (syntax.value)(value.value),
-        Loc::Imm(value) if differs() => format!("{}{}", immediate(value, mask), width()),
-        Loc::Imm(value) => immediate(value, mask),
+        Loc::Imm(value) if differs() => format!("{}{}", immediate(value, mask, syntax), width()),
+        Loc::Imm(value) => immediate(value, mask, syntax),
         Loc::Mem(cell) if differs() => format!("{}{}", memory(cell, syntax), width()),
         Loc::Mem(cell) => memory(cell, syntax),
-        Loc::Address(one) => address(one),
+        Loc::Address(one) => address(one, syntax),
     }
 }
 

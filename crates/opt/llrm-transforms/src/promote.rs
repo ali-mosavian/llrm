@@ -37,10 +37,15 @@
 //! by the stored operand or the phi. With `-g`, the debug record of the
 //! variable a cell is gets the value, or a piece of it.
 //!
+//! A cell whose alloca has a name names its values: the phi and each stored
+//! operand that has none are `name.1`, `name.2`, ... in the order the walk
+//! meets them, so a dump of the promoted body says which variable a value is a
+//! version of.
+//!
 //! ```text
 //!  b1: store 7, %a   b2: store %d, %a       b1: store 7, %a   b2: store %d, %a
-//!  b3: %x = load %a             =>          b3: %x = phi [7, b1], [%d, b2]
-//!      %y = add %x, 1                           %y = add %x, 1
+//!  b3: %x = load %a             =>          b3: %a.1 = phi [7, b1], [%d, b2]
+//!      %y = add %x, 1                           %y = add %a.1, 1
 //! ```
 //!
 //! # Example
@@ -425,6 +430,9 @@ struct Plan {
     /// The variable `-g` names that each cell is, where it is one
     /// (`llrm_mir::DebugRecord`).
     variables: Vec<Option<Named>>,
+    /// What each cell is called, where its pointer is a named alloca: the name
+    /// its values are given a version of.
+    names: Vec<Option<String>>,
     types: Vec<TypeId>,
     stores: HashMap<InstId, usize>,
     loads: HashMap<InstId, usize>,
@@ -498,6 +506,18 @@ impl Named {
             None => llrm_mir::DebugWhat::Value(value),
         }
     }
+}
+
+/// The name of the alloca `pointer` is, if it is a named one.
+fn alloca_name(
+    unit: &Unit,
+    pointer: Operand,
+) -> Option<String> {
+    let Operand::Value(value) = pointer else { return None };
+    let llrm_mir::ValueDef::Instruction(inst) = unit.function.value(value).def else { return None };
+    matches!(unit.function.instruction(inst).opcode, Opcode::Alloca { .. })
+        .then(|| unit.function.value(value).name.clone())
+        .flatten()
 }
 
 /// The type `inst` loads or stores.
@@ -587,14 +607,21 @@ fn plan(
 
     let used = usable.iter().map(|inst| slots[inst]).collect::<BTreeSet<_>>();
     let renumbered = used.iter().enumerate().map(|(new, &old)| (old, new)).collect::<HashMap<_, _>>();
-    let types = used.iter().map(|&slot| candidates[slot]).collect();
+    let types: Vec<TypeId> = used.iter().map(|&slot| candidates[slot]).collect();
     let stores = slots
         .iter()
         .filter(|(inst, slot)| !is_load(unit, **inst) && used.contains(slot))
         .map(|(&inst, slot)| (inst, renumbered[slot]))
         .collect();
     let loads = usable.into_iter().map(|inst| (inst, renumbered[&slots[&inst]])).collect();
-    Ok(Plan { variables: Vec::new(), types, stores, loads })
+    let mut names = vec![None; types.len()];
+    for (&inst, old) in &slots {
+        let Some(&slot) = renumbered.get(old) else { continue };
+        let instruction = unit.function.instruction(inst);
+        let pointer = if is_load(unit, inst) { instruction.operands[0] } else { instruction.operands[1] };
+        names[slot] = names[slot].take().or_else(|| alloca_name(unit, pointer));
+    }
+    Ok(Plan { variables: Vec::new(), names, types, stores, loads })
 }
 
 /// Loads a stored value reaches on every path, with no write between that
@@ -955,6 +982,13 @@ fn rewrite(
         Leave(usize),
     }
     let mut current = poison.clone();
+    // A cell's values are named `i.1`, `i.2`, ... in the order the walk meets
+    // them, which is the same on every run.
+    let versioned = |function: &mut Function, slot: usize, value: Operand| {
+        if let (Some(name), Operand::Value(value)) = (&plan.names[slot], value) {
+            function.name_version(value, name);
+        }
+    };
     let mut undo = Vec::<(usize, Operand)>::new();
     let mut stack = vec![Visit::Enter(entry)];
     while let Some(visit) = stack.pop() {
@@ -974,6 +1008,7 @@ fn rewrite(
             let (phi, _) = &phis[&(at, slot)];
             undo.push((slot, current[slot]));
             current[slot] = Operand::Value(function.instruction(*phi).result.expect("a phi's value"));
+            versioned(function, slot, current[slot]);
         }
         for inst in function.block(block).instructions().to_vec() {
             if let Some(&slot) = plan.loads.get(&inst) {
@@ -982,6 +1017,7 @@ fn rewrite(
             } else if let Some(&slot) = plan.stores.get(&inst) {
                 undo.push((slot, current[slot]));
                 current[slot] = function.instruction(inst).operands[0];
+                versioned(function, slot, current[slot]);
                 // And the value it stores, from the instruction after it on.
                 if let Some(named) = plan.variables.get(slot).copied().flatten()
                     && let Some(next) =
