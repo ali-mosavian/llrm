@@ -4,8 +4,9 @@
 //!
 //! # How it works
 //! `render` gives an instruction as a destination, an opcode and operands.
-//! The opcode carries the type and bytes of the operation (`sub.i2`, `fld.f8`),
-//! so operands do not repeat it; a source of another width says so (`t10:i1`).
+//! The opcode carries the type of the operation as MIR spells one (`sub.i16`,
+//! `fld.f64`),
+//! so operands do not repeat it; a source of another width says so (`t10:i8`).
 //! Virtual registers are named by their source name or `t12`; real ones are
 //! named by width (`al`, `ax`, `eax`, `st0`); a virtual register placed in a
 //! real one is `t12@ax`. Memory is `[es:t3@bx+t4*4+8]`: segment, base, index
@@ -17,11 +18,11 @@
 //! 3->B6]`), a call its callee and register arguments.
 //!
 //! ```text
-//! t11     = sub.i4     t2, 2
-//!           cmp.i4     t46, 5
+//! t11     = sub.i32     t2, 2
+//!           cmp.i32     t46, 5
 //!           jl         B5 else B4
 //! t13@eax = call       fib(t12@ax)
-//!           store.i2   [slot0], t47
+//!           store.i16   [slot0], t47
 //! ```
 //!
 //! # Used by
@@ -95,15 +96,15 @@ pub fn register(register: RegId) -> String {
     format!("{register:?}").to_lowercase()
 }
 
-/// A width as a type and its bytes: `i1`, `i2`, `i4`, `i8`, and `f4`, `f8`,
-/// `f10` where the operation is a float one.
+/// A width as a type and its bits, as MIR prints one: `i8`, `i16`, `i32`,
+/// `i64`, and `f32`, `f64`, `f80` where the operation is a float one.
 pub fn bits(
     width: u32,
     float: bool,
 ) -> String {
     match width {
         0 => "?".to_owned(),
-        bytes => format!("{}{bytes}", if float { 'f' } else { 'i' }),
+        bytes => format!("{}{}", if float { 'f' } else { 'i' }, bytes * 8),
     }
 }
 
