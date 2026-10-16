@@ -147,6 +147,7 @@ def main() -> int:
     parser.add_argument("--new-head", default="HEAD", help="the revision NEW was built from")
     parser.add_argument("--stale-ok", action="store_true", help="do not check the binaries' ages against the heads")
     parser.add_argument("--no-bench", action="store_true", help="leave out the bench harness's own compiles")
+    parser.add_argument("--show", type=int, default=20, help="how many differing objects to name")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     args = parser.parse_args()
     if not args.stale_ok:
@@ -171,7 +172,7 @@ def main() -> int:
             results = list(pool.map(lambda job: same(job, args.old, args.new, work), jobs))
     bad = [r for r in results if r[2]]
     print(f"{len(files)} files, {len(results)} objects compared, {len(bad)} differ or failed")
-    for name, level, why in bad[:20]:
+    for name, level, why in bad[: args.show]:
         print(f"  {name} {level}: {why}")
     return 1 if bad else 0
 
