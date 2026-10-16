@@ -27,6 +27,8 @@ name: ci
 
 on:
   pull_request:
+    # A draft runs plan and static only (minutes); marking it ready starts the full gate.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -48,6 +50,7 @@ jobs:
     outputs:
       base: ${{ steps.plan.outputs.base }}
       groups: ${{ steps.plan.outputs.groups }}
+      static: ${{ steps.plan.outputs.static }}
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
@@ -65,7 +68,8 @@ jobs:
           json=$(python3 tools/gate/gate.py plan --json --base "$base")
           echo "$json"
           echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(sorted(json.load(sys.stdin)["groups"])))')" >> "$GITHUB_OUTPUT"
+          echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(sorted(g for g in json.load(sys.stdin)["groups"] if g != "static")))')" >> "$GITHUB_OUTPUT"
+          echo "static=$(echo "$json" | python3 -c 'import json,sys; print(str("static" in json.load(sys.stdin)["groups"]).lower())')" >> "$GITHUB_OUTPUT"
           echo "private=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["private"]))')" >> "$GITHUB_OUTPUT"
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
           echo "tier=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" >> "$GITHUB_OUTPUT"
@@ -86,9 +90,23 @@ jobs:
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
           echo "Runners: $summary" >> "$GITHUB_STEP_SUMMARY"
 
-  build:
+  # The checks that read the tree and build nothing (tiers.toml [groups] static: format, generated docs, tracked products) run alone before
+  # the build: a mistake in them fails in minutes and the long jobs never start. What fails there hides the later jobs' failures until it is fixed.
+  static:
     needs: plan
-    if: needs.plan.outputs.any == 'true'
+    if: needs.plan.outputs.static == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group static --base "${{ needs.plan.outputs.base }}"
+
+  build:
+    needs: [plan, static]
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.plan.outputs.any == 'true' && needs.static.result != 'failure' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_build) }}
     timeout-minutes: 90
     steps:
@@ -133,6 +151,8 @@ jobs:
 
   gate:
     needs: [plan, build]
+    # A skipped ancestor (static, when nothing it checks changed) would skip this job too: success() looks at every job upstream.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
     timeout-minutes: 60
     strategy:
@@ -184,24 +204,25 @@ jobs:
       # the group's 22 minutes: a push to main records its own counts under the key of what they depend on (basecounts.compiler_key: the
       # tree but docs and editor files), and a pull request restores its base's, the merge ref's first parent.
       - id: basecounts
-        if: matrix.group == 'tools'
+        if: startsWith(matrix.group, 'bench-')
         run: |
           echo "LLRM_BENCH_BASE_DIR=$RUNNER_TEMP/bench-base" >> "$GITHUB_ENV"
           echo "base=bench-base-$(python3 tools/bench/basecounts.py key HEAD^1 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
           echo "head=bench-base-$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"
-      - if: matrix.group == 'tools'
+      - if: startsWith(matrix.group, 'bench-')
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.base }}
       - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
-        env:
-          LLRM_BENCH_RECORD: ${{ github.event_name == 'push' && '1' || '' }}
-      - if: matrix.group == 'tools' && github.event_name == 'push' && success()
-        uses: actions/cache/save@v4
+      # A shard's rows, counts and names only (nothing a private tool printed): bench-merge judges what no shard can alone.
+      - if: always() && startsWith(matrix.group, 'bench-')
+        uses: actions/upload-artifact@v4
         with:
-          path: ${{ runner.temp }}/bench-base
-          key: ${{ steps.basecounts.outputs.head }}
+          name: ${{ matrix.group }}
+          path: target/bench-shards
+          if-no-files-found: ignore
+          retention-days: 1
       # A private group's logs stay in its job log (the failing excerpt): its tools' output is not uploaded.
       - if: always() && steps.private.outputs.needed != 'true'
         uses: actions/upload-artifact@v4
@@ -210,19 +231,60 @@ jobs:
           path: target/gate-logs
           retention-days: 3
 
-  ci:
+  # The verdict no shard has alone (standing against the references, waivers nothing needed) and, on a main push, the head's counts kept
+  # as the base of the next pull requests: saved here, as soon as the shards are in, not at the end of a job that also measured the base.
+  bench-merge:
     needs: [plan, build, gate]
+    if: always() && needs.build.result == 'success' && contains(needs.plan.outputs.groups, '"bench-1"')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: target
+          path: ${{ runner.temp }}
+      - name: Restore the target dir
+        run: |
+          zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
+          python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - id: basecounts
+        run: |
+          echo "LLRM_BENCH_BASE_DIR=$RUNNER_TEMP/bench-base" >> "$GITHUB_ENV"
+          echo "head=bench-base-$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"
+      - run: uv run -q --project tools python tools/bench/bench.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards)" ${{ github.event_name == 'push' && '--record' || '' }}
+      - if: github.event_name == 'push' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bench-base
+          key: ${{ steps.basecounts.outputs.head }}
+
+  ci:
+    needs: [plan, static, build, gate, bench-merge]
     if: always()
     runs-on: ubuntu-24.04
     steps:
       # The line `gate.py run` prints, naming the head the run is of (a pull request's head, not the merge commit CI checks out).
       - run: |
           head="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
-          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ]; then
+          echo "plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
+          if [ "${{ github.event.pull_request.draft }}" = true ] && [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ]; then
+            line="GATE ${{ needs.plan.outputs.tier }} DRAFT at ${head:0:12}: static=${{ needs.static.result }}, the gate runs when it is ready for review (not a pass)"
+            echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}"
           else
-            line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }}"
+            line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
           fi
           echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
           case "$line" in *" PASS at "*) ;; *) exit 1;; esac
