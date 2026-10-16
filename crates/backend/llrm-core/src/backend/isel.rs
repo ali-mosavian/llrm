@@ -694,6 +694,25 @@ pub(super) fn width_of(
     }
 }
 
+/// The alignment the hardware wants of an object of `ty`: its widest scalar's
+/// size, up to 8, whatever the data layout promises (it gives a double 1).
+fn natural_align(
+    types: &llrm_mir::types::Types,
+    layout: &DataLayout,
+    ty: TypeId,
+) -> i64 {
+    match types.get(ty) {
+        Type::Array { element, .. } | Type::Vector { element, .. } => natural_align(types, layout, *element),
+        Type::Struct { .. } | Type::Named(_) => {
+            types.fields(ty).unwrap_or_default().iter().map(|&one| natural_align(types, layout, one)).max().unwrap_or(1)
+        }
+        Type::Int(_) | Type::Float(_) | Type::Pointer(_) => {
+            i64::try_from(layout.store_size(types, ty).clamp(1, 8).next_power_of_two()).unwrap_or(1)
+        }
+        _ => 1,
+    }
+}
+
 /// The conditions of the flags that answer a comparison: one, both of two,
 /// or either of two.
 #[derive(Clone, Copy, Debug)]
@@ -1642,11 +1661,25 @@ impl Selector<'_, '_, '_> {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let group = group_of[&inst];
+                    // Where the function keeps the stack aligned beyond a slot,
+                    // an object lies on its type's alignment, or its size's
+                    // where the front end typed it as bytes: a local
+                    // `double[4]` at 4 mod 8 costs a 486 3 clocks an access
+                    // (nbody -O2: 18,404). Else the layout is the slot's.
+                    let kept = self.callee_facts.stack_alignment(self.arch, name);
+                    let align = if kept > i64::from(self.arch.stack_slot_bytes()) {
+                        natural_align(&self.module.context.types, &self.layout, allocated)
+                            .max(1 << size.clamp(1, 8).ilog2())
+                            .min(kept)
+                            .max(1)
+                    } else {
+                        1
+                    };
                     let disp = *homes
                         .entry(group)
                         .or_insert_with(
                             || {
-                                self.depth += capacity[group];
+                                self.depth = (self.depth + capacity[group] + align - 1).div_euclid(align) * align;
                                 self.extents.push((-self.depth, capacity[group]));
                                 -self.depth
                             },
@@ -5341,6 +5374,7 @@ impl Selector<'_, '_, '_> {
         if !in_order {
             order.reverse();
         }
+        let first_push = out.len();
         let mut pushed = 0;
         let mut spans: Vec<(usize, i64)> = Vec::new();
         for index in order {
@@ -5475,6 +5509,30 @@ impl Selector<'_, '_, '_> {
             pushed += slot(self.arch, held.width);
             out.push(insn(at, semantics(Operation::Push, "push", vec![], vec![Loc::Held(held)])));
         }
+        // The stack a multiple of the target's alignment at the call, as the
+        // callee assumes it: what the arguments leave short is pushed first,
+        // above them, and the caller removes it with them. A callee that pops
+        // its own arguments cannot be told to leave a pad.
+        let align = self.callee_facts.stack_alignment(self.arch, &name);
+        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness != 32 {
+            0
+        } else {
+            (align - pushed % align) % align
+        };
+        for _ in 0..pad / self.arch.stack_slot_bytes() {
+            out.insert(
+                first_push,
+                insn(
+                    at,
+                    semantics(
+                        Operation::Push,
+                        "push",
+                        vec![],
+                        vec![Loc::Imm(Imm { value: 0, width: self.arch.stack_slot_bytes() as u32, address: None })],
+                    ),
+                ),
+            );
+        }
         let excess: i64 = spans
             .iter()
             .enumerate()
@@ -5483,6 +5541,7 @@ impl Selector<'_, '_, '_> {
             .sum();
         // A struct result's address the callee pops is not the caller's to
         // remove.
+        let pushed = pushed + pad;
         let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
             (Opcode::Call(info) | Opcode::Invoke(info), Some(one))
                 if hidden_slot_popped_by_callee(
