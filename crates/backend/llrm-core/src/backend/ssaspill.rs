@@ -14,6 +14,8 @@
 //! predecessor ends with is taken only if it is a phi result arriving here or
 //! the block is a loop header the pass has admitted; it is otherwise reloaded
 //! where it is read.
+//! A header holds a value only while the loop's reloads that restore it, on any
+//! of its edges, run less than half as often as the reloads at its first uses.
 //!
 //! Within a block, Belady's rule decides eviction. Next-use distance is counted
 //! across blocks, with a large constant for a use beyond a loop exit. When an
@@ -1148,25 +1150,39 @@ fn simulated_with(
     // trip.
     for _ in 0..4 {
         let mut more = false;
+        // What reloads each trip to restore a value its loop's header holds: on
+        // the back edge, or on any edge inside the loop, where the
+        // value was evicted between the header and a join (a latch the header's
+        // path skips the body for).
+        let mut keeps: IndexMap<(i64, u32), f64> = IndexMap::default();
         for ((from, to), values) in &result.across {
-            if place[from] < place[to] {
-                continue;
-            }
-            let Some(within) = loops.iter().find(|one| one.header == *to) else { continue };
-            for value in values {
-                let keep: f64 = body
-                    .blocks
-                    .iter()
-                    .filter(|block| block.succ.contains(to) && !result.edits[&block.at].w_out.contains(value))
-                    .map(|block| weights.edge(block.at, *to))
-                    .sum();
-                let drop = first_uses(flow, weights, &within.body, *to, *value);
-                // Holding the value costs its register through the trip as
-                // well: keep it only when the back edge reloads
-                // it rarely.
-                if 2.0 * keep >= drop {
-                    more |= dropped.entry(*to).or_default().insert(*value);
+            for within in loops.iter().filter(|one| one.body.contains(from) && one.body.contains(to)) {
+                if !weights.by_frequency && place[from] < place[to] {
+                    continue;
                 }
+                for value in values {
+                    // A phi result arrives in a register at the header whatever
+                    // it does: dropping it only
+                    // adds a store and a reload.
+                    if result.edits[&within.header].w_in.contains(value)
+                        && !body
+                            .blocks
+                            .iter()
+                            .find(|block| block.at == within.header)
+                            .is_some_and(|block| block.arrives().contains(value))
+                    {
+                        *keeps.entry((within.header, *value)).or_default() += weights.edge(*from, *to);
+                    }
+                }
+            }
+        }
+        for ((header, value), keep) in keeps {
+            let Some(within) = loops.iter().find(|one| one.header == header) else { continue };
+            let drop = first_uses(flow, weights, &within.body, header, value);
+            // Holding the value costs its register through the trip as
+            // well: keep it only when the loop reloads it rarely.
+            if 2.0 * keep >= drop {
+                more |= dropped.entry(header).or_default().insert(value);
             }
         }
         if !more {
@@ -2059,7 +2075,7 @@ fn shared_slots(
 fn first_uses(
     flow: &Flow,
     weights: &Weights<'_>,
-    within: &BTreeSet<i64>,
+    within: &crate::analysis::loops::Body,
     header: i64,
     value: u32,
 ) -> f64 {

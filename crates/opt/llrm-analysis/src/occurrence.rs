@@ -66,10 +66,10 @@ pub fn operations(function: &Function) -> impl Iterator<Item = (InstId, BlockId,
 /// in block-id order: the walk of a loop costs the loop, not the function.
 pub fn operations_in<'a>(
     function: &'a Function,
-    inside: &'a std::collections::BTreeSet<i64>,
+    inside: impl IntoIterator<Item = &'a i64> + 'a,
 ) -> impl Iterator<Item = (InstId, BlockId, &'a Instruction)> {
     inside
-        .iter()
+        .into_iter()
         .map(|&at| crate::cfg::block(at))
         .flat_map(move |block| {
             function.block(block).instructions().iter().map(move |&inst| (inst, block, function.instruction(inst)))

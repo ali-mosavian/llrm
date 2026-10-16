@@ -323,7 +323,7 @@ impl Peephole {
         let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
-        let body = crate::backend::postrasink::sunk(&body);
+        let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -360,7 +360,8 @@ impl Peephole {
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            let body = zero_extensions(self.rules, &widened_moves(self.rules, &body));
+            let body =
+                zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
             gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
         } else {
             body
@@ -385,14 +386,16 @@ impl Peephole {
     }
 }
 
-/// A call's `add sp,2*n` as `n` pops into a dead scratch register, as BCC
-/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`).
-/// The add's flags must be dead: a pop sets none.
+/// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
+/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`). A
+/// pop takes back the mode's word: 2 bytes in 16-bit code, 4 in 32-bit. The
+/// add's flags must be dead: a pop sets none.
 pub fn popped_arguments(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
     let regs = body.regs();
+    let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
     let exits = liveness::dead_at_exit(body);
@@ -410,9 +413,9 @@ pub fn popped_arguments(
                 {
                     match what.sources.as_slice() {
                         [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % 2 == 0 && *value > 0 =>
+                            if *first == sp && value % unit == 0 && *value > 0 =>
                         {
-                            value / 2
+                            value / unit
                         }
                         _ => 0,
                     }
@@ -431,7 +434,12 @@ pub fn popped_arguments(
                     let pop = || {
                         Arc::new(with_what(
                             one,
-                            semantics(Operation::Pop, "pop", vec![Loc::Reg(reg(register, 2))], vec![]),
+                            semantics(
+                                Operation::Pop,
+                                "pop",
+                                vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
+                                vec![],
+                            ),
                         ))
                     };
                     insns.extend((0..words).map(|_| pop()));
@@ -1189,6 +1197,19 @@ pub fn _register_effects(
     may_write: bool,
     flags: bool,
 ) -> Option<(Lanes, Lanes)> {
+    // Kept on the instruction: asked again by each pass of the peephole.
+    let (was, answer) = one.register_effects[usize::from(may_write) << 1 | usize::from(flags)]
+        .get_or_init(|| (bits, _register_effects_worked(regs, bits, one, may_write, flags)));
+    if *was == bits { *answer } else { _register_effects_worked(regs, bits, one, may_write, flags) }
+}
+
+fn _register_effects_worked(
+    regs: Regs,
+    bits: u32,
+    one: &Insn,
+    may_write: bool,
+    flags: bool,
+) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
     // definition and its ABI use; clearing liveness at each one kept dead
@@ -1825,6 +1846,12 @@ fn _root_get(
     key.then_some(rooted)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The values `secondary_bases` tried as derived from a candidate.
+    pub static SECONDARY_TRIES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Replace repeated allocated address shuttles with one clean 67h base.
 ///
 /// Constrained-occurrence splitting keeps a long-lived word value in any GPR
@@ -1874,9 +1901,10 @@ pub fn secondary_bases<'a>(
     };
 
     let derived = |value: u32, original: u32, source: &Reg| -> Option<(Arc<Insn>, Vec<Arc<Insn>>)> {
-        let definition = definitions.get(&value).cloned().flatten();
-        let consumers = uses.get(&value).cloned().unwrap_or_default();
-        let definition = definition?;
+        #[cfg(test)]
+        SECONDARY_TRIES.with(|count| count.set(count.get() + 1));
+        let definition = definitions.get(&value)?.as_ref()?;
+        let consumers = uses.get(&value).map_or(&[][..], Vec::as_slice);
         if !definition.inserted() || definition.uses != [original] || consumers.len() != 1 {
             return None;
         }
@@ -1923,7 +1951,7 @@ pub fn secondary_bases<'a>(
                 }
             }
         }
-        if seen != 0 { Some((definition, consumers)) } else { None }
+        if seen != 0 { Some((Arc::clone(definition), consumers.to_vec())) } else { None }
     };
 
     let rewritten = |one: &Insn, substitutions: &IndexMap<u32, (u32, RegId)>| -> Arc<Insn> {
@@ -1958,6 +1986,15 @@ pub fn secondary_bases<'a>(
     let mut substitutions: IndexMap<u32, (u32, RegId)> = IndexMap::default();
     let mut remove: HashSet<usize> = HashSet::default();
     let mut insert_after: HashMap<usize, Arc<Insn>> = HashMap::default();
+    // `derived` needs a definition that uses its candidate alone, so the values
+    // to try for a candidate are those, found once (every candidate tried every
+    // definition, with a copy of its uses).
+    let mut used_alone: HashMap<u32, Vec<u32>> = HashMap::default();
+    for (value, made) in &definitions {
+        if let Some([only]) = made.as_ref().map(|made| made.uses.as_slice()) {
+            used_alone.entry(*only).or_default().push(*value);
+        }
+    }
     for (candidate, definition) in definitions.clone() {
         let Some(definition) = definition else {
             continue;
@@ -1972,8 +2009,8 @@ pub fn secondary_bases<'a>(
             continue;
         }
         let mut group = Vec::new();
-        for (value, made) in &definitions {
-            if *value == candidate || made.is_none() {
+        for value in used_alone.get(&candidate).into_iter().flatten() {
+            if *value == candidate {
                 continue;
             }
             if let Some((made, found)) = derived(*value, candidate, &source) {
@@ -2358,6 +2395,8 @@ static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHM
 /// overflow or adjust flags it would have cleared. Work independent of the
 /// computation may stand between them, in the block or in a sole predecessor
 /// that only falls into it: the computation sinks to just before the test.
+/// A computation with a memory source stays where it is, and answers a test it
+/// is beside.
 pub fn tested(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2544,7 +2583,10 @@ fn _flag_source(
                 .as_ref()
                 .is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_))));
             let (reads, writes) = (registers(&effect.reads), registers(&effect.writes));
-            return (operands_in_registers
+            // A memory source is read where it is: only a setter that moves
+            // down past other work must have its operands in
+            // registers.
+            return ((operands_in_registers || crossed.is_empty())
                 && crossed.iter().all(|other: &liveness::Effect| {
                     other.writes.is_disjoint(&reads)
                         && other.reads.is_disjoint(&writes)

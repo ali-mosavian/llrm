@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:34645f1636642177dc6ae8f51e4a07ca5c5255676551f150ab2ca97c5c14f6f5 -->
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:e3cd576470a40c06e6c38277249a11591dd468bee963b27961a6bfe9181436f5 -->
 
 # hoist
 
@@ -35,6 +35,17 @@ spill model spills, and what reads them, stay; a displacement the accesses
 fold, or a value rebuilt at each read, is not charged. A floating value held
 across the loop is charged its release. At -Os the run is priced in bytes,
 every block once.
+
+A hoisted load is priced by what it saves each trip. A floating load its one
+reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
+(`OperationCosts::float_load_folded`, the fold's own extra cost), so
+hoisting it saves that and costs a load and a release before the loop: it
+stays unless the loop's trips pay for both. And the class holds only so many
+floating values (`Machine::float_registers`): of those the run holds across
+the loop, what the loop's own values leave room for are hoisted and the rest
+stay. A 4x4 matrix read through a pointer in a loop of six trips was hoisted
+whole, 13 of its 16 values spilled to the frame as doubles, 40 instructions
+each entry for a loop gcc runs with the matrix in memory operands.
 
 ## Example
 Before:

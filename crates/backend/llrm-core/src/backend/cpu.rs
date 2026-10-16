@@ -113,6 +113,8 @@ pub struct Profile {
     /// The operand size an instruction has without a prefix, in bytes.
     pub operand_bytes: i64,
     pub call_register_capacity: i64,
+    /// The floating values it holds in registers at once.
+    pub float_register_capacity: i64,
     // Preferred forms only; the complete legal set is `address_forms`.
     pub address_scales: BTreeSet<i64>,
     pub _costs: Vec<(String, i64)>,
@@ -143,6 +145,10 @@ pub struct Profile {
     /// and clang's nothing is improved after selection and allocation
     /// (`flow::machine_with`).
     pub optimized: bool,
+    /// `-fexcess-precision=standard` (`-ffloat-store`): a float conversion
+    /// rounds to its type, where otherwise x87 keeps the wider value in its
+    /// register, as gcc's `-fexcess-precision=fast` does.
+    pub float_store: bool,
     /// With `search`, whether it tries every shape (`-fallocation-search-all`,
     /// -Omax) or the one the spills suggest and the body without splitting.
     pub exhaustive: bool,
@@ -226,6 +232,7 @@ impl Profile {
             address_stall: self.address_prefix_stall,
             registers: self.register_capacity,
             call_registers: self.call_register_capacity,
+            float_registers: self.float_register_capacity,
             address_forms: self.address_forms.clone(),
             operations: self.operations.clone(),
             spaces: self.spaces,
@@ -273,6 +280,7 @@ impl Profile {
             ports: arch.flat_ports(),
             operand_bytes: arch.operand_bytes(),
             call_register_capacity: arch.callee_saved().len() as i64,
+            float_register_capacity: arch.float_stack() as i64,
             address_scales: BTreeSet::from([1]),
             _costs: Vec::new(),
             _latencies: Vec::new(),
@@ -286,6 +294,7 @@ impl Profile {
             search: true,
             routes: true,
             optimized: true,
+            float_store: false,
             exhaustive: false,
             model: arch.cost_model(),
             multiplies: Default::default(),
@@ -413,7 +422,7 @@ fn _profile(
 /// passes hold them.
 static _MADE: LazyLock<
     std::sync::Mutex<
-        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool), &'static Profile>,
+        crate::support::hash::HashMap<(&'static str, String, bool, bool, bool, bool, bool, bool), &'static Profile>,
     >,
 > = LazyLock::new(Default::default);
 
@@ -468,7 +477,7 @@ pub fn tuned_routing(
     exhaustive: bool,
     routes: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, routes, true)
+    tuned_optimizing(arch, name, size, search, exhaustive, routes, true, false)
 }
 
 /// `tuned_routing`, the backend's optional phases left out where not
@@ -481,12 +490,13 @@ pub fn tuned_optimizing(
     exhaustive: bool,
     routes: bool,
     optimized: bool,
+    float_store: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
     }
     let mut made = _MADE.lock().expect("the profiles are not poisoned");
-    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized);
+    let key = (arch.name(), name.to_owned(), size, search, exhaustive, routes, optimized, float_store);
     if let Some(&one) = made.get(&key) {
         return Ok(one);
     }
@@ -496,6 +506,7 @@ pub fn tuned_optimizing(
         exhaustive,
         routes,
         optimized,
+        float_store,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -570,6 +581,22 @@ mod tests {
         }
         assert!(profile("P5").unwrap().pentium_pairing);
         assert!(!names().into_iter().any(|name| name != "P5" && profile(name).unwrap().pentium_pairing));
+    }
+
+    /// The passes' view of the target (`Profile::target`, then the QB layer's
+    /// wrapper) dropped the depth of the floating stack: hoist saw no class and
+    /// held 16 matrix values across a loop on a stack of 8.
+    #[test]
+    fn test_a_profiles_target_states_the_depth_of_its_floating_stack() {
+        for name in names() {
+            let target = profile(name).unwrap();
+            assert_eq!(target.target().float_registers(), 8, "{name}");
+            assert_eq!(
+                target.operations.float_load_folded,
+                target.cost("x87_add_m").unwrap() - target.cost("x87_add").unwrap(),
+                "{name}"
+            );
+        }
     }
 
     #[test]

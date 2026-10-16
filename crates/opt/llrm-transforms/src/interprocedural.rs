@@ -13,7 +13,11 @@
 //! (`docs/optimizations/module-analyses.md`). A procedure has every caller in
 //! the program when the program does not export it (`unexported`); the roots
 //! are the exported bodies. Each stage re-runs the pipeline over the bodies it
-//! changed under a stage name (`LLRM_DEBUG=runs` and `--dump` use it).
+//! changed under a stage name (`LLRM_DEBUG=runs` and `--dump` use it). A pass
+//! that found nothing on a body starts again only where what it read has
+//! changed ([`crate::settled`]); `ipa-cp.` and `ipa-deadargs.` vouch for their
+//! edits of a caller that are no more than a call's new name or one argument
+//! fewer.
 //!
 //! The stages, in order:
 //!
@@ -200,18 +204,46 @@ fn reporting<T>(
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
 ) -> T {
+    reporting_marked(module, modules, edit).0
+}
+
+/// `reporting`, and where each body it changed was before: what a stage that
+/// vouches for its edit (`Settled::vouch`) says it from.
+fn reporting_marked<T>(
+    module: &mut Module,
+    modules: &mut ModuleAnalyses,
+    edit: impl FnOnce(&mut Module) -> T,
+) -> (T, llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>) {
     let before: Vec<(GlobalId, llrm_mir::module::Mark)> = module
         .functions()
         .filter(|(_, _, body)| !body.is_declaration())
         .map(|(id, _, body)| (id, body.mark()))
         .collect();
     let out = edit(module);
+    let mut changed = llrm_support::hash::IndexMap::default();
     for (id, mark) in before {
         if module.global(id).function().map(llrm_mir::module::Function::mark) != Some(mark) {
             modules.changed(id);
+            changed.insert(id, mark);
         }
     }
-    out
+    (out, changed)
+}
+
+/// The edits `bodies` had since `before` are ones the pipeline's passes need
+/// not look at again: each is a call that names another function that says the
+/// same, or one that takes fewer arguments (`Settled`).
+fn vouched(
+    module: &Module,
+    bodies: impl IntoIterator<Item = GlobalId>,
+    before: &llrm_support::hash::IndexMap<GlobalId, llrm_mir::module::Mark>,
+) {
+    let settled = module.context.extension::<crate::settled::Settled>();
+    for id in bodies {
+        if let (Some(function), Some(&mark)) = (module.global(id).function(), before.get(&id)) {
+            settled.vouch(function, mark);
+        }
+    }
 }
 
 /// `module`'s declarations to declare into: the module's own `Declarations`,
@@ -1365,7 +1397,7 @@ pub fn optimized_with<E: From<String>>(
         // and the calls go to the copy.
         let mut cloned_now = false;
         for at in 0..count {
-            let made = reporting(&mut program.modules[at], &mut modules[at], |module| {
+            let (made, before) = reporting_marked(&mut program.modules[at], &mut modules[at], |module| {
                 crate::ipacp::cloned(
                     module,
                     &program.layout,
@@ -1376,6 +1408,7 @@ pub fn optimized_with<E: From<String>>(
                     &mut cloning,
                 )
             });
+            vouched(&program.modules[at], made.edited.iter().copied().filter(|id| !made.unsound.contains(id)), &before);
             for &id in &made.added {
                 let size = inline::operations(program.modules[at].global(id).function().expect("a procedure"));
                 procedures[at].push(id);
@@ -1539,7 +1572,10 @@ pub fn optimized_with<E: From<String>>(
     }
     // What the constants and ranges left unread is not pushed.
     for at in 0..count {
-        for id in reporting(&mut program.modules[at], &mut modules[at], crate::deadargs::removed) {
+        let ((removed, unsound), before) =
+            reporting_marked(&mut program.modules[at], &mut modules[at], crate::deadargs::removed_with);
+        vouched(&program.modules[at], removed.iter().copied().filter(|id| !unsound.contains(id)), &before);
+        for id in removed {
             edited(&mut modules[at], &[id]);
             // A body with fewer values to carry is another body to the loop
             // passes and the recursion's.
@@ -1812,7 +1848,7 @@ pub fn stamped(
                 .all(
                     |one| proofs(one).iter().any(|proof| {
                         !proof.stops
-                            && (proof.count.is_some() || proof.step.magnitude() == &num_bigint::BigUint::from(1_u8))
+                            && (proof.count.is_some() || proof.step.magnitude() == llrm_analysis::num::Num::from(1_u8))
                     }),
                 )
         };

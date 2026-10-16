@@ -126,6 +126,7 @@ use llrm_analysis::consts::{self, Calls};
 use llrm_analysis::floatfacts::{self, LoopExit, Solved};
 use llrm_analysis::manager::{self, FloatFacts};
 use llrm_analysis::memory::{MemRef, Unit};
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ssa::SsaUpdater;
 use llrm_analysis::{cfg, induction, regions};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -136,7 +137,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use num_bigint::BigInt;
 
 use crate::lcssa::{arms, from_arms};
 use crate::transform::live;

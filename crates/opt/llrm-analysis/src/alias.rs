@@ -148,7 +148,6 @@ use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
-use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
@@ -160,13 +159,15 @@ use crate::memory::{
     self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, wrapped,
 };
-use crate::ranges;
+use crate::num::Num as BigInt;
+use crate::ranges::{self, Interval, Lookup};
 use crate::regions::{self, ByteRange};
 use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
 pub static NONLOCAL: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::NONLOCAL));
-pub const EMPTY: Provenance = Provenance { slices: BTreeSet::new(), restrict: BTreeSet::new() };
+pub const EMPTY: Provenance =
+    Provenance { slices: crate::memory::Sorted::new(), restrict: crate::memory::Sorted::new() };
 
 /// One actual argument of a call: a provenance, a `(pointer value,
 /// displacement)` pair, or nothing a pointer is.
@@ -479,7 +480,7 @@ fn _resolved_reference(
 ///
 /// `captures` holds PARAMETER
 /// object identities.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub struct Summary {
     pub reads: SliceSet,
     pub writes: SliceSet,
@@ -868,7 +869,7 @@ fn _unknown_base(
     at: InstId,
 ) -> Result<(BTreeSet<Slice>, BTreeSet<Slice>, bool), String> {
     OTHER_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let mut reads = NONLOCAL.slices.clone();
+    let mut reads = NONLOCAL.slices.to_set();
     reads.extend(_whole([], &facts.escaped_before.get(&at).unwrap_or_default()));
     // A port `ports` left reaching memory reaches it as its device does, by
     // address: every object, whether the program ever took its address.
@@ -2042,6 +2043,38 @@ pub struct Effect {
     pub fills: Vec<MemRef>,
 }
 
+/// `effects` with each value `to` gives another operand named by it, the
+/// effects of the same calls on the same bytes after a value is replaced by
+/// one found equal. The lists the calls share stay shared. None where a
+/// reference cannot carry its names over (`MemRef::renamed`).
+pub fn effects_renamed(
+    effects: &IndexMap<InstId, Effect>,
+    to: &dyn Fn(ValueId) -> Option<Operand>,
+) -> Option<IndexMap<InstId, Effect>> {
+    let mut lists: HashMap<*const [MemRef], Rc<[MemRef]>> = HashMap::default();
+    let mut list = |old: &Rc<[MemRef]>| -> Option<Rc<[MemRef]>> {
+        if let Some(done) = lists.get(&Rc::as_ptr(old)) {
+            return Some(Rc::clone(done));
+        }
+        let made: Rc<[MemRef]> = old.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?.into();
+        lists.insert(Rc::as_ptr(old), Rc::clone(&made));
+        Some(made)
+    };
+    effects
+        .iter()
+        .map(|(inst, effect)| {
+            Some((
+                *inst,
+                Effect {
+                    loads: list(&effect.loads)?,
+                    stores: list(&effect.stores)?,
+                    fills: effect.fills.iter().map(|one| one.renamed(to)).collect::<Option<Vec<_>>>()?,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Instantiate callee effects through actual pointer provenance: each
 /// call's effect, as old `calls_annotated` wrote it into the call.
 pub fn calls_annotated(
@@ -2056,7 +2089,7 @@ pub fn calls_annotated(
         procedure.calls.keys().map(|at| (*at, callee(at).map(|one| one.captures.clone()))).collect::<IndexMap<_, _>>();
     let facts = points_to(&procedure.unit, Some(&procedure.arguments), Some(&captures))?;
     let computed;
-    let callbacks = match procedure.unit.callbacks {
+    let callbacks = match procedure.unit.callbacks() {
         Some(held) => {
             if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
                 assert!(
@@ -2075,7 +2108,7 @@ pub fn calls_annotated(
     let reference = |one: &Slice| {
         MemRef::reach(
             u32::try_from(one.width).expect("a slice width is a memory width"),
-            Provenance { slices: BTreeSet::from([one.clone()]), restrict: BTreeSet::new() },
+            Provenance { slices: crate::memory::Sorted::from([one.clone()]), restrict: crate::memory::Sorted::new() },
         )
     };
 
@@ -2118,8 +2151,8 @@ pub fn calls_annotated(
         };
         if effect.unknown_read {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.clone() } else { visible });
-            effect.reads.extend(NONLOCAL.slices.clone());
+            effect.reads.extend(if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible });
+            effect.reads.extend(NONLOCAL.slices.to_set());
             effect.reads.extend(_tracked(&procedure.unit));
         }
         // What an unplaced write may reach: each of its types' stores, not an
@@ -2127,8 +2160,8 @@ pub fn calls_annotated(
         let mut typed = Vec::new();
         if effect.unknown_write {
             let visible = _whole(&actual, &facts.escaped_before.get(&at).unwrap_or_default());
-            let mut reached = if visible.is_empty() { UNKNOWN.slices.clone() } else { visible };
-            reached.extend(NONLOCAL.slices.clone());
+            let mut reached = if visible.is_empty() { UNKNOWN.slices.to_set() } else { visible };
+            reached.extend(NONLOCAL.slices.to_set());
             match &effect.unknown_write_types {
                 // A pointer no fact follows reaches only what escaped, never a
                 // tracked global.
@@ -2494,8 +2527,7 @@ fn _direct(
         // based on it reach is reached by nothing that is not.
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
-            let mut restrict = source.restrict.clone();
-            restrict.insert(Identity::Value(result.0));
+            let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
             Ok(Some(Provenance { slices: source.slices, restrict }))
         }
         // A callee whose result is `noalias` returns a pointer to an object
@@ -3531,13 +3563,16 @@ enum Bounded<'a> {
 }
 
 impl Bounded<'_> {
-    fn at(
+    /// What is known of `value` at block `at`.
+    fn of(
         &self,
+        unit: &Unit,
+        value: &ValueId,
         at: i64,
-    ) -> Option<&ranges::Intervals> {
+    ) -> Option<Interval> {
         match self {
-            Bounded::Held(held) => held.at(at),
-            Bounded::Worked(worked) => worked.get(&at),
+            Bounded::Held(held) => held.scope(unit, at).lookup(value).map(std::borrow::Cow::into_owned),
+            Bounded::Worked(worked) => worked.get(&at).and_then(|scope| scope.get(value)).cloned(),
         }
     }
 }
@@ -3554,9 +3589,10 @@ pub fn annotated_with(
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
                 // body's.
-                let facts = held.facts();
+                let facts = held.loops_facts();
                 assert!(
-                    (!unit.loop_intervals && facts.is_empty()) || facts == ranges::bounded_with(unit, known)?,
+                    (!unit.loop_intervals && facts.is_empty())
+                        || facts == ranges::bounded_solved(unit, known, None, false)?.loops_facts(),
                     "the bounds a unit carries are not those of the body it stands over: stale"
                 );
             }
@@ -3569,9 +3605,8 @@ pub fn annotated_with(
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval = reference
-            .base
-            .and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
+        let interval =
+            reference.base.and_then(|base| bounded.of(unit, &base, at).or_else(|| constants.get(&base).cloned()));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -3590,7 +3625,7 @@ pub fn annotated_with(
                         i64::try_from(number).map_err(|_| format!("slice bound {number} exceeds the i64 slice model"))
                     };
                     got = Some(Provenance {
-                        slices: BTreeSet::from([Slice::new(
+                        slices: crate::memory::Sorted::from([Slice::new(
                             source.object.clone(),
                             model(&low)?,
                             model(&high)?,
@@ -3607,11 +3642,7 @@ pub fn annotated_with(
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
             let lookup = |value: ValueId| {
-                bounded
-                    .at(at)
-                    .and_then(|known| known.get(&value))
-                    .or_else(|| constants.get(&value))
-                    .map(|one| (value, one.clone()))
+                bounded.of(unit, &value, at).or_else(|| constants.get(&value).cloned()).map(|one| (value, one))
             };
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {

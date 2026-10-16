@@ -717,3 +717,25 @@ fn test_a_walk_that_differs_at_a_loop_entry_resumes_there_not_from_the_top() {
     let (walked, resumed) = (body.facts.0.counted("sim-blocks-walked"), body.facts.0.counted("sim-blocks-resumed"));
     assert!(resumed > 0, "{walked} blocks walked and none taken from an earlier walk");
 }
+
+/// A pair loop reads five values it does not change and keeps its sums in
+/// registers. Its body needs the registers, so the values were evicted there
+/// and reloaded on the edge to the loop's latch each trip, an edge that is not
+/// the back edge: only reloads on the back edge counted against holding a value
+/// at the header, so four were reloaded 30,000 times (nbody_fixed -O2 at m16:
+/// 1,854,166 instructions against 1,450,167 for the allocator alone). Every
+/// reload that restores a header's value inside the loop counts.
+#[test]
+fn test_what_a_loop_reloads_each_trip_on_any_of_its_edges_is_not_held_at_its_header() {
+    let (body, _) = before_phase(Calls::C, "loopinvariants.ll", "_bench_nbody_fixed@3", "486", "SsaSpill");
+    let spilled = ssaspill::spilled(
+        &body,
+        &mut Frame::new(0),
+        &target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+        Prices::clocks(),
+    )
+    .expect("spills");
+    let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
+    assert!(done.instructions < 1_035_000.0, "{} instructions executed", done.instructions);
+}

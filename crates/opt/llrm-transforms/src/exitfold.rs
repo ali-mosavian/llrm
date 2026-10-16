@@ -106,6 +106,7 @@
 
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, ExitCount, Scev};
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, guards, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -113,7 +114,6 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use num_bigint::BigInt;
 
 use crate::counting;
 use crate::expand::{self, Expander};
@@ -833,7 +833,7 @@ fn _hoisted(
                 break 'candidate;
             };
             let step = Scev::of(&affine.step, width);
-            let Some(by) = step.known().filter(|by| by.magnitude() == &num_bigint::BigUint::from(1_u8)) else {
+            let Some(by) = step.known().filter(|by| by.magnitude() == BigInt::from(1_u8)) else {
                 break 'candidate;
             };
             let start = Scev::of(&affine.start, width);

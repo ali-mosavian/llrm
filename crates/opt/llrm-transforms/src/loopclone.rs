@@ -177,7 +177,7 @@ fn plan(
     if Some(loop_.header) == function.entry().map(cfg::id) || loop_.latches.len() != 1 {
         return None;
     }
-    let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+    let outside = predecessors[&loop_.header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
     if outside.len() != 1 {
         return None;
     }
@@ -188,7 +188,7 @@ fn plan(
     if blocks[&entry].succ != [loop_.header] || !back {
         return None;
     }
-    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].is_subset(&loop_.body)) {
+    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].iter().all(|at| loop_.body.contains(at))) {
         return None;
     }
     let originals =
@@ -557,13 +557,13 @@ pub fn chained(
     if Some(loop_.header) == function.entry().map(cfg::id) || loop_.latches.len() != 1 {
         return Ok(None);
     }
-    let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+    let outside = predecessors[&loop_.header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
     let [entry] = outside[..] else { return Ok(None) };
     let latch = *loop_.latches.first().expect("one latch");
     if blocks[&entry].succ != [loop_.header] || blocks[&latch].succ != [loop_.header] || latch == loop_.header {
         return Ok(None);
     }
-    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].is_subset(&loop_.body)) {
+    if loop_.body.iter().any(|at| *at != loop_.header && !predecessors[at].iter().all(|at| loop_.body.contains(at))) {
         return Ok(None);
     }
     // The header alone leaves, by a conditional branch.

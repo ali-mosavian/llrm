@@ -44,6 +44,13 @@
 //! From unit test `test_an_exchange_swaps_the_zero_upper_halves` in
 //! `upperzero.rs`.
 //!
+//! `hoisted` (m32 and other targets with the rule `zero_extensions`) puts the
+//! same `movzx` in front of a loop for a word register whose widening `movzx`
+//! the loop repeats, where the loop writes the register's low word only: the
+//! widening is then a copy (`peephole.peep`, `zero_extended_copy`). The frame
+//! register is zeroed when the body writes it (no frame pointer: its cells are
+//! esp-relative later) and no instruction reads it whole by name.
+//!
 //! # Provides
 //! `before`, the zero roots before each instruction, keyed by instruction
 //! identity. `preheaded` places `movzx` in loop preheaders for roots a caller
@@ -53,12 +60,12 @@
 //! `established` is the last sub-pass of [`crate::backend::peephole`], run when
 //! the body has such a cell (`needs::UNHELD`) and not on a native target, whose
 //! addresses read whole registers.
+//! `hoisted` runs before the zero-extension rules of the same phase.
 //!
 //! # Used by
 //! [`crate::backend::exactaddress`] (`before`, `preheaded`), and the rewrite
 //! guards of the peephole (`upper_zero`).
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
@@ -330,6 +337,105 @@ pub(crate) fn unheld(
         .fold(0, |roots, one| roots | one)
 }
 
+/// `body` with the upper half of each word register a loop's `movzx` widens
+/// zeroed once, in the preheader of the outermost loop that writes the register
+/// only below its upper half.
+pub fn hoisted(body: &LirBody) -> LirBody {
+    // The word register a `movzx` widens into another root.
+    let widened = |one: &Insn| -> Option<Roots> {
+        let what = one.what.as_ref()?;
+        match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+            (
+                Operation::Extend,
+                Some("movzx"),
+                [Loc::Reg(wide @ Reg { width: 4, .. })],
+                [Loc::Reg(word @ Reg { width: 2, .. })],
+            ) if crate::model::ir::root(wide.register) != crate::model::ir::root(word.register) => bit(word.register),
+            _ => None,
+        }
+    };
+    if !body.blocks.iter().any(|block| block.insns.iter().any(|one| widened(one).is_some())) {
+        return body.clone();
+    }
+    let regs = body.regs();
+    let natural = loops::loops(&body.blocks, Some(body.entry));
+    let zero = before(body);
+    let untouched = |inside: &loops::Body, roots: Roots| {
+        body.blocks
+            .iter()
+            .filter(|block| inside.contains(&block.at))
+            .all(|block| block.insns.iter().all(|one| disturbed(regs, body.bits, one) & roots == 0))
+    };
+    let mut wanted: IndexMap<i64, Roots> = IndexMap::default();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(roots) = widened(one).filter(|roots| zero[&id(one)] & roots == 0) else { continue };
+            let outermost = natural
+                .iter()
+                .filter(|inside| inside.body.contains(&block.at) && untouched(&inside.body, roots))
+                .max_by_key(|inside| inside.body.len());
+            if let Some(found) = outermost {
+                *wanted.entry(found.header).or_default() |= roots;
+            }
+        }
+    }
+    if wanted.is_empty() {
+        return body.clone();
+    }
+    // A body that writes the frame register has no frame pointer: the cells
+    // that name it as their base are resolved to the stack pointer later,
+    // and read none of it. So its upper half is dead where no instruction
+    // reads it by name, which liveness cannot say of a register those cells
+    // keep live.
+    let frame = bit(regs.frame).unwrap_or(0);
+    let reads_wide = |roots: Roots| {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(
+                |one| one.what.as_ref().is_some_and(|what| {
+                    what.sources.iter().any(|source| {
+                        matches!(
+                            source,
+                            Loc::Reg(Reg { register, width: 4 }) if bit(*register).is_some_and(|one| one & roots != 0)
+                        )
+                    })
+                }),
+            )
+    };
+    let writes_frame = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .any(
+            |one| one.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.dests
+                        .iter()
+                        .any(
+                            |dest| matches!(
+                                dest,
+                                Loc::Reg(Reg { register, .. }) if bit(*register) == Some(frame)
+                            ),
+                        ),
+                ),
+        );
+    let symbolic = if frame != 0 && writes_frame && !reads_wide(frame) { frame } else { 0 };
+    let mut placed = body.clone();
+    let own: IndexMap<i64, Roots> =
+        wanted.iter().map(|(header, roots)| (*header, roots & !symbolic)).filter(|(_, r)| *r != 0).collect();
+    let by_cells: IndexMap<i64, Roots> =
+        wanted.iter().map(|(header, roots)| (*header, roots & symbolic)).filter(|(_, r)| *r != 0).collect();
+    if !own.is_empty() {
+        placed = preheaded(&placed, &own, true).0;
+    }
+    if !by_cells.is_empty() {
+        placed = preheaded(&placed, &by_cells, false).0;
+    }
+    placed
+}
+
 /// `body` with the upper half of every unheld root a cell reads zero: one
 /// `movzx` in the preheader of the outermost loop around the cell that
 /// leaves that half alone, or before the first cell of a block no
@@ -338,7 +444,7 @@ pub fn established(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let graph = &body.blocks;
     let natural = loops::loops(&graph, Some(body.entry));
-    let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
+    let untouched = |inside: &loops::Body, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))
@@ -408,8 +514,9 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{before, bit};
+    use super::{before, bit, hoisted};
     use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
+    use crate::model::lir::Block;
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -534,5 +641,68 @@ mod tests {
         let id = |at: usize| crate::backend::peephole::id(&body.blocks[0].insns[at]);
         assert_ne!(zero[&id(2)] & bit(RegId::ESI).unwrap(), 0);
         assert_eq!(zero[&id(2)] & bit(RegId::ECX).unwrap(), 0);
+    }
+
+    /// sieve -O2 (m32) ran `movzx ecx, bp` 1,449 times in its inner loop, where
+    /// `bp` is written only as a word: 4,350 of the row's 4,680 extra
+    /// clocks over the allocation that happened to reuse a register already
+    /// zero above its word. One `movzx ebp, bp` before the loops makes the half
+    /// zero for every trip, and the loop's `movzx` a copy.
+    #[test]
+    fn test_a_loops_widening_of_a_word_written_register_is_zeroed_once_before_it() {
+        let (ebx, bx) =
+            (Loc::Reg(Reg { register: RegId::EBX, width: 4 }), Loc::Reg(Reg { register: RegId::BX, width: 2 }));
+        let ecx = Loc::Reg(Reg { register: RegId::ECX, width: 4 });
+        let word = |value| Loc::Imm(Imm { value, width: 2, address: None });
+        let entry = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    one(0, Operation::Move, "mov", vec![bx.clone()], vec![word(2)], None),
+                    one(1, Operation::Jump, "jmp", vec![], vec![], Some(1)),
+                ],
+            )
+        };
+        let looped = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                1,
+                vec![
+                    one(2, Operation::Extend, "movzx", vec![ecx], vec![bx.clone()], None),
+                    one(3, Operation::Binary, "add", vec![bx.clone()], vec![bx.clone(), word(3)], None),
+                    one(4, Operation::Compare, "cmp", vec![], vec![bx.clone(), word(9)], None),
+                    one(5, Operation::Branch, "jne", vec![], vec![], Some(1)),
+                ],
+            )
+        };
+        // A callee-saved register is restored whole before the return: its
+        // upper half is dead until then.
+        let restore = Loc::Imm(Imm { value: 7, width: 4, address: None });
+        let exit = LirBlock::new(
+            2,
+            vec![
+                one(6, Operation::Move, "mov", vec![ebx.clone()], vec![restore], None),
+                one(7, Operation::Return, "ret", vec![], vec![], None),
+            ],
+        );
+        let body = LirBody::new(
+            "hoist",
+            0,
+            vec![entry.into(), looped.into(), exit.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let widening = crate::backend::peephole::id(&body.blocks[1].insns[0]);
+        let ebx_bit = bit(RegId::EBX).unwrap();
+        assert_eq!(before(&body)[&widening] & ebx_bit, 0, "premise: nothing zeroes the half before the loop");
+
+        let after = hoisted(&body);
+
+        assert_ne!(before(&after)[&widening] & ebx_bit, 0, "the loop's widening reads a register zero above its word");
+        let names =
+            |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&after.blocks[0]), ["mov", "movzx", "jmp"]);
+        assert_eq!(names(&after.blocks[1]), ["movzx", "add", "cmp", "jne"]);
     }
 }

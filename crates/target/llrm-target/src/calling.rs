@@ -54,6 +54,10 @@ pub struct Convention {
     pub cc: Option<String>,
     /// What a byte argument takes on the stack, and the least a cell holds.
     pub slot_bytes: i64,
+    /// The bytes the stack pointer is a multiple of at a call, where that is
+    /// more than a slot: a double on the stack is then aligned (Intel486 data
+    /// sheet 240440-002, Table 2.1). A slot's worth where the file gives none.
+    pub stack_alignment: Option<i64>,
     pub order: Order,
     pub cleanup: Cleanup,
     pub argument_registers: Vec<String>,
@@ -184,6 +188,7 @@ const KEYS: &[&str] = &[
     "aggregate_pointer_register",
     "aggregate_pointer_far",
     "slot_bytes",
+    "stack_alignment",
     "order",
     "cleanup",
     "argument_registers",
@@ -573,6 +578,7 @@ impl Convention {
             pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
             symbol,
             slot_bytes: integer("slot_bytes")?,
+            stack_alignment: table.contains_key("stack_alignment").then(|| integer("stack_alignment")).transpose()?,
             order,
             cleanup,
             argument_registers: names(table.get("argument_registers"), "argument_registers")?,

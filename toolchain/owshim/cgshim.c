@@ -278,7 +278,14 @@ static unsigned sym( cg_sym_handle h )
             n += (size_t)snprintf( line + n, sizeof( line ) - n, "%s%s", i ? "," : "", one );
         }
         regs( one, sizeof( one ), ret );
-        snprintf( line + n, sizeof( line ) - n, "] ret=%s", ret != NULL ? one : "-" );
+        n += (size_t)snprintf( line + n, sizeof( line ) - n, "] ret=%s", ret != NULL ? one : "-" );
+        {
+            hw_reg_set *save = FEAuxInfo( aux, FEINF_SAVE_REGS );
+
+            /* What the routine keeps: `__modify` is its complement. */
+            regs( one, sizeof( one ), save );
+            snprintf( line + n, sizeof( line ) - n, " save=%s", save != NULL ? one : "-" );
+        }
         emit( "%s", line );
         {
             byte_seq *code = FEAuxInfo( aux, FEINF_CALL_BYTES );

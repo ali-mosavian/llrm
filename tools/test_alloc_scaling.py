@@ -448,3 +448,94 @@ def test_a_carve_works_on_the_positions_that_name_the_value_not_on_the_block():
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["split carving"] < 150, f"cells N=448 -O2: split carving cost {run['split carving']} Minstr (150 allowed; 333 before): {run}"
+
+
+def test_a_short_update_looks_at_the_definitions_of_the_spilled_values_and_not_at_every_instruction_of_the_block():
+    """Making an update of a spilled value short walked each block that holds a definition of one, end to end, and copied it:
+    `spill short updates` cost 335 Minstr on `cells` at N=896 (x4.1 for x2 the program). It looks at the positions the postings give."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["spill short updates"] < 20, f"cells N=448 -O2: spill short updates cost {run['spill short updates']} Minstr (20 allowed; 84 before): {run}"
+
+
+def test_an_update_made_local_looks_at_the_definitions_of_the_spilled_values_and_copies_a_block_only_where_it_makes_one():
+    """`_local_updates` copied each block holding a definition of a spilled value and looked at every instruction of it: `spill local updates`
+    cost 70 Minstr on `cells` at N=448 (x4.2 for x2 the program). It looks at the positions the postings give."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["spill local updates"] < 25, f"cells N=448 -O2: spill local updates cost {run['spill local updates']} Minstr (25 allowed; 70 before): {run}"
+
+
+def test_the_liveness_of_the_pieces_a_split_made_is_asked_of_their_postings_and_not_of_a_pass_over_the_body():
+    """`split after liveness` scanned the whole body for the occurrences of the pieces it had made: 98.6 Minstr on `cells` at N=448, 401 at 896.
+    It reads them from the postings the body is followed with."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split after liveness"] < 60, f"cells N=448 -O2: split after liveness cost {run['split after liveness']} Minstr (60 allowed; 98.6 before): {run}"
+
+def test_a_load_is_asked_of_the_stores_to_its_own_symbol_and_not_of_every_store_in_the_body():
+    """Every load of a global was asked, one by one, whether each of the body's stores to other globals keeps it: 300 loads against
+    300 stores took `spill stable loads` 1,226 Minstr at -O2 -m32 (5,102 at 600), most of it `may_overlap` building the same answer
+    for every pair. The stores to another external symbol meet it by region and are found by block, not named for each load."""
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    n = 300
+    lines = ["extern void sink(int *);", *(f"int a{k}, k{k};" for k in range(n)), "void taken(void){"]
+    lines += [f" sink(&a{k}); sink(&k{k});" for k in range(n)]
+    lines += ["}", "int fn(int m){ int s=0,i; for(i=0;i<m;i++){"]
+    lines += [f" a{k} += i; s += k{k};" for k in range(n)]
+    lines += [" } return s; }"]
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "stores.c"
+        source.write_text("\n".join(lines) + "\n")
+        run = steps(compiler, source, "-O2")
+    assert run["spill stable loads"] < 500, f"300 stores and 300 loads: spill stable loads cost {run['spill stable loads']} Minstr (500 allowed; 1,226 before)"
+
+
+def test_a_local_split_asks_the_postings_for_the_references_of_the_value_and_not_every_instruction_of_its_block():
+    """`splitkit::local` collected a value's references by asking each instruction of its block whether it names it: `split local` cost 82
+    Minstr on `cells` at N=448 and 291 at 896. They are read from the postings."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "cells.c"
+        source.write_text(scaling.AXES["cells"](448))
+        run = steps(compiler, source, "-O2")
+    assert run["split local"] < 45, f"cells N=448 -O2: split local cost {run['split local']} Minstr (45 allowed; 82 before): {run}"
+
+
+def test_the_peephole_grows_as_a_loop_nest_does():
+    """`lir peephole` took 6.3x as long for a loop nest 4x as deep (4.3x the instructions) at -O2: `copysink` walked every block of a loop
+    to find the path from each copy to the exit and solved the loop's liveness for each loop around it, whether or not a copy could move.
+    A copy its own block settles is left there, and the paths and the liveness are made once for a block and a loop."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        spent = {}
+        for n in (16, 64):
+            source = Path(work) / f"nest{n}.c"
+            source.write_text(scaling.AXES["nest"](n))
+            spent[n] = steps(compiler, source, "-O2")["lir peephole"]
+    grown = spent[64] / max(spent[16], 1e-9)
+    assert grown < 5.2, f"a nest 4x as deep cost {grown:.2f} times as much in `lir peephole` (5.2 allowed; 6.29 before): {spent}"

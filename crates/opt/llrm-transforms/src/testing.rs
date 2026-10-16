@@ -129,6 +129,7 @@ pub struct Tuned {
     pub sizes: crate::profit::OperationCosts,
     pub registers: i64,
     pub call_registers: i64,
+    pub float_registers: i64,
     pub far_access: i64,
     pub segments: i64,
     pub address_forms: Vec<llrm_mir::target::AddressForm>,
@@ -174,6 +175,10 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn call_registers(&self) -> i64 {
         self.call_registers
+    }
+
+    fn float_registers(&self) -> i64 {
+        self.float_registers
     }
 
     fn far_access_registers(&self) -> i64 {

@@ -15,12 +15,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+import qb32demos  # noqa: E402
 import qbbuild  # noqa: E402
 import qbplay  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
 SOURCE = dosbatch.ROOT / "tests" / "qbrt" / "keys_trap.bas"
 KEYS = ["f1", "f2", "a", "f1"]
+PARK_MS = 5   # emulated ms the program runs before a key goes in, and after
 
 
 def test_trapped_keys_run_their_handlers_and_are_not_read(tmp_path):
@@ -33,11 +35,15 @@ def test_trapped_keys_run_their_handlers_and_are_not_read(tmp_path):
             shutil.copy(beside, work / Path(beside).name)
         session = qbplay.Session(work)
         try:
-            session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
-            session.wait_for("ready", 60)
-            session.idle()
-            session.type(KEYS, pause=0)
-            session.wait_for("done", 60)
+            session.launch(qb32demos.LONGEST_MS)
+            session.run_until(lambda: "ready" in session.screen(), qb32demos.LONGEST_MS, "'ready'")
+            # One key at a time, each into the phase of the program that takes it (the program waits for its handler before the next):
+            # a timed park is long enough for the program to have moved on.
+            session.resume(PARK_MS)
+            for key in KEYS:
+                session.send({"cmd": "key", "key": key})
+                session.resume(PARK_MS)
+            session.run_until(lambda: "done" in session.screen(), qb32demos.LONGEST_MS, "'done'")
             screen = " ".join(session.screen().split())
         finally:
             session.close()

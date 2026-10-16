@@ -15,7 +15,7 @@
 +            /*
 +             * llrm: an attribute of an earlier declaration holds for the function, as gcc's do.
 +             */
-+            sym->flags |= old_sym.flags & LLRM_SYM_NOINLINE;
++            sym->flags |= old_sym.flags & ( LLRM_SYM_NOINLINE | LLRM_SYM_ALWAYSINLINE );
  #if _INTEL_CPU
              /*
               * add default far/near flags depending on data model

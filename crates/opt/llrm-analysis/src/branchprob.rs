@@ -927,7 +927,7 @@ fn truth(
 pub struct Cycle<'a> {
     pub header: i64,
     pub latches: &'a BTreeSet<i64>,
-    pub body: &'a BTreeSet<i64>,
+    pub body: &'a llrm_mir::forest::Body,
     /// The trips induction proves, in place of the heuristic's odds.
     pub trips: Option<i64>,
 }
@@ -973,6 +973,10 @@ pub fn propagated(
 }
 
 /// `propagated`, and each edge's probability as the trips left it.
+///
+/// Worked over the blocks by place in `order`: each block's forward
+/// predecessors and the edges they come by are found once, a loop's blocks are
+/// marked with its own stamp, and an edge's plan is made at its first ask.
 pub fn propagated_edges(
     order: &[i64],
     predecessors: &dyn Fn(i64) -> Vec<i64>,
@@ -980,72 +984,108 @@ pub fn propagated_edges(
     cycles: &[Cycle],
     given: &dyn Fn(i64, i64) -> f64,
 ) -> (BTreeMap<i64, f64>, BTreeMap<(i64, i64), f64>) {
+    let count = order.len();
+    let place: HashMap<i64, usize> = order.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let next: Vec<Vec<i64>> = order.iter().map(|&at| successors(at)).collect();
+    // Each loop's header by place, and each header's loops.
+    let mut headed: HashMap<i64, Vec<usize>> = HashMap::default();
+    for (index, one) in cycles.iter().enumerate() {
+        headed.entry(one.header).or_default().push(index);
+    }
+    // Each block's loops, inner first, and each loop's reachable blocks in
+    // `order`: a loop is asked about from its own blocks, so no ask walks every
+    // loop of the function.
+    let mut around: Vec<Vec<usize>> = vec![Vec::new(); count];
+    let mut inside_of: Vec<Vec<usize>> = vec![Vec::new(); cycles.len()];
+    for (index, one) in cycles.iter().enumerate() {
+        for at in one.body.iter() {
+            if let Some(&at) = place.get(at) {
+                around[at].push(index);
+            }
+        }
+    }
+    for at in 0..count {
+        for &index in &around[at] {
+            inside_of[index].push(at);
+        }
+    }
+    // Each block's predecessors by place with the edge they come by, whether it
+    // goes back to a loop's header from inside the loop, in the order the
+    // closure gives them.
+    struct Coming {
+        from: usize,
+        edge: usize,
+        back: bool,
+    }
+    let mut coming: Vec<Vec<Coming>> = Vec::with_capacity(count);
+    for (at, &block) in order.iter().enumerate() {
+        let mut list = Vec::new();
+        for from in predecessors(block) {
+            let Some(&from) = place.get(&from) else { continue };
+            let Some(edge) = next[from].iter().position(|to| *to == block) else { continue };
+            let back = headed.get(&block).into_iter().flatten().any(|&index| cycles[index].body.contains(&order[from]));
+            list.push(Coming { from, edge, back });
+        }
+        let _ = at;
+        coming.push(list);
+    }
     // How often a trip of each loop reaches its exiting blocks together, which
-    // its exit test runs: more than once where one is in a loop nested in
-    // it, and each visit then takes that much less of the exit, so that the
-    // trips stay.
-    let visits: std::cell::RefCell<BTreeMap<i64, f64>> = std::cell::RefCell::new(BTreeMap::new());
-    // Asked of every edge by every loop's weighing: a block's successors and a
-    // loop's exiting blocks do not change between asks.
-    let next_of: std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<i64>>>> = std::cell::RefCell::new(BTreeMap::new());
-    let successors = |at: i64| -> std::rc::Rc<Vec<i64>> {
-        std::rc::Rc::clone(next_of.borrow_mut().entry(at).or_insert_with(|| std::rc::Rc::new(successors(at))))
+    // its exit test runs: more than once where one is in a loop nested in it,
+    // and each visit then takes that much less of the exit, so that the trips
+    // stay.
+    let mut visits: Vec<f64> = vec![1.0; cycles.len()];
+    let exiting: std::cell::RefCell<Vec<Option<usize>>> = std::cell::RefCell::new(vec![None; cycles.len()]);
+    // Asked only of a loop whose trips are proven, and then once.
+    let exiting_blocks = |index: usize| -> usize {
+        *exiting.borrow_mut()[index].get_or_insert_with(|| {
+            let one = &cycles[index];
+            one.body
+                .iter()
+                .filter(|&&at| place.get(&at).is_some_and(|&at| next[at].iter().any(|to| !one.body.contains(to))))
+                .count()
+        })
     };
-    let exiting_blocks: Vec<usize> = cycles
-        .iter()
-        .map(|one| one.body.iter().filter(|&&at| successors(at).iter().any(|to| !one.body.contains(to))).count())
-        .collect();
     // Which loop's trips fix an edge, and its share of its side's mass: what
-    // the loops and the odds say, not what `visits` is by the time the edge
-    // is asked about, so it is worked out once (every loop's weighing asks
-    // every edge).
+    // the loops and the odds say, not what `visits` is by the time the edge is
+    // asked about, so it is worked out once.
     struct Counted {
-        header: i64,
+        cycle: usize,
         trips: f64,
         tested: f64,
         part: f64,
         inside: bool,
     }
-    let plans: std::cell::RefCell<BTreeMap<(i64, i64), Option<std::rc::Rc<Counted>>>> =
-        std::cell::RefCell::new(BTreeMap::new());
-    // Each block's loops, inner first, and each header's loops: a loop is
-    // asked about from its own blocks, so no ask walks every loop of the
-    // function.
-    let mut around: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    let mut headed: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    for (index, one) in cycles.iter().enumerate() {
-        headed.entry(one.header).or_default().push(index);
-        for &at in one.body.iter() {
-            around.entry(at).or_default().push(index);
-        }
-    }
-    let plan = |from: i64, to: i64| -> Option<std::rc::Rc<Counted>> {
-        if let Some(known) = plans.borrow().get(&(from, to)) {
+    let plans: std::cell::RefCell<Vec<Vec<Option<Option<Rc<Counted>>>>>> =
+        std::cell::RefCell::new(next.iter().map(|list| vec![None; list.len()]).collect());
+    let plan = |from: usize, edge: usize| -> Option<Rc<Counted>> {
+        if let Some(known) = &plans.borrow()[from][edge] {
             return known.clone();
         }
         let made = (|| {
-            let next = successors(from);
-            for (index, one) in around.get(&from).into_iter().flatten().map(|&index| (index, &cycles[index])) {
-                let inside = next.iter().filter(|at| one.body.contains(at)).count();
-                let outside = next.len() - inside;
+            let to = next[from][edge];
+            let list = &next[from];
+            for &index in &around[from] {
+                let one = &cycles[index];
+                let inside = list.iter().filter(|at| one.body.contains(at)).count();
+                let outside = list.len() - inside;
                 if inside == 0 || outside == 0 {
                     continue;
                 }
                 // A loop without proven trips leaves the edge to the loops
                 // around it, which may state them.
                 let Some(trips) = one.trips else { continue };
-                if exiting_blocks[index] != 1 && from != one.header && !one.latches.contains(&from) {
+                if exiting_blocks(index) != 1 && order[from] != one.header && !one.latches.contains(&order[from]) {
                     return None;
                 }
-                let tested = if from == one.header && !one.latches.contains(&from) { 0.0 } else { 1.0 };
+                let tested = if order[from] == one.header && !one.latches.contains(&order[from]) { 0.0 } else { 1.0 };
                 // The trips fix how often the loop is left, not which way: each
                 // edge takes its side's mass by its own odds.
                 let side: BTreeSet<i64> =
-                    next.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
-                let weight: f64 = side.iter().map(|at| given(from, *at)).sum();
-                let part = if weight > 0.0 { given(from, to) / weight } else { 1.0 / side.len() as f64 };
-                return Some(std::rc::Rc::new(Counted {
-                    header: one.header,
+                    list.iter().copied().filter(|at| one.body.contains(at) == one.body.contains(&to)).collect();
+                let weight: f64 = side.iter().map(|at| given(order[from], *at)).sum();
+                let part = if weight > 0.0 { given(order[from], to) / weight } else { 1.0 / side.len() as f64 };
+                return Some(Rc::new(Counted {
+                    cycle: index,
                     trips: trips as f64,
                     tested,
                     part,
@@ -1054,68 +1094,81 @@ pub fn propagated_edges(
             }
             None
         })();
-        plans.borrow_mut().insert((from, to), made.clone());
+        plans.borrow_mut()[from][edge] = Some(made.clone());
         made
     };
-    let counted = |from: i64, to: i64| -> Option<f64> {
-        let found = plan(from, to)?;
-        let visited = visits.borrow().get(&found.header).copied().unwrap_or(1.0).max(1.0);
-        let stay = 1.0 - (1.0 - (found.trips - found.tested) / (found.trips + 1.0 - found.tested)) / visited;
-        Some(if found.inside { stay * found.part } else { (1.0 - stay) * found.part })
-    };
-    let edge = |from: i64, to: i64| counted(from, to).unwrap_or_else(|| given(from, to));
-    // `to` is a loop header and `from` is in its loop.
-    let backward =
-        |from: i64, to: i64| headed.get(&to).into_iter().flatten().any(|&index| cycles[index].body.contains(&from));
-    // Each loop's reachable blocks in `order`, found in one pass over it: a
-    // nest of N loops sorted each loop's body by its place, N times over
-    // the same blocks.
-    let mut inside_of: Vec<Vec<i64>> = vec![Vec::new(); cycles.len()];
-    for &at in order {
-        for &index in around.get(&at).into_iter().flatten() {
-            inside_of[index].push(at);
+    let edge = |from: usize, edge: usize, visits: &[f64]| -> f64 {
+        match plan(from, edge) {
+            Some(found) => {
+                let visited = visits[found.cycle].max(1.0);
+                let stay = 1.0 - (1.0 - (found.trips - found.tested) / (found.trips + 1.0 - found.tested)) / visited;
+                if found.inside { stay * found.part } else { (1.0 - stay) * found.part }
+            }
+            None => given(order[from], next[from][edge]),
         }
-    }
+    };
+    // The edge from a block to another, by their places.
+    let edge_between = |from: usize, to: i64, visits: &[f64]| -> f64 {
+        match next[from].iter().position(|one| *one == to) {
+            Some(at) => edge(from, at, visits),
+            None => given(order[from], to),
+        }
+    };
     // Innermost first: an inner header's scale is known when its outer loop is
     // weighed.
-    let mut scale: BTreeMap<i64, f64> = BTreeMap::new();
+    let mut scale: Vec<f64> = vec![1.0; count];
+    let mut mass: Vec<f64> = vec![0.0; count];
+    let mut stamp: Vec<usize> = vec![usize::MAX; count];
     for (index, found) in cycles.iter().enumerate() {
-        let weighed = |edge: &dyn Fn(i64, i64) -> f64, scale: &BTreeMap<i64, f64>| -> BTreeMap<i64, f64> {
-            let mut mass: BTreeMap<i64, f64> = BTreeMap::new();
+        let header = place.get(&found.header).copied();
+        let weigh = |mass: &mut Vec<f64>, stamp: &mut Vec<usize>, rough: bool, visits: &[f64], scale: &[f64]| {
             let inside = &inside_of[index];
             #[cfg(test)]
             VISITS.with(|visits| visits.set(visits.get() + found.body.len()));
             for &at in inside {
-                let entering: f64 = if at == found.header {
+                stamp[at] = index;
+                mass[at] = 0.0;
+            }
+            for &at in inside {
+                let entering: f64 = if Some(at) == header {
                     1.0
                 } else {
-                    predecessors(at)
-                        .into_iter()
-                        .filter(|from| found.body.contains(from) && !backward(*from, at))
-                        .map(|from| mass.get(&from).copied().unwrap_or(0.0) * edge(from, at))
+                    coming[at]
+                        .iter()
+                        .filter(|one| stamp[one.from] == index && !one.back)
+                        .map(|one| {
+                            mass[one.from]
+                                * if rough {
+                                    given(order[one.from], order[at])
+                                } else {
+                                    edge(one.from, one.edge, visits)
+                                }
+                        })
                         .sum()
                 };
-                let inner = if at == found.header { 1.0 } else { scale.get(&at).copied().unwrap_or(1.0) };
-                mass.insert(at, entering * inner);
+                let inner = if Some(at) == header { 1.0 } else { scale[at] };
+                mass[at] = entering * inner;
             }
-            mass
         };
         if found.trips.is_some() {
             // By the odds alone: where the exits are visited, and how often.
-            let rough = weighed(&|from, to| given(from, to), &scale);
+            weigh(&mut mass, &mut stamp, true, &visits, &scale);
             let total: f64 = found
                 .body
                 .iter()
-                .filter(|at| successors(**at).iter().any(|to| !found.body.contains(to)))
-                .map(|at| rough.get(at).copied().unwrap_or(0.0))
+                .filter(|at| place.get(at).is_some_and(|&at| next[at].iter().any(|to| !found.body.contains(to))))
+                .map(|at| mass[place[at]])
                 .sum();
-            visits.borrow_mut().insert(found.header, total);
+            visits[index] = total;
         }
-        let mass = weighed(&edge, &scale);
+        weigh(&mut mass, &mut stamp, false, &visits, &scale);
         let back: f64 = found
             .latches
             .iter()
-            .map(|latch| mass.get(latch).copied().unwrap_or(0.0) * edge(*latch, found.header))
+            .map(|latch| match place.get(latch) {
+                Some(&latch) => mass[latch] * edge_between(latch, found.header, &visits),
+                None => 0.0,
+            })
             .sum();
         let mut weighed_scale = (1.0 / (1.0 - back.min(1.0 - 1.0 / LOOP_SCALE))).min(LOOP_SCALE);
         // The proven trips are the scale, not what the odds around them add up
@@ -1126,7 +1179,7 @@ pub fn propagated_edges(
                 .body
                 .iter()
                 .copied()
-                .filter(|at| successors(*at).iter().any(|to| !found.body.contains(to)))
+                .filter(|at| place.get(at).is_some_and(|&at| next[at].iter().any(|to| !found.body.contains(to))))
                 .collect();
             if !exiting.is_empty() && exiting.iter().all(|at| found.latches.contains(at)) {
                 weighed_scale = trips as f64;
@@ -1134,27 +1187,30 @@ pub fn propagated_edges(
                 weighed_scale = trips as f64 + 1.0;
             }
         }
-        scale.insert(found.header, weighed_scale);
+        if let Some(header) = header {
+            scale[header] = weighed_scale;
+        }
     }
-    let mut frequency: BTreeMap<i64, f64> = BTreeMap::new();
-    for (index, &at) in order.iter().enumerate() {
-        let entering: f64 = if index == 0 {
+    let mut frequency: Vec<f64> = vec![0.0; count];
+    for at in 0..count {
+        let entering: f64 = if at == 0 {
             1.0
         } else {
-            predecessors(at)
-                .into_iter()
-                .filter(|from| !backward(*from, at))
-                .map(|from| frequency.get(&from).copied().unwrap_or(0.0) * edge(from, at))
+            coming[at]
+                .iter()
+                .filter(|one| !one.back)
+                .map(|one| frequency[one.from] * edge(one.from, one.edge, &visits))
                 .sum()
         };
-        frequency.insert(at, entering * scale.get(&at).copied().unwrap_or(1.0));
+        frequency[at] = entering * scale[at];
     }
-    let edges = order
-        .iter()
-        .flat_map(|&from| successors(from).iter().copied().collect::<Vec<_>>().into_iter().map(move |to| (from, to)))
-        .map(|(from, to)| ((from, to), edge(from, to)))
-        .collect();
-    (frequency, edges)
+    let mut edges = BTreeMap::new();
+    for from in 0..count {
+        for at in 0..next[from].len() {
+            edges.insert((order[from], next[from][at]), edge(from, at, &visits));
+        }
+    }
+    (order.iter().copied().zip(frequency).collect(), edges)
 }
 
 /// Blocks in reverse postorder from `entry`, by `successors`.

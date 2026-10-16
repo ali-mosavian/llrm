@@ -67,13 +67,13 @@
 //! Blocks and edges are unchanged; dominators and loops are preserved.
 
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, ranges};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
-use num_bigint::BigInt;
 
 pub struct FixedNarrow;
 

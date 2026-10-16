@@ -88,6 +88,28 @@ fn listing(
     listing_on("486", text, name)
 }
 
+/// The procedure's instructions where the conversions round to their types
+/// (`-fexcess-precision=standard`).
+fn listing_float_store(
+    text: &str,
+    name: &str,
+) -> Vec<String> {
+    let profile =
+        crate::backend::cpu::tuned_optimizing(&llrm_x86_m16::M16, "486", false, true, false, true, true, true)
+            .expect("the 486 profile");
+    let module = assemble::assembled(
+        &parsed(text),
+        &qb(),
+        "T_TEXT",
+        ProfileOrName::Profile(profile),
+        &crate::backend::target::BASIC,
+    )
+    .expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let from = text.find(&format!("{name} proc")).expect("the procedure");
+    text[from..].lines().skip(1).take_while(|line| !line.ends_with("endp")).map(|line| line.trim().to_owned()).collect()
+}
+
 /// The procedure's instructions as `cpu` prices them.
 fn listing_on(
     cpu: &str,
@@ -1224,10 +1246,8 @@ small:
             "fstp qword ptr [bp-24]",
             "call far ptr scale",
             "add sp, 16",
-            "fst dword ptr [bp-4]",
-            "fld dword ptr [bp-4]",
             "fst dword ptr out",
-            "fstp dword ptr [bp-4]",
+            "fst dword ptr [bp-4]",
             "push dword ptr [bp-4]",
             "fstp qword ptr [bp-32]",
             "call far ptr show",
@@ -1308,9 +1328,8 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "or ax, 3072",
             "mov word ptr [bp-8], ax",
             "fld qword ptr [bp+6]",
-            "fld st(0)",
             "fldcw word ptr [bp-8]",
-            "fistp word ptr [bp-2]",
+            "fist word ptr [bp-2]",
             "mov ax, word ptr [bp-2]",
             "fistp dword ptr [bp-4]",
             "mov bx, word ptr [bp-4]",
@@ -1628,6 +1647,58 @@ fn test_an_integer_load_only_a_conversion_reads_is_the_x87_operand() {
     );
 }
 
+/// d_faces `gv[v] * (float)K`: gcc and clang execute `fimul word` for it (3,420
+/// of them in the scene), llrm `fild` and `fmul`. An integer load folds into
+/// the `fi` form where the target prices that form below the `fild` and the
+/// operation it replaces: the 486 has `fimul` at 23 clocks against 13 and 16,
+/// the P5 no cheaper one.
+#[test]
+fn test_an_integer_load_is_a_fimul_operand_where_the_target_prices_it_below_the_pair() {
+    let text = "define double @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %q = fmul double %x, %w
+  ret double %q
+}
+define double @g(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %y = fmul double %x, %x
+  %q = fadd double %y, %w
+  ret double %q
+}
+";
+    let on_486 = listing_on("486", text, "f");
+    assert!(on_486.iter().any(|line| line.starts_with("fimul word ptr")), "{on_486:?}");
+    assert!(!on_486.iter().any(|line| line.starts_with("fild")), "{on_486:?}");
+    let added = listing_on("486", text, "g");
+    assert!(added.iter().any(|line| line.starts_with("fiadd word ptr")), "{added:?}");
+    let on_p5 = listing_on("P5", text, "f");
+    assert!(on_p5.iter().any(|line| line.starts_with("fild word ptr")), "{on_p5:?}");
+    assert!(!on_p5.iter().any(|line| line.starts_with("fimul")), "{on_p5:?}");
+}
+
+/// d_faces `x < (float)p->w`: gcc and clang execute `ficomp word` for it, llrm
+/// `fild` and `fcomp`. The compare takes the integer load as its memory operand
+/// where the target prices `ficom` below the pair, as the arithmetic does.
+#[test]
+fn test_an_integer_load_is_a_ficom_operand_where_the_target_prices_it_below_the_pair() {
+    let text = "define i16 @f(double %x, ptr %p) addrspace(1) {
+  %v = load i16, ptr %p
+  %w = sitofp i16 %v to double
+  %c = fcmp ogt double %x, %w
+  %r = zext i1 %c to i16
+  ret i16 %r
+}
+";
+    let on_486 = listing_on("486", text, "f");
+    assert!(on_486.iter().any(|line| line.starts_with("ficom")), "{on_486:?}");
+    assert!(!on_486.iter().any(|line| line.starts_with("fild")), "{on_486:?}");
+    let on_p5 = listing_on("P5", text, "f");
+    assert!(on_p5.iter().any(|line| line.starts_with("fild word ptr")), "{on_p5:?}");
+    assert!(!on_p5.iter().any(|line| line.starts_with("ficom")), "{on_p5:?}");
+}
+
 /// A load read again is in a register, and x87 reads that.
 #[test]
 fn test_an_integer_load_read_again_is_converted_from_its_register() {
@@ -1717,12 +1788,10 @@ define void @f(double %x) addrspace(1) {
             "or ax, 3072",
             "mov word ptr [bp-4], ax",
             "fld qword ptr [bp+6]",
-            "fld st(0)",
             "fldcw word ptr [bp-4]",
-            "fistp word ptr b",
-            "fld st(0)",
+            "fist word ptr b",
             "fldcw word ptr [bp-2]",
-            "fistp word ptr b",
+            "fist word ptr b",
             "fstp dword ptr o",
             "leave",
             "retf"
@@ -3596,8 +3665,10 @@ fn test_a_float_to_a_byte_is_a_stored_word_low_byte() {
 }
 ";
     let got = listing(text, "f");
-    let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fistp")).collect();
-    assert!(stores.len() == 2 && stores.iter().all(|one| one.starts_with("fistp word ptr")), "{got:#?}");
+    // the value is read by both conversions: the first stores without popping
+    // it
+    let stores: Vec<&String> = got.iter().filter(|one| one.starts_with("fist")).collect();
+    assert!(stores.len() == 2 && stores.iter().all(|one| one.contains(" word ptr")), "{got:#?}");
 }
 
 /// mathlib.c's `ent_step_to`: a compare consuming one operand and keeping
@@ -4332,14 +4403,19 @@ define i32 @f() addrspace(1) {
 }
 
 /// `(double)long_double` was rounded through a dword (fstp dword) whatever
-/// the target: a long double narrowed to double lost 29 bits (#103). A
-/// narrowing rounds to the target's width.
+/// the target: a long double narrowed to double lost 29 bits (#103). With
+/// `-fexcess-precision=standard` a narrowing rounds to the target's width.
 #[test]
 fn test_a_narrowing_float_rounds_to_its_targets_width() {
     let text = "define double @f(x86_fp80 %x) addrspace(1) {\n  %d = fptrunc x86_fp80 %x to double\n  ret double %d\n}\ndefine float @g(double %x) addrspace(1) {\n  %d = fptrunc double %x to float\n  ret float %d\n}\n";
     assert!(text.contains("fptrunc x86_fp80"), "the shape that was rounded to a float");
-    assert!(listing(text, "f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", listing(text, "f"));
-    assert!(listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
+    let rounded = |name| listing_float_store(text, name);
+    assert!(rounded("f").contains(&"fstp qword ptr [bp-8]".to_owned()), "{:?}", rounded("f"));
+    assert!(rounded("g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", rounded("g"));
+    // by default the register keeps the wider value, as gcc's
+    // -fexcess-precision=fast: no round trip through memory
+    assert!(!listing(text, "f").iter().any(|line| line.starts_with("fstp")), "{:?}", listing(text, "f"));
+    assert!(!listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
 }
 
 /// A long double is compared from a register: fcom has no 10-byte memory

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:7ced5865ab5cee38d75b59e3b09ff315bcdab5f2b8edd7c7591c6b7b6346bf7a -->
+<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:f6eb8aeeceef238531623e2fb12d7b907f9bcc304e341ce3e2b5699ac7c2907c -->
 
 # phielim
 
@@ -31,7 +31,10 @@ does not interfere with the result.
 
 Otherwise a predecessor with several successors makes the edge critical. A
 copy there may run in the predecessor only if no other path reads either end
-of it (`_observed`) and, where block odds are known, the edge is not cheaper
+of it (`_observed`: whether a block that reads it is reachable from the
+predecessor's other successors without entering the successor, searched
+from both ends so that the smaller region is walked) and, where block odds
+are known, the edge is not cheaper
 (`EdgePrices::cheaper_on_edge`: the edge's chance times copies plus a `jmp`
 against the copies run every time). Otherwise the copy goes in a new block
 on the edge, which holds its copies and a jump to the successor:

@@ -125,6 +125,11 @@ pub struct Symbol {
     /// the default one is its description's `default_registers`; any other
     /// is an `aux` pragma's or `__fastcall`'s.
     pub register_list: String,
+    /// The registers the front end says it returns in (`ret=`, an empty set
+    /// where the type's own default holds) and the ones its routine keeps
+    /// (`save=`): the front end's words, `hwreg::Set` reads them.
+    pub return_registers: String,
+    pub saved_registers: String,
     pub code: Option<Code>,
     pub segment: i64,
 }
@@ -339,6 +344,8 @@ pub struct Unit {
     /// What the front end records of a function it passes in its default
     /// registers.
     pub default_registers: String,
+    /// The registers the front end names, from the target's description.
+    pub hardware: crate::hwreg::Registers,
     /// The `cc` of the convention a function the front end records as cdecl
     /// has, and one it records in its default registers; none where that is
     /// the C one (`ccc`).
@@ -583,6 +590,8 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                         call_target: 0,
                         register_parms: false,
                         register_list: String::new(),
+                        return_registers: String::new(),
+                        saved_registers: String::new(),
                         code: None,
                         segment: int(one.fields.get("seg").map_or("0", String::as_str)),
                     },
@@ -595,6 +604,8 @@ pub fn unit(records: &[Record]) -> Result<Unit, Unsupported> {
                 let parms = one.fields.get("parms").map_or("[]", String::as_str);
                 symbol.register_parms = parms != "[]";
                 symbol.register_list = parms.to_owned();
+                symbol.return_registers = one.fields.get("ret").cloned().unwrap_or_default();
+                symbol.saved_registers = one.fields.get("save").cloned().unwrap_or_default();
             }
             "CODE" => {
                 let fixups = field(one, "fix")

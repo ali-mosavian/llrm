@@ -47,8 +47,10 @@
 //! and the work copied at every site beyond the last must stay below the calls
 //! removed, in the target's clocks, or in code bytes where size outranks speed
 //! (`-Os`). A routine marked `alwaysinline` is a candidate at any size and
-//! `noinline` at none; `inlinehint` scales the budget by 325/225. A body held
-//! only to inline from (`available_externally`) is a candidate at any size.
+//! `noinline` at none; the caller's growth limit does not apply to
+//! `alwaysinline` (gcc's `DECL_DISREGARD_INLINE_LIMITS`). `inlinehint` scales
+//! the budget by 325/225. A body held only to inline from
+//! (`available_externally`) is a candidate at any size.
 //!
 //! A public callee, or one whose address is taken, stays defined; a private one
 //! goes with its last site. The last call of a function nothing else reaches
@@ -257,14 +259,25 @@ impl Threshold {
     ) -> Option<i64> {
         // -O1 has no `-finline-functions`: its threshold keeps the ordinary
         // budget.
-        let floor =
-            if self.limit < Self::default().limit { 0 } else { INSNS_AUTO * self.limit / Self::default().limit };
+        let floor = if self.limit < Self::default().limit {
+            0
+        } else if self.limit >= Self::new(250).limit {
+            // -O3's `max-inline-insns-auto` is 30, twice -O2's
+            // (opts.cc:690-694): the threshold's own 250 against
+            // 225 is not that ratio.
+            INSNS_AUTO_O3
+        } else {
+            INSNS_AUTO * self.limit / Self::default().limit
+        };
         self.budget(call_cost).map(|budget| budget.max(floor))
     }
 }
 
 /// GCC's `max-inline-insns-auto` at -O2 (params.opt:545).
 const INSNS_AUTO: i64 = 15;
+
+/// The same at -O3.
+const INSNS_AUTO_O3: i64 = 30;
 
 /// Direct call counts by callee.
 pub type Counter = IndexMap<GlobalId, i64>;
@@ -1236,6 +1249,11 @@ fn grows_within_limits(
     callee: &Function,
     moved: bool,
 ) -> bool {
+    // gcc's `DECL_DISREGARD_INLINE_LIMITS`: `always_inline` is held to no limit
+    // of size.
+    if stated(callee) == Some(Inlining::Always) {
+        return true;
+    }
     let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
     let after = own + callee_size;
