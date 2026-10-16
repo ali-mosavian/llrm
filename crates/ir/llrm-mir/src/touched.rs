@@ -16,7 +16,7 @@
 //! with the invertible log (rollback), and the epochs then read it.
 
 use crate::context::Context;
-use crate::dense::{IdMap, IdSet};
+use crate::dense::IdSet;
 use crate::module::{BlockId, Change, Function, InstId, Mark, Operand, ValueId};
 use crate::opcode::Opcode;
 use crate::types::Type;
@@ -408,21 +408,25 @@ impl Function {
         // What each terminator named at the mark: its operands now, with the
         // replaced ones put back, in one pass over the log (not one per
         // terminator).
-        let mut thens = IdMap::<u32, Vec<Operand>>::new();
-        for &(inst, _) in &terminators {
-            thens.insert(inst.0, self.instruction(inst).operands.clone());
-        }
+        // (A list by instruction, not a dense map: a map would be as long as
+        // the function for the few terminators an edit touches.)
+        let mut thens: Vec<(u32, Vec<Operand>)> =
+            terminators.iter().map(|&(inst, _)| (inst.0, self.instruction(inst).operands.clone())).collect();
+        thens.sort_unstable_by_key(|one| one.0);
         if !thens.is_empty() {
+            let find = |thens: &mut Vec<(u32, Vec<Operand>)>, inst: InstId| {
+                thens.binary_search_by_key(&inst.0, |one| one.0).ok()
+            };
             for change in changes.iter().rev() {
                 match change {
                     Change::Operand { inst, index, was } => {
-                        if let Some(then) = thens.get_mut(&inst.0) {
-                            then[*index as usize] = *was;
+                        if let Some(at) = find(&mut thens, *inst) {
+                            thens[at].1[*index as usize] = *was;
                         }
                     }
                     Change::Operands { inst, was } => {
-                        if let Some(then) = thens.get_mut(&inst.0) {
-                            *then = was.to_vec();
+                        if let Some(at) = find(&mut thens, *inst) {
+                            thens[at].1 = was.to_vec();
                         }
                     }
                     _ => {}
@@ -430,7 +434,8 @@ impl Function {
             }
         }
         for (inst, at_mark) in terminators {
-            self.edges_of(inst, at_mark, &thens[&inst.0], !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
+            let at = thens.binary_search_by_key(&inst.0, |one| one.0).expect("a terminator listed");
+            self.edges_of(inst, at_mark, &thens[at].1, !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
         }
         // A terminator replaced by another naming the same block leaves the
         // edge: a pair both added and removed is in neither.
