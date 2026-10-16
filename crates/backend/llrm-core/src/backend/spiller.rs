@@ -292,7 +292,8 @@ pub fn spilled_from(
         }
     };
     let plan = planned(body, values, frame)?;
-    let (body, made, merged) = materialized(body, &plan, frame, floor, classes, &BTreeSet::new())?;
+    let start = crate::backend::splitkit::_next_value_following(body).max(floor);
+    let (body, made, merged, _) = materialized(body, &plan, frame, start, classes, &BTreeSet::new())?;
     Ok((body, made.union(&merged).copied().collect()))
 }
 
@@ -312,17 +313,27 @@ pub fn spilled_apart(
     floor: u32,
     classes: &RegisterClasses,
     plain: &BTreeSet<u32>,
-) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>, u32), Error> {
     if values.is_empty() {
-        return Ok((body.clone(), BTreeSet::new(), BTreeSet::new()));
+        return Ok((body.clone(), BTreeSet::new(), BTreeSet::new(), floor));
     }
     let plan = planned(body, values, frame)?;
+    // `floor` is the allocation's high-water mark: no value of the body is
+    // above it, so the body is not walked for its largest.
+    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+        assert!(
+            floor >= crate::backend::splitkit::_next_value(body),
+            "{}: the floor {floor} is below the body's next value",
+            body.name
+        );
+    }
     materialized(body, &plan, frame, floor, classes, plain)
 }
 
 /// `body` with `plan` written: a reload before each read of a stored value, a
 /// store after each write, and every other value made again where it is read.
-/// The values made are returned; each lives for one use.
+/// The values made are returned; each lives for one use. They are numbered
+/// from `floor`, which no value of `body` is at or above.
 pub fn materialized(
     body: &LirBody,
     plan: &Plan,
@@ -330,9 +341,9 @@ pub fn materialized(
     floor: u32,
     classes: &RegisterClasses,
     plain: &BTreeSet<u32>,
-) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>), Error> {
+) -> Result<(LirBody, BTreeSet<u32>, BTreeSet<u32>, u32), Error> {
     let regs = body.regs();
-    let mut fresh = crate::backend::splitkit::_next_value_following(body).max(floor);
+    let mut fresh = floor;
     let mut made: BTreeSet<u32> = BTreeSet::new();
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
@@ -652,7 +663,7 @@ pub fn materialized(
     let made = postings::following(&result, |postings| {
         made.iter().copied().filter(|value| postings.defs_count(*value) != 0).collect::<BTreeSet<u32>>()
     });
-    Ok((result, made, merged))
+    Ok((result, made, merged, fresh))
 }
 
 /// The reloads of the spilled values `one` reads, and the value each is read

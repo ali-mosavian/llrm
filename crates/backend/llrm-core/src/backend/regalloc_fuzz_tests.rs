@@ -1385,12 +1385,15 @@ fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_witho
 }
 
 /// The allocator's rewrites asked every instruction of the body for the
-/// largest value it names (d_faces -O1: 274 M of 24.6 G instructions); they
-/// ask the postings.
+/// largest value it names (d_faces -O1: 274 M of 24.6 G instructions), then
+/// the postings (d_faces -O2: 107 spills and 108 splits, 21k instructions
+/// each, a pass over every value). The allocation numbers the values it makes
+/// from a floor that it raises as it makes them, and asks the body once.
 #[test]
-fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
+fn test_the_allocators_rewrites_number_their_values_from_a_floor_and_do_not_ask_the_body() {
+    use crate::backend::allocate::required_skipped;
     use crate::backend::splitkit::next_value_asks;
-    let before = next_value_asks();
+    let (asked, rewrote) = (next_value_asks(), required_skipped());
     for seed in 0..120_u64 {
         let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
         let (body, _) = body(seed, &shape);
@@ -1405,7 +1408,8 @@ fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
         .expect("a phase");
         phase.transform(body).expect("allocated");
     }
-    assert!(next_value_asks() > before, "no rewrite asked the postings for the next value");
+    assert!(required_skipped() > rewrote, "premise: some body was rewritten");
+    assert_eq!(next_value_asks() - asked, 0, "a rewrite asked the postings for the largest value");
 }
 
 /// The pins were worked out of every instruction of the body after each
