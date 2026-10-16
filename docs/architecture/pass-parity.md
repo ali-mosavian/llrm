@@ -160,6 +160,8 @@ Levers at -O2, own instructions against the clang counterpart's share of its opt
 | `lir` (`peephole` 117, `jumps` 74, ...) | 409 | ~35 | ~370 (10%) |
 | the pipeline's own steps (`mir pipeline`) | 86 | none | 86 (2.4%) |
 
+The ceilings of the rows above the analyses sum to 1,746 M of 3,511: reaching every one leaves 1,765 M, 3.2x clang's 557, and taking half of the analyses' 808 as well leaves 1,361 M, 2.4x. The rest of the gap is not in a pass of the list: it is the 425 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 54 M of summaries and 59 M of `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
+
 An earlier version of this table read inclusive times (`annotated` 37 ms is its 8 ms plus the analyses it asks for) as if own; the rows above do not overlap.
 
 ## Not measured
