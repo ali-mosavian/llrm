@@ -90,6 +90,16 @@ A program that includes `llrm_os.h` finds it without `-I`: the header is the
 target's OS layer interface. The target's physical addresses are defined as
 `PHYSICAL_<NAME>`.
 
+## Inline code with registers
+
+Open Watcom's `#pragma aux name = "bytes" __parm [..] __value [..] __modify [..]` is inline code that takes its
+parameters in the registers it names and answers in the registers it names. `llrm-c` turns it into an `asm` block:
+the parameters are its inputs, the answer its outputs, and what it modifies its clobbers. A register it modifies is
+saved by a function that keeps that register for its caller. Where a register pair holds a far pointer, the segment is
+the register Open Watcom's compiler picks (the segment registers always; otherwise by its preference). The registers, their bits and ranks are the target's description (`[frontend.registers]` of its `c.toml`), not the
+front end's. What it cannot
+express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
+
 ## Numbers as pointers
 
 A number used as a pointer (`NULL`, Open Watcom's `SIG_DFL` = `(handler)2`) is the pointer with those bits, whatever
