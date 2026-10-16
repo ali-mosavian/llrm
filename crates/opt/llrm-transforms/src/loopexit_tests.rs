@@ -231,3 +231,47 @@ b3:
         assert!(changed && !after.contains("ret i16 %s"), "{after}");
     }
 }
+
+/// `kept` loops that store their sum, then `gone` loops that only count, in a
+/// row.
+fn row(
+    kept: usize,
+    gone: usize,
+    wide: bool,
+) -> String {
+    let mut text = String::from("@g = global i16 0\n@w = global i32 0\n\ndefine i16 @f() {\nb0:\n  br label %e0\n\n");
+    for k in 0..kept + gone {
+        let mut stored = if k < kept { format!("  store i16 %t{k}, ptr @g\n") } else { String::new() };
+        if wide && k < kept {
+            stored += &format!("  %w{k} = sext i16 %i{k} to i32\n  store i32 %w{k}, ptr @w\n");
+        }
+        text += &format!(
+            "e{k}:\n  br label %h{k}\n\nh{k}:\n  %i{k} = phi i16 [ 0, %e{k} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i16 [ 0, %e{k} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp uge i16 %i{k}, 4\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nl{k}:\n  %t{k} = add i16 %s{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n{stored}  br label %h{k}\n\nx{k}:\n  br label %e{}\n\n",
+            k + 1
+        );
+    }
+    text + &format!("e{}:\n  ret i16 0\n}}\n", kept + gone)
+}
+
+/// A loop the pass left was looked at again by every turn that deleted one
+/// after it: 8 loops that stay in front of 8 that go cost 8 x 9 looks, each
+/// of them the heavy part of a turn (scroll -Os: +28 M instructions once
+/// `indvars` ran before `gvn`).
+#[test]
+fn a_loop_left_is_not_looked_at_by_each_turn_that_deletes_a_later_one() {
+    let (text, changed, kept) = evaluated_text(&row(8, 8, false), &[&[]]);
+    assert!(changed && kept == 8, "{text}");
+    let looks = super::EXAMINED.with(|count| count.replace(0));
+    assert!(looks <= 4 * 16, "{looks} looks at 16 loops");
+}
+
+/// Each loop with a widened counter that was looked at worked out the bounds
+/// of the whole body again: 8 such loops in front of 8 that go, 70 solves of
+/// the body for what one solve per turn answers.
+#[test]
+fn the_bounds_of_the_body_are_worked_out_once_a_turn_for_all_its_loops() {
+    let (text, changed, kept) = evaluated_text(&row(8, 8, true), &[&[]]);
+    assert!(changed && kept == 8, "{text}");
+    let solves = super::BOUNDED.with(|count| count.replace(0));
+    assert!(solves <= 2 * 16, "{solves} solves of the body's bounds");
+}
