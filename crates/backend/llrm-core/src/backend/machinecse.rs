@@ -296,10 +296,20 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
     // blocks and conservative loop joins may need more; refusal to converge
     // keeps the body unchanged rather than trusting a partial physical state.
     let mut converged = false;
+    // A round works every block in layout order, and a block's answer is of the
+    // outputs it reads alone: so a round need work only the blocks one of
+    // those changed, the ones a change reaches later in layout order in this
+    // round and the rest in the next. The answers are those of every block
+    // every round (6 rounds of every block for a loop nest 3 deep: the
+    // slope of d_faces' machine CSE), the work only of the blocks that change.
+    let index: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let mut this: std::collections::BTreeSet<usize> = (0..body.blocks.len()).collect();
+    let mut next: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
     for _round in 0..std::cmp::max(1, body.blocks.len() * 4) {
-        let mut changed = false;
-        for block in &body.blocks {
-            let mut states: Vec<&State> = predecessors[&block.at].iter().filter_map(|at| outgoing.get(at)).collect();
+        while let Some(at) = this.pop_first() {
+            let block = &body.blocks[at];
+            let mut states: Vec<&State> =
+                predecessors[&block.at].iter().filter_map(|from| outgoing.get(from)).collect();
             if states.len() != predecessors[&block.at].len() {
                 states.push(&empty);
             }
@@ -311,13 +321,20 @@ pub fn eliminated(body: &LirBody) -> Result<LirBody, String> {
             if outgoing.get(&block.at) != Some(&after) || redundant.get(&block.at) != Some(&gone) {
                 outgoing.insert(block.at, after);
                 redundant.insert(block.at, gone);
-                changed = true;
+                for to in block.succ.iter().filter_map(|to| index.get(to).copied()) {
+                    if to > at {
+                        this.insert(to);
+                    } else {
+                        next.insert(to);
+                    }
+                }
             }
         }
-        if !changed {
+        if next.is_empty() {
             converged = true;
             break;
         }
+        std::mem::swap(&mut this, &mut next);
     }
     if !converged {
         return Ok(body.clone());

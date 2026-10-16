@@ -1,4 +1,4 @@
-reason = "A constant several edges of a phi carry is made once (phiconst): lru c -6 bytes at -O2 and -Os; no row worse; on the merge of main: narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -16,63 +16,6 @@ code_bytes = 437
 data_bytes = 77
 bss_bytes = 0
 kernel_ms = 0.0085
-
-[bq16.O2]
-instructions = 145
-memory_operands = 55
-code_bytes = 488
-data_bytes = 77
-bss_bytes = 0
-kernel_ms = 0.0066
-
-[bq16.Os]
-instructions = 146
-memory_operands = 55
-code_bytes = 442
-data_bytes = 77
-bss_bytes = 0
-kernel_ms = 0.0067
-
-[bq32.O2]
-instructions = 125
-code_bytes = 501
-data_bytes = 83
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 122
-code_bytes = 470
-data_bytes = 83
-bss_bytes = 0
-
-[c.O2]
-instructions = 124
-memory_operands = 55
-code_bytes = 378
-data_bytes = 0
-bss_bytes = 78
-
-[c.Os]
-instructions = 123
-memory_operands = 55
-code_bytes = 341
-data_bytes = 0
-bss_bytes = 78
-
-[nib.O2]
-instructions = 204
-memory_operands = 107
-code_bytes = 606
-data_bytes = 32
-bss_bytes = 0
-
-[nib.Os]
-instructions = 267
-memory_operands = 139
-code_bytes = 522
-data_bytes = 32
-bss_bytes = 0
-kernel_ms = 0.0041
 
 [ow.O2]
 instructions = 300
