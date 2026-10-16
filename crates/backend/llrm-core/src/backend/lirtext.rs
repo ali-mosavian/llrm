@@ -32,13 +32,13 @@
 //! fn _f@3(v5@ax) -> @eax
 //!
 //! B0  entry  → B1                                                    ×1.0
-//!   0  bx      = mov.16     1
-//!   1  cx      = mov.16     0
+//!   0  bx      = mov.i2     1
+//!   1  cx      = mov.i2     0
 //!   2           jmp         B1
 //!
 //!     B1  ← B0 B3  → B3 B2  loop                                     ×32.0
-//!       3  ax      = sub.16     ax, 1
-//!       4           cmp.16      ax, -1
+//!       3  ax      = sub.i2     ax, 1
+//!       4           cmp.i2      ax, -1
 //!       5           jne         B3 else B2                        ; 97% taken
 //! ```
 //!
@@ -161,6 +161,12 @@ pub fn place(
             shown(one).position(|insn| insn.at == at).map(|index| format!("B{block}.{}", one.phis.len() + index))
         })
         .unwrap_or_else(|| format!("B?.{at}"))
+}
+
+/// One instruction on its own, for a message that has no body to name a place
+/// in: its operation and operands, blocks as `B@address`.
+pub fn insn_text(insn: &Insn) -> String {
+    insn.what.as_ref().map_or_else(|| "carried".to_owned(), |what| text::render(what, &Syntax::plain()).to_string())
 }
 
 /// `block`'s name, for a check message.

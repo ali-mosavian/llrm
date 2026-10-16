@@ -463,11 +463,14 @@ fn complaints(done: &LirBody) -> Vec<String> {
                 _ => false,
             };
             if unplaced {
-                out.push(format!("{:#06x}: {} is not placed", one.at, place.repr()));
+                out.push(format!("{}: {} is not placed", crate::backend::lirtext::insn_text(&one), place.repr()));
             }
             if let Loc::Reg(Reg { register, width }) = place {
                 if regs.width_of(*register).is_some_and(|got| got != i64::from(*width)) {
-                    out.push(format!("{:#06x}: register {register:?} at width {width}", one.at));
+                    out.push(format!(
+                        "{}: register {register:?} at width {width}",
+                        crate::backend::lirtext::insn_text(&one)
+                    ));
                 }
             }
         }

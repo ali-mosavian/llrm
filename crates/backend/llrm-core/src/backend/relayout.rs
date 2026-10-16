@@ -379,7 +379,12 @@ pub fn difference(
     }
     for (one, other) in a.iter().zip(&b) {
         if one != other {
-            return Some(format!("at {:#06x}:\n  {one:?}\n  {other:?}", one.at));
+            return Some(format!(
+                "at {}:\n  {}\n  {}",
+                crate::backend::lirtext::place(&left.body, one.at),
+                crate::backend::lirtext::insn_text(one),
+                crate::backend::lirtext::insn_text(other)
+            ));
         }
     }
     if left.body.blocks.iter().map(|block| (block.at, &block.succ)).ne(right
