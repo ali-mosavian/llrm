@@ -929,6 +929,17 @@ thread_local! {
 /// registers a client knows change what a walk answers, not any of this, so
 /// every client of one body state shares it (`Accesses::graph`).
 pub struct Structure {
+    /// Which structure this is, among those made.
+    sid: u64,
+    /// The blocks' edges and the instructions that make or move pointers, as
+    /// hashes: what a remembered answer reads besides the writes.
+    cfg_hash: u64,
+    /// Per block, a hash of its memory ops in order and what each def writes.
+    sigs: IndexMap<i64, u64>,
+    /// Per access number, its block's place among `sigs` (`u32::MAX`: none) and
+    /// whether the def writes through an index or selector; made when first
+    /// asked.
+    places: std::cell::OnceCell<Vec<(u32, bool)>>,
     pub live: Access,
     pub accesses: Vec<Access>,
     pub sites: IndexMap<InstId, Access>,
@@ -985,6 +996,14 @@ pub struct MemorySSA<'a> {
     /// While a walk is bounded (`nearest_writes`): the most writes it collects
     /// before it stops.
     limit: std::cell::Cell<Option<usize>>,
+    /// The answers of this function's earlier walks, where its accesses are the
+    /// manager's.
+    memo: Option<Rc<std::cell::RefCell<Memo>>>,
+    /// Whether the walk being made is to be remembered, and the chains it
+    /// jumped over.
+    recording: std::cell::Cell<bool>,
+    jumped: std::cell::RefCell<Vec<(usize, usize)>>,
+    trail: std::cell::RefCell<Vec<usize>>,
 }
 
 /// The nearest writes a walk collects for a caller that serves a load from
@@ -1012,6 +1031,32 @@ impl MemorySSA<'_> {
         known: BTreeMap<ValueId, Interval>,
     ) -> Self {
         self.known = Some(known);
+        self
+    }
+
+    /// This graph asking the memo of its function's version history, for the
+    /// accesses of the manager's kinds.
+    fn remembering(
+        mut self,
+        accesses: &Accesses,
+    ) -> Self {
+        let kind = if accesses.plain_source.is_some() {
+            1
+        } else if accesses.source.is_some() {
+            2
+        } else {
+            return self;
+        };
+        let key = (self.unit.function.mark().lineage(), kind);
+        let memo = MEMOS.with(|memos| {
+            let mut memos = memos.borrow_mut();
+            if memos.len() > 64 && !memos.contains_key(&key) {
+                memos.clear();
+            }
+            Rc::clone(memos.entry(key).or_insert_with(|| Rc::new(std::cell::RefCell::new(Memo::new()))))
+        });
+        memo.borrow_mut().seen(&self.structure);
+        self.memo = Some(memo);
         self
     }
 
@@ -1263,7 +1308,27 @@ impl MemorySSA<'_> {
         edge_memory: Option<&MemRef>,
         honor: bool,
     ) -> BTreeSet<usize> {
+        let remembered = boundary.is_none() && edge.is_none() && edge_memory.is_none() && self.memo.is_some();
+        if remembered && let Some(answer) = self.recalled(site, memory, honor) {
+            if check_clobbers() {
+                let fresh = self.walked(site, memory, boundary, edge, edge_memory, true, honor);
+                let cut = self.limit.get().is_some_and(|limit| fresh.len() > limit);
+                assert!(
+                    fresh == answer || cut,
+                    "LLRM_CHECK_CLOBBERS: a remembered walk differs from a walk now: {answer:?} against {fresh:?}"
+                );
+            }
+            RECALLED.with(|count| count.set(count.get() + 1));
+            return answer;
+        }
+        WALKED.with(|count| count.set(count.get() + 1));
+        self.recording.set(remembered);
         let found = self.walked(site, memory, boundary, edge, edge_memory, true, honor);
+        self.recording.set(false);
+        if remembered {
+            let reads = self.reads_of(memory);
+            self.remember(site, memory, honor, &found, reads);
+        }
         if check_jumps() {
             let stepped = self.walked(site, memory, boundary, edge, edge_memory, false, honor);
             let cut = self.limit.get().is_some_and(|limit| found.len() > limit && stepped.len() > limit);
@@ -1273,6 +1338,153 @@ impl MemorySSA<'_> {
             );
         }
         found
+    }
+
+    /// The nearest writes of `memory` before `site` an earlier version of the
+    /// body found, while the blocks its walk went through have the memory ops
+    /// they had and `known` says what it said of the values it compared.
+    fn recalled(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+        honor: bool,
+    ) -> Option<BTreeSet<usize>> {
+        let memo = self.memo.as_ref()?;
+        let mut memo = memo.borrow_mut();
+        let slot = memo.entries.get(&site)?.iter().position(|(was, cell, _)| *was == honor && cell == memory)?;
+        let held = &memo.entries[&site][slot].2;
+        let stale = held.blocks.iter().any(|block| memo.dirty.get(block).is_some_and(|&at| at > held.epoch))
+            || held
+                .known
+                .iter()
+                .any(|(value, was)| self.known.as_ref().and_then(|known| known.get(value)) != was.as_ref());
+        if stale {
+            memo.entries.get_mut(&site)?.swap_remove(slot);
+            return None;
+        }
+        let mut found = BTreeSet::new();
+        for &one in &held.answer {
+            found.insert(match one {
+                Remembered::Live => self.live.id,
+                Remembered::Phi(block) => self.phis.get(&block)?.id,
+                Remembered::Def(inst) => self.sites.get(&inst).filter(|access| access.kind == Kind::Def)?.id,
+            });
+        }
+        self.limit.get().is_none_or(|limit| found.len() <= limit).then_some(found)
+    }
+
+    /// `found`, the answer of a walk that read `reads`, kept for the versions
+    /// that follow.
+    fn remember(
+        &self,
+        site: InstId,
+        memory: &MemRef,
+        honor: bool,
+        found: &BTreeSet<usize>,
+        mut reads: Reads,
+    ) {
+        let Some(memo) = self.memo.as_ref() else { return };
+        if self.limit.get().is_some_and(|limit| found.len() > limit) {
+            return;
+        }
+        let answer: Option<Vec<Remembered>> = found
+            .iter()
+            .map(|&id| {
+                let access = self.access(id);
+                match access.kind {
+                    Kind::Live => Some(Remembered::Live),
+                    Kind::Phi => access.block.map(Remembered::Phi),
+                    Kind::Def => access.site.map(Remembered::Def),
+                    Kind::Use => None,
+                }
+            })
+            .collect();
+        let Some(answer) = answer else { return };
+        let Some(block) = self.at(site).block else { return };
+        reads.blocks.insert(block);
+        let known = reads
+            .values
+            .iter()
+            .map(|&value| (value, self.known.as_ref().and_then(|k| k.get(&value)).cloned()))
+            .collect();
+        let mut memo = memo.borrow_mut();
+        let epoch = memo.epoch;
+        let held = Remembering { epoch, blocks: reads.blocks.into_iter().collect(), known, answer };
+        let slots = memo.entries.entry(site).or_default();
+        match slots.iter().position(|(was, cell, _)| *was == honor && cell == memory) {
+            Some(at) => slots[at].2 = held,
+            None => slots.push((honor, memory.clone(), held)),
+        }
+    }
+
+    /// What the walk of `site` that took the stamps from `before` read: the
+    /// blocks of the accesses it visited, of the chains it jumped over and of
+    /// the ones back from the site, and the values `known` is asked of for the
+    /// cell and the writes it may have compared.
+    fn reads_of(
+        &self,
+        memory: &MemRef,
+    ) -> Reads {
+        let places = self.places.get_or_init(|| {
+            let mut places = vec![(u32::MAX, false); self.span.len()];
+            for access in &self.accesses {
+                let block =
+                    access.block.and_then(|block| self.sigs.get_index_of(&block)).map_or(u32::MAX, |at| at as u32);
+                let valued = access.kind == Kind::Def
+                    && access.site.is_some_and(|site| {
+                        self.written[&site]
+                            .iter()
+                            .flat_map(|stores| stores.iter())
+                            .any(|write| write.base.is_some() || write.segment.is_some())
+                    });
+                places[access.id] = (block, valued);
+            }
+            places
+        });
+        let mut blocks = vec![false; self.sigs.len()];
+        let mut valued: Vec<InstId> = Vec::new();
+        let mut note = |id: usize| {
+            let (block, indexed) = places[id];
+            if block != u32::MAX {
+                blocks[block as usize] = true;
+            }
+            if indexed {
+                valued.extend(self.access(id).site);
+            }
+        };
+        for id in std::mem::take(&mut *self.trail.borrow_mut()) {
+            note(id);
+        }
+        for (from, end) in self.jumped.borrow_mut().drain(..) {
+            let mut at = Some(from);
+            while let Some(one) = at {
+                note(one);
+                if one == end {
+                    break;
+                }
+                at = self.access(one).defining;
+            }
+        }
+        let mut reads = Reads::default();
+        reads.blocks = blocks
+            .iter()
+            .enumerate()
+            .filter(|(_, seen)| **seen)
+            .filter_map(|(at, _)| self.sigs.get_index(at).map(|(block, _)| *block))
+            .collect();
+        let mut values = |one: &MemRef| {
+            reads.values.extend(one.base);
+            if let Some(llrm_mir::module::Operand::Value(value)) = one.segment {
+                reads.values.insert(value);
+            }
+        };
+        values(memory);
+        for site in valued {
+            for write in self.written[&site].iter().flat_map(|stores| stores.iter()) {
+                values(write);
+            }
+        }
+        reads
     }
 
     /// Whether `ahead` is `access` or reached from it by `defining` links.
@@ -1351,6 +1563,9 @@ impl MemorySSA<'_> {
                 .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
                 .max_by_key(|found| self.span[*found].0);
             let root = index.root[above];
+            if self.recording.get() {
+                self.jumped.borrow_mut().push((above, root));
+            }
             let reaches_others = object.addressed && {
                 let known = index.aliased.borrow().get(&object.id()).copied();
                 known.unwrap_or_else(|| {
@@ -1421,6 +1636,8 @@ impl MemorySSA<'_> {
                 pending = vec![Some(root)];
             }
         }
+        let record = self.recording.get();
+        let mut trail: Vec<usize> = Vec::new();
         // Visited accesses by stamp: a set built per walk was most of its cost.
         let mut stamps = self.stamps.borrow_mut();
         if stamps.0.len() < self.span.len() {
@@ -1466,9 +1683,15 @@ impl MemorySSA<'_> {
                 chain.clear();
                 continue;
             };
+            if record {
+                trail.push(current);
+            }
             if jumpable && table[current] != 0 {
                 chain.clear();
                 let end = table[current] as usize - 1;
+                if record {
+                    self.jumped.borrow_mut().push((current, end));
+                }
                 // The boundary lies on the chain when it is behind `current`
                 // and `end` is behind it: the walk stops there.
                 match boundary {
@@ -1560,6 +1783,9 @@ impl MemorySSA<'_> {
                 }
             }
         }
+        if record {
+            *self.trail.borrow_mut() = trail;
+        }
         found
     }
 
@@ -1611,6 +1837,154 @@ pub fn built<'a>(
         index: Default::default(),
         taken: Default::default(),
         limit: Default::default(),
+        memo: None,
+        recording: Default::default(),
+        jumped: Default::default(),
+        trail: Default::default(),
+    }
+    .remembering(accesses)
+}
+
+thread_local! {
+    static STRUCTURE_IDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static MEMOS: std::cell::RefCell<std::collections::HashMap<(u64, u8), Rc<std::cell::RefCell<Memo>>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    static RECALLED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many nearest-writes queries this thread has answered from a remembered
+/// answer, and how many it has walked.
+pub fn recalled() -> (usize, usize) {
+    (RECALLED.with(std::cell::Cell::get), WALKED.with(std::cell::Cell::get))
+}
+
+fn hashed(value: &impl std::hash::Hash) -> u64 {
+    std::hash::BuildHasher::hash_one(&llrm_support::hash::FxBuild::default(), value)
+}
+
+fn signatures(
+    function: &Function,
+    graph: &[cfg::Block],
+    sites: &IndexMap<InstId, Access>,
+    written: &llrm_mir::dense::IdMap<InstId, Option<Rc<[MemRef]>>>,
+) -> (u64, IndexMap<i64, u64>) {
+    let cfg_hash = hashed(&graph.iter().map(|block| (block.at, block.succ.clone())).collect::<Vec<_>>());
+    // A block's edges and the blocks that reach it are part of what a walk
+    // through it reads.
+    let mut sigs: IndexMap<i64, u64> = IndexMap::default();
+    let mut parents: std::collections::HashMap<i64, Vec<i64>> = std::collections::HashMap::new();
+    for block in graph {
+        for &next in &block.succ {
+            parents.entry(next).or_default().push(block.at);
+        }
+    }
+    for block in graph {
+        let mut preds = parents.get(&block.at).cloned().unwrap_or_default();
+        preds.sort_unstable();
+        sigs.insert(block.at, hashed(&(&block.succ, preds)));
+    }
+    // `pointerfacts::Offsets` follows geps only, from the pointers references
+    // name: a gep nothing uses is no part of them. One in a block that reaches
+    // the walk's block is in its cone, as the memory ops it addresses are.
+    for &block in function.layout() {
+        for &inst in function.block(block).instructions() {
+            let op = function.instruction(inst);
+            if matches!(op.opcode, Opcode::GetElementPtr { .. })
+                && op.result.is_some_and(|value| !function.users(value).is_empty())
+            {
+                let entry = sigs.entry(cfg::id(block)).or_insert(0);
+                *entry = entry.rotate_left(5) ^ hashed(&(inst, &op.operands));
+            }
+        }
+    }
+    for (site, access) in sites {
+        let one = if access.kind == Kind::Def { hashed(&(*site, written[site].as_deref())) } else { hashed(site) };
+        let entry = sigs.entry(access.block.unwrap_or(-1)).or_insert(0);
+        *entry = entry.rotate_left(7) ^ one;
+    }
+    (cfg_hash, sigs)
+}
+
+/// What one function's walks answered, kept across the versions of its body
+/// while the blocks an answer reads are as they were (LLVM stores a use's
+/// clobber on the access, stamped with the defining access it was found for).
+struct Memo {
+    last: u64,
+    cfg: u64,
+    sigs: IndexMap<i64, u64>,
+    /// Counts the versions seen; `dirty` is the one each block's memory ops
+    /// last changed at, an entry the one it was made at.
+    epoch: u64,
+    dirty: llrm_support::hash::HashMap<i64, u64>,
+    entries: llrm_support::hash::HashMap<InstId, Vec<(bool, MemRef, Remembering)>>,
+}
+
+/// An answer, and what it read: the version it was found at, the blocks its
+/// walk went through, and what `known` said of the values it compared.
+struct Remembering {
+    epoch: u64,
+    blocks: Vec<i64>,
+    known: Vec<(ValueId, Option<Interval>)>,
+    answer: Vec<Remembered>,
+}
+
+/// What a walk being remembered has read.
+#[derive(Clone, Default)]
+struct Reads {
+    blocks: BTreeSet<i64>,
+    values: BTreeSet<ValueId>,
+    last: Option<i64>,
+}
+
+#[derive(Clone, Copy)]
+enum Remembered {
+    Live,
+    Phi(i64),
+    Def(InstId),
+}
+
+impl Memo {
+    fn new() -> Self {
+        Self {
+            last: 0,
+            cfg: 0,
+            sigs: IndexMap::default(),
+            epoch: 0,
+            dirty: Default::default(),
+            entries: Default::default(),
+        }
+    }
+
+    /// Brought to `structure`: what the body's blocks, pointers or memory ops
+    /// have changed since the last seen makes the answers that read them stale.
+    fn seen(
+        &mut self,
+        structure: &Structure,
+    ) {
+        if self.last == structure.sid {
+            return;
+        }
+        self.epoch += 1;
+        if self.last == 0 {
+            self.entries.clear();
+            self.dirty.clear();
+        } else {
+            let epoch = self.epoch;
+            for (block, sig) in &structure.sigs {
+                if self.sigs.get(block) != Some(sig) {
+                    self.dirty.insert(*block, epoch);
+                }
+            }
+            for block in self.sigs.keys() {
+                if !structure.sigs.contains_key(block) {
+                    self.dirty.insert(*block, epoch);
+                }
+            }
+        }
+        self.last = structure.sid;
+        self.cfg = structure.cfg_hash;
+        self.sigs = structure.sigs.clone();
     }
 }
 
@@ -1732,7 +2106,27 @@ fn structure_of(
         })
         .collect();
     let ends = outgoing.iter().map(|(block, state)| (*block, Some(resolved(&replacements, *state)))).collect();
-    Structure { ends, live, accesses, sites, phis, written, reaches: Default::default(), span, fixed, exacts }
+    let (cfg_hash, sigs) = signatures(function, &graph, &sites, &written);
+    let sid = STRUCTURE_IDS.with(|next| {
+        next.set(next.get() + 1);
+        next.get()
+    });
+    Structure {
+        sid,
+        cfg_hash,
+        sigs,
+        places: Default::default(),
+        ends,
+        live,
+        accesses,
+        sites,
+        phis,
+        written,
+        reaches: Default::default(),
+        span,
+        fixed,
+        exacts,
+    }
 }
 
 #[cfg(test)]
