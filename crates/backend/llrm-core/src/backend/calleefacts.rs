@@ -96,6 +96,8 @@ pub struct CalleeFacts {
     /// a double or an extended real (their 8-byte slots) and every function
     /// that calls one of them directly.
     aligned: BTreeSet<String>,
+    /// The functions only their module's direct calls reach.
+    private: BTreeSet<String>,
 }
 
 /// Whether some function of `module` has a value of type double or x87
@@ -146,6 +148,7 @@ impl CalleeFacts {
                 eligible,
                 written: RefCell::default(),
                 aligned: aligned.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
+                private: private.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
             },
             graph.bottom_up(),
         )
@@ -162,6 +165,27 @@ impl CalleeFacts {
         name: &str,
     ) -> i64 {
         if self.aligned.contains(name) { arch.stack_alignment() } else { arch.stack_slot_bytes() }
+    }
+
+    /// The bytes a call of `name` pushes first, above `pushed` bytes of
+    /// arguments, to enter it with the stack aligned. A callee that pops its
+    /// arguments pops the pad too, so only a private one (every caller known)
+    /// is padded.
+    pub fn pad(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+        pushed: i64,
+        callee_pops: bool,
+    ) -> i64 {
+        let align = self.stack_alignment(arch, name);
+        if align <= arch.stack_slot_bytes()
+            || arch.object().bitness != 32
+            || callee_pops && !self.private.contains(name)
+        {
+            return 0;
+        }
+        (align - pushed % align) % align
     }
 
     /// What each function of the module does to memory, where the facts were

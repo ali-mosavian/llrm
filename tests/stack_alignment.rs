@@ -5,11 +5,19 @@
 use std::process::Command;
 
 fn listing(source: &str) -> String {
+    listing_with(source, &["-mabi=sysv", "-O2"])
+}
+
+fn listing_with(
+    source: &str,
+    flags: &[&str],
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args(["-m32", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .args(flags)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -91,4 +99,19 @@ fn the_wide_constants_are_laid_out_before_the_narrow_ones() {
     let wide = text.find("db 09ah,099h,099h,099h,099h,099h,0b9h,03fh").expect("the double 0.1");
     let narrow = text.find("db 000h,000h,000h,03eh").expect("the float 0.125");
     assert!(wide < narrow, "{text}");
+}
+
+/// A private callee that pops its arguments pops the pad too: `decay` took 20
+/// bytes and was entered with the stack 4 off a multiple of 8, so each of its
+/// quad accesses cost 3 clocks (recfloat -O1, 2,500 misaligned operands).
+#[test]
+fn a_callee_that_pops_its_arguments_pops_the_pad() {
+    let text = listing_with(
+        "static double decay(double x, double acc, int n)
+{ return n ? decay(x * 0.5 + 1.0, acc + x, n - 1) : acc; }
+double top(int n) { return decay(100.0, 0.0, n); }",
+        &["-O1"],
+    );
+    assert!(text.contains("ret 24"), "{text}");
+    assert!(text.contains("pushd 0"), "{text}");
 }
