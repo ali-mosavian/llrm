@@ -1476,3 +1476,71 @@ fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
     let (small, big) = (asked(32), asked(64));
     assert!(big <= 2 * small + 64, "{small} -> {big} questions for 32 -> 64 loops");
 }
+
+/// `rest` in a loop that divides it by ten is bounded by where it starts: the
+/// recurrence's box was dropped because the quotient had no interval, so
+/// `while (rest > 0) rest /= 10` of a value below 30001 held up to INT_MAX
+/// (bench/frames' dividend, which the divide's price and any narrowing read).
+#[test]
+fn test_a_value_divided_in_its_own_loop_is_bounded_by_its_start() {
+    let p = Parsed::new(
+        "define i32 @f(i32 range(i32 1, 30001) %v) {
+b0:
+  br label %b1
+
+b1:
+  %rest = phi i32 [ %v, %b0 ], [ %q, %b2 ]
+  %c = icmp sgt i32 %rest, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %q = udiv i32 %rest, 10
+  br label %b1
+
+b3:
+  ret i32 %rest
+}
+",
+    );
+    let unit = p.unit();
+    let b2 = cfg::id(function(&p.module, "f").layout()[2]);
+    let known = super::operand_at(&unit, llrm_mir::module::Operand::Value(p.value("rest")), b2).unwrap().unwrap();
+    assert!(known.low >= BigInt::from(1) && known.high <= BigInt::from(32767), "[{}, {}]", known.low, known.high);
+}
+
+/// What the operations that divide and shift compute from their operands'
+/// intervals, as LLVM's `ConstantRange` has them.
+#[test]
+fn test_division_remainder_and_shift_follow_their_operands_intervals() {
+    let p = Parsed::new(
+        "define i32 @f(i32 range(i32 -100, 101) %x) {
+b0:
+  %sd = sdiv i32 %x, 7
+  %sr = srem i32 %x, 7
+  %ar = ashr i32 %x, 2
+  %ul = lshr i32 %x, 28
+  %pos = and i32 %x, 255
+  %ud = udiv i32 %pos, 10
+  %ur = urem i32 %pos, 10
+  %t = trunc i32 %pos to i16
+  ret i32 %sd
+}
+",
+    );
+    let unit = p.unit();
+    let mut known = Intervals::from_iter([(p.value("x"), interval(-100, 100, 32))]);
+    for (name, low, high) in [
+        ("sd", -14, 14),
+        ("sr", -6, 6),
+        ("ar", -25, 25),
+        ("ul", 0, 15),
+        ("pos", 0, 255),
+        ("ud", 0, 25),
+        ("ur", 0, 9),
+        ("t", 0, 255),
+    ] {
+        let got = _computed(&unit, p.made(name), &known, &IndexMap::default()).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!((got.low.clone(), got.high.clone()), (BigInt::from(low), BigInt::from(high)), "{name}");
+        known.insert(p.value(name), got);
+    }
+}

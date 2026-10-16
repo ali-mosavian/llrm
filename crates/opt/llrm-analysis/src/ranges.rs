@@ -598,9 +598,73 @@ fn computes(
         || matches!(unit.intrinsic(inst), Some(Intrinsic::Fixed { divide: false }))
         || matches!(
             op.opcode,
-            Opcode::Cast(CastOp::SExt | CastOp::ZExt)
-                | Opcode::Binary(BinaryOp::Shl | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And)
+            Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc)
+                | Opcode::Binary(
+                    BinaryOp::Shl
+                        | BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::And
+                        | BinaryOp::UDiv
+                        | BinaryOp::SDiv
+                        | BinaryOp::URem
+                        | BinaryOp::SRem
+                        | BinaryOp::LShr
+                        | BinaryOp::AShr
+                )
         )
+}
+
+/// The interval `kind` gives from the intervals of its operands: LLVM's
+/// `ConstantRange` division, remainder and shift. None where a corner could
+/// wrap, or an operand's sign leaves the answer to the whole width.
+fn quotient_or_shifted(
+    kind: BinaryOp,
+    first: &Interval,
+    second: &Interval,
+    width: u32,
+) -> Option<Interval> {
+    let zero = BigInt::from(0_u8);
+    let sign = BigInt::from(1_u8) << (width - 1);
+    let (low, high) = match kind {
+        BinaryOp::UDiv if first.low >= zero && second.low > zero => {
+            (&first.low / &second.high, &first.high / &second.low)
+        }
+        BinaryOp::URem if first.low >= zero && second.low > zero => {
+            (zero.clone(), first.high.clone().min(&second.high - 1u8))
+        }
+        BinaryOp::SDiv if second.low > zero || second.high < zero => {
+            let corners = [
+                &first.low / &second.low,
+                &first.low / &second.high,
+                &first.high / &second.low,
+                &first.high / &second.high,
+            ];
+            (corners.iter().min()?.clone(), corners.iter().max()?.clone())
+        }
+        BinaryOp::SRem if second.low > zero || second.high < zero => {
+            let most = second.low.magnitude().max(second.high.magnitude());
+            let most = BigInt::from(most.clone()) - 1u8;
+            let low = if first.low >= zero { zero.clone() } else { first.low.clone().max(-&most) };
+            let high = if first.high <= zero { zero.clone() } else { first.high.clone().min(most) };
+            (low, high)
+        }
+        BinaryOp::LShr | BinaryOp::AShr
+            if second.low == second.high && second.low >= zero && second.low < BigInt::from(width) =>
+        {
+            let by = usize::try_from(&second.low).ok()?;
+            if kind == BinaryOp::AShr || first.low >= zero {
+                (&first.low >> by, &first.high >> by)
+            } else if by > 0 {
+                // A negative number is a large unsigned one.
+                (zero.clone(), (BigInt::from(1_u8) << (width as usize - by)) - 1u8)
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    (-&sign <= low && low <= high && high < sign).then_some(Interval { low, high, width })
 }
 
 /// The interval `inst` computes from what is known of its operands.
@@ -627,6 +691,27 @@ pub fn _computed(
         return _fixed_product(unit, inst, width, known, facts);
     }
     // Every other operation answers None below, whatever its operands.
+    let operand = |one: Operand| _operand(unit, one, known, facts);
+    if let Opcode::Binary(
+        kind @ (BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem | BinaryOp::LShr | BinaryOp::AShr),
+    ) = op.opcode
+    {
+        let args = op.operands.iter().map(|&one| operand(one)).collect::<Option<Vec<_>>>()?;
+        let [first, second] = args.as_slice() else { return None };
+        return (first.width == width && second.width == width)
+            .then(|| quotient_or_shifted(kind, first, second, width))
+            .flatten();
+    }
+    if op.opcode == Opcode::Cast(CastOp::Trunc) {
+        // A number that fits the narrower type keeps its value.
+        let first = operand(*op.operands.first()?)?;
+        let sign = BigInt::from(1_u8) << (width - 1);
+        return (first.width > width && -&sign <= first.low && first.high < sign).then(|| Interval {
+            low: first.low.clone(),
+            high: first.high.clone(),
+            width,
+        });
+    }
     let kind = match op.opcode {
         Opcode::Cast(CastOp::SExt | CastOp::ZExt) => None,
         Opcode::Binary(kind @ (BinaryOp::Shl | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And)) => {
@@ -634,7 +719,6 @@ pub fn _computed(
         }
         _ => return None,
     };
-    let operand = |one: Operand| _operand(unit, one, known, facts);
     if kind == Some(BinaryOp::And) {
         // A non-negative mask bounds the result whatever the other operand
         // holds.
