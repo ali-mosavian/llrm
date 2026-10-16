@@ -756,7 +756,7 @@ def base_rows(args) -> tuple[dict, set[str], str]:
     base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
     with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
         base, was = basecounts.base_counts(
-            base_sha, args.opt, measure.tree_of, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time), args.time
+            base_sha, args.opt, basecounts.compiler_key, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time), args.time
         )
     now = basecounts.programs(ROOT)
     return base, {name for name in now if was.get(name) == now[name]}, base_sha
@@ -796,6 +796,10 @@ def main() -> int:
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
+    if os.environ.get("LLRM_BENCH_RECORD") and not args.select:  # a main push: these counts are the next pull requests' base
+        import measure
+
+        basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD")))
     try:
         base, same, base_sha = base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints

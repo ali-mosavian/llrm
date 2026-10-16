@@ -152,7 +152,28 @@ jobs:
           zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
           # The build job made this target dir from this commit: no file is newer than it.
           python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
+      # The bench step judges the compiler's rows against the base's counts (tools/bench/readme.md). Building and measuring the base took 20 of
+      # the group's 22 minutes: a push to main records its own counts under the key of what they depend on (basecounts.compiler_key: the
+      # tree but docs and editor files), and a pull request restores its base's, the merge ref's first parent.
+      - id: basecounts
+        if: matrix.group == 'tools'
+        run: |
+          echo "LLRM_BENCH_BASE_DIR=$RUNNER_TEMP/bench-base" >> "$GITHUB_ENV"
+          echo "base=bench-base-$(python3 tools/bench/basecounts.py key HEAD^1 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
+          echo "head=bench-base-$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"
+      - if: matrix.group == 'tools'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/bench-base
+          key: ${{ steps.basecounts.outputs.base }}
       - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
+        env:
+          LLRM_BENCH_RECORD: ${{ github.event_name == 'push' && '1' || '' }}
+      - if: matrix.group == 'tools' && github.event_name == 'push' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/bench-base
+          key: ${{ steps.basecounts.outputs.head }}
       # A private group's logs stay in its job log (the failing excerpt): its tools' output is not uploaded.
       - if: always() && steps.private.outputs.needed != 'true'
         uses: actions/upload-artifact@v4

@@ -30,6 +30,28 @@ COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_
 WAIVERS = "tools/bench/waivers"
 
 
+# What changes nothing a count is made of: a commit that touches only these has its parent's counts.
+INERT = {"docs", "editors", ".github", ".zed", ".gitignore", "readme.md", "license", "agents.md", "claude.md"}
+
+
+def compiler_key(sha: str, root: Path = ROOT) -> str:
+    """What `sha`'s counts depend on, as one name: the hash of its top-level entries but the inert ones (docs, editor files, workflows). The
+    key of the cache of a base's counts, so a docs-only commit finds its parent's, where its tree is new."""
+    listing = subprocess.run(["git", "ls-tree", sha], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    kept = [line for line in listing if line.split("\t", 1)[1].lower() not in INERT]
+    return hashlib.sha256("\n".join(kept).encode()).hexdigest()[:20]
+
+
+def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
+    """Store the rows of ours (bench.py's measured rows), with the programs' hashes, as the counts of the tree `key` names: the file
+    `base_counts` reads for a base. A main push does this for its own commit, so the next pull requests find their base measured."""
+    rows = {k: v for k, v in rows.items() if k[1] in OURS}
+    cache.mkdir(parents=True, exist_ok=True)
+    path = cache / f"{key}-own.json"
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root)}))
+    return path
+
+
 def programs(root: Path = ROOT) -> dict[str, str]:
     """Each benchmark's hash: its sources and settings (not its baseline or the waivers). A row of a program that differs between the base
     and the head compares two programs, not two compilers, and is not judged."""
@@ -128,3 +150,12 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["key"]:
+        print(compiler_key(sys.argv[2] if len(sys.argv) > 2 else "HEAD"))
+    elif sys.argv[1:2] == ["record"]:  # record ROWS.json DIR: the counts of HEAD
+        print(record(rows_of(json.loads(Path(sys.argv[2]).read_text())), Path(sys.argv[3]), compiler_key("HEAD")))
+    else:
+        sys.exit("usage: basecounts.py key [REV] | record ROWS.json DIR")

@@ -139,3 +139,44 @@ def test_waivers_live_outside_bench_where_every_tool_that_lists_the_benchmarks_w
     test_compile_cost and tests/run.rs all listed a benchmark called `waivers`."""
     assert not bc.WAIVERS.startswith("bench/") and (bc.ROOT / "tools/bench").is_dir()
     assert not (bc.ROOT / "bench/waivers").exists()
+
+
+def _repo(tmp_path):
+    import subprocess
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "crates").mkdir()
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "crates/a.rs").write_text("1")
+    (tmp_path / "docs/a.md").write_text("1")
+    git("add", "-A")
+    git("commit", "-q", "-m", "one")
+    return git
+
+
+def test_a_commit_that_changes_only_docs_has_its_parents_key_and_one_that_changes_code_does_not(tmp_path):
+    """The cache of a base's counts is keyed by the tree: a docs-only commit is a new tree with the same counts, a miss that built and
+    measured the base again for 20 minutes."""
+    git = _repo(tmp_path)
+    first = bc.compiler_key("HEAD", tmp_path)
+    (tmp_path / "docs/a.md").write_text("2")
+    git("commit", "-q", "-am", "docs")
+    assert bc.compiler_key("HEAD", tmp_path) == first
+    (tmp_path / "crates/a.rs").write_text("2")
+    git("commit", "-q", "-am", "code")
+    assert bc.compiler_key("HEAD", tmp_path) != first
+
+
+def test_the_counts_a_main_push_records_are_the_next_pull_requests_base_without_measuring_it(tmp_path):
+    rows = {"fib/c/O2": {"instructions": 7}, "fib/bas/O2": {"instructions": 9}}
+    cache = tmp_path / "cache"
+    bc.record(bc.rows_of(rows), cache, "k1", bc.ROOT)
+
+    def never(*a):
+        raise AssertionError("the base was built or measured")
+
+    have, hashes = bc.base_counts("sha", ["O2"], lambda sha: "k1", never, never, cache=cache)
+    assert have == {("fib", "c", "O2"): {"instructions": 7}} and "fib" in hashes, "ours only: the reference's row is not recorded"
