@@ -116,6 +116,19 @@
 //! in
 //! `manager_tests.rs`.
 //!
+//! # Why `Annotated` has no `update`
+//! Tried on d_faces -O1 (123 runs, 244 M before `PointerValues` was split from
+//! the escape phase): an update from `Touched`/`Reach` that keeps the
+//! references of the accesses no edit reached and works out the rest. Of its
+//! 90 updates, 58 had to bail because a pointer value or a load, store or call
+//! naming one was added, removed or re-operanded (`PointerValues` may then say
+//! something else, and the one the references were built from is not kept to
+//! compare), and 16 on a CFG change; the 16 left worked out 4 to 249 accesses
+//! each (a branch whose condition changed puts every block it dominates in the
+//! set). 3,217.6 M without it, 3,220.4 M with. To pay it must carry the
+//! `PointerValues` it was built from and diff it per value, bailing only when
+//! the root of a reference's chain differs: about 30 M at best.
+//!
 //! # Provides
 //! The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 //! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
