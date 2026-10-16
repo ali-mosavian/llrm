@@ -173,3 +173,33 @@ fn adopting_a_fork_keeps_the_marks_taken_before_it() {
     changed.sort_by_key(|value| value.0);
     assert_eq!(changed, [named(f, "x").1, named(f, "y").1]);
 }
+
+/// A rewrite reached only the blocks of the uses it feeds: the walk the
+/// analyses each kept for themselves marked every block or none.
+#[test]
+fn an_edit_reaches_the_blocks_that_read_what_it_makes_and_no_others() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (yes, no, join) = (block(f, "yes"), block(f, "no"), block(f, "join"));
+    let mark = f.mark();
+    let (y, _) = named(f, "y");
+    f.set_operand(y, 1, Operand::Value(f.parameters()[0]));
+    let reach = f.touched_since(mark).expect("history").reach(f);
+    assert_eq!(reach.blocks.iter().collect::<std::collections::BTreeSet<_>>(), [yes, join].into_iter().collect());
+    assert!(!reach.blocks.contains(&no));
+    assert_eq!(reach.conditions.iter().collect::<Vec<_>>(), [join]);
+    assert!(!reach.cfg_changed());
+}
+
+/// A branch retargeted is a change of the CFG, whether or not the log says
+/// the instruction was rewritten.
+#[test]
+fn a_retargeted_branch_is_a_change_of_the_cfg_in_the_reach() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, join) = (f.entry().unwrap(), block(f, "join"));
+    let mark = f.mark();
+    let br = f.terminator(entry).unwrap();
+    f.set_operand(br, 1, Operand::Block(join));
+    assert!(f.touched_since(mark).expect("history").reach(f).cfg_changed());
+}

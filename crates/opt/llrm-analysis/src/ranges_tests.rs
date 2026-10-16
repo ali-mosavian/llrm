@@ -1469,7 +1469,7 @@ fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
         let f = function(&parsed.module, "f");
         let shape = unit.shape();
         let before = super::hosts_asked();
-        let touched = std::collections::BTreeSet::from([block(f, "h1")]);
+        let touched: llrm_mir::dense::IdSet<_> = [block(f, "h1")].into_iter().collect();
         super::loops_reached(f, &shape, &touched, &Default::default(), &|_| false);
         super::hosts_asked() - before
     };

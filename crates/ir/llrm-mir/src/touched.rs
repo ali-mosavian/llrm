@@ -60,6 +60,36 @@ pub struct Touched {
     /// rewritten name: what a flow-insensitive points-to solve is built from.
     /// Empty until `with_pointers` fills it (it needs the types).
     pub pointers: IdSet<ValueId>,
+    /// Instructions added, moved or rewritten since the mark and still there:
+    /// where `reach` starts.
+    pub insts: IdSet<InstId>,
+    /// A terminator was added, erased or moved.
+    pub terminators_made: bool,
+    /// A terminator was rewritten (it may name the same blocks).
+    pub terminators_rewritten: bool,
+}
+
+/// What a change reached: the blocks holding an instruction it touched, or one
+/// that reads a value a touched instruction makes, or one that reads the value
+/// such a reader makes, and so on; and of those the blocks whose branch, or
+/// assume, or call, is one that reads a value the change made, which can alter
+/// what holds below them.
+#[derive(Clone, Debug, Default)]
+pub struct Reach {
+    pub blocks: IdSet<BlockId>,
+    pub conditions: IdSet<BlockId>,
+    /// A block was made or erased, or a terminator added, erased or moved.
+    pub cfg: bool,
+    /// A terminator was rewritten: the CFG is the same where it names the same
+    /// blocks in the same order, which the caller checks.
+    pub rewired: bool,
+}
+
+impl Reach {
+    /// The CFG may differ from the one the mark saw.
+    pub fn cfg_changed(&self) -> bool {
+        self.cfg || self.rewired
+    }
 }
 
 impl Touched {
@@ -108,6 +138,43 @@ impl Touched {
         }
         self.pointers = pointers;
         self
+    }
+
+    /// What the touched instructions reach through the uses of the values they
+    /// make (`Reach`), found in `function`.
+    pub fn reach(
+        &self,
+        function: &Function,
+    ) -> Reach {
+        let mut blocks = self.blocks.clone();
+        let mut conditions = IdSet::<BlockId>::new();
+        let mut work: Vec<InstId> = self.insts.iter().collect();
+        let mut seen: IdSet<InstId> = self.insts.clone();
+        while let Some(inst) = work.pop() {
+            let one = function.instruction(inst);
+            if let Some(block) = function.parent(inst) {
+                blocks.insert(block);
+                if one.opcode.is_terminator() || matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                    conditions.insert(block);
+                }
+            }
+            if let Some(result) = one.result {
+                for user in function.users(result) {
+                    if seen.insert(user.user) {
+                        work.push(user.user);
+                    }
+                }
+            }
+        }
+        Reach {
+            blocks,
+            conditions,
+            cfg: !self.blocks_created.is_empty()
+                || !self.blocks_erased.is_empty()
+                || self.terminators_made
+                || !self.cfg.is_empty(),
+            rewired: self.terminators_rewritten,
+        }
     }
 
     /// Whether a load, a store or a call was added, removed, moved or
@@ -204,7 +271,23 @@ impl Function {
         &self,
         mark: Mark,
     ) -> Option<Touched> {
-        let changes = self.changes_since(mark)?;
+        Some(self.touched_by(self.changes_since(mark)?))
+    }
+
+    /// What `changes` reached, none where the parameters changed.
+    pub fn reach_of(
+        &self,
+        changes: &[Change],
+    ) -> Option<Reach> {
+        let touched = self.touched_by(changes);
+        (!touched.parameters).then(|| touched.reach(self))
+    }
+
+    /// The digest of `changes`, the log since some mark.
+    pub fn touched_by(
+        &self,
+        changes: &[Change],
+    ) -> Touched {
         let mut out = Touched::default();
         let mut added = IdSet::<InstId>::new();
         let mut erased = IdSet::<InstId>::new();
@@ -331,7 +414,26 @@ impl Function {
                 !all.contains(&(from, to, opposite))
             })
             .collect();
-        Some(out)
+        for change in changes {
+            match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Cloned { to: inst, .. } => {
+                    out.terminators_made |= self.instruction(inst).opcode.is_terminator();
+                }
+                Change::Rewritten(inst) => {
+                    out.terminators_rewritten |= self.instruction(inst).opcode.is_terminator();
+                }
+                _ => {}
+            }
+        }
+        for inst in added.iter().chain(moved.iter()).chain(rewritten.iter()) {
+            if !self.is_erased(inst) {
+                out.insts.insert(inst);
+            }
+        }
+        out
     }
 
     /// The edges terminator `inst` added and removed since the changes began:
