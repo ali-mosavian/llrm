@@ -244,3 +244,20 @@ fn a_named_slot_replaces_the_frame_displacement() {
     let save = what(Operation::Move, "mov", vec![frame(-2, 2)], vec![value(3, 2)]);
     assert_eq!(render(&save, &syntax).to_string(), "store.i16 [slot0], v3");
 }
+
+/// A ten-byte source of a float operation printed `t2:i80`: x87's extended real
+/// is a float whichever operation reads it.
+#[test]
+fn an_extended_real_operand_is_f80() {
+    let multiply = what(
+        Operation::FloatArith,
+        "fmul",
+        vec![st_loc()],
+        vec![Loc::Held(Held { value: 2, width: 10 }), frame(-8, 8)],
+    );
+    assert_eq!(text(&multiply), "st0 = fmul.f64 v2:f80, [bp-8]");
+}
+
+fn st_loc() -> Loc {
+    Loc::st(0)
+}

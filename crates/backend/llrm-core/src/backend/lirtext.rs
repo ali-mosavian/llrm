@@ -89,18 +89,24 @@ pub struct Calls {
 }
 
 /// Values by their names: a source name, else `t12`.
-struct Namer(ValueNames);
+struct Namer {
+    names: ValueNames,
+    defined: std::collections::BTreeMap<u32, u32>,
+}
 
 impl Namer {
     fn of(body: &LirBody) -> Self {
-        Namer(body.with_inherited_names())
+        Namer { names: body.with_inherited_names(), defined: body.definitions() }
     }
 
+    /// A name a copy gave holds while the value is defined once; defined again
+    /// (after the phis are gone) it is another version, and has none.
     fn name(
         &self,
         value: u32,
     ) -> String {
-        self.0.get(value).map_or_else(|| format!("t{value}"), str::to_owned)
+        let kept = self.names.get(value).filter(|(_, inherited)| !inherited || self.defined.get(&value) == Some(&1));
+        kept.map_or_else(|| format!("t{value}"), |(name, _)| name.to_owned())
     }
 }
 
@@ -419,8 +425,11 @@ fn _block(
         .phis
         .iter()
         .map(|phi| {
-            let arms = phi
-                .incoming
+            // By block, whatever order the pass built them in: the same text
+            // for the same phi.
+            let mut incoming: Vec<_> = phi.incoming.iter().collect();
+            incoming.sort_by_key(|(from, _)| position.get(from).copied().unwrap_or(usize::MAX));
+            let arms = incoming
                 .iter()
                 .map(|(from, value)| format!("{}: {}", named(position, *from), namer.name(*value)))
                 .collect::<Vec<_>>()
