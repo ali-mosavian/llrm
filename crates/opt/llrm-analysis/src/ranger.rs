@@ -43,7 +43,7 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use llrm_mir::dense::IdMap;
+use llrm_support::hash::SparseIdMap;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_support::hash::HashMap;
 
@@ -55,7 +55,7 @@ use crate::ranges::{self, Interval, Intervals, Lookup};
 #[derive(Default)]
 struct Memo {
     /// (value, block) -> what holds after the block's own instructions.
-    own: RefCell<IdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
+    own: RefCell<SparseIdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
     /// Block -> what the edge from its sole predecessor sets, where it has one.
     edges: RefCell<HashMap<i64, Rc<Option<Intervals>>>>,
     /// Block -> what each of its assumes sets below it, in order.
@@ -105,7 +105,7 @@ impl EdgeFacts {
 
     /// How many answers are held.
     pub fn answers(&self) -> usize {
-        self.memo.own.borrow().iter().map(|(_, held)| held.len()).sum()
+        self.memo.own.borrow().values().map(|held| held.len()).sum()
     }
 
     /// Every block's facts, as the table gave them: asked of every value at
@@ -146,7 +146,7 @@ impl EdgeFacts {
         let mut kept = |at: i64| *judged.entry(at).or_insert_with(|| keep(at));
         match Rc::get_mut(&mut self.memo) {
             Some(memo) => {
-                for (_, held) in memo.own.get_mut().iter_mut() {
+                for held in memo.own.get_mut().values_mut() {
                     held.retain(|at, _| kept(*at));
                 }
                 memo.edges.get_mut().retain(|at, _| kept(*at));
@@ -159,7 +159,7 @@ impl EdgeFacts {
                 for (value, held) in self.memo.own.borrow().iter() {
                     let stands: HashMap<i64, Option<Rc<Interval>>> =
                         held.iter().filter(|(at, _)| kept(**at)).map(|(at, found)| (*at, found.clone())).collect();
-                    memo.own.borrow_mut().insert(value, stands);
+                    memo.own.borrow_mut().insert(*value, stands);
                 }
                 *memo.edges.borrow_mut() = self
                     .memo
@@ -263,7 +263,8 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             return found.clone();
         }
         let found = self.worked(value, at).map(Rc::new);
-        self.memo.own.borrow_mut().get_or_insert_with(value, HashMap::default).insert(at, found.clone());
+        self.memo.own.borrow_mut().entry(value)
+            .or_default().insert(at, found.clone());
         found
     }
 
@@ -437,7 +438,7 @@ pub struct LoopContext<'a, 'u> {
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
-    made: std::cell::OnceCell<IdMap<ValueId, InstId>>,
+    made: std::cell::OnceCell<SparseIdMap<ValueId, InstId>>,
 }
 
 impl<'a, 'u> LoopContext<'a, 'u> {
@@ -456,9 +457,9 @@ impl<'a, 'u> LoopContext<'a, 'u> {
     }
 
     /// The value each operation makes, found when first asked.
-    fn makers(&self) -> &IdMap<ValueId, InstId> {
+    fn makers(&self) -> &SparseIdMap<ValueId, InstId> {
         self.made.get_or_init(|| {
-            let mut found = IdMap::new();
+            let mut found = SparseIdMap::default();
             for &inst in self.operations {
                 if let Some(result) = self.unit.function.instruction(inst).result {
                     found.insert(result, inst);
@@ -494,12 +495,12 @@ pub struct LoopView<'r, 'a, 'u> {
     boxes: RefCell<Intervals>,
     round: std::cell::Cell<u32>,
     /// The round each box last changed in.
-    changed: RefCell<IdMap<ValueId, u32>>,
+    changed: RefCell<SparseIdMap<ValueId, u32>>,
     /// The boxed values read by the answers being worked out, innermost last.
     reading: RefCell<Vec<Vec<ValueId>>>,
-    closed: RefCell<IdMap<ValueId, Held<Option<Rc<Interval>>>>>,
+    closed: RefCell<SparseIdMap<ValueId, Held<Option<Rc<Interval>>>>>,
     layers: RefCell<HashMap<i64, Held<Rc<Vec<Intervals>>>>>,
-    swept: RefCell<IdMap<ValueId, HashMap<i64, Held<Option<Rc<Interval>>>>>>,
+    swept: RefCell<SparseIdMap<ValueId, HashMap<i64, Held<Option<Rc<Interval>>>>>>,
     failed: RefCell<Option<String>>,
 }
 
@@ -794,7 +795,8 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let reads = self.end();
         self.swept
             .borrow_mut()
-            .get_or_insert_with(value, HashMap::default)
+            .entry(value)
+            .or_default()
             .insert(at, Held { answer: found.clone(), round: self.round.get(), reads });
         found
     }
