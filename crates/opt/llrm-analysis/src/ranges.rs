@@ -1559,6 +1559,18 @@ pub fn bounded_solved(
     lazy: bool,
 ) -> Result<Bounds, String> {
     let function = unit.function;
+    // Every loop's proof, outer loops first, found once and sharing what the
+    // proofs of one body share: a unit that carries none proved each loop
+    // alone, and the loops around it again for each (`scoped`, for
+    // instruction selection: 3.6 M a proof at 64 loops).
+    let proved;
+    let unit = &match (unit.counted, lazy) {
+        (None, false) => {
+            proved = induction::counted_all(&Unit { registers: Some(facts), ..*unit });
+            Unit { counted: Some(&proved), registers: Some(facts), ..*unit }
+        }
+        _ => *unit,
+    };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();

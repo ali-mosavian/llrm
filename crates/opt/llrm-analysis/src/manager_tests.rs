@@ -1255,3 +1255,35 @@ entry:
     let again = analyses.get::<ThroughMemory>(context, &layout, function);
     assert!(!Rc::ptr_eq(&kept, &again), "an operand set to another value kept what was said of it");
 }
+
+/// A terminator rewritten in one loop was a change to the CFG, and every loop
+/// of the body was proved again (`unrolled` at -O3: 62 of the 91 reruns, 1155
+/// M of the 24.5 G at 64 loops). Only the loop it is in, and those it can
+/// guard or enter, are.
+#[test]
+fn a_terminator_rewritten_in_one_loop_proves_that_loop_again_and_not_the_other() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        analyses.get::<super::Counted>(context, &layout, function);
+        let latch = crate::testing::block(function, "l0");
+        let branch = function.terminator(latch).expect("a latch ends in a branch");
+        let same = function.instruction(branch).operands.clone();
+        function.set_operands(branch, same);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let proved = crate::induction::proved();
+    let after = analyses.get::<super::Counted>(context, &layout, function);
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert_eq!(crate::induction::proved() - proved, 1, "only the loop holding the terminator is proved again");
+    }
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<super::Counted>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
