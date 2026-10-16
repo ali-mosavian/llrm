@@ -326,6 +326,17 @@ pub fn far(global: &GlobalValue) -> Result<bool, Unselected> {
     }
 }
 
+/// A word of inline code that names a symbol: the byte it is at, how
+/// (`offset`, `segment`, `reloff`), the global by its place in the module's
+/// names, and the displacement from it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InlineSymbol {
+    pub at: usize,
+    pub kind: String,
+    pub global: (Space, i64),
+    pub addend: i64,
+}
+
 /// What a call calls: a named routine, far or near, the code a pointer
 /// addresses, or inline code laid down in its place.
 enum Callee {
@@ -601,6 +612,8 @@ pub struct Selected {
     /// Where the frame places an inline site's code names were patched in, by
     /// site: (byte, displacement, addend).
     pub inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    /// The symbols the inline code of a site names, by site.
+    pub inline_symbols: IndexMap<i64, Vec<InlineSymbol>>,
     pub far: BTreeSet<i64>,
     /// The argument bytes each direct call's callee pops as it returns, where
     /// it does.
@@ -995,6 +1008,7 @@ pub fn selected_with<'c>(
         calls: IndexMap::default(),
         inline: IndexMap::default(),
         inline_places: IndexMap::default(),
+        inline_symbols: IndexMap::default(),
         far: BTreeSet::new(),
         pops: IndexMap::default(),
         landing: None,
@@ -1051,6 +1065,7 @@ pub fn selected_with<'c>(
         calls: selector.calls,
         inline: selector.inline,
         inline_places: selector.inline_places,
+        inline_symbols: selector.inline_symbols,
         far: selector.far,
         pops: selector.pops,
         depth: selector.depth,
@@ -1595,6 +1610,7 @@ pub struct Selector<'m, 'c, 'p> {
     /// The code laid down in place of each call to an inline helper.
     inline: IndexMap<i64, Vec<u8>>,
     inline_places: IndexMap<i64, Vec<(usize, i64, i64)>>,
+    inline_symbols: IndexMap<i64, Vec<InlineSymbol>>,
     far: BTreeSet<i64>,
     pops: IndexMap<i64, i64>,
     /// The `at` of what starts the landing pad.
@@ -5449,6 +5465,32 @@ impl Selector<'_, '_, '_> {
                     let Some(block) = llrm_mir::intrinsics::asm(&name) else {
                         return refuse(format!("@{name} does not parse"));
                     };
+                    // The symbols the block names come first, as addresses.
+                    let (symbols, arguments) = arguments.split_at(block.fixups.len());
+                    let mut named = Vec::new();
+                    for (operand, fixup) in symbols.iter().zip(&block.fixups) {
+                        // The constant, seen through a cast of its address
+                        // space.
+                        let mut operand = *operand;
+                        while let Operand::Value(value) = operand
+                            && let ValueDef::Instruction(inst) = self.function.value(value).def
+                            && self.function.instruction(inst).opcode == Opcode::Cast(CastOp::AddrSpaceCast)
+                        {
+                            operand = self.function.instruction(inst).operands[0];
+                        }
+                        let Operand::Constant(id) = operand else {
+                            return refuse(format!("@{name} names a symbol by a computed address"));
+                        };
+                        let (global, offset) = crate::backend::globals::target(self.module, &self.layout, id)
+                            .map_err(|error| Unselected(format!("{error}: {:?}", self.module.context.get(id).kind)))?;
+                        named.push(InlineSymbol {
+                            at: fixup.at,
+                            kind: fixup.kind.clone(),
+                            global: (crate::backend::globals::space(self.module, global), i64::from(global.0)),
+                            addend: offset as i64 + fixup.addend,
+                        });
+                    }
+                    self.inline_symbols.insert(at, named);
                     self.called(inst, convention, Callee::Inline(name, block.code), arguments, at, out)
                 }
                 Some(Intrinsic::PtrDiff) => self.pointer_difference(inst, arguments, at, out),
