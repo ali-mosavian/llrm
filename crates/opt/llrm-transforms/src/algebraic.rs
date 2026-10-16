@@ -227,15 +227,11 @@ pub fn simplified(
     let facts =
         if divided_by_values { analyses.get::<Registers>(context, layout, function) } else { Default::default() };
     let outer = std::rc::Rc::clone(analyses.outer());
-    // Blocks and edges stay as they are through every round: one shape, the
-    // manager's, for the rules that read the loops (114 derivations of it for
-    // 46 runs on d_faces -O2).
-    let shape = analyses.get::<Shape>(context, layout, function);
     let mut changed = false;
     loop {
         let mut round = _whole_fixed(context, layout, function, &outer);
         round |= _unsigned_divisions(context, layout, function, &outer, analyses, changed || round, &facts, size);
-        round |= _divisions(context, layout, function, &outer, &shape, &facts);
+        round |= _divisions(context, layout, function, &outer, &facts);
         round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
         round |= _unread_bits(context, layout, function, analyses, changed || round);
         let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
@@ -244,7 +240,7 @@ pub fn simplified(
                 round |= _rewritten(context, layout, function, &recurrences, inst, size);
             }
         }
-        round |= _reassociated_recurrences(function, &shape);
+        round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
         // Last, when no other rule has anything to do: a repeat may be a
         // difference the other rules cancel (`x - (x + 5 + x)`).
@@ -1699,12 +1695,9 @@ fn _selected(
 ///
 /// Only a two-level tree in one block, its inner `add` read only by the
 /// outer, whose value is what a latch carries into that phi.
-fn _reassociated_recurrences(
-    function: &mut Function,
-    shape: &Shape,
-) -> bool {
+fn _reassociated_recurrences(function: &mut Function) -> bool {
     let mut updates = BTreeMap::<ValueId, ValueId>::new();
-    for one in &shape.loops {
+    for one in cfg::Shape::of(function).loops {
         for &phi in function.block(cfg::block(one.header)).instructions() {
             let instruction = function.instruction(phi);
             if instruction.opcode != Opcode::Phi {
@@ -2088,10 +2081,10 @@ fn _divisions(
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
-    shape: &Shape,
     facts: &IndexMap<ValueId, Known>,
 ) -> bool {
-    let unit = Unit::within(context, layout, function, outer).with_shape(shape);
+    let shape = cfg::Shape::of(function);
+    let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let divisors: Vec<(InstId, u32)> = function
         .walk()
         .map(|(_, inst)| inst)
