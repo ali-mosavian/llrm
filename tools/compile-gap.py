@@ -94,7 +94,7 @@ def main() -> None:
     inputs = {"d_faces": (str(qc / "render/d_faces.c"), KEYWORDS + includes)}
     for name in filter(None, args.programs.split(",")):
         inputs[name] = (str(ROOT / "bench" / name / f"{name}.c"), [])
-    # An object each compiler writes, not assembly text to /dev/null: llrm printed the text (21 M of d_faces -O2) instead of
+    # An object each compiler writes, not assembly text to the null device: llrm printed the text (21 M of d_faces -O2) instead of
     # encoding and writing the object (22 M), and clang and gcc would not have run their assemblers.
     target = os.path.join(tempfile.mkdtemp(prefix="compile-gap-"), "out.o")
     sink = ["-o", target]
