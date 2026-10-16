@@ -147,7 +147,9 @@ fn kernels(
     basic: &str,
 ) -> [(&'static str, Vec<(Vec<String>, bool)>); 3] {
     let source = |extension: &str| dir.join(format!("{stem}.{extension}"));
-    let cpu = ["-O2", "-march=i486"];
+    // With the search and the second route: one allocation keeps a BASIC
+    // loop's counters in the frame where C and Nib hold them (#1886).
+    let cpu = ["-O2", "-march=i486", "-fallocation-search", "-fallocation-routes"];
     let bas = compiled(
         "llrm-qb",
         &source("bas"),

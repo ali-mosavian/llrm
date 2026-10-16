@@ -1429,3 +1429,63 @@ to = 72
 label = "parity/sum_three nib -O2"
 counter = "code_bytes"
 to = 178
+
+[[row]]
+label = "fpbench bq32 -O2"
+counter = "instructions"
+to = 21403
+
+[[row]]
+label = "fpbench bq32 -Os"
+counter = "instructions"
+to = 21682
+
+[[row]]
+label = "huge bq32 -O2"
+counter = "instructions"
+to = 806320
+
+[[row]]
+label = "huge bq32 -Os"
+counter = "instructions"
+to = 565722
+
+[[row]]
+label = "nbody bq32 -O2"
+counter = "instructions"
+to = 48537
+
+[[row]]
+label = "ring bq32 -O2"
+counter = "instructions"
+to = 58692
+
+[[row]]
+label = "ring bq32 -Os"
+counter = "instructions"
+to = 58694
+
+[[row]]
+label = "shellsort bq32 -O2"
+counter = "instructions"
+to = 10351
+
+[[row]]
+label = "sieve bq32 -Os"
+counter = "instructions"
+to = 22794
+
+[[row]]
+label = "parity/parity bq32 -O2"
+counter = "instructions"
+to = 614
+
+[[row]]
+label = "parity/parity bq32 -Os"
+counter = "instructions"
+to = 616
+
+[[row]]
+label = "parity/qbsp bq32 -Os"
+counter = "instructions"
+to = 1181
