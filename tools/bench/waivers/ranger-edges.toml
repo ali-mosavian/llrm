@@ -14,3 +14,13 @@ to = 89430785
 label = "stft_fixed bq32 -O2"
 counter = "instructions"
 to = 98394531
+
+[[row]]
+label = "jpeg_single bq32 -Os"
+counter = "instructions"
+to = 64513519
+
+[[row]]
+label = "stft_single bq32 -Os"
+counter = "instructions"
+to = 73091461
