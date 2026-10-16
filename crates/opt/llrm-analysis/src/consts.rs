@@ -1127,7 +1127,7 @@ fn exit_loads(
         };
         let leaving = successors[&exit.header].iter().copied().filter(|at| !body.contains(at)).collect::<Vec<_>>();
         let [after] = leaving[..] else { continue };
-        if predecessors[&after] != BTreeSet::from([exit.header]) {
+        if !predecessors.are(&after, &[exit.header]) {
             continue;
         }
         let mut cells = Cells::default();
