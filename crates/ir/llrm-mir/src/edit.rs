@@ -48,6 +48,7 @@ impl Function {
         &mut self,
         operand: Operand,
     ) -> Option<&mut Vec<Use>> {
+        self.save_uses(operand);
         match operand {
             Operand::Value(value) => Some(&mut self.value_uses[value.0 as usize]),
             Operand::Block(block) => Some(&mut self.block_uses[block.0 as usize]),
@@ -225,6 +226,7 @@ impl Function {
         from: InstId,
         to: InstId,
     ) {
+        self.save_debug();
         let (moved, mut kept): (Vec<DebugRecord>, Vec<DebugRecord>) =
             std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == from);
         let at = kept.iter().position(|one| one.before == to).unwrap_or(kept.len());
@@ -267,6 +269,8 @@ impl Function {
         moving: bool,
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
+        self.save_block(block);
+        self.save_instruction(inst);
         let list = &self.blocks[block.0 as usize].instructions;
         #[cfg(test)]
         SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
@@ -301,6 +305,7 @@ impl Function {
                 self.reanchor_records(inst, start);
             }
             None => {
+                self.save_debug();
                 let (gone, kept): (Vec<DebugRecord>, Vec<DebugRecord>) =
                     std::mem::take(&mut self.debug_records).into_iter().partition(|one| one.before == inst);
                 self.debug_records = kept;
@@ -322,6 +327,8 @@ impl Function {
         if self.block(block).erased {
             return Err(format!("block {} is erased", block.0));
         }
+        self.save_block(block);
+        self.save_instruction(inst);
         self.blocks[block.0 as usize].instructions.insert(at, inst);
         self.parent[inst.0 as usize] = Some(block);
         // What follows is what the position named: scanning the block for it
@@ -374,6 +381,8 @@ impl Function {
     ) -> Result<(), String> {
         for &inst in run {
             let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
+            self.save_block(block_from);
+            self.save_instruction(inst);
             let list = &mut self.blocks[block_from.0 as usize].instructions;
             let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
             list.remove(at);
@@ -391,6 +400,7 @@ impl Function {
         operand: Operand,
     ) {
         let at = Use { user: inst, index: index as u32 };
+        self.save_instruction(inst);
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
         self.remove_use(old, at);
         self.add_use(operand, at);
@@ -405,6 +415,7 @@ impl Function {
         inst: InstId,
         operands: Vec<Operand>,
     ) {
+        self.save_instruction(inst);
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
         if old.len() > 4 {
@@ -441,6 +452,7 @@ impl Function {
         &mut self,
         inst: InstId,
     ) {
+        self.save_instruction(inst);
         if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
             && *volatile
         {
@@ -454,6 +466,7 @@ impl Function {
         &mut self,
         inst: InstId,
     ) {
+        self.save_instruction(inst);
         if let Opcode::Store { volatile, .. } = &mut self.instructions[inst.0 as usize].opcode
             && !*volatile
         {
@@ -468,6 +481,7 @@ impl Function {
         inst: InstId,
         flags: Flags,
     ) {
+        self.save_instruction(inst);
         self.instructions[inst.0 as usize].flags = flags;
         self.log(Change::Rewritten(inst));
     }
@@ -509,9 +523,11 @@ impl Function {
             self.retarget_debug_records(value, with);
             // Every use goes: the list is taken, not scanned for each of its
             // uses (a value of U uses read U^2 entries).
+            self.save_uses(Operand::Value(value));
             let uses = std::mem::take(&mut self.value_uses[value.0 as usize]);
             self.log(Change::Substituted { from: value, to: with });
             for one in uses {
+                self.save_instruction(one.user);
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
                 self.add_use(with, one);
                 self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
@@ -540,6 +556,7 @@ impl Function {
         variable: MetadataId,
         what: DebugWhat,
     ) {
+        self.save_debug();
         let at = self.debug_records.iter().position(|one| one.before == before).unwrap_or(self.debug_records.len());
         self.debug_records.insert(at, DebugRecord { before, variable, what });
     }
@@ -552,6 +569,7 @@ impl Function {
         variable: MetadataId,
         what: DebugWhat,
     ) {
+        self.save_debug();
         self.debug_records.push(DebugRecord { before, variable, what });
     }
 
@@ -561,6 +579,7 @@ impl Function {
         value: ValueId,
         with: Operand,
     ) {
+        self.save_debug();
         for record in &mut self.debug_records {
             if let DebugWhat::Declare(at) | DebugWhat::Value(at) | DebugWhat::Piece { value: at, .. } = &mut record.what
                 && *at == Operand::Value(value)
@@ -576,6 +595,7 @@ impl Function {
         &mut self,
         value: ValueId,
     ) {
+        self.save_debug();
         // The memory a variable lived in is gone, and nothing is said of what
         // it was: only what the variable was set to says that.
         self.debug_records.retain(|one| {
@@ -620,6 +640,7 @@ impl Function {
         {
             return Err(format!("instruction {}'s result still has {} users", inst.0, self.users(result).len()));
         }
+        self.save_instruction(inst);
         let operands = self.instructions[inst.0 as usize].operands.clone();
         for (index, operand) in operands.into_iter().enumerate() {
             self.remove_use(operand, Use { user: inst, index: index as u32 });
@@ -685,6 +706,7 @@ impl Function {
         blocks.sort_unstable();
         blocks.dedup();
         for block in blocks {
+            self.save_block(block);
             let list = self.blocks[block.0 as usize].instructions.clone();
             #[cfg(test)]
             SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
@@ -700,6 +722,7 @@ impl Function {
             self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
         }
         for inst in insts {
+            self.save_instruction(inst);
             self.parent[inst.0 as usize] = None;
             self.erased[inst.0 as usize] = true;
         }
@@ -714,6 +737,7 @@ impl Function {
         index: usize,
         attr: crate::opcode::Attribute,
     ) {
+        self.save_instruction(inst);
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
             panic!("a call")
         };
@@ -727,6 +751,7 @@ impl Function {
         inst: InstId,
         attr: crate::opcode::Attribute,
     ) {
+        self.save_instruction(inst);
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
             panic!("a call")
         };
@@ -740,6 +765,7 @@ impl Function {
         inst: InstId,
         convention: u32,
     ) {
+        self.save_instruction(inst);
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
             panic!("a call")
         };
@@ -755,6 +781,7 @@ impl Function {
         at: usize,
         types: &[TypeId],
     ) -> Vec<ValueId> {
+        self.save_whole();
         let made: Vec<ValueId> = types
             .iter()
             .map(|&ty| {
@@ -783,6 +810,7 @@ impl Function {
         at: usize,
     ) {
         assert!(self.users(self.parameters[at]).is_empty(), "a parameter removed is unused");
+        self.save_whole();
         self.forget_debug_value(self.parameters[at]);
         self.track_parameters();
         self.parameter_origins.remove(at);
@@ -821,6 +849,7 @@ impl Function {
         inst: InstId,
         function_type: TypeId,
     ) {
+        self.save_instruction(inst);
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.function_type = function_type;
         self.log(Change::Rewritten(inst));
@@ -838,6 +867,7 @@ impl Function {
         let mut operands = self.instructions[inst.0 as usize].operands.clone();
         operands.splice(at..=at, with.iter().copied());
         self.set_operands(inst, operands);
+        self.save_instruction(inst);
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.function_type = function_type;
         if info.argument_attrs.len() <= at {
@@ -853,6 +883,7 @@ impl Function {
         inst: InstId,
         bytes: u64,
     ) {
+        self.save_instruction(inst);
         let (Opcode::Load { align, .. } | Opcode::Store { align, .. }) = &mut self.instructions[inst.0 as usize].opcode
         else {
             return;
@@ -868,6 +899,7 @@ impl Function {
         kind: &str,
         node: MetadataId,
     ) {
+        self.save_instruction(inst);
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
@@ -879,6 +911,7 @@ impl Function {
         &mut self,
         map: &dyn Fn(MetadataId) -> MetadataId,
     ) {
+        self.save_whole();
         for inst in &mut self.instructions {
             for (_, node) in &mut inst.metadata {
                 *node = map(*node);
@@ -898,6 +931,7 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
+        self.save_instruction(inst);
         self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
     }
 
@@ -918,6 +952,7 @@ impl Function {
             Operand::Value(value) => matches!(this.value(value).def, ValueDef::Argument(_)),
             _ => true,
         };
+        self.save_debug();
         for one in said {
             let what = match one.what {
                 DebugWhat::Value(operand) if !same_everywhere(self, operand) => DebugWhat::Gone,
@@ -965,6 +1000,8 @@ impl Function {
                     + 1
             }
         };
+        self.save_layout();
+        self.save_block(block);
         self.layout.insert(at, block);
         self.blocks[block.0 as usize].placed = true;
         Ok(())
@@ -973,6 +1010,7 @@ impl Function {
     /// Drops every instruction and block, leaving a declaration, as LLVM's
     /// `deleteBody`.
     pub fn delete_body(&mut self) {
+        self.save_whole();
         for block in self.layout.clone() {
             for inst in self.block(block).instructions.clone() {
                 let (block, next) = self.detach(inst, false).expect("a placed instruction");
@@ -1001,6 +1039,8 @@ impl Function {
         if !self.block_users(block).is_empty() {
             return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
         }
+        self.save_layout();
+        self.save_block(block);
         self.layout.retain(|one| *one != block);
         self.release_name(block);
         self.blocks[block.0 as usize].erased = true;
