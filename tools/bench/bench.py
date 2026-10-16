@@ -793,6 +793,7 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")
     parser.add_argument("--reason", default="")
     parser.add_argument("--no-judge", action="store_true", help="measure, write --json and stop: the base's counts are made this way")
+    parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
@@ -803,6 +804,11 @@ def main() -> int:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
     if args.json:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.record:
+        import measure
+
+        print("recorded", basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD"))))
+        return 0
     if args.no_judge:
         return 0
     if args.bless:
@@ -818,10 +824,6 @@ def main() -> int:
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
-    if os.environ.get("LLRM_BENCH_RECORD") and not args.select:  # a main push: these counts are the next pull requests' base
-        import measure
-
-        basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD")))
     try:
         base, same, base_sha = base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints

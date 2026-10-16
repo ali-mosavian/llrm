@@ -40,7 +40,7 @@ BASIC is built on `llrm-qb`'s own frames, the default: no `B$ENRA`/`B$EXSA` wher
 
 The compiler's rows (`c`, `nib`, `bq16`, `bq32`) are judged against the base commit's: the merge-base with `origin/main`
 (`LLRM_BENCH_BASE_REF`), built and measured by its own tree's `bench.py` and programs (so a flag only the head's harness knows never reaches
-the base's compiler) and kept by its git tree (`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): a landed tree is measured once, and by what the counts depend on (`basecounts.py key`: the tree but docs and editor files). CI: a push to main records its own counts (`LLRM_BENCH_RECORD=1`) into the actions cache `bench-base-KEY`, and a pull request restores its base's, so the bench step measures the head only. Counts, sizes
+the base's compiler) and kept by its git tree (`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): a landed tree is measured once, and by what the counts depend on (`basecounts.py key`: the tree but docs and editor files). CI: a push to main records its own counts (`bench.py --record`, saved before the gate run) into the actions cache `bench-base-KEY`, and a pull request restores its base's, so the bench step measures the head only. Counts, sizes
 and, with `--time`, a timed-only program's kernel time may not exceed the base's. A row the base lacks (a new program), or of a program whose
 files differ between the base and the head, is not judged. The line `BASE sha: n rows` says which base. A base that cannot be built or measured
 fails the step with the reason (`FAIL BASE: ...`).
