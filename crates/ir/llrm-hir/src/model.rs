@@ -897,6 +897,9 @@ pub struct DataObject {
     pub addressed: bool,
     // The segment the frontend places it in. Its alignment is a stated fact.
     pub segment: Option<String>,
+    // Kept though nothing names it, as LLVM's `llvm.compiler.used`: the
+    // layout the program puts it in is what reads it.
+    pub kept: bool,
 }
 
 impl DataObject {
@@ -915,6 +918,7 @@ impl DataObject {
             address: AddressKind::Near,
             addressed: true,
             segment: None,
+            kept: false,
         }
     }
 }

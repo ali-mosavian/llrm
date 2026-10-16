@@ -396,6 +396,10 @@ fn data_object(
             code: false,
         });
     }
+    // A segment the program names (`__segname`) is laid out by what it is read
+    // as, a table of init routines: its objects stay whether or not code
+    // names them.
+    let kept = matches!(object.key, Key::Symbol(symbol) if unit.symbols[&symbol].in_named_segment());
     let (linkage, readonly, addressed) = match object.key {
         Key::Symbol(symbol) => {
             let symbol = &unit.symbols[&symbol];
@@ -414,6 +418,7 @@ fn data_object(
         linkage,
         address: address(space(unit, object.key)),
         segment: Some(object.segment.clone()),
+        kept,
         ..h::DataObject::new(id, &object.name, object.bytes.iter().map(|&one| i64::from(one)).collect())
     })
 }

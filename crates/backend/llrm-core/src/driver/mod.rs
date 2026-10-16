@@ -272,11 +272,24 @@ pub fn emitted(
     let runtime = timed("mir runtime", || {
         crate::hir::mir::runtime(&emitted.iter().zip(&program.modules).collect::<Vec<_>>(), &program.promises)
     })?;
-    let (modules, data) = emitted.into_iter().map(|one| (one.module, one.data)).unzip();
+    let (modules, data): (Vec<_>, Vec<HashMap<i64, GlobalId>>) =
+        emitted.into_iter().map(|one| (one.module, one.data)).unzip();
+    // The objects a frontend keeps though nothing names them, by their globals' names.
+    let kept: std::collections::BTreeSet<String> = program
+        .modules
+        .iter()
+        .zip(modules.iter().zip(&data))
+        .flat_map(|(hir, (module, placed))| {
+            hir.data.iter().filter(|one| one.kept).filter_map(move |one| {
+                placed.get(&one.id).and_then(|&id| module.global(id).name.clone())
+            })
+        })
+        .collect();
     let target =
         std::rc::Rc::new(crate::abi::qb::LoweredTarget::of(options.cpu()?, crate::abi::qb::HirAbi::of(program)?));
     let mut linked = timed("mir link", || linked(modules, runtime, target))?;
     linked.exports.entries = program.entries.iter().cloned().collect();
+    linked.exports.kept = kept;
     if crate::support::debug::enabled("mir") {
         let bodies = || {
             linked.modules.iter().flat_map(|module| {

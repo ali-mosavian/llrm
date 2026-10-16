@@ -188,6 +188,12 @@ impl Symbol {
         self.base == entry && self.exported()
     }
 
+    /// Whether the symbol is data in a segment of its own, outside DGROUP:
+    /// what `__based( __segname( "XI" ) )` puts it in.
+    pub fn in_named_segment(&self) -> bool {
+        !self.proc() && self.attr & PRIVATE != 0
+    }
+
     /// Whether `#pragma aux` gave the symbol its whole name: a pattern with no
     /// `*` for the symbol's own.
     fn named_by_pragma(&self) -> bool {

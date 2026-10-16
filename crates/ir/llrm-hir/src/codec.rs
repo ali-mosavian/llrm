@@ -406,6 +406,9 @@ impl _Plain for model::DataObject {
         if self.segment.is_some() {
             out.insert("segment".to_owned(), self.segment._plain());
         }
+        if self.kept {
+            out.insert("kept".to_owned(), self.kept._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1386,6 +1389,7 @@ static DATA_OBJECT: _Record = _Record {
         ("address", enum_hint!(AddressKind), false),
         ("addressed", _Hint::Bool, false),
         ("segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
+        ("kept", _Hint::Bool, false),
     ],
     build: |args| {
         _object(model::DataObject {
@@ -1398,6 +1402,7 @@ static DATA_OBJECT: _Record = _Record {
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
             segment: _default(args, "segment", None)?,
+            kept: _default(args, "kept", false)?,
         })
     },
 };

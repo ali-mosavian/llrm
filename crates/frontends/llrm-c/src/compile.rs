@@ -906,6 +906,33 @@ mod tests {
         assert_eq!(publics, ["__dunder", "_under", "plain", "unmarked_"], "{asm}");
     }
 
+    /// A static object put in a segment the program names
+    /// (`__based( __segname( "XI" ) )`, clib's table of init routines) was
+    /// dead code for nothing named it: the segment came out empty and the
+    /// start-up ran no initializer, so `printf` and `puts` wrote nothing.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_an_object_in_a_named_segment_is_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("table.c");
+        std::fs::write(
+            &source,
+            "static void init(void) {}\n\
+             static struct { char kind; void (*run)(void); } __based( __segname( \"XI\" ) ) entry = { 1, init };\n\
+             int plain;\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records table.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "table", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("XI segment") && asm.contains("dd init_"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
