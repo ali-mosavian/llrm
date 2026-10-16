@@ -50,6 +50,8 @@ pub enum Event {
     LiveRows,
 }
 
+const SLOTS: usize = 64;
+
 const NAMES: [&str; 12] = [
     "function_clones",
     "function_forks",
@@ -68,6 +70,7 @@ const NAMES: [&str; 12] = [
 thread_local! {
     static EVENTS: [Cell<u64>; 12] = const { [const { Cell::new(0) }; 12] };
     /// (name, hits, misses) by the address of the name, which is a literal.
+    static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -87,13 +90,24 @@ pub fn analysis(
     name: &'static str,
     hit: bool,
 ) {
+    // The row last found for a literal's address, by a few bits of it: a scan
+    // of every name per lookup was most of the cost.
+    let slot = (name.as_ptr() as usize >> 3) & (SLOTS - 1);
     ANALYSES.with(|rows| {
         let mut rows = rows.borrow_mut();
-        let at = match rows.iter().position(|row| std::ptr::eq(row.0, name)) {
-            Some(at) => at,
-            None => {
-                rows.push((name, 0, 0));
-                rows.len() - 1
+        let guess = FOUND.with(|found| found[slot].get());
+        let at = match rows.get(guess) {
+            Some(row) if std::ptr::eq(row.0, name) => guess,
+            _ => {
+                let at = match rows.iter().position(|row| std::ptr::eq(row.0, name)) {
+                    Some(at) => at,
+                    None => {
+                        rows.push((name, 0, 0));
+                        rows.len() - 1
+                    }
+                };
+                FOUND.with(|found| found[slot].set(at));
+                at
             }
         };
         if hit {
