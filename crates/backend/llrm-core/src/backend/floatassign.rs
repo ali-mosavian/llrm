@@ -72,31 +72,21 @@
 //! Before (after `FloatFold`):
 //!
 //! ```lir
-//! keep: 12 instructions
-//!   block 0x0000
-//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
-//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
-//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
-//!     ; ...
-//!     0x0007  [None] := fstp v5  ; inserted
-//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+//! ; ...
+//!      #9               fstp.f64    [sp], t5:f80
+//!     #10  t6@eax     = call        show()
+//!     #12  t8         = fadd.f64    t1:f80, [slot1]
 //! ```
 //!
 //! After (`FloatAssign`):
 //!
 //! ```lir
-//! keep: 14 instructions
-//!   block 0x0000
-//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
-//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
-//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
-//!     ; ...
-//!     0x0007  [None] := fstp v5  ; inserted
-//!     0x0007  [[bp-0x18]] := fstp v1  ; inserted
-//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-//!     0x0009  v1 := fld [[bp-0x18]]  ; inserted
-//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+//! ; ...
+//!      #9               fstp.f64    [sp], t5:f80
+//!     #15               fstp.f64    [slot2], t1:f80                       ; spill
+//!     #10  t6@eax     = call        show()
+//!     #16  t1         = fld.f64     [slot2]
+//!     #12  t8         = fadd.f64    t1:f80, [slot1]
 //! ```
 //!
 //! From `ISEL_DUMP=1` of the nib function `keep(a: f64, b: f64)` with `-m32

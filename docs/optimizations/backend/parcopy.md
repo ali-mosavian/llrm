@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/parcopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:6003e8fd564feb8c4fda6cd04285f15b69a436fc6384e4c3bfc695ed54faa2f4 -->
+<!-- src: crates/backend/llrm-core/src/backend/parcopy.rs sha256:db9fd2f45e4640a569169b76ec1e45ffabeab152c3134b9dc68022c49e871da7 -->
 
 # parcopy
 
@@ -46,34 +46,36 @@ word) becomes `push` then `pop`, which needs no scratch register and keeps
 the flags.
 
 ## Example
-`swaps` in a loop exchanges `a` and `b` each trip. The back edge's three
-copies are one group, and `AX`, `DX` form a cycle (`BX` only reads `CX`):
+A loop that swaps `a` and `b` each trip and updates two more values. The
+back edge's three copies are one group; `ax` and `dx` form a cycle, and
+`cx = mov si` is ready (nothing in the group reads `cx`):
 
 Before:
 
 ```lir
-block 0x000b
-  0x000b  BX := mov CX  ; inserted; parallel-copy 2
-  0x000b  DX := mov AX  ; inserted; parallel-copy 2
-  0x000b  AX := mov DX  ; inserted; parallel-copy 2
-  0x000b  jmp   ; inserted
+    B6  ← B2  → B2
+        #45  ax         = mov.i16     dx                                    ; copy
+        #46  dx         = mov.i16     ax                                    ; copy
+        #47  cx         = mov.i16     si                                    ; copy
+        #49               jmp         B2
 ```
 
 After:
 
 ```lir
-block 0x000b
-  0x000b  BX := mov CX  ; inserted
-  0x000b  DX, AX := xchg AX, DX  ; inserted
-  0x000b     ; inserted
-  0x000b  jmp   ; inserted
+    B6  ← B2  → B2
+        #47  cx         = mov.i16     si
+        #45  ax, dx     = xchg.i16    dx, ax
+        #46  y3.1       = elided      y2.1
+        #49               jmp         B2
 ```
 
 The ready copy is written first, the cycle becomes one `xchg`, and an anchor
-keeps the virtual definition the dropped copies stood for.
+(`elided`) keeps the virtual definition the dropped copy stood for.
 
-From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
-compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+From `ISEL_DUMP=1 llrm-c -m16 -O2` of a C loop that does `t = a; a = b;
+b = t;` and updates `c` and `d`: block `B6` in the `RegAlloc` and
+`ParallelCopy` stages.
 
 ## Runs
 After `regalloc`, before `prologue` and the peephole, once per body, at

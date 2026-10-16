@@ -32,32 +32,22 @@
 //! store, so an intervening read, write, call or branch stops the fold.
 //!
 //! # Example
-//! A load of a cell, an `add` of a value, a store back (instruction 0x0003 is
-//! an anchor that carries no operation; `[None v1@unplaced]` is the cell
-//! `[v1]`, `[None]` the second load's cell):
+//! `*p += x;` is a load of `[p]`, an `add` and a store back. The store became
+//! `add [t1], t2`; the load and the `add` stay as `elided` anchors and
+//! their values no longer exist. No dump shows the body before selection, so
+//! only the result is shown:
 //!
 //! ```lir
-//! === before
-//!     block 0x0000
-//!       0x0000  v2 := mov [None v1@unplaced]  ; inserted
-//!       0x0001  v3 := mov [None]  ; inserted
-//!       0x0002  v4 := add v2, v3  ; inserted
-//!       0x0003     ; inserted
-//!       0x0004  [None v1@unplaced] := mov v4  ; inserted
-//! === after
-//!     block 0x0000
-//!       0x0000     ; inserted
-//!       0x0001  v3 := mov [None]  ; inserted
-//!       0x0002     ; inserted
-//!       0x0003     ; inserted
-//!       0x0004  [None v1@unplaced] := add [None v1@unplaced], v3  ; inserted
+//! fn _f@3(t1@ax, t2@dx)
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #2               elided
+//!      #3               elided
+//!      #4               add.i16     [t1], t2
+//!      #5               ret
 //! ```
 //!
-//! The load, the `add` and the store became one `add [v1], v3`, and `v2` and
-//! `v4` no longer exist.
-//!
-//! From unit test `test_private_integer_update_selects_a_memory_destination` in
-//! `rmw.rs`.
+//! From `ISEL_DUMP=1 llrm-c -m16 -O2` of `void f(int *p, int x) { *p += x; }`.
 //!
 //! # Runs
 //! During instruction selection, in the combining step of `isel/combined.rs`,

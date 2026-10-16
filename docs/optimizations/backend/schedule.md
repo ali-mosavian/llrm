@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/schedule.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:286d3e7242f7d82094cb4874875438ada4feb58655e5eb3826a7d54c32c60b88 -->
+<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:0c5ba7940cbb38eb9ebbb65583b5380747f6bb8dbdee094f2cebe00300a2027f -->
 
 # schedule
 
@@ -46,26 +46,29 @@ immediate forms, multiplies and funnel shifts, `uv` otherwise. A U-only or
 fills the V slot.
 
 ## Example
-`imul` has a long latency and `add` needs its result; the `mov` is
-independent. The addresses on the left are the original positions:
+On a Pentium, `shr` needs the `mov` before it and cannot pair with it; the
+`lea` is independent. Moved up beside the `mov`, it fills the V slot:
 
 ```lir
-=== before
-    block 0x0000
-      0x0000  EAX := imul EAX, ECX
-      0x0001  EAX := add EAX, EDX
-      0x0002  EBX := mov ESI
-=== after
-    block 0x0000
-      0x0000  EAX := imul EAX, ECX
-      0x0002  EBX := mov ESI
-      0x0001  EAX := add EAX, EDX
+═══ _fill_local@3 · LoopSlots · m16 ════════════════════════════════════════════
+B2  ← B0  → B1                                                    ×0.8
+    #18  bx         = lea.i16     &+eax+eax*1
+    #17  cx         = mov.i16     bx
+     #8  cx         = shr.i16     cx, 2:i8
+     #9  bx         = and.i16     bx, 3
+    #11  di         = lea.i16     &bp-16
+
+═══ _fill_local@3 · Scheduler · m16 ════════════════════════════════════════════
+B2  ← B0  → B1                                                    ×0.8
+    #18  bx         = lea.i16     &+eax+eax*1
+    #17  cx         = mov.i16     bx
+    #11  di         = lea.i16     &bp-16
+     #8  cx         = shr.i16     cx, 2:i8
+     #9  bx         = and.i16     bx, 3
 ```
 
-The `mov` now runs while the multiply finishes.
-
-From unit test `test_out_of_order_profile_fills_an_imul_dependency_gap` in
-`schedule_tests.rs` (P6 profile).
+From `ISEL_DUMP=1` of `fill_local` in tests/fixtures/c/fill.c with
+`-m16 -O2 -march=pentium -mtune=pentium`, stages `LoopSlots`, `Scheduler`.
 
 ## Runs
 Once per body, the machine phase after `loopslots` and before `jumps`

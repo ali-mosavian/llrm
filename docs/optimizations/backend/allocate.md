@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:1892bb1477d5c7b6b998c6060583fd0e35a2d6ec462d280198c3e158f0af9fd6 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:2e445c5cb3887d489b8c3b9bec6a96f2cc8a631a36ee2ad3691f310250a0369a -->
 
 # allocate
 
@@ -152,11 +152,10 @@ weighted by block frequency); the cheapest wins.
 Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
 the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 `Unfolded` that the spills admit is tried, plus `Whole` without
-splitting, and only that shape is made: the rewritten bodies of the others
-cost 104 M of `d_faces` -O1's 7.1 G and were dropped unused. A trial is kept
-only if it is cheaper and spilled none of its protected values: it stops at the
-first spill of one (`ABANDONED`), since the rounds after it could not change
-what is kept. The frame is restored between trials.
+splitting. A trial is kept only if it is cheaper and spilled none of its
+protected values: it stops at the first spill of one (`ABANDONED`), since
+the rounds after it could not change what is kept. The frame is restored
+between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width
@@ -165,73 +164,68 @@ dead allocator copies, and refuses a body with a spill left. `datagroup`
 then restores DS where a value held it.
 
 ## Example
-A dword multiply by 5 (`Times5& = x * 5`), before and after. `; inserted`
-notes are dropped. `v4` and `v5` are pinned to EAX and EDX (`requires`) and
-everything else is free.
+A dword multiply by 5 (`Times5& = x * 5`), before and after. `t4` and `t5`
+are pinned to EAX and EDX (the `ret`) and everything else is free.
 
 Before (`Coalescer`):
 
 ```lir
-0x0000  v1 := mov [[bp+0x6]]
-0x0000  v2 := mov [None v1@unplaced]
-0x0001  v4 := mov v2
-0x0001  v4 := shl v4, 0x2
-0x0001  v4 := add v4, v2
-0x0002  v5 := mov v4
-0x0002  v5 := shr v5, 0x10
-0x0002     ; requires v4@EAX,v5@EDX
+     #1  t1         = load.i16    [arg0+6]
+     #2  t2         = load.i32    [t1]
+     #7  t4         = mov.i32     t2
+     #3  t4         = shl.i32     t4, 2:i8
+     #4  t4         = add.i32     t4, t2
+     #9  t5         = mov.i32     t4
+     #5  t5         = shr.i32     t5, 16:i8
+     #6               ret         t4@eax, t5@edx
 ```
 
 After (`RegAlloc`):
 
 ```lir
-0x0000  BX := mov [[bp+0x6]]
-0x0000  EBX := mov [None v1@BX]
-0x0001  EAX := mov EBX
-0x0001  EAX := shl EAX, 0x2
-0x0001  EAX := add EAX, EBX
-0x0002  EDX := mov EAX
-0x0002  EDX := shr EDX, 0x10
-0x0002     ; ...
-0x0002     ; requires v6@EAX,v7@EDX
+     #1  bx         = load.i16    [arg0+6]
+     #2  ebx        = load.i32    [t1@bx]
+     #7  eax        = mov.i32     ebx
+     #3  eax        = shl.i32     eax, 2:i8
+     #4  eax        = add.i32     eax, ebx
+     #9  edx        = mov.i32     eax
+     #5  edx        = shr.i32     edx, 16:i8
+    #10  t6         = elided      t4
+    #11  t7         = elided      t5
+     #6               ret         t6@eax, t7@edx
 ```
 
-Every value is a register; the pinned values are fresh ones (`v6`, `v7`),
+Every value is a register; the pinned values are fresh ones (`t6`, `t7`),
 see `constrain`.
 
 When registers run out, values get frame cells. Eight LONG parameters
-multiplied in pairs (`Mix&`), the first lines, before (`Coalescer`):
+combined in pairs (`Mix&`), the first lines, before (`Coalescer`):
 
 ```lir
-0x0000  v1 := mov [[bp+0x14]]
-0x0000  v9 := mov [None v1@unplaced]
-0x0001  v2 := mov [[bp+0x12]]
-0x0001  v10 := mov [None v2@unplaced]
-0x0002  v11 := mov v9
-0x0002  v11 := imul v11, v10
+     #1  t1         = load.i16    [arg0+20]
+     #9  t9         = load.i32    [t1]
+     #2  t2         = load.i16    [arg0+18]
+    #10  t10        = load.i32    [t2]
+    #37  t11        = mov.i32     t9
+    #11  t11        = imul.i32    t11, t10
 ; ...
 ```
 
-After (`RegAlloc`): `v9` and `v11` are stored to frame cells, and `v11` is
-read back before its update (`spill reload`):
+After (`RegAlloc`): `t9` is stored to `slot0` (`spill`) and read back
+where the copy `#37` was:
 
 ```lir
-0x0000  BX := mov [[bp+0x14]]
-0x0000  ECX := mov [None v1@BX]
-0x0001  BX := mov [[bp+0x12]]
-0x0001  EAX := mov [None v2@BX]
-0x0002  EBX := mov ECX
-0x0002  [[bp-0x18]] := mov EBX
-0x0002     ; ...
-0x0002  [[bp-0x4]] := mov ECX
-0x0002  EBX := mov [[bp-0x18]]  ; spill reload
-0x0002  EBX := imul EBX, EAX
-0x0002  [[bp-0x18]] := mov EBX
+     #1  bx         = load.i16    [arg0+20]
+     #9  eax        = load.i32    [t1@bx]
+    #56               store.i32   [slot0], eax                          ; spill
+     #2  bx         = load.i16    [arg0+18]
+    #10  edx        = load.i32    [t2@bx]
+    #37  eax        = load.i32    [slot0]
 ; ...
 ```
 
-From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5&` and of `Mix&`, first
-route.
+From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5&` and of an
+eight-LONG `Mix&`, first route.
 
 ## Runs
 Once per function and route in the machine phases (`regalloc`), after

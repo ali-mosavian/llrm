@@ -28,22 +28,23 @@
 //! *Landing-pad root block*
 //!
 //! # Example
-//! A QB program with `ON ERROR GOTO`. After selection the root block holds the
-//! never-taken branch, and the pad is a block that begins with the clobbering
+//! A QB program with `ON ERROR GOTO`. After selection the root block `B0` holds
+//! the never-taken branch, and the pad `B4` begins with the clobbering
 //! pseudo-call:
 //!
 //! ```lir
-//!     block 0x001d
-//!       0x001d  cmp SP, 0x0  ; inserted
-//!       0x001d  je   ; inserted
-//!     block 0x0000
-//!       ; ...
-//!     block 0x0007
-//!       0x0007  call   ; inserted; clobbers EAX,ECX,EDX,EBX,ES,DS,FS,GS
+//! ═══ __main · FarIndirectCalls · m16 ════════════════════════════════════════════
+//! fn __main()   ; calls clobber eax ecx edx ebx esi edi es ds fs gs
+//! B0  entry  → B4 B1                                                ×1.0
+//!      #1               cmp.i16     sp, 0
+//!      #2               je          B4 else B1
+//!      ; ...
+//! B4  ← B0  → B5 B7                                                 ×0.5
+//!     #20               call        __LANDING()
 //! ```
 //!
 //! From `ISEL_DUMP=1` of a QB program (`ON ERROR GOTO handler`, an `OPEN`, a
-//! `RESUME NEXT` handler) at `-O2`, stage `FarIndirectCalls`.
+//! `RESUME NEXT` handler) with `-m16 -O2`, stage `FarIndirectCalls`.
 //!
 //! # Runs
 //! During `Selector::body` (`pads`, `landing_pad`) and at its end (`rooted`);

@@ -18,20 +18,13 @@ The flags are rows of `PASSES` in [`flags.rs`](https://github.com/ali-mosavian/l
 
 ## What prints
 
-`ISEL_DUMP=1` prints the LIR after each machine phase, `=== PhaseName` then each function ([`lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/lirtext.rs#L12)). Each route prints its own run, so a function made by both appears twice, the second with `SsaSpill`. `LLRM_VERIFY=1` checks the body after each phase and names the first that breaks an invariant, or loses source bytes.
+`ISEL_DUMP=1` prints the LIR after each machine phase, a banner `═══ fn · Stage · m16 ═══` then the function ([`lirtext`](../../optimizations/backend/lirtext.md)). Each route prints its own run, so a function made by both appears twice, the second with `SsaSpill`. `LLRM_VERIFY=1` checks the body after each phase and names the first that breaks an invariant, or loses source bytes. Every line is explained in [LIR text](../../reference/lir-text.md); what matters here:
 
-| Dump text | Means |
-|---|---|
-| `v12 := add v12, v27` | value `v12` is updated in place (a tie) |
-| `AX := mov [[abs+0xc] v36@BX]` | after allocation, a cell addressed through value `v36`, placed in `BX`; before it, `v10@unplaced` |
-| `[[bp-0x10]]` | a frame cell: a spill slot, a local or an argument |
-| `; requires v13@AX` | the instruction needs `v13` in `AX` |
-| `; delivers v5@AX` | the instruction writes `v5` in `AX` and names it nowhere |
-| `; clobbers EAX,ECX,...` | registers destroyed (`clobbers_high`: only the upper half) |
-| `; parallel-copy 2` | one move of copy group 2 |
-| `; spill reload` | a reload the spiller wrote; a store or a remat has no note |
-| `; inserted` | the instruction was made by a phase and claims no source bytes |
-| `v6 := phi 0x0000:v1 0x0009:v5` | a phi: value from each predecessor block |
+- An instruction is `#12  dest  = op.i16  operands  ; note`. The label `#12` is kept by every phase, so two stages are compared by label.
+- A value is its source name or `t12`; after allocation a register (`ax`, `eax`) stands in its place. In an address, `t4@bx` names the value and the register it was placed in.
+- A frame slot is `[slot2]`, listed on the `frame` line. Blocks are `B3`, every target names its block, and a loop is indented.
+- `call f(t12@ax)` needs `t12` in `ax`; `fn` and `; also clobbers esi` state what a call destroys.
+- Notes: `spill` (a store), `reload`, `remat`, `copy` (one move of a phi's parallel copy), `elided` (an operation selection removed that still carries a value).
 
 `LLRM_DEBUG=channel,channel` (or `all`) writes `[channel] line` to stderr ([`debug.rs`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/support/llrm-support/src/debug.rs#L1)).
 

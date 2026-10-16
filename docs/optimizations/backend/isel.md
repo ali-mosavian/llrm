@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/isel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/isel.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/isel.rs sha256:942cb8c348a8ad740772f2afaadbae91fe576b026b01cc72d137171dbd10bd0f -->
+<!-- src: crates/backend/llrm-core/src/backend/isel.rs sha256:50a33ab0cce23cd04d5d9d532f5202c386bbc592543487d764a5b70976429dd6 -->
 
 # isel
 
@@ -120,20 +120,23 @@ Before, the loop of `Acc.run` inlined into `main` (the MIR `-O2` leaves):
   br i1 %5, label %2, label %6
 ```
 
-After, the block as the first machine phase receives it:
+After, the loop as the first machine phase receives it:
 
 ```lir
-    block 0x0004
-      v5 := phi 0x0000:v1 0x0004:v4
-      ; ...
-      0x0007  [[abs+0x0] v2@unplaced] := add [[abs+0x0] v2@unplaced], 0x3  ; inserted
-      0x0008  v4 := add v5, 0x1  ; inserted
-      0x000a  cmp v4, 0x0  ; inserted
-      0x000a  jne   ; inserted
+═══ main · FarIndirectCalls · m16 ══════════════════════════════════════════════
+    B1  ← B0 B1  → B1 B2  loop 7 trips                                ×7.0
+        #12  i.11       = phi         B0: t1, B1: i.2
+        #13               elided
+        #14               elided
+        #15               add.i16     [ss:t9], 3
+        #16  i.2        = add.i16     i.11, 1
+        #17               cmp.i16     i.2, 0
+        #18               jne         B1 else B2                            ; 97% taken
 ```
 
-The load, add and store of one cell are one `add` on memory, and the
-compare and branch are `cmp` and `jne`; registers are still virtual.
+The load, add and store of one cell are one `add` on memory (`#15`; `#13`
+and `#14` are the load and the add it replaced), and the compare and branch
+are `cmp` and `jne`; registers are still virtual.
 
 From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
 called from `main`) at `-m16 -O2`, stage `FarIndirectCalls`.

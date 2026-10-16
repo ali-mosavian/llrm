@@ -2,8 +2,8 @@
 //! edges.
 //!
 //! # How it works
-//! For each phi `r = phi [p1: v1, p2: v2]` the pass puts `r := v1` at the end
-//! of `p1` and `r := v2` at the end of `p2`, before the terminator. The copies
+//! For each phi `r = phi [p1: v1, p2: v2]` the pass puts `r = v1` at the end
+//! of `p1` and `r = v2` at the end of `p2`, before the terminator. The copies
 //! of one edge carry one group number, so [`crate::backend::parcopy`] later
 //! orders them as a single simultaneous assignment. A phi with an incoming edge
 //! from outside the body is left alone.
@@ -73,52 +73,56 @@
 //! it first.
 //!
 //! # Example
-//! A loop carrying three values has three phis at its head:
+//! A loop carrying three values has three phis at its head (`ISEL_DUMP=1` of
+//! a C Fibonacci loop, `t = a + b; a = b; b = t;`, `llrm-c -O2 -m16`).
 //!
 //! Before:
 //!
 //! ```lir
-//! block 0x0000
-//!   0x0000  v2 := mov 0x1  ; inserted
-//!   0x0000  v3 := mov 0x0  ; inserted
-//!   0x0000  jmp   ; inserted
-//! block 0x0001
-//!   v5 := phi 0x0000:v2 0x0009:v4
-//!   v6 := phi 0x0000:v3 0x0009:v5
-//!   v8 := phi 0x0000:v1 0x0009:v7
-//!   ; ...
-//! block 0x0009
-//!   0x0009  v4 := add v6, v5  ; inserted
-//!   0x000a  jmp   ; inserted
+//! ═══ _f@3 · SharedConstants · m16 ═══════════════════════════════════════════════
+//! B0  entry  → B1                                                   ×1.0
+//!      #2  t2         = mov.i16     0
+//!      #3  t3         = mov.i16     1
+//!      #4               jmp         B1
+//!
+//!     B1  ← B0 B3  → B3 B2  loop                                        ×32.0
+//!          #5  y4.1       = phi         B0: t2, B3: y4.2
+//!          #6  y3.1       = phi         B0: t3, B3: y4.1
+//!          #7  y2.2       = phi         B0: y2.1, B3: y2.3
+//! ; ...
+//!
+//!     B3  ← B1  → B1                                                    ×31.0
+//!         #13  y4.2       = add.i16     y3.1, y4.1
+//!         #14               jmp         B1
 //! ```
 //!
 //! After:
 //!
 //! ```lir
-//! block 0x0000
-//!   0x0000  v2 := mov 0x1  ; inserted
-//!   0x0000  v3 := mov 0x0  ; inserted
-//!   0x0000  v5 := mov v2  ; inserted; parallel-copy 1
-//!   0x0000  v6 := mov v3  ; inserted; parallel-copy 1
-//!   0x0000  v8 := mov v1  ; inserted; parallel-copy 1
-//!   0x0000  jmp   ; inserted
-//! block 0x0001
-//!   ; ...
-//! block 0x0009
-//!   0x0009  v4 := add v6, v5  ; inserted
-//!   0x000a  v5 := mov v4  ; inserted; parallel-copy 2
-//!   0x000a  v6 := mov v5  ; inserted; parallel-copy 2
-//!   0x000a  v8 := mov v7  ; inserted; parallel-copy 2
-//!   0x000a  jmp   ; inserted
+//! ═══ _f@3 · PhiElimination · m16 ════════════════════════════════════════════════
+//! B0  entry  → B1                                                   ×1.0
+//!      #2  t2         = mov.i16     0
+//!      #3  t3         = mov.i16     1
+//!     #15  y4.1       = mov.i16     t2                                    ; copy
+//!     #16  y3.1       = mov.i16     t3                                    ; copy
+//!     #17  y2.2       = mov.i16     y2.1                                  ; copy
+//!      #4               jmp         B1
+//!
+//!     B1  ← B0 B3  → B3 B2  loop                                        ×32.0
+//! ; ...
+//!
+//!     B3  ← B1  → B1                                                    ×31.0
+//!         #13  y4.2       = add.i16     y3.1, y4.1
+//!         #19  y4.1       = mov.i16     y4.2                                  ; copy
+//!         #20  y3.1       = mov.i16     y4.1                                  ; copy
+//!         #21  y2.2       = mov.i16     y2.3                                  ; copy
+//!         #14               jmp         B1
 //! ```
 //!
-//! Each phi became one copy at the end of each predecessor, one group per edge.
-//! The copies of group 2 read values (`v5`) that others write, which
-//! [`crate::backend::parcopy`] orders after allocation.
-//!
-//! From `ISEL_DUMP=1` of a C Fibonacci loop (`t = a + b; a = b; b = t;`)
-//! compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
-//! `PhiElimination`.
+//! Each phi became one copy at the end of each predecessor (`#15`-`#17` on the
+//! entry edge, `#19`-`#21` on the back edge), one group per edge. The back-edge
+//! copy `#20` reads `y4.1`, which `#19` writes, so [`crate::backend::parcopy`]
+//! orders them after allocation. The loop-exit phi `#11` became the copy `#18`.
 //!
 //! # Runs
 //! A machine phase after `ssaspill` (spiller route only) and before

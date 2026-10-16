@@ -28,37 +28,39 @@
 //! priced by the selector, are strictly smaller than the run's.
 //!
 //! # Example
-//! Four stores of zero through `BX`, with `AX` dead after the argument is
+//! Four stores of zero through `bx`, with `ax` dead after the argument is
 //! copied. Before, the input of `Peephole`:
 //!
 //! ```lir
-//! === ParallelCopy
-//!   _f@3: 7 instructions
-//!     block 0x0000
-//!       0x0000     ; inserted; delivers v2@AX
-//!       0x0000  BX := mov AX  ; inserted
-//!       0x0001  [None v1@BX] := mov 0x0  ; inserted
-//!       0x0003  [None v1@BX] := mov 0x0  ; inserted
-//!       0x0005  [None v1@BX] := mov 0x0  ; inserted
-//!       0x0007  [None v1@BX] := mov 0x0  ; inserted
+//! ═══ _f@3 · ParallelCopy · m16 ══════════════════════════════════════════════════
+//! fn _f@3(t2@ax)
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #7  bx         = mov.i16     ax
+//!      #2               store.i16   [t1@bx], 0
+//!      #3               store.i16   [t1@bx+2], 0
+//!      #4               store.i16   [t1@bx+4], 0
+//!      #5               store.i16   [t1@bx+6], 0
+//!      #6               ret
 //! ```
 //!
 //! After:
 //!
 //! ```lir
-//! === Peephole
-//!   _f@3: 8 instructions
-//!     block 0x0000
-//!       0x0000  BX := mov AX  ; inserted
-//!       0x0001  AX := xor AX, AX  ; inserted
-//!       0x0001  [None v1@BX] := mov AX  ; inserted
-//!       0x0003  [None v1@BX] := mov AX  ; inserted
-//!       0x0005  [None v1@BX] := mov AX  ; inserted
-//!       0x0007  [None v1@BX] := mov AX  ; inserted
+//! ═══ _f@3 · Peephole · m16 ══════════════════════════════════════════════════════
+//! fn _f@3(t2@ax)
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #7  bx         = mov.i16     ax
+//!      #8  ax         = xor.i16     ax, ax
+//!      #2               store.i16   [t1@bx], ax
+//!      #3               store.i16   [t1@bx+2], ax
+//!      #4               store.i16   [t1@bx+4], ax
+//!      #5               store.i16   [t1@bx+6], ax
+//!      #6               ret
 //! ```
 //!
-//! One `xor` and four register stores replace four immediate stores. The dump
-//! omits the stores' displacements.
+//! One `xor` and four register stores replace four immediate stores.
 //!
 //! From `ISEL_DUMP=1` of `void f(struct s *p)` storing 0 to four `int` fields
 //! at -Os -m16.

@@ -2,7 +2,7 @@
 
 `fences(text)` finds the ```mermaid fences of a Markdown text; `check(body)` lists what is wrong with
 one; `check_tree(root)` does it for every tracked Markdown file and every `//!` header, and rejects a
-legacy ```fig fence. `render_errors(root)` also draws each figure with mermaid-cli when `$MMDC` or
+legacy ```fig fence and any ```lir fence with a line that is not of the LIR text format. `render_errors(root)` also draws each figure with mermaid-cli when `$MMDC` or
 `mmdc` on `$PATH` is there, and says so when it is not.
 """
 from __future__ import annotations
@@ -227,6 +227,27 @@ def fix_style_tree(root: Path) -> list[str]:
     return changed
 
 
+# A line of a ```lir fence is a line of the dump format (docs/reference/lir-text.md): a banner, the
+# `fn` or `frame` line, a block header, an instruction or phi (`#12  ...`) or an elision. Text of the
+# old format (`0x0003  v5 := mov v1`, `block 0x0007`) is none of them, so it cannot come back.
+LIR_LINE = re.compile(r"^(\s*|\s*(;\s*)?\.\.\..*|\u2550\u2550\u2550 .*|fn \S.*|frame  .*|\s*B\d+\b.*|\s*#\d+\s.*)$")
+
+
+# A fence that shows a dump, new or old: other ```lir fences show pseudo-assembly of a pass.
+DUMP = re.compile(r"^\s*(\u2550\u2550\u2550 |B\d+\s|block 0x|0x[0-9a-f]{4}\s\s|_?\w+@?\d*: \d+ instructions)", re.M)
+
+
+def lir_errors(label: str, line: int, body: str) -> list[str]:
+    """What is wrong with the lines of one ```lir fence at `line` of `label`, if it shows a dump."""
+    if not DUMP.search(body):
+        return []
+    return [
+        f"{label}:{line + n}: not a line of the LIR text format: {text.strip()[:60]!r}"
+        for n, text in enumerate(body.split("\n"), 1)
+        if not LIR_LINE.match(text)
+    ]
+
+
 def check_tree(root: Path) -> list[str]:
     errs = []
     for label, text in documents(root):
@@ -235,6 +256,8 @@ def check_tree(root: Path) -> list[str]:
                 errs.append(f"{label}:{line}: legacy ```fig fence; convert it with tools/docsbuild/mdfigs.py")
             elif lang == "mermaid":
                 errs += [f"{label}:{line}: {e}" for e in check(body)]
+            elif lang == "lir":
+                errs += lir_errors(label, line, body)
     return errs
 
 

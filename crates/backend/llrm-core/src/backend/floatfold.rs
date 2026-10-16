@@ -44,37 +44,41 @@
 //! it becomes the memory operand of the arithmetic that reads it. The `fsub`
 //! had the loaded cell on its left, so it is the reversed `fsubr`.
 //!
-//! Before (after `PressureSink`):
+//! Before (`PhiElimination`):
 //!
 //! ```lir
-//! mix: 11 instructions
-//!   block 0x0000
-//!     0x0000     ; inserted; delivers v1@EAX
-//!     0x0000  v2 := fld [[bp+0x8]]  ; inserted
-//!     0x0000  v3 := fld [None v1@unplaced]  ; inserted
-//!     0x0001  v4 := fmul v3, v2  ; inserted
-//!     0x0003  v5 := fld [None v1@unplaced]  ; inserted
-//!     0x0004  v6 := fadd v4, v5  ; inserted
-//!     0x0005  [None v1@unplaced] := fstp v6  ; inserted
-//!     0x0006  v7 := fld [None v1@unplaced]  ; inserted
-//!     0x0007  v8 := fsub v7, v2  ; inserted
-//!     0x0008   v8  ; inserted
-//!     0x0008     ; inserted
+//! ═══ mix · PhiElimination · m32 ═════════════════════════════════════════════════
+//! fn mix(t1@eax)
+//! frame  arg0 [bp+0] 16 B
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #2  t2         = fld.f64     [arg0+8]
+//!      #3  t3         = fld.f64     [t1]
+//!      #4  t4         = fmul.f80    t3, t2
+//!      #5  t5         = fld.f64     [t1+8]
+//!      #6  t6         = fadd.f80    t4, t5
+//!      #7               fstp.f64    [t1], t6:f80
+//!      #8  t7         = fld.f64     [t1]
+//!      #9  t8         = fsub.f80    t7, t2
+//!     #10               fstore.f80  t8
+//!     #11               ret
 //! ```
 //!
 //! After (`FloatFold`):
 //!
 //! ```lir
-//! mix: 8 instructions
-//!   block 0x0000
-//!     0x0000     ; inserted; delivers v1@EAX
-//!     0x0000  v2 := fld [[bp+0x8]]  ; inserted
-//!     0x0001  v4 := fmul v2, [None v1@unplaced]  ; inserted
-//!     0x0004  v6 := fadd v4, [None v1@unplaced]  ; inserted
-//!     0x0005  [None v1@unplaced] := fstp v6  ; inserted
-//!     0x0007  v8 := fsubr v2, [None v1@unplaced]  ; inserted
-//!     0x0008   v8  ; inserted
-//!     0x0008     ; inserted
+//! ═══ mix · FloatFold · m32 ══════════════════════════════════════════════════════
+//! fn mix(t1@eax)
+//! frame  arg0 [bp+0] 16 B
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #2  t2         = fld.f64     [arg0+8]
+//!      #4  t4         = fmul.f64    t2:f80, [t1]
+//!      #6  t6         = fadd.f64    t4:f80, [t1+8]
+//!      #7               fstp.f64    [t1], t6:f80
+//!      #9  t8         = fsubr.f64   t2:f80, [t1]
+//!     #10               fstore.f80  t8
+//!     #11               ret
 //! ```
 //!
 //! From `ISEL_DUMP=1` of the nib function `mix(p: &mut P, k: f64)` with `-m32

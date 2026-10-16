@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ssarepair.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssarepair.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ssarepair.rs sha256:ff37582ea0169b4e705447d54438de440cd853aac1197bca2cf866bb2cf17fa5 -->
+<!-- src: crates/backend/llrm-core/src/backend/ssarepair.rs sha256:01e18105057481eb02923b25393cf6e6007456ab3e51b8f7c14a0f49bb18f761 -->
 
 # ssarepair
 
@@ -60,45 +60,46 @@ itself) and renames every use to that value, repeated to a fixed point
 because one removal can make another phi trivial.
 
 ## Example
-`v5` and `v6` are live across a call in one arm of an `if`. The spiller
-stores them before the call and reloads them after it, and repair gives the
-join a phi for each. Before, the spiller's input:
+`y11.1` is live across a call in one arm of an `if`. The spiller stores it
+before the call and reloads it after it, and repair gives the join a phi.
+Before, the spiller's input:
 
 ```lir
-=== FarIndirectCalls
-    block 0x0013
-      v15 := phi 0x001f:v12 0x001c:v14
-      0x0019  v21 := add v20, v5  ; inserted
-      0x001a  v22 := add v21, v6  ; inserted
-    block 0x001c
-      0x001c  call   ; inserted; requires v3@AX; delivers v13@EAX; clobbers ...
-      0x001d  v14 := add v12, v13  ; inserted
-      0x001e  jmp   ; inserted
+═══ _f@3 · SharedConstants · m16 ═══════════════════════════════════════════════
+B1  ← B2 B3  → exit                                               ×1.0
+    #14  t16        = phi         B2: y12.2, B3: y12.1
+; ...
+    #21  t23        = movsx.i32   y11.1:i16
+    #22  t3.1       = add.i32     t22, t23
+
+B2  ← B0  → B1                                                    ×0.5
+    #24  t14@eax    = call        far _g@3(y4.1@eax)
+    #25  y12.2      = add.i32     y12.1, t14
+    #26               jmp         B1
 ```
 
-After, with the reloads and the repaired phis:
+After, with the reload and the repaired phi:
 
 ```lir
-=== SsaSpill
-    block 0x0013
-      v15 := phi 0x001f:v12 0x001c:v14
-      v23 := phi 0x001c:v26 0x001f:v5
-      v24 := phi 0x001c:v27 0x001f:v6
-      0x0019  v21 := add v20, v23  ; inserted
-      0x001a  v22 := add v21, v24  ; inserted
-    block 0x001c
-      0x001c  [[bp-0x8]] := mov v6  ; inserted
-      0x001c  [[bp-0x6]] := mov v5  ; inserted
-      0x001c  call   ; inserted; requires v3@AX; delivers v13@EAX; clobbers ...
-      0x001d  v14 := add v12, v13  ; inserted
-      0x001e  v26 := mov [[bp-0x6]]  ; inserted; spill reload
-      0x001e  v27 := mov [[bp-0x8]]  ; inserted; spill reload
-      0x001e  jmp   ; inserted
+═══ _f@3 · SsaSpill · m16 ══════════════════════════════════════════════════════
+B1  ← B2 B3  → exit                                               ×1.0
+    #14  t16        = phi         B2: y12.2, B3: y12.1
+    #31  t25        = phi         B2: t29, B3: y11.1
+; ...
+    #21  t23        = movsx.i32   t25:i16
+    #22  t3.1       = add.i32     t22, t23
+
+B2  ← B0  → B1                                                    ×0.5
+    #34               store.i16   [slot3], y11.1                        ; spill
+    #35  t28        = load.i32    [slot0]                               ; reload
+    #24  t14@eax    = call        far _g@3(t28@eax)
+    #25  y12.2      = add.i32     y12.1, t14
+    #36  t29        = load.i16    [slot3]                               ; reload
+    #26               jmp         B1
 ```
 
-The arm through the call reads the reloads `v26` and `v27`, the other arm
-still has `v5` and `v6`, so the uses in the join read the phis `v23` and
-`v24`.
+The arm through the call reads the reload `t29`, the other arm still has
+`y11.1`, so the use in the join reads the phi `t25`.
 
 From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of a C function with
 `if (c) s += g(a);` and seven loads from `p`, at -O2 -m16, trimmed.

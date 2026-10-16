@@ -68,48 +68,48 @@
 //! general registers hold. Before, the phase's input:
 //!
 //! ```lir
-//! === FarIndirectCalls
-//!   f_: 19 instructions
-//!     block 0x0000
-//!       0x0000     ; inserted; delivers v1@EAX
-//!       0x0001  v2 := mov [None v1@unplaced]  ; inserted
-//!       ; ... v3 to v6, loaded the same way
-//!       0x000b  v7 := mov [None v1@unplaced]  ; inserted
-//!       0x000d  v8 := mov [None v1@unplaced]  ; inserted
-//!       0x000f  v9 := mov [None v1@unplaced]  ; inserted
-//!       0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
-//!       ; ... v11 to v14
-//!       0x0015  v15 := imul v6, v7  ; inserted
-//!       0x0016  v16 := add v14, v15  ; inserted
-//!       0x0017  v17 := imul v8, v9  ; inserted
-//!       0x0018  v18 := add v16, v17  ; inserted
+//! ═══ f_ · FarIndirectCalls · m32 ════════════════════════════════════════════════
+//! fn f_(t1@eax) -> @eax   ; calls clobber eax
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #2  t2         = load.i32    [t1]
+//!      ; ... t3 to t7, loaded the same way
+//!      #8  t8         = load.i32    [t1+24]
+//!      #9  t9         = load.i32    [t1+28]
+//!     #10  t10@eax    = call        g_(t2@eax)
+//!     ; ... t11 to t14
+//!     #15  t15        = imul.i32    t7, t8
+//!     #16  t16        = add.i32     t14, t15
+//!     #17  t17        = imul.i32    t9, t2
+//!     #18  t18        = add.i32     t16, t17
 //! ```
 //!
 //! After:
 //!
 //! ```lir
-//! === SsaSpill
-//!   f_: 21 instructions
-//!     block 0x0000
-//!       0x000b  v7 := mov [None v1@unplaced]  ; inserted
-//!       0x000b  [[bp-0x4]] := mov v7  ; inserted
-//!       0x000d  v8 := mov [None v1@unplaced]  ; inserted
-//!       0x000f  v9 := mov [None v1@unplaced]  ; inserted
-//!       0x000f  [[bp-0x8]] := mov v9  ; inserted
-//!       0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
-//!       ; ... v11 to v14
-//!       0x0015  v15 := imul v6, [[bp-0x4]]  ; inserted
-//!       0x0016  v16 := add v14, v15  ; inserted
-//!       0x0017  v17 := imul v8, [[bp-0x8]]  ; inserted
-//!       0x0018  v18 := add v16, v17  ; inserted
+//! ═══ f_ · SsaSpill · m32 ════════════════════════════════════════════════════════
+//! fn f_(t1@eax) -> @eax   ; calls clobber eax
+//! frame  slot0 [bp-4] 4 B  slot1 [bp-8] 4 B
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #7  t7         = load.i32    [t1+20]
+//!     #20               store.i32   [slot0], t7                           ; spill
+//!      #8  t8         = load.i32    [t1+24]
+//!      #9  t9         = load.i32    [t1+28]
+//!     #21               store.i32   [slot1], t9                           ; spill
+//!     #10  t10@eax    = call        g_(t2@eax)
+//!     ; ... t11 to t14
+//!     #15  t15        = imul.i32    t8, [slot0]
+//!     #16  t16        = add.i32     t14, t15
+//!     #17  t17        = imul.i32    t2, [slot1]
+//!     #18  t18        = add.i32     t16, t17
 //! ```
 //!
-//! `v7` and `v9` are stored to `[bp-0x4]` and `[bp-0x8]` after their
-//! definitions, and their uses read the slot as a memory operand, so no reload
-//! is needed. The dump prints the loads' addresses as `[None v1@unplaced]`.
+//! `t7` and `t9` are stored to `slot0` and `slot1` after their definitions, and
+//! their uses read the slot as a memory operand, so no reload is needed.
 //!
-//! From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of `int f(int *p)` (`g(p[0])`
-//! plus products of `p[0]..p[7]`) at -O2 -m32.
+//! From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of `int f(int *p)` (eight loads
+//! `p[0]..p[7]`, `g(p[0])`, then products of the rest) at -O2 -m32.
 //!
 //! # Runs
 //! The first machine phase after `far-indirect-calls`, before `phielim`, on the

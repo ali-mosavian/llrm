@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:9475278206ca22e9ea3f73973b28f58086fe331eefb9f380ad99fca932e7a47d -->
+<!-- src: crates/backend/llrm-core/src/backend/peephole.rs sha256:eb3da4f0adf1cb6ec29656f1e6338268f145e3954d9cb978d38a035c11e99fee -->
 
 # peephole
 
@@ -69,33 +69,38 @@ A loop counting `n` down, after allocation:
 Before:
 
 ```lir
-block 0x0000
-  0x0000  AX := mov 0x1  ; inserted
-  0x0000  BX := mov 0x0  ; inserted
-  0x0000  jmp   ; inserted
-block 0x0001
-  0x0004  CX := mov DX  ; inserted
-  0x0004  CX := sub CX, 0x1  ; inserted
-  0x0006  cmp DX, 0x0  ; inserted
-  0x0006  jne   ; inserted
+    B2  ← B2 B3  → B2 B4  loop                                        ×31.0
+        #10  cx         = add.i16     cx, bx
+        #11  ax         = sub.i16     ax, 1
+        #12  bx         = add.i16     bx, cx
+        #13               cmp.i16     ax, 0
+        #14               jne         B2 else B4                            ; 97% taken
+
+B3  ← B0  → B2                                                    ×1.0
+    #15  bx         = mov.i16     1
+    #16  cx         = mov.i16     0
+    #17               jmp         B2
 ```
 
 After:
 
 ```lir
-block 0x0000
-  0x0000  AX := mov 0x1  ; inserted
-  0x0000  BX := xor BX, BX  ; inserted
-  0x0000  jmp   ; inserted
-block 0x0001
-  0x0004  CX := mov DX  ; inserted
-  0x0004  CX := dec CX  ; inserted
-  0x0006  DX := or DX, DX  ; inserted
-  0x0006  jne   ; inserted
+    B2  ← B2 B3  → B2 B4  loop                                        ×31.0
+        #10  cx         = add.i16     cx, bx
+        #12  bx         = add.i16     bx, cx
+        #11  ax         = dec.i16     ax
+        #13               elided
+        #14               jne         B2 else B4                            ; 97% taken
+
+B3  ← B0  → B2                                                    ×1.0
+    #15  bx         = mov.i16     1
+    #16  cx         = xor.i16     cx, cx
+    #17               jmp         B2
 ```
 
-The zero load became `xor`, the subtraction of one `dec`, and the compare
-with zero `or`, which sets the flags `jne` reads as `cmp` did.
+The zero load `#16` became `xor` and the subtraction of one `#11` became
+`dec`, now after `#12`. `dec` sets the flags
+`jne` reads, so the compare `#13` is `elided`.
 
 From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
 the `ParallelCopy` and `Peephole` stages.

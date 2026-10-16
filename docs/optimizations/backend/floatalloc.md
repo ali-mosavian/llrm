@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatalloc.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:55d890806b1ef0db282f6a7f576361216b2259895b3fd6541a39abf62db1f7d1 -->
+<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:ff355ea426a33caee4579ebf1ad4e8342772bf64d0b7f9f4e7c98148dc241564 -->
 
 # floatalloc
 
@@ -76,39 +76,37 @@ once. Unlike gcc's lazy code motion this does not solve for the least number
 of insertions: it follows demand and takes a critical edge's source mode.
 
 ## Example
-The same `keep` as in `floatassign`. Each value becomes `ST0`, the stack
-position implied by the order of the instructions. `a` is read again after
-the multiply, so the multiply works on a copy pushed first (`fld ST0`).
+The same `keep` as in `floatassign`. Each value becomes `st0`, the stack
+position implied by the order of the instructions. `a` (`t1`) is read again
+after the multiply, so the multiply works on a copy pushed first (`#18`).
 
 Before (after `FloatAssign`):
 
 ```lir
-keep: 14 instructions
-  block 0x0000
-    0x0000  v1 := fld [[bp+0x8]]  ; inserted
-    0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
-    0x0003  [[bp-0x10]] := fstp v3  ; inserted
-    ; ...
-    0x0007  [[bp-0x18]] := fstp v1  ; inserted
-    0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-    0x0009  v1 := fld [[bp-0x18]]  ; inserted
-    0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
+═══ keep · FloatAssign · m32 ═══════════════════════════════════════════════════
+     #1  t1         = fld.f64     [arg0+8]
+     #3  t3         = fmul.f64    t1:f80, [arg0+16]
+; ...
+    #16               fstp.f64    [slot3], t1:f80                       ; spill
+    #10  t6@eax     = call        show()
+    #11               store.i16   [slot0], t6
+    #17  t1         = fld.f64     [slot3]
+    #13  t8         = fadd.f64    t1:f80, [slot2]
 ```
 
 After (`FloatAlloc`):
 
 ```lir
-keep: 14 instructions
-  block 0x0000
-    0x0000  ST0 := fld [[bp+0x8]]  ; inserted
-    0x0002  ST0 := fld ST0  ; inserted
-    0x0002  ST0 := fmul ST0, [[bp+0x10]]  ; inserted
-    0x0003  [[bp-0x10]] := fstp ST0  ; inserted
-    ; ...
-    0x0007  [[bp-0x18]] := fstp ST0  ; inserted
-    0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-    0x0009  ST0 := fld [[bp-0x18]]  ; inserted
-    0x0009  ST0 := fadd ST0, [[bp-0x10]]  ; inserted
+═══ keep · FloatAlloc · m32 ════════════════════════════════════════════════════
+     #1  st0        = fld.f64     [arg0+8]
+    #18  st0        = fld.f80     st0
+     #3  st0        = fmul.f64    st0, [arg0+16]
+; ...
+    #16               fstp.f64    [slot3], st0                          ; spill
+    #10  t6@eax     = call        show()
+    #11               store.i16   [slot0], t6
+    #17  st0        = fld.f64     [slot3]
+    #13  st0        = fadd.f64    st0, [slot2]
 ```
 
 From `ISEL_DUMP=1` of the nib function `keep(a: f64, b: f64)` with `-m32

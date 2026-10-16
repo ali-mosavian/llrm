@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:d2ff757834fd58b14878e3dda2bf77e5514e7b6b5f4eea5444515084e75444cf -->
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:492a015be48418d40b788581597cb017b3f3245286f666e0cbfafbf50b2df530 -->
 
 # masm
 
@@ -66,47 +66,55 @@ the leave sequence, which `jumps::duplicated_returns` needs.
 
 ## Example
 The allocated LIR has no frame sequences. `listing` adds the `push` and
-`pop` of the callee-saved `si` the body uses, a `ret` after each leave, and
-the labels.
+`pop` of the callee-saved `si` the body uses (the `push` in `B1`, where `si`
+is first written), a `ret` after each leave, and the labels.
 
-Before:
+Before (`ControlFlow`):
 ```lir
-=== ControlFlow
-  total: 25 instructions
-    block 0x0000
-      0x0000     ; inserted; delivers v19@AX
-      0x0000  SI := mov AX  ; inserted
-      ; ...
-      0x0003  cmp DX, 0x4  ; inserted
-      0x0003  jne   ; inserted
-      0x0003     ; inserted
-      0x0003     ; inserted
-      0x0003     ; inserted; requires v20@EAX
-    block 0x0009
-      0x000a  cmp DX, CX  ; inserted
-      0x000a  jae   ; inserted
+B0  entry  → B1 B5
+    #39  bx         = mov.i16     ax
+     #2  ax         = load.i16    [ss:t1@bx]
+     #3  bx, es     = les.i16     [ss:t1@bx+0x4]:i32
+     #4               elided
+     #6               test.i16    ax, ax
+     #7               je          B5 else B1                            ; 3% taken
+
+B1  ← B0  → B4 B2
+    #21  ax         = add.i16     ax, ax
+    #38  si         = mov.i16     ax
     ; ...
+    #11               cmp.i16     cx, 4
+    #12               je          B4 else B2                            ; 3% taken
+; ...
+B4  ← B1 B2 B3  → exit
+    #41  sum.1.lcssa1 = elided      sum.1.lcssa1
+    #16               ret         sum.1.lcssa1@eax
 ```
 
 After:
 ```asm
 _total proc near
-    push si
 L0_0:
+    mov bx, ax
+    mov ax, word ptr ss:[bx]
+    les bx, dword ptr ss:[bx+4]
+    test ax, ax
+    je L0_4294967297
+L0_19:
+    push si
+    add ax, ax
     mov si, ax
     ; ...
-    cmp dx, 4
-    jne L0_9
+    cmp cx, 4
+    je L0_13
+    ; ...
+L0_13:
     pop si
     ret
-L0_9:
-    cmp dx, cx
-    jae L0_18
-    ; ...
 ```
 
-From `ISEL_DUMP=1` and `-S` of a `total` over a `&[u16]`
-(`-fno-inline-functions`) at `-m16 -O2`.
+From `ISEL_DUMP=1` and `-S` of a `total` over a `&[u16]` with `llrm-nib -m16
+-O2 -fno-inline-functions -fno-inline-functions-called-once`.
 
 ## Runs
 Once per procedure after the machine phases. `cleaned_returns` runs in

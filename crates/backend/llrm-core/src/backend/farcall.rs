@@ -6,8 +6,8 @@
 //! into one frame cell and calls through the cell.
 //!
 //! ```text
-//!   call  v5                 mov  [bp-0x14], v5
-//!   (indirect, 4 bytes)  =>  call [bp-0x14]
+//!   call  t5                 store [slot0], t5
+//!   (indirect, 4 bytes)  =>  call [slot0]
 //! ```
 //!
 //! Only an indirect call whose single source is a four-byte value counts,
@@ -21,19 +21,22 @@
 //! # Example
 //! `int apply(int (__far *f)(int), int x) { return f(x) + 1; }` on `-m16`. No
 //! dump prints the body before this phase, so this is what it leaves: the
-//! pointer is stored to the frame cell `[bp-0x4]` and the call reads the cell.
+//! pointer is stored to the frame cell `slot0` (as two halves) and the call
+//! reads the cell.
 //!
 //! ```lir
-//! _apply@3: 8 instructions
-//!   block 0x0000
-//!     0x0000     ; inserted; delivers v3@AX
-//!     0x0000  v1 := mov [[bp+0x6]]  ; inserted
-//!     0x0000  v2 := mov [[bp+0x8]]  ; inserted
-//!     0x0000  [[bp-0x4]] := mov v1  ; inserted
-//!     0x0000  [[bp-0x2]] := mov v2  ; inserted
-//!     0x0000  call [[bp-0x4]]  ; inserted; requires v3@AX; delivers v4@EAX; ...
-//!     0x0001  v5 := add v4, 0x1  ; inserted
-//!     0x0002     ; inserted; requires v5@EAX
+//! ═══ _apply@3 · FarIndirectCalls · m16 ══════════════════════════════════════════
+//! fn _apply@3(t3@ax) -> @eax   ; calls clobber eax ecx edx ebx es fs gs
+//! frame  slot0 [bp-4] 4 B  arg0 [bp+0] 10 B
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #2  t1         = load.i16    [arg0+6]
+//!      #3  t2         = load.i16    [arg0+8]
+//!      #4               store.i16   [slot0], t1
+//!      #5               store.i16   [slot0+2], t2
+//!      #6  t4@eax     = call        [slot0](t3@ax)
+//!      #7  t5         = add.i16     t4, 1
+//!      #8               ret         t5@eax
 //! ```
 //!
 //! From `ISEL_DUMP=1` of that function, stage `FarIndirectCalls`, at -O2.

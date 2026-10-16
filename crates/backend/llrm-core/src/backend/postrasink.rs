@@ -46,45 +46,51 @@
 //! block keeps only its jump (a back edge's `mov; jmp` becomes a `jl`).
 //!
 //! # Example
-//! A function copies its argument into `DI`, then either returns at once or
-//! loops reading `DI`.
-//!
-//! Schematic, from the fixture of test
-//! `test_a_copy_only_one_successor_reads_moves_into_it` (not printer output):
-//! Before:
+//! A function copies its argument `ax` into `bx`, then either returns at once
+//! or loops reading `bx`. Before (stage `ParallelCopy`):
 //!
 //! ```lir
-//! block 0x0001
-//!   0x0001  DI := mov DX
-//!   0x0002  cmp AX, BX
-//!   0x0003  jl
-//! block 0x0005
-//!   0x0005  ret
-//! block 0x0009
-//!   0x0009  AX := add AX, DI
-//!   0x000a  jmp
+//! ═══ _f@3 · ParallelCopy · m16 ══════════════════════════════════════════════════
+//! fn _f@3(t15@ax, y5.2.lcssa@dx, y5.1.lcssa@cx) -> @eax
+//!
+//! B0  entry  → B2 B1                                                ×1.0
+//!     #41  bx         = mov.i16     ax
+//!      ; ...
+//!      #2               cmp.i16     dx, 0
+//!      #3               je          B2 else B1                            ; 38% taken
+//!      ; ...
+//! B6  ← B1  → B5                                                    ×0.6
+//!     #21  dx         = shl.i16     dx, 1
+//!      ; ...
+//!     #23  bx         = add.i16     bx, dx
 //! ```
 //!
-//! After:
+//! After (stage `Peephole`; the `test`, `xor` and `add` are other peephole
+//! rewrites):
 //!
 //! ```lir
-//! block 0x0001
-//!   0x0002  cmp AX, BX
-//!   0x0003  jl
-//! block 0x0005
-//!   0x0005  ret
-//! block 0x0009
-//!   0x0001  DI := mov DX
-//!   0x0009  AX := add AX, DI
-//!   0x000a  jmp
+//! ═══ _f@3 · Peephole · m16 ══════════════════════════════════════════════════════
+//! fn _f@3(t15@ax, y5.2.lcssa@dx, y5.1.lcssa@cx) -> @eax
+//!
+//! B0  entry  → B2 B1                                                ×1.0
+//!      ; ...
+//!      #2               test.i16    dx, dx
+//!      #3               je          B2 else B1                            ; 38% taken
+//!      ; ...
+//! B6  ← B1  → B5                                                    ×0.6
+//!     #41  bx         = mov.i16     ax
+//!     #21  dx         = add.i16     dx, dx
+//!      ; ...
+//!     #23  bx         = add.i16     bx, dx
 //! ```
 //!
-//! Only block 0x0009 reads `DI` and has no other predecessor, so the copy moves
-//! there and the path through 0x0005 runs without it.
+//! Only the loop path reads `bx`, and `B1` and `B6` each have one predecessor,
+//! so the copy moves down to `B6` and the path through `B2` runs without it.
 //!
-//! From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
-//! `postrasink.rs`, which asserts the copy count per block (0 in 0x0001, 1 in
-//! 0x0009).
+//! From `ISEL_DUMP=1` of `int f(int *p, int n, int k)`, which returns 0 when
+//! `n` is 0 and else sums `p[i] * k`, with `-m16 -O2`. Unit test
+//! `test_a_copy_only_one_successor_reads_moves_into_it` asserts the copy count
+//! per block.
 //!
 //! # Runs
 //! A sub-pass of [`crate::backend::peephole`], after `spillforward`: a reload

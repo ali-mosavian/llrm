@@ -43,32 +43,28 @@
 //! recompute.
 //!
 //! # Example
-//! A value is built in EAX, copied to EDI and read later as EDI (the first
-//! block of the fixture; the second block, which reads EDI and then overwrites
-//! every other register, is trimmed):
+//! A sum is built in ECX, copied to EAX and read later as EAX. The producer
+//! writes EAX directly:
+//!
+//! Before (`ParallelCopy`):
 //!
 //! ```lir
-//! === before
-//!     block 0x0000
-//!       0x0000  EAX := mov 0x7  ; inserted
-//!       0x0001  EDI := mov EAX  ; inserted
-//!     block 0x0001
-//!       0x0009  push EDI  ; inserted
-//!       ; ...
-//! === after
-//!     block 0x0000
-//!       0x0000  EDI := mov 0x7  ; inserted
-//!       0x0001     ; inserted
-//!     block 0x0001
-//!       0x0009  push EDI  ; inserted
-//!       ; ...
+//!      #3  ecx        = add.i32     ecx, eax
+//!      #7  eax        = mov.i32     ecx
 //! ```
 //!
-//! The producer writes EDI directly. The copy is left as an anchor with no
-//! operation, which keeps the virtual value it defined.
+//! After (`Peephole`):
 //!
-//! From unit test `test_removed_copy_keeps_its_virtual_definition` in
-//! `regthrash.rs`.
+//! ```lir
+//!      #3  eax        = add.i32     eax, ecx
+//!      #7  t5         = elided      t1
+//! ```
+//!
+//! The copy is left as an anchor with no operation (`elided`), which keeps
+//! the virtual value it defined.
+//!
+//! From `ISEL_DUMP=1 llrm-c -m32 -O2` of `tests/fixtures/c/inline.c`
+//! (`twice_`).
 //!
 //! # Runs
 //! First sub-pass of [`crate::backend::peephole`], gated on a register copy
