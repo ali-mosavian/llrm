@@ -548,6 +548,19 @@ pub struct Asm {
     pub clobbers: Vec<String>,
     // Whether it reads or writes memory.
     pub memory: bool,
+    // Words of its code that name a symbol, whose addresses are the operands
+    // after the registers' own, in order.
+    pub fixups: Vec<AsmFixup>,
+}
+
+/// A word of inline code that is a symbol's address: its offset, its segment
+/// (`kind` "offset", "segment") or its distance from the end of the word
+/// ("reloff", a near call or jump), plus `addend`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AsmFixup {
+    pub at: i64,
+    pub kind: String,
+    pub addend: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]

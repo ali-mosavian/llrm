@@ -188,6 +188,7 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
         outputs: block.outputs,
         clobbers: block.clobbers,
         memory: block.memory,
+        fixups: Vec::new(),
     };
     Some(_inline_contract(&asm).and_then(|(contract, inputs, outputs)| {
         let machine = |names: Vec<(runtime::Reg, u32)>| {

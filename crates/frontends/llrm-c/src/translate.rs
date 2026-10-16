@@ -1975,7 +1975,13 @@ impl<'a, 't> Body<'a, 't> {
                 }
                 let ty = self.types.pointer(space(self.unit, Key::Symbol(symbol.id)));
                 let value = self.value(ty);
-                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(symbol.object_name());
+                let name = symbol.object_name();
+                // A routine this unit does not define is declared by the address taken
+                // of it as by a call.
+                if !self.unit.procs.iter().any(|one| one.symbol == symbol.id) {
+                    self.callable(&name);
+                }
+                self.instruction(Op::Address, vec![value], Vec::new()).callee = Some(name);
                 Ok(value)
             }
             Got::Returned(None) => self.refuse("a void call's value"),
@@ -2994,8 +3000,30 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<Got> {
         use crate::hwreg::Set;
         let name = symbol.name.clone();
-        if !code.fixups.is_empty() {
-            return self.refuse(format!("{name} is inline code with registers and a symbol reference"));
+        // The words that name a symbol, each with the symbol's address as an
+        // operand ahead of the registers'.
+        let mut symbols = Vec::new();
+        let mut fixups = Vec::new();
+        for fixup in &code.fixups {
+            let target = &self.unit.symbols[&fixup.symbol];
+            let value = if target.proc() {
+                if inline(target) {
+                    return self.refuse(format!("{name} names inline code {}", target.name));
+                }
+                self.scalar(Got::Function(target.id))?
+            } else if fixup.kind == "reloff" {
+                return self.refuse(format!("{name} reaches data {} relative to itself", target.name));
+            } else if let Some(&object) = self.shared.keys.get(&Key::Symbol(target.id)) {
+                let place = self.global(object);
+                self.address_of(place)
+            } else {
+                return self.refuse(format!("{name} names {}, a frame place, in inline code with registers", target.name));
+            };
+            if !matches!(fixup.kind.as_str(), "offset" | "segment" | "reloff") {
+                return self.refuse(format!("{name} names a symbol as {}", fixup.kind));
+            }
+            symbols.push(value_ref(value));
+            fixups.push(h::AsmFixup { at: fixup.at, kind: fixup.kind.clone(), addend: fixup.offset });
         }
         // Source order: the call lists its last argument first.
         let parms: Vec<(String, String)> = call.parms.iter().rev().cloned().collect();
@@ -3095,6 +3123,7 @@ impl<'a, 't> Body<'a, 't> {
             operands.push(value_ref(value.expect("a part")));
             registers.push(root.to_owned());
         }
+        operands.splice(0..0, symbols);
         // What it answers in.
         let target = symbol.call_target;
         let result_type = self.ty(&call.type_)?;
@@ -3165,6 +3194,7 @@ impl<'a, 't> Body<'a, 't> {
             outputs,
             clobbers,
             memory,
+            fixups,
         });
         if returns_void {
             return Ok(Got::Returned(None));
