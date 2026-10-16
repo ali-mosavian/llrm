@@ -37,6 +37,12 @@
 //! incoming edge, becomes a phi of those numbers. An operation that also reads
 //! an unknown value stays.
 //!
+//! A phi in one arm of a `br i1` that takes the branch's own condition from the
+//! branch's block reads that arm's constant (GVN's `propagateEquality`, over
+//! the edge's phi uses): loop rotation and `lcssa` make `phi i1 [%c, %latch]`
+//! for a test after the loop, and no GVN runs after them. The branch on the phi
+//! then decides itself, with no `setcc` and `test` for the flag.
+//!
 //! Then [`crate::floatfold`] runs on the same body (exact floats, and the
 //! integers of exact conversions), and [`crate::canonical`] swaps a compare
 //! whose constant is on the left and simplifies identities. The pass reports
@@ -175,11 +181,16 @@ fn _folded(
     analyses: &mut Analyses,
     calls: &Calls,
 ) -> bool {
+    // Before the facts are asked, so that they see the constants.
+    let edges = edges::conditions_decided(context, function);
+    if edges {
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
     let numbers = _numbers(context, layout, function, analyses, calls);
     if numbers {
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
-    floatfold::_folded(context, layout, function, analyses, calls) | numbers
+    floatfold::_folded(context, layout, function, analyses, calls) | numbers | edges
 }
 
 /// `folded`'s integers: consts' answers, a counted float loop's exit

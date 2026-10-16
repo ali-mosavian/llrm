@@ -561,3 +561,33 @@ fn what_is_known_through_memory_is_derived_once_for_the_integers_and_the_floats(
         llrm_analysis::consts::memory_derivations() - before
     );
 }
+
+/// Loop rotation and `lcssa` make `phi i1 [ %c, %latch ]` in a loop's exit for
+/// a test after the loop, and no GVN runs after them: the phi kept the compare
+/// alive as a `setl` + `test` + `jne` where the edge itself decides it (the
+/// vertex bounds loop of d_faces, 2,196 times a frame).
+#[test]
+fn a_phi_that_takes_a_branchs_condition_from_its_block_reads_the_arms_constant() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %c = icmp slt i32 %x, %y
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i1 [ %c, %b0 ], [ true, %b1 ]
+  %r = zext i1 %p to i32
+  ret i32 %r
+}
+",
+    );
+    let inputs: &[&[i128]] = &[&[1, 2], &[2, 1], &[3, 3]];
+    let before = results(&module, inputs);
+    assert!(fold(&mut module));
+    let text = printed(&module);
+    assert!(!text.contains("phi i1 [ %c"), "{text}");
+    assert_eq!(results(&module, inputs), before);
+}
