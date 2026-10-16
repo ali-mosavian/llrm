@@ -1479,6 +1479,8 @@ impl llrm_mir::passes::Analysis for Pressure {
                 }
                 Change::Cloned { to, .. } => name_inst(&mut named, *to),
                 Change::Rewritten(inst) => name_inst(&mut named, *inst),
+                // Each user is told by its own entries.
+                Change::Substituted(_) => {}
                 Change::Operand { inst, was, index } => {
                     name_operand(&mut named, was);
                     if function.instruction(*inst).opcode.is_terminator()

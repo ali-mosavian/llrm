@@ -286,6 +286,31 @@ pub trait Analysis: 'static {
     /// are the ones it read).
     const SKIPS: bool = false;
 
+    /// Whether the result stays a true answer, with entries for fewer values
+    /// and facts no more precise than a fresh derivation's, after edits that
+    /// `sound_edits` finds only keep every live value's meaning: what it says
+    /// of a live value holds, a value it has no entry for is unknown, and none
+    /// is asked of an erased one. `covers` is the check.
+    const SOUND: bool = false;
+
+    /// Whether the result holds values (a pointer, a root), not facts keyed by
+    /// them: uses replaced by an equal value (`Substituted`) then leave it
+    /// naming one that is gone, and it is not kept past them.
+    const NAMES_VALUES: bool = false;
+
+    /// Whether `old`, derived before sound edits, says nothing `fresh`, derived
+    /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
+    /// sound.
+    #[allow(unused_variables)]
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        context: &Context,
+        function: &Function,
+    ) -> bool {
+        old == fresh
+    }
+
     /// What the result reads of the function: `unaffected` filters the change
     /// log against it. None, the default, is every change.
     fn depends() -> Option<crate::depends::Depends> {
@@ -811,6 +836,14 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
+    /// `still_true`, as `covers` has it, for a result kept as sound.
+    fn still_covered(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool;
     /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
 }
@@ -850,7 +883,18 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn incremental(&self) -> bool {
-        A::INCREMENTAL || A::SKIPS
+        A::INCREMENTAL || A::SKIPS || A::SOUND
+    }
+
+    fn still_covered(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool {
+        let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)));
+        A::covers(&self.result, &fresh, context, function)
     }
 
     fn mark(&self) -> crate::module::Mark {
@@ -868,6 +912,12 @@ pub struct Analyses {
     /// (`invalidate`): a result derived before and held is as true now as
     /// then.
     vouched: Option<crate::module::Mark>,
+    /// Results kept past edits that only keep what they say true, not derived
+    /// afresh: dropped at the next named point (`refresh_soft`).
+    soft: HashSet<TypeId>,
+    /// Something was kept as sound: what was derived from it since stands as
+    /// sound too, and is not what fresh results give (the checks leave it).
+    tainted: bool,
     outer: Rc<Outer>,
 }
 
@@ -926,9 +976,102 @@ fn check_replay() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
 }
 
+/// Whether `changes` only keep every live value's meaning, as a result that
+/// is `SOUND` needs: an instruction erased (an unused value, a dead store);
+/// uses replaced by the same value (`replace_value`, which logs
+/// `Substituted` first); a value made that nothing existing reads, or a pure
+/// one moved. Not: a block made or erased, an operand set to another
+/// meaning, an instruction rewritten in place, a store or a call made or
+/// moved, a terminator touched.
+pub fn sound_edits(
+    function: &Function,
+    changes: &[crate::module::Change],
+    names_values: bool,
+) -> bool {
+    use crate::module::Change;
+    use crate::module::Operand;
+    let mut replaced: crate::dense::IdSet<crate::module::ValueId> = crate::dense::IdSet::new();
+    let mut said: crate::dense::IdSet<crate::module::InstId> = crate::dense::IdSet::new();
+    let writes = |opcode: &crate::opcode::Opcode| {
+        opcode.is_terminator()
+            || matches!(
+                opcode,
+                crate::opcode::Opcode::Store { .. }
+                    | crate::opcode::Opcode::Call(_)
+                    | crate::opcode::Opcode::Invoke(_)
+                    | crate::opcode::Opcode::LandingPad { .. }
+                    | crate::opcode::Opcode::Resume
+                    | crate::opcode::Opcode::Load { volatile: true, .. }
+            )
+    };
+    for change in changes {
+        match *change {
+            // A result that names values would name the replaced one.
+            Change::Substituted(_) if names_values => return false,
+            Change::Substituted(value) => {
+                replaced.insert(value);
+            }
+            Change::Operand { inst, was, .. } => match was {
+                Operand::Value(value) if replaced.contains(&value) => {
+                    said.insert(inst);
+                }
+                _ => return false,
+            },
+            Change::Rewritten(inst) => {
+                if !said.contains(&inst) {
+                    return false;
+                }
+            }
+            Change::Erased { inst, .. } => {
+                if function.instruction(inst).opcode.is_terminator() {
+                    return false;
+                }
+            }
+            Change::Inserted { inst, .. } | Change::Cloned { to: inst, .. } => {
+                if writes(&function.instruction(inst).opcode) {
+                    return false;
+                }
+            }
+            Change::Moved { inst, .. } => {
+                let opcode = &function.instruction(inst).opcode;
+                if writes(opcode)
+                    || matches!(
+                        opcode,
+                        crate::opcode::Opcode::Load { .. } | crate::opcode::Opcode::Alloca { .. }
+                    )
+                {
+                    return false;
+                }
+            }
+            Change::Operands { .. } | Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 impl Analyses {
+    /// Drops what was kept only as sound: a named point (the start of a round,
+    /// after the interprocedural step) where the facts are worked out afresh,
+    /// as gcc recomputes its alias results at a few fixed points.
+    pub fn refresh_soft(&mut self) {
+        for key in std::mem::take(&mut self.soft) {
+            self.cache.remove(&key);
+            self.kept.remove(&key);
+        }
+    }
+
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), vouched: None, outer }
+        Self {
+            cache: HashMap::default(),
+            kept: HashMap::default(),
+            evicted: HashMap::default(),
+            vouched: None,
+            soft: HashSet::default(),
+            tainted: false,
+            outer,
+        }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -998,6 +1141,20 @@ impl Analyses {
             if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
                 return None;
             }
+            if A::SOUND && sound_edits(function, changes, A::NAMES_VALUES) {
+                if check_replay() {
+                    let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
+                    assert!(
+                        A::covers(&result, &fresh, context, function),
+                        "{}: the result kept past {} sound edits contradicts what deriving it afresh gives",
+                        A::NAME,
+                        changes.len()
+                    );
+                }
+                self.soft.insert(key);
+                self.tainted = true;
+                return Some(Rc::clone(&result));
+            }
             // Asking of a long log again and again is more than the run it
             // saves.
             if A::SKIPS
@@ -1014,7 +1171,9 @@ impl Analyses {
                 && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
                 && A::unaffected(changes, context, function)
             {
-                if check_replay() {
+                // Derived from what was kept as sound, it is sound, not the
+                // same as from fresh results.
+                if check_replay() && !self.tainted {
                     let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
                         *result == whole,
@@ -1039,7 +1198,9 @@ impl Analyses {
             }
             let made =
                 spanned_as("analysis", A::NAME, || A::update_owned(result, changes, context, layout, function, self))?;
-            if check_replay() {
+            // Derived from what was kept as sound it is sound, not the same as
+            // what fresh results give.
+            if check_replay() && !self.tainted {
                 let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                 assert!(
                     made == whole,
@@ -1050,6 +1211,9 @@ impl Analyses {
             Some(Rc::new(made))
         });
         let replayed = updated.is_some();
+        if !replayed {
+            self.soft.remove(&key);
+        }
         let result = match updated {
             Some(made) => made,
             None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
@@ -1215,11 +1379,19 @@ impl Analyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Vec<&'static str> {
+        // What was kept as sound is checked as such; what is derived from it
+        // while it stands is not the same as from fresh results, so is not.
         let mut out: Vec<&'static str> = self
             .cache
-            .values()
-            .filter(|one| !one.still_true(context, layout, function, &self.outer))
-            .map(|one| one.name())
+            .iter()
+            .filter(|(key, one)| {
+                if self.soft.contains(key) {
+                    !one.still_covered(context, layout, function, &self.outer)
+                } else {
+                    !self.tainted && !one.still_true(context, layout, function, &self.outer)
+                }
+            })
+            .map(|(_, one)| one.name())
             .collect();
         out.sort_unstable();
         out
