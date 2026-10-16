@@ -14,20 +14,56 @@ def test_a_runner_that_dies_at_once_makes_the_slot_wait():
     assert supervisor.backoff(3600) == 0
 
 
-def test_only_dead_registrations_of_ours_are_reaped():
+def test_only_registrations_offline_at_two_beats_in_a_row_are_reaped():
+    """A runner just started is offline for a moment; only one that stays so is dead."""
     runners = [
         {"id": 1, "name": "tinytim-1-aa", "status": "offline"},
         {"id": 2, "name": "tinytim-2-bb", "status": "offline"},
         {"id": 3, "name": "tinytim-3-cc", "status": "online"},
         {"id": 4, "name": "someone-else", "status": "offline"},
     ]
-    assert supervisor.stale(runners, {"tinytim-2-bb"}) == [1]
+    assert supervisor.stale(runners, {"tinytim-1-aa", "tinytim-3-cc", "someone-else"}) == [1]
 
 
-def test_every_slot_gets_its_own_cores():
-    """nproc inside a container reported 32 under --cpus: JOBS=$(nproc) oversubscribed. A cpuset of 8 makes it 8."""
+def test_cpus_are_the_slot_units_not_podmans():
+    """Rootless podman put containers in the service's own cgroup and ignored --cpuset-cpus/--cpus: nproc read 32 in every container.
+    The units pin them (AllowedCPUs from install.sh), so the CPU limit lives in the cgroup the container is in."""
     src = Path(supervisor.__file__).read_text()
-    assert "--cpuset-cpus" in src and "--cpus=" not in src
+    assert "\"--cpuset-cpus" not in src and "--cpus=" not in src
+    assert "AllowedCPUs=" in (Path(supervisor.__file__).parent / "install.sh").read_text()
+
+
+def _cpus(spec):
+    return {c for part in spec.split(",") for c in range(int(part.split("-")[0]), int(part.split("-")[-1]) + 1)}
+
+
+def test_a_runner_is_whole_physical_cores_in_one_ccd_and_slots_do_not_overlap():
+    """Four threads spread over four cores run at a half of what two whole cores give; two SMT siblings of different cores or a core pair split
+    across the CCDs' L3 slow the jobs. Siblings are (c, c+16); the CCDs are cores 0-7 and 8-15; cores 0, 1, 8, 9 are left to interactive work."""
+    seen = set()
+    for spec in supervisor.CPUSETS:
+        cpus = _cpus(spec)
+        assert len(cpus) == 4 and {c % 16 for c in cpus} == {c % 16 for c in cpus if c < 16} | {c - 16 for c in cpus if c >= 16}
+        assert all((c + 16 in cpus) if c < 16 else (c - 16 in cpus) for c in cpus)
+        assert len({(c % 16) // 8 for c in cpus}) == 1
+        assert not (cpus & seen) and not (cpus & {0, 1, 8, 9, 16, 17, 24, 25})
+        seen |= cpus
+    assert supervisor.SLOTS == 6
+
+
+def test_the_cpusets_match_the_machines_sibling_pairs():
+    """The pairs above are tinytim's; where the machine says otherwise (or is another machine) the test is not about it."""
+    import pytest
+
+    try:
+        sib = lambda c: _cpus(Path(f"/sys/devices/system/cpu/cpu{c}/topology/thread_siblings_list").read_text().strip())
+        if sib(0) != {0, 16}:
+            pytest.skip("not the 16-core, 32-thread host the sets are for")
+    except OSError:
+        pytest.skip("no sysfs topology")
+    for spec in supervisor.CPUSETS:
+        for c in _cpus(spec):
+            assert sib(c) <= _cpus(spec)
 
 
 def test_the_workspace_is_the_hosted_one():
