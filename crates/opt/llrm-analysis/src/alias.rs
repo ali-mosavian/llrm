@@ -320,6 +320,47 @@ impl EscapedBefore {
     }
 }
 
+/// What gives an access its provenance: the pointer values' objects, whether
+/// the solve went on to find what escapes (`PointsTo`) or not (`PointValues`).
+pub trait Resolves {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance>;
+}
+
+impl PointValues {
+    /// Canonical bytes reached by an access through an analysed pointer.
+    pub fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        _resolved_reference(unit, reference, &self.values)
+    }
+}
+
+impl Resolves for PointValues {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        PointValues::reference(self, unit, reference)
+    }
+}
+
+impl Resolves for PointsTo {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        PointsTo::reference(self, unit, reference)
+    }
+}
+
 impl PointsTo {
     /// Canonical bytes reached by an access through an analysed pointer.
     pub fn reference(
@@ -2618,6 +2659,7 @@ pub struct PointValues {
 
 thread_local! {
     static VALUE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ESCAPE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -2642,6 +2684,12 @@ pub fn limit_collapses() -> usize {
 /// not know of) and never settles; past the limit it settles at the objects'
 /// whole extents.
 pub const MAX_FIELDS_FOR_FIELD_SENSITIVE: usize = 100;
+
+/// How many escape solves (`points_to`'s second phase) this thread has made,
+/// for a test that what reads only the pointer values does not ask one.
+pub fn escape_solves() -> usize {
+    ESCAPE_SOLVES.with(std::cell::Cell::get)
+}
 
 /// How many value solves this thread has made, for a test that two analyses of
 /// one body ask one.
@@ -2959,6 +3007,7 @@ fn escapes(
     arguments: Option<&llrm_support::hash::SparseIdMap<InstId, Vec<Actual>>>,
     captures: Option<&llrm_support::hash::SparseIdMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
 ) -> Result<PointsTo, String> {
+    ESCAPE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
@@ -3590,7 +3639,7 @@ impl Bounded<'_> {
 
 pub fn annotated_with(
     unit: &Unit,
-    facts: &PointsTo,
+    facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
     let bounded = match (unit.bounds, unit.registers) {
