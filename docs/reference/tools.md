@@ -18,7 +18,6 @@ name them in an environment variable, listed in the tool's header.
 | `gate/gate.py` | The gate in tiers: `plan` picks the steps a diff needs from `gate/tiers.toml`, `run` runs them concurrently |
 | `gate/tiers.toml` | The path map: which paths select which tests |
 | `gate/doctests.py` | Exit 0 when a doc comment holds a fence or an indented block rustdoc would run, so the gate runs `cargo test --doc` only then |
-| `gate/train.py` | The merge train: smoke-green PRs merged onto origin/main, one full gate on the tip, the tip printed (never pushed) |
 | `gate/pytest_shards.py` | the pytest step: one pytest process per test file, N at a time, longest first (`PYTEST_SHARDS`, default min(16, cpus)); a SPLITTABLE slow file is dealt over several; times kept in `$CARGO_TARGET_DIR/pytest-durations.json` |
 | `gate/proctree.py`, `gate/pytest_cpulimit.py` | CPU of a process tree; a pytest plugin that fails a test by CPU seconds, not wall time |
 | `ci/nib_lsp_paths.py` | The paths whose change can change the `nib-lsp` binary; `--write` puts them in the release workflow |
@@ -60,7 +59,7 @@ name them in an environment variable, listed in the tool's header.
 
 | Tool | Does |
 |---|---|
-| `bench/bench.py` | The benchmark gate: executed instructions and memory operands per kernel against `bench/NAME/expected.toml`; see [tools/bench](../../tools/bench/readme.md) |
+| `bench/bench.py` | The benchmark gate: executed instructions and memory operands per kernel against the base's counts (and the references' in `bench/NAME/expected.toml`); see [tools/bench](../../tools/bench/readme.md) |
 | `bench/history.py`, `bench/dashboard.py` | Per-commit benchmark history on the `bench-history` branch, and the HTML dashboard drawn from it |
 | `bench/maps.py`, `bench/timeit.asm`, `bench/startup/` | Public symbols from a linker map; the RDTSC timer `.COM`; the empty program whose start-up time is subtracted |
 | `sizes.py` | Object bytes and the backend's expected instructions and memory operands of every program, two builds side by side |
