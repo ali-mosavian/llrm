@@ -589,6 +589,14 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
+/// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers it saves
+/// are then all pushed at the entry, and the return sets SP from the frame register.
+fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
+    body.insns()
+        .iter()
+        .any(|one| one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK))))
+}
+
 /// The registers `procedure` keeps for its caller: each one it names, or a call
 /// it makes disturbs by its convention, that this convention leaves to the
 /// callee, by its low half. A call to a routine whose convention disturbs more
@@ -618,6 +626,9 @@ fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
+    if moves_stack(body) {
+        return None;
+    }
     let lows = saved_of(procedure);
     let kept: BTreeSet<RegId> =
         procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
@@ -715,9 +726,7 @@ fn parts(
     let (bp, sp) = (reg(FRAME), reg(STACK));
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
-    let moved = !omit
-        && framed
-        && procedure.body.insns().iter().any(|one| one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK))));
+    let moved = !omit && framed && moves_stack(&procedure.body);
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
         let below = reserve + slot * saved.len() as i64;

@@ -971,6 +971,30 @@ mod tests {
         let (lea, pop) = (asm.find("lea sp").expect(&asm), asm.find("pop bp").expect(&asm));
         assert!(lea < pop, "{asm}");
     }
+
+    /// A function with `alloca` returns by setting SP from the frame register
+    /// and popping every register it kept, so all are pushed at the entry. The
+    /// heap test's `Test_alloca_stackavail__memavl__memmax` pushed SI after
+    /// the first allocation (shrink-wrapping) and popped it on every return:
+    /// the program jumped to the stack.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_function_with_alloca_pushes_what_it_keeps_at_its_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("shrink.c");
+        std::fs::write(&source, include_str!("../../../../tests/fixtures/c/alloca_shrink.c")).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records shrink.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "shrink", None, &options).unwrap()).unwrap();
+        let (entry, body) = asm.split_once("L0_0:").expect(&asm);
+        let kept = |text: &str, op: &str| text.lines().filter(|one| one.trim().starts_with(op) && !one.contains("bp")).count();
+        assert_eq!(kept(entry, "push"), kept(body.split("retf").next().unwrap(), "pop"), "{asm}");
+    }
     }
 
     /// Inline code that changes SI (`__modify [__si]`) in a function whose
