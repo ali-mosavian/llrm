@@ -145,17 +145,17 @@ fn f(t1@ax) -> @eax   ; calls clobber eax ecx
 frame  slot0 [bp-4] 2 B
 
 B0  entry  → B1
-     #2  t2         = mov.i2      1
+     #2  t2         = mov.i16     1
      #3               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
          #4  t5         = phi         B0: t2, B1: t4
-         #5  t4         = sub.i2      t5, 1
-         #6               cmp.i2      t4, -1
+         #5  t4         = sub.i16     t5, 1
+         #6               cmp.i16     t4, -1
          #7               jne         B1 else B2
 
 B2  ← B1  → exit
-     #8  t7         = load.i2     [slot0]                               ; reload
+     #8  t7         = load.i16    [slot0]                               ; reload
      #9  t10@eax    = call        fib(t7@ax)
     #10  t11@eax    = call        fib(t7@ax)
     #11  t12@eax    = call        log(t7@ax)                            ; also clobbers esi
@@ -338,8 +338,8 @@ fn a_named_value_prints_by_name_and_its_copy_keeps_it() {
     blocks[0] = blocks[0].with_insns(insns);
     let body = body.with_blocks(blocks);
     let text = dump_of(&body);
-    assert!(text.contains("  i          = mov.i2      1"), "{text}");
-    assert!(text.contains("  i          = mov.i2      i"), "the copy keeps the name\n{text}");
+    assert!(text.contains("  i          = mov.i16     1"), "{text}");
+    assert!(text.contains("  i          = mov.i16     i"), "the copy keeps the name\n{text}");
     assert!(text.contains("i.2        = phi         B0: i, B1: t4"), "{text}");
     assert!(!text.contains("v2") && !text.contains("v30"), "{text}");
 }
