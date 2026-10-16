@@ -3035,7 +3035,7 @@ impl<'a, 't> Body<'a, 't> {
             let dword = self.types.int(4, false);
             let whole = (bytes == 4).then(|| self.resized(value, false, dword));
             match (set.as_slice(), bytes) {
-                ([register], 1 | 2) if !matches!(*register, "ds" | "es") && register.len() == 2 && !register.ends_with(['h', 'l']) => {
+                ([register], 1 | 2) if *register != "ds" && register.len() == 2 && !register.ends_with(['h', 'l']) => {
                     let wide = self.resized(value, false, word);
                     inputs.push((register, vec![(wide, false)]));
                 }

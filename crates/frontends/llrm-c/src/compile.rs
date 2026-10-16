@@ -933,6 +933,46 @@ mod tests {
         assert!(asm.contains("XI segment") && asm.contains("dd init_"), "{asm}");
     }
 
+    /// Inline code taking a value in ES (`__parm [__es]`, a far pointer in
+    /// `[__es __di]`) was refused: clib's DOS block calls (`_TinyFreeBlock`)
+    /// and its far string functions (`_fmemmove`) were left to the reference
+    /// compiler.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_takes_and_answers_in_es() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("seg.c");
+        std::fs::write(
+            &source,
+            "extern void setes(unsigned s);\n\
+             #pragma aux setes = \"mov dl,1\" __parm [__es] __modify __exact [__dl]\n\
+             extern void far *same(void far *p);\n\
+             #pragma aux same = \"nop\" __parm [__es __di] __value [__es __di] __modify __exact []\n\
+             void set(unsigned s) { setes(s); }\n\
+             void far *pass(void far *p) { return same(p); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records seg.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "seg", None, &options).unwrap()).unwrap();
+        let body = |function: &str| -> Vec<String> {
+            let from = asm.find(&format!("{function} proc")).expect("the function");
+            asm[from..].lines().map(|one| one.trim().to_owned()).take_while(|one| !one.ends_with("endp")).collect()
+        };
+        let set = body("set_");
+        let at = set.iter().position(|one| one.starts_with("db 0b2h")).expect("the bytes");
+        assert!(set[..at].iter().any(|one| one == "mov es, ax"), "{set:?}");
+        let pass = body("pass_");
+        let at = pass.iter().position(|one| one == "db 090h").expect("the bytes");
+        assert!(pass[..at].iter().any(|one| one.starts_with("mov es, ")), "{pass:?}");
+        assert!(pass[at..].iter().any(|one| one == "mov ax, es"), "{pass:?}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
