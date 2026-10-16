@@ -388,7 +388,17 @@ pub fn recorded_for(
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());
-    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
+    // `-funsigned-char` takes the ABI's `-j` (a signed char) away;
+    // `-fsigned-char` is `-j`.
+    let unsigned = watcom.contains(&"-funsigned-char");
+    let watcom: Vec<&str> = watcom.iter().copied().filter(|one| *one != "-funsigned-char").collect();
+    let flags: Vec<&str> = profile
+        .flags
+        .iter()
+        .map(String::as_str)
+        .filter(|one| !(unsigned && *one == "-j"))
+        .chain([header.as_str()])
+        .collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
@@ -430,6 +440,20 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut entry_requests = false;
     let mut at = 0;
     while at < argv.len() {
+        // The language's, not the driver's: whether a plain char is signed.
+        match argv[at].as_str() {
+            "-fsigned-char" => {
+                watcom.push("-j".to_owned());
+                at += 1;
+                continue;
+            }
+            "-funsigned-char" => {
+                watcom.push("-funsigned-char".to_owned());
+                at += 1;
+                continue;
+            }
+            _ => {}
+        }
         if flags.take(argv, &mut at)? {
             at += 1;
             continue;
@@ -1023,6 +1047,33 @@ mod tests {
         };
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "keep", None, &options).unwrap()).unwrap();
         assert!(asm.contains("push si") && asm.contains("pop si"), "{asm}");
+    }
+
+    /// Open Watcom's plain char is unsigned (its library is built with `-j`),
+    /// Borland's signed: the Open Watcom family took Borland's, and clib's own
+    /// tests compare `'\x81'` with an unsigned char and failed.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_plain_char_is_signed_or_not_as_the_abi_and_the_switch_say() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sign.c");
+        std::fs::write(&source, "int negative(void) { char c = '\\x81'; return c < 0; }\n").unwrap();
+        let returns = |flags: &[&str]| {
+            let mut argv: Vec<String> = flags.iter().map(|one| (*one).to_owned()).collect();
+            argv.push("sign.c".to_owned());
+            let args = super::parse_args(&argv).unwrap();
+            let profile = super::Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).unwrap();
+            let switches: Vec<&str> = args.watcom.iter().map(String::as_str).collect();
+            let text = super::recorded_for(&source, &[], false, &switches, &profile).expect("wccq records sign.c");
+            let asm =
+                llrm_core::backend::masm::text(&super::selected(&text, "sign", None, &args.codegen).unwrap()).unwrap();
+            asm.contains("mov ax, 1")
+        };
+        assert!(!returns(&["-m16", "-mabi=watcom"]), "Open Watcom's char is unsigned");
+        assert!(returns(&["-m16", "-mabi=watcom", "-fsigned-char"]));
+        assert!(returns(&["-m16", "-mabi=cdecl"]), "Borland's char is signed");
+        assert!(!returns(&["-m16", "-mabi=cdecl", "-funsigned-char"]));
     }
 
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`

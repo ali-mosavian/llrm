@@ -70,7 +70,10 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 | Option | Does |
 |---|---|
-| `-I DIR`, `--include DIR` | Add an include directory |
+| `-I DIR`, `-IDIR`, `--include DIR` | Add an include directory |
+| `-DNAME[=VALUE]`, `-UNAME` | Define or undefine a macro (`-D NAME` too) |
+| `-fsigned-char`, `-funsigned-char` | Whether a plain char is signed; each ABI family has its default (Borland's and gcc's signed, Open Watcom's unsigned) |
+| `-std=c99` | The language standard, the front end's `-zastd=` |
 | `-oa` | Open Watcom's relaxed alias checking: an object whose address is never taken is unaliased |
 | `-on` | Open Watcom's relaxed floating point |
 | `--dump DIR` | Write every stage to `DIR` |
