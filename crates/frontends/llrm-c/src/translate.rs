@@ -1968,15 +1968,28 @@ impl<'a, 't> Body<'a, 't> {
         node: &str,
         type_: &str,
     ) -> R<i64> {
-        // A constant 0 is the null pointer of whatever pointer it is used as: converted
-        // from a near one it would be the data segment's offset 0.
+        // A number used as a pointer (`NULL`, `SIG_DFL` = `(handler)2`) is the pointer
+        // with that number as its bits, whatever pointer it is used as: converted from
+        // a near one it would be the data segment's offset.
         if let Some(tree) = self.unit.nodes.get(&hir::handle(node))
             && tree.call == "CGInteger"
-            && tree.args.first().is_some_and(|value| hir::int(value) == 0)
+            && let Some(value) = tree.args.first().map(|value| hir::int(value))
         {
             let ty = self.ty(type_)?;
-            if matches!(self.types.shape(ty), Shape::Pointer(_) | Shape::Huge) {
-                return Ok(self.constant(ty, Number::Int(0)));
+            let from = self.type_of_node(node);
+            let from = self.ty(&from)?;
+            let pointer = |shape| matches!(shape, Shape::Pointer(_) | Shape::Huge);
+            if pointer(self.types.shape(ty)) && pointer(self.types.shape(from)) {
+                // Widened from a narrower pointer, the number is unsigned in that width.
+                let (to, was) = (self.types.get(ty).width, self.types.get(from).width);
+                let value = if to > was { value & ((1_i64 << (was * 8)) - 1) } else { value };
+                if value == 0 {
+                    return Ok(self.constant(ty, Number::Int(0)));
+                }
+                // The bits of an integer as wide as the pointer.
+                let int = self.types.int(to, false);
+                let bits = self.constant(int, Number::Int(value.into()));
+                return Ok(self.op(Op::Convert, ty, vec![value_ref(bits)]));
             }
         }
         let got = self.eval(node)?;

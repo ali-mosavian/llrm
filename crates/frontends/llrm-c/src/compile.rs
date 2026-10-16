@@ -1151,10 +1151,11 @@ mod tests {
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
-    fn test_a_constant_zero_is_the_null_pointer_of_a_far_one() {
+    fn test_a_constant_number_used_as_a_far_pointer_has_segment_zero() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("null.c");
-        std::fs::write(&source, "int isnull(void far *p) { return p == (void *)0; }\n").unwrap();
+        std::fs::write(&source, "int isnull(void far *p) { return p == (void *)0; }\nint isdefault(void far *p) { return p == (void far *)2; }\n")
+            .unwrap();
         let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records null.c");
         let options = llrm_core::driver::Options {
@@ -1163,6 +1164,7 @@ mod tests {
         };
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
         assert!(!asm.contains("DGROUP"), "{asm}");
+        assert!(asm.contains("xor ax, 2"), "{asm}");
     }
 
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
