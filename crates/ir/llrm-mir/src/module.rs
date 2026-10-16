@@ -324,6 +324,7 @@ pub struct Function {
     pub(crate) lineage: Lineage,
     /// The checkpoints open: what the edits since each saved.
     pub(crate) journal: crate::journal::Journal,
+    pub(crate) witness: crate::journal::CloneWitness,
     /// The names of the live values and blocks, for `unique_name`.
     pub(crate) names: NameIndex,
 }
@@ -380,6 +381,7 @@ impl Function {
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
             journal: Default::default(),
+            witness: Default::default(),
             names: NameIndex::default(),
         }
     }
@@ -651,6 +653,15 @@ impl Function {
     /// these is true while they are as they were.
     pub fn epochs(&self) -> crate::touched::Epochs {
         self.epochs
+    }
+
+    /// The changes logged from position `from` on, as they stand.
+    pub(crate) fn changes_from(
+        &self,
+        from: usize,
+    ) -> Vec<Change> {
+        let kept_from = self.lineage.logged - self.changes.0.len();
+        self.changes.0[from.saturating_sub(kept_from).min(self.changes.0.len())..].to_vec()
     }
 
     /// The log cut back to `logged` after a rollback, with `taken` as it was.

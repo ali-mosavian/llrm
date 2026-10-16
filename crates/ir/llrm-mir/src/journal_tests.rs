@@ -144,6 +144,18 @@ fn a_rollback_gives_back_an_equal_function_after_any_edits() {
                 }
                 1 if !open.is_empty() => {
                     let (was, checkpoint, at, made, made_blocks) = open.pop().expect("open");
+                    if dice.below(2) == 0 {
+                        // Set aside, then found to be the one to keep.
+                        let after = f.clone();
+                        let logged = f.changes_since(at).map(<[_]>::len);
+                        let redo = f.rollback_keeping(checkpoint);
+                        assert_eq!(*f, was, "seed {seed}");
+                        f.redo(redo);
+                        assert_eq!(*f, after, "seed {seed}: made again");
+                        assert!(f.check_uses().is_empty(), "seed {seed}");
+                        assert_eq!(f.changes_since(at).map(<[_]>::len), logged, "seed {seed}: the log came back");
+                        continue;
+                    }
                     f.rollback(checkpoint);
                     insts.truncate(made);
                     blocks.truncate(made_blocks);

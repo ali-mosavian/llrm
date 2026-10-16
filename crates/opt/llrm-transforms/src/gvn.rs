@@ -374,18 +374,17 @@ fn _numbered(
     shape: &cfg::Shape,
 ) -> Result<(bool, bool), String> {
     // The walk over the function as it comes in: the same for both runs below,
-    // each of which changes a copy.
+    // each of which edits the function and is rolled back if it is not kept.
     let forwarding = transform::Forwarding::default();
     // Whether some load was served across a store: the one thing the second
     // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
-    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
+    let numbered = |unit: &mut Unit, avoid_store_crossing: bool| -> Result<(bool, bool), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
-        let mut function = function.fork();
         let forwarded = transform::forwarded(
             unit.context,
             unit.layout,
-            &mut function,
+            unit.function,
             outer,
             accesses,
             registers,
@@ -395,35 +394,58 @@ fn _numbered(
             &crossed,
         )?;
         let subexpressed =
-            transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
+            transform::subexpressions(unit.function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
-        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
-        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
+        let called = transform::equal_calls(unit.function, &silent(unit.context, outer))?;
+        Ok((forwarded || subexpressed || called, subexpressed || called))
     };
-    let crossing = numbered(unit.function, false)?;
-    let price = |one: &Function| {
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
-        profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
+    let checkpoint = unit.function.checkpoint();
+    let crossing = match numbered(unit, false) {
+        Ok(found) => found,
+        Err(error) => {
+            unit.function.rollback(checkpoint);
+            return Err(error);
+        }
+    };
+    let price = |unit: &Unit| {
+        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, unit.function, Some(trips))?;
+        profit::motion_price(unit.context, unit.layout, outer, unit.function, costs, room, &frequency)
     };
     // Where no load crossed a store, the second numbering is the first: it is
     // neither made nor priced.
-    let chosen = if !room.priced() || !crossed.get() {
-        crossing
-    } else {
-        match crossing_price(unit, outer, costs, room, trips, &crossing.0) {
-            // The careful numbering forwards no load crossing one forwards, so
-            // where crossing spills nothing it can only be dearer in work: it
-            // is not made.
-            Some((_, true)) | None => crossing,
-            Some((crossed, false)) => {
-                let careful = numbered(unit.function, true)?;
-                if price(&careful.0).is_some_and(|kept| kept < crossed) { careful } else { crossing }
+    if !room.priced() || !crossed.get() {
+        unit.function.release(checkpoint);
+        return Ok(crossing);
+    }
+    match crossing_price(unit, outer, costs, room, trips, unit.function) {
+        // The careful numbering forwards no load crossing one forwards, so
+        // where crossing spills nothing it can only be dearer in work: it
+        // is not made.
+        Some((_, true)) | None => {
+            unit.function.release(checkpoint);
+            Ok(crossing)
+        }
+        Some((crossed_price, false)) => {
+            let crossing_edits = unit.function.rollback_keeping(checkpoint);
+            let careful_at = unit.function.checkpoint();
+            let careful = match numbered(unit, true) {
+                Ok(found) => found,
+                Err(error) => {
+                    unit.function.rollback(careful_at);
+                    return Err(error);
+                }
+            };
+            if price(unit).is_some_and(|kept| kept < crossed_price) {
+                unit.function.release(careful_at);
+                Ok(careful)
+            } else {
+                unit.function.rollback(careful_at);
+                unit.function.redo(crossing_edits);
+                Ok(crossing)
             }
         }
-    };
-    unit.function.adopt(chosen.0);
-    Ok(chosen.1)
+    }
 }
 
 /// What `function` costs, as `profit::motion_price` has it, and whether it fits

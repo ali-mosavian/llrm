@@ -36,6 +36,26 @@ struct Frame {
     whole: Option<Box<Function>>,
 }
 
+/// The edits a rollback undid, to make again.
+#[derive(Default)]
+pub struct Redo {
+    changes: Vec<crate::module::Change>,
+    instructions: IdMap<u32, (Instruction, Option<BlockId>, bool)>,
+    blocks: IdMap<u32, Block>,
+    value_uses: IdMap<u32, Vec<Use>>,
+    block_uses: IdMap<u32, Vec<Use>>,
+    layout: Option<Vec<BlockId>>,
+    debug: Option<(Vec<DebugRecord>, Vec<MetadataId>)>,
+    instruction_tail: Vec<Instruction>,
+    parent_tail: Vec<Option<BlockId>>,
+    erased_tail: Vec<bool>,
+    value_tail: Vec<crate::module::ValueData>,
+    value_uses_tail: Vec<Vec<Use>>,
+    block_tail: Vec<Block>,
+    block_uses_tail: Vec<Vec<Use>>,
+    whole: Option<Box<Function>>,
+}
+
 /// The open checkpoints, innermost last. Not part of what a function is.
 #[derive(Default)]
 pub(crate) struct Journal {
@@ -95,15 +115,63 @@ impl Function {
         &mut self,
         checkpoint: Checkpoint,
     ) {
+        drop(self.undo(checkpoint, false));
+    }
+
+    /// `rollback`, giving the edits undone back as a [`Redo`] to make again:
+    /// for a speculation tried and set aside, the other tried, and the first
+    /// found to be the one to keep.
+    pub fn rollback_keeping(
+        &mut self,
+        checkpoint: Checkpoint,
+    ) -> Redo {
+        self.undo(checkpoint, true).expect("asked for")
+    }
+
+    fn undo(
+        &mut self,
+        checkpoint: Checkpoint,
+        keep: bool,
+    ) -> Option<Redo> {
         assert!(
             checkpoint.uid == self.lineage.uid && checkpoint.depth <= self.journal.frames.len(),
             "a checkpoint of this function, still open"
         );
         self.journal.frames.truncate(checkpoint.depth);
         let frame = self.journal.frames.pop().expect("an open checkpoint");
+        let mut redo = keep.then(|| Redo { changes: self.changes_from(frame.logged), ..Redo::default() });
         if let Some(whole) = frame.whole {
+            if let Some(redo) = redo.as_mut() {
+                let mut after = self.clone();
+                after.journal = Journal::default();
+                redo.whole = Some(Box::new(after));
+            }
             self.restore_whole(*whole);
         } else {
+            if let Some(redo) = redo.as_mut() {
+                redo.instructions = frame
+                    .saved_instructions
+                    .keys()
+                    .map(|at| {
+                        let i = at as usize;
+                        (at, (self.instructions[i].clone(), self.parent[i], self.erased[i]))
+                    })
+                    .collect();
+                redo.blocks = frame.saved_blocks.keys().map(|at| (at, self.blocks[at as usize].clone())).collect();
+                redo.value_uses =
+                    frame.saved_value_uses.keys().map(|at| (at, self.value_uses[at as usize].clone())).collect();
+                redo.block_uses =
+                    frame.saved_block_uses.keys().map(|at| (at, self.block_uses[at as usize].clone())).collect();
+                redo.layout = frame.layout.as_ref().map(|_| self.layout.clone());
+                redo.debug = frame.debug.as_ref().map(|_| (self.debug_records.clone(), self.debug_dropped.clone()));
+                redo.instruction_tail = self.instructions[frame.instructions..].to_vec();
+                redo.parent_tail = self.parent[frame.instructions..].to_vec();
+                redo.erased_tail = self.erased[frame.instructions..].to_vec();
+                redo.value_tail = self.values[frame.values..].to_vec();
+                redo.value_uses_tail = self.value_uses[frame.values..].to_vec();
+                redo.block_tail = self.blocks[frame.blocks..].to_vec();
+                redo.block_uses_tail = self.block_uses[frame.blocks..].to_vec();
+            }
             self.instructions.truncate(frame.instructions);
             self.parent.truncate(frame.instructions);
             self.erased.truncate(frame.instructions);
@@ -137,6 +205,69 @@ impl Function {
         // Names made since are in the index, and names given up are not.
         self.names = Default::default();
         self.cut_log(frame.logged, frame.taken);
+        redo
+    }
+
+    /// Makes again the edits `redo` has, on the function as it was when they
+    /// were undone.
+    pub fn redo(
+        &mut self,
+        redo: Redo,
+    ) {
+        assert!(self.journal.frames.is_empty() || redo.whole.is_none(), "no whole-function redo inside a checkpoint");
+        if let Some(whole) = redo.whole {
+            // The log the undone edits made goes back with them.
+            let mut after = *whole;
+            after.lineage = std::mem::take(&mut self.lineage);
+            after.changes = std::mem::take(&mut self.changes);
+            after.epochs = self.epochs;
+            after.taken = self.taken;
+            after.journal = std::mem::take(&mut self.journal);
+            *self = after;
+            for change in redo.changes {
+                self.log(change);
+            }
+        } else {
+            for (at, (instruction, parent, erased)) in redo.instructions.iter() {
+                self.save_instruction(InstId(at));
+                let at = at as usize;
+                self.instructions[at] = instruction.clone();
+                self.parent[at] = *parent;
+                self.erased[at] = *erased;
+            }
+            for (at, block) in redo.blocks.iter() {
+                self.save_block(BlockId(at));
+                self.blocks[at as usize] = block.clone();
+            }
+            for (at, uses) in redo.value_uses.iter() {
+                self.save_uses(Operand::Value(crate::module::ValueId(at)));
+                self.value_uses[at as usize] = uses.clone();
+            }
+            for (at, uses) in redo.block_uses.iter() {
+                self.save_uses(Operand::Block(BlockId(at)));
+                self.block_uses[at as usize] = uses.clone();
+            }
+            if let Some(layout) = redo.layout {
+                self.save_layout();
+                self.layout = layout;
+            }
+            if let Some((records, dropped)) = redo.debug {
+                self.save_debug();
+                self.debug_records = records;
+                self.debug_dropped = dropped;
+            }
+            self.instructions.extend(redo.instruction_tail);
+            self.parent.extend(redo.parent_tail);
+            self.erased.extend(redo.erased_tail);
+            self.values.extend(redo.value_tail);
+            self.value_uses.extend(redo.value_uses_tail);
+            self.blocks.extend(redo.block_tail);
+            self.block_uses.extend(redo.block_uses_tail);
+            self.names = Default::default();
+            for change in redo.changes {
+                self.log(change);
+            }
+        }
     }
 
     /// Keeps what was done since `checkpoint`.
@@ -257,4 +388,35 @@ impl Function {
             }
         });
     }
+}
+
+thread_local! {
+    static CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts the clones of a function: the cost speculation by checkpoint is
+/// there to avoid. Part of no function's value.
+#[derive(Debug, Default)]
+pub(crate) struct CloneWitness;
+
+impl Clone for CloneWitness {
+    fn clone(&self) -> Self {
+        CLONES.with(|count| count.set(count.get() + 1));
+        Self
+    }
+}
+
+impl PartialEq for CloneWitness {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+/// How many times this thread has cloned (or forked) a function, for a test
+/// that a pass prices a change without a copy.
+pub fn clones() -> usize {
+    CLONES.with(std::cell::Cell::get)
 }

@@ -1163,3 +1163,39 @@ b0:
         assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
     }
 }
+
+/// Each numbering was made on a copy of the function (a `fork` each): pricing a
+/// numbering now edits the function and rolls it back, so the pass copies
+/// nothing more than the manager does.
+#[test]
+fn numbering_a_function_both_ways_copies_it_no_more_than_the_manager_does() {
+    let text = "@x = global i16 0
+@y = global i16 0
+
+define i16 @f(i16 %p) {
+b0:
+  %a = load i16, ptr @x
+  store i16 %p, ptr @y
+  %b = load i16, ptr @x
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+";
+    let copies = |with_gvn: bool| {
+        let mut module = parsed(text);
+        let mut manager = PassManager::default();
+        manager.require::<Summaries>();
+        if with_gvn {
+            manager.add(Gvn::default());
+        }
+        let (before, numbered) = (llrm_mir::journal::clones(), super::numberings());
+        manager
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
+            .unwrap();
+        (llrm_mir::journal::clones() - before, super::numberings() - numbered)
+    };
+    let (without, _) = copies(false);
+    let (with, numbered) = copies(true);
+    assert_eq!(numbered, 2, "the premise: both numberings are made");
+    assert_eq!(with, without, "copies beyond the manager's own");
+}
