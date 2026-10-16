@@ -583,7 +583,7 @@ fn globals_loaded_in_loops(module: &Module) -> usize {
     for (_, _, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
         let inside = loops::loops(&cfg::graph(function), function.entry().map(cfg::id))
             .into_iter()
-            .flat_map(|one| one.body)
+            .flat_map(|one| one.body.to_set())
             .collect::<BTreeSet<_>>();
         found += function
             .walk()

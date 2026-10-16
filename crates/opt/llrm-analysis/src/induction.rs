@@ -126,13 +126,13 @@ use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{self, MemRef, Unit};
 use crate::noreturn;
+use crate::num::Num as BigInt;
 use crate::occurrence::{operations_in, phis};
 
 /// A recurrence's start or step: a value, or a number.
@@ -274,6 +274,26 @@ impl CountedLoop {
     /// loop has left. Its zero extension is a counter of the wider width.
     pub fn rises_unsigned(&self) -> bool {
         !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1)
+    }
+
+    /// `rises_unsigned` for signed values: a unit step tested before each trip
+    /// by `slt` from any start: the counter is below the bound when it is
+    /// stepped, so the step never passes the width's largest signed value.
+    /// Its sign extension is a counter of the wider width.
+    pub fn rises_signed(&self) -> bool {
+        !self.posttested && !self.stepped && self.test == IntPredicate::Slt && self.step == BigInt::from(1)
+    }
+
+    /// `rises_signed` for a loop tested after its trips, entered behind a copy
+    /// of its test.
+    pub fn rises_signed_after(&self) -> bool {
+        self.posttested
+            && self.stepped
+            && !self.shifted
+            && self.entry_guarded
+            && matches!(self.reach, Reach::Distance)
+            && self.test == IntPredicate::Slt
+            && self.step == BigInt::from(1)
     }
 
     /// `rises_unsigned` for a loop tested after its trips, entered behind a
@@ -2136,7 +2156,7 @@ impl Invariant {
 /// What the blocks `inside` do not define.
 pub fn invariant(
     function: &Function,
-    inside: &BTreeSet<i64>,
+    inside: &llrm_mir::forest::Body,
 ) -> Invariant {
     let defined = inside
         .iter()
@@ -2155,7 +2175,7 @@ pub fn basics(
     let function = unit.function;
     let header = cfg::block(loop_.header);
     let mut out = IndexMap::default();
-    if !function.layout().contains(&header) {
+    if !function.is_placed(header) {
         return out;
     }
     let inside = &loop_.body;
@@ -2362,7 +2382,7 @@ pub fn pointers(
     let inside = &loop_.body;
     let within = |inst: InstId| function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)));
     let mut out = Vec::new();
-    if !function.layout().contains(&header) {
+    if !function.is_placed(header) {
         return out;
     }
     for &inst in function.block(header).instructions() {

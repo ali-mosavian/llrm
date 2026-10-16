@@ -193,9 +193,10 @@ def link_files(source: Path, names: Iterable[str], target: str) -> list[Path]:
     return out
 
 
-def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None) -> tuple[Path, ...]:
+def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None, image: Path | None = None) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
-    `target` says; the files its executable needs beside it (an extender's loader)."""
+    `target` says; the files its executable needs beside it (an extender's loader). `image`: the same objects linked again as a flat ELF,
+    for the emulator that prices the work (tools/bench/flatcount.py)."""
     link = target_link(target)
     if defines is None:
         defines = os_defines(target, "c")
@@ -210,6 +211,8 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     mapping = ["option", f"map={listing}"] if listing else []
     files = lambda paths: [word for one in paths for word in ("file", str(one))]  # noqa: E731
     _host([str(BIN / "jwlink"), "option", "quiet", *mapping, *before, *link["format"], "name", str(exe), *map(fill, link.get("options", [])), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
+    if image is not None:
+        _host([str(BIN / "jwlink"), "option", "quiet", "option", f"map={image.with_suffix('.map')}", "format", "elf", "name", str(image), *files(first), "file", str(obj), *files(objects_after), *files(last), *after, *files(final)])
     return (Path(fill(link["loader"])),) if "loader" in link else ()
 
 
@@ -221,7 +224,12 @@ _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
 def os_layer(target: str, field: str, language: str) -> str:
     """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    return subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    said = subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    if field == "directory" and "/runtime/" in said:
+        # The compiler names the runtime of the tree it was built in; a target shared by two worktrees holds the other's (a gate of main
+        # read the tip's path: 14 collection errors). The tools read this tree's.
+        return str(ROOT / "runtime" / said.rpartition("/runtime/")[2])
+    return said
 
 
 def os_defines(target: str, language: str) -> tuple[str, ...]:

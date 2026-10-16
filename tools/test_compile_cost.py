@@ -23,6 +23,7 @@ def test_a_counter_that_reads_zero_is_unavailable_not_a_count(tmp_path, monkeypa
     fake.write_text('#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho "0,,instructions:u,0,0.00,," > "$2"\n')
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("LLRM_COUNTER", "perf")  # on a runner with no counters `auto` is callgrind, which never reads this fake
     with pytest.raises(cc.NoCounter):
         cc.instructions(["true"])
 

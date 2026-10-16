@@ -106,7 +106,7 @@ fn bytes(
     let slice = Slice::new(object.clone(), low, low + 1, 1, high - low).unwrap();
     MemRef::reach(
         u32::try_from(high - low).unwrap(),
-        Provenance { slices: BTreeSet::from([slice]), restrict: BTreeSet::new() },
+        Provenance { slices: crate::memory::Sorted::from([slice]), restrict: crate::memory::Sorted::new() },
     )
 }
 
@@ -337,8 +337,8 @@ b30:
     );
     let facts = parsed.facts();
     let expected = Provenance {
-        slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices).cloned().collect(),
-        restrict: BTreeSet::new(),
+        slices: UNKNOWN.slices.union(&Provenance::one(parameter(0)).slices),
+        restrict: crate::memory::Sorted::new(),
     };
     assert_eq!(facts.values[&parsed.value("current")], expected);
     assert_eq!(facts.values[&parsed.value("advanced")], expected);
@@ -686,7 +686,7 @@ b50:
     let tagged = annotated(&parsed.unit()).unwrap()[&load].provenance.clone().expect("a provenance");
     let root = MemRef::of(&parsed.unit(), load).and_then(|one| one.root).expect("a root");
     let global = object_of(&parsed.unit(), root).expect("an object");
-    assert_eq!(tagged.slices, BTreeSet::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
+    assert_eq!(tagged.slices, crate::memory::Sorted::from([Slice::new(global, 4, 11, 2, 2).unwrap()]));
 }
 
 /// A byte counter stepping by `step` for 200 trips, counting the trips
@@ -973,6 +973,26 @@ fn an_edit_visits_the_edited_body_and_its_callers_only() {
         super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["callee".to_owned()]))).unwrap();
     assert_eq!((super::visits() - visits, super::direct_runs() - direct), (1, 1), "callee alone");
     assert_eq!(again, whole);
+}
+
+/// A run in which every body was edited updated what it kept, which was
+/// nothing: waking the readers of each body and comparing what changed cost 2.7
+/// and 5.2 Minstr more than the run from nothing on the `joins` axis at N=64
+/// (-O2), twice of six runs. It is the run from nothing, and the result is the
+/// same.
+#[test]
+fn a_run_in_which_every_body_is_edited_is_worked_out_from_nothing() {
+    let parsed = Parsed::new(CALLEE_WRITES_ITS_PARAMETER);
+    let procedures =
+        IndexMap::from_iter(["f", "callee"].map(|name| (name.to_owned(), Procedure::of(parsed.unit_of(name)))));
+    let mut memo = super::SummaryMemo::default();
+    let whole = super::summaries_updating(&procedures, None, &mut memo, None).unwrap();
+    let before = super::whole_runs();
+    let one = super::summaries_updating(&procedures, None, &mut memo, Some(&BTreeSet::from(["f".to_owned()]))).unwrap();
+    assert_eq!((super::whole_runs() - before, &one), (0, &whole), "one body edited is an update");
+    let all = BTreeSet::from(["f".to_owned(), "callee".to_owned()]);
+    let again = super::summaries_updating(&procedures, None, &mut memo, Some(&all)).unwrap();
+    assert_eq!((super::whole_runs() - before, &again), (1, &whole), "every body edited is a run from nothing");
 }
 
 /// The facts a visit found are of the body as it was: an edited body is visited
@@ -1499,4 +1519,52 @@ out:
     crate::alias::point_values(&parsed.unit()).unwrap();
     let visits = crate::alias::value_rounds() - before;
     assert!(visits < 40, "{visits} visits for a loop of three pointer instructions");
+}
+
+/// Every solve worked out what had escaped before each call, load and store
+/// (a bit set cloned for each: 54 M of d_faces' 425 M escape cost, answers
+/// nothing reads). A solve works out none; an answer is found when asked, once.
+#[test]
+fn what_escaped_before_an_instruction_is_found_when_asked_and_once() {
+    let parsed = Parsed::new(
+        "declare void @keep(ptr)
+
+define void @f(ptr %p) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  store i16 1, ptr %a
+  %x = load i16, ptr %b
+  call void @keep(ptr %a)
+  store i16 2, ptr %a
+  ret void
+}
+",
+    );
+    let before = crate::alias::before_answers();
+    let facts = parsed.facts();
+    assert_eq!(crate::alias::before_answers() - before, 0, "the solve answered what nobody asked");
+    let call = parsed.all(|op| matches!(op, Opcode::Call(_)))[0];
+    let first = facts.escaped_before.get(&call).expect("a call is asked of");
+    let again = facts.escaped_before.get(&call).expect("a call is asked of");
+    assert_eq!(first, again);
+    assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
+    let a = parsed.object("a");
+    assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
+}
+
+/// An access was held for each version of its function, and a type tag
+/// attached afterwards logs no change: the held access kept no type, so a
+/// store tagged `!tbaa` after its first ask was apart from nothing.
+#[test]
+fn a_type_attached_after_the_access_was_first_asked_is_seen() {
+    let mut parsed =
+        Parsed::new(&format!("define void @f(ptr %p) {{\n  store i16 1, ptr %p\n  ret void\n}}\n{TYPE_TREE}"));
+    let store = parsed.all(|op| matches!(op, Opcode::Store { .. }))[0];
+    assert!(MemRef::of(&parsed.unit(), store).expect("a store").typed.is_none(), "premise: no type yet");
+    let (_, function) = parsed.module.function_mut("f").expect("f");
+    function.annotate(store, "tbaa", llrm_mir::module::MetadataId(5));
+    let reference = MemRef::of(&parsed.unit(), store).expect("a store");
+    assert!(reference.typed.is_some(), "the type attached later was not seen");
+    assert_eq!(reference.lineage.len(), 3);
 }

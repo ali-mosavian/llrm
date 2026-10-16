@@ -140,6 +140,11 @@ pub struct Insn {
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
     pub effect: Derived<(u32, Option<crate::backend::liveness::Effect>)>,
+    /// What it reads and writes as `peephole::_register_effects` says, for each
+    /// of its four ways of asking (`may_write`, `flags`): hashing the whole
+    /// instruction to find the remembered answer cost more than the answer
+    /// each of the peephole's passes asked again.
+    pub register_effects: [Derived<(u32, Option<(crate::backend::lanes::Lanes, crate::backend::lanes::Lanes)>)>; 4],
     /// Its identity (`Insn::id`): given when first asked, never again to
     /// another instruction.
     pub ident: Derived<u64>,
@@ -428,6 +433,7 @@ impl Insn {
             line: None,
             debug: DebugTags::default(),
             effect: Derived::default(),
+            register_effects: Default::default(),
             ident: Derived::default(),
         }
     }
@@ -777,6 +783,23 @@ impl FromIterator<LirBlock> for Vec<Block> {
 }
 
 impl Block {
+    /// This block with `insns` in place of its instructions: the block itself,
+    /// the same allocation, when they are the instructions it has. A pass that
+    /// changed nothing in a block pays for no copy of it, and the facts kept
+    /// for the block (`Insns::same_as`) stand.
+    #[must_use]
+    pub fn with_insns(
+        &self,
+        insns: Vec<Arc<Insn>>,
+    ) -> Block {
+        if insns.len() == self.insns.len()
+            && insns.iter().zip(self.insns.iter()).all(|(one, two)| Arc::ptr_eq(one, two))
+        {
+            return self.clone();
+        }
+        self.0.with_insns(insns)
+    }
+
     /// The block itself, copied only if another body holds it.
     #[must_use]
     pub fn into_inner(self) -> LirBlock {

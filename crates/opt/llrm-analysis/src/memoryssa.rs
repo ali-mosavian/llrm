@@ -16,7 +16,11 @@
 //! exit states, with the entry block also fed by `Live`, the state on entry to
 //! the function. Phis are wired before they are resolved, so back edges need no
 //! iteration over memory versions; then phis whose inputs reduce to one state
-//! are replaced by it.
+//! are replaced by it. What that makes (`Structure`) depends on the body and
+//! its `Accesses` alone, so it is kept in the accesses, per body state, and
+//! every graph built from them shares it: the walks' memory of what was
+//! asked (and the registers they know) is each graph's own. The manager's
+//! `PlainAccesses` is the one set `ThroughMemory` and `FloatFacts` share.
 //!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -188,6 +192,57 @@ pub struct Accesses {
     /// What the manager's accesses were made from: the references annotated
     /// and the calls' effects.
     source: Option<(Rc<<Annotated as Analysis>::Result>, Rc<<CallEffects as Analysis>::Result>)>,
+    /// The graph's structure, made when first asked.
+    graph: GraphCell,
+}
+
+/// The `Structure` of the one body state these accesses are of, kept for
+/// every graph built from them. A copy of the accesses starts without it, so
+/// a copy that is changed does not carry it.
+#[derive(Default)]
+struct GraphCell(std::cell::RefCell<Option<(llrm_mir::module::Mark, Rc<Structure>)>>);
+
+impl GraphCell {
+    fn of(
+        &self,
+        function: &Function,
+        make: impl FnOnce() -> Structure,
+    ) -> Rc<Structure> {
+        let mark = function.mark();
+        if let Some((made, kept)) = &*self.0.borrow()
+            && *made == mark
+        {
+            return Rc::clone(kept);
+        }
+        STRUCTURES.with(|made| made.set(made.get() + 1));
+        let made = Rc::new(make());
+        *self.0.borrow_mut() = Some((mark, Rc::clone(&made)));
+        made
+    }
+}
+
+impl Clone for GraphCell {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for GraphCell {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("GraphCell")
+    }
+}
+
+impl PartialEq for GraphCell {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// The objects an instruction's writes can reach, for ruling a cell out before
@@ -348,6 +403,18 @@ impl Accesses {
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
+    /// The manager's accesses where `unit` has them (`Unit::with_plain`), else
+    /// what `make` makes of it.
+    pub fn shared_or<'u>(
+        unit: &'u Unit,
+        make: impl FnOnce() -> Self,
+    ) -> std::borrow::Cow<'u, Self> {
+        match unit.plain {
+            Some(shared) => std::borrow::Cow::Borrowed(shared),
+            None => std::borrow::Cow::Owned(make()),
+        }
+    }
+
     /// `footprint` gives a call's reads and writes, where known.
     fn new(
         unit: &Unit,
@@ -381,7 +448,7 @@ impl Accesses {
             };
             touched.insert(inst, found);
         }
-        Self { references, touched, fills: IndexMap::default(), source: None }
+        Self { references, touched, fills: IndexMap::default(), source: None, graph: GraphCell::default() }
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
@@ -609,6 +676,16 @@ thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+thread_local! {
+    static STRUCTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many graph structures this thread has made (`built` of accesses and a
+/// body state it has not seen).
+pub fn structures_made() -> usize {
+    STRUCTURES.with(std::cell::Cell::get)
+}
+
 /// How many times this thread has asked whether a def's writes may clobber a
 /// cell, rather than been answered from memory.
 pub fn clobber_runs() -> usize {
@@ -735,8 +812,11 @@ thread_local! {
     pub(crate) static CELL_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-#[derive(Clone)]
-pub struct MemorySSA<'a> {
+/// What the graph is made of, from the function and its `Accesses` alone: the
+/// accesses, the phis, what each def writes and the order of the tree. The
+/// registers a client knows change what a walk answers, not any of this, so
+/// every client of one body state shares it (`Accesses::graph`).
+pub struct Structure {
     pub live: Access,
     pub accesses: Vec<Access>,
     pub sites: IndexMap<InstId, Access>,
@@ -746,9 +826,27 @@ pub struct MemorySSA<'a> {
     /// What each def's writes can reach, worked out when a walk first asks of
     /// the def.
     reaches: std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Rc<Reach>>>,
-    unit: Unit<'a>,
     /// The state each block leaves.
     ends: IndexMap<i64, Option<usize>>,
+    /// Each access's entry and exit in a depth-first order of the tree its
+    /// `defining` links make, by access number: one is behind another when
+    /// its interval holds the other's.
+    span: Vec<(u32, u32)>,
+    /// Of each def that writes one cell at a fixed displacement, the frame and
+    /// bytes (`regions::displaced_span`): a cell at a fixed displacement of the
+    /// same frame whose bytes miss them is not written, settled without asking
+    /// `may_clobber` or remembering the answer.
+    fixed: llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
+    /// Of each def that writes one cell its pointer's provenance places
+    /// exactly, the object and bytes: a read placed exactly elsewhere in
+    /// the same object, or in one it cannot alias, is not written.
+    exacts: llrm_mir::dense::IdMap<InstId, (ObjectRef, i128, i128)>,
+}
+
+#[derive(Clone)]
+pub struct MemorySSA<'a> {
+    structure: Rc<Structure>,
+    unit: Unit<'a>,
     /// The values that are constants, for placing an index away from a cell
     /// (`with_known`).
     known: Option<BTreeMap<ValueId, Interval>>,
@@ -766,21 +864,8 @@ pub struct MemorySSA<'a> {
     /// stopped at (plus one; 0: not known), by access number. A walk takes
     /// the jump instead of the steps, unless its own boundary lies between.
     jumps: std::cell::RefCell<Vec<Option<Vec<u32>>>>,
-    /// Each access's entry and exit in a depth-first order of the tree its
-    /// `defining` links make, by access number: one is behind another when
-    /// its interval holds the other's.
-    span: Vec<(u32, u32)>,
     /// Per access, the walk that last visited it, and the walks made.
     stamps: std::cell::RefCell<(Vec<u32>, u32)>,
-    /// Of each def that writes one cell at a fixed displacement, the frame and
-    /// bytes (`regions::displaced_span`): a cell at a fixed displacement of the
-    /// same frame whose bytes miss them is not written, settled without asking
-    /// `may_clobber` or remembering the answer.
-    fixed: llrm_mir::dense::IdMap<InstId, (crate::regions::Frame, i128, i128)>,
-    /// Of each def that writes one cell its pointer's provenance places
-    /// exactly, the object and bytes: a read placed exactly elsewhere in
-    /// the same object, or in one it cannot alias, is not written.
-    exacts: llrm_mir::dense::IdMap<InstId, (ObjectRef, i128, i128)>,
     /// The last-write index, once made, and the accesses walks have stepped
     /// over.
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
@@ -797,6 +882,14 @@ pub struct MemorySSA<'a> {
 /// checks, gcc's value numbering at `sccvn-max-alias-queries-per-access`
 /// (1000).
 pub const MAX_NEAREST_WRITES: usize = 100;
+
+impl std::ops::Deref for MemorySSA<'_> {
+    type Target = Structure;
+
+    fn deref(&self) -> &Structure {
+        &self.structure
+    }
+}
 
 impl MemorySSA<'_> {
     /// This graph with the register constants `known` tells, as the
@@ -1389,7 +1482,30 @@ pub fn built<'a>(
     unit: &Unit<'a>,
     accesses: &Accesses,
 ) -> MemorySSA<'a> {
-    let function = unit.function;
+    let structure = accesses
+        .graph
+        .of(
+            unit.function,
+            || llrm_support::debug::timed("memoryssa structure", || structure_of(unit.function, accesses)),
+        );
+    MemorySSA {
+        structure,
+        unit: *unit,
+        known: None,
+        clobbers: Default::default(),
+        slots: Default::default(),
+        jumps: Default::default(),
+        stamps: Default::default(),
+        index: Default::default(),
+        taken: Default::default(),
+        limit: Default::default(),
+    }
+}
+
+fn structure_of(
+    function: &Function,
+    accesses: &Accesses,
+) -> Structure {
     let graph = cfg::graph(function);
     let entry = function.entry().map(cfg::id);
     let live = Access::new(0, Kind::Live);
@@ -1504,27 +1620,7 @@ pub fn built<'a>(
         })
         .collect();
     let ends = outgoing.iter().map(|(block, state)| (*block, Some(resolved(&replacements, *state)))).collect();
-    MemorySSA {
-        ends,
-        live,
-        accesses,
-        sites,
-        phis,
-        written,
-        reaches: Default::default(),
-        unit: *unit,
-        known: None,
-        clobbers: Default::default(),
-        slots: Default::default(),
-        jumps: Default::default(),
-        span,
-        stamps: Default::default(),
-        fixed,
-        exacts,
-        index: Default::default(),
-        taken: Default::default(),
-        limit: Default::default(),
-    }
+    Structure { ends, live, accesses, sites, phis, written, reaches: Default::default(), span, fixed, exacts }
 }
 
 #[cfg(test)]

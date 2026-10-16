@@ -90,12 +90,33 @@ A program that includes `llrm_os.h` finds it without `-I`: the header is the
 target's OS layer interface. The target's physical addresses are defined as
 `PHYSICAL_<NAME>`.
 
+## Inline code with registers
+
+Open Watcom's `#pragma aux name = "bytes" __parm [..] __value [..] __modify [..]` is inline code that takes its
+parameters in the registers it names and answers in the registers it names. `llrm-c` turns it into an `asm` block:
+the parameters are its inputs, the answer its outputs, and what it modifies its clobbers. A register it modifies is
+saved by a function that keeps that register for its caller. Where a register pair holds a far pointer, the segment is
+the register Open Watcom's compiler picks (the segment registers always; otherwise by its preference). The registers, their bits and ranks are the target's description (`[frontend.registers]` of its `c.toml`), not the
+front end's. What it cannot
+express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
+
+## Numbers as pointers
+
+A number used as a pointer (`NULL`, Open Watcom's `SIG_DFL` = `(handler)2`) is the pointer with those bits, whatever
+pointer it is used as: as a far pointer its segment is 0, not the data segment a near pointer would be given.
+
+## Code pointers in data
+
+A function's address in static data is as wide as a code pointer of the model: 4 bytes where code is far (medium,
+large), 2 where it is near. At two bytes in a far-code model a table of handlers (Open Watcom's `signal` table) was
+half its size.
+
 ## `__attribute__`
 
 gcc's `__attribute__((...))` is read where gcc allows it on a declaration: before the type and after a declarator
 (`int f(void) __attribute__((noinline));`, which holds for the definition that follows it). The target's header spells it as
 Open Watcom's `__declspec( ... )`, and the patched front end reads the list, commas, arguments and `__name__` spellings
-included. `noinline` and `noreturn` state facts. `unused`, `used`, `always_inline`, `cold`, `hot`, `format`, `nonnull`,
+included. `noinline`, `always_inline` and `noreturn` state facts. `unused`, `used`, `cold`, `hot`, `format`, `nonnull`,
 `pure`, `const`, `malloc`, `deprecated`, `visibility` and a few others are read and dropped: leaving them out changes no
 meaning. Any other (`packed`, `aligned`, `section`, `weak`, `alias`) is an error, not ignored.
 

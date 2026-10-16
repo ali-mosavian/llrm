@@ -114,6 +114,8 @@ pub struct CpuPrices {
     /// Registers an allocator may hold values in, and those a call keeps.
     pub registers: i64,
     pub call_registers: i64,
+    /// The floating values it holds in registers at once.
+    pub float_registers: i64,
     /// The indexed addresses the target states, native form first.
     pub address_forms: Vec<AddressForm>,
     /// What each operation costs: the target's mapping applied to `costs`.
@@ -148,6 +150,7 @@ pub fn described_by_size(
     Rc::new(Described {
         registers: prices.registers,
         call_registers: prices.call_registers,
+        float_registers: prices.float_registers,
         address_forms: prices.address_forms.clone(),
         operations: prices.operations.clone(),
         // The by-pieces ratios are the CPU's, whichever table prices the rest.
@@ -169,6 +172,7 @@ pub fn described_by_size(
 struct Described {
     registers: i64,
     call_registers: i64,
+    float_registers: i64,
     address_forms: Vec<AddressForm>,
     operations: OperationCosts,
     sizes: Option<OperationCosts>,
@@ -247,6 +251,10 @@ impl llrm_mir::target::Machine for Described {
         self.call_registers
     }
 
+    fn float_registers(&self) -> i64 {
+        self.float_registers
+    }
+
     fn two_address(&self) -> bool {
         true
     }
@@ -311,6 +319,12 @@ pub trait Target {
     /// The bytes an argument of `width` takes on the stack, and the least a
     /// stack cell holds.
     fn stack_slot_bytes(&self) -> i64;
+
+    /// The bytes the stack pointer is a multiple of at a call (`calling.toml`'s
+    /// `stack_alignment`): a slot's worth unless it says more.
+    fn stack_alignment(&self) -> i64 {
+        self.stack_slot_bytes()
+    }
 
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
@@ -436,6 +450,7 @@ pub trait Target {
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
             slot: self.stack_slot_bytes(),
+            align: self.stack_alignment(),
             optional: self.frame_optional(),
             enter: self.frame_enter(),
             free: false,
@@ -466,6 +481,10 @@ pub struct FrameRegisters {
     pub saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
+    /// The bytes the stack pointer is a multiple of at a call, as the callee
+    /// assumes it (its frame cells then sit on their alignments): a slot's
+    /// worth where the target says no more.
+    pub align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.

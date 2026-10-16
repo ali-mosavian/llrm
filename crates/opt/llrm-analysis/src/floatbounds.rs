@@ -67,18 +67,18 @@
 //! # See also
 //! LLVM ValueTracking's `computeKnownFPClass` with `isKnownExactCastIntToFP`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::{self, Calls, Cells};
 use crate::floatfacts::{self, Finite, Format, Operation, Rule};
 use crate::memory::{MemRef, Unit};
+use crate::num::Num as BigInt;
 use crate::ranges;
 
 pub type Bounds = (BigInt, BigInt);
@@ -130,7 +130,7 @@ pub fn _memory(
     inst: InstId,
     format: Format,
     read: &mut dyn FnMut(&[MemRef]) -> Cells,
-    scoped: &crate::ranges::Intervals,
+    scoped: &dyn crate::ranges::Lookup,
 ) -> Option<Bounds> {
     let reference = MemRef::of(unit, inst)?;
     let width = match format {
@@ -143,9 +143,8 @@ pub fn _memory(
     }
     let mut offsets = vec![BigInt::from(0)];
     if let Some(base) = reference.base {
-        let interval = scoped.get(&base)?;
-        let known = scoped.iter().map(|(value, interval)| (value, interval.clone())).collect::<BTreeMap<_, _>>();
-        if ranges::covering(&reference, &known).base.is_some() {
+        let interval = scoped.lookup(&base)?;
+        if ranges::covering(&reference, scoped).base.is_some() {
             return None;
         }
         offsets = Vec::new();
@@ -238,7 +237,6 @@ pub fn exact(
         .collect::<Vec<_>>();
     let mut safe = BTreeSet::new();
     let mut values = IndexMap::<ValueId, Bounds>::default();
-    let empty_scope = crate::ranges::Intervals::default();
     let mut changed = true;
     while changed {
         changed = false;
@@ -278,8 +276,7 @@ pub fn exact(
                         &mut asked,
                     )
                 };
-                _memory(unit, inst, rule.inputs[0], &mut read, scoped.at(cfg::id(block)).unwrap_or(&empty_scope))
-                    .map(|one| vec![one])
+                _memory(unit, inst, rule.inputs[0], &mut read, &scoped.scope(unit, cfg::id(block))).map(|one| vec![one])
             } else {
                 rule.inputs
                     .iter()

@@ -116,6 +116,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::cfg::Around;
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::{cfg, ssa};
 use llrm_mir::module::{Function, Operand, ValueId};
@@ -132,16 +133,12 @@ pub fn closed(
     let entry = function.entry().map(cfg::id);
     let predecessors = loops::predecessors(&graph);
     let dominance = cfg::Dominance::of(function);
-    let exits = graph
-        .iter()
-        .filter(|block| loop_.body.contains(&block.at))
-        .flat_map(|block| block.succ.iter().copied())
-        .filter(|at| !loop_.body.contains(at))
-        .collect::<BTreeSet<_>>();
-    if exits
-        .iter()
-        .any(|at| predecessors.get(at).is_none_or(|parents| parents.is_empty() || !parents.is_subset(&loop_.body)))
-    {
+    let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<BTreeSet<_>>();
+    if exits.iter().any(|at| {
+        predecessors
+            .get(at)
+            .is_none_or(|parents| parents.is_empty() || !parents.iter().all(|at| loop_.body.contains(at)))
+    }) {
         return Ok(false);
     }
     let definitions = definitions(function, &loop_.body);

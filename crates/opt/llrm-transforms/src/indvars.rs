@@ -16,15 +16,21 @@
 //!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
 //!    as 32, so the exit no longer keeps the old counter alive past its step.
 //! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-//! 5. `widened`: a counter read through `zext` to the address's index width,
-//!    where `induction` proves its values never pass its own
-//!    (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
-//!    i` reads `a[zext i]`, a conversion per trip, which hides the loop from
-//!    idioms and strength reduction. The wide counter ends the loop against the
-//!    bound extended once in the preheader; an unsigned or equality compare of
-//!    the narrow one with a value the loop leaves alone compares the wide one
-//!    with that value extended (`WidenIV::widenLoopCompare`); other readers of
-//!    the narrow one read its low part.
+//! 5. `widened`: a counter read through `zext` (or, where it is signed and
+//!    tested by `slt`, `sext`) to the address's index width, where `induction`
+//!    proves its values never pass its own (`rises_unsigned`, `rises_signed`),
+//!    becomes a counter of that width. C's `unsigned short i` reads `a[zext
+//!    i]`, and `short k` reads `a[sext k]`: a conversion per trip (`inc cx;
+//!    movsx esi,cx; cmp cx,bx`), which hides the loop from idioms and strength
+//!    reduction. A signed counter of a loop of at most `unroll`'s trip limit
+//!    (`IndVars::unrolls`) is left for `unroll` until the run with
+//!    `exit_values`: one operation fewer in the rolled loop made a loop that
+//!    `unroll` took whole no longer fit its own size. The wide counter ends the
+//!    loop against the bound extended once in the preheader; an unsigned or
+//!    equality compare of the narrow one with a value the loop leaves alone
+//!    compares the wide one with that value extended
+//!    (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
+//!    low part.
 //! 6. `congruent`: header counters with one start and one step are one counter
 //!    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
 //!    first, and `dead` removes them.
@@ -131,10 +137,12 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::cfg::Around;
 use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, liveness, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -143,7 +151,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 use num_traits::Zero;
 
 use crate::counting;
@@ -161,9 +168,17 @@ pub struct IndVars {
     /// header copy: a number is a `mov` where the counter's register already
     /// holds it.
     pub exit_values: bool,
+    /// The trips up to which `unroll` takes a loop whole (its
+    /// `max_unroll_iterations`, 0 for any number), none where it is off: a
+    /// signed counter of such a loop is left for it until `exit_values`.
+    pub unrolls: Option<i64>,
 }
 
 impl FunctionPass for IndVars {
+    fn adds_memory_operations(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "indvars"
     }
@@ -204,7 +219,14 @@ impl FunctionPass for IndVars {
         if sunk {
             standing.changed();
         }
-        let widened = widened_with(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let widened = widened_with(
+            unit.context,
+            unit.layout,
+            unit.function,
+            &outer,
+            &mut standing,
+            if self.exit_values { None } else { self.unrolls },
+        );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound(
             unit.context,
@@ -616,12 +638,9 @@ fn _rewinding(
     }
     let dominance = &shape.dominance;
     let live = liveness::live(function);
-    let graph = cfg::graph(function);
     for inner in found {
-        let Some(parent) = found
-            .iter()
-            .filter(|parent| inner.body.is_subset(&parent.body) && inner.body != parent.body)
-            .min_by_key(|parent| parent.body.len())
+        let Some(parent) =
+            inner.body.parent_header().and_then(|header| found.iter().find(|parent| parent.header == header))
         else {
             continue;
         };
@@ -644,11 +663,7 @@ fn _rewinding(
         {
             continue;
         }
-        let exiting = graph
-            .iter()
-            .filter(|block| inner.body.contains(&block.at))
-            .flat_map(|block| block.succ.iter().filter(|at| !inner.body.contains(at)).map(move |at| (block.at, *at)))
-            .collect::<Vec<_>>();
+        let exiting = inner.exits(function);
         let exits = exiting.iter().map(|(_, target)| *target).collect::<BTreeSet<_>>();
         let [exit] = exits.into_iter().collect::<Vec<_>>()[..] else {
             continue;
@@ -740,17 +755,22 @@ pub fn widened(
     function: &mut Function,
     outer: &passes::Outer,
 ) -> bool {
-    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived())
+    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived(), None)
 }
 
 /// `widened`, what is known of the body without memory given as `standing`
 /// says: derived once for each state of the body, not once for each loop.
+/// With `unrolls`, a signed counter of a loop that runs that many times or
+/// fewer is left for `unroll`, which takes a loop whole by what it comes to
+/// rolled: one operation fewer in the widened loop was a loop that no longer
+/// fit its own size (bench/lru's three-trip fill).
 pub fn widened_with(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
     standing: &mut llrm_analysis::memory::Standing,
+    unrolls: Option<i64>,
 ) -> bool {
     let mut changed = false;
     'again: loop {
@@ -759,7 +779,7 @@ pub fn widened_with(
             let found = {
                 let unit = llrm_analysis::memory::Unit::within(context, layout, function, outer).with_shape(&shape);
                 let facts = standing.of(&unit);
-                _find(&unit.with_registers(facts), &loop_)
+                _find(&unit.with_registers(facts), &loop_, unrolls)
             };
             if let Some(found) = found {
                 _widen(context, function, &found);
@@ -791,11 +811,15 @@ struct _Found {
     /// The loop is tested after its trips: the compare reads the counter
     /// stepped.
     after: bool,
+    /// The counter is signed and read through `sext`: its wide counter is
+    /// tested by `slt` against the bound sign-extended.
+    signed: bool,
 }
 
 fn _find(
     unit: &llrm_analysis::memory::Unit,
     loop_: &Loop,
+    unrolls: Option<i64>,
 ) -> Option<_Found> {
     let function = unit.function;
     let header = cfg::block(loop_.header);
@@ -811,10 +835,16 @@ fn _find(
     let facts = unit.registers();
     for proof in induction::counted(unit, loop_, Some(&facts), false) {
         let width = proof.width();
-        let after = proof.rises_unsigned_after();
-        if !(proof.rises_unsigned() || after) || width > 64 {
+        let signed = proof.rises_signed() || proof.rises_signed_after();
+        let after = proof.rises_unsigned_after() || proof.rises_signed_after();
+        if !(proof.rises_unsigned() || signed || after) || width > 64 {
             continue;
         }
+        let for_unroll = |count: &BigInt| unrolls.is_some_and(|most| most == 0 || *count <= BigInt::from(most));
+        if signed && proof.count.as_ref().is_some_and(for_unroll) {
+            continue;
+        }
+        let ext = if signed { CastOp::SExt } else { CastOp::ZExt };
         let compare = function.instruction(proof.compare);
         let (Operand::Value(tested), bound) = (compare.operands[0], compare.operands[1]) else { continue };
         let Some(counter) = function.instruction(proof.phi).result else { continue };
@@ -854,7 +884,7 @@ fn _find(
         let mut wide = None;
         for one in function.users(counter) {
             let user = function.instruction(one.user);
-            if user.opcode != Opcode::Cast(CastOp::ZExt) {
+            if user.opcode != Opcode::Cast(ext) {
                 continue;
             }
             let to = unit.int_bits(Operand::Value(user.result?))?;
@@ -871,9 +901,9 @@ fn _find(
             if one.user == proof.compare || one.user == next_inst {
                 continue;
             }
-            if user.opcode == Opcode::Cast(CastOp::ZExt) && unit.int_bits(Operand::Value(user.result?)) == Some(wide) {
+            if user.opcode == Opcode::Cast(ext) && unit.int_bits(Operand::Value(user.result?)) == Some(wide) {
                 extensions.push(one.user);
-            } else if _compares_extended(user, one.index, &still) {
+            } else if _compares_extended(user, one.index, &still, signed) {
                 compares.push((one.user, one.index));
             } else {
                 rest.push((one.user, one.index));
@@ -892,6 +922,7 @@ fn _find(
             rest,
             compares,
             after,
+            signed,
         });
     }
     None
@@ -905,36 +936,62 @@ fn _compares_extended(
     user: &llrm_mir::module::Instruction,
     index: u32,
     still: &induction::Invariant,
+    signed: bool,
 ) -> bool {
-    matches!(
-        user.opcode,
-        Opcode::ICmp(
-            IntPredicate::Eq
-                | IntPredicate::Ne
-                | IntPredicate::Ult
-                | IntPredicate::Ule
-                | IntPredicate::Ugt
-                | IntPredicate::Uge
+    let fits = if signed {
+        matches!(
+            user.opcode,
+            Opcode::ICmp(
+                IntPredicate::Eq
+                    | IntPredicate::Ne
+                    | IntPredicate::Slt
+                    | IntPredicate::Sle
+                    | IntPredicate::Sgt
+                    | IntPredicate::Sge
+            )
         )
-    ) && still.operand(user.operands[1 - index as usize])
+    } else {
+        matches!(
+            user.opcode,
+            Opcode::ICmp(
+                IntPredicate::Eq
+                    | IntPredicate::Ne
+                    | IntPredicate::Ult
+                    | IntPredicate::Ule
+                    | IntPredicate::Ugt
+                    | IntPredicate::Uge
+            )
+        )
+    };
+    fits && still.operand(user.operands[1 - index as usize])
 }
 
-/// `operand` zero-extended to `ty` at the end of `preheader`: a number is its
-/// own extension.
+/// `operand` zero- (or, where `signed`, sign-) extended to `ty` at the end of
+/// `preheader`: a number is its own extension.
 fn _extended(
     context: &mut Context,
     function: &mut Function,
     preheader: BlockId,
     operand: Operand,
     ty: llrm_mir::types::TypeId,
+    signed: bool,
 ) -> Operand {
     match operand {
         Operand::Constant(constant) => match context.get(constant).kind {
-            llrm_mir::context::ConstantKind::Int(bits) => Operand::Constant(context.int(ty, bits as i128)),
+            llrm_mir::context::ConstantKind::Int(bits) => {
+                let narrow = context.types.int_bits(context.get(constant).ty).unwrap_or(64);
+                let value = if signed && narrow < 128 && bits >> (narrow - 1) & 1 == 1 {
+                    bits as i128 - (1_i128 << narrow)
+                } else {
+                    bits as i128
+                };
+                Operand::Constant(context.int(ty, value))
+            }
             _ => unreachable!("an integer operand"),
         },
         value => {
-            let cast = function.create_instruction(Opcode::Cast(CastOp::ZExt), ty, vec![value], Flags::default(), None);
+            let ext = if signed { CastOp::SExt } else { CastOp::ZExt };
+            let cast = function.create_instruction(Opcode::Cast(ext), ty, vec![value], Flags::default(), None);
             let end = function.terminator(preheader).expect("a terminated preheader");
             function.insert(cast, Position::Before(end)).expect("a preheader");
             Operand::Value(function.instruction(cast).result.expect("a value"))
@@ -951,7 +1008,7 @@ fn _widen(
     let counter = function.instruction(found.phi).result.expect("a phi's value");
     let header = function.parent(found.phi).expect("a placed phi");
     // The bound and the start, extended once before the loop.
-    let bound = _extended(context, function, found.preheader, found.bound, ty);
+    let bound = _extended(context, function, found.preheader, found.bound, ty, found.signed);
     let first = function.block(header).instructions()[0];
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("widen.iv"));
     function.insert(phi, Position::Before(first)).expect("a header");
@@ -967,14 +1024,27 @@ fn _widen(
     function.insert(next, Position::Before(found.next)).expect("a latch");
     let next = Operand::Value(function.instruction(next).result.expect("a value"));
     let start = match &found.start {
+        AffineOperand::Const(start) if found.signed => {
+            // The narrow start's value, sign-extended.
+            let width = function.value(counter).ty;
+            let bits = context.types.int_bits(width).unwrap_or(64);
+            let modulus = BigInt::from(1) << bits;
+            let mut n = ((&start.n % &modulus) + &modulus) % &modulus;
+            if n >= (BigInt::from(1) << (bits - 1)) {
+                n -= &modulus;
+            }
+            counting::constant(context, &n, found.wide)
+        }
         AffineOperand::Const(start) => counting::constant(context, &start.n, found.wide),
-        AffineOperand::Value(value, _) => _extended(context, function, found.preheader, Operand::Value(*value), ty),
+        AffineOperand::Value(value, _) => {
+            _extended(context, function, found.preheader, Operand::Value(*value), ty, found.signed)
+        }
     };
     function.set_operands(phi, vec![start, Operand::Block(found.preheader), next, Operand::Block(found.latch)]);
     let bit = context.types.int(1);
     let tested = if found.after { next } else { value };
-    let test =
-        function.create_instruction(Opcode::ICmp(IntPredicate::Ult), bit, vec![tested, bound], Flags::default(), None);
+    let order = if found.signed { IntPredicate::Slt } else { IntPredicate::Ult };
+    let test = function.create_instruction(Opcode::ICmp(order), bit, vec![tested, bound], Flags::default(), None);
     function.insert(test, Position::Before(found.compare)).expect("a placed compare");
     let test = Operand::Value(function.instruction(test).result.expect("a value"));
     let old = function.instruction(found.compare).result.expect("a value");
@@ -987,7 +1057,7 @@ fn _widen(
     }
     for &(user, index) in &found.compares {
         let other = function.instruction(user).operands[1 - index as usize];
-        let other = _extended(context, function, found.preheader, other, ty);
+        let other = _extended(context, function, found.preheader, other, ty, found.signed);
         function.set_operand(user, index as usize, value);
         function.set_operand(user, 1 - index as usize, other);
     }

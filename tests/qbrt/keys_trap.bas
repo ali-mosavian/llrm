@@ -8,10 +8,16 @@ ON KEY(2) GOSUB two
 KEY(1) ON
 KEY(2) ON
 PRINT "ready"
-other$ = ""
-DO WHILE f1 + f2 < 3
-  k$ = INKEY$
-  IF k$ <> "" THEN other$ = other$ + k$
+' Each phase has one reader of the keyboard, so a key's fate does not depend on the instant it arrives: the trap looks before each
+' statement, INKEY$ reads in the middle of one, and a key that arrived between the two went to INKEY$ and was never trapped.
+DO WHILE f1 < 1
+LOOP
+DO WHILE f2 < 1
+LOOP
+DO
+  other$ = INKEY$
+LOOP WHILE other$ = ""
+DO WHILE f1 < 2
 LOOP
 KEY(1) OFF
 KEY(2) OFF

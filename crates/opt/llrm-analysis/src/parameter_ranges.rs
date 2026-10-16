@@ -93,12 +93,12 @@ use llrm_mir::module::{GlobalKind, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::program::Program;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::Known;
 use crate::effects;
 use crate::memory::Unit;
+use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval};
 
 const ROUNDS: usize = 8;
@@ -132,7 +132,7 @@ impl Seen {
 /// computed from its operands' a level or two down.
 fn actual(
     unit: &Unit,
-    scope: &crate::ranges::Intervals,
+    scope: &dyn crate::ranges::Lookup,
     facts: &IndexMap<ValueId, Known>,
     operand: Operand,
     depth: u32,
@@ -145,16 +145,17 @@ fn actual(
     if depth == 0 {
         return None;
     }
-    let mut known = scope.clone();
+    let mut found_here = crate::ranges::Intervals::default();
     for &one in &unit.function.instruction(inst).operands {
         if let Operand::Value(from) = one
-            && !known.contains_key(&from)
+            && scope.lookup(&from).is_none()
+            && !found_here.contains_key(&from)
             && let Some(found) = actual(unit, scope, facts, one, depth - 1)
         {
-            known.insert(from, found);
+            found_here.insert(from, found);
         }
     }
-    ranges::_computed(unit, inst, &known, facts)
+    ranges::_computed(unit, inst, &crate::ranges::Over { delta: found_here, base: scope }, facts)
 }
 
 /// The numbers `parameter` of the body at `defined` is compared with, one
@@ -276,7 +277,7 @@ pub fn stamp(
                     if scoped.unreachable(cfg::id(block)) {
                         continue;
                     }
-                    let scope = scoped.at(cfg::id(block)).cloned().unwrap_or_default();
+                    let scope = scoped.scope(&unit, cfg::id(block));
                     let parameters =
                         program.modules[target.0].global(target.1).function().expect("a procedure").parameters().len();
                     for index in 0..parameters {

@@ -911,7 +911,9 @@ fn _placed(
     let tests = _tests(&natural, body.entry, &by_at);
     // loops() is innermost first.  A block in nested loops follows the nearest
     // loop's trace before an exit from it; the outer trace resumes afterwards.
-    let mut inside: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
+    // Each loop's body is the forest's view, shared by its blocks: a copy for
+    // each block was the square of a nest's depth.
+    let mut inside: IndexMap<i64, loopy::Body> = IndexMap::default();
     for found in &natural {
         for at in &found.body {
             inside.entry(*at).or_insert_with(|| found.body.clone());
@@ -930,7 +932,7 @@ fn _placed(
     let mut done: HashSet<i64> = HashSet::default();
     let mut current: Option<i64> = Some(body.entry);
     let mut source: Option<i64> = None;
-    let empty = BTreeSet::new();
+    let empty = loopy::Body::from_blocks([]);
     // What the search for the next trace needs, kept as blocks are placed and
     // not worked out again over every block waiting: where each is in source
     // order, the first waiting block (any, and not cold), and, for a waiting
@@ -1030,7 +1032,7 @@ fn _placed(
             });
         }
         (current, source) = (
-            _onward(body.bits, block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties),
+            _onward(body.bits, block, &done, inside.get(&block.at).map_or(&empty, |one| one), Some(&by_at), odds, ties),
             Some(at),
         );
     }
@@ -1046,7 +1048,7 @@ pub fn _onward(
     bits: u32,
     block: &LirBlock,
     done: &HashSet<i64>,
-    inside: &BTreeSet<i64>,
+    inside: &loopy::Body,
     by_at: Option<&IndexMap<i64, Block>>,
     odds: Option<&Frequency>,
     ties: Option<&Frequency>,

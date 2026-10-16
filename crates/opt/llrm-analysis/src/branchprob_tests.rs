@@ -561,7 +561,7 @@ no:
 /// and read the procedure 2.7% hotter (#217).
 #[test]
 fn test_a_counted_loops_exits_share_by_their_odds() {
-    let (latches, body) = (BTreeSet::from([2]), BTreeSet::from([2]));
+    let (latches, body) = (BTreeSet::from([2]), llrm_mir::forest::Body::from_blocks([2]));
     let cycles = [Cycle { header: 2, latches: &latches, body: &body, trips: Some(4) }];
     let successors = |at: i64| match at {
         1 => vec![2],
@@ -813,8 +813,13 @@ fn test_a_nest_of_counted_loops_asks_each_edge_which_trips_fix_it_once() {
             preds.entry(to).or_default().push(from);
         }
     }
-    let bodies: Vec<(BTreeSet<i64>, BTreeSet<i64>)> = (1..=depth)
-        .map(|k| ((k..=depth).flat_map(|j| [header(j), latch(j)]).collect(), BTreeSet::from([latch(k)])))
+    let bodies: Vec<(llrm_mir::forest::Body, BTreeSet<i64>)> = (1..=depth)
+        .map(|k| {
+            (
+                llrm_mir::forest::Body::from_blocks((k..=depth).flat_map(|j| [header(j), latch(j)])),
+                BTreeSet::from([latch(k)]),
+            )
+        })
         .collect();
     let cycles: Vec<Cycle> = bodies
         .iter()

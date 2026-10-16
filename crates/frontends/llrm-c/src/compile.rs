@@ -115,6 +115,7 @@ pub fn selected_checking(
         unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
         unit.entry = profile.entry.clone();
         unit.default_registers = profile.default_registers.clone();
+        unit.hardware = profile.hardware.clone();
         unit.entry_cc = calling
             .named(&profile.entry_convention)
             .and_then(|one| one.cc.clone())
@@ -169,8 +170,9 @@ struct Args {
     /// The target, whose OS layer header a program that includes it is given
     /// (`os_header_directory`).
     target: std::rc::Rc<dyn llrm_target::Target>,
-    /// Watcom switches the program opts into, passed to wccq: -oa, -on.
-    watcom: Vec<&'static str>,
+    /// Watcom switches the program opts into, passed to wccq: -oa, -on, and
+    /// the preprocessor's -D and -U as its `-d` and `-u`.
+    watcom: Vec<String>,
     /// The target, the built-in DOS on a 386 unless `--machine` names
     /// another, and the pipeline.
     codegen: llrm_core::driver::Options,
@@ -208,6 +210,8 @@ pub struct Profile {
     /// An interrupt handler's parameters, in order: the registers its frame
     /// holds, by name. None where the target has no interrupt handlers.
     pub interrupt_parameters: Vec<String>,
+    /// Open Watcom's registers, for inline code that names them.
+    pub hardware: crate::hwreg::Registers,
 }
 
 impl Profile {
@@ -282,8 +286,15 @@ impl Profile {
             long_double_bytes: 0,
             cdecl: text(abi, "cdecl")?,
             registers: text(abi, "registers")?,
-            header: text(frontend, "header")?,
+            // A family may state its own, as Open Watcom's, which has nothing
+            // of Borland's to undo.
+            header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
+            // Only a target that has inline code naming registers states them.
+            hardware: match frontend.get("registers").and_then(toml::Value::as_table) {
+                Some(table) => crate::hwreg::Registers::parse(table)?,
+                None => crate::hwreg::Registers::default(),
+            },
         })
     }
 }
@@ -386,8 +397,19 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
             // Watcom's: relaxed alias checking; relaxed floating point.
-            "-oa" => watcom.push("-oa"),
-            "-on" => watcom.push("-on"),
+            "-oa" => watcom.push("-oa".to_owned()),
+            "-on" => watcom.push("-on".to_owned()),
+            // The value is joined (`-DX=1`) or the next argument (`-D X=1`).
+            "-D" | "-U" => {
+                let text = value(argument)?;
+                watcom.push(format!("-{}{text}", argument[1..].to_lowercase()));
+            }
+            // The language standard, as the front end's `-zastd=`.
+            flag if flag.starts_with("-std=") => watcom.push(format!("-zastd={}", &flag[5..])),
+            flag if flag.starts_with("-I") => include.push(flag[2..].to_owned()),
+            flag if flag.starts_with("-D") || flag.starts_with("-U") => {
+                watcom.push(format!("-{}{}", flag[1..2].to_lowercase(), &flag[2..]));
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
@@ -453,7 +475,7 @@ pub fn main(argv: &[String]) -> i32 {
                     .map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase()))
                     .collect();
                 let switches: Vec<&str> =
-                    args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
+                    args.watcom.iter().map(String::as_str).chain(defines.iter().map(String::as_str)).collect();
                 let profile =
                     Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?;
                 let record =
@@ -702,6 +724,196 @@ mod tests {
         listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
     }
 
+    /// A table of function pointers initialised with integer constants
+    /// (`SIG_IGN`, `SIG_DFL`), in a model with far code, had 2-byte entries
+    /// where code pointers are 4: clib's signal table was half its size and
+    /// `signal` answered the wrong previous handler.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_pointer_constant_in_data_is_as_wide_as_the_model_says() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("table.c");
+        std::fs::write(
+            &source,
+            "typedef void (*handler)(int);\nhandler table[3] = { (handler)1, (handler)2, (handler)0 };\n",
+        )
+        .unwrap();
+        let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records table.c");
+        let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGInteger")).collect();
+        assert_eq!(data.len(), 3, "{recorded}");
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records table.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "table", None, &options).unwrap()).unwrap();
+        let bytes: usize = asm
+            .lines()
+            .skip_while(|one| *one != "_table label byte")
+            .skip(1)
+            .take_while(|one| one.starts_with("db "))
+            .map(|one| one[3..].split(',').count())
+            .sum();
+        assert_eq!(bytes, 12, "{asm}");
+    }
+
+    /// `-DNAME=value`, `-UNAME` and `-Idir` were refused as unrecognized
+    /// arguments, so no source that selects its code by a macro the build
+    /// sets (a library's `-D__DOS__`) could be compiled. The front end must
+    /// see them.
+    #[test]
+    fn test_defines_and_undefines_reach_the_front_end() {
+        let argv: Vec<String> =
+            ["-DA=3", "-D", "B", "-UC", "-U", "D", "-Idir", "-I", "other", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        assert_eq!(args.watcom, ["-dA=3", "-dB", "-uC", "-uD"]);
+        assert_eq!(args.include, ["dir", "other"]);
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("d.c");
+        std::fs::write(
+            &source,
+            "#ifndef WANTED\n#error WANTED is not defined\n#endif\nint f(void) { return WANTED; }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        assert!(super::recorded_for(&source, &[], false, &[], &profile).is_err(), "premise: -error without -D");
+        let made = super::recorded_for(&source, &[], false, &["-dWANTED=7"], &profile);
+        assert!(made.is_ok(), "{made:?}");
+    }
+
+    /// Open Watcom's own ABI read Borland's header: `__BORLANDC__` was defined,
+    /// `__segment` renamed away, `__STDC__` undone. Open Watcom's `malloc.h`
+    /// (`__segment __seg`) and every clib source with a `__BORLANDC__` branch
+    /// failed or took the wrong one. `-std=c99` is the front end's
+    /// `-zastd=c99`.
+    #[test]
+    fn test_the_watcom_abi_has_no_borland_names_and_takes_a_language_standard() {
+        let argv: Vec<String> = ["-std=c99", "x.c"].map(str::to_owned).to_vec();
+        assert_eq!(super::parse_args(&argv).unwrap().watcom, ["-zastd=c99"]);
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("w.c");
+        std::fs::write(
+            &source,
+            "#ifdef __BORLANDC__\n#error Borland\n#endif\n#if __STDC_VERSION__ < 199901L\n#error not c99\n#endif\n\
+             int f(__segment s) { return (int)s; }\n",
+        )
+        .unwrap();
+        let watcom = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let made = super::recorded_for(&source, &[], false, &["-zastd=c99"], &watcom);
+        assert!(made.is_ok(), "{made:?}");
+        let borland = super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap();
+        assert!(
+            super::recorded_for(&source, &[], false, &["-zastd=c99"], &borland).is_err(),
+            "premise: Borland's keeps its names"
+        );
+    }
+
+    /// The front end predefined the build host's OS: a real-mode program saw
+    /// `__LINUX__` and no `__DOS__`, so every source that picks its system
+    /// calls by them (clib's `handleio`, `file`) took the Linux branch.
+    #[test]
+    fn test_real_mode_sources_see_dos_and_not_the_build_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("os.c");
+        std::fs::write(
+            &source,
+            "#ifndef __DOS__\n#error not DOS\n#endif\n#ifdef __LINUX__\n#error Linux\n#endif\nint x;\n",
+        )
+        .unwrap();
+        for family in ["cdecl", "watcom", "ia16", "regparm3"] {
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some(family)).unwrap();
+            let made = super::recorded_for(&source, &[], false, &[], &profile);
+            assert!(made.is_ok(), "{family}: {made:?}");
+        }
+    }
+
+    /// Inline code that says its registers (`#pragma aux f = "..." __parm
+    /// [__dx]`) was laid down with its parameters dropped: Open Watcom's
+    /// `cgets` ran `int 21h` function 0Ah on whatever `dx` held. Each
+    /// parameter is in its register before the bytes.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_gets_its_parameters_in_the_registers_it_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("regs.c");
+        std::fs::write(
+            &source,
+            "extern void buffered(char *s);\n\
+             #pragma aux buffered = \"mov ah,0ah\" \"int 21h\" __parm __caller [__dx] __value __modify __exact [__ah]\n\
+             extern unsigned char add2(unsigned char a, unsigned char b);\n\
+             #pragma aux add2 = \"add al,bl\" __parm [__al] [__bl] __value [__al] __modify __exact [__al]\n\
+             char buf[10];\n\
+             void fill(void) { buffered(buf); }\n\
+             unsigned char sum(unsigned char x, unsigned char y) { return add2(x, y); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regs.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let built = super::selected(&text, "regs", None, &options).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let before = |function: &str, bytes: &str, register: &str| {
+            let from = asm.find(&format!("{function} proc")).expect("the function");
+            let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+            let at = body.iter().position(|one| one.starts_with(bytes)).expect("the inline bytes");
+            body[..at]
+                .iter()
+                .any(
+                    |one| one.strip_prefix("mov ")
+                        .or_else(|| one.strip_prefix("movzx "))
+                        .is_some_and(|rest| rest.starts_with(register)),
+                )
+        };
+        assert!(before("fill_", "db 0b4h,00ah", "dx,"), "{asm}");
+        assert!(before("sum_", "db 002h,0c3h", "bx,"), "{asm}");
+    }
+
+    /// A Borland `__asm { fld x }` block naming frame places has a save set of
+    /// its own, which took it for a pragma with registers: qcport's `_fsin`
+    /// and `_ftol_short` did not compile ("F.0 is inline code with registers
+    /// and a symbol reference"), found by CI, not by the committed streams.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_an_asm_block_naming_frame_places_is_not_a_pragma_with_registers() {
+        let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.c");
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records inlinecode.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        super::selected(&text, "inlinecode", None, &options).expect("compiles");
+    }
+
+    /// Inline code that changes SI (`__modify [__si]`) in a function whose
+    /// convention keeps SI for its caller: the function did not save it, so
+    /// `_fstrrev` handed its caller back a corrupted SI.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_register_inline_code_changes_is_saved_by_the_function_that_keeps_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("keep.c");
+        std::fs::write(
+            &source,
+            "extern void clobber(void);\n#pragma aux clobber = \"mov si,1\" __modify __exact [__si]\n\
+             void run(void) { clobber(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records keep.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "keep", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("push si") && asm.contains("pop si"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
@@ -776,6 +988,29 @@ mod tests {
         .expect("wccq records halve.c");
         let committed = std::fs::read_to_string(root.join("tests/fixtures/c/halve.cgs")).unwrap();
         assert_eq!(without_path(&recorded), without_path(&committed));
+    }
+
+    /// `far_pointer == NULL`, where `NULL` is `((void *)0)`: the constant was
+    /// converted from a near pointer, to the data segment's offset 0, so a far
+    /// null pointer compared unequal to it (clib's `memtest` said so of
+    /// `_fmemchr`; `signal`'s `SIG_DFL` likewise). A number used as a pointer
+    /// keeps its bits, with segment 0.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_constant_number_used_as_a_far_pointer_has_segment_zero() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("null.c");
+        std::fs::write(
+            &source,
+            "int isnull(void far *p) { return p == (void *)0; }\nint isdefault(void far *p) { return p == (void far *)2; }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records null.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
+        assert!(!asm.contains("DGROUP"), "{asm}");
     }
 
     /// A far pointer made from a long in memory had its segment as a word-wide

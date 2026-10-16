@@ -100,7 +100,6 @@ use llrm_mir::facts::Facts;
 use llrm_mir::module::{InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::cfg;
@@ -108,6 +107,7 @@ use crate::consts::{self, Calls, Cells, Known};
 use crate::graph::loops::Loop;
 use crate::induction::{self, AffineOperand};
 use crate::memory::{self, Unit};
+use crate::num::Num as BigInt;
 
 /// GCC's `--param max-peel-branches`: undecided branches a copied sequence may
 /// hold.

@@ -2,9 +2,9 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Module, ValueId};
-use num_bigint::BigInt;
 
 use super::*;
+use crate::num::Num as BigInt;
 use crate::testing::{DOS, function, layout, parsed, value};
 
 struct Parsed {
@@ -359,4 +359,85 @@ fn test_an_inexact_trip_proves_no_exit() {
     // 0.1f is a float, but three of them need 26 bits.
     let parsed = Parsed::new(&LOOP.replace("STEP", "0x3FB99999A0000000"));
     assert_eq!(loop_exits(&parsed.unit(), &Calls::default()), Vec::new());
+}
+
+/// Every float load was walked for its provider: d_faces' 842 loads cost 58 M
+/// instructions, 88 had one. A load only a store of a value no one knows may
+/// write (a parameter's, here) is left alone, and the graph is not made when
+/// no load is left.
+#[test]
+fn a_float_load_no_known_store_may_write_is_not_walked() {
+    let parsed = Parsed::new(
+        "define float @f(ptr %p, float %x) {
+b0:
+  store float %x, ptr %p
+  %a = load float, ptr %p
+  %b = fadd float %a, 1.0
+  ret float %b
+}
+",
+    );
+    let unit = parsed.unit();
+    let integers = IndexMap::default();
+    let before = crate::memoryssa::structures_made();
+    let solved = solved_over(&unit, &Calls::default(), &integers);
+    assert_eq!(crate::memoryssa::structures_made() - before, 0);
+    assert!(solved.facts.get(&parsed.value("b")).is_none());
+}
+
+/// The filter keeps the load a known store reaches.
+#[test]
+fn a_float_load_a_known_store_may_write_is_still_walked() {
+    let parsed = Parsed::new(
+        "define float @f(ptr %p) {
+b0:
+  store float 2.0, ptr %p
+  %a = load float, ptr %p
+  %b = fadd float %a, 1.0
+  ret float %b
+}
+",
+    );
+    let solved = solved_with(&parsed.unit(), &Calls::default());
+    assert_eq!(solved.facts.get(&parsed.value("b")).cloned(), Some(integer(3)));
+}
+
+/// The first filter left out a float read back from what a constant's value was
+/// stored as (jpeg_single, fpbench, nbody_single: 2-4 facts missing, each as
+/// `LLRM_CHECK_FLOAT_LOADS` found): the load of constant memory is a known
+/// value to the store that follows it, though no store writes it.
+#[test]
+fn a_float_read_back_from_a_store_of_a_constant_load_is_still_known() {
+    let parsed = Parsed::new(
+        "@c = constant float 2.0
+
+define float @f(ptr %p) {
+b0:
+  %a = load float, ptr @c
+  store float %a, ptr %p
+  %b = load float, ptr %p
+  %r = fadd float %b, 1.0
+  ret float %r
+}
+",
+    );
+    let solved = solved_with(&parsed.unit(), &Calls::default());
+    assert_eq!(solved.facts.get(&parsed.value("r")).cloned(), Some(integer(3)));
+}
+
+/// And from what an integer store wrote there.
+#[test]
+fn a_float_read_back_from_an_integer_store_is_still_known() {
+    let parsed = Parsed::new(
+        "define float @f(ptr %p) {
+b0:
+  store i32 1073741824, ptr %p
+  %b = load float, ptr %p
+  %r = fadd float %b, 1.0
+  ret float %r
+}
+",
+    );
+    let solved = solved_with(&parsed.unit(), &Calls::default());
+    assert_eq!(solved.facts.get(&parsed.value("r")).cloned(), Some(integer(3)));
 }

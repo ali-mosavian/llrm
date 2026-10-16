@@ -667,6 +667,137 @@ done:
     assert_eq!(asked(pipeline::Options::basic()), 0, "-O1 worked out the counted loops' intervals");
 }
 
+const SUMMARISED: &str = "
+define i16 @count(i16 %n) {
+b1:
+  %i = alloca i16
+  %sum = alloca i16
+  store i16 0, ptr %sum
+  store i16 0, ptr %i
+  br label %b2
+b2:
+  %a = load i16, ptr %i
+  %c = icmp ult i16 %a, %n
+  br i1 %c, label %b3, label %b4
+b3:
+  %s = load i16, ptr %sum
+  %j = load i16, ptr %i
+  %t = add i16 %s, %j
+  store i16 %t, ptr %sum
+  %k = add i16 %j, 1
+  store i16 %k, ptr %i
+  br label %b2
+b4:
+  %r = load i16, ptr %sum
+  ret i16 %r
+}
+
+define i16 @main() {
+entry:
+  %r = call i16 @count(i16 100)
+  ret i16 %r
+}
+";
+
+/// `text` through the pipeline under `options`, with how many times each module
+/// analysis was worked out, by how it came out (`first`: nothing held).
+fn pipelined(
+    text: &str,
+    options: pipeline::Options,
+) -> (Module, Vec<(&'static str, &'static str, usize)>) {
+    let mut module = crate::testing::parsed(text);
+    let applied = Applied { options, ..Applied::default() };
+    llrm_mir::passes::trace_recomputes(true);
+    let entered = |program: &mut Program| {
+        program.exports.entries.insert("main".to_owned());
+        pipeline::applied(program, &applied)
+    };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), entered).and_then(|done| done).unwrap();
+    let runs = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let mut by_how: Vec<(&'static str, &'static str, usize)> = Vec::new();
+    for (name, _, how, count) in runs {
+        match by_how.iter_mut().find(|(one, other, _)| *one == name && *other == how) {
+            Some(found) => found.2 += count,
+            None => by_how.push((name, how, count)),
+        }
+    }
+    (module, by_how)
+}
+
+/// The summaries and the globals' facts are worked out from nothing once for a
+/// program, not once for each segment of the pipeline and each module pass that
+/// makes its own analyses: the ones after the first start from what the
+/// last left (`Carried`). bench/sieve at -O1 worked the summaries out from
+/// nothing 5 times.
+#[test]
+fn the_summaries_are_worked_out_from_nothing_once() {
+    let (_, runs) = pipelined(SUMMARISED, pipeline::Options::basic());
+    let first =
+        |name: &str| runs.iter().find(|(one, how, _)| *one == name && *how == "first").map_or(0, |found| found.2);
+    let counted = |name: &str| runs.iter().filter(|(one, ..)| *one == name).collect::<Vec<_>>();
+    assert_eq!(
+        (first("summaries"), first("globals-aa")),
+        (1, 1),
+        "from nothing again after the first run: {:?} {:?}",
+        counted("summaries"),
+        counted("globals-aa")
+    );
+}
+
+/// The summaries carried to the segment after `GlobalDce` are of bodies whose
+/// ids it has moved: it removed `@dead`, which came before `@bump` and `@main`.
+/// A summary kept by id and not by body would give `@bump` the summary `@dead`
+/// had (no memory touched) and let `@main` return the 1 it stored before the
+/// call. Each body's `Mark` names its function, so the bodies that moved are
+/// worked out again. A guard: it passes without the carry too.
+#[test]
+fn summaries_carried_past_a_removed_global_stay_with_their_bodies() {
+    let text = "
+@g = global i16 0
+
+define internal i16 @dead() {
+entry:
+  ret i16 7
+}
+
+define void @bump() {
+entry:
+  store i16 5, ptr @g
+  ret void
+}
+
+define i16 @main() {
+entry:
+  store i16 1, ptr @g
+  call void @bump()
+  %v = load i16, ptr @g
+  ret i16 %v
+}
+";
+    let options = pipeline::Options { inline: crate::inline::Threshold::none(), ..pipeline::Options::basic() };
+    let (module, runs) = pipelined(text, options);
+    let printed = crate::testing::printed(&module);
+    let first = runs.iter().find(|(name, how, _)| *name == "summaries" && *how == "first").map_or(0, |found| found.2);
+    assert_eq!(first, 1, "premise: the summaries were carried from segment to segment: {runs:?}");
+    assert!(!printed.contains("@dead"), "premise: the global that came first is removed:\n{printed}");
+    assert!(printed.contains("call void @bump()"), "premise: the call stays:\n{printed}");
+    assert!(printed.contains("load i16, ptr @g"), "the load after the call was forwarded from before it:\n{printed}");
+}
+
+/// What the pipeline runs after the summaries are made and holds them past
+/// (`manager.freeze`) adds no memory operation. Six of those passes
+/// (loop-simplify, LCSSA, fold, algebraic, indvars, dead) did not say so, and
+/// each edit of theirs made the module's summaries and globals' facts again.
+#[test]
+fn the_passes_after_the_summaries_add_no_memory_operation() {
+    let applied = Applied { options: pipeline::Options::basic(), ..Applied::default() };
+    let passes = pipeline::header_copied(&applied);
+    assert!(passes.len() >= 7, "premise: the pass list this test names");
+    let adding: Vec<_> = passes.iter().filter(|pass| pass.adds_memory_operations()).map(|pass| pass.name()).collect();
+    assert!(adding.is_empty(), "held past, so they must not add one: {adding:?}");
+}
+
 thread_local! {
     static BURNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -764,6 +895,11 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         classified: unit.function.mark(),
         stretches: Vec::new(),
         unreached: 0,
+        slice: None,
+        persisted: 0,
+        records: unit.context.extension::<crate::settled::Settled>(),
+        rerun: false,
+        idle_at: Vec::new(),
     };
     run.step(&mut Asks, "asks", &mut unit, &mut analyses);
     (run, reference)
@@ -906,6 +1042,71 @@ fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
     assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
 }
 
+/// Changes the constant of @f's add on each of its first `left` runs, the way a
+/// chain of folds does one step per round.
+struct Chain {
+    left: usize,
+    runs: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl llrm_mir::passes::FunctionPass for Chain {
+    fn name(&self) -> &'static str {
+        "chain"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.runs.set(self.runs.get() + 1);
+        if self.left == 0 {
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        self.left -= 1;
+        let (_, add) = unit
+            .function
+            .walk()
+            .find(|&(_, one)| {
+                unit.function.instruction(one).opcode
+                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
+            })
+            .expect("an add");
+        let ty = unit.function.instruction(add).ty;
+        let operands = unit.function.instruction(add).operands.clone();
+        let constant = llrm_mir::module::Operand::Constant(unit.context.int(ty, 10 + self.left as i128));
+        unit.function.set_operands(add, vec![operands[0], constant]);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The rounds of a body's passes were bounded by its size (`max(16, blocks +
+/// insts + 1)`) and nothing else: the fourth and fifth round of d_faces'
+/// hottest body were 354 of its 6,246 Minstr, and found nothing the 284 rows of
+/// the vsgcc tables and the 65 QCport modules show (the objects are the same).
+/// `Options::rounds` bounds them; -Omax runs to the fixed point.
+#[test]
+fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let runs = |rounds: usize| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let options = pipeline::Options { rounds, ..pipeline::Options::basic() };
+        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
+        fixed.only = false;
+        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
+        crate::testing::managed(&mut module, fixed);
+        count.get()
+    };
+    assert_eq!(runs(4), 4, "the budget ends the rounds");
+    assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
+    assert_eq!(pipeline::Options::basic().rounds, 4);
+    assert_eq!(pipeline::Options::standard().rounds, 4);
+    assert_eq!(pipeline::Options::speed().rounds, 4);
+    assert_eq!(pipeline::Options::size().rounds, 4);
+    assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
+}
+
 /// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,
 /// through the whole pipeline at -O3 with and without unroll-and-jam, and at
 /// -O2: the jam changes the code of -O3 alone, and the nest computes what it
@@ -976,4 +1177,204 @@ done:
         through(pipeline::Options::default()).0,
         through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
     );
+}
+
+/// Reads what the module says each function does to memory, and finds nothing
+/// to do; counts how often it was asked.
+struct ReadsCallees {
+    runs: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl llrm_mir::passes::FunctionPass for ReadsCallees {
+    fn name(&self) -> &'static str {
+        "reads-callees"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.runs.set(self.runs.get() + 1);
+        let _ = analyses.outer().callees().len();
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// A pipeline of the two passes that find nothing: one that reads the module's
+/// facts and one that reads none.
+fn watching(
+    reader: &std::rc::Rc<std::cell::Cell<usize>>,
+    blind: &std::rc::Rc<std::cell::Cell<usize>>,
+) -> pipeline::Fixed {
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![
+        Box::new(ReadsCallees { runs: std::rc::Rc::clone(reader) }),
+        Box::new(Watch { name: "blind", reads: llrm_mir::footprint::Footprint::ALL, runs: std::rc::Rc::clone(blind) }),
+    ];
+    fixed
+}
+
+const CALLS_G: &str = "declare i16 @g(i16)
+declare i16 @g2(i16)
+
+define i16 @f(i16 %x) {
+b0:
+  %a = call i16 @g(i16 %x)
+  %b = add i16 %a, %x
+  ret i16 %b
+}
+";
+
+/// The interprocedural stages sent a body that had found nothing back through
+/// the pipeline for a callee's new name and fewer arguments: d_faces -O3 ran
+/// its 1,200-operation body twice more, 19 and 31 passes, to change nothing,
+/// 340 of 7,400 Minstr. A body that found nothing runs no pass again where
+/// nothing it read has changed.
+#[test]
+fn a_body_run_again_with_nothing_changed_starts_no_pass() {
+    let mut module = llrm_analysis::testing::parsed(CALLS_G);
+    let (reader, blind) = (std::rc::Rc::default(), std::rc::Rc::default());
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    assert_eq!((reader.get(), blind.get()), (1, 1));
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    assert_eq!((reader.get(), blind.get()), (1, 1), "nothing changed: no pass is started");
+}
+
+/// A pass that read what the module says of a callee runs again where that
+/// changed; one that read none of the module's facts does not.
+#[test]
+fn a_pass_runs_again_where_what_it_read_of_a_callee_changed_and_one_that_read_none_does_not() {
+    let mut module = llrm_analysis::testing::parsed(CALLS_G);
+    let (reader, blind) = (std::rc::Rc::default(), std::rc::Rc::default());
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    let (_, g) = module.function_mut("g").expect("g");
+    g.attrs.push(llrm_mir::opcode::Attribute::Memory(vec![(None, "none".to_owned())]));
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    assert_eq!(reader.get(), 2, "@g now does nothing to memory, which the pass read");
+    assert_eq!(blind.get(), 1, "the pass that read none of the module's facts is not asked");
+}
+
+/// A call sent to another function that says the same, by a stage that vouches
+/// for the edit, is not a change to what the passes read; sent to one that says
+/// otherwise it is.
+#[test]
+fn test_a_body_run_again_after_a_call_is_sent_to_an_equal_copy_starts_no_pass() {
+    let retargeted = |write: bool| {
+        let mut module = llrm_analysis::testing::parsed(CALLS_G);
+        let (reader, blind) = (std::rc::Rc::default(), std::rc::Rc::default());
+        crate::testing::managed(&mut module, watching(&reader, &blind));
+        if write {
+            let (_, g2) = module.function_mut("g2").expect("g2");
+            g2.attrs.push(llrm_mir::opcode::Attribute::Memory(vec![(None, "none".to_owned())]));
+        }
+        let copy = module.named("g2").expect("g2");
+        let (types_and_constants, f) = module.function_mut("f").expect("f");
+        let before = f.mark();
+        let call = f
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(f.instruction(inst).opcode, llrm_mir::opcode::Opcode::Call(_)))
+            .expect("a call");
+        let Some(&llrm_mir::module::Operand::Constant(old)) = f.instruction(call).operands.last() else {
+            panic!("a direct call")
+        };
+        let ty = types_and_constants.get(old).ty;
+        let new = types_and_constants
+            .constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Global(copy) });
+        let last = f.instruction(call).operands.len() - 1;
+        f.set_operand(call, last, llrm_mir::module::Operand::Constant(new));
+        module.context.extension::<crate::settled::Settled>().vouch(module.function_mut("f").expect("f").1, before);
+        crate::testing::managed(&mut module, watching(&reader, &blind));
+        (reader.get(), blind.get())
+    };
+    assert_eq!(retargeted(false), (1, 1), "the copy says what the callee said: no pass is started");
+    assert_eq!(retargeted(true), (2, 1), "the copy writes nothing, which the pass that read callees asked");
+}
+
+/// -O1 inlined small functions called more than once, searched allocations and
+/// made the spiller's second route, none of which gcc's -O1 does: 34% of
+/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
+/// called once still goes in (`-finline-functions-called-once`).
+#[test]
+fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+    let text = "
+define internal i16 @twice(i16 %x) {
+entry:
+  %y = add i16 %x, 7
+  ret i16 %y
+}
+
+define internal i16 @once(i16 %x) {
+entry:
+  %y = mul i16 %x, 3
+  ret i16 %y
+}
+
+define i16 @main(i16 %a) {
+entry:
+  %p = call i16 @twice(i16 %a)
+  %q = call i16 @twice(i16 %p)
+  %r = call i16 @once(i16 %q)
+  ret i16 %r
+}
+";
+    let o1 = pipeline::Options::basic();
+    assert!(!o1.searches() && !o1.compares_routes());
+    let o2 = pipeline::Options::standard();
+    assert!(o2.searches() && o2.compares_routes(), "premise: -O2 keeps both");
+    let (kept, _) = pipelined(text, o1);
+    let kept = crate::testing::printed(&kept);
+    assert_eq!(
+        kept.lines().filter(|line| line.contains("call ") && line.contains("@twice")).count(),
+        2,
+        "-O1 inlined a function called twice:\n{kept}"
+    );
+    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    let (gone, _) = pipelined(text, o2);
+    assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
+}
+
+/// tile.c's inner sum is 40 trips of one load and one add. gcc's
+/// `max-completely-peel-times` (16) keeps it a loop at -O3, as clang's is not
+/// capped: -Omax completes it (tile -O3 8,159 clocks against clang's 4,236;
+/// -Omax unrolls it).
+#[test]
+fn test_a_forty_trip_loop_is_completed_at_omax_and_kept_at_o3() {
+    let text = "@t = global [40 x i16] zeroinitializer
+
+define i16 @f() {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b ]
+  %s = phi i16 [ 0, %b0 ], [ %a, %b ]
+  %go = icmp slt i16 %i, 40
+  br i1 %go, label %b, label %x
+
+b:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @t, i16 %o
+  %v = load i16, ptr %p
+  %a = add i16 %s, %v
+  %n = add i16 %i, 1
+  br label %h
+
+x:
+  ret i16 %s
+}
+";
+    let looped = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+            pipeline::applied(program, &Applied { options, ..Applied::default() })
+        })
+        .and_then(|done| done)
+        .unwrap();
+        llrm_mir::print::module(&module).contains("phi i16")
+    };
+    assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
+    assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }

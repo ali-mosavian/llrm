@@ -169,7 +169,7 @@ pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
 pub fn pressure(
     function: &Function,
     found: Option<&Liveness>,
-    inside: Option<&BTreeSet<i64>>,
+    inside: Option<&llrm_mir::forest::Body>,
 ) -> usize {
     pressure_of(function, found, inside, &|_| true)
 }
@@ -178,7 +178,7 @@ pub fn pressure(
 pub fn pressure_of(
     function: &Function,
     found: Option<&Liveness>,
-    inside: Option<&BTreeSet<i64>>,
+    inside: Option<&llrm_mir::forest::Body>,
     counted: &dyn Fn(ValueId) -> bool,
 ) -> usize {
     let owned;
@@ -418,6 +418,13 @@ pub fn live_where(
     found
 }
 
+/// The blocks one value is live into and out of, in ascending order.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Range {
+    pub into: Vec<i64>,
+    pub out: Vec<i64>,
+}
+
 /// `live` of the values in `wanted` alone, followed from their reads without
 /// the setup of a solve of the whole function: the work is the blocks those
 /// values are live in. The sets are named for the blocks a value is live in
@@ -427,12 +434,38 @@ pub fn live_of(
     function: &Function,
     wanted: &IdSet<ValueId>,
 ) -> Liveness {
+    let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
+    let ranges = ranges_of(function, wanted, None);
+    for (value, range) in ranges.iter() {
+        for &at in &range.into {
+            found.live_in.entry(at).or_default().insert(value);
+        }
+        for &at in &range.out {
+            found.live_out.entry(at).or_default().insert(value);
+        }
+    }
+    found
+}
+
+/// `live_of` by value: where each is live, as sorted lists, with no set made
+/// per block. A value live nowhere is not in the result.
+///
+/// A phi's arm is live out of the predecessor it comes from where the phi's
+/// value is live out of its block or read in it. A phi `wanted` does not hold
+/// is, with `settled`, taken as `settled` says of it (was it live out of its
+/// block) or read in its block as the function now has it; with `None` it is
+/// not followed.
+pub fn ranges_of(
+    function: &Function,
+    wanted: &IdSet<ValueId>,
+    settled: Option<&dyn Fn(ValueId, BlockId) -> bool>,
+) -> IdMap<ValueId, Range> {
     use llrm_mir::module::ValueDef;
     enum Reach {
         After(BlockId, ValueId),
         Out(BlockId, ValueId),
     }
-    let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
+    let mut found: IdMap<ValueId, Range> = IdMap::new();
     let Some(&entry) = function.layout().first() else { return found };
     // Where a value is made: a block, and whether by a phi. A value made by
     // nothing here arrives at the entry.
@@ -442,6 +475,12 @@ pub fn live_of(
         }
         ValueDef::Argument(_) => None,
     };
+    // Each block's instructions by position, worked out once for the blocks a
+    // read is asked about in: a scan of the block for every read is the block
+    // squared.
+    let mut positions: IdMap<BlockId, IdMap<llrm_mir::module::InstId, usize>> = IdMap::new();
+    // A block's predecessors, asked once for all the values live into it.
+    let mut before = IdMap::<BlockId, Vec<BlockId>>::new();
     let mut pending = Vec::new();
     for value in wanted.iter() {
         let at = made(value);
@@ -454,12 +493,14 @@ pub fn live_of(
             // it comes first.
             let exposed = match at {
                 Some((home, false)) if home == block => {
-                    let insts = function.block(block).instructions();
-                    insts
-                        .iter()
-                        .position(|&one| one == user.user)
-                        .zip(insts.iter().position(|&one| function.instruction(one).result == Some(value)))
-                        .is_some_and(|(read, made)| read <= made)
+                    let places = positions.get_or_insert_with(block, || {
+                        function.block(block).instructions().iter().enumerate().map(|(at, &one)| (one, at)).collect()
+                    });
+                    let maker = match function.value(value).def {
+                        ValueDef::Instruction(inst) => places.get(&inst),
+                        ValueDef::Argument(_) => None,
+                    };
+                    places.get(&user.user).zip(maker).is_some_and(|(&read, &made)| read <= made)
                 }
                 _ => true,
             };
@@ -468,7 +509,35 @@ pub fn live_of(
             }
         }
     }
+    if let Some(settled) = settled {
+        for value in wanted.iter() {
+            for user in function.users(value) {
+                let phi = function.instruction(user.user);
+                let (is_phi, Some(home), Some(result)) =
+                    (phi.opcode == Opcode::Phi, function.parent(user.user), phi.result)
+                else {
+                    continue;
+                };
+                if !is_phi || wanted.contains(&result) {
+                    continue;
+                }
+                let read = function.users(result).iter().any(|one| {
+                    function.instruction(one.user).opcode != Opcode::Phi && function.parent(one.user) == Some(home)
+                });
+                if !(read || settled(result, home)) {
+                    continue;
+                }
+                for from in before.get_or_insert_with(home, || function.predecessors(home)).clone() {
+                    if arm(phi, from) == Some(value) {
+                        pending.push(Reach::Out(from, value));
+                    }
+                }
+            }
+        }
+    }
     let mut seen_phis = BTreeSet::<(i64, ValueId)>::new();
+    let mut seen_out = IdMap::<ValueId, IdSet<BlockId>>::new();
+    let mut seen_in = IdMap::<ValueId, IdSet<BlockId>>::new();
     while let Some(reach) = pending.pop() {
         match reach {
             Reach::Out(block, value) => {
@@ -476,8 +545,11 @@ pub fn live_of(
                     Some((home, phi)) => home == block && !phi,
                     None => block == entry,
                 };
-                if found.live_out.entry(id(block)).or_default().insert(value) && !by_op {
-                    pending.push(Reach::After(block, value));
+                if seen_out.get_or_insert_with(value, IdSet::new).insert(block) {
+                    found.get_or_insert_with(value, Range::default).out.push(id(block));
+                    if !by_op {
+                        pending.push(Reach::After(block, value));
+                    }
                 }
             }
             Reach::After(block, value) => {
@@ -500,13 +572,19 @@ pub fn live_of(
                         }
                     }
                 } else {
-                    if !found.live_in.entry(id(block)).or_default().insert(value) {
+                    if !seen_in.get_or_insert_with(value, IdSet::new).insert(block) {
                         continue;
                     }
-                    pending.extend(function.predecessors(block).into_iter().map(|from| Reach::Out(from, value)));
+                    found.get_or_insert_with(value, Range::default).into.push(id(block));
+                    let from = before.get_or_insert_with(block, || function.predecessors(block));
+                    pending.extend(from.iter().map(|&from| Reach::Out(from, value)));
                 }
             }
         }
+    }
+    for (_, range) in found.iter_mut() {
+        range.into.sort_unstable();
+        range.out.sort_unstable();
     }
     found
 }
@@ -956,11 +1034,11 @@ join:
     fn pressure_counts_the_most_values_live_at_once_and_can_look_only_inside_a_loop() {
         let (module, found) = facts(LOOP);
         let f = function(&module, "f");
-        let inside = BTreeSet::from([id(block(f, "head")), id(block(f, "body"))]);
+        let inside = llrm_mir::forest::Body::from_blocks([id(block(f, "head")), id(block(f, "body"))]);
         // %n, %across, %i and %done at the header's branch.
         assert_eq!(pressure(f, Some(&found), Some(&inside)), 4);
         assert_eq!(pressure(f, Some(&found), None), 4);
-        assert_eq!(pressure(f, Some(&found), Some(&BTreeSet::from([id(block(f, "out"))]))), 2);
+        assert_eq!(pressure(f, Some(&found), Some(&llrm_mir::forest::Body::from_blocks([id(block(f, "out"))]))), 2);
     }
 
     #[test]
@@ -1043,5 +1121,55 @@ top:
                 assert_eq!(found.live_out.get(&at).cloned().unwrap_or_default(), whole.live_out[&at], "out {at}");
             }
         }
+    }
+
+    /// A pass that touched a phi's arm named the phi, and the phis that take
+    /// it, and their arms and so on: 19 values became 108 in quicksort -O3
+    /// (13 in 14 before the body grew 4.4 times). A phi the pass left alone
+    /// is taken as the model had it, live or not at its block, and is not
+    /// followed.
+    #[test]
+    fn test_an_arm_is_followed_through_a_phi_that_is_not_wanted() {
+        let module = parsed(
+            "define i16 @f(i16 %x) {
+b0:
+  %arm = add i16 %x, 1
+  br label %b1
+
+b1:
+  %merged = phi i16 [ %arm, %b0 ]
+  ret i16 %merged
+}
+",
+        );
+        let function = function(&module, "f");
+        let (b0, arm) = (id(block(function, "b0")), value(function, "arm"));
+        let wanted: IdSet<ValueId> = [arm].into_iter().collect();
+        let live_out = |settled: Option<&dyn Fn(ValueId, BlockId) -> bool>| {
+            ranges_of(function, &wanted, settled).get(&arm).is_some_and(|range| range.out.contains(&b0))
+        };
+        assert!(!live_out(None), "no oracle: the phi is not followed");
+        assert!(live_out(Some(&|_, _| false)), "the phi is read in its block (ret): the arm is live out of b0");
+        let module = parsed(
+            "define i16 @g(i16 %x) {
+b0:
+  %arm = add i16 %x, 1
+  br label %b1
+
+b1:
+  %merged = phi i16 [ %arm, %b0 ]
+  ret i16 0
+}
+",
+        );
+        let dead = crate::testing::function(&module, "g");
+        let (b0, arm) = (id(block(dead, "b0")), value(dead, "arm"));
+        let wanted: IdSet<ValueId> = [arm].into_iter().collect();
+        let range = |settled: bool| {
+            let oracle = move |_: ValueId, _: BlockId| settled;
+            ranges_of(dead, &wanted, Some(&oracle)).get(&arm).cloned()
+        };
+        assert!(range(false).is_none(), "a dead phi keeps nothing live");
+        assert!(range(true).is_some_and(|range| range.out.contains(&b0)), "a phi the model had live out keeps its arm");
     }
 }

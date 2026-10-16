@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipacp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipacp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:de37bf279f494e31c30b4e68e72732aff5c58b684a37bea8cb18eb26cb0ed29e -->
+<!-- src: crates/opt/llrm-transforms/src/ipacp.rs sha256:478831b5eba0bd3e3738912ed1df15d4fb9ced8a343a908953f85ebc35b44010 -->
 
 # ipacp
 
@@ -30,6 +30,10 @@ that pass the same constants. A group is a clone candidate when
 
 A callee that is private, not addressed, and called only from the group
 needs no growth test: every call goes to the copy and the original dies.
+
+A caller whose calls go to a copy that says what the callee said (the same
+attributes) is vouched for (`Changed::unsound` names the others): its passes
+need not look at the new name ([`crate::settled`](settled.md)).
 
 The copy is an internal function `<origin>.constprop.N` with each known
 parameter replaced by its constant. A later call with the same constants

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+REQUIRES = ["qcport"]  # d_faces.c and its headers are QCport's, which the repository does not hold
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
@@ -31,7 +32,7 @@ def test_the_scene_reaches_every_path_it_was_written_to(work):
 def test_an_optimised_build_reports_the_hash_of_the_reference(work):
     reference = run.run("gccO0")
     for variant in ("gccO2", "clangO1"):
-        assert run.run(variant)["reports"] == reference["reports"], variant
+        assert run.agree(run.run(variant)["reports"], reference["reports"]), variant
 
 
 def test_a_build_that_computes_something_else_is_caught(work, tmp_path):
@@ -47,4 +48,15 @@ def test_a_build_that_computes_something_else_is_caught(work, tmp_path):
         different = run.run("gccO1")["reports"]
     finally:
         run.D_FACES = original
-    assert different != run.run("gccO1")["reports"]
+    assert not run.agree(different, run.run("gccO1")["reports"])
+
+
+def test_the_16_bit_build_does_what_the_reference_does(work):
+    """llrm -m16 is held to what gcc and clang do in 32 bits, so its answer is judged against the flat reference. Its first run
+    differed from every flat build, and the cause was the scene: a face whose `side >> 1` named a fourth brush model that the
+    scene had not made, so the offset read was whatever followed the array, and that differs between a flat and a 16-bit layout."""
+    pytest.importorskip("unicorn")
+    reference = run.run("gccO0")
+    small = run.run_m16("O2")
+    assert run.agree(small["reports"], reference["reports"]), (small["reports"], reference["reports"])
+    assert small["ins"] > 0

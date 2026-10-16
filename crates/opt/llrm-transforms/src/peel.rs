@@ -178,6 +178,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::peelsize::{self, Limits};
 use llrm_analysis::{cfg, induction, memory};
 use llrm_mir::context::Context;
@@ -186,7 +187,6 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::Function;
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::profit;

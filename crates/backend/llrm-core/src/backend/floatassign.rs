@@ -1056,15 +1056,15 @@ fn _allocnos(
     floating: &HashSet<u32>,
     homes: &IndexMap<u32, Arc<Insn>>,
     cpu: &Profile,
+    (live_in, live_out): (&Live, &Live),
 ) -> Allocnos {
     let regs = body.regs();
-    let (live_in, live_out) = live(body);
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
     };
     let bundles = spillplacement::bundles(body);
-    let stacked = _stacked(body, floating, &live_in, &live_out, &bundles);
-    let cells = _shared_cells(body, floating, &live_out);
+    let stacked = _stacked(body, floating, live_in, live_out, &bundles);
+    let cells = _shared_cells(body, floating, live_out);
     // A bundle's registers are what any border of it holds: stack form
     // fills or pops the rest at each border.
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
@@ -1326,13 +1326,23 @@ impl Plan<'_> {
 
 /// Later loads of a cell nothing wrote since are its first load's value.
 fn _aliased(body: &LirBody) -> LirBody {
-    let (_, live_out) = live(body);
+    _aliased_by(body, &live(body).1).0
+}
+
+/// `_aliased` with the body's liveness at block exits given; whether any load
+/// was aliased, else the body is returned as it was.
+fn _aliased_by(
+    body: &LirBody,
+    live_out: &Live,
+) -> (LirBody, bool) {
     let mut out = body.clone();
+    let mut changed = false;
     for block in &mut out.blocks {
         let aliases = _equivalent_loads(&block.insns, &live_out[&block.at]);
         if aliases.is_empty() {
             continue;
         }
+        changed = true;
         let canonical = |value: u32| {
             let mut value = value;
             while let Some(next) = aliases.get(&value) {
@@ -1369,7 +1379,7 @@ fn _aliased(body: &LirBody) -> LirBody {
             })
             .collect();
     }
-    out
+    (out, changed)
 }
 
 /// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the
@@ -1438,8 +1448,8 @@ fn _homes(
     body: &LirBody,
     floating: &HashSet<u32>,
     ordered: bool,
+    (live_in, live_out): (&Live, &Live),
 ) -> IndexMap<u32, Arc<Insn>> {
-    let (live_in, live_out) = live(body);
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in one.defines.iter().filter(|value| floating.contains(value)) {
@@ -1997,18 +2007,20 @@ pub fn assigned(
     if floating.is_empty() {
         return Ok(body);
     }
-    let (live_in, _) = live(&body);
+    let (live_in, live_out) = live(&body);
     if live_in[&body.entry].iter().any(|value| floating.contains(value)) {
         return Err(unlowered("floating stack input is unavailable"));
     }
-    let body = _aliased(&body);
+    // One solution for the body the rest reads: the first again where nothing
+    // was aliased.
+    let (body, aliased) = _aliased_by(&body, &live_out);
+    let (live_in, live_out) = if aliased { live(&body) } else { (live_in, live_out) };
     let floating = _floating_values(&body);
-    let mut homes = _homes(&body, &floating, basic_semantics);
+    let mut homes = _homes(&body, &floating, basic_semantics, (&live_in, &live_out));
     let stored = _stored_homes(&body, &floating);
     let stored_values: HashSet<u32> = stored.keys().copied().collect();
     homes.extend(stored);
-    let allocnos = _allocnos(&body, &floating, &homes, cpu);
-    let (_, live_out) = live(&body);
+    let allocnos = _allocnos(&body, &floating, &homes, cpu, (&live_in, &live_out));
     let cells = _shared_cells(&body, &floating, &live_out);
     let mut roots: HashMap<i64, Vec<usize>> = body.blocks.iter().map(|block| (block.at, Vec::new())).collect();
     let touched = allocnos

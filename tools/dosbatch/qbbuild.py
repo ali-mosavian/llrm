@@ -86,7 +86,7 @@ def build(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: 
     return built
 
 
-def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None, before: tuple[str, ...] = ()) -> Built:
+def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], flags: tuple[str, ...], target: str, name: str | None = None, listing: Path | None = None, before: tuple[str, ...] = (), image: Path | None = None) -> Built:
     """`source` for one target; its files are `name`'s (the source's stem) in `work`."""
     stem = name or source.stem
     obj, exe = work / f"{stem}.{target}.obj", work / f"{stem}.{target}.EXE"
@@ -103,7 +103,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
     if target == FLAT:
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target]))
+            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target])), image=image
         )
         return Built(exe, tuple(loaders))
     link16(obj, objects[target], exe, libs)

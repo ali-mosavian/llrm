@@ -63,15 +63,20 @@ impl Placed {
         let (default, items) = built.data.pop().ok_or("an assembled module without its data segment")?;
         // What assembly adds after the globals' data: its constant pool and
         // jump tables.
-        let pool: Vec<masm::Datum> = items
-            .into_iter()
-            .skip_while(|one| {
-                !matches!(
-                    one,
-                    masm::Datum::Label(label) | masm::Datum::Object(label) if constpool::is_pool(&label.name)
-                )
+        let is_pool = |one: &masm::Datum| {
+            matches!(
+                one,
+                masm::Datum::Label(label) | masm::Datum::Object(label) if constpool::is_pool(&label.name)
+            )
+        };
+        let start = items
+            .iter()
+            .enumerate()
+            .position(|(at, one)| {
+                is_pool(one) || (matches!(one, masm::Datum::Align(_)) && items.get(at + 1).is_some_and(is_pool))
             })
-            .collect();
+            .unwrap_or(items.len());
+        let pool: Vec<masm::Datum> = items.into_iter().skip(start).collect();
         let placed: BTreeSet<&str> = self.segments.iter().flat_map(|(_, names)| names).map(String::as_str).collect();
         let mut unplaced = Vec::new();
         for (at, global) in module.globals.iter().enumerate() {

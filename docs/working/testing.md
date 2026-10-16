@@ -116,7 +116,7 @@ docstring of `run_tests.py` lists them. A `known: #N` program that passes fails 
     uv run --project tools python -m pytest tools/dosbatch/test_dosbatch.py -q
     uv run --project tools python -m pytest tools/dosbatch -m slow_dos       the demos and graphics sweeps
 
-The slow tier needs `-m slow_dos` or `LLRM_DOS_SLOW=1` and Microsoft's NIBBLES.BAS and GORILLA.BAS (`QB45_DEMOS_DIR`).
+The slow tier needs `-m slow_dos` or `LLRM_DOS_SLOW=1` and Microsoft's NIBBLES.BAS and GORILLA.BAS (`QB45_DEMOS_DIR`). The demos are played in lockstep with the emulator on virtual time ([debugging](debugging.md)): the same picture sequence at any host speed; a play takes 1.5 to 2.5 s more of wall than it did on host-timed waits.
 
 The DOSBox-X is the fork's `dosrun` branch, built by `toolchain/dosrunbuild.sh` into the target directory. Set `DOSBOX_BIN` to use
 another.

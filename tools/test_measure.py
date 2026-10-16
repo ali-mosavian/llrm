@@ -140,9 +140,10 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     base built the other way would be measured with another compiler than the branch."""
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
-    assert measure.built("0" * 40) == tmp_path / "target" / "release"
+    assert measure.built("0" * 40) == tmp_path / "snapshots" / ("release" + "0" * 12)
     assert ran == [["bash", "-c", measure.gate.MEASURE_BUILD]]
 
 
@@ -318,9 +319,10 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     assert measure.method() != release
     ran = []
     monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
-    assert measure.built("0" * 40) == tmp_path / "target" / "dist"
+    assert measure.built("0" * 40) == tmp_path / "snapshots" / ("dist" + "0" * 12)
     assert ran == [["bash", "-c", "cargo build --profile dist -q --bins"]]
 
 
@@ -486,3 +488,146 @@ def test_the_cases_regression_as_measured_fails_the_gate_at_the_size_the_gate_us
     assert measure.step_rises(base, now, measure.tolerances())[1], "x3.9 at 2N went unseen"
     axis = measure.axis_rises({"cases O1": [100, 200, 400]}, {"cases O1": [100, 400, 1600]}, measure.tolerances())
     assert axis[1], "its axis (the whole compile's second difference) fails as well"
+
+
+def test_a_wait_for_a_lock_another_session_holds_says_so_in_the_log(tmp_path, monkeypatch, capsys):
+    """#1755's measure sat 10 minutes on another session's build lock, silent and idle, and the gate killed it as stalled. On virtual
+    time: the version with a thread releasing the lock after 0.6 s of the wall clock failed once under load (the waiter had not waited
+    long enough when the holder let go)."""
+    import fcntl
+
+    monkeypatch.setattr(measure, "CACHE", tmp_path)
+    holder = open(tmp_path / "b.lock", "w")
+    fcntl.flock(holder, fcntl.LOCK_EX)
+    now = [0.0]
+
+    def sleep(seconds):
+        now[0] += seconds
+        if now[0] >= 150:  # the holder lets go at 150 s
+            holder.close()
+
+    with measure.locked("b", every=60, clock=lambda: now[0], sleep=sleep):
+        pass
+    lines = capsys.readouterr().out.splitlines()
+    assert lines and lines[0].startswith("measure: waiting 60s for the lock b") and len(lines) == 2, lines
+
+
+# The `analysis through-memory` step of joins at 2N=128 (#1755): 254.6 -> 282.0 Minstr under mimalloc, equal under the system allocator.
+STEP = "joins O2 analysis through-memory"
+
+
+def rise_under_mimalloc():
+    return made(passes={STEP: [38.4, 103.8, 254.6, 9000.0]}), made(passes={STEP: [38.6, 103.6, 282.0, 9000.0]})
+
+
+def test_a_step_rise_the_system_allocator_does_not_show_is_a_heap_layout_effect_and_passes():
+    """#1755 failed `analysis through-memory` +27 Minstr: identical input and output, the step equal under glibc malloc."""
+    base, now = rise_under_mimalloc()
+    assert measure.rises(base, now, TOL)[1], "the rise is real under the shipped allocator"
+    system = lambda sha, cells: {STEP: [38.4, 103.8, 254.6, 9000.0] if sha == "b" else [38.6, 103.7, 254.9, 9000.0]}
+    lines, bad = measure.confirmed(measure.rises(base, now, TOL)[1], base, now, "b", "h", TOL, system)
+    assert bad == [] and "not confirmed under the system allocator" in lines[0], (lines, bad)
+
+
+def test_a_step_rise_that_shows_under_both_allocators_fails_and_prints_both():
+    base, now = rise_under_mimalloc()
+    system = lambda sha, cells: {STEP: [38.4, 103.8, 254.6, 9000.0] if sha == "b" else [38.6, 103.6, 282.0, 9000.0]}
+    lines, bad = measure.confirmed(measure.rises(base, now, TOL)[1], base, now, "b", "h", TOL, system)
+    assert len(bad) == 1 and "254.6" in bad[0] and "282.0" in bad[0] and "system allocator" in bad[0], bad
+
+
+def test_a_rise_the_system_allocator_cannot_check_stands_and_a_clean_run_builds_nothing():
+    base, now = rise_under_mimalloc()
+    found = measure.rises(base, now, TOL)[1]
+    assert measure.confirmed(found, base, now, "b", "h", TOL, lambda sha, cells: None)[1] == found
+
+    def never(sha, cells):
+        raise AssertionError("a run with no step rise built the system allocator's compiler")
+
+    assert measure.confirmed([], base, now, "b", "h", TOL, never) == ([], [])
+    axis_only = ["joins O2: cost at 2N=128 x2 > 1.5"]
+    assert measure.confirmed(axis_only, base, now, "b", "h", TOL, never)[1] == axis_only, "an axis is judged on the shipped binary"
+
+
+def test_the_system_allocator_measurement_of_a_commit_is_built_and_made_once(tmp_path, monkeypatch):
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    monkeypatch.setattr(measure, "tree_of", lambda sha: "t" + sha)
+    built, ran = [], []
+    monkeypatch.setattr(measure.scaling_gate, "pass_costs", lambda axis, level, work: ran.append((axis, level)) or {f"{axis} {level} s": (1.0, 2.0, 3.0, 4.0)})
+    build = lambda sha: built.append(sha) or tmp_path
+    first = measure.system_passes("c" * 40, {"joins O2"}, build)
+    assert measure.system_passes("c" * 40, {"joins O2"}, build) == first == {"joins O2 s": [1.0, 2.0, 3.0, 4.0]}
+    assert built == ["c" * 40] and ran == [("joins", "O2")]
+    measure.system_passes("c" * 40, {"joins O2", "cases O1"}, build)
+    assert ran == [("joins", "O2"), ("cases", "O1")], "only the cell not yet measured is"
+
+
+def test_a_row_names_the_size_it_is_at_so_2n_is_not_read_off_the_halves():
+    """The log said `2N x1.108 (38.592/103.553/281.974 ...)` and was read as a rise at 4N: the three numbers are N/2, N and 2N and
+    the line named no size."""
+    base, now = rise_under_mimalloc()
+    lines, bad = measure.rises(base, now, TOL)
+    assert "2N=128" in " ".join(lines) and "2N=128" in " ".join(bad), (lines, bad)
+
+
+def test_a_step_then_linear_row_is_not_a_superlinear_slope_and_a_quadratic_one_is():
+    """`live O1 peephole` read 16.2/23.4/44.9 Minstr at n=32/64/128: copyprop and regthrash ran at 32 only, so the work steps and is linear
+    from 64 on; its second difference (7.1) was called a slope. The last doubling is x1.92: linear."""
+    tol = measure.tolerances()
+    key = "live O1 lir peephole"
+    base = {key: [10.0, 23.4, 44.9, 50.0]}  # the same work from n=64; at n=32 the base ran less
+    step = {key: [16.2, 23.4, 44.9, 50.0]}
+    assert measure.step_rises(base, step, tol)[1] == [], "a step is not a slope"
+    assert measure.grown(16.2, 23.4, 44.9) == 0.0 and measure.superlinear(16.2, 23.4, 44.9) > 0
+    base_linear = {key: [10.0, 20.0, 40.0, 50.0]}
+    quadratic = {key: [10.0, 40.0, 160.0, 170.0]}
+    assert measure.step_rises(base_linear, quadratic, tol)[1], "N^2 still fails"
+    assert measure.grown(10.0, 40.0, 160.0) > 0
+    mixed = {key: [10.0, 22.0, 56.0, 60.0]}  # 20% of the work at 2N is the quadratic term: x2.5 in the last doubling
+    assert measure.step_rises(base_linear, mixed, tol)[1], "a real quadratic part is not hidden"
+
+def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tree_does_not_change(tmp_path, monkeypatch):
+    """Train 5's measure step died on `stale binaries in .../measure-build/.../release`: another base was checked out in the shared tree
+    and built while this one was measured, and the release directory it measured from changed under it."""
+    monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
+    release = tmp_path / "target" / "release"
+
+    def build(command, **kw):
+        release.mkdir(parents=True, exist_ok=True)
+        (release / "llrm-c").unlink(missing_ok=True)  # cargo links a new file, not the old inode
+        (release / "llrm-c").write_text(kw["env"]["WHO"])
+        (release / "llrm-c.d").write_text("llrm-c: src/lib.rs\n")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(measure.subprocess, "run", build)
+    monkeypatch.setenv("WHO", "first")
+    first = measure.built("a" * 40)
+    monkeypatch.setenv("WHO", "second")
+    second = measure.built("b" * 40)
+    assert (first / "llrm-c").read_text() == "first" and (second / "llrm-c").read_text() == "second" and first != second
+    assert not list(first.glob("*.d")), "dep-info is not linked: nothing is compared with a tree that has moved on"
+
+
+def test_the_build_lock_is_held_for_the_build_and_not_for_the_measurement(tmp_path, monkeypatch):
+    """A base was measured with the lock held (a bench run took 20 minutes of it): other sessions waited on a measurement, not a build."""
+    import fcntl
+
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "method", lambda: "m")
+    free = []
+
+    def measuring(jobs):
+        with open(tmp_path / "cache" / "build.lock", "w") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                free.append(True)
+            except BlockingIOError:
+                free.append(False)
+        return made(files(a=1)) | {"method": "m"}
+
+    monkeypatch.setattr(measure, "measure_all", measuring)
+    measure.base_measurement("f" * 40, 1, build=lambda sha: tmp_path)
+    assert free == [True]

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/masm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/masm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:053e74a54ce3e10f3ce2a828d5d4dc7406d76505c4443e3ee7ccb779c2ce48fe -->
+<!-- src: crates/backend/llrm-core/src/backend/masm.rs sha256:d2ff757834fd58b14878e3dda2bf77e5514e7b6b5f4eea5444515084e75444cf -->
 
 # masm
 
@@ -13,6 +13,11 @@ and the module's data into `Datum`s, giving a `Module`. `listing` turns
 one procedure into `Item`s, and `text` prints the module from them. The
 printer and the encoder read the same items, so the two cannot drift. Every
 operand is already placed; an unplaced one is an error (`Unprintable`).
+
+A procedure that makes calls and needs the stack aligned (`calleefacts`, the
+target's `stack_alignment`) reserves what makes the return address, its
+pushes, the frame register and the reserve a multiple of it, so a call finds
+the stack aligned; a call's arguments are padded to it by `isel`.
 
 ```text
   Procedure.body (LIR)     frame facts          Item list

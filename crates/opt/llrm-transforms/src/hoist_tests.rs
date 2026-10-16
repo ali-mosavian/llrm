@@ -646,3 +646,125 @@ fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own()
     assert!(priced > 0, "nothing was priced");
     assert_eq!(found, forecast, "{found} traffics for {forecast} forecasts");
 }
+
+/// The invariant `double` loads of a loop, hoisted: how many are in the
+/// preheader when `count` globals are summed each trip, on a target whose
+/// floating load costs `load`, `folded` where the add takes it from memory,
+/// and which holds `class` floating values.
+fn invariant_floats(
+    count: usize,
+    folded: i64,
+    class: i64,
+) -> usize {
+    let globals: String = (0..count).map(|one| format!("@g{one} = global double 1.0\n")).collect();
+    let loads: String = (0..count)
+        .map(|one| format!("  %v{one} = load double, ptr @g{one}\n  %s{} = fadd double %s{one}, %v{one}\n", one + 1))
+        .collect();
+    let text = format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %s0 = phi double [ 0.0, %b0 ], [ %s{count}, %b1 ]
+{loads}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %r = fptosi double %s{count} to i16
+  ret i16 %r
+}}
+"
+    );
+    let before = parsed(&text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: false });
+    let prices = crate::profit::OperationCosts {
+        float_load: 3,
+        float_load_folded: folded,
+        float_release: 2,
+        float_add: 3,
+        ..Default::default()
+    };
+    let machine = crate::testing::Tuned {
+        registers: 6,
+        float_registers: class,
+        costs: prices.clone(),
+        sizes: prices,
+        ..Default::default()
+    };
+    passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    block(&printed(&after), "b0").iter().filter(|line| line.contains("load")).count()
+}
+
+/// A load the target folds into the add that reads it saves nothing each trip
+/// (`float_load_folded` 0): d_faces' 16 matrix loads were hoisted and spilled
+/// as doubles, 40 instructions each entry of a loop of 6 trips, for a loop
+/// gcc runs with `fmul m32`.
+#[test]
+fn test_a_float_load_the_target_folds_into_its_reader_is_not_hoisted() {
+    assert_eq!(invariant_floats(4, 3, 8), 4, "a load of its own is hoisted");
+    assert_eq!(invariant_floats(4, 0, 8), 0, "a load folded into the add saves nothing a trip");
+}
+
+/// Hoisted floating values are held across the loop, and the class holds only
+/// so many: 12 loads on a stack of 4 are not all hoisted.
+#[test]
+fn test_floats_are_not_hoisted_past_the_registers_of_their_class() {
+    assert_eq!(invariant_floats(12, 3, 0), 12, "no class is stated");
+    let held = invariant_floats(12, 3, 4);
+    assert!(0 < held && held < 4, "{held} hoisted onto a stack of 4");
+}
+
+/// `invariant_floats` on x86-m16's own model (a 486), the target facts as its
+/// description states them.
+fn invariant_floats_on_a_486(count: usize) -> usize {
+    let globals: String = (0..count).map(|one| format!("@g{one} = global double 1.0\n")).collect();
+    let loads: String = (0..count)
+        .map(|one| format!("  %v{one} = load double, ptr @g{one}\n  %s{} = fadd double %s{one}, %v{one}\n", one + 1))
+        .collect();
+    let text = format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %s0 = phi double [ 0.0, %b0 ], [ %s{count}, %b1 ]
+{loads}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %r = fptosi double %s{count} to i16
+  ret i16 %r
+}}
+"
+    );
+    let before = parsed(&text);
+    let mut after = before.clone();
+    let mut passes = llrm_mir::passes::PassManager::default();
+    (passes.verify_each, passes.verify_invalidation) = (true, true);
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: false });
+    passes
+        .run_module(&mut after, std::rc::Rc::new(llrm_x86_m16::Dos::default()))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    block(&printed(&after), "b0").iter().filter(|line| line.contains("load")).count()
+}
+
+/// d_faces hoisted a 4x4 matrix whole on the 486 model: 16 loads, each read
+/// once by the add next to it, 13 of them spilled to the frame as doubles.
+#[test]
+fn test_a_486_keeps_loads_in_a_loop_that_its_adds_take_from_memory() {
+    assert_eq!(invariant_floats_on_a_486(1), 0, "a load the add folds saves nothing a trip");
+    let held = invariant_floats_on_a_486(16);
+    assert!(held < 8, "{held} of 16 loads hoisted onto a stack of 8");
+}

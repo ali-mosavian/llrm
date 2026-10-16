@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -91,8 +92,10 @@ VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(VSGCC))
 
+import benchlist  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
+import levels_time  # noqa: E402
 
 sys.path.insert(0, str(HERE / "gate"))
 import gate  # noqa: E402
@@ -123,7 +126,7 @@ def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
     files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
-    files += sorted((ROOT / "bench").glob("*/*.c")) + sorted((VSGCC / "kernels").glob("*/*.c"))
+    files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
     if qcport := os.environ.get("QCPORT"):
         files += sorted(Path(qcport).expanduser().glob("*/*.c"))
     digest = hashlib.sha256()
@@ -131,6 +134,7 @@ def method() -> str:
         digest.update(str(one.name).encode() + b"\0" + one.read_bytes())
     digest.update(b"qcport" if qcport else b"-")
     digest.update(PROFILE.encode())
+    digest.update(levels_time.backend().encode())  # the counts of one backend are not another's
     return digest.hexdigest()[:12]
 
 
@@ -208,34 +212,139 @@ def checked_out(sha: str, tree: Path, source: Path = ROOT) -> Path:
     return tree
 
 
+SNAPSHOTS_KEPT = 6
+
+
+def snapshot(release: Path, sha: str, kind: str = "") -> Path:
+    """The files of `release` linked into a directory of `sha`'s own (a hard link keeps the inode: the next build of another commit in the
+    shared tree writes new files and leaves these as they were). A base was measured from the release directory itself, and when a session
+    checked out another base in the tree meanwhile its binaries read as older than the source: "stale binaries" in the measure step of
+    train 5. No dep-info is linked, so nothing is compared with a tree that has moved on. The oldest snapshots beyond SNAPSHOTS_KEPT go."""
+    into = BUILD / "snapshots" / f"{kind}{sha[:12]}"
+    into.mkdir(parents=True, exist_ok=True)
+    for one in sorted(release.iterdir()) if release.is_dir() else []:
+        if one.is_file() and one.suffix != ".d":
+            staged = into / f".{one.name}.new"
+            staged.unlink(missing_ok=True)
+            os.link(one, staged)
+            os.replace(staged, into / one.name)
+    os.utime(into)
+    for old in sorted((p for p in into.parent.iterdir() if p != into), key=lambda p: p.stat().st_mtime)[: max(0, len(list(into.parent.iterdir())) - SNAPSHOTS_KEPT)]:
+        shutil.rmtree(old, ignore_errors=True)
+    return into
+
+
 def built(sha: str) -> Path:
-    """`sha` built in a tree and target directory of its own (reused, so each build is an increment); its release directory."""
-    BUILD.mkdir(parents=True, exist_ok=True)
-    (BUILD / ".used").touch()
-    if BUILD.parent == BUILDS:
-        for tree in pruned(BUILDS, BUILD, BUILD_CAP):
-            print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
-    tree = checked_out(sha, BUILD / "tree")
-    env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
-    env.pop("LLRM_BIN", None)
-    done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
-    if done.returncode:
-        raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
-    return BUILD / "target" / PROFILE
+    """`sha` built in a tree and target directory of its own (reused, so each build is an increment) while holding the build lock, and
+    its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it."""
+    with locked("build"):
+        BUILD.mkdir(parents=True, exist_ok=True)
+        (BUILD / ".used").touch()
+        if BUILD.parent == BUILDS:
+            for tree in pruned(BUILDS, BUILD, BUILD_CAP):
+                print(f"measure: removed the build tree {tree.name} to keep the cache within {BUILD_CAP >> 30} GB", flush=True)
+        tree = checked_out(sha, BUILD / "tree")
+        env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
+        env.pop("LLRM_BIN", None)
+        done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+        if done.returncode:
+            raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
+        return snapshot(BUILD / "target" / PROFILE, sha, PROFILE)
+
+
+SYSTEM_BUILD = "env -u RUSTFLAGS cargo build --release -q --bin llrm-c --features system-alloc"
+
+
+def built_system(sha: str) -> Path | None:
+    """`sha`'s llrm-c with the system allocator in a target of its own (reused), a snapshot of its release directory (as `built`'s); None
+    where `sha` has no `system-alloc` feature (a base from before it)."""
+    with locked("build"):
+        BUILD.mkdir(parents=True, exist_ok=True)
+        tree = checked_out(sha, BUILD / "tree")
+        env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target-system")}
+        env.pop("LLRM_BIN", None)
+        if "system-alloc" not in (tree / "Cargo.toml").read_text():
+            return None
+        done = subprocess.run(["bash", "-c", SYSTEM_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+        if done.returncode:
+            raise SystemExit(f"measure: {sha[:9]} does not build with the system allocator:\n{done.stderr[-2000:]}")
+        return snapshot(BUILD / "target-system" / "release", sha, "system-")
+
+
+def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, list[float]] | None:
+    """The steps of `cells` ("axis level") of `sha` measured with the system allocator, stored by the tree like the baseline (a cell is
+    measured, and the compiler built, on a miss only); None where `sha` cannot be built that way."""
+    which = method() + "-system"
+    one = stored_path(sha, which, tree_of(sha))
+    have = json.loads(one.read_text()) if one.is_file() else {}
+    if missing := sorted(cells - have.keys()):
+        if (binary := build(sha)) is None:
+            return None
+        previous = os.environ.get("LLRM_BIN")
+        os.environ["LLRM_BIN"] = str(binary)
+        try:
+            for cell in missing:
+                axis, level = cell.split(" ")
+                with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
+                    have[cell] = {k: [round(v, 3) for v in got] for k, got in scaling_gate.pass_costs(axis, level, Path(tmp)).items()}
+        finally:
+            os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        CACHE.mkdir(parents=True, exist_ok=True)
+        one.write_text(json.dumps(have, separators=(",", ":")) + "\n")
+    return {k: v for cell in cells for k, v in have[cell].items()}
+
+
+def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, tol: dict, system=None) -> tuple[list[str], list[str]]:
+    """(lines, bad) with each step rise kept only if it shows under the system allocator too: mimalloc's heap layout moves a step's count
+    (#1755: `analysis through-memory` +27 Minstr under mimalloc, equal under glibc, though the step ran on the same input). The axes and
+    the compile stay judged on the shipped binary. A rise that cannot be checked stands."""
+    steps = {b.split(": ")[0] for b in bad} & now["passes"].keys()
+    if not steps:
+        return [], bad
+    cells = {" ".join(k.split(" ")[:2]) for k in steps}
+    system = system or system_passes
+    was, got = system(base_sha, cells), system(head, cells)
+    if was is None or got is None:
+        return [], bad
+    judged = judged_axes(base, now)
+    _, also = step_rises(was, got, tol, judged)
+    kept = {b.split(": ")[0] for b in also}
+    lines, out = [], []
+    for b in bad:
+        key = b.split(": ")[0]
+        if key not in steps:
+            out.append(b)
+        elif key in kept:
+            out.append(f"{b}; system allocator {'/'.join(map(str, got[key][:3]))} against {'/'.join(map(str, was[key][:3])) if key in was else 'none'} (mimalloc and system malloc both rose)")
+        else:
+            lines.append(f"{key}: not confirmed under the system allocator, a heap layout effect: {'/'.join(map(str, got.get(key, [])[:3]))} against {'/'.join(map(str, was.get(key, [])[:3]))}")
+    return lines, out
 
 
 @contextlib.contextmanager
-def locked(name: str):
-    """An exclusive lock named `name` between sessions (and threads: each opens the file itself)."""
+def locked(name: str, every: float = 60.0, clock=time.monotonic, sleep=time.sleep):
+    """An exclusive lock named `name` between sessions (and threads: each opens the file itself). A wait says so every `every` seconds:
+    the gate kills a step with no log growth and no CPU for 10 minutes, and #1755's measure waited that long for another session's build.
+    `clock` and `sleep` are the test's, which waits on virtual time."""
     CACHE.mkdir(parents=True, exist_ok=True)
     with open(CACHE / f"{name}.lock", "w") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
+        began = last = clock()
+        while True:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if clock() - last >= every:
+                    last = clock()
+                    print(f"measure: waiting {last - began:.0f}s for the lock {name[:24]} (another session holds it)", flush=True)
+                sleep(min(0.5, every / 4))
         yield
 
 
 def base_measurement(base: str, jobs: int, build=built) -> dict:
     """`base`'s measurement by this tree's method: stored, else made with `base` built by `build`. Sessions that miss the same base at
-    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time."""
+    once wait on the base's lock and read what the first stored; the one tree and target the builds share are taken one at a time
+    (`built` holds the build lock for the build, and measures from a snapshot)."""
     which = method()
     if (got := stored(base, which)) is not None:
         return got
@@ -243,13 +352,12 @@ def base_measurement(base: str, jobs: int, build=built) -> dict:
         if (got := stored(base, which)) is not None:
             return got
         print(f"measure: no measurement of {base[:9]} by this method; building and measuring it", flush=True)
-        with locked("build"):
-            previous = os.environ.get("LLRM_BIN")
-            os.environ["LLRM_BIN"] = str(build(base))
-            try:
-                data = measure_all(jobs)
-            finally:
-                os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
+        previous = os.environ.get("LLRM_BIN")
+        os.environ["LLRM_BIN"] = str(build(base))
+        try:
+            data = measure_all(jobs)
+        finally:
+            os.environ.pop("LLRM_BIN") if previous is None else os.environ.__setitem__("LLRM_BIN", previous)
         save(base, data)
         return data
 
@@ -292,18 +400,35 @@ def superlinear(half: float, small: float, big: float) -> float:
     return max(0.0, second(half, small, big))
 
 
+# A cost that at most doubles when N does grows no faster than linear there (a little over, for the compile's own noise).
+LINEAR = 2.05
+
+
+def grown(half: float, small: float, big: float) -> float:
+    """`superlinear` of a measurement now: nil where its last doubling is linear. A step (work that stops above some N: `live O1 peephole`
+    ran copyprop and regthrash at n=32 only, 16.2/23.4/44.9) is not a slope, and three points cannot tell a step from a curve by their second
+    difference. The base's is `superlinear` as it was: a fixed cost or linear work removed moves the ratio, not the second difference."""
+    return 0.0 if big <= LINEAR * small else superlinear(half, small, big)
+
+
+def two_n(key: str) -> str:
+    """The size the cost at 2N is at, as 2N=128: the rows are N/2, N and 2N and name no size."""
+    n = scaling_gate.SIZES.get(key.split(" ")[0])
+    return f"2N={2 * n}" if n else "2N"
+
+
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
     """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
         tol = row_tolerance(general, key)
-        more = superlinear(half, small, big) - superlinear(was_half, was_small, was_big)
-        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), 2N x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
+        more = grown(half, small, big) - superlinear(was_half, was_small, was_big)
+        lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), {two_n(key)} x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
         if more > tol["excess"] * was_big:
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
-            bad.append(f"{key}: cost at 2N x{big / was_big:.4f} > {tol['worst']}")
+            bad.append(f"{key}: cost at {two_n(key)} x{big / was_big:.4f} > {tol['worst']}")
     return lines, bad
 
 
@@ -320,19 +445,19 @@ def step_rises(
         rise = max(tol["step_rise"], tol["pass_slack"])  # a row accepted at a higher pass_slack is accepted at that for this too
         if key in base and big > base[key][2] * rise and big - base[key][2] >= tol["step_floor"]:
             # whatever its share of the compile: a step that was 907 Minstr at 2N and is 13,840 was 0.4% of a compile and is not now
-            lines.append(f"{key}: 2N x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
-            bad.append(f"{key}: cost at 2N x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: {two_n(key)} x{big / base[key][2]:.3f} (+{big - base[key][2]:.1f} Minstr, {half}/{small}/{big} against {'/'.join(map(str, base[key][:3]))})")
+            bad.append(f"{key}: cost at {two_n(key)} x{big / base[key][2]:.3f} (> {rise}, +{big - base[key][2]:.1f} Minstr), whatever its share of the compile{risen_elsewhere(key, base, now)}")
             continue
         if big < tol["high"] * whole:
             continue
         if key not in base and " ".join(key.split(" ")[:2]) in judged:
             continue
         was_half, was_small, was_big, _ = base.get(key, [half, small, big, whole])
-        more = superlinear(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
+        more = grown(half, small, big) - (superlinear(was_half, was_small, was_big) if key in base else 0.0)
         if more > tol["step_excess"] * whole or (key in base and big > was_big * tol["pass_slack"]):
             shown = f"{half}/{small}/{big} against {was_half}/{was_small}/{was_big}"
-            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), 2N x{big / was_big:.3f} ({shown})")
-            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or 2N x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
+            lines.append(f"{key}: second difference {second(half, small, big):.1f} Minstr (base {second(was_half, was_small, was_big) if key in base else 0.0:.1f}), {two_n(key)} x{big / was_big:.3f} ({shown})")
+            bad.append(f"{key}: superlinear work {second(half, small, big):.1f} Minstr rose by {more / whole:.4f} of the compile (> {tol['step_excess']}), or {two_n(key)} x{big / was_big:.3f} ({shown}){risen_elsewhere(key, base, now)}")
     return lines, bad
 
 
@@ -348,11 +473,15 @@ def risen_elsewhere(key: str, base: dict[str, list[float]], now: dict[str, list[
     return "; steps of the same axis and level that rose: " + ", ".join(f"{name.split(' ', 2)[2]} +{rise:.1f} Minstr" for rise, name in rows[:3]) if rows else ""
 
 
+def judged_axes(base: dict, now: dict) -> frozenset[str]:
+    return frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
+
+
 def rises(base: dict, now: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
     tol = tol or tolerances()
     lines, bad = [], []
     # An axis judges a new row only when its own second difference did not rise: work moved between rows leaves it flat or lower.
-    judged = frozenset(axis for axis in base["axes"].keys() & now["axes"].keys() if superlinear(*now["axes"][axis]) <= superlinear(*base["axes"][axis]))
+    judged = judged_axes(base, now)
     for part, check in (("compile", compile_rises), ("axes", axis_rises), ("passes", lambda b, n, t: step_rises(b, n, t, judged))):
         got = check(base[part], now[part], tol)
         lines += got[0]
@@ -422,6 +551,9 @@ def check(jobs: int, ref: str) -> int:
         print(f"SKIPPED: instruction counter unavailable ({why})")
         return 77
     lines, bad = rises(base, now)
+    if bad:
+        more, bad = confirmed(bad, base, now, base_sha, head, tolerances())
+        lines += more
     print(f"measured {now['binary']['path']} ({now['binary']['sha']}) against {base_sha[:9]}")
     print("\n".join(lines))
     # The gated head is stored by its tree: the commit that lands it (a squash of the same tree) is the next run's base, measured here.
