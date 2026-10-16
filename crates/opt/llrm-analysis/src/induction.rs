@@ -276,6 +276,26 @@ impl CountedLoop {
         !self.posttested && !self.stepped && self.test == IntPredicate::Ult && self.step == BigInt::from(1)
     }
 
+    /// `rises_unsigned` for signed values: a unit step tested before each trip
+    /// by `slt` from any start: the counter is below the bound when it is
+    /// stepped, so the step never passes the width's largest signed value.
+    /// Its sign extension is a counter of the wider width.
+    pub fn rises_signed(&self) -> bool {
+        !self.posttested && !self.stepped && self.test == IntPredicate::Slt && self.step == BigInt::from(1)
+    }
+
+    /// `rises_signed` for a loop tested after its trips, entered behind a copy
+    /// of its test.
+    pub fn rises_signed_after(&self) -> bool {
+        self.posttested
+            && self.stepped
+            && !self.shifted
+            && self.entry_guarded
+            && matches!(self.reach, Reach::Distance)
+            && self.test == IntPredicate::Slt
+            && self.step == BigInt::from(1)
+    }
+
     /// `rises_unsigned` for a loop tested after its trips, entered behind a
     /// copy of its test: the stepped counter is below the bound when the
     /// loop goes round, so the step never passes the width's largest either.

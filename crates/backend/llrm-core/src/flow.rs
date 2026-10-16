@@ -87,6 +87,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // Before SsaSpill: a constant several edges of a phi carry is one
+        // value.
+        Box::new(crate::backend::phiconst::SharedConstants),
         Box::new(ssaspill::SsaSpill {
             frame: or_empty(),
             segments: segments.clone(),

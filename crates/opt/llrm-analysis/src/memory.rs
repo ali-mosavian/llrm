@@ -1067,6 +1067,9 @@ pub struct Unit<'a> {
     /// What calling back into the module does, the module's `Callbacks`;
     /// without it each `calls_annotated` adds up every entry's summary.
     pub callbacks: Option<&'a Option<crate::alias::Summary>>,
+    /// Where `callbacks` is read from when it is asked for and was not given: a
+    /// body that never asks is not one that read it (`llrm_mir::passes::read`).
+    pub callbacks_from: Option<&'a llrm_mir::passes::Outer>,
     /// Whether the unit's `bounds`, held, are the counted loops' intervals: at
     /// a level without them (`Outer::loop_intervals`) they are empty on
     /// purpose.
@@ -1134,6 +1137,7 @@ impl<'a> Unit<'a> {
             plain: None,
             point_values: None,
             callbacks: None,
+            callbacks_from: None,
             loop_intervals: true,
             congruent: None,
             proved: None,
@@ -1145,6 +1149,16 @@ impl<'a> Unit<'a> {
         spaces: llrm_mir::spaces::Spaces,
     ) -> Self {
         Self { spaces, ..self }
+    }
+
+    /// What calling back into the module does: the held `callbacks`, or the
+    /// module's where the unit was made over its facts.
+    pub fn callbacks(&self) -> Option<&'a Option<crate::alias::Summary>> {
+        self.callbacks.or_else(|| {
+            self.callbacks_from
+                .and_then(|outer| outer.cached_ref::<crate::manager::Callbacks>())
+                .and_then(|one| one.as_ref().ok())
+        })
     }
 
     pub fn with_callbacks(
@@ -1623,6 +1637,51 @@ thread_local! {
 }
 
 impl MemRef {
+    /// This reference with each value that `to` gives another operand named by
+    /// it: the reference to the same bytes by the value that replaced one found
+    /// equal. None where a name cannot be carried over: the replaced value is
+    /// the object's own address (`object`: `disp` counts from it), keys an
+    /// object of `provenance`, or is the variable index (a constant has no
+    /// register to scale).
+    pub fn renamed(
+        &self,
+        to: &dyn Fn(ValueId) -> Option<Operand>,
+    ) -> Option<Self> {
+        let named = |operand: Option<Operand>| match operand {
+            Some(Operand::Value(value)) => to(value).map(Some),
+            other => Some(other),
+        };
+        let replaced = |operand: Option<Operand>| matches!(operand, Some(Operand::Value(value)) if to(value).is_some());
+        if self.object && replaced(self.root) {
+            return None;
+        }
+        if let Some(provenance) = &self.provenance {
+            if provenance.slices.iter().any(|slice| {
+                matches!(
+                    slice.object.key,
+                    Key::Value(value) if to(ValueId(value)).is_some()
+                )
+            }) {
+                return None;
+            }
+        }
+        let base = match self.base {
+            Some(value) => match to(value) {
+                Some(Operand::Value(now)) => Some(now),
+                Some(_) => return None,
+                None => Some(value),
+            },
+            None => None,
+        };
+        Some(Self {
+            pointer: named(self.pointer)?.or(self.pointer),
+            root: named(self.root)?.or(self.root),
+            segment: named(self.segment)?.or(self.segment),
+            base,
+            ..self.clone()
+        })
+    }
+
     /// Whether every object it may reach is constant, so that no write
     /// changes it.
     pub fn unwritable(&self) -> bool {

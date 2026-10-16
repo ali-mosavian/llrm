@@ -38,9 +38,16 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   was kept this way at the start of each round of a fixed point, so the facts are
   worked out afresh once a round. `ThroughMemory` is `SOUND`: on `d_faces` -O1 it is derived 49 times
   instead of 62 and the compile takes 1.3% fewer instructions.
-- `NAMES_VALUES`: the result holds values (a `MemRef`'s pointer or root), not
-  facts keyed by them, so uses replaced by an equal value end its keeping:
-  the replaced value is erased and it would name one that is gone.
+- `NAMES_VALUES` with `remapped`: the result holds values (a `MemRef`'s
+  pointer or root), not facts keyed by them. Uses replaced by an equal value
+  (`Change::Substituted { from, to }`) leave it naming a value that is then
+  erased, so it is brought to what took the place (`remapped`, the way LLVM's
+  value handles follow a replace-all-uses), or derived again where it returns
+  none. `CallEffects` is kept this way (`MemRef::renamed`; none where the
+  replaced value is an object's own address, keys an object of the provenance, or
+  is the scaled index): derived 100 times instead of 127 on `d_faces` -O1, 71.9 -> 56.3
+  Minstr own, the compile 0.5% fewer instructions. `covers` also asserts it names no
+  erased value.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
   something was kept as sound, what was derived from it is not compared with

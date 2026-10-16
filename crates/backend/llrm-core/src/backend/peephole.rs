@@ -323,7 +323,7 @@ impl Peephole {
         let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
-        let body = crate::backend::postrasink::sunk(&body);
+        let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -360,7 +360,8 @@ impl Peephole {
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            let body = zero_extensions(self.rules, &widened_moves(self.rules, &body));
+            let body =
+                zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
             gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
         } else {
             body
@@ -2394,6 +2395,8 @@ static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHM
 /// overflow or adjust flags it would have cleared. Work independent of the
 /// computation may stand between them, in the block or in a sole predecessor
 /// that only falls into it: the computation sinks to just before the test.
+/// A computation with a memory source stays where it is, and answers a test it
+/// is beside.
 pub fn tested(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2580,7 +2583,10 @@ fn _flag_source(
                 .as_ref()
                 .is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_))));
             let (reads, writes) = (registers(&effect.reads), registers(&effect.writes));
-            return (operands_in_registers
+            // A memory source is read where it is: only a setter that moves
+            // down past other work must have its operands in
+            // registers.
+            return ((operands_in_registers || crossed.is_empty())
                 && crossed.iter().all(|other: &liveness::Effect| {
                     other.writes.is_disjoint(&reads)
                         && other.reads.is_disjoint(&writes)

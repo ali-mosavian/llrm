@@ -9,6 +9,11 @@
 //! printer and the encoder read the same items, so the two cannot drift. Every
 //! operand is already placed; an unplaced one is an error ([`Unprintable`]).
 //!
+//! A procedure that makes calls and needs the stack aligned (`calleefacts`, the
+//! target's `stack_alignment`) reserves what makes the return address, its
+//! pushes, the frame register and the reserve a multiple of it, so a call finds
+//! the stack aligned; a call's arguments are padded to it by `isel`.
+//!
 //! ```text
 //!   Procedure.body (LIR)     frame facts          Item list
 //!   ----------------------   ------------------   -----------------------
@@ -669,15 +674,44 @@ fn parts(
     // Where the frame register's own cell was stays reserved: a cell addressed
     // through an index has no sign to say whether it lies above that cell
     // or below it, so every one keeps its distance from it.
-    let reserve = if omit && reserve != 0 { reserve + slot } else { reserve };
     // Inline code is bytes this printer cannot read, so it may address the
     // frame. A frame the runtime's entry built (B$ENRA, B$ENRD) is not
     // built again by a shell of ours.
-    let framed = !omit
+    let framed_by = |reserve: i64| {
+        !omit
+            && procedure.entry == 0
+            && (reserve != 0
+                || roots.contains(&ir::root(procedure.registers.pointer))
+                || procedure.callees.values().any(|one| !one.code.is_empty()))
+    };
+    let locals = reserve != 0;
+    let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
+    // A call finds the stack a multiple of the target's alignment, as its
+    // callee assumes (a double on its stack at an 8-aligned address): the frame
+    // takes what keeps it so, the return address, the pushed registers, the
+    // frame register and the reserve a multiple of it.
+    let align = procedure.registers.align;
+    let calls = align > slot
+        && procedure.body.bits == 32
+        && !procedure.far
+        && procedure.interrupt.is_none()
         && procedure.entry == 0
-        && (reserve != 0
-            || roots.contains(&ir::root(procedure.registers.pointer))
-            || procedure.callees.values().any(|one| !one.code.is_empty()));
+        && procedure
+            .body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Call));
+    let mut reserve = reserve;
+    if calls {
+        let below =
+            |reserve: i64| slot + slot * saved.len() as i64 + if framed_by(reserve) { slot } else { 0 } + held(reserve);
+        while below(reserve) % align != 0 {
+            reserve += slot;
+        }
+    }
+    let framed = framed_by(reserve);
+    let reserve = held(reserve);
     let (bp, sp) = (reg(FRAME), reg(STACK));
     let mut leave: Vec<Semantics> =
         saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])).collect();
@@ -2329,6 +2363,7 @@ mod tests {
             stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
+            align: 4,
             optional: false,
             enter: false,
             free: false,
@@ -2377,6 +2412,7 @@ mod tests {
                 stack: RegId::ESP,
                 saved: Vec::new(),
                 slot: 4,
+                align: 4,
                 optional: false,
                 enter,
                 free: false,
@@ -2430,6 +2466,7 @@ mod tests {
             stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
+            align: 4,
             optional,
             enter: false,
             free: false,
@@ -2585,6 +2622,7 @@ mod tests {
             stack: RegId::ESP,
             saved: Vec::new(),
             slot: 4,
+            align: 4,
             optional: false,
             enter: false,
             free: false,

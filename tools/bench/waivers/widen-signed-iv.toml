@@ -1,0 +1,6 @@
+reason = "a signed short counter read as an index is widened to the index's width: parity/loop bq32 at -Os is 137 -> 104 instructions, code 200 -> 201 bytes"
+
+[[row]]
+label = "parity/loop bq32 -Os"
+counter = "code_bytes"
+to = 201

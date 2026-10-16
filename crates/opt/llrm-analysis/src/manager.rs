@@ -190,7 +190,8 @@ impl<'a> Unit<'a> {
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
+            callbacks: None,
+            callbacks_from: Some(outer),
             loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
@@ -1180,8 +1181,40 @@ impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
     const SKIPS: bool = true;
+    const SOUND: bool = true;
+    /// Its references name the pointers of the call's arguments: past a
+    /// substitution they would name a value the edit erased.
+    const NAMES_VALUES: bool = true;
+    /// What it says of a call is what the call and its arguments' meanings
+    /// give, which edits that keep every value's meaning leave (no call is
+    /// made or moved). The calls still there are the calls it has an entry
+    /// for; an erased one is not asked.
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        _context: &Context,
+        function: &Function,
+    ) -> bool {
+        match (old, fresh) {
+            (Ok(old), Ok(fresh)) => {
+                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
+            }
+            (old, fresh) => old == fresh,
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+    }
+    /// Each effect with the values it names followed through the substitution:
+    /// the same bytes by the value that replaced one found equal.
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
+        _changes: &[llrm_mir::module::Change],
+        _context: &Context,
+        _function: &Function,
+    ) -> Option<Self::Result> {
+        Some(Ok(alias::effects_renamed(old.as_ref().ok()?, substituted)?))
     }
     fn run(
         context: &Context,
@@ -1277,7 +1310,7 @@ impl Analysis for Registers {
                 | Change::BlockErased(_)
                 | Change::Operand { .. }
                 | Change::Operands { .. }
-                | Change::Substituted(_) => {
+                | Change::Substituted { .. } => {
                     continue;
                 }
                 // An argument's fact is of its position.
@@ -1492,7 +1525,7 @@ fn reached_through(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
