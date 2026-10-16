@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:fc78c284728cb4b46c0a217cdca3ecc0baaf02557287abbaac06ce1f5a07e2a1 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:7861b7fe576cbcb554d651923c5f8e497095f1782625482d1f729ec9f62ef666 -->
 
 # manager
 
@@ -27,33 +27,6 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`.
-- `SOUND` with `covers`: the entry is kept past an invalidation while every
-  edit since it was derived keeps every live value's meaning
-  (`passes::sound_edits`, read from the change log, not promised by a pass):
-  an instruction erased, uses replaced by the same value (`replace_value`
-  logs `Substituted` first), a value made that nothing existing reads. A block
-  made or erased, an operand set to another value, an instruction rewritten in
-  place and a store or call made or moved each end it. What the result says of
-  a live value then holds; a value it has no entry for is unknown, and none is
-  asked of an erased one. gcc keeps its alias and points-to results across DCE,
-  folding and value numbering the same way. `Analyses::refresh_soft` drops what
-  was kept this way at the start of each round of a fixed point, so the facts are
-  worked out afresh once a round. `ThroughMemory` is `SOUND`: on `d_faces` -O1 it is derived 49 times
-  instead of 62 and the compile takes 1.3% fewer instructions.
-- `NAMES_VALUES` with `remapped`: the result holds values (a `MemRef`'s
-  pointer or root), not facts keyed by them. Uses replaced by an equal value
-  (`Change::Substituted { from, to }`) leave it naming a value that is then
-  erased, so it is brought to what took the place (`remapped`, the way LLVM's
-  value handles follow a replace-all-uses), or derived again where it returns
-  none. `CallEffects` is kept this way (`MemRef::renamed`; none where the
-  replaced value is an object's own address, keys an object of the provenance, or
-  is the scaled index): derived 100 times instead of 127 on `d_faces` -O1, 71.9 -> 56.3
-  Minstr own, the compile 0.5% fewer instructions. `covers` also asserts it names no
-  erased value.
-- `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
-  fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
-  something was kept as sound, what was derived from it is not compared with
-  fresh results (it is sound, not the same).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -147,6 +120,25 @@ From unit test
 `an_integer_edit_leaves_the_pointer_analyses_as_they_were_and_a_pointer_edit_does_not`
 in
 `manager_tests.rs`.
+
+## Order check
+A result a pass reads is a function of the body, not of when something first
+asked for it (#1909: a `ThroughMemory` asked early and kept past sound edits
+made `fold` weaker, 18 KB of asm against 34 KB). `LLRM_CHECK_ORDER=SEED`
+asks some analyses early at each body pass's entry, which ones by the seed,
+and the object must be the lazy compile's. `tests/analysis_order.rs` runs it
+on matmul. The wide sweep is a command, not a gate; run it before a release
+and when an analysis starts to be kept:
+
+```text
+for s in 1 2 3 4 5 6 7 8; do
+  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+done
+```
+
+`tools/identical.py` keeps a `LLRM_CHECK_*` value already set; the bench
+BASIC and Nib programs under the harness flags are compiled the same way
+with and without the seed.
 
 ## Provides
 The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
