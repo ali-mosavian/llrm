@@ -158,7 +158,7 @@ to = 705
 [[row]]
 label = "frames bas -O2"
 counter = "instructions"
-to = 4907165
+to = 5124953
 
 [[row]]
 label = "frames bas -O2"
@@ -168,7 +168,7 @@ to = 960247
 [[row]]
 label = "frames bas -O2"
 counter = "code_bytes"
-to = 347
+to = 355
 
 [[row]]
 label = "frames bas -Os"
@@ -188,7 +188,7 @@ to = 329
 [[row]]
 label = "frames bq16 -O2"
 counter = "instructions"
-to = 5162239
+to = 5380027
 
 [[row]]
 label = "frames bq16 -O2"
@@ -198,7 +198,7 @@ to = 960247
 [[row]]
 label = "frames bq16 -O2"
 counter = "code_bytes"
-to = 352
+to = 360
 
 [[row]]
 label = "frames bq16 -Os"
@@ -238,7 +238,7 @@ to = 279
 [[row]]
 label = "frames c -O2"
 counter = "instructions"
-to = 2758915
+to = 3036703
 
 [[row]]
 label = "frames nib -O2"
@@ -663,7 +663,7 @@ to = 6161
 [[row]]
 label = "matmul nib -O2"
 counter = "code_bytes"
-to = 294
+to = 295
 
 [[row]]
 label = "matmul nib -Os"
@@ -1033,12 +1033,12 @@ to = 43521
 [[row]]
 label = "recmany c -O2"
 counter = "memory_operands"
-to = 16501
+to = 13501
 
 [[row]]
 label = "recmany c -O2"
 counter = "code_bytes"
-to = 248
+to = 307
 
 [[row]]
 label = "recmany c -Os"
