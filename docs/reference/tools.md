@@ -51,7 +51,7 @@ name them in an environment variable, listed in the tool's header.
 | Tool | Does |
 |---|---|
 | `identity.sh` | Two builds of `llrm-nib` or `llrm-c` make byte-identical objects for a corpus; see [tools/readme.md](../../tools/readme.md) |
-| `identical.py` | The same for `llrm-c` alone: every program and every QCport module at each level |
+| `identical.py` | The same for `llrm-c` alone: every program, every `tests/run/c` program (each flag variant) and every QCport module; aborts on a binary older than its head's commit |
 | `g-identical.sh`, `qcport-g-identical.sh` | The assembly of every bench C program, or QCport module, with and without `-g`; lists the ones that differ |
 | `baseline.sh` | Every MIR stage dump of the OMF corpus and the Nib examples; `diff -r` two trees |
 

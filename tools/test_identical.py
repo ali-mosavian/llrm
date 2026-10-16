@@ -62,3 +62,34 @@ def test_every_oracle_in_the_source_is_run_on_the_corpus_but_those_named_not_run
     crate.mkdir(parents=True)
     (crate / "lib.rs").write_text('fn a() { env_set("LLRM_CHECK_BRANDNEW"); env_set("LLRM_CHECK_THRASH"); }\n')
     assert identical.checks(tmp_path) == ("BRANDNEW",), "a new oracle is run, one named NOT_RUN is not"
+
+
+def test_the_run_programs_are_in_the_corpus_with_their_own_flags(tmp_path):
+    """tests/run/c/i64_param_home.c -O2 was miscompiled by a kept result and passed identical.py with REPLAY (544 objects): the corpus did not
+    hold the programs the gate's run tests do."""
+    files = identical.corpus(tmp_path, None, None, programs_only=True)
+    source, flags = files["run/i64_param_home#0"]
+    assert source.name == "i64_param_home.c" and flags == ["-O2", "-march=i486", "-m32"]
+    assert "run/i64_param_home#1" in files
+
+
+def _repo(tmp_path):
+    import subprocess
+
+    for args in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True)
+
+
+def test_a_binary_older_than_its_head_is_stale(tmp_path):
+    """A baseline whose build failed silently was the previous main's binary: identical.py compared against it and said 'identical' of 544."""
+    import os
+    import time
+
+    _repo(tmp_path)
+    binary = tmp_path / "llrm-c"
+    binary.write_text("x")
+    assert identical.stale(str(binary), "HEAD", "OLD", tmp_path) is None
+    os.utime(binary, (time.time() - 3600, time.time() - 3600))
+    assert "stale build" in identical.stale(str(binary), "HEAD", "OLD", tmp_path)
+    assert "does not exist" in identical.stale(str(tmp_path / "none"), "HEAD", "OLD", tmp_path)
+    assert "no such revision" in identical.stale(str(binary), "nosuchrev", "OLD", tmp_path)
