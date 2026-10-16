@@ -553,6 +553,17 @@ def test_a_worse_count_fails_the_gate_and_nothing_else_does(monkeypatch, capsys,
     assert code == 0 and "BETTER" not in out and "0 problems" in out
 
 
+def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, capsys, tmp_path):
+    """The counts were recorded after the base was measured: a main push saved them 40 minutes in, and five pull requests measured the base alone."""
+    def no_base(args):
+        raise AssertionError("record measures no base")
+
+    monkeypatch.setattr(bench.basecounts, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(bench, "base_rows", no_base)
+    code, out = _main(monkeypatch, capsys, ["--record"], [], tmp_path)
+    assert code == 0 and list((tmp_path / "cache").glob("*-own.json")) and "problems" not in out
+
+
 def test_a_bless_records_references_only_and_needs_a_reason():
     import subprocess
 
