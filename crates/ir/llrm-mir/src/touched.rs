@@ -430,6 +430,26 @@ impl Function {
         (!touched.parameters).then(|| touched.reach(self))
     }
 
+    /// What `changes` touched, by class and by block: the digest of one window
+    /// of a log that is drained as it goes (`take_changes`).
+    pub fn edits_of(
+        &self,
+        context: &Context,
+        changes: &[Change],
+    ) -> kinds::Edits {
+        kinds::Edits::of(&self.touched_by(changes), context, self)
+    }
+
+    /// What the edits since `mark` touched, by class and by block
+    /// (`kinds::Edits`), or none where the history from there is gone.
+    pub fn edits_since(
+        &self,
+        context: &Context,
+        mark: Mark,
+    ) -> Option<kinds::Edits> {
+        Some(kinds::Edits::of(&self.touched_since(mark)?, context, self))
+    }
+
     /// The digest of `changes`, the log since some mark.
     pub fn touched_by(
         &self,

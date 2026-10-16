@@ -1,6 +1,6 @@
 use crate::context::Context;
 use crate::depends::Depends;
-use crate::kinds::{self, Kinds, Reads};
+use crate::kinds::{self, Edits, Kinds, Reads};
 use crate::module::{Function, InstId, Module, Operand};
 use crate::opcode::{BinaryOp, Flags, Opcode};
 use crate::{Position, parse};
@@ -245,4 +245,62 @@ fn the_class_form_answers_as_the_predicate_form_does() {
             assert_eq!(by_classes, by_predicates, "{edit} / {name}");
         }
     }
+}
+
+/// The digest of a window answers as the `Touched` it comes from does, for the
+/// two flows passes declare, and two windows add: what a step reads of the
+/// edits since it last ran is the sum of the windows between, found without the
+/// log.
+#[test]
+fn a_window_digest_answers_as_its_touched_does_and_windows_add() {
+    let readers = [
+        Reads { kinds: Kinds::PHI | Kinds::BRANCH, keyed: Kinds::NONE, stops: Some(Kinds::NONE) },
+        Reads { kinds: Kinds::STORE_INT, keyed: Kinds::NONE, stops: Some(Kinds::NONE) },
+        Reads { kinds: Kinds::ARITH, keyed: Kinds::NONE, stops: None },
+        Reads::analysis(Kinds::LOAD | Kinds::CALL, Kinds::CALL, None),
+        Reads::analysis(Kinds::CAST_PTR, Kinds::NONE, Some(Kinds::NONE)),
+    ];
+    let mut fresh = module();
+    let (context, f) = fresh.function_mut("f").expect("@f");
+    let (a, first) = (Operand::Value(f.parameters()[0]), f.mark());
+    f.set_operand(named(f, "y"), 1, a);
+    let second = f.mark();
+    let st = stores(f)[1];
+    f.erase(st).expect("erased");
+    let (one, two) =
+        (f.edits_since(context, first).expect("history"), f.edits_since(context, second).expect("history"));
+    let (whole, early) = (f.touched_since(first).expect("history"), f.touched_since(first).expect("history"));
+    let _ = early;
+    let mut summed = Edits::of(&f.touched_since(first).expect("history"), context, f);
+    // The first window alone: the mul's operand, up to the erase.
+    let mut front = f.touched_since(first).expect("history");
+    front.erased = Default::default();
+    let front = Edits::of(&front, context, f);
+    let mut added = front.clone();
+    added.merge(&two);
+    for reads in &readers {
+        assert_eq!(one.meets(reads), Some(!whole.leaves(context, f, reads)), "{reads:?}");
+        assert_eq!(one.blocks_meeting(reads), whole.blocks_meeting(context, f, reads), "{reads:?}");
+        assert_eq!(added.meets(reads), one.meets(reads), "windows add: {reads:?}");
+    }
+    assert!(Edits::default().is_empty());
+    summed.merge(&Edits::default());
+    assert_eq!(summed.meets(&readers[0]), one.meets(&readers[0]));
+    let bounded = Reads { kinds: Kinds::STORE, keyed: Kinds::NONE, stops: Some(Kinds::BRANCH) };
+    assert_eq!(one.meets(&bounded), None, "a bounded flow is the Touched's to answer");
+}
+
+/// A window of a drained log is digested from the changes taken, not from a
+/// mark the log no longer holds.
+#[test]
+fn a_window_taken_from_the_log_is_digested_from_the_changes() {
+    let mut fresh = module();
+    let (context, f) = fresh.function_mut("f").expect("@f");
+    let a = Operand::Value(f.parameters()[0]);
+    let _ = f.take_changes();
+    f.set_operand(named(f, "y"), 1, a);
+    let taken = f.take_changes();
+    let window = f.edits_of(context, &taken);
+    assert!(window.meets(&Reads { kinds: Kinds::ARITH, keyed: Kinds::NONE, stops: None }) == Some(true));
+    assert!(window.meets(&Reads { kinds: Kinds::STORE, keyed: Kinds::NONE, stops: None }) == Some(false));
 }

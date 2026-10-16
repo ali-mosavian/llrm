@@ -248,3 +248,186 @@ impl Reads {
         Self { kinds: kinds | Kinds::CFG | Kinds::SIGNATURE, keyed, stops }
     }
 }
+
+/// What one window of edits touched, by class and by block, found once from its
+/// `Touched` for the readers that ask again and again (a pass per step of a
+/// round): `meets` and `blocks_meeting` cost the classes, not the edits.
+/// Windows add (`merge`), so what was edited since some step ran, apart from a
+/// pass's own edits, is the sum of the other steps' windows, not the log read
+/// again.
+///
+/// It answers the two flows the passes declare: none (`Reads::stops` is
+/// `None`, a change is the instruction's own) and unbounded (`Some(NONE)`,
+/// followed to every user); a reader that stops the flow at some classes asks
+/// the `Touched` (`Touched::leaves`).
+#[derive(Clone, Debug, Default)]
+pub struct Edits {
+    /// The classes of the instructions added, moved or rewritten.
+    direct: Kinds,
+    /// Those and the classes of every instruction their values reach.
+    flowed: Kinds,
+    /// The classes of the instructions erased; of those, the ones whose
+    /// opcode does something besides make a value.
+    erased: Kinds,
+    erased_effectful: Kinds,
+    /// A block was made or erased; the parameters changed.
+    blocks_changed: bool,
+    signature: bool,
+    /// The blocks of the instructions of a class touched, and reached, by class
+    /// bit; and every block an edit was in, for what an erased instruction
+    /// leaves no block of.
+    direct_blocks: Vec<(u32, crate::dense::IdSet<crate::module::BlockId>)>,
+    flowed_blocks: Vec<(u32, crate::dense::IdSet<crate::module::BlockId>)>,
+    touched_blocks: crate::dense::IdSet<crate::module::BlockId>,
+}
+
+fn add_block(
+    by_class: &mut Vec<(u32, crate::dense::IdSet<crate::module::BlockId>)>,
+    class: Kinds,
+    block: crate::module::BlockId,
+) {
+    for bit in (0..31).map(|at| 1u32 << at).filter(|bit| class.0 & bit != 0) {
+        match by_class.iter_mut().find(|(one, _)| *one == bit) {
+            Some((_, blocks)) => {
+                blocks.insert(block);
+            }
+            None => {
+                let mut blocks = crate::dense::IdSet::new();
+                blocks.insert(block);
+                by_class.push((bit, blocks));
+            }
+        }
+    }
+}
+
+impl Edits {
+    pub fn of(
+        touched: &crate::touched::Touched,
+        context: &Context,
+        function: &Function,
+    ) -> Self {
+        let mut found = Self {
+            blocks_changed: !touched.blocks_created.is_empty() || !touched.blocks_erased.is_empty(),
+            signature: touched.parameters,
+            touched_blocks: touched.blocks.clone(),
+            ..Self::default()
+        };
+        for inst in touched.erased.iter() {
+            let class = of(context, function, inst);
+            found.erased = found.erased | class;
+            if crate::depends::effectful(&function.instruction(inst).opcode) {
+                found.erased_effectful = found.erased_effectful | class;
+            }
+        }
+        let mut work: Vec<InstId> = touched.insts.iter().collect();
+        let mut seen = touched.insts.clone();
+        for inst in touched.insts.iter() {
+            let class = of(context, function, inst);
+            found.direct = found.direct | class;
+            if let Some(block) = function.parent(inst) {
+                add_block(&mut found.direct_blocks, class, block);
+            }
+        }
+        while let Some(inst) = work.pop() {
+            let class = of(context, function, inst);
+            found.flowed = found.flowed | class;
+            if let Some(block) = function.parent(inst) {
+                add_block(&mut found.flowed_blocks, class, block);
+            }
+            let Some(result) = function.instruction(inst).result else { continue };
+            for user in function.users(result) {
+                if seen.insert(user.user) {
+                    work.push(user.user);
+                }
+            }
+        }
+        found
+    }
+
+    /// The edits of `other` as well.
+    pub fn merge(
+        &mut self,
+        other: &Self,
+    ) {
+        self.direct = self.direct | other.direct;
+        self.flowed = self.flowed | other.flowed;
+        self.erased = self.erased | other.erased;
+        self.erased_effectful = self.erased_effectful | other.erased_effectful;
+        self.blocks_changed |= other.blocks_changed;
+        self.signature |= other.signature;
+        self.touched_blocks.extend(other.touched_blocks.iter());
+        for (mine, theirs) in
+            [(&mut self.direct_blocks, &other.direct_blocks), (&mut self.flowed_blocks, &other.flowed_blocks)]
+        {
+            for (bit, blocks) in theirs {
+                match mine.iter_mut().find(|(one, _)| one == bit) {
+                    Some((_, held)) => held.extend(blocks.iter()),
+                    None => mine.push((*bit, blocks.clone())),
+                }
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.direct.is_none() && self.erased.is_none() && !self.blocks_changed && !self.signature
+    }
+
+    /// The classes an edit reached: touched, or the value of one that was.
+    pub fn reached(
+        &self,
+        flowing: bool,
+    ) -> Kinds {
+        if flowing { self.flowed } else { self.direct }
+    }
+
+    /// Whether the edits reach a reader of `reads`; none for a flow this does
+    /// not keep (a bounded `stops`).
+    pub fn meets(
+        &self,
+        reads: &Reads,
+    ) -> Option<bool> {
+        let flowing = Self::flow(reads)?;
+        Some(
+            (self.blocks_changed && reads.kinds.meets(Kinds::CFG))
+                || (self.signature && reads.kinds.meets(Kinds::SIGNATURE))
+                || reads.keyed.meets(self.erased)
+                || reads.kinds.meets(self.erased_effectful)
+                || reads.kinds.meets(self.reached(flowing)),
+        )
+    }
+
+    /// The blocks of the instructions the edits touched or reached that `reads`
+    /// models; none where it cannot say (the CFG or the signature changed for a
+    /// reader that sees them, or a flow this does not keep).
+    pub fn blocks_meeting(
+        &self,
+        reads: &Reads,
+    ) -> Option<crate::dense::IdSet<crate::module::BlockId>> {
+        let flowing = Self::flow(reads)?;
+        if (self.blocks_changed && reads.kinds.meets(Kinds::CFG))
+            || (self.signature && reads.kinds.meets(Kinds::SIGNATURE))
+        {
+            return None;
+        }
+        let mut blocks = crate::dense::IdSet::new();
+        // An erased instruction leaves no block: every block of an edit.
+        if reads.keyed.meets(self.erased) || reads.kinds.meets(self.erased) {
+            blocks.extend(self.touched_blocks.iter());
+        }
+        let by_class = if flowing { &self.flowed_blocks } else { &self.direct_blocks };
+        for (bit, held) in by_class {
+            if reads.kinds.0 & bit != 0 {
+                blocks.extend(held.iter());
+            }
+        }
+        Some(blocks)
+    }
+
+    fn flow(reads: &Reads) -> Option<bool> {
+        match reads.stops {
+            None => Some(false),
+            Some(stops) if stops.is_none() => Some(true),
+            Some(_) => None,
+        }
+    }
+}

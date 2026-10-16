@@ -34,6 +34,10 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   in this form, `Touched::kinds` the classes an edit touched, and
   `Touched::blocks_meeting(&Reads)` the blocks a regional run of a pass looks
   at. A test holds the class form to the predicate form on a script of edits.
+  `Edits` is the digest of one window of edits (`Function::edits_of(changes)`
+  for a log drained as it goes): its classes, direct and followed through
+  values, and its blocks by class; windows add (`merge`), so a pass that last
+  ran some steps ago asks the sum of the windows since without reading the log.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`.
 
