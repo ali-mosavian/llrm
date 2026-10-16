@@ -115,6 +115,7 @@ pub fn selected_checking(
         unit.registers_cc = Some(cc_of(&profile.registers)?).filter(|cc| cc != "cdecl");
         unit.entry = profile.entry.clone();
         unit.default_registers = profile.default_registers.clone();
+        unit.hardware = profile.hardware.clone();
         unit.entry_cc = calling
             .named(&profile.entry_convention)
             .and_then(|one| one.cc.clone())
@@ -209,6 +210,8 @@ pub struct Profile {
     /// An interrupt handler's parameters, in order: the registers its frame
     /// holds, by name. None where the target has no interrupt handlers.
     pub interrupt_parameters: Vec<String>,
+    /// Open Watcom's registers, for inline code that names them.
+    pub hardware: crate::hwreg::Registers,
 }
 
 impl Profile {
@@ -287,6 +290,11 @@ impl Profile {
             // of Borland's to undo.
             header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
+            // Only a target that has inline code naming registers states them.
+            hardware: match frontend.get("registers").and_then(toml::Value::as_table) {
+                Some(table) => crate::hwreg::Registers::parse(table)?,
+                None => crate::hwreg::Registers::default(),
+            },
         })
     }
 }
@@ -829,6 +837,21 @@ mod tests {
         };
         assert!(before("fill_", "db 0b4h,00ah", "dx,"), "{asm}");
         assert!(before("sum_", "db 002h,0c3h", "bx,"), "{asm}");
+    }
+
+    /// A Borland `__asm { fld x }` block naming frame places has a save set of
+    /// its own, which took it for a pragma with registers: qcport's `_fsin`
+    /// and `_ftol_short` did not compile ("F.0 is inline code with registers
+    /// and a symbol reference"), found by CI, not by the committed streams.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_an_asm_block_naming_frame_places_is_not_a_pragma_with_registers() {
+        let source = Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c/inlinecode.c");
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records inlinecode.c");
+        let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
+        super::selected(&text, "inlinecode", None, &options).expect("compiles");
     }
 
     /// Inline code that changes SI (`__modify [__si]`) in a function whose

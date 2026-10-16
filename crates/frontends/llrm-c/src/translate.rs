@@ -694,6 +694,9 @@ struct Body<'a, 't> {
 // (x86auxcc.h and cgauxcc.h).
 const SPECIAL_RETURN: i64 = 0x1;
 const MODIFY_EXACT: i64 = 0x40;
+/// Inline code that names frame places (`__asm { fld x }`): the front end gives
+/// it a save set of its own, which is not a pragma's `__modify`.
+const NEEDS_BP_CHAIN: i64 = 0x100_0000;
 const NO_MEMORY: i64 = 0x300;
 
 /// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
@@ -709,10 +712,11 @@ fn states_registers(
     unit: &hir::Unit,
 ) -> bool {
     symbol.code.is_some()
+        && symbol.call_target & NEEDS_BP_CHAIN == 0
         && (symbol.register_list != unit.default_registers
             || symbol.call_target & (SPECIAL_RETURN | MODIFY_EXACT) != 0
             || crate::hwreg::Set::parse(&symbol.saved_registers)
-                .is_some_and(|saved| !saved.is_empty() && saved.low & 0x3ff != 0x3ff))
+                .is_some_and(|saved| !saved.is_empty() && !unit.hardware.keeps_general(saved)))
 }
 
 /// The inline code a statement runs as its last call, if it is a
@@ -2962,7 +2966,7 @@ impl<'a, 't> Body<'a, 't> {
         }
         let word = self.types.int(2, false);
         // Each input register, whole, with the bytes of it that are set.
-        let mut inputs: Vec<(&'static str, Vec<(i64, bool)>)> = Vec::new();
+        let mut inputs: Vec<(String, Vec<(i64, bool)>)> = Vec::new();
         for ((node, type_), set) in parms.iter().zip(&listed) {
             let value = self.value_as(node, type_)?;
             // A pointer is its own bits.
@@ -2973,7 +2977,7 @@ impl<'a, 't> Body<'a, 't> {
             } else {
                 value
             };
-            let Some(set) = Set::parse(set).and_then(Set::names) else {
+            let Some(set) = Set::parse(set).and_then(|set| self.unit.hardware.names(set)) else {
                 return self.refuse(format!("{name}'s parameter is in a register this target lacks"));
             };
             let bytes = match self.shape(value) {
@@ -2986,29 +2990,18 @@ impl<'a, 't> Body<'a, 't> {
             }
             let dword = self.types.int(4, false);
             let whole = (bytes == 4).then(|| self.resized(value, false, dword));
+            let registers = &self.unit.hardware;
             match (set.as_slice(), bytes) {
-                ([register], 1 | 2)
-                    if !matches!(*register, "ds" | "es") && register.len() == 2 && !register.ends_with(['h', 'l']) =>
-                {
+                ([register], 1 | 2) if registers.is_word(register) => {
                     let wide = self.resized(value, false, word);
-                    inputs.push((register, vec![(wide, false)]));
+                    inputs.push((register.clone(), vec![(wide, false)]));
                 }
-                ([register], 1) if matches!(
-                    *register,
-                    "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh"
-                ) => {
+                // A byte register takes the low byte of a value of a byte or a
+                // word.
+                ([register], 1) if registers.half(register).is_some() => {
+                    let high = registers.half(register).expect("a half");
+                    let root = registers.whole_of(register).to_owned();
                     let wide = self.resized(value, false, word);
-                    let (root, high) = match register.as_bytes() {
-                        [r, b'l'] => (*r, false),
-                        [r, b'h'] => (*r, true),
-                        _ => unreachable!("a byte register"),
-                    };
-                    let root: &'static str = match root {
-                        b'a' => "ax",
-                        b'b' => "bx",
-                        b'c' => "cx",
-                        _ => "dx",
-                    };
                     inputs.push((root, vec![(wide, high)]));
                 }
                 ([high, low], 4) => {
@@ -3018,8 +3011,7 @@ impl<'a, 't> Body<'a, 't> {
                     let top = self.resized(top, false, word);
                     let bottom = self.resized(whole, false, word);
                     for (register, part) in [(high, top), (low, bottom)] {
-                        let register: &'static str = register;
-                        inputs.push((register, vec![(part, false)]));
+                        inputs.push((register.clone(), vec![(part, false)]));
                     }
                 }
                 _ => return self.refuse(format!("{name}'s parameter does not fit its registers {set:?}")),
@@ -3030,7 +3022,7 @@ impl<'a, 't> Body<'a, 't> {
         let mut registers: Vec<String> = Vec::new();
         let mut at = 0;
         while at < inputs.len() {
-            let root = inputs[at].0;
+            let root = inputs[at].0.clone();
             let mut parts: Vec<(i64, bool)> = Vec::new();
             while at < inputs.len() && inputs[at].0 == root {
                 parts.extend(inputs[at].1.iter().copied());
@@ -3050,74 +3042,61 @@ impl<'a, 't> Body<'a, 't> {
                 });
             }
             operands.push(value_ref(value.expect("a part")));
-            registers.push(root.to_owned());
+            registers.push(root);
         }
         // What it answers in.
         let target = symbol.call_target;
         let result_type = self.ty(&call.type_)?;
         let returns_void = self.types.shape(result_type) == Shape::Void;
-        let answer: Vec<&'static str> = if returns_void {
+        let answer: Vec<String> = if returns_void {
             Vec::new()
         } else if target & SPECIAL_RETURN != 0 {
-            match Set::parse(&symbol.return_registers).and_then(Set::names) {
+            match Set::parse(&symbol.return_registers).and_then(|set| self.unit.hardware.names(set)) {
                 Some(names) => names,
                 None => return self.refuse(format!("{name} answers in a register this target lacks")),
             }
         } else {
-            match self.types.get(result_type).width {
-                1 => vec!["al"],
-                2 => vec!["ax"],
-                4 => vec!["dx", "ax"],
-                _ => return self.refuse(format!("{name} answers in the default registers with a result this size")),
+            match self.unit.hardware.answers.get(&self.types.get(result_type).width) {
+                Some(names) => names.clone(),
+                None => return self.refuse(format!("{name} answers in the default registers with a result this size")),
             }
         };
-        let wholes: Vec<&'static str> = answer
-            .iter()
-            .map(|one| match *one {
-                "al" | "ah" => "ax",
-                "bl" | "bh" => "bx",
-                "cl" | "ch" => "cx",
-                "dl" | "dh" => "dx",
-                other => other,
-            })
-            .collect();
+        let wholes: Vec<String> = answer.iter().map(|one| self.unit.hardware.whole_of(one).to_owned()).collect();
         // What it changes: whatever it does not keep, and, unless it says
         // exactly, what it takes and answers in.
         let saved = Set::parse(&symbol.saved_registers).unwrap_or_default();
-        let mut changed = Set { low: 0xffff_ffff, high: 0xffff_ffff }
-            .without(saved)
-            .without(Set { low: 0xfffc_0000, high: 0xffff_fffc });
+        let hw = &self.unit.hardware;
+        let mut changed = hw.universe().without(saved);
         if target & MODIFY_EXACT == 0 {
             for set in listed.iter().filter_map(|one| Set::parse(one)) {
                 changed = changed.with(set);
             }
             changed = changed.with(Set::parse(&symbol.return_registers).unwrap_or_default());
-            changed = changed.with(Set { low: 0x3, high: 0 });
+            changed = changed.with(hw.bits(&hw.accumulator).unwrap_or_default());
         }
-        let changed = changed.whole();
+        let changed = hw.whole(changed);
         let mut clobbers: Vec<String> = Vec::new();
-        for (bits, register) in
-            [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x2000, "es")]
-        {
-            if changed.low & bits == bits && !wholes.contains(&register) {
-                clobbers.push(register.to_owned());
+        for register in &hw.clobbered {
+            let bits = hw.bits(register).unwrap_or_default();
+            if changed.has(bits) && !wholes.contains(register) {
+                clobbers.push(register.clone());
             }
         }
-        if changed.low & 0x1_0000 != 0 || changed.low & 0x5c00 != 0 {
+        if hw.has_fixed(changed) {
             return self.refuse(format!("{name} changes a register an inline block cannot declare"));
         }
-        clobbers.push("flags".to_owned());
+        clobbers.push(self.unit.hardware.flags.clone());
         let memory = symbol.call_class & NO_MEMORY != NO_MEMORY;
         // One result per register it answers in.
         let mut results = Vec::new();
-        let mut seen: Vec<&'static str> = Vec::new();
+        let mut seen: Vec<String> = Vec::new();
         for register in &wholes {
             if !seen.contains(register) {
-                seen.push(register);
+                seen.push(register.clone());
                 results.push(self.value(word));
             }
         }
-        let outputs: Vec<String> = seen.iter().map(|one| (*one).to_owned()).collect();
+        let outputs: Vec<String> = seen.clone();
         self.instruction(Op::Asm, results.clone(), operands);
         let instruction = self.blocks[self.current].instructions.last_mut().expect("the asm instruction");
         instruction.asm = Some(h::Asm {
@@ -3131,13 +3110,13 @@ impl<'a, 't> Body<'a, 't> {
             return Ok(Got::Returned(None));
         }
         let ty = result_type;
-        let part = |register: &str| results[seen.iter().position(|one| *one == register).expect("an output")];
+        let part = |register: &str| results[seen.iter().position(|one| one == register).expect("an output")];
         let value = match answer.as_slice() {
             [_] => {
-                let whole = part(wholes[0]);
-                let narrow = answer[0].len() == 2 && answer[0].ends_with(['h', 'l']);
-                let whole = if narrow {
-                    let whole = if answer[0].ends_with('h') {
+                let whole = part(&wholes[0]);
+                let half = self.unit.hardware.half(&answer[0]);
+                let whole = if let Some(high) = half {
+                    let whole = if high {
                         let eight = self.constant(word, Number::Int(8.into()));
                         self.op(Op::Shr, word, vec![value_ref(whole), value_ref(eight)])
                     } else {
@@ -3152,8 +3131,8 @@ impl<'a, 't> Body<'a, 't> {
             }
             [_, _] => {
                 let dword = self.types.int(4, false);
-                let high = part(wholes[0]);
-                let low = part(wholes[1]);
+                let high = part(&wholes[0]);
+                let low = part(&wholes[1]);
                 let high = self.resized(high, false, dword);
                 let sixteen = self.constant(dword, Number::Int(16.into()));
                 let high = self.op(Op::Shl, dword, vec![value_ref(high), value_ref(sixteen)]);

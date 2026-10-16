@@ -29,6 +29,47 @@ header = "crates/frontends/llrm-c/src/borland.h"
 # (`calling.toml`'s `interrupt_frame`); what it writes to them is what it returns to.
 interrupt_parameters = ["bp", "di", "si", "ds", "es", "dx", "cx", "bx", "ax", "ip", "cs", "flags"]
 
+# Open Watcom's register sets as the front end records them (cgx86reg.h): the bits of each register in the first
+# word of a set, which whole register a half is part of, and its rank when a set is named high half first (a segment
+# above an offset, `dx` above `cx` above `bx` above `ax`). An inline block may declare changed `clobbered`, never `fixed`.
+[frontend.registers]
+accumulator = "ax"
+flags = "flags"
+segments = ["ds", "es", "cs", "ss"]
+clobbered = ["ax", "bx", "cx", "dx", "si", "di", "es"]
+fixed = ["bp", "sp", "ds", "cs", "st0"]
+universe = "3ffff:3"
+quad = ["ax", "bx", "cx", "dx"]
+
+set = [
+  { name = "ax", bits = 0x3, rank = 1 },
+  { name = "bx", bits = 0xc, rank = 2 },
+  { name = "cx", bits = 0x30, rank = 3 },
+  { name = "dx", bits = 0xc0, rank = 4 },
+  { name = "si", bits = 0x100 },
+  { name = "di", bits = 0x200 },
+  { name = "bp", bits = 0x400, rank = 2 },
+  { name = "sp", bits = 0x800 },
+  { name = "ds", bits = 0x1000, rank = 8 },
+  { name = "es", bits = 0x2000, rank = 8 },
+  { name = "cs", bits = 0x4000, rank = 8 },
+  { name = "ss", bits = 0x8000, rank = 8 },
+  { name = "ah", bits = 0x01, rank = 1, whole = "ax", high = true },
+  { name = "al", bits = 0x02, rank = 1, whole = "ax" },
+  { name = "bh", bits = 0x04, rank = 2, whole = "bx", high = true },
+  { name = "bl", bits = 0x08, rank = 2, whole = "bx" },
+  { name = "ch", bits = 0x10, rank = 3, whole = "cx", high = true },
+  { name = "cl", bits = 0x20, rank = 3, whole = "cx" },
+  { name = "dh", bits = 0x40, rank = 4, whole = "dx", high = true },
+  { name = "dl", bits = 0x80, rank = 4, whole = "dx" },
+  { name = "st0", bits = 0x10000 },
+]
+
+[frontend.registers.answer]
+1 = ["al"]
+2 = ["ax"]
+4 = ["dx", "ax"]
+
 # Every family names the OS the target is, `-bt=dos`: the front end otherwise predefines the host's (`__LINUX__`).
 # Borland's medium model: far code, near data, cdecl, signed char (long double is the x87 type: llrm-c adds -fld),
 # byte-packed structs, 16-bit enums, x87 inline, no stack probes, no default library. -fp3 is for

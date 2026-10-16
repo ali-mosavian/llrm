@@ -344,6 +344,8 @@ pub struct Unit {
     /// What the front end records of a function it passes in its default
     /// registers.
     pub default_registers: String,
+    /// The registers the front end names, from the target's description.
+    pub hardware: crate::hwreg::Registers,
     /// The `cc` of the convention a function the front end records as cdecl
     /// has, and one it records in its default registers; none where that is
     /// the C one (`ccc`).
