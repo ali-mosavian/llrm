@@ -96,8 +96,8 @@ impl Reach {
     }
 }
 
-/// Log entries and operands the digest's edge search has looked at, for a test
-/// that its work is linear in the edits.
+// Log entries and operands the digest's edge search has looked at, for a test
+// that its work is linear in the edits.
 #[cfg(test)]
 thread_local! {
     pub(crate) static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
