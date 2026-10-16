@@ -277,7 +277,9 @@ impl Profile {
             cpu: text(frontend, "watcom_cpu")?,
             convention: text(abi, "convention")?,
             entry: text(frontend, "entry")?,
-            entry_convention: text(frontend, "entry_convention")?,
+            // A family may state its own: Open Watcom's start-up calls `main` in
+            // the registers.
+            entry_convention: text(abi, "entry_convention").or_else(|_| text(frontend, "entry_convention"))?,
             default_registers: text(frontend, "default_registers")?,
             flags,
             long_double_bytes: 0,
@@ -846,6 +848,32 @@ mod tests {
         assert!(same.contains("mov bx, 3") && same.contains("call far ptr allocator"), "{same}");
         let other = build("#pragma aux allocator \"*\" __parm [__dx] [__ax] [__bx]").expect_err("another list");
         assert!(format!("{other:?}").contains("register calling convention"), "{other:?}");
+    }
+
+    /// Open Watcom's start-up calls `main_` with argc and argv in AX and DX;
+    /// under its ABI `main` was `_main` on the stack, the cdecl entry the
+    /// Borland start-up calls, and nothing linked.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_main_is_in_the_registers_under_the_watcom_abi() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("entry.c");
+        std::fs::write(&source, "int main(int argc, char **argv) { return argc + argv[0][0]; }\n").unwrap();
+        let listing = |family: &str| {
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some(family)).unwrap();
+            let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records entry.c");
+            let options = llrm_core::driver::Options {
+                abi: Some(family.to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            let built = super::selected(&text, "entry", None, &options).unwrap();
+            llrm_core::backend::masm::text(&built).unwrap()
+        };
+        let watcom = listing("watcom");
+        assert!(watcom.contains("public main_") && watcom.contains("add ax,"), "{watcom}");
+        let cdecl = listing("cdecl");
+        assert!(cdecl.contains("public _main") && !cdecl.contains("main_"), "{cdecl}");
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object

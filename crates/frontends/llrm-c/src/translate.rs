@@ -785,6 +785,10 @@ fn cleanup(
     // The entry is called by the runtime's start in the stack convention its
     // description names.
     if symbol.is_entry(&unit.entry) && !symbol.in_order() {
+        // A start-up that calls it in the registers gets the register convention.
+        if unit.registers_cc.is_some() && Some(&unit.entry_cc) == unit.registers_cc.as_ref() {
+            return Ok((StackCleanup::Callee, unit.registers_cc.clone()));
+        }
         return Ok((StackCleanup::Caller, None));
     }
     let stack = symbol.call_class & (hir::CALLER_POPS | hir::REVERSE_PARMS);

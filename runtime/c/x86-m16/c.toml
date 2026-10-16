@@ -46,6 +46,8 @@ registers = "watcall16"
 [frontend.abi.watcom]
 convention = "cdecl16"
 header = "crates/frontends/llrm-c/src/watcom.h"
+# Its start-up (cstrt086) calls `main_`, as the registers take argc and argv.
+entry_convention = "watcall16"
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"
 registers = "watcall16"

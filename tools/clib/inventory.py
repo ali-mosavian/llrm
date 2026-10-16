@@ -87,7 +87,7 @@ def run(job, args):
                *includes(args.ow, clib, sub, opts, args.headers), "-o", str(out), str(src)]
         tool = "llrm-c"
     else:
-        cmd = [str(args.jwasm), "-q", "-0", "-D__WASM__", "-D__MEDIUM__", "-D__FPC__", "-D__DOS__", "-D_M_I86", "-Fo" + str(out),
+        cmd = [str(args.jwasm), "-q", "-omf", "-Cp", "-Zg", "-Zm", "-0", "-D__WASM__", "-D__MEDIUM__", "-D__FPC__", "-D__DOS__", "-D_M_I86", "-Fo" + str(out),
                *includes(args.ow, clib, sub, opts, args.headers), str(src)]
         tool = "jwasm"
     done = subprocess.run(cmd, capture_output=True, text=True, cwd=args.out, errors="replace")
