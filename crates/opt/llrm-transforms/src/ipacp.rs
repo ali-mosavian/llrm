@@ -26,6 +26,10 @@
 //! A callee that is private, not addressed, and called only from the group
 //! needs no growth test: every call goes to the copy and the original dies.
 //!
+//! A caller whose calls go to a copy that says what the callee said (the same
+//! attributes) is vouched for (`Changed::unsound` names the others): its passes
+//! need not look at the new name ([`crate::settled`]).
+//!
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
@@ -159,6 +163,9 @@ type Key = (GlobalId, Vec<Option<ConstantId>>);
 pub struct Changed {
     pub added: Vec<GlobalId>,
     pub edited: Vec<GlobalId>,
+    /// The callers among `edited` that a call was sent to a copy that says
+    /// other than the callee did: their edit is more than a new name.
+    pub unsound: Vec<GlobalId>,
 }
 
 /// Every call of a constant context worth a clone, cloned.
@@ -171,7 +178,7 @@ pub fn cloned(
     clone: bool,
     state: &mut Cloning,
 ) -> Changed {
-    let mut changed = Changed { added: Vec::new(), edited: Vec::new() };
+    let mut changed = Changed { added: Vec::new(), edited: Vec::new(), unsound: Vec::new() };
     // GCC: "Not considering %s for cloning; -fipa-cp-clone disabled." What -O2
     // does without it is the propagation of constants every call agrees on.
     if !clone {
@@ -487,6 +494,25 @@ fn redirect(
     sites: &[(GlobalId, InstId, i64)],
     changed: &mut Changed,
 ) {
+    let same_said = match (
+        module.global(clone).function(),
+        sites.first().and_then(|&(caller, call, _)| {
+            let function = module.global(caller).function()?;
+            let Some(&Operand::Constant(old)) = function.instruction(call).operands.last() else { return None };
+            match module.context.get(old).kind {
+                ConstantKind::Global(callee) => module.global(callee).function(),
+                _ => None,
+            }
+        }),
+    ) {
+        (Some(copy), Some(original)) => {
+            copy.attrs == original.attrs
+                && copy.return_attrs == original.return_attrs
+                && copy.parameter_attrs == original.parameter_attrs
+                && copy.calling_convention == original.calling_convention
+        }
+        _ => false,
+    };
     for &(caller, call, _) in sites {
         let GlobalKind::Function(function) = &module.globals[caller.0 as usize].kind else { continue };
         let Some(&Operand::Constant(old)) = function.instruction(call).operands.last() else { continue };
@@ -497,6 +523,9 @@ fn redirect(
         function.set_operand(call, last, target);
         if !changed.edited.contains(&caller) {
             changed.edited.push(caller);
+        }
+        if !same_said && !changed.unsound.contains(&caller) {
+            changed.unsound.push(caller);
         }
     }
 }

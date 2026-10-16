@@ -804,6 +804,7 @@ impl Outer {
 
     /// `cached`, borrowed for as long as the proxy.
     pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
+        read::note(read::of(M::NAME));
         self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
     }
 
@@ -817,6 +818,53 @@ impl Outer {
             && self.globals == other.globals
             && self.modules.len() == other.modules.len()
             && self.modules.iter().all(|(key, one)| other.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
+    }
+}
+
+/// Which parts of the module's facts a pass has read, noted as they are: by
+/// what an analysis it asks for reads, and by what it asks of the proxy itself.
+/// A body's pipeline is run again only where a part a pass read has changed.
+pub mod read {
+    use std::cell::Cell;
+
+    /// What each function does to memory and how many registers its call
+    /// keeps (`CalleeEffects`, `CallRegisters`).
+    pub const CALLEES: u8 = 1;
+    /// Each function's summary (`Summaries`).
+    pub const SUMMARIES: u8 = 2;
+    /// What `GlobalsAA` holds.
+    pub const GLOBALS: u8 = 4;
+    /// What calling back into the module may do (`Callbacks`).
+    pub const CALLBACKS: u8 = 8;
+    /// The other functions' and variables' declarations, and the globals'
+    /// sizes.
+    pub const DECLARATIONS: u8 = 16;
+    pub const ALL: u8 = 31;
+
+    thread_local! {
+        static READ: Cell<u8> = const { Cell::new(0) };
+    }
+
+    /// Notes the parts `bits` as read.
+    pub fn note(bits: u8) {
+        READ.with(|read| read.set(read.get() | bits));
+    }
+
+    /// What was noted, replaced by `bits`.
+    pub fn swap(bits: u8) -> u8 {
+        READ.with(|read| read.replace(bits))
+    }
+
+    /// The part a module analysis of this name is.
+    pub fn of(name: &str) -> u8 {
+        match name {
+            "callee-effects" | "call-registers" => CALLEES,
+            "summaries" => SUMMARIES,
+            "globals-aa" => GLOBALS,
+            "callbacks" => CALLBACKS,
+            "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
+            _ => ALL,
+        }
     }
 }
 
@@ -854,6 +902,8 @@ struct Entry<A: Analysis> {
     outer: Rc<Outer>,
     /// The function's history when the result was derived.
     mark: crate::module::Mark,
+    /// Which parts of the module's facts it read (`read`).
+    bits: u8,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -1080,11 +1130,22 @@ impl Analyses {
     }
 
     pub fn outer(&self) -> &Rc<Outer> {
+        read::note(read::DECLARATIONS);
+        &self.outer
+    }
+
+    /// The proxy, not noted as a read: for the manager's own use.
+    pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
+        if A::READS_OUTER
+            && let Some(entry) = self.cache.get(&TypeId::of::<A>())
+        {
+            read::note(entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").bits);
+        }
         self.cache
             .get(&TypeId::of::<A>())
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
@@ -1101,7 +1162,12 @@ impl Analyses {
     ) {
         self.cache.insert(
             TypeId::of::<A>(),
-            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result,
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: if A::READS_OUTER { read::ALL } else { 0 },
+            }),
         );
     }
 
@@ -1115,11 +1181,16 @@ impl Analyses {
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            if A::READS_OUTER {
+                read::note(entry.bits);
+            }
             counted(A::NAME, true);
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
+        let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
+        let mut old_reads = 0;
         let old_kept = if why() {
             self.kept.get(&key).map(|o| {
                 (Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result), o.mark())
@@ -1132,6 +1203,7 @@ impl Analyses {
             // reference there is.
             let (result, outer, mark) = {
                 let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+                old_reads = old.bits;
                 (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
             };
             drop(held);
@@ -1218,6 +1290,13 @@ impl Analyses {
             Some(made) => made,
             None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
         };
+        // What it read of the module: what the result it was brought up to date
+        // from read, and what the bringing read.
+        let mine = read::swap(before_reads);
+        let bits = if A::READS_OUTER { mine | old_reads } else { 0 };
+        if A::READS_OUTER {
+            read::note(bits);
+        }
         if why() {
             let class = match self.evicted.remove(&key) {
                 Some(old) => {
@@ -1246,7 +1325,12 @@ impl Analyses {
         }
         self.cache.insert(
             key,
-            Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result: Rc::clone(&result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits,
+            }),
         );
         result
     }

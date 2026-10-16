@@ -3,7 +3,7 @@
 //! source without passing the header. Back edges into one header make one
 //! loop.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::dominators::DominatorTree;
 use crate::module::{BlockId, Function, MetadataNode, MetadataOperand};
@@ -11,10 +11,70 @@ use crate::module::{BlockId, Function, MetadataNode, MetadataOperand};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Loop {
     pub header: BlockId,
-    pub blocks: BTreeSet<BlockId>,
+    pub blocks: Body,
     pub latches: Vec<BlockId>,
     /// The innermost loop holding this one.
     pub parent: Option<usize>,
+}
+
+/// The blocks of one loop, those of the loops inside it too, as the forest of
+/// the function holds them: asking whether a block is in it takes no more than
+/// a lookup, and naming them all costs what they are.
+#[derive(Clone)]
+pub struct Body {
+    forest: std::rc::Rc<crate::forest::Forest>,
+    index: usize,
+}
+
+impl Body {
+    pub fn contains(
+        &self,
+        block: &BlockId,
+    ) -> bool {
+        self.forest.contains(self.index, i64::from(block.0))
+    }
+
+    pub fn len(&self) -> usize {
+        self.forest.loops[self.index].size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The blocks in ascending order.
+    pub fn iter(&self) -> std::vec::IntoIter<BlockId> {
+        let mut found: Vec<BlockId> = self.forest.blocks(self.index).map(|at| BlockId(at as u32)).collect();
+        found.sort_unstable();
+        found.into_iter()
+    }
+}
+
+impl std::fmt::Debug for Body {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl PartialEq for Body {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.len() == other.len() && self.iter().eq(other.iter())
+    }
+}
+
+impl<'a> IntoIterator for &'a Body {
+    type Item = BlockId;
+    type IntoIter = std::vec::IntoIter<BlockId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -29,40 +89,43 @@ impl LoopInfo {
         function: &Function,
         tree: &DominatorTree,
     ) -> Self {
-        let mut latches: BTreeMap<BlockId, Vec<BlockId>> = BTreeMap::new();
-        for &block in function.layout() {
-            if !tree.is_reachable(block) {
-                continue;
-            }
-            for successor in function.successors(block) {
-                if tree.dominates(successor, block) && !latches.get(&successor).is_some_and(|one| one.contains(&block))
-                {
-                    latches.entry(successor).or_default().push(block);
-                }
-            }
+        let nodes: Vec<(i64, Vec<i64>)> = function
+            .layout()
+            .iter()
+            .map(|&block| (i64::from(block.0), function.successors(block).iter().map(|one| i64::from(one.0)).collect()))
+            .collect();
+        let slices: Vec<(i64, &[i64])> = nodes.iter().map(|(at, succ)| (*at, succ.as_slice())).collect();
+        let forest = std::rc::Rc::new(crate::forest::forest(
+            &slices,
+            function.layout().first().map(|block| i64::from(block.0)),
+            &|at| tree.is_reachable(BlockId(at as u32)),
+            &|dominator, at| tree.dominates(BlockId(dominator as u32), BlockId(at as u32)),
+        ));
+        // Outer loops first, so each block's innermost loop is its last; the
+        // larger first, and by header among the same size.
+        let mut order: Vec<usize> = (0..forest.loops.len()).collect();
+        order.sort_by_key(|&index| (std::cmp::Reverse(forest.loops[index].size), forest.loops[index].header));
+        let mut place = vec![0; forest.loops.len()];
+        for (at, &index) in order.iter().enumerate() {
+            place[index] = at;
         }
-        let mut loops: Vec<Loop> = latches
-            .into_iter()
-            .map(|(header, latches)| {
-                let mut blocks = BTreeSet::from([header]);
-                let mut work = latches.clone();
-                while let Some(block) = work.pop() {
-                    if blocks.insert(block) {
-                        work.extend(function.predecessors(block).into_iter().filter(|one| tree.is_reachable(*one)));
-                    }
+        let loops: Vec<Loop> = order
+            .iter()
+            .map(|&index| {
+                let one = &forest.loops[index];
+                Loop {
+                    header: BlockId(one.header as u32),
+                    blocks: Body { forest: std::rc::Rc::clone(&forest), index },
+                    latches: one.latches.iter().map(|&at| BlockId(at as u32)).collect(),
+                    parent: one.parent.map(|parent| place[parent]),
                 }
-                Loop { header, blocks, latches, parent: None }
             })
             .collect();
-        // Outer loops first, so each block's innermost loop is its last.
-        loops.sort_by_key(|one| std::cmp::Reverse(one.blocks.len()));
-        let mut innermost = BTreeMap::new();
-        for at in 0..loops.len() {
-            loops[at].parent = (0..at).rev().find(|&outer| loops[outer].blocks.is_superset(&loops[at].blocks));
-            for &block in &loops[at].blocks {
-                innermost.insert(block, at);
-            }
-        }
+        let innermost = function
+            .layout()
+            .iter()
+            .filter_map(|&block| forest.innermost(i64::from(block.0)).map(|index| (block, place[index])))
+            .collect();
         Self { loops, innermost }
     }
 
@@ -113,7 +176,7 @@ pub fn exits(
     one: &Loop,
 ) -> bool {
     !one.latches.is_empty()
-        && one.blocks.iter().any(|&block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
+        && one.blocks.iter().any(|block| function.successors(block).iter().any(|next| !one.blocks.contains(next)))
 }
 
 /// Whether the loop `latch` closes carries `llvm.loop.mustprogress`.
