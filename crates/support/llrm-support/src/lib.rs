@@ -55,5 +55,3 @@ mod decoder_tests {
         }
     }
 }
-
-fn   badly_formatted( ) { let x=1 ;}
