@@ -81,10 +81,8 @@ impl Set {
     }
 
     /// The names in the set, whole registers where both halves are in, the
-    /// high half first: a segment register above an offset, an `si` or `di`
-    /// below the register it pairs with, else the later of `a`, `b`, `c`, `d`
-    /// above the earlier. None where a bit has no name here (FS, GS, the
-    /// 32-bit halves).
+    /// high half (a far pointer's segment) first. None where a bit has no name
+    /// here (FS, GS, the 32-bit halves).
     pub fn names(self) -> Option<Vec<&'static str>> {
         if self.high != 0 || self.low & 0xffff_0000 & !0x1_0000 != 0 {
             return None;
@@ -103,12 +101,18 @@ impl Set {
                 left &= !bits;
             }
         }
+        // Which of two registers holds the segment: the front end lets the set decide,
+        // not the order it was written in. Open Watcom's own compiler, asked with
+        // every pair (`[__si __ax]`, `[__ax __si]`, ...), takes the offset from the
+        // first of ax, bx, si, di, dx, cx, and a segment register is always the
+        // segment.
         let rank = |name: &str| match name {
-            "ds" | "es" | "cs" | "ss" => 8,
+            "ds" | "es" | "cs" | "ss" => 9,
+            "cx" | "ch" | "cl" => 5,
             "dx" | "dh" | "dl" => 4,
-            "cx" | "ch" | "cl" => 3,
-            "bx" | "bh" | "bl" | "bp" => 2,
-            "ax" | "ah" | "al" => 1,
+            "di" => 3,
+            "si" => 2,
+            "bx" | "bh" | "bl" | "bp" => 1,
             _ => 0,
         };
         found.sort_by_key(|name| std::cmp::Reverse(rank(name)));
@@ -134,7 +138,27 @@ mod tests {
         assert_eq!(names("2200:0"), ["es", "di"]);
         assert_eq!(names("c:0"), ["bx"]);
         assert_eq!(names("2:0"), ["al"]);
-        assert_eq!(names("10103:0"), ["ax", "si", "st0"]);
+        assert_eq!(names("10103:0"), ["si", "ax", "st0"]);
+    }
+
+    /// `[__si __ax]` is a far pointer whose segment is SI (clib's `_fmemmove`
+    /// moves SI into DS), whichever way it is written. A set read in bit order
+    /// took AX for the segment, and `_fmemmove` copied from the wrong place.
+    /// Each row is what Open Watcom's compiler does with that pair.
+    #[test]
+    fn test_the_segment_of_a_register_pair_is_the_one_the_front_end_picks() {
+        for (set, high, low) in [
+            ("103:0", "si", "ax"),
+            ("10c:0", "si", "bx"),
+            ("230:0", "cx", "di"),
+            ("300:0", "di", "si"),
+            ("f0:0", "cx", "dx"),
+            ("20c:0", "di", "bx"),
+            ("2200:0", "es", "di"),
+        ] {
+            let set = Set::parse(set).unwrap();
+            assert_eq!(set.names().unwrap(), [high, low], "{set:?}");
+        }
     }
 
     #[test]
