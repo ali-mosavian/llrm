@@ -1220,6 +1220,7 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
     assert not {"fmt", "docs", "products"} & {s for g, steps in cfg["groups"].items() if g != "static" for s in steps}
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "  build:\n    needs: [plan, static]" in workflow and 'if g != "static"' in workflow, "the matrix never runs the static group"
+    assert "needs: [plan, build]\n    # A skipped ancestor" in workflow and "needs.build.result == 'success' }}" in workflow, "a skipped static job must not skip the gate"
 
 
 def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():

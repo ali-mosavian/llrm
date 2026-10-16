@@ -149,6 +149,8 @@ jobs:
 
   gate:
     needs: [plan, build]
+    # A skipped ancestor (static, when nothing it checks changed) would skip this job too: success() looks at every job upstream.
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
     timeout-minutes: 60
     strategy:
