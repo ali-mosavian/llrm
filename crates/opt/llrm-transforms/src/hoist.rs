@@ -29,7 +29,9 @@
 //! spill model spills, and what reads them, stay; a displacement the accesses
 //! fold, or a value rebuilt at each read, is not charged. A floating value held
 //! across the loop is charged its release. At -Os the run is priced in bytes,
-//! every block once.
+//! every block once. The moved function's liveness is the kept one's with the
+//! values the run moved solved again (`profit::spill_forecast_after`;
+//! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
 //!
 //! A hoisted load is priced by what it saves each trip. A floating load its one
 //! reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
@@ -215,7 +217,9 @@ pub fn hoisted(
         }
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
         let run = match &frequency {
-            Some(frequency) => _affordable(unit, &outer, run, before, into, one, &costs, room, frequency, &mut held),
+            Some(frequency) => {
+                _affordable(unit, analyses, moved, &outer, run, before, into, one, &costs, room, frequency, &mut held)
+            }
             None => run,
         };
         if run.is_empty() {
@@ -239,6 +243,8 @@ pub fn hoisted(
 /// counted.
 fn _affordable(
     unit: &passes::Unit,
+    analyses: &mut llrm_mir::passes::Analyses,
+    moved_before: bool,
     outer: &Outer,
     mut run: Vec<InstId>,
     before: InstId,
@@ -249,11 +255,46 @@ fn _affordable(
     frequency: &std::collections::BTreeMap<i64, i64>,
     held: &mut Option<i64>,
 ) -> Vec<InstId> {
-    let price =
-        |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
+    // Each clone is priced from this, its liveness solved again for the values
+    // the run moves alone (the whole function was solved for each of 28
+    // forecasts: 63% of the spill model on d_faces at -Os).
+    // The cache holds the pressure of the function before the motions this pass
+    // has made, which are not told to it until it is let go.
+    if moved_before && room.priced() {
+        analyses.invalidate(unit.function, &PreservedAnalyses::all().except::<crate::spill::Pressure>());
+    }
+    let base =
+        (room.priced()).then(|| analyses.get::<crate::spill::Pressure>(unit.context, unit.layout, unit.function));
+    #[cfg(test)]
+    if let Some(base) = &base {
+        assert!(
+            **base == crate::spill::Pressure::of(unit.context, unit.function, room.index_scales),
+            "the pressure a clone is priced from is not the function's, which a motion has moved things in"
+        );
+    }
     // A run that is let go leaves the function as the clone priced it, whose
     // price is then the next loop's `kept`.
-    let Some(kept) = held.take().or_else(|| price(unit.function)) else { return run };
+    let kept = match held.take() {
+        Some(kept) => kept,
+        None => {
+            let work = profit::weighted(unit.context, unit.layout, unit.function, outer.callees(), costs, frequency);
+            let forecast = match &base {
+                Some(base) => profit::spill_forecast_over(
+                    unit.context,
+                    unit.layout,
+                    unit.function,
+                    base,
+                    costs,
+                    room,
+                    &|inst| crate::spill::kept_across(outer, unit.context, unit.function, inst),
+                    frequency,
+                ),
+                None => Some(crate::spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 }),
+            };
+            let Some(kept) = work.zip(forecast).map(|(work, forecast)| work + forecast.cost) else { return run };
+            kept
+        }
+    };
     // Where no register is priced the price is the work alone, a sum over the
     // instructions each at its block's frequency: moving `run` changes it by
     // what each costs at the preheader's frequency less at its own. The
@@ -266,7 +307,9 @@ fn _affordable(
             for &inst in &run {
                 hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
             }
-            hoisted
+            // The clone's log holds what the run made of it, and nothing else.
+            let changes = hoisted.take_changes();
+            (hoisted, changes)
         });
         // The price of the moved function is its work and the forecast below,
         // which is found once (it was found twice: 41% of hoist on a 16-deep
@@ -287,7 +330,7 @@ fn _affordable(
                 profit::weighted(
                     unit.context,
                     unit.layout,
-                    moved.as_ref().expect("cloned under test"),
+                    &moved.as_ref().expect("cloned under test").0,
                     outer.callees(),
                     costs,
                     frequency
@@ -300,7 +343,7 @@ fn _affordable(
             let Some(work) = profit::weighted(
                 unit.context,
                 unit.layout,
-                moved.as_ref().expect("cloned where priced"),
+                &moved.as_ref().expect("cloned where priced").0,
                 outer.callees(),
                 costs,
                 frequency,
@@ -309,7 +352,7 @@ fn _affordable(
             };
             work
         };
-        let hoisted = moved.as_ref().unwrap_or(unit.function);
+        let hoisted = moved.as_ref().map_or(&*unit.function, |(function, _)| function);
         // A floating value held across the loop is released after it, once for
         // each time the loop is entered.
         let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
@@ -319,17 +362,22 @@ fn _affordable(
                 Type::Float(_)
             ))
             .collect();
-        let Some(forecast) = profit::spill_forecast(
-            unit.context,
-            unit.layout,
-            hoisted,
-            costs,
-            room,
-            &|inst| crate::spill::kept_across(outer, unit.context, hoisted, inst),
-            frequency,
-        ) else {
-            return run;
+        let across = |inst| crate::spill::kept_across(outer, unit.context, hoisted, inst);
+        let forecast = match (&moved, &base) {
+            (Some((_, changes)), Some(base)) => profit::spill_forecast_after(
+                unit.context,
+                unit.layout,
+                hoisted,
+                base,
+                changes,
+                costs,
+                room,
+                &across,
+                frequency,
+            ),
+            _ => profit::spill_forecast(unit.context, unit.layout, hoisted, costs, room, &across, frequency),
         };
+        let Some(forecast) = forecast else { return run };
         let moved = work
             + forecast.cost
             + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);

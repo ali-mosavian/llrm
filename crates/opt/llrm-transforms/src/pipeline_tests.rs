@@ -1088,23 +1088,52 @@ impl llrm_mir::passes::FunctionPass for Chain {
 #[test]
 fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
-    let runs = |rounds: usize| {
+    let through = |options: pipeline::Options| {
         let mut module = llrm_analysis::testing::parsed(text);
         let count = std::rc::Rc::new(std::cell::Cell::new(0));
-        let options = pipeline::Options { rounds, ..pipeline::Options::basic() };
         let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
         fixed.only = false;
         fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
         crate::testing::managed(&mut module, fixed);
         count.get()
     };
+    let runs = |rounds: usize| through(pipeline::Options { rounds, ..pipeline::Options::standard() });
     assert_eq!(runs(4), 4, "the budget ends the rounds");
     assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
-    assert_eq!(pipeline::Options::basic().rounds, 4);
+    // -O1 ran four rounds, the third of which changed five passes of d_faces
+    // and the fourth none: 253 of 3,084 Minstr for the rounds after the
+    // second, and 5 of the 71 vsgcc objects differ without them (+0.18%
+    // clocks).
+    assert_eq!(through(pipeline::Options::basic()), 2, "-O1 runs two rounds");
+    assert_eq!(pipeline::Options::basic().rounds, 2);
     assert_eq!(pipeline::Options::standard().rounds, 4);
     assert_eq!(pipeline::Options::speed().rounds, 4);
     assert_eq!(pipeline::Options::size().rounds, 4);
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
+}
+
+/// A loop unrolled in the last round of the budget left its straight line
+/// uncleaned: -O1's two rounds stopped there, and `lru`'s two word zero stores
+/// stayed two (169 clocks against clang's 168; the third round's fold makes
+/// them one). A round follows an unroll that changed the body, whatever the
+/// budget.
+#[test]
+fn a_round_follows_an_unroll_that_changed_the_body_past_the_budget() {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let rounds = |unrolls: usize| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let options = pipeline::Options { rounds: 2, ..pipeline::Options::standard() };
+        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
+        fixed.only = false;
+        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
+        fixed.unrollers = vec![Box::new(Chain { left: unrolls, runs: std::rc::Rc::default() })];
+        crate::testing::managed(&mut module, fixed);
+        count.get()
+    };
+    assert_eq!(rounds(0), 2, "premise: the budget ends the rounds");
+    assert_eq!(rounds(1), 2, "an unroll of the first round is cleaned by the second");
+    assert_eq!(rounds(2), 3, "a third round runs after the unroll of the second, none after the third");
 }
 
 /// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,

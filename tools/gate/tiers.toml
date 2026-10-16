@@ -177,14 +177,22 @@ slow_pytest = [
 ]
 
 # Every step the planner can produce is in exactly one group (a test checks).
+[bench]
+shards = 6
+
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts", "products"]
+unit = ["lib", "doc", "crate-tests", "scans", "rfmt-post", "facts"]
+static = ["fmt", "docs", "products"]  # read the tree, build nothing: CI runs them first and alone, so a format error fails in minutes
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs", "pytest-quick", "changed-tests"]
-tools = ["bench", "torture"]
+perf = ["pytest-perf"]  # the test files that read hardware counters: tinytim has them, a hosted VM has none
+tools = ["torture"]
+bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
 identity = ["identity"]
-reference = ["turbo", "cv4", "qcport"]
+turbo = ["turbo"]
+cv4 = ["cv4"]
+qcport = ["qcport"]
 dos = ["dos-slow"]
 cost = ["measure"]
 
@@ -229,7 +237,7 @@ needs = [
 repo = "ali-mosavian/llrm-private-tools"
 public = { rm-quake = "ali-mosavian/rm-quake" }
 env = { TCPP30_DIR = "tcpp30", TD_DIR = "td", VBDOS_DIR = "vbdos", PDS71_DIR = "pds71", QB45_DIR = "qb45", QB45_DEMOS_DIR = "gor", QCPORT_BORLAND = "qcbcc", QCPORT_INC = "qctc/inc", QCPORT_BCC_LIB = "bcpp31/lib", TOOLCHAINS = ".", TURBO = "." }
-group_env = { reference = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-quake/src" }, python = { QCPORT = "rm-quake/src", DFACES_SRC = "qbq-llrm/src" } }
+group_env = { qcport = { QCPORT = "rm-quake/src" }, cost = { QCPORT = "rm-quake/src" }, python = { QCPORT = "rm-quake/src", DFACES_SRC = "qbq-llrm/src" } }
 
 # What each item needs, one table. A key is a step (`turbo`), a `run` language (`lang:qb`), a cheap test binary (`bin:differential`).
 # A step is skipped whole; a language or binary is left out of the step that runs it, and the step is skipped if no language is left.
@@ -239,6 +247,7 @@ turbo = ["turbo"]
 cv4 = ["codeview"]
 qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
+pytest-perf = ["perf"]
 measure = ["perf", "qcport"]  # callgrind counts (capability `counter`) but takes over an hour a run on a hosted runner: measure waits for its shards and a cached base (#1844). qcport: its rows are QCport's modules; without them measure would judge the programs alone
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
