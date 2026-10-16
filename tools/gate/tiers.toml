@@ -169,6 +169,7 @@ slow_pytest = [
     "tools/dosbatch/test_qbgfxspeed.py",
     "crates/target/llrm-x86-m32/vsgcc/test_scaling.py",
     "tools/test_alloc_scaling.py",
+    "tools/test_oracles.py",
     "tools/dosbatch/test_qb32cache.py",
     "tests/test_loops.py",
     "tools/dosbatch/test_qbentries.py",

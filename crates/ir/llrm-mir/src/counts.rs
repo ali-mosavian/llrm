@@ -7,12 +7,13 @@
 //! output. The analysis manager's hits and misses are kept by name.
 //!
 //! A count is exact and the same on every host, so a budget can be a ratio of
-//! two sizes of one program (`tools/test_budgets.py`): a pass that is asked once
-//! for the function must not be asked once for each loop.
+//! two sizes of one program (`tools/test_budgets.py`): a pass that is asked
+//! once for the function must not be asked once for each loop.
 //!
 //! # Example
 //! `LLRM_DEBUG=counts llrm-c -O2 f.c` ends with lines such as
-//! `[counts] function_clones 3` and `[counts] analysis dominators 41 hits 7 misses`.
+//! `[counts] function_clones 3` and `[counts] analysis dominators 41 hits 7
+//! misses`.
 //!
 //! # Used by
 //! The pass manager (`passes`), `Function`'s copies, the machine phases and the
@@ -105,19 +106,29 @@ pub fn analysis(
 
 /// (hits, misses) of the analysis `name` so far.
 pub fn analysed(name: &str) -> (u64, u64) {
-    ANALYSES.with(|rows| rows.borrow().iter().filter(|row| row.0 == name).fold((0, 0), |sum, row| (sum.0 + row.1, sum.1 + row.2)))
+    ANALYSES.with(|rows| {
+        rows.borrow().iter().filter(|row| row.0 == name).fold((0, 0), |sum, row| (sum.0 + row.1, sum.1 + row.2))
+    })
 }
 
 /// The counts as `LLRM_DEBUG=counts` prints them.
 pub fn lines() -> Vec<String> {
-    let mut out: Vec<String> = NAMES.iter().enumerate().map(|(at, name)| format!("[counts] {name} {}", EVENTS.with(|events| events[at].get()))).collect();
+    let mut out: Vec<String> = NAMES
+        .iter()
+        .enumerate()
+        .map(|(at, name)| format!("[counts] {name} {}", EVENTS.with(|events| events[at].get())))
+        .collect();
     ANALYSES.with(|rows| {
         let mut by_name: std::collections::BTreeMap<&str, (u64, u64)> = std::collections::BTreeMap::new();
         for (name, hits, misses) in rows.borrow().iter() {
             let row = by_name.entry(name).or_default();
             *row = (row.0 + hits, row.1 + misses);
         }
-        out.extend(by_name.iter().map(|(name, (hits, misses))| format!("[counts] analysis {name} {hits} hits {misses} misses")));
+        out.extend(
+            by_name
+                .iter()
+                .map(|(name, (hits, misses))| format!("[counts] analysis {name} {hits} hits {misses} misses")),
+        );
     });
     out
 }
