@@ -290,7 +290,9 @@ impl Profile {
                     list.as_array()
                         .ok_or_else(|| format!("frontend.abi.{key} is not a list"))?
                         .iter()
-                        .map(|one| one.as_str().map(str::to_owned).ok_or_else(|| format!("a {key} name is not a string")))
+                        .map(|one| {
+                            one.as_str().map(str::to_owned).ok_or_else(|| format!("a {key} name is not a string"))
+                        })
                         .collect()
                 })
                 .unwrap_or(Ok(Vec::new()))
@@ -939,8 +941,8 @@ mod tests {
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
     /// and `__argc` where `main` takes arguments: they pull in the start-up
     /// and the module that builds `argv`. Without them a program linked against
-    /// the library had `argc` 0 and no `argv[0]`, and needed `_cstart_` named on
-    /// the link line.
+    /// the library had `argc` 0 and no `argv[0]`, and needed `_cstart_` named
+    /// on the link line.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
@@ -985,9 +987,9 @@ mod tests {
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brackets.c");
         let argv: Vec<String> = ["-m16", "-mabi=watcom", "brackets.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
-        let asm = llrm_core::backend::masm::text(&super::selected(&text, "brackets", None, &args.codegen).unwrap()).unwrap();
-        let order: Vec<&str> =
-            asm.lines().filter_map(|one| one.strip_suffix(" segment word public 'DATA'")).collect();
+        let asm =
+            llrm_core::backend::masm::text(&super::selected(&text, "brackets", None, &args.codegen).unwrap()).unwrap();
+        let order: Vec<&str> = asm.lines().filter_map(|one| one.strip_suffix(" segment word public 'DATA'")).collect();
         assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 

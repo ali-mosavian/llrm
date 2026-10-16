@@ -169,8 +169,8 @@ pub fn program(
     // by the symbols it asks for.
     let data = unreferenced_externs_dropped(data.clone(), &functions);
     let (types, alias_classes) = types.finished();
-    // A module that defines the entry asks for its start-up, and for what builds
-    // `argv` where the entry takes arguments.
+    // A module that defines the entry asks for its start-up, and for what
+    // builds `argv` where the entry takes arguments.
     let mut requests = Vec::new();
     if let Some(entry) = unit.procs.iter().find(|one| unit.symbols[&one.symbol].is_entry(&unit.entry)) {
         requests.extend(profile.entry_requests.iter().cloned());
