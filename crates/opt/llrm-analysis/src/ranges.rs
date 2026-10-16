@@ -1457,6 +1457,7 @@ pub fn loops_reached(
     blocks: &BTreeSet<BlockId>,
     conditions: &BTreeSet<BlockId>,
     edges_changed: &dyn Fn(i64) -> bool,
+    entered: &dyn Fn(&loops::Loop) -> bool,
 ) -> BTreeSet<i64> {
     let loops = &shape.loops;
     let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
@@ -1480,6 +1481,7 @@ pub fn loops_reached(
             one.body.iter().any(|at| reached.contains(at))
                 || judged.iter().any(|above| shape.dominance.dominates(*above, one.header))
                 || starts(one).iter().any(moved)
+                || entered(one)
         })
         .map(|one| one.header)
         .collect();
@@ -1614,9 +1616,17 @@ pub fn bounded_solved(
                 .filter(|one| dirty.contains(&one.header))
                 .flat_map(|one| one.body.iter().copied())
                 .collect();
+            // What a loop that is kept says of a block is kept with it; a
+            // block no kept loop holds any more (the CFG moved it out of the
+            // loop it was in) has nothing.
+            let kept: BTreeSet<i64> = nest
+                .iter()
+                .filter(|one| !dirty.contains(&one.header))
+                .flat_map(|one| one.body.iter().copied())
+                .collect();
             held.within
                 .iter()
-                .filter(|(at, _)| !redone.contains(at))
+                .filter(|(at, _)| !redone.contains(at) && kept.contains(at))
                 .map(|(at, scope)| (*at, Rc::clone(scope)))
                 .collect()
         }
@@ -1630,7 +1640,12 @@ pub fn bounded_solved(
                 .filter(|one| dirty.contains(&one.header))
                 .flat_map(|one| one.body.iter().copied())
                 .collect();
-            held.dead.difference(&redone).copied().collect()
+            let kept: BTreeSet<i64> = nest
+                .iter()
+                .filter(|one| !dirty.contains(&one.header))
+                .flat_map(|one| one.body.iter().copied())
+                .collect();
+            held.dead.difference(&redone).filter(|at| kept.contains(at)).copied().collect()
         }
         None => BTreeSet::new(),
     };

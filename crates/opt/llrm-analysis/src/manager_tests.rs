@@ -1256,6 +1256,90 @@ entry:
     assert!(!Rc::ptr_eq(&kept, &again), "an operand set to another value kept what was said of it");
 }
 
+/// A terminator rewritten in one loop was a change to the CFG, and `Bounded`
+/// worked every loop of the body out again (`d_faces` -O1: 15 reruns after a
+/// CFG edit, 36 M of its 62 M). Only the loop it is in, and those it can guard
+/// or enter, are.
+#[test]
+fn a_terminator_rewritten_in_one_loop_solves_that_loop_again_and_not_the_other() {
+    let mut module = parsed(&format!("{DOS}{LIMITED}"));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        analyses.get::<super::Bounded>(context, &layout, function);
+        let latch = crate::testing::block(function, "l0");
+        let branch = function.terminator(latch).expect("a latch ends in a branch");
+        let same = function.instruction(branch).operands.clone();
+        function.set_operands(branch, same);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let solved = crate::ranges::loops_solved();
+    let after = analyses.get::<super::Bounded>(context, &layout, function);
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert_eq!(crate::ranges::loops_solved() - solved, 1, "only the loop holding the terminator is solved again");
+    }
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<super::Bounded>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
+
+/// A block a CFG edit took out of its loop kept the facts the loop had given
+/// it, though the loop it was in is solved again.
+#[test]
+fn a_block_the_cfg_edit_took_out_of_its_loop_keeps_none_of_its_facts() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f() {{
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %l ]
+  %c = icmp slt i16 %i, 9
+  br i1 %c, label %a, label %end
+
+a:
+  %t = icmp slt i16 %i, 5
+  br i1 %t, label %b, label %l
+
+b:
+  br label %l
+
+l:
+  %i.next = add i16 %i, 1
+  br label %h
+
+end:
+  ret i16 %i
+}}
+"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        analyses.get::<super::Bounded>(context, &layout, function);
+        let a = crate::testing::block(function, "a");
+        let branch = function.terminator(a).expect("a ends in a branch");
+        let mut operands = function.instruction(branch).operands.clone();
+        operands[1] = operands[2];
+        function.set_operands(branch, operands);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let after = analyses.get::<super::Bounded>(context, &layout, function);
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<super::Bounded>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
+
 /// A terminator rewritten in one loop was a change to the CFG, and every loop
 /// of the body was proved again (`unrolled` at -O3: 62 of the 91 reruns, 1155
 /// M of the 24.5 G at 64 loops). Only the loop it is in, and those it can

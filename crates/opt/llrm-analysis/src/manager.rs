@@ -1573,11 +1573,22 @@ impl Analysis for Counted {
         // branches of the blocks that dominate it.
         Some(induction::counted_renewed(&unit, previous, |one| {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
-                || (reach.cfg
-                    && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(*r), one.header))))
+                || (reach.cfg && cfg_enters(function, &shape, &reached, one.header))
         }))
     }
+}
+
+/// Whether a change to the CFG reached what enters the loop of `header`: a
+/// block that branches to it, or one that dominates it, whose edges the loop's
+/// guards and starting values are read through.
+fn cfg_enters(
+    function: &Function,
+    shape: &Shape,
+    reached: &BTreeSet<BlockId>,
+    header: i64,
+) -> bool {
+    function.predecessors(crate::cfg::block(header)).iter().any(|pred| reached.contains(pred))
+        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(*r), header))
 }
 
 /// What a change reached: the blocks holding an instruction it touched, or one
@@ -1951,16 +1962,24 @@ impl Analysis for Bounded {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let bounds = previous.as_ref().ok()?;
-        let reach = reached_by(function, changes)?;
+        let reach = reached_with_cfg(function, changes)?;
         let shape = analyses.get::<Shape>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
         edges.as_ref().as_ref().ok()?;
         // A loop starts from the edges' facts of its dominator: those of a
         // block a change reached or one it dominates may have changed.
         let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
-        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
-            dominated_by(&shape, &reached, at)
-        });
+        // A change to the CFG moves the edges above a loop and what enters it
+        // only by a terminator it rewrites, in a block that enters the loop or
+        // dominates it.
+        let dirty = ranges::loops_reached(
+            function,
+            &shape,
+            &reach.blocks,
+            &reach.conditions,
+            &|at| dominated_by(&shape, &reached, at),
+            &|one| reach.cfg && cfg_enters(function, &shape, &reach.blocks, one.header),
+        );
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }
 }
