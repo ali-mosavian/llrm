@@ -143,3 +143,18 @@ fn a_call_of_unseen_code_pads_its_arguments() {
         assert!(text.contains("pushd 0"), "{text}");
     }
 }
+
+/// Tuned for size, unseen code does not force the rounding or the pad: -Os is
+/// gated by bytes (+7 in every object), and only a double the module shows
+/// pays for alignment.
+#[test]
+fn tuned_for_size_unseen_code_costs_no_bytes() {
+    for source in
+        ["extern void g(int);\nvoid f(void) { g(1); g(2); }\n", "void (*volatile p)(int);\nvoid f(void) { p(1); }\n"]
+    {
+        let text = listing_with(source, &["-mabi=sysv", "-Os"]);
+        assert!(!text.contains("pushd 0") && !text.contains("sub esp"), "{text}");
+    }
+    let text = listing_with(MODULE, &["-mabi=sysv", "-Os"]);
+    assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
+}
