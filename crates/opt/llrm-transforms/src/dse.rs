@@ -56,8 +56,8 @@
 //! From unit test `test_a_zeroed_slot_nothing_reads_goes` in `dse_tests.rs`.
 //!
 //! # Runs
-//! Once per pass of the function fixed point, after `trivialunswitch` and
-//! `inferspace` and before `gvn`. Off with `-fno-tree-dse`; nothing runs at
+//! Once per pass of the function fixed point, after `gvn`, as clang's DSE
+//! follows its GVN. Off with `-fno-tree-dse`; nothing runs at
 //! -O0.
 //!
 //! # Needs

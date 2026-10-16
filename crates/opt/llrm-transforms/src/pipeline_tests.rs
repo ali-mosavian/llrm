@@ -1098,7 +1098,7 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
         count.get()
     };
     let runs = |rounds: usize| through(pipeline::Options { rounds, ..pipeline::Options::standard() });
-    assert_eq!(runs(4), 4, "the budget ends the rounds");
+    assert_eq!(runs(3), 3, "the budget ends the rounds");
     assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
     // -O1 ran four rounds, the third of which changed five passes of d_faces
     // and the fourth none: 253 of 3,084 Minstr for the rounds after the
@@ -1106,9 +1106,9 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     // clocks).
     assert_eq!(through(pipeline::Options::basic()), 2, "-O1 runs two rounds");
     assert_eq!(pipeline::Options::basic().rounds, 2);
-    assert_eq!(pipeline::Options::standard().rounds, 4);
-    assert_eq!(pipeline::Options::speed().rounds, 4);
-    assert_eq!(pipeline::Options::size().rounds, 4);
+    assert_eq!(pipeline::Options::standard().rounds, 3);
+    assert_eq!(pipeline::Options::speed().rounds, 2);
+    assert_eq!(pipeline::Options::size().rounds, 2);
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
@@ -1405,4 +1405,77 @@ x:
     };
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}
+
+/// `dse` ran before `gvn`: the stores gvn forwards past were seen by it a round
+/// later, and the dead code that left a round after that, so a recursive body
+/// reached `tailrec` in the third round and `rectwo` ran 2.7x the clocks, `fib`
+/// 1.4x, when the rounds were two. As clang's DSE follows its GVN
+/// (PassBuilderPipelines.cpp L787-L820).
+#[test]
+fn dse_follows_gvn_in_the_round() {
+    let order = pipeline::passes();
+    let at =
+        |name: &str| order.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} is not in {order:?}"));
+    assert!(at("gvn") < at("dse"), "{order:?}");
+}
+
+/// `indvars` ran after `gvn`: a loop-exit value it made constant was numbered a
+/// round later, with the single-entry phi it left, and d_faces -O2 needed a
+/// fourth round for the chain that follows (`fold`, `decide`, `lcssa`, `gvn`).
+/// As clang's IndVarSimplify precedes its GVN (PassBuilderPipelines.cpp
+/// L760-L787).
+#[test]
+fn indvars_precedes_gvn_in_the_round() {
+    let order = pipeline::passes();
+    let at =
+        |name: &str| order.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} is not in {order:?}"));
+    assert!(at("indvars") < at("gvn"), "{order:?}");
+}
+
+/// The rounds compared the body printed to text, 23 M instructions of
+/// `format!` on d_faces: the guard compares a digest now, and prints nothing.
+#[test]
+fn the_rounds_do_not_print_the_body_to_compare_it() {
+    let mut module =
+        llrm_analysis::testing::parsed("define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n");
+    let count = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(Chain { left: 2, runs: std::rc::Rc::clone(&count) })];
+    let printed = llrm_mir::print::bodies_printed();
+    crate::testing::managed(&mut module, fixed);
+    assert_eq!(llrm_mir::print::bodies_printed() - printed, 0);
+}
+
+/// The digest the rounds compare agrees with the text they compared before:
+/// equal for bodies that print alike, however many instructions the arenas
+/// have seen, and apart for bodies that do not.
+#[test]
+fn the_digest_of_a_body_is_the_text_of_it_compared() {
+    let body = |name: &str, constant: i16, spare: bool| {
+        format!(
+            "define i16 @{name}(i16 %x) {{\nb0:\n{}  %y = add i16 %x, {constant}\n  ret i16 %y\n}}\n",
+            if spare { "  %z = add i16 %x, 7\n" } else { "" }
+        )
+    };
+    let text = [
+        body("one", 1, false),
+        body("alike", 1, false),
+        body("constant", 2, false),
+        body("spare", 1, true),
+        body("erased", 1, true),
+    ]
+    .join("\n");
+    let mut module = llrm_analysis::testing::parsed(&text);
+    let mut digest = |name: &str| llrm_mir::print::digest(module.function_mut(name).unwrap().1);
+    let (one, alike, constant, spare) = (digest("one"), digest("alike"), digest("constant"), digest("spare"));
+    assert_eq!(one, alike);
+    assert_ne!(one, constant, "another constant");
+    assert_ne!(one, spare, "another instruction");
+    // An instruction erased leaves the arena larger and the body as it was.
+    let (_, function) = module.function_mut("erased").unwrap();
+    let first = function.walk().map(|(_, inst)| inst).next().unwrap();
+    function.erase(first).unwrap();
+    assert_eq!(llrm_mir::print::digest(function), one);
 }

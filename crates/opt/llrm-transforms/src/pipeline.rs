@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>indvars gvn dse promote<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -240,12 +240,13 @@ pub struct Options {
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
-    /// How many rounds of the body's passes run at most. A round after the
-    /// third found nothing on the 71 programs of the vsgcc tables and
-    /// QCport (the objects are the same), and the fourth and fifth of
-    /// d_faces were 354 Minstr; -Omax runs to the fixed point. A round that
-    /// follows an unroll which changed the body runs past the budget, to clean
-    /// the straight line it made.
+    /// How many rounds of the body's passes run at most. With `indvars` placed
+    /// before `gvn` and `dse` after it, as clang places them, -O3 and -Os find
+    /// nothing in a third round on the 71 programs of the vsgcc tables (the
+    /// rows are the same) and -O2 needs the third for d_faces' fold, decide,
+    /// lcssa, gvn chain; -Omax runs to the fixed point. A round that follows
+    /// an unroll which changed the body runs past the budget, to clean the
+    /// straight line it made.
     pub rounds: usize,
 }
 
@@ -345,6 +346,7 @@ impl Options {
     /// `-fpeel-loops` only).
     pub fn standard() -> Self {
         Self {
+            rounds: 3,
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
@@ -370,6 +372,7 @@ impl Options {
             unroll_jam: true,
             interchange: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
+            rounds: 2,
             ..Self::default()
         }
     }
@@ -407,6 +410,7 @@ impl Options {
             limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default().for_size(),
             for_size: true,
+            rounds: 2,
             ..Self::default()
         }
     }
@@ -512,14 +516,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before gvn: a far pointer cast from a near one is read as the near
         // one.
         Box::new(inferspace::InferAddressSpaces),
-        Box::new(dse::Dse),
-        Box::new(gvn::Gvn { pre: applied.options.pre }),
-        // Ordinary scalar write-through promotion remains after memory GVN.
-        Box::new(promote::Promote),
+        // Clang's order (PassBuilderPipelines.cpp L760-L820): the loop passes
+        // that rewrite exit values and counters, then GVN, then DSE on the
+        // stores GVN made dead.
         Box::new(indvars::IndVars {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
         }),
+        Box::new(gvn::Gvn { pre: applied.options.pre }),
+        Box::new(dse::Dse),
+        // Ordinary scalar write-through promotion remains after memory GVN.
+        Box::new(promote::Promote),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
@@ -1006,7 +1013,7 @@ impl Fixed {
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        let mut history = BTreeSet::from([print::digest(unit.function)]);
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
@@ -1061,7 +1068,7 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
-            if !history.insert(print::body(unit.context, unit.function)) {
+            if !history.insert(print::digest(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }

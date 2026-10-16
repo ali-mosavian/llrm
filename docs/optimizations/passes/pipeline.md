@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:00b0982bbee987fcf64c0ba458f483f9def7ab64f52c9fba02152cb0fb5d16ff -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:b109639201505f21289ea8287aa7b345ef94d789878da036164d1d393a285aa1 -->
 
 # pipeline
 
@@ -29,7 +29,7 @@ flowchart TB
   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>indvars gvn dse promote<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid

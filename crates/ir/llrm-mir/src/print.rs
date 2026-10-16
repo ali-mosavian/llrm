@@ -89,7 +89,64 @@ pub fn body(
     context: &Context,
     function: &Function,
 ) -> String {
+    PRINTED.with(|count| count.set(count.get() + 1));
     Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
+}
+
+thread_local! {
+    static PRINTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many bodies `body` has printed on this thread.
+pub fn bodies_printed() -> usize {
+    PRINTED.with(std::cell::Cell::get)
+}
+
+/// A hash of `function`'s body that two bodies share when `body` prints them
+/// alike: values and blocks by where they first appear, names, types, flags,
+/// opcodes and operands as they are (a constant by its id, so two bodies of one
+/// module). For comparing the bodies of a pass
+/// pipeline's rounds, where printing each was most of the guard's cost.
+pub fn digest(function: &Function) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut values: HashMap<ValueId, u32> = HashMap::default();
+    let mut blocks: HashMap<BlockId, u32> = HashMap::default();
+    for &parameter in &function.parameters {
+        let at = values.len() as u32;
+        values.insert(parameter, at);
+        function.value(parameter).name.hash(&mut hasher);
+    }
+    for &block in &function.layout {
+        let at = blocks.len() as u32;
+        blocks.insert(block, at);
+        function.block(block).name.hash(&mut hasher);
+        for &inst in &function.block(block).instructions {
+            if let Some(result) = function.instruction(inst).result {
+                let at = values.len() as u32;
+                values.insert(result, at);
+                function.value(result).name.hash(&mut hasher);
+            }
+        }
+    }
+    for &block in &function.layout {
+        blocks[&block].hash(&mut hasher);
+        for &inst in &function.block(block).instructions {
+            let inst = function.instruction(inst);
+            inst.opcode.hash(&mut hasher);
+            inst.ty.hash(&mut hasher);
+            inst.flags.words().hash(&mut hasher);
+            inst.result.map(|result| values[&result]).hash(&mut hasher);
+            for operand in &inst.operands {
+                match operand {
+                    Operand::Value(value) => (0u8, values.get(value).copied()).hash(&mut hasher),
+                    Operand::Block(block) => (1u8, blocks.get(block).copied()).hash(&mut hasher),
+                    Operand::Constant(constant) => (2u8, constant).hash(&mut hasher),
+                }
+            }
+        }
+    }
+    hasher.finish()
 }
 
 /// Lines under a blank line, when there are any.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/dse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/dse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:a14e227f65f15086422df6d152257d2c6a34b00bfc1ebd7b475595bad495e2d1 -->
+<!-- src: crates/opt/llrm-transforms/src/dse.rs sha256:c1084590db3931b83e31de26a783b2f9893549d9d10b28027b88a6d54ea76be3 -->
 
 # dse
 
@@ -61,8 +61,8 @@ void` is left.
 From unit test `test_a_zeroed_slot_nothing_reads_goes` in `dse_tests.rs`.
 
 ## Runs
-Once per pass of the function fixed point, after `trivialunswitch` and
-`inferspace` and before `gvn`. Off with `-fno-tree-dse`; nothing runs at
+Once per pass of the function fixed point, after `gvn`, as clang's DSE
+follows its GVN. Off with `-fno-tree-dse`; nothing runs at
 -O0.
 
 ## Needs
