@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:719eb55a80241f028a30b4ede700d8e9521872c40fe9ab1fee64a583e84c9e8b -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:31a998825f3f0ff7ba8f0432818637d99187a679891c511bca75663c77186f35 -->
 
 # indvars
 
@@ -21,15 +21,21 @@ changed the body.
    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
    as 32, so the exit no longer keeps the old counter alive past its step.
 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
-5. `widened`: a counter read through `zext` to the address's index width,
-   where `induction` proves its values never pass its own
-   (`rises_unsigned`), becomes a counter of that width. C's `unsigned short
-   i` reads `a[zext i]`, a conversion per trip, which hides the loop from
-   idioms and strength reduction. The wide counter ends the loop against the
-   bound extended once in the preheader; an unsigned or equality compare of
-   the narrow one with a value the loop leaves alone compares the wide one
-   with that value extended (`WidenIV::widenLoopCompare`); other readers of
-   the narrow one read its low part.
+5. `widened`: a counter read through `zext` (or, where it is signed and
+   tested by `slt`, `sext`) to the address's index width, where `induction`
+   proves its values never pass its own (`rises_unsigned`, `rises_signed`),
+   becomes a counter of that width. C's `unsigned short i` reads `a[zext
+   i]`, and `short k` reads `a[sext k]`: a conversion per trip (`inc cx;
+   movsx esi,cx; cmp cx,bx`), which hides the loop from idioms and strength
+   reduction. A signed counter of a loop of at most `unroll`'s trip limit
+   (`IndVars::unrolls`) is left for `unroll` until the run with
+   `exit_values`: one operation fewer in the rolled loop made a loop that
+   `unroll` took whole no longer fit its own size. The wide counter ends the
+   loop against the bound extended once in the preheader; an unsigned or
+   equality compare of the narrow one with a value the loop leaves alone
+   compares the wide one with that value extended
+   (`WidenIV::widenLoopCompare`); other readers of the narrow one read its
+   low part.
 6. `congruent`: header counters with one start and one step are one counter
    (`SCEVExpander::replaceCongruentIVs`); the later ones' readers read the
    first, and `dead` removes them.

@@ -1,10 +1,10 @@
 // RUN: llrm-c %s -m32 -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 // bench/tile (7 instructions an element, clang 4) and bench/nbody (`inc bx; movzx esi,bx; cmp bx,4`) on -m32.
-// A mask the counter's range makes a no-op is gone: one load, one add, the step, the test.
+// A mask the counter's range makes a no-op is gone: one load (the counter scaled by the address), one add, the step by one, the test.
 // CHECK-LABEL: masked_ proc
-// CHECK: movsx {{e..}}, word ptr
+// CHECK: movsx {{e..}}, word ptr {{.*}}*2]
 // CHECK-NEXT: add
-// CHECK-NEXT: add
+// CHECK-NEXT: inc
 // CHECK-NEXT: jne
 // CHECK: masked_ endp
 // A counter that starts where the outer loop left it is one the width of its index.

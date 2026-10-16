@@ -11,7 +11,7 @@ accept; the x_* kernels in `kernels/` are always in. What each side times, as `p
   clang -c the driver and the cc1 process with its integrated assembler.
 `empty.c` is compiled the same way at every level: what a compiler spends on nothing, to read the rest against.
 """
-import argparse, json, math, os, statistics, subprocess, sys, tempfile
+import argparse, functools, json, math, os, statistics, subprocess, sys, tempfile
 from pathlib import Path
 
 R = Path(__file__).resolve().parents[4]
@@ -37,11 +37,56 @@ def command(compiler: str, level: str, source: Path, bits: int = 32) -> list[str
     return [compiler, *FLAGS, f"-{level}", "-c", "-o", "/dev/null", str(source)]
 
 
-def instructions(cmd: list[str]) -> int:
+SLOWDOWN = 60  # CPU seconds of a run under callgrind per native CPU second (about 50x measured on a compile)
+
+
+@functools.cache
+def perf_counts() -> bool:
+    """Whether `perf stat` reads an instruction count here (a hosted VM exposes no counters: it prints `<not supported>`)."""
+    return subprocess.run("perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,'", shell=True).returncode == 0
+
+
+def backend() -> str:
+    """What counts instructions: LLRM_COUNTER=perf, or callgrind (valgrind's executed-instruction count: exact, and the same on every
+    host), else perf where it counts and callgrind where it does not. A count of one backend is not comparable with another's (callgrind
+    read 102.67 M of a compile perf read 103.84 M of), so a stored measurement names its backend."""
+    chosen = os.environ.get("LLRM_COUNTER") or "auto"
+    if chosen not in ("auto", "perf", "callgrind"):
+        raise SystemExit(f"LLRM_COUNTER is {chosen!r}: perf, callgrind or auto")
+    return chosen if chosen != "auto" else "perf" if perf_counts() else "callgrind"
+
+
+def counted(cmd: list[str], env: dict | None = None, preexec=None, timeout: float | None = None, cwd=None) -> tuple[int, int, subprocess.CompletedProcess]:
+    """(user instructions, task-clock ns, the finished process) of one run of `cmd`, with the address space fixed. The process's
+    returncode and stderr are the command's own. Raises RuntimeError where the backend counted nothing."""
+    import resource
+
+    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     with tempfile.NamedTemporaryFile("r") as out:
-        subprocess.run([*UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u", "-o", out.name, *cmd], check=True, capture_output=True)
-        line = [l for l in out.read().splitlines() if "instructions" in l][0]
-    return int(line.split(",")[0])
+        if backend() == "perf":
+            wrapped = ["perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, "--"]
+        else:  # the tool's own messages go to a file, so the command's stderr is its own
+            wrapped = ["valgrind", "--tool=callgrind", "--callgrind-out-file=/dev/null", f"--log-file={out.name}"]
+        done = subprocess.run([*UNRANDOMIZED, *wrapped, *cmd], capture_output=True, text=True, env=env, preexec_fn=preexec, timeout=timeout, cwd=cwd)
+        text = out.read()
+    if backend() == "perf":
+        found = {l.split(",")[2]: int(float(l.split(",")[0])) for l in text.splitlines() if l and not l.startswith("#") and l.split(",")[0].replace(".", "").isdigit()}
+        count, clock = found.get("instructions:u", 0), found.get("task-clock", 0)
+    else:
+        after = resource.getrusage(resource.RUSAGE_CHILDREN)
+        collected = [l.split(":")[-1].strip().replace(",", "") for l in text.splitlines() if "Collected" in l]
+        count = int(collected[0]) if collected and collected[0].isdigit() else 0
+        clock = int((after.ru_utime + after.ru_stime - before.ru_utime - before.ru_stime) * 1e9)
+    if count <= 0:
+        raise RuntimeError(f"{backend()} counted nothing: {(text or done.stderr)[-200:]!r}")
+    return count, clock, done
+
+
+def instructions(cmd: list[str]) -> int:
+    count, _, done = counted(cmd)
+    if done.returncode:
+        raise subprocess.CalledProcessError(done.returncode, cmd, done.stdout, done.stderr)
+    return count
 
 
 def measure(cmd: list[str], runs: int) -> tuple[int, float]:

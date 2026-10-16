@@ -55,7 +55,7 @@ impl Depends {
                 Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return false,
                 // What the operands were is for readers of the log;
                 // the `Rewritten` after it is the change.
-                Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => {}
+                Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => {}
                 Change::Erased { inst, .. } => {
                     if (self.keyed)(context, function, inst)
                         || (effectful(&function.instruction(inst).opcode) && (self.models)(context, function, inst))

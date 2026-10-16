@@ -190,7 +190,8 @@ impl<'a> Unit<'a> {
             exposed: None,
             plain: None,
             point_values: None,
-            callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
+            callbacks: None,
+            callbacks_from: Some(outer),
             loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
@@ -1277,7 +1278,7 @@ impl Analysis for Registers {
                 | Change::BlockErased(_)
                 | Change::Operand { .. }
                 | Change::Operands { .. }
-                | Change::Substituted(_) => {
+                | Change::Substituted { .. } => {
                     continue;
                 }
                 // An argument's fact is of its position.
@@ -1492,7 +1493,7 @@ fn reached_through(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))

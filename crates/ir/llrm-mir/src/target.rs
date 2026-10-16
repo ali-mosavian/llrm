@@ -38,6 +38,13 @@ pub trait Machine {
     /// Of `registers`, how many survive a call.
     fn call_registers(&self) -> i64;
 
+    /// How many floating values fit in registers at once: the depth of a
+    /// register stack, or a file of their own. None: floating values share
+    /// `registers`, or the target does not say.
+    fn float_registers(&self) -> i64 {
+        0
+    }
+
     /// Registers an access through a pointer wider than its offset takes
     /// for its selector, besides those its address names.
     fn far_access_registers(&self) -> i64 {
@@ -204,6 +211,16 @@ pub struct OperationCosts {
     pub float_multiply: i64,
     pub float_divide: i64,
     pub float_load: i64,
+    /// What a floating load costs more than the operation that reads it where
+    /// the target folds it into that operation's memory form (x87 `fmul
+    /// m32`): the load moved out of a loop saves this much each trip, not
+    /// `float_load`.
+    pub float_load_folded: i64,
+    /// Whether a price counts a load its one reader takes from memory at
+    /// `float_load_folded`, as the pass that moves loads asks (`hoist`); the
+    /// description never states it, and the passes that price a body
+    /// by its loads count each as an instruction.
+    pub folds_loads: bool,
     pub float_store: i64,
     /// What dropping a floating value from the register stack costs once its
     /// last reader is past (x87 `fstp st(0)`): one held across a loop is
@@ -324,6 +341,8 @@ impl Default for OperationCosts {
             float_multiply: 1,
             float_divide: 1,
             float_load: 1,
+            float_load_folded: 1,
+            folds_loads: false,
             float_store: 1,
             float_release: 0,
             extend: 1,
