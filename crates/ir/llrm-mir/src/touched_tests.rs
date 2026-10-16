@@ -287,3 +287,41 @@ fn the_edge_search_reads_the_log_once_not_once_for_each_terminator_touched() {
     assert!(small > 0, "premise: the edges were searched");
     assert!(big as f64 <= 2.3 * small as f64, "{small} -> {big} entries and operands read for 64 -> 128 terminators");
 }
+
+/// A store's value operand was told from its address only by the whole log: the
+/// digest now says which slots of an instruction an edit set, and which
+/// instructions it erased (their operands stay readable by id).
+#[test]
+fn the_digest_names_the_operand_slots_set_and_the_instructions_erased() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let st = store(f);
+    let (l, _) = named(f, "l");
+    let a = Operand::Value(f.parameters()[0]);
+    let mark = f.mark();
+    f.set_operand(st, 0, a);
+    f.set_operand(st, 0, a);
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.operands_edited(st).collect::<Vec<_>>(), [0]);
+    assert_eq!(touched.operands_edited(l).count(), 0);
+    assert!(touched.erased.is_empty());
+    f.erase(st).expect("erased");
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.erased.iter().collect::<Vec<_>>(), [st]);
+    assert_eq!(f.instruction(st).operands.len(), 2, "an erased instruction's operands are readable by id");
+}
+
+/// An instruction made and erased inside the window is no erasure of anything
+/// the mark saw.
+#[test]
+fn an_instruction_made_and_erased_in_the_window_is_not_in_erased() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let mark = f.mark();
+    let copy = f.clone_instruction(x);
+    f.insert(copy, Position::Before(y)).expect("placed");
+    f.erase(copy).expect("erased");
+    assert!(f.touched_since(mark).expect("history").erased.is_empty());
+}
