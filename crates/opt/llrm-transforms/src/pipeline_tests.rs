@@ -1108,3 +1108,89 @@ done:
         through(pipeline::Options { unroll_jam: false, ..Default::default() }).0
     );
 }
+
+/// -O1 inlined small functions called more than once, searched allocations and
+/// made the spiller's second route, none of which gcc's -O1 does: 34% of
+/// d_faces' -O1 compile (5,643 -> 3,718 Minstr) for 0 rows of vsgcc. A function
+/// called once still goes in (`-finline-functions-called-once`).
+#[test]
+fn o1_inlines_only_the_last_call_and_has_no_allocation_search_or_second_route() {
+    let text = "
+define internal i16 @twice(i16 %x) {
+entry:
+  %y = add i16 %x, 7
+  ret i16 %y
+}
+
+define internal i16 @once(i16 %x) {
+entry:
+  %y = mul i16 %x, 3
+  ret i16 %y
+}
+
+define i16 @main(i16 %a) {
+entry:
+  %p = call i16 @twice(i16 %a)
+  %q = call i16 @twice(i16 %p)
+  %r = call i16 @once(i16 %q)
+  ret i16 %r
+}
+";
+    let o1 = pipeline::Options::basic();
+    assert!(!o1.searches() && !o1.compares_routes());
+    let o2 = pipeline::Options::standard();
+    assert!(o2.searches() && o2.compares_routes(), "premise: -O2 keeps both");
+    let (kept, _) = pipelined(text, o1);
+    let kept = crate::testing::printed(&kept);
+    assert_eq!(
+        kept.lines().filter(|line| line.contains("call ") && line.contains("@twice")).count(),
+        2,
+        "-O1 inlined a function called twice:\n{kept}"
+    );
+    assert!(!kept.contains("@once"), "@once, called once, is inlined at -O1:\n{kept}");
+    let (gone, _) = pipelined(text, o2);
+    assert!(!crate::testing::printed(&gone).contains("@twice"), "premise: -O2 inlines it");
+}
+
+/// tile.c's inner sum is 40 trips of one load and one add. gcc's
+/// `max-completely-peel-times` (16) keeps it a loop at -O3, as clang's is not
+/// capped: -Omax completes it (tile -O3 8,159 clocks against clang's 4,236;
+/// -Omax unrolls it).
+#[test]
+fn test_a_forty_trip_loop_is_completed_at_omax_and_kept_at_o3() {
+    let text = "@t = global [40 x i16] zeroinitializer
+
+define i16 @f() {
+b0:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b ]
+  %s = phi i16 [ 0, %b0 ], [ %a, %b ]
+  %go = icmp slt i16 %i, 40
+  br i1 %go, label %b, label %x
+
+b:
+  %o = mul i16 %i, 2
+  %p = getelementptr i8, ptr @t, i16 %o
+  %v = load i16, ptr %p
+  %a = add i16 %s, %v
+  %n = add i16 %i, 1
+  br label %h
+
+x:
+  ret i16 %s
+}
+";
+    let looped = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+            pipeline::applied(program, &Applied { options, ..Applied::default() })
+        })
+        .and_then(|done| done)
+        .unwrap();
+        llrm_mir::print::module(&module).contains("phi i16")
+    };
+    assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
+    assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}

@@ -1,8 +1,8 @@
-reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; nbody_fixed nib -O2, quicksort bq32 -O2, grep c -O2 (-27 B) improve at clocks prices; matmul -O2 gains one reload per inner trip"
+reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
 blessed = "2026-10-16"
 
 [bas.O2]
-code_bytes = 5493
+code_bytes = 5531
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 990.2466
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 990.065
 
 [bq16.O2]
-code_bytes = 5529
+code_bytes = 5567
 data_bytes = 29147
 bss_bytes = 0
 kernel_ms = 1078.9088
@@ -32,13 +32,13 @@ data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89430784
+instructions = 89430783
 code_bytes = 5990
 data_bytes = 29209
 bss_bytes = 0
 
 [c.O2]
-code_bytes = 3420
+code_bytes = 3416
 data_bytes = 474
 bss_bytes = 15849
 kernel_ms = 443.7384
