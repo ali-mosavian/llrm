@@ -855,6 +855,32 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// A `ThroughMemory` kept past an edit as sound knows no more than it did:
+/// `%n` replaced by the 7 it was found equal to leaves the loaded `%v` unknown
+/// in it, and a fresh solve has `%v = 7`. Which a pass reads depended on
+/// whether something had asked for it earlier in the round: matmul bq32 -O3
+/// came out 18 KB of asm with `floatloop` asking it and 34 KB without (#1909).
+/// A pass whose decisions follow what is known asks for the body as it stands.
+#[test]
+fn test_a_pass_that_follows_what_is_known_reads_it_for_the_body_as_it_stands() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %n) {{\nb:\n  store i16 %n, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let (n, v) = (crate::testing::value(f, "n"), crate::testing::value(f, "v"));
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<ThroughMemory>(context, &layout, f);
+    let seven = Operand::Constant(context.int(f.value(n).ty, 7));
+    f.replace_value(n, seven);
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let known = |result: &Rc<<ThroughMemory as Analysis>::Result>| {
+        Result::as_ref(&**result).unwrap().get(&v).map(|fact| fact.n.clone())
+    };
+    assert_eq!(known(&analyses.get_exact::<ThroughMemory>(context, &layout, f)), Some(7.into()));
+}
+
 /// `Summaries` solved where every pointer points for the direct summary, for
 /// the calls' facts and for each summarized call: 4 to 5 value solves a body
 /// state, 11.0% of QCport's -O1 compile with the rest of the family. One a

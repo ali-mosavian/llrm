@@ -1224,6 +1224,27 @@ impl Analyses {
         );
     }
 
+    /// `get` for a pass whose decisions follow what is known: the result for
+    /// `function` as it stands. One kept past edits as sound (`soft`) knows no
+    /// more than when it was derived, and what a fresh derivation knows is what
+    /// the body says, not when something first asked.
+    pub fn get_exact<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let key = TypeId::of::<A>();
+        if self.soft.remove(&key) {
+            self.cache.remove(&key);
+        }
+        // Held to be brought up to date as sound only (`SOUND`): derived again.
+        if A::SOUND && !A::INCREMENTAL {
+            self.kept.remove(&key);
+        }
+        self.get::<A>(context, layout, function)
+    }
+
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
         &mut self,

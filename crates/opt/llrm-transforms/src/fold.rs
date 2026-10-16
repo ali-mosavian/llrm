@@ -210,7 +210,7 @@ fn _numbers(
         // With no loop to leave the answer is the manager's, where it was of
         // these writes.
         let shared = (exits.is_empty() && *calls == manager::writes(context, layout, function, analyses))
-            .then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
+            .then(|| analyses.get_exact::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {
             Some(Ok(through)) => through.clone(),
             _ => consts::known_walked_over(&unit, calls, &exits),

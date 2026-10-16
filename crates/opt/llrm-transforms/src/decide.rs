@@ -164,7 +164,7 @@ fn _decided(
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     // What is known through memory is the manager's, as every other client
     // reads it.
-    let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+    let through = analyses.get_exact::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
     let facts = Result::as_ref(&*through).map_err(String::clone)?;
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), facts)?;
     if decisions.is_empty() {

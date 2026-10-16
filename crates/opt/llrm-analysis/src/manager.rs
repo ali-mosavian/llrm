@@ -1774,7 +1774,7 @@ impl Analysis for FloatFacts {
         let references = analyses.get::<Annotated>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
-        let through = analyses.get::<ThroughMemory>(context, layout, function);
+        let through = analyses.get_exact::<ThroughMemory>(context, layout, function);
         let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
