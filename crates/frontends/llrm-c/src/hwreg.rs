@@ -132,13 +132,16 @@ impl Registers {
         self.entry(name).filter(|one| one.whole != one.name).map(|one| one.high)
     }
 
-    /// Whether `name` is a whole register that holds a number: not a half and
-    /// not a segment.
+    /// Whether `name` is a whole register that holds a number: not a half, and
+    /// not a segment register a block may not change (`es` may be set by inline
+    /// code, `ds` may not).
     pub fn is_word(
         &self,
         name: &str,
     ) -> bool {
-        self.entry(name).is_some_and(|one| one.whole == one.name) && !self.segments.iter().any(|one| one == name)
+        let segment = self.segments.iter().any(|one| one == name);
+        self.entry(name).is_some_and(|one| one.whole == one.name)
+            && (!segment || self.clobbered.iter().any(|one| one == name))
     }
 
     /// Whether `saved` holds every general register (the accumulator, the other
