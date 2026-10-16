@@ -1,4 +1,4 @@
-reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
+reason = "work-priced post-RA fixes: the memory-source flag fix, the hoist and the back-edge copy remove bytes and instructions in jpeg (code bytes -4..-6) and stft bq32; the hoisted zeroing of a word register adds one instruction at a loop entry (stft_single bq32 -O2 +1)"
 blessed = "2026-10-16"
 
 [bas.O2]
@@ -26,13 +26,13 @@ bss_bytes = 0
 kernel_ms = 1132.0913
 
 [bq32.O2]
-instructions = 72232466
+instructions = 72232467
 code_bytes = 1385
 data_bytes = 4733
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 73091463
+instructions = 73091460
 code_bytes = 1352
 data_bytes = 4733
 bss_bytes = 0
