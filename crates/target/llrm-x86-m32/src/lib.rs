@@ -137,6 +137,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().slot_bytes
     }
 
+    fn stack_alignment(&self) -> i64 {
+        CALLING.native().stack_alignment.unwrap_or(CALLING.native().slot_bytes)
+    }
+
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
     }
@@ -293,6 +297,7 @@ mod tests {
             address_stall: 0,
             registers: 6,
             call_registers: 3,
+            float_registers: 0,
             address_forms: Vec::new(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,
@@ -319,6 +324,7 @@ mod tests {
             address_stall: 0,
             registers: 6,
             call_registers: 3,
+            float_registers: 0,
             address_forms: Vec::new(),
             operations: OperationCosts { load: 1, ..Default::default() },
             spaces: layout().spaces.roles,
@@ -361,6 +367,7 @@ mod tests {
             address_stall: 0,
             registers: M32.register_capacity(),
             call_registers: M32.callee_saved().len() as i64,
+            float_registers: 0,
             address_forms: forms.clone(),
             operations: OperationCosts::default(),
             spaces: layout().spaces.roles,

@@ -831,6 +831,28 @@ impl Selector<'_, '_, '_> {
         bytes * 100 + clocks
     }
 
+    /// The chain a multiply of `width` bytes by the constant `n` is where it
+    /// prices below `imul r,r,n` in the channel the profile tunes for (bytes,
+    /// then clocks, tuned for size; else clocks): what `multiply_scaled`
+    /// selects, for a multiply made outside the patterns.
+    pub fn cheaper_chain(
+        &self,
+        n: i64,
+        width: i64,
+    ) -> Option<Vec<(&'static str, i64)>> {
+        let (chain, clocks) = arithmetic::cheapest_chain(n, self.cpu).ok().flatten()?;
+        let imul = arithmetic::immediate_multiply(self.cpu, n).ok()?;
+        let (by_chain, by_imul) = if self.cpu.size {
+            (
+                Self::by_size(Self::chain_bytes(&chain, width, self.cpu.operand_bytes), clocks),
+                Self::by_size(llrm_x86::encoding::imul_immediate_bytes(n, width, self.cpu.operand_bytes), imul),
+            )
+        } else {
+            (clocks, imul)
+        };
+        (by_chain < by_imul).then_some(chain)
+    }
+
     pub fn cost_immediate_multiply(
         &self,
         m: &Match,
@@ -880,9 +902,26 @@ impl Selector<'_, '_, '_> {
         else {
             unreachable!("a register")
         };
+        self.emit_chain(m.at, out, a, &chain, result);
+        Ok(())
+    }
+
+    /// `chain`'s steps on `a`, the last into `result`: a multiply by a constant
+    /// as shifts, adds and `lea`s.
+    pub fn emit_chain(
+        &mut self,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+        a: Loc,
+        chain: &[(&'static str, i64)],
+        result: Held,
+    ) {
         let mut current = a.clone();
         for (index, &(name, count)) in chain.iter().enumerate() {
             let into = if index == chain.len() - 1 { result } else { self.fresh_held(result.width) };
+            // A step the next one reads is read; one nothing reads, the product
+            // an address took into its own, goes with it.
+            self.folded.insert(into.value);
             if name == "flea" {
                 // `into = current + current*count`.
                 let Loc::Held(base) = current.clone() else { unreachable!("a chain works on registers") };
@@ -892,7 +931,7 @@ impl Selector<'_, '_, '_> {
                     scale: count,
                     ..crate::model::ir::Mem::new(None, result.width)
                 };
-                out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+                out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
             } else if name == "lea" {
                 // `into = a + current*count`: the shift and add of one digit,
                 // made by the address unit.
@@ -905,13 +944,13 @@ impl Selector<'_, '_, '_> {
                     scale: count,
                     ..crate::model::ir::Mem::new(None, result.width)
                 };
-                out.push(insn(m.at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
+                out.push(insn(at, semantics(Operation::Address, "lea", vec![Loc::Held(into)], vec![Loc::Mem(cell)])));
             } else if name == "neg" {
-                out.push(insn(m.at, semantics(Operation::Unary, "neg", vec![Loc::Held(into)], vec![current])));
+                out.push(insn(at, semantics(Operation::Unary, "neg", vec![Loc::Held(into)], vec![current])));
             } else if name == "rsub" {
                 // `into = source - current`.
                 out.push(insn(
-                    m.at,
+                    at,
                     semantics(Operation::Binary, "sub", vec![Loc::Held(into)], vec![a.clone(), current]),
                 ));
             } else if name == "fadd" || name == "fsub" {
@@ -920,7 +959,7 @@ impl Selector<'_, '_, '_> {
                 let Loc::Held(width_of) = current.clone() else { unreachable!("a chain works on registers") };
                 let shifted = self.fresh_held(width_of.width);
                 out.push(insn(
-                    m.at,
+                    at,
                     semantics(
                         Operation::Binary,
                         "shl",
@@ -933,15 +972,14 @@ impl Selector<'_, '_, '_> {
                 } else {
                     ("sub", Loc::Held(shifted), current)
                 };
-                out.push(insn(m.at, semantics(Operation::Binary, add, vec![Loc::Held(into)], vec![left, right])));
+                out.push(insn(at, semantics(Operation::Binary, add, vec![Loc::Held(into)], vec![left, right])));
             } else {
                 let other =
                     if name == "shl" { Loc::Imm(Imm { value: count, width: 1, address: None }) } else { a.clone() };
-                out.push(insn(m.at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
+                out.push(insn(at, semantics(Operation::Binary, name, vec![Loc::Held(into)], vec![current, other])));
             }
             current = Loc::Held(into);
         }
-        Ok(())
     }
 
     /// A byte product, by the operand size's own multiply of both factors

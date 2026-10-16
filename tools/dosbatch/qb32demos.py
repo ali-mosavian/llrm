@@ -8,6 +8,9 @@ NIBBLES's snake runs into the wall (the delay loop is calibrated on TIMER, which
 the snake across the arena in two seconds), and GORILLA's players throw bananas (the font of the graphics screen once
 came back from a protected-mode interrupt as noise). The skyline, the sparkles and where the number lies are random,
 so a screen is compared where nothing is: whole where it holds none, else the box of a prompt.
+
+The game is played in lockstep with the emulator (qbplay.Session.resume): the guest runs only between commands, so a key, a look and a
+screenshot happen at an emulated instant, and the picture sequence, random parts included, is the same at any host speed or load.
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ import qbbuild  # noqa: E402
 
 CURSOR_PIXELS = 32   # the cursor blinks: a few pixels of difference at most
 
-# (keys to type, seconds to wait, checkpoint name or None, text the screen must show first or None) for
+# (keys to type, seconds (unused: nothing waits for a time), checkpoint name or None, text the screen must show first or None) for
 # each demo.
 SCRIPTS = {
     "NIBBLES": [
@@ -67,82 +70,64 @@ PLAYED = {
 }
 
 
-STABLE_FOR = 3          # successive looks at the screen that must be the same picture
-LOOK_EVERY = 0.3        # seconds between looks
-SETTLE = 0.5            # seconds after text a step waited for appears
-
-
-LONGEST = 15            # the most a step waits, whatever it is waiting for
+LONGEST_MS = 60_000     # the most emulated time a step waits, whatever it is waiting for
 LOOKS = 3               # successive looks at a screen that must show the same picture
-LOOK_EVERY = 0.03       # host seconds between looks: the guest runs between them, so looks back to back would all see one frame
+LOOK_MS = 50            # emulated ms between two looks
 
 
-def expiry(session, seconds: float):
-    """A function that says the wait is over: `seconds` of the emulator's CPU time, which a loaded host does not stretch (the guest runs on
-    virtual time, so a step that needs 8 CPU seconds needs them whatever the wall says: 'Press any key' never appeared at host load 150,
-    ali-mosavian/llrm#1570), else of the wall clock where there is no emulator behind the session."""
-    if getattr(session, "process", None):
-        return session.limit(seconds)
-    deadline = time.monotonic() + seconds
-    return lambda: time.monotonic() > deadline
-
-
-def ready(session, since: int, shown: str | None) -> None:
-    """Returns once the program has taken the keys and has put up what the step waits for: the text it names (a text
-    screen), else the fork's `key_wait` event, which arrives when the program reads the keyboard and finds nothing there."""
+def ready(session, shown: str | None, typed: bool) -> None:
+    """Returns once the program has taken the keys and has put up what the step waits for: the text it names (a text screen) and then its
+    next keyboard read that finds nothing, else (keys typed) the read that took the last of them. The guest runs in emulated slices, so the number of slices it takes is a property of
+    the program and not of the host."""
     if shown:
-        late = expiry(session, LONGEST)
-        while shown not in session.screen():
-            if late():
-                # `IBM ROM BASIC NOT IMPLEMENTED` on the screen is the fork's flake, ali-mosavian/llrm#1570.
-                raise TimeoutError(f"{shown!r} never appeared")
-            time.sleep(LOOK_EVERY)
-        since = len(session.events)
-        session.send({"cmd": "key_wait_arm"})
-    session.wait_event("key_wait", since, LONGEST)
+        session.run_until(lambda: shown in session.screen(), LONGEST_MS, repr(shown))
+    if shown or not typed:
+        session.send({"cmd": "key_wait_arm", "stop": True})
+        session.run_to_key(LONGEST_MS)
 
 
-def settled(session, work: Path, name: str | None, before: bytes | None) -> None:
-    """For a checkpoint, until its screen is the same picture LOOKS times running: by the hash of the adapter's memory
-    on a graphics screen (no decoding), by the text on a text screen; where a box of the screen is compared, until that
-    part has changed from `before`."""
+def settled(session, name: str | None, before: str | None, looks: int = LOOKS, look_ms: int = LOOK_MS) -> None:
+    """For a checkpoint, until its screen is the same picture LOOKS times running, LOOK_MS of emulated time apart: by the hash of the
+    adapter's memory (`looks` of them, `look_ms` of emulated time apart); where a box of the screen is compared, until that part has changed from `before`."""
     if not name:
         return
-    late, same, last = expiry(session, LONGEST), 0, None
-    while not late():
+    same, last, seen = 0, None, []
+    for _ in range(LONGEST_MS // look_ms):
         look = session.screen_hash()
         same = same + 1 if look == last else 1
-        if same >= LOOKS and (before is None or look != before):
+        if same >= looks and (before is None or look != before):
             return
         last = look
-        time.sleep(LOOK_EVERY)
-    raise TimeoutError(f"the screen never settled for {name}")
+        seen.append(look)
+        session.resume(look_ms)
+    # What a runner that never settled looked like: a picture that moves for ever, or one that never left `before`.
+    raise TimeoutError(
+        f"the screen never settled for {name}: {len(seen)} looks in {LONGEST_MS} emulated ms, "
+        f"{len(set(seen))} distinct pictures, {'still the one before the step' if set(seen) <= {before} else 'last ' + ' '.join(map(str, seen[-5:]))}"
+    )
 
 
 def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
-    """test_qbdemos.play on virtual time and without its sleeps: each step types its keys (which arms the fork's
-    `key_wait` event), waits for the event or for the text it names, and a checkpoint then waits for the screen to settle
-    and is taken; nothing waits for a time, and none waits longer than LONGEST."""
+    """The steps played in lockstep with the emulator: the guest runs only between commands, for as long as the program takes to
+    ask for a key or for a stated number of emulated milliseconds, so each key, look and screenshot happens at an emulated instant
+    that does not depend on the host. Nothing waits for a time, and none waits longer than LONGEST_MS of emulated time."""
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     shots: dict[str, Path] = {}
     session = qbplay.Session(work, qb32.DEMO_CONF)
+    trace = os.environ.get("QB32DEMO_TRACE")
     try:
-        session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
+        session.launch(LONGEST_MS)
         for keys, _seconds, name, shown in steps:
-            began, since = time.monotonic(), len(session.events)
             before = session.screen_hash() if name else None
-            if keys:
-                session.type(keys, pause=0)
-            else:
-                session.send({"cmd": "key_wait_arm"})
-            ready(session, since, shown)
-            settled(session, work, name, before)
+            session.keys_in_lockstep(keys, LONGEST_MS)
+            ready(session, shown, bool(keys))
+            settled(session, name, before)
             if name:
                 shots[name] = work / f"{name}.png"
-                session.shot(shots[name], settle=0)
-            if os.environ.get("QB32DEMO_TRACE"):
-                print(f"{work.parent.parent.name}: {keys} {name} {time.monotonic() - began:.2f}s", file=sys.stderr)
+                session.snap(shots[name])
+            if trace:
+                print(f"{work.parent.parent.name}: {keys} {name} at {session.now_us} emulated us", file=sys.stderr)
     finally:
         session.close()
     return shots
@@ -163,7 +148,15 @@ def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> 
     return sum(pixel(left, x, y) != pixel(right, x, y) for y in range(y0, y1) for x in range(x0, x1))
 
 
-def differences(name: str, want: dict[str, Path], got: dict[str, Path]) -> list[str]:
+def keep_screens(name: str, target: str, checkpoint: str, want: Path, got: Path) -> None:
+    """Both screens of a mismatch into the gate's logs (CI uploads them): the pixel count alone cannot say what drew wrong."""
+    if logs := os.environ.get("CARGO_TARGET_DIR"):
+        (kept := Path(logs) / "gate-logs" / "screens").mkdir(parents=True, exist_ok=True)
+        for kind, path in (("want", want), ("got", got)):
+            shutil.copy(path, kept / f"{name}-{target}-{checkpoint}-{kind}.png")
+
+
+def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: str = "") -> list[str]:
     """The checkpoints of `name` whose screens differ by more than a blinking cursor."""
     boxes, bad = PLAYED[name][1], []
     for checkpoint in want:
@@ -171,13 +164,14 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path]) -> list[
         count = region_difference(want[checkpoint], got[checkpoint], box) if box else qbplay.differing_pixels(want[checkpoint], got[checkpoint])
         if count > CURSOR_PIXELS:
             bad.append(f"{checkpoint}: {count} pixels")
+            keep_screens(name, target, checkpoint, want[checkpoint], got[checkpoint])
     return bad
 
 
 def _key(name: str, source: Path) -> str:
     linker = dosbatch.QB45 / "LINK.EXE"
     stamp = f"{linker.stat().st_size}:{int(linker.stat().st_mtime)}" if linker.exists() else ""
-    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode()).hexdigest()[:20]
+    return hashlib.sha256(source.read_bytes() + repr(script(name)).encode() + stamp.encode() + qb32.DEMO_CONF.encode() + b"lockstep").hexdigest()[:20]
 
 
 def reference_shots(name: str, source: Path, work: Path) -> dict[str, Path]:
@@ -209,8 +203,9 @@ def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, P
     return shots
 
 
-def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]]]:
-    """For each demo and target of ours, the checkpoints that differ from BCOM45's: [] where it looks the same."""
+def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] | Exception]:
+    """For each demo and target of ours, the checkpoints that differ from BCOM45's: [] where it looks the same. A demo that could not be
+    played is its exception, not a failure of the others': GORILLA's `never settled` read as NIBBLES's too."""
     objects = qbbuild.runtimes(work)
 
     def one(name: str) -> dict[str, list[str]]:
@@ -219,8 +214,23 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]]]
             reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
             candidate = pool.submit(candidate_shots, name, built, work / name / "cand")
             want, got = reference.result(), candidate.result()
-        return {target: differences(name, want, shots) for target, shots in got.items()}
+        return {target: differences(name, want, shots, target) for target, shots in got.items()}
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}
-        return {name: future.result() for name, future in futures.items()}
+        return {name: outcome(future) for name, future in futures.items()}
+
+
+def outcome(future):
+    """What a demo's run gave: its differences, or the exception that stopped it."""
+    try:
+        return future.result()
+    except Exception as why:
+        return why
+
+
+def of(results: dict, name: str) -> dict[str, list[str]]:
+    """`name`'s differences from `run`'s results; raises only if `name` itself could not be played."""
+    if isinstance(results[name], Exception):
+        raise results[name]
+    return results[name]

@@ -120,6 +120,7 @@
 use std::collections::BTreeSet;
 
 use llrm_analysis::manager::ExposedFrames;
+use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
@@ -127,7 +128,6 @@ use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode, Tail};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
-use num_bigint::BigInt;
 
 use crate::counting;
 use crate::edges;

@@ -193,3 +193,30 @@ b0:
 ");
     assert!(after.contains("i16 %x, i16 1, i16 5)"), "{after}");
 }
+
+/// An argument that only the call read is dead once it is not passed: the
+/// caller's passes have that to remove, so the caller's edit is not one the
+/// pipeline may take as a call that takes fewer arguments (`Settled::vouch`).
+#[test]
+fn a_caller_whose_dropped_argument_had_no_other_reader_is_not_a_plain_edit() {
+    let plain = "define internal i16 @f(i16 %a, i16 %unused) {
+b0:
+  ret i16 %a
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 12)
+  ret i16 %r
+}
+";
+    let computed =
+        plain.replace("i16 %x, i16 12)", "i16 %x, i16 %k)").replace("  %r = call", "  %k = mul i16 %x, 3\n  %r = call");
+    let unsound = |text: &str| {
+        let mut module = parsed(&format!("{}{text}", llrm_analysis::testing::DOS));
+        let (_, unsound) = crate::deadargs::removed_with(&mut module);
+        let top = module.named("top").expect("top");
+        unsound.contains(&top)
+    };
+    assert!(!unsound(plain), "a constant is dropped: nothing becomes dead");
+    assert!(unsound(&computed), "%k was computed for the call alone");
+}

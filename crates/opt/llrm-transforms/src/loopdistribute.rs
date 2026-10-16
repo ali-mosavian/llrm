@@ -336,7 +336,7 @@ fn found(
     let function: &Function = unit.function;
     let shape = cfg::Shape::of(function);
     // The most nested first: the hottest.
-    let depth = |loop_: &Loop| shape.loops.iter().filter(|one| one.body.is_superset(&loop_.body)).count();
+    let depth = |loop_: &Loop| loop_.body.depth() as usize;
     let mut candidates = shape
         .loops
         .iter()

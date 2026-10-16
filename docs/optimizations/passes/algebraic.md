@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/algebraic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/algebraic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:f4ea7d0252021bd4de94b664d3bb12cc4ad626865745efa0b2828b12136204cd -->
+<!-- src: crates/opt/llrm-transforms/src/algebraic.rs sha256:7494c42f25faca3bf2479b2afcf462a74431c32e2fa5b59a69dcbcd1a27e465d -->
 
 # algebraic
 
@@ -105,7 +105,8 @@ reason). It is skipped with `-fno-strength-reduce`.
 ## Needs
 `ranges` (non-negative dividends, redundant masks), `DemandedBits` (unread
 bits), `Registers` and `consts` (divisors known through phis), `induction`
-(recurrences).
+(recurrences, over the manager's `Shape` and `Registers`, which a round that
+edited the body invalidates).
 
 ## Keeps
 Blocks and edges are unchanged: dominators and loops are preserved; other

@@ -1,0 +1,50 @@
+# CI is the gate
+
+A green CI run means what `gate.py run` passing locally means: the same planner, the same `tiers.toml`, the same steps and tiers. No step is skipped for a missing tool; a step that cannot run fails the job by name.
+
+## Rules
+
+1. CI asks `gate.py plan --json` for its jobs. It lists no step itself. A test builds the plan of a diff both ways (what `gate.py run` would run, what the workflow's jobs run) and compares them.
+2. `GATE_ALLOW_MISSING` is gone from the workflow. A capability missing on a runner is a failure, not a skip.
+3. The run's last job prints `GATE <tier> PASS at <head sha>`, or `FAIL: <groups>`, the line `gate.py run` prints.
+4. Per pull request CI tests that PR merged with main as it is then. Batch interactions are the periodic full gate on main's job and the merger's premerge against current main.
+
+## Runners
+
+Build and the heavy groups (`python`, `tools`, `reference`, `cost`) prefer tinytim; the rest, and anything tinytim cannot take, run on `ubuntu-24.04`. GitHub has no "prefer A, else B", so `plan` chooses: `tools/ci/pick_runners.py` reads the repository variable `TINYTIM_HEARTBEAT` (`<epoch> <idle runners>`, written each minute by the supervisor). Missing, older than 3 minutes or zero idle means hosted, so a dead tinytim never blocks a run. Only a push to main and a pull request from this repository can get tinytim; a fork's pull request, a push to any other branch and a manual run elsewhere are hosted. The idle count can be a minute stale: another run may take the runner before the job starts, and the job then waits for a free one. That wait is not bounded by `timeout-minutes`, and there is no cancel-and-rerun-hosted timeout: accepted. The run summary and the `ci` line (`GATE <tier> PASS at <head12>  [runners: tinytim: ...; hosted: ...]`) say which runner took each job.
+
+The two runners are not the same gate on one point: tinytim has `perf`, so `test_scaling*.py` and `measure` run there with `GATE_ALLOW_MISSING` empty; hosted has none and drops them (`GATE_ALLOW_MISSING=perf`). One PR can pass on one and fail on the other until those tests have a counter hosted can read (#1844 and the sharding after it).
+
+tinytim (`tools/ci/selfhosted`, `install.sh`): user `ghrunner`, which cannot read the secrets in `~alim`, runs six slot units (`ghrunner@1..6`, one runner each) and `ghrunner-heartbeat`. Per job the supervisor gets a single-use JIT config from the API and starts a rootless podman container (crun) of the runner image; one job, then the container is gone. The PAT (`/etc/ghrunner/pat`, Administration and Variables on this repository) stays outside the containers. No Docker. Limits (`AllowedCPUs` and `MemoryMax` of each slot unit, since rootless podman ignores `--cpuset-cpus` in the unit's cgroup): 6 slots of 4 threads, each the two SMT threads of two physical cores inside one CCD (tinytim clocks about twice a hosted VM, so 4 threads match 8 hosted); cores 0, 1, 8, 9 (8 threads) stay free; 16 GB each, 24 threads in total, low CPU weight. `perf` works there (host `kernel.perf_event_paranoid=-1`, a seccomp profile that allows `perf_event_open`), so `GATE_ALLOW_MISSING` is empty on tinytim and `perf` only on hosted. The private tools are cloned inside the container (see below) and die with it. "Require approval for all outside contributors" is on.
+
+## Public and private steps
+
+Hosted runners hold the public tools only. What the repository must not hold is in a private repository, `ali-mosavian/llrm-private-tools`, read by a deploy key kept as the secret `LLRM_PRIVATE_KEY`:
+
+| capability (`tiers.toml`) | directory in the private repository | env the gate reads |
+|---|---|---|
+| turbo | `tcpp30/`, `td/` | `TCPP30_DIR`, `TD_DIR` |
+| codeview | `vbdos/`, `tcpp30/` | `VBDOS_DIR`, `TCPP30_DIR` |
+| qcport | `qcport/src/`, `qcbcc/`, the d_faces sources | `QCPORT`, `QCPORT_BORLAND` |
+| qb45, qb45demos | `qb45/`, `gor/` | `QB45_DIR`, `QB45_DEMOS_DIR` |
+
+A job that needs one checks the repository out into its workspace outside `target/`, only where `github.event.pull_request.head.repo.full_name == github.repository` (and on pushes to main). It never saves it to a cache or an artifact, never prints a file of it (`set +x`, no `ls -R` into a log), and removes it at the end. A job that needs one on a fork PR runs a step that fails with `group X needs the private tools; fork PRs cannot have them`.
+
+A step is wholly public or wholly private, so the private jobs are as fine as the public ones. Steps that are half of each are split in `tiers.toml`, locally too: `pytest` (the files that `REQUIRES` nothing private) and `pytest-qb`, `run` and `run-qb`, `integration` and `integration-qb` (the BC differential binary). Private steps: `turbo`, `cv4`, `qcport`, `dos-slow`, `bench`, `pytest-qb`, `run-qb`, `integration-qb`.
+
+## Instruction counters
+
+Hosted VMs have no `perf` instruction counter. Steps that read one: `measure`, and the scaling tests (`test_scaling_gate.py`, `test_scaling.py`). Until a counter exists on hosted runners they cannot be a CI job; the options, in order of preference:
+
+- **qemu-user with the instruction-count plugin** (`-plugin libinsn`): exact guest instruction counts, at about 5 to 10 times native. `measure` is about 10^12 instructions: ~80 CPU-minutes, split over its axes as a matrix of jobs (each axis and level one job): a few minutes of wall time. The counter becomes a backend of `scaling.sample` (`LLRM_COUNTER=qemu`), chosen for base and head alike; counts differ from `perf`'s by a few per cent, so the baselines are per backend.
+- **valgrind `--tool=callgrind`**: exact too, 30 to 100 times native: too slow for `measure`, usable for one cell of the scaling tests.
+- Keep them off CI, run by the merger's premerge and the periodic gate on main: a skipped step, which rule 2 forbids.
+
+## Order
+
+1. Main's CI green (#1837).
+2. `gate.py plan --json` lists jobs with the capabilities each needs; the workflow runs them; the plan-equality test; the summary line.
+3. The step splits in `tiers.toml`.
+4. The private repository, the secret, the private jobs (needs the owner of the repository: it holds files whose licences the repository does not).
+5. The counter backend and `measure` as a matrix.
+6. Owners merge main into their open PRs.

@@ -164,7 +164,8 @@ b3:
         assert_eq!(found.len(), 1);
         let loop_ = &found[0];
         let predecessors = loops::predecessors(&graph);
-        let outside = predecessors[&loop_.header].difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside =
+            predecessors[&loop_.header].iter().copied().filter(|at| !loop_.body.contains(at)).collect::<Vec<_>>();
         assert_eq!(outside.len(), 1);
         assert_eq!(function.successors(cfg::block(outside[0])), [cfg::block(header_at)]);
         let exits = graph
@@ -174,7 +175,7 @@ b3:
             .filter(|at| !loop_.body.contains(at))
             .collect::<BTreeSet<_>>();
         assert_ne!(exits, BTreeSet::from([exit_at]));
-        assert!(exits.iter().all(|at| predecessors[at].is_subset(&loop_.body)));
+        assert!(exits.iter().all(|at| predecessors[at].iter().all(|a| loop_.body.contains(a))));
         assert!(!simplified(function));
         printed(&module);
     }
@@ -218,13 +219,13 @@ fn shape(
     let found = loops::loops(&graph, function.entry().map(cfg::id));
     let loop_ = found.iter().find(|one| one.header == header).expect("the loop");
     let predecessors = loops::predecessors(&graph);
-    let outside = predecessors[&header].difference(&loop_.body).collect::<Vec<_>>();
+    let outside = predecessors[&header].iter().filter(|a| !loop_.body.contains(a)).collect::<Vec<_>>();
     let dedicated = graph
         .iter()
         .filter(|block| loop_.body.contains(&block.at))
         .flat_map(|block| block.succ.iter())
         .filter(|at| !loop_.body.contains(at))
-        .all(|at| predecessors[at].is_subset(&loop_.body));
+        .all(|at| predecessors[at].iter().all(|a| loop_.body.contains(a)));
     (outside.len(), loop_.latches.len(), dedicated)
 }
 

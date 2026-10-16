@@ -190,7 +190,7 @@ pub(crate) fn nest_of(
         .chain(post.iter().copied())
         .chain(inner.body.iter().copied())
         .collect::<BTreeSet<_>>();
-    if covered != outer.body {
+    if outer.body != covered {
         return None;
     }
     let block = cfg::block;

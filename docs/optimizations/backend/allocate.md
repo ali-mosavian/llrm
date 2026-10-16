@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:ad550ce0258560c79d9c313b9569b569a24fdf9c910854dc2cd6526aa3514512 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:1892bb1477d5c7b6b998c6060583fd0e35a2d6ec462d280198c3e158f0af9fd6 -->
 
 # allocate
 
@@ -135,13 +135,6 @@ Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than
 the one it has, so each joined copy becomes a deleted move.
 
-A value a spill or split rewrite takes its register from (its interval now
-overlaps another's in the same register) goes back to the `Assign` stage, as
-LLVM queues an unassigned interval at `RS_Assign`, so it may evict lighter
-holders before it is split or spilled. Left at `Done` it was spilled at once:
-the inner counter of the 8x8 matmul kernel, weight 34 against its
-loop-invariant neighbours' 0.3-0.6.
-
 ### Candidates
 The first run (`regalloc base`) is a full allocation of the prepared body.
 If it spilled, and the profile has `search` (`-fallocation-search`; off at
@@ -159,8 +152,11 @@ weighted by block frequency); the cheapest wins.
 Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
 the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 `Unfolded` that the spills admit is tried, plus `Whole` without
-splitting. A trial is kept only if it is cheaper and spilled none of its
-protected values. The frame is restored between trials.
+splitting, and only that shape is made: the rewritten bodies of the others
+cost 104 M of `d_faces` -O1's 7.1 G and were dropped unused. A trial is kept
+only if it is cheaper and spilled none of its protected values: it stops at the
+first spill of one (`ABANDONED`), since the rounds after it could not change
+what is kept. The frame is restored between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width

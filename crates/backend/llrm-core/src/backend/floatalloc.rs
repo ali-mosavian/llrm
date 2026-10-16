@@ -43,6 +43,12 @@
 //!  fsubp st(1), st(0)   ; left' - right'      [result, right, left]
 //! ```
 //!
+//! A store or a compare that reads a value still live does not copy it first:
+//! `fst`, `fist` (a word or a dword; `fistt` for `fisttp`) leave the value on
+//! the stack, and `fcom`/`fcomp st(i)` compare it where it lies, as gcc's
+//! reg-stack and LLVM's `X86FloatingPoint` do. A quadword conversion has only
+//! its popping form and keeps the copy.
+//!
 //! More than eight operands on the stack is refused. Order, rounding and
 //! storage conversions are not changed.
 //!
@@ -124,7 +130,7 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::loops;
-use crate::backend::allocate::live;
+use crate::backend::allocate::{Live, live};
 use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
 use crate::backend::constpool::Pool;
@@ -700,10 +706,28 @@ impl _Stack {
         self.top(source)?;
         let name = if name_is(&what, "fst") { Some("fstp".to_owned()) } else { what.name.clone() };
         if self.survives(source) {
-            if name.as_deref() == Some("fstp")
-                && what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if dest.width == 4 || dest.width == 8))
-            {
-                self.emit(Semantics { name: Some("fst".to_owned()), sources: vec![st(0)], ..what });
+            let sized = |widths: &[u32]| {
+                what.dests
+                    .iter()
+                    .all(
+                        |dest| matches!(
+                            dest,
+                            Loc::Mem(dest) if widths.contains(&u32::from(dest.width))
+                        ),
+                    )
+            };
+            // The value stays: the store that does not pop it (`fst`, `fist`;
+            // the 387 has `fist` for a word and a dword only), not
+            // a copy and a popping store, as gcc's reg-stack and LLVM's
+            // X86FloatingPoint have it.
+            let kept = match name.as_deref() {
+                Some("fstp") if sized(&[4, 8]) => Some("fst"),
+                Some("fistp") if sized(&[2, 4]) => Some("fist"),
+                Some("fisttp") if sized(&[2, 4]) => Some("fistt"),
+                _ => None,
+            };
+            if let Some(kept) = kept {
+                self.emit(Semantics { name: Some(kept.to_owned()), sources: vec![st(0)], ..what });
                 return Ok(());
             }
             self.duplicate(source)?;
@@ -720,15 +744,22 @@ impl _Stack {
         cell: Loc,
     ) -> Result<(), Raised> {
         self.top(left)?;
-        if self.survives(left) {
-            self.duplicate(left)?;
-        }
         let what = self.one().what.clone().expect("a floating instruction has semantics");
-        // Fused from a home load, it is already `fcomp` or, over an integer
-        // cell, `ficomp`.
-        let name = if name_is(&what, "ficomp") { "ficomp" } else { "fcomp" };
+        // `fcom`/`fcomp` or, over an integer cell, `ficom`/`ficomp`, however it
+        // was written: the popping form where the left dies, else the
+        // one that leaves it, not a copy of it.
+        let integer = what.name.as_deref().is_some_and(|name| name.starts_with("fi"));
+        let lives = self.survives(left);
+        let name = match (integer, lives) {
+            (true, true) => "ficom",
+            (true, false) => "ficomp",
+            (false, true) => "fcom",
+            (false, false) => "fcomp",
+        };
         self.emit(Semantics { name: Some(name.to_owned()), dests: Vec::new(), sources: vec![st(0), cell], ..what });
-        self.values.remove(0);
+        if !lives {
+            self.values.remove(0);
+        }
         self.status()
     }
 
@@ -739,22 +770,39 @@ impl _Stack {
         left: u32,
         right: u32,
     ) -> Result<(), Raised> {
-        // Left on top and right beneath it, each a copy where it is read again:
-        // `fld st(i)` copies from any slot.
+        // As gcc's reg-stack and LLVM's X86FloatingPoint compare against any
+        // slot, not a copy of it: left on top (one exchange
+        // at most), then `fcompp` where both die and right lies beneath it;
+        // `fcomp st(i)` where left dies, which pops it; `fcom st(i)`
+        // where it lives. A right that dies is popped after, as any dead value
+        // is.
+        if right != left {
+            let slot = index_of(&self.values, left);
+            if slot != 0 {
+                self.exchange(slot);
+            }
+            let slot = index_of(&self.values, right);
+            let (lives, other_lives) = (self.survives(left), self.survives(right));
+            if !lives && !other_lives && slot == 1 {
+                self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
+                self.values.drain(..2);
+            } else {
+                let name = if lives { "fcom" } else { "fcomp" };
+                self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
+                if !lives {
+                    self.values.remove(0);
+                }
+            }
+            return self.status();
+        }
+        // One value on both sides: a copy of it, read again where it is.
         if self.survives(left) {
             self.duplicate(left)?;
         } else {
             self.top(left)?;
         }
-        if right == left || self.survives(right) {
-            self.duplicate(right)?;
-            self.exchange(1);
-        } else if index_of(&self.values, right) != 1 {
-            let slot = index_of(&self.values, right);
-            self.exchange(slot);
-            self.exchange(1);
-            self.exchange(slot);
-        }
+        self.duplicate(right)?;
+        self.exchange(1);
         self.emit(semantics(Operation::Compare, "fcompp", Vec::new(), vec![st(0), st(1)]));
         self.values.drain(..2);
         self.status()
@@ -952,12 +1000,23 @@ fn _converted(
     if floating.is_empty() {
         return Ok(body.clone());
     }
-    let body = &_split_for_the_stack(body, &floating);
+    // The split's own liveness and bundles are the body's where it adds no
+    // block.
     let (live_in, live_out) = live(body);
+    let bundles = spillplacement::bundles(body);
+    let split = _split_for_the_stack(body, &floating, (&live_in, &live_out), &bundles);
+    let (body, live_in, live_out, bundles) = match split {
+        Some(body) => {
+            let (live_in, live_out) = live(&body);
+            let bundles = spillplacement::bundles(&body);
+            (std::borrow::Cow::Owned(body), live_in, live_out, bundles)
+        }
+        None => (std::borrow::Cow::Borrowed(body), live_in, live_out, bundles),
+    };
+    let body = &*body;
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
     };
-    let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
         let (entry, exit) = bundles.of[&block.at];
@@ -1058,12 +1117,12 @@ fn _converted(
 fn _split_for_the_stack(
     body: &LirBody,
     floating: &HashSet<u32>,
-) -> LirBody {
-    let (live_in, live_out) = live(body);
+    (live_in, live_out): (&Live, &Live),
+    bundles: &spillplacement::Bundles,
+) -> Option<LirBody> {
     let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
         set.iter().copied().filter(|value| floating.contains(value)).collect()
     };
-    let bundles = spillplacement::bundles(body);
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     let mut entries: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
@@ -1086,7 +1145,7 @@ fn _split_for_the_stack(
             }
         }
     }
-    if edges.is_empty() { body.clone() } else { crate::backend::phielim::placed_on_edges(body, &edges) }
+    (!edges.is_empty()).then(|| crate::backend::phielim::placed_on_edges(body, &edges))
 }
 
 /// Where the instructions leaving the block begin; the stack shuffles there.
@@ -1127,7 +1186,11 @@ pub fn allocated<'a>(
 /// instructions, x87 loads, exchanges, compares, sign changes, branches)
 /// needs none.
 fn _needs(one: &Insn) -> Option<Mode> {
-    if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
+    if one
+        .what
+        .as_ref()
+        .is_some_and(|what| what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt")))
+    {
         return Some(Mode::Chop);
     }
     let branches = one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch));
@@ -1340,10 +1403,15 @@ fn _truncating(
                     current = needed;
                 }
             }
-            if one.what.as_ref().is_some_and(|what| what.op == Operation::FloatStore && name_is(what, "fisttp")) {
+            if one.what.as_ref().is_some_and(|what| {
+                what.op == Operation::FloatStore && (name_is(what, "fisttp") || name_is(what, "fistt"))
+            }) {
                 let mut made = (**one).clone();
-                made.what =
-                    Some(Semantics { name: Some("fistp".to_owned()), ..one.what.clone().expect("checked above") });
+                let kept = name_is(one.what.as_ref().expect("checked above"), "fistt");
+                made.what = Some(Semantics {
+                    name: Some(if kept { "fist" } else { "fistp" }.to_owned()),
+                    ..one.what.clone().expect("checked above")
+                });
                 insns.push(Arc::new(made));
             } else {
                 insns.push(Arc::clone(one));

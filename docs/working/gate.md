@@ -93,7 +93,7 @@ Every step exits 0 to pass, 77 when SKIPPED, and anything else to fail. A cargo 
 | `run` | `tests/run` in DOSBox for the languages the diff touches (`LLRM_RUN_ONLY`) | every program prints its `.out` | run |
 | `pytest` | `tools`, `crates`, `tests/*.py` | pass | python |
 | `pytest-programs` | `tests/test_programs_compile.py`, `tests/test_loops.py` | every program compiles bar `tools/sizes-known.txt`; loop checks hold | python |
-| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count off its `expected.toml` baseline | tools |
+| `bench` | `tools/bench/bench.py` | its last line says `0 problems`: no count of the compiler's own above the base's (`BASE` line; the base is the merge-base with origin/main, built and measured by its own tree), none of a reference off its stored count | tools |
 | `torture` | `tools/torture/torture.py --gate`, the fixed sample | each program is a pass or a named design difference | tools |
 | `identity` | `tests/toolchain.rs` `test_the_identity_gate_passes` | the compiler built against itself makes identical objects | identity |
 | `turbo` | Turbo Debugger sessions (`tests/turbo.rs`) | the debugger shows the same values | reference |
@@ -115,14 +115,6 @@ Cost, as `tiers.toml` states it: `turbo` 48 s, `cv4` 30 s, `identity` 96 s, `pyt
 ## The smoke tier
 
 `gate.py run --tier smoke [--pr N]` is the cheap check of one PR (about a minute on a warm target): the fast tier's plan cut to `build`, `lib`, `crate-tests`, `scans`, `facts` (the target-facts audit), `products` (no tracked `.o`, `.obj`, `.exe`, `.map` or `.lst` outside the fixtures; no build), `fmt`, `docs` (generated pages and pass pages current), `pytest-programs` (every program compiles; with the build), `pytest-quick` (the pytest step's files but the slow ones named in `tiers.toml` `[smoke] slow_pytest`; with the build) and `changed-tests` (the test files the diff touches or sits beside). It refuses first, exit 2: a dirty tree, a PR whose base is not `main` (stacked; `--pr` reads it from `gh`), a branch that conflicts with `origin/main`, and a commit message, PR text or added line that names the assistant or its maker. A smoke PASS is not a merge licence: only a full gate on the tip is.
-
-## The merge train
-
-`python3 tools/gate/train.py PR...` (`--max 5`) lands smoke-green PRs together. A PR boards when its base is `main`, its text, commits and diff name nothing they must not, and its head has a smoke PASS (`gate.py run --tier smoke` leaves a mark per head under `~/.cache/llrm/smoke`). The train merges the PRs onto `origin/main` in order (a conflict bounces that PR), runs the full gate once on that tip and prints `TRAIN PASS TIP=<sha> PRs=...` and the `git push origin <sha>:main` line. **It pushes nothing**: whoever lands it runs that line, so the commit on `main` is the commit the gate passed on. A PR touching `tools/gate/`, `tools/bench/` or the measurement tools goes in a batch of its own.
-
-A red batch: the failed steps are run on `origin/main` alone (red there too: `TRAIN ENV`, no PR blamed, exit 3); otherwise halves are re-run on the failed steps, each culprit is named with what its failing tests printed, and the rest is gated whole on its own tip before it is offered. Before starting it checks disk, `/tmp` inodes and `CARGO_TARGET_DIR`, and takes a lock so one train runs at a time.
-
-`tools/bench/bench.py --batch` is the bench step's mode in a train (`LLRM_BENCH_BATCH=1`): a count below its blessed one is printed `BETTER`, not failed, while a worse count, a missing baseline and an error still fail. `--bless --batch --reason TEXT` writes `expected.toml` only when nothing but better counts remain, so it can never bless over a worse number. Outside a batch a better count fails until its PR blesses it.
 
 ## Running it locally
 

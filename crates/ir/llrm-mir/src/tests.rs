@@ -696,3 +696,74 @@ fn an_alias_of_a_keyed_map_and_three_uses_of_it_count_as_three() {
         "a file that neither imports nor defines the alias is no user of it (a name like Facts is another file's own); an indented associated type is no alias, but a keyed set itself"
     );
 }
+
+/// `depth` loops one inside the next: loop k's header `h{k}` goes into the next
+/// loop, or the body of the innermost, and out to the latch of the loop round
+/// it.
+fn nested(depth: usize) -> String {
+    let mut text = String::from("define void @f(i32 %n) {\nentry:\n  br label %h0\n\n");
+    for k in 0..depth {
+        let before = if k == 0 { "entry".to_owned() } else { format!("h{}", k - 1) };
+        let inside = if k + 1 < depth { format!("h{}", k + 1) } else { "body".to_owned() };
+        let outside = if k == 0 { "x".to_owned() } else { format!("l{}", k - 1) };
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i32 [ 0, %{before} ], [ %n{k}, %l{k} ]\n  %c{k} = icmp slt i32 %i{k}, %n\n  br i1 %c{k}, label %{inside}, label %{outside}\n\n"
+        );
+    }
+    text += &format!("body:\n  br label %l{}\n\n", depth - 1);
+    for k in 0..depth {
+        text += &format!("l{k}:\n  %n{k} = add i32 %i{k}, 1\n  br label %h{k}\n\n");
+    }
+    text + "x:\n  ret void\n}\n"
+}
+
+/// Every loop's blocks were a flood from its latches, and its parent the
+/// nearest larger loop holding all of them: a nest of d loops took d times its
+/// blocks and d squared times the loops' sets (quicksort -O3, five deep: a 20 x
+/// slope in `analysis loops`). The forest names the same loops, parents and
+/// innermost loops.
+#[test]
+fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
+    use crate::dominators::DominatorTree;
+    use crate::loops::LoopInfo;
+    let depth = 12;
+    let module = parse::module(&nested(depth)).expect("a module");
+    let function = module.functions().next().expect("@f").2;
+    let info = LoopInfo::new(function, &DominatorTree::new(function));
+    assert_eq!(info.loops.len(), depth);
+    for (at, one) in info.loops.iter().enumerate() {
+        // Outermost first: loop `at` is the one whose header is `h{at}`, and
+        // holds the `depth - at` loops from there in, each `h`, `l`
+        // pair, and the innermost's body.
+        let named = |name: &str| {
+            function.layout().iter().copied().find(|&block| function.block(block).name.as_deref() == Some(name))
+        };
+        let header = named(&format!("h{at}")).expect("a header");
+        assert_eq!(one.header, header);
+        assert_eq!(one.blocks.len(), 2 * (depth - at) + 1, "loop {at}");
+        assert_eq!(one.parent, at.checked_sub(1), "loop {at}");
+        let latch = named(&format!("l{at}")).expect("a latch");
+        assert_eq!(one.latches, vec![latch]);
+        assert!(one.blocks.contains(&latch) && one.blocks.contains(&header));
+        assert_eq!(info.depth(latch), (at + 1) as u32);
+    }
+    assert!(info.loops[depth - 1].blocks.iter().any(|&block| function.block(block).name.as_deref() == Some("body")));
+}
+
+/// Twice the nest, twice the walk: the blocks a function's loops are found in
+/// grow with the blocks, not with their depth.
+#[test]
+fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
+    use crate::dominators::DominatorTree;
+    use crate::forest::forest_visits;
+    use crate::loops::LoopInfo;
+    let visits = |depth: usize| {
+        let module = parse::module(&nested(depth)).expect("a module");
+        let function = module.functions().next().expect("@f").2;
+        let before = forest_visits();
+        LoopInfo::new(function, &DominatorTree::new(function));
+        forest_visits() - before
+    };
+    let (small, large) = (visits(40), visits(80));
+    assert!(large < 3 * small, "{small} blocks walked for 40 loops, {large} for 80");
+}

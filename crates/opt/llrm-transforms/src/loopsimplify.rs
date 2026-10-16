@@ -325,7 +325,7 @@ fn _exits(
 fn _reached_only_from(
     function: &Function,
     target: i64,
-    body: &BTreeSet<i64>,
+    body: &llrm_mir::forest::Body,
 ) -> bool {
     function.predecessors(cfg::block(target)).into_iter().all(|from| body.contains(&cfg::id(from)))
 }
@@ -410,7 +410,7 @@ fn _bridged(
     target: i64,
     sources: &BTreeSet<i64>,
 ) {
-    if !loop_.body.contains(&target) || !sources.is_subset(&loop_.body) {
+    if !loop_.body.contains(&target) || !sources.iter().all(|at| loop_.body.contains(at)) {
         return;
     }
     loop_.body.insert(bridge);

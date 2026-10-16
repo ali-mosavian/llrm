@@ -1,4 +1,4 @@
-"""Session start-up: the emulator freezes at launch until a `continue` reaches it after it has frozen (#1570)."""
+"""Session start-up: the first `continue` is sent after the emulator has frozen at launch (#1570)."""
 
 from __future__ import annotations
 
@@ -11,29 +11,26 @@ import qbplay  # noqa: E402
 
 
 class FrozenAtLaunch:
-    """An emulator that ignores the `continue` sent before it froze: it answers `socketFrozen` until it gets another."""
+    """An emulator that answers `socketFrozen` only after a few polls: a `continue` sent before that was lost."""
 
-    def __init__(self, ignored: int):
-        self.ignored, self.sent = ignored, []
+    def __init__(self, polls: int):
+        self.polls, self.sent = polls, []
 
     def send(self, command: dict) -> dict:
         self.sent.append(command["cmd"])
-        if command["cmd"] == "continue":
-            self.ignored -= 1
-            return {"status": "ok"}
-        frozen = self.ignored >= 0
-        return {"status": "ok", "socketFrozen": frozen, "shellReady": not frozen}
+        self.polls -= 1
+        return {"status": "ok", "socketFrozen": self.polls < 0}
 
 
-def test_a_lost_continue_is_sent_again_while_the_emulator_is_frozen():
-    """The gate's `test_graphics_probe` waited 40 minutes on an emulator frozen at F000:FFF0: its one `continue` was lost, and
-    a frozen emulator burns none of the CPU time the wait was bounded by."""
+def test_the_first_continue_waits_until_the_emulator_has_frozen():
+    """The gate's `test_graphics_probe` waited 40 minutes on an emulator frozen at F000:FFF0: its one `continue` was sent before it had
+    frozen and was lost, and a frozen emulator burns none of the CPU time the wait was bounded by."""
     one = object.__new__(qbplay.Session)
-    emulator = FrozenAtLaunch(ignored=1)
+    emulator = FrozenAtLaunch(polls=3)
     one.send = emulator.send
-    one.limit = lambda seconds: (lambda: len(emulator.sent) > 50)
-    one.wait_for_shell()
-    assert "continue" in emulator.sent
+    one.process = type("Running", (), {"poll": lambda self: None})()
+    one.await_frozen()
+    assert emulator.sent == ["status"] * 4 and "continue" not in emulator.sent
 
 
 def test_two_sessions_never_pick_a_port_at_once(tmp_path):

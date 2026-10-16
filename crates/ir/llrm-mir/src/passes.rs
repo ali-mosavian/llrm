@@ -286,6 +286,48 @@ pub trait Analysis: 'static {
     /// are the ones it read).
     const SKIPS: bool = false;
 
+    /// Whether the result stays a true answer, with entries for fewer values
+    /// and facts no more precise than a fresh derivation's, after edits that
+    /// `sound_edits` finds only keep every live value's meaning: what it says
+    /// of a live value holds, a value it has no entry for is unknown, and none
+    /// is asked of an erased one. `covers` is the check.
+    const SOUND: bool = false;
+
+    /// Whether the result holds values (a pointer, a root), not facts keyed by
+    /// them: uses replaced by an equal value (`Substituted`) then leave it
+    /// naming one that is gone, and it is not kept past them.
+    const NAMES_VALUES: bool = false;
+
+    /// `old` brought to the function after `changes`, which `sound_edits` found
+    /// keep every live value's meaning, equal to what `run` gives: each value
+    /// `substituted` names replaced by what took its place (LLVM's value
+    /// handles follow a RAUW the same way); none where it cannot be (it is
+    /// then derived again). Asked of a result that `NAMES_VALUES`, which is
+    /// kept only when it returns `Some`.
+    #[allow(unused_variables)]
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(crate::module::ValueId) -> Option<crate::module::Operand>,
+        changes: &[crate::module::Change],
+        context: &Context,
+        function: &Function,
+    ) -> Option<Self::Result> {
+        None
+    }
+
+    /// Whether `old`, derived before sound edits, says nothing `fresh`, derived
+    /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
+    /// sound.
+    #[allow(unused_variables)]
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        context: &Context,
+        function: &Function,
+    ) -> bool {
+        old == fresh
+    }
+
     /// What the result reads of the function: `unaffected` filters the change
     /// log against it. None, the default, is every change.
     fn depends() -> Option<crate::depends::Depends> {
@@ -779,6 +821,7 @@ impl Outer {
 
     /// `cached`, borrowed for as long as the proxy.
     pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
+        read::note(read::of(M::NAME));
         self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
     }
 
@@ -792,6 +835,53 @@ impl Outer {
             && self.globals == other.globals
             && self.modules.len() == other.modules.len()
             && self.modules.iter().all(|(key, one)| other.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
+    }
+}
+
+/// Which parts of the module's facts a pass has read, noted as they are: by
+/// what an analysis it asks for reads, and by what it asks of the proxy itself.
+/// A body's pipeline is run again only where a part a pass read has changed.
+pub mod read {
+    use std::cell::Cell;
+
+    /// What each function does to memory and how many registers its call
+    /// keeps (`CalleeEffects`, `CallRegisters`).
+    pub const CALLEES: u8 = 1;
+    /// Each function's summary (`Summaries`).
+    pub const SUMMARIES: u8 = 2;
+    /// What `GlobalsAA` holds.
+    pub const GLOBALS: u8 = 4;
+    /// What calling back into the module may do (`Callbacks`).
+    pub const CALLBACKS: u8 = 8;
+    /// The other functions' and variables' declarations, and the globals'
+    /// sizes.
+    pub const DECLARATIONS: u8 = 16;
+    pub const ALL: u8 = 31;
+
+    thread_local! {
+        static READ: Cell<u8> = const { Cell::new(0) };
+    }
+
+    /// Notes the parts `bits` as read.
+    pub fn note(bits: u8) {
+        READ.with(|read| read.set(read.get() | bits));
+    }
+
+    /// What was noted, replaced by `bits`.
+    pub fn swap(bits: u8) -> u8 {
+        READ.with(|read| read.replace(bits))
+    }
+
+    /// The part a module analysis of this name is.
+    pub fn of(name: &str) -> u8 {
+        match name {
+            "callee-effects" | "call-registers" => CALLEES,
+            "summaries" => SUMMARIES,
+            "globals-aa" => GLOBALS,
+            "callbacks" => CALLBACKS,
+            "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
+            _ => ALL,
+        }
     }
 }
 
@@ -811,6 +901,14 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
+    /// `still_true`, as `covers` has it, for a result kept as sound.
+    fn still_covered(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool;
     /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
 }
@@ -821,6 +919,8 @@ struct Entry<A: Analysis> {
     outer: Rc<Outer>,
     /// The function's history when the result was derived.
     mark: crate::module::Mark,
+    /// Which parts of the module's facts it read (`read`).
+    bits: u8,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -850,7 +950,27 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn incremental(&self) -> bool {
-        A::INCREMENTAL || A::SKIPS
+        A::INCREMENTAL || A::SKIPS || A::SOUND
+    }
+
+    fn still_covered(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool {
+        let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)));
+        // What `get` would hand out: brought to the function first.
+        let Some(changes) = function.changes_since(self.mark) else { return true };
+        if !A::NAMES_VALUES {
+            return A::covers(&self.result, &fresh, context, function);
+        }
+        let taken = substitutions(changes);
+        match A::remapped(&self.result, &|value| taken.resolve(value), changes, context, function) {
+            Some(now) => A::covers(&now, &fresh, context, function),
+            None => true,
+        }
     }
 
     fn mark(&self) -> crate::module::Mark {
@@ -868,6 +988,12 @@ pub struct Analyses {
     /// (`invalidate`): a result derived before and held is as true now as
     /// then.
     vouched: Option<crate::module::Mark>,
+    /// Results kept past edits that only keep what they say true, not derived
+    /// afresh: dropped at the next named point (`refresh_soft`).
+    soft: HashSet<TypeId>,
+    /// Something was kept as sound: what was derived from it since stands as
+    /// sound too, and is not what fresh results give (the checks leave it).
+    tainted: bool,
     outer: Rc<Outer>,
 }
 
@@ -926,9 +1052,129 @@ fn check_replay() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
 }
 
+/// Whether `changes` only keep every live value's meaning, as a result that
+/// is `SOUND` needs: an instruction erased (an unused value, a dead store);
+/// uses replaced by the same value (`replace_value`, which logs
+/// `Substituted` first); a value made that nothing existing reads, or a pure
+/// one moved. Not: a block made or erased, an operand set to another
+/// meaning, an instruction rewritten in place, a store or a call made or
+/// moved, a terminator touched.
+pub fn sound_edits(
+    function: &Function,
+    changes: &[crate::module::Change],
+) -> bool {
+    use crate::module::Change;
+    use crate::module::Operand;
+    let mut replaced: crate::dense::IdSet<crate::module::ValueId> = crate::dense::IdSet::new();
+    let mut said: crate::dense::IdSet<crate::module::InstId> = crate::dense::IdSet::new();
+    let writes = |opcode: &crate::opcode::Opcode| {
+        opcode.is_terminator()
+            || matches!(
+                opcode,
+                crate::opcode::Opcode::Store { .. }
+                    | crate::opcode::Opcode::Call(_)
+                    | crate::opcode::Opcode::Invoke(_)
+                    | crate::opcode::Opcode::LandingPad { .. }
+                    | crate::opcode::Opcode::Resume
+                    | crate::opcode::Opcode::Load { volatile: true, .. }
+            )
+    };
+    for change in changes {
+        match *change {
+            Change::Substituted { from, .. } => {
+                replaced.insert(from);
+            }
+            Change::Operand { inst, was, .. } => match was {
+                Operand::Value(value) if replaced.contains(&value) => {
+                    said.insert(inst);
+                }
+                _ => return false,
+            },
+            Change::Rewritten(inst) => {
+                if !said.contains(&inst) {
+                    return false;
+                }
+            }
+            Change::Erased { inst, .. } => {
+                if function.instruction(inst).opcode.is_terminator() {
+                    return false;
+                }
+            }
+            Change::Inserted { inst, .. } | Change::Cloned { to: inst, .. } => {
+                if writes(&function.instruction(inst).opcode) {
+                    return false;
+                }
+            }
+            Change::Moved { inst, .. } => {
+                let opcode = &function.instruction(inst).opcode;
+                if writes(opcode)
+                    || matches!(
+                        opcode,
+                        crate::opcode::Opcode::Load { .. } | crate::opcode::Opcode::Alloca { .. }
+                    )
+                {
+                    return false;
+                }
+            }
+            Change::Operands { .. } | Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// What the substitutions in a log came to: a value replaced by one replaced
+/// later is followed to the last.
+struct Substitutions(crate::dense::IdMap<crate::module::ValueId, crate::module::Operand>);
+
+fn substitutions(changes: &[crate::module::Change]) -> Substitutions {
+    let mut taken = crate::dense::IdMap::new();
+    for change in changes {
+        if let crate::module::Change::Substituted { from, to } = *change {
+            taken.insert(from, to);
+        }
+    }
+    Substitutions(taken)
+}
+
+impl Substitutions {
+    fn resolve(
+        &self,
+        value: crate::module::ValueId,
+    ) -> Option<crate::module::Operand> {
+        let mut now = *self.0.get(&value)?;
+        while let crate::module::Operand::Value(next) = now {
+            match self.0.get(&next) {
+                Some(&later) => now = later,
+                None => break,
+            }
+        }
+        Some(now)
+    }
+}
+
 impl Analyses {
+    /// Drops what was kept only as sound: a named point (the start of a round,
+    /// after the interprocedural step) where the facts are worked out afresh,
+    /// as gcc recomputes its alias results at a few fixed points.
+    pub fn refresh_soft(&mut self) {
+        for key in std::mem::take(&mut self.soft) {
+            self.cache.remove(&key);
+            self.kept.remove(&key);
+        }
+    }
+
     pub fn new(outer: Rc<Outer>) -> Self {
-        Self { cache: HashMap::default(), kept: HashMap::default(), evicted: HashMap::default(), vouched: None, outer }
+        Self {
+            cache: HashMap::default(),
+            kept: HashMap::default(),
+            evicted: HashMap::default(),
+            vouched: None,
+            soft: HashSet::default(),
+            tainted: false,
+            outer,
+        }
     }
 
     /// An empty cache over the same module and target, for another body.
@@ -937,11 +1183,22 @@ impl Analyses {
     }
 
     pub fn outer(&self) -> &Rc<Outer> {
+        read::note(read::DECLARATIONS);
+        &self.outer
+    }
+
+    /// The proxy, not noted as a read: for the manager's own use.
+    pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
+        if A::READS_OUTER
+            && let Some(entry) = self.cache.get(&TypeId::of::<A>())
+        {
+            read::note(entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").bits);
+        }
         self.cache
             .get(&TypeId::of::<A>())
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
@@ -958,7 +1215,12 @@ impl Analyses {
     ) {
         self.cache.insert(
             TypeId::of::<A>(),
-            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result,
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: if A::READS_OUTER { read::ALL } else { 0 },
+            }),
         );
     }
 
@@ -972,11 +1234,16 @@ impl Analyses {
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            if A::READS_OUTER {
+                read::note(entry.bits);
+            }
             counted(A::NAME, true);
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
+        let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
+        let mut old_reads = 0;
         let old_kept = if why() {
             self.kept.get(&key).map(|o| {
                 (Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result), o.mark())
@@ -989,6 +1256,7 @@ impl Analyses {
             // reference there is.
             let (result, outer, mark) = {
                 let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+                old_reads = old.bits;
                 (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
             };
             drop(held);
@@ -997,6 +1265,29 @@ impl Analyses {
             // changes of the function are not all that moved.
             if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
                 return None;
+            }
+            if A::SOUND && sound_edits(function, changes) {
+                // A result that names values names the replaced ones: it is
+                // brought to the values that took their place, or derived
+                // again.
+                let result = if A::NAMES_VALUES {
+                    let taken = substitutions(changes);
+                    Rc::new(A::remapped(&result, &|value| taken.resolve(value), changes, context, function)?)
+                } else {
+                    result
+                };
+                if check_replay() {
+                    let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
+                    assert!(
+                        A::covers(&result, &fresh, context, function),
+                        "{}: the result kept past {} sound edits contradicts what deriving it afresh gives",
+                        A::NAME,
+                        changes.len()
+                    );
+                }
+                self.soft.insert(key);
+                self.tainted = true;
+                return Some(Rc::clone(&result));
             }
             // Asking of a long log again and again is more than the run it
             // saves.
@@ -1014,7 +1305,9 @@ impl Analyses {
                 && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
                 && A::unaffected(changes, context, function)
             {
-                if check_replay() {
+                // Derived from what was kept as sound, it is sound, not the
+                // same as from fresh results.
+                if check_replay() && !self.tainted {
                     let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
                         *result == whole,
@@ -1039,7 +1332,9 @@ impl Analyses {
             }
             let made =
                 spanned_as("analysis", A::NAME, || A::update_owned(result, changes, context, layout, function, self))?;
-            if check_replay() {
+            // Derived from what was kept as sound it is sound, not the same as
+            // what fresh results give.
+            if check_replay() && !self.tainted {
                 let whole = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                 assert!(
                     made == whole,
@@ -1050,10 +1345,20 @@ impl Analyses {
             Some(Rc::new(made))
         });
         let replayed = updated.is_some();
+        if !replayed {
+            self.soft.remove(&key);
+        }
         let result = match updated {
             Some(made) => made,
             None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
         };
+        // What it read of the module: what the result it was brought up to date
+        // from read, and what the bringing read.
+        let mine = read::swap(before_reads);
+        let bits = if A::READS_OUTER { mine | old_reads } else { 0 };
+        if A::READS_OUTER {
+            read::note(bits);
+        }
         if why() {
             let class = match self.evicted.remove(&key) {
                 Some(old) => {
@@ -1082,7 +1387,12 @@ impl Analyses {
         }
         self.cache.insert(
             key,
-            Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result: Rc::clone(&result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits,
+            }),
         );
         result
     }
@@ -1215,11 +1525,19 @@ impl Analyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Vec<&'static str> {
+        // What was kept as sound is checked as such; what is derived from it
+        // while it stands is not the same as from fresh results, so is not.
         let mut out: Vec<&'static str> = self
             .cache
-            .values()
-            .filter(|one| !one.still_true(context, layout, function, &self.outer))
-            .map(|one| one.name())
+            .iter()
+            .filter(|(key, one)| {
+                if self.soft.contains(key) {
+                    !one.still_covered(context, layout, function, &self.outer)
+                } else {
+                    !self.tainted && !one.still_true(context, layout, function, &self.outer)
+                }
+            })
+            .map(|(_, one)| one.name())
             .collect();
         out.sort_unstable();
         out

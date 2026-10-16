@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Module, ValueId};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use super::{
-    _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, exact_offsets,
-    exact_offsets_given, on_edge, operations_applied, scoped, singletons,
+    _computed, _recurrence_span, Interval, bounded, covering, dominated_edges, edge_deltas, edges_solved,
+    exact_offsets, exact_offsets_given, on_edge, operations_applied, scoped, singletons,
 };
 use crate::cfg;
 use crate::memory::{MemRef, Unit};
+use crate::num::Num as BigInt;
 use crate::ranges::Intervals;
 use crate::testing::{DOS, block, function, layout, parsed, value};
 
@@ -1375,4 +1375,104 @@ fn test_a_block_works_out_only_the_edge_past_the_prefix_it_shares() {
     bounded(&parsed.unit()).unwrap();
     let narrowed = edge_deltas() - before;
     assert!(narrowed <= 10 * blocks, "{narrowed} edges narrowed for a chain of {blocks} blocks");
+}
+
+/// A loop with no counted proof and no phi to box had its blocks listed, its
+/// operations filtered and its header's facts read before the solve found it
+/// had nothing to say: 243 of the 290 loops worked on d_faces -O1, 27 M of its
+/// 117 M. It is found to have none first.
+#[test]
+fn a_loop_with_nothing_to_bound_is_not_swept() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n, i16 %m, i16 %k) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ %n, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, %k
+  %c = icmp ne i16 %j, %m
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+",
+    );
+    let (solved, swept) = (super::loops_solved(), super::loops_swept());
+    let known = bounded(&parsed.unit()).unwrap();
+    assert_eq!(super::loops_solved() - solved, 1, "premise: the loop was solved");
+    assert!(known.get(&cfg::id(parsed.block("b1"))).is_none_or(|facts| facts.is_empty()), "premise: nothing to say");
+    assert_eq!(super::loops_swept(), swept, "its operations were found to be swept");
+}
+
+/// An update of the edges' facts built the graph, its predecessors, every
+/// dominator and the order of the blocks again before it asked what changed:
+/// 15 M of its 36 M on d_faces -O1. A change that left the CFG as it was left
+/// the order as it was.
+#[test]
+fn an_update_of_the_edges_reads_the_order_it_had() {
+    let parsed = guarded_loop("");
+    let unit = parsed.unit();
+    let facts = unit.registers();
+    let states = edges_solved(&unit, &facts, None).unwrap();
+    let found = super::orders_found();
+    let reached = std::collections::BTreeSet::from([parsed.block("b30")]);
+    let again = edges_solved(&unit, &facts, Some((&states, &reached))).unwrap();
+    assert_eq!(super::orders_found(), found, "the order of the blocks was found again");
+    assert_eq!(again, states);
+}
+
+/// A loop's box search worked out the edges of every guard above the loop for
+/// the one latch it asked about, and again for each loop below those guards:
+/// 188 loops on d_faces -O1, 40 M of `bounded`'s 101 M. The edges above a loop
+/// narrow only values made outside it, which the loop's `known` holds already.
+#[test]
+fn the_box_search_of_a_loop_does_not_work_out_the_guards_above_it() {
+    let guards = 6;
+    let mut body = String::from("define i16 @f(i16 %n, i16 %k) {\nb0:\n  br label %g0\n");
+    for at in 0..guards {
+        body += &format!(
+            "g{at}:\n  %c{at} = icmp slt i16 %n, {}\n  br i1 %c{at}, label %g{}, label %out\n",
+            1000 + at,
+            at + 1
+        );
+    }
+    body += &format!(
+        "g{guards}:\n  br label %h\nh:\n  %i = phi i16 [ %n, %g{guards} ], [ %j, %h ]\n  %j = add i16 %i, %k\n  \
+         %d = icmp ne i16 %j, 7\n  br i1 %d, label %h, label %out\nout:\n  ret i16 0\n}}\n"
+    );
+    let parsed = Parsed::new(&body);
+    let before = crate::ranger::view_edges();
+    let _ = bounded(&parsed.unit()).unwrap();
+    let worked = crate::ranger::view_edges() - before;
+    assert!(worked < guards, "{worked} edges worked out for a loop under {guards} guards");
+}
+
+/// Which loops hold what each loop starts from was asked of every loop for each
+/// start: N loops in a row asked N^2 times (4x per doubling, 7% of `analysis
+/// bounded` on `branches` at N=2048).
+#[test]
+fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
+    let asked = |loops: usize| {
+        let mut body = String::from("define i16 @f(i16 %n) {\nb0:\n  br label %h1\n\n");
+        for k in 1..=loops {
+            let next = if k < loops { format!("h{}", k + 1) } else { "out".into() };
+            body += &format!(
+                "h{k}:\n  %i{k} = phi i16 [ 0, %{} ], [ %j{k}, %h{k} ]\n  %j{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %j{k}, %n\n  br i1 %c{k}, label %h{k}, label %{next}\n\n",
+                if k == 1 { "b0".into() } else { format!("h{}", k - 1) }
+            );
+        }
+        body += "out:\n  ret i16 %n\n}\n";
+        let parsed = Parsed::new(&body);
+        let unit = parsed.unit();
+        let f = function(&parsed.module, "f");
+        let shape = unit.shape();
+        let before = super::hosts_asked();
+        let touched = std::collections::BTreeSet::from([block(f, "h1")]);
+        super::loops_reached(f, &shape, &touched, &Default::default(), &|_| false);
+        super::hosts_asked() - before
+    };
+    let (small, big) = (asked(32), asked(64));
+    assert!(big <= 2 * small + 64, "{small} -> {big} questions for 32 -> 64 loops");
 }

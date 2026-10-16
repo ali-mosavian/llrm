@@ -87,6 +87,9 @@ pub fn machine_with<'a>(
     let or_empty = || frame.clone().unwrap_or_else(|| Rc::new(RefCell::new(Frame::new(0))));
     let mut phases: Vec<Box<dyn LIRTransform + 'a>> = vec![
         Box::new(farcall::FarIndirectCalls::new(or_empty())),
+        // Before SsaSpill: a constant several edges of a phi carry is one
+        // value.
+        Box::new(crate::backend::phiconst::SharedConstants),
         Box::new(ssaspill::SsaSpill {
             frame: or_empty(),
             segments: segments.clone(),
@@ -102,7 +105,7 @@ pub fn machine_with<'a>(
         }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
-        Box::new(crate::backend::floatfold::FloatFold),
+        Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
         // After phi elimination: a phi's copies are where the stack shuffles.
         Box::new(floatassign::FloatAssign { frame: frame.clone(), pool, basic_semantics, cpu: target }),
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),

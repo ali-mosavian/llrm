@@ -33,6 +33,17 @@
 //! values the run moved solved again (`profit::spill_forecast_after`;
 //! `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
 //!
+//! A hoisted load is priced by what it saves each trip. A floating load its one
+//! reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
+//! (`OperationCosts::float_load_folded`, the fold's own extra cost), so
+//! hoisting it saves that and costs a load and a release before the loop: it
+//! stays unless the loop's trips pay for both. And the class holds only so many
+//! floating values (`Machine::float_registers`): of those the run holds across
+//! the loop, what the loop's own values leave room for are hoisted and the rest
+//! stay. A 4x4 matrix read through a pointer in a loop of six trips was hoisted
+//! whole, 13 of its 16 values spilled to the frame as doubles, 40 instructions
+//! each entry for a loop gcc runs with the matrix in memory operands.
+//!
 //! # Example
 //! Before:
 //!
@@ -104,6 +115,7 @@ use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, induction, noreturn, ranges};
 use llrm_mir::context::{ConstantKind, mask};
+use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
@@ -161,7 +173,8 @@ pub fn hoisted(
     let outer = std::rc::Rc::clone(analyses.outer());
     let terminal = analyses.get::<noreturn::TerminalSites>(unit.context, unit.layout, unit.function);
     let room = profit::registers(&outer);
-    let costs = if size { outer.target().size_costs() } else { profit::costs(&outer) };
+    let costs =
+        OperationCosts { folds_loads: true, ..if size { outer.target().size_costs() } else { profit::costs(&outer) } };
     // Moving instructions leaves every block and loop as they are.
     // The registers are priced where the function is in SSA; before that, with
     // scalar slots still in memory, only what a held value costs to release
@@ -205,7 +218,7 @@ pub fn hoisted(
         let before = unit.function.terminator(cfg::block(into)).expect("a terminator");
         let run = match &frequency {
             Some(frequency) => {
-                _affordable(unit, analyses, moved, &outer, run, before, into, &costs, room, frequency, &mut held)
+                _affordable(unit, analyses, moved, &outer, run, before, into, one, &costs, room, frequency, &mut held)
             }
             None => run,
         };
@@ -236,6 +249,7 @@ fn _affordable(
     mut run: Vec<InstId>,
     before: InstId,
     into: i64,
+    loop_: &Loop,
     costs: &OperationCosts,
     room: crate::spill::Room,
     frequency: &std::collections::BTreeMap<i64, i64>,
@@ -409,13 +423,47 @@ fn _affordable(
             crossing,
             forecast.spilled
         );
-        if moved - uncounted <= kept {
+        // The class holds only so many floating values: of those the run holds
+        // across the loop, what the loop's own values leave room for are held,
+        // and the rest stay where they are read (a register stack that is
+        // full spills what is hoisted to a cell the loop then reads, and
+        // the hoist is the spill).
+        // A load the loop folds into its reader saves what the fold costs more
+        // than the register form, each trip; hoisted, it is a load of its own
+        // and a release, once per entry.
+        let unworthy: IdSet<ValueId> = floats
+            .iter()
+            .copied()
+            .filter(|&value| {
+                let ValueDef::Instruction(def) = unit.function.value(value).def else { return false };
+                let Some(home) = unit.function.parent(def) else { return false };
+                let Some(price) =
+                    profit::operation(unit.context, unit.layout, unit.function, outer.callees(), def, costs)
+                else {
+                    return false;
+                };
+                price < costs.float_load
+                    && price * frequency[&cfg::id(home)]
+                        <= (costs.float_load + costs.float_release) * frequency.get(&into).copied().unwrap_or(1)
+            })
+            .collect();
+        let beyond: IdSet<ValueId> = match outer.target().float_registers() {
+            0 => unworthy,
+            class => {
+                let left = (class - _float_working_set(unit, loop_, &run)).max(0) as usize;
+                floats.iter().copied().skip(left).chain(unworthy.iter()).collect()
+            }
+        };
+        if beyond.is_empty() && moved - uncounted <= kept {
             *held = Some(work + forecast.cost);
             return run;
         }
-        let mut stay: BTreeSet<ValueId> = crossing.into_iter().filter(|&value| !free(value)).collect();
+        let costly = moved - uncounted > kept;
+        let mut stay: BTreeSet<ValueId> =
+            if costly { crossing.into_iter().filter(|&value| !free(value)).collect() } else { BTreeSet::new() };
+        stay.extend(beyond.iter());
         // What costs its release more than it saves stays, with what reads it.
-        if costs.float_release > 0 {
+        if costly && costs.float_release > 0 {
             stay.extend(floats);
         }
         if stay.is_empty() {
@@ -460,6 +508,64 @@ fn _affordable(
     // Everything stayed: the function is as it was priced.
     *held = Some(kept);
     run
+}
+
+/// The most floating values the loop holds at once besides the `run`'s, which
+/// are held across it: those defined outside it and read inside it, and in a
+/// block those defined and not yet read for the last time.
+fn _float_working_set(
+    unit: &passes::Unit,
+    loop_: &Loop,
+    run: &[InstId],
+) -> i64 {
+    let function = &*unit.function;
+    let floating = |value: ValueId| matches!(
+        unit.context.types.get(function.value(value).ty),
+        Type::Float(_)
+    );
+    let inside = |inst: InstId| function.parent(inst).is_some_and(|home| loop_.body.contains(&cfg::id(home)));
+    let moving: IdSet<InstId> = run.iter().copied().collect();
+    let mut held: IdSet<ValueId> = IdSet::new();
+    let mut peak = 0;
+    for &block in function.layout() {
+        if !loop_.body.contains(&cfg::id(block)) {
+            continue;
+        }
+        let list = function.block(block).instructions();
+        let mut ends: Vec<usize> = Vec::new();
+        for (at, &inst) in list.iter().enumerate() {
+            let one = function.instruction(inst);
+            for operand in &one.operands {
+                let Operand::Value(value) = operand else { continue };
+                let defined_inside = matches!(
+                    function.value(*value).def,
+                    ValueDef::Instruction(def) if inside(def)
+                );
+                if floating(*value) && !defined_inside {
+                    held.insert(*value);
+                }
+            }
+            if moving.contains(&inst) {
+                continue;
+            }
+            let Some(result) = one.result.filter(|&value| floating(value)) else { continue };
+            let end = function
+                .users(result)
+                .iter()
+                .map(|user| {
+                    if function.parent(user.user) == Some(block) {
+                        list.iter().position(|&other| other == user.user).unwrap_or(at)
+                    } else {
+                        list.len()
+                    }
+                })
+                .max()
+                .unwrap_or(at);
+            ends.push(end);
+            peak = peak.max(ends.iter().filter(|&&end| end > at).count() as i64);
+        }
+    }
+    peak + held.len() as i64
 }
 
 /// Whether `value` is a `getelementptr` by constants that only memory accesses,
@@ -508,7 +614,7 @@ fn _slots_remain(unit: &passes::Unit) -> bool {
 
 /// Each block's executions per entry: as `_frequencies` finds them from the
 /// loops' proven trips, or once for all where `size` counts bytes.
-fn _frequency(
+pub(crate) fn _frequency(
     unit: &passes::Unit,
     analyses: &mut Analyses,
     outer: &Outer,
@@ -705,11 +811,12 @@ fn _bounded_inside(
     let held = bounded.get_or_insert_with(|| bounds());
     // What holds on the edge into the loop, as the preheader's branch narrows
     // it.
-    let scope = held.as_ref().as_ref().ok().and_then(|facts| facts.at(into)).cloned().unwrap_or_default();
-    let Ok(Some(known)) = ranges::on_edge(&memory, cfg::block(into), cfg::block(header), &scope, None) else {
+    let Ok(facts) = held.as_ref().as_ref() else { return false };
+    let scope = facts.scope(&memory, into);
+    let Ok(Some(known)) = ranges::on_edge_over(&memory, cfg::block(into), cfg::block(header), &scope, None) else {
         return false;
     };
-    ranges::inside_object(&memory, &reference, &known.into_iter().collect())
+    ranges::inside_object(&memory, &reference, &known)
 }
 
 /// Whether this divide can be performed where it might not have been: by a

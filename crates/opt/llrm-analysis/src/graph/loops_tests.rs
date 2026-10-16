@@ -107,7 +107,10 @@ fn test_disconnected_cycle_has_no_dominators_or_natural_loops() {
 #[test]
 fn test_dead_edge_into_latch_is_not_part_of_live_loop() {
     let chain = [block(0, &[1]), block(1, &[2, 3]), block(2, &[1]), block(3, &[]), block(9, &[2])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[2]), body: set(&[1, 2]) }]);
+    assert_eq!(
+        loops(&chain, None),
+        vec![Loop { header: 1, latches: set(&[2]), body: Body::from_blocks(set(&[1, 2])) }]
+    );
 }
 
 #[test]
@@ -151,14 +154,17 @@ fn an_empty_graph_has_no_loops_dominators_or_frontiers() {
 #[test]
 fn a_self_loop_at_the_entry_is_a_loop_headed_by_the_entry() {
     let chain = [block(0, &[0, 1]), block(1, &[])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 0, latches: set(&[0]), body: set(&[0]) }]);
+    assert_eq!(loops(&chain, None), vec![Loop { header: 0, latches: set(&[0]), body: Body::from_blocks(set(&[0])) }]);
     assert_eq!(depth(&chain, None), BTreeMap::from([(0, 1), (1, 0)]));
 }
 
 #[test]
 fn two_latches_to_one_header_are_one_loop() {
     let chain = [block(0, &[1]), block(1, &[2, 3]), block(2, &[1]), block(3, &[1, 4]), block(4, &[])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[2, 3]), body: set(&[1, 2, 3]) }]);
+    assert_eq!(
+        loops(&chain, None),
+        vec![Loop { header: 1, latches: set(&[2, 3]), body: Body::from_blocks(set(&[1, 2, 3])) }]
+    );
     assert_eq!(depth(&chain, None)[&2], 1, "one loop, not two");
 }
 
@@ -168,7 +174,7 @@ fn sibling_loops_do_not_contain_each_other() {
     let found = loops(&chain, None);
     assert_eq!(
         found.iter().map(|one| (one.header, one.body.clone())).collect::<Vec<_>>(),
-        [(1, set(&[1])), (3, set(&[3]))]
+        [(1, Body::from_blocks(set(&[1]))), (3, Body::from_blocks(set(&[3])))]
     );
     assert_eq!(depth(&chain, None), BTreeMap::from([(0, 0), (1, 1), (2, 0), (3, 1), (4, 0)]));
 }
@@ -187,14 +193,17 @@ fn nested_loops_come_innermost_first_and_the_outer_body_holds_the_inner() {
 #[test]
 fn a_loop_with_two_exits_keeps_neither_exit_in_its_body() {
     let chain = [block(0, &[1]), block(1, &[2, 4]), block(2, &[1, 3]), block(3, &[]), block(4, &[])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[2]), body: set(&[1, 2]) }]);
+    assert_eq!(
+        loops(&chain, None),
+        vec![Loop { header: 1, latches: set(&[2]), body: Body::from_blocks(set(&[1, 2])) }]
+    );
 }
 
 #[test]
 fn a_branch_with_both_arms_to_one_block_is_one_edge() {
     let chain = [block(0, &[1]), block(1, &[1, 1]), block(2, &[])];
     assert_eq!(predecessors(&chain)[&1], set(&[0, 1]));
-    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[1]), body: set(&[1]) }]);
+    assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[1]), body: Body::from_blocks(set(&[1])) }]);
 }
 
 #[test]
@@ -245,6 +254,6 @@ fn an_irreducible_cycle_yields_no_natural_loop() {
 #[test]
 fn a_reducible_loop_beside_an_irreducible_cycle_is_still_found() {
     let chain = [block(0, &[1, 2, 4]), block(1, &[2]), block(2, &[1, 3]), block(3, &[]), block(4, &[4, 3])];
-    assert_eq!(loops(&chain, None), vec![Loop { header: 4, latches: set(&[4]), body: set(&[4]) }]);
+    assert_eq!(loops(&chain, None), vec![Loop { header: 4, latches: set(&[4]), body: Body::from_blocks(set(&[4])) }]);
     assert!(!irreducible(&chain, None).contains(&4));
 }

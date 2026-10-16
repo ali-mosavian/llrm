@@ -4,10 +4,10 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{InstId, Module, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use super::{_MemoryQueries, _result, Calls, Known, division, initialized, known, known_walked, masked};
 use crate::memory::{Addr, MemRef, MemoryKind, MemoryObject, Provenance, Unit};
+use crate::num::Num as BigInt;
 use crate::regions::tests::dos;
 use crate::testing::{DOS, function, layout, parsed, value};
 

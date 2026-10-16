@@ -868,3 +868,187 @@ fn a_body_a_function_pass_edited_is_in_the_log_of_edits() {
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(LOGGED.get(), 1, "the edit the pass made was not reported");
 }
+
+/// Reads what each function does to memory, from the outer facts.
+struct ReadsEffects;
+
+impl Analysis for ReadsEffects {
+    type Result = usize;
+    const NAME: &'static str = "reads-effects";
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        analyses: &mut Analyses,
+    ) -> usize {
+        analyses.outer().callees().len()
+    }
+}
+
+/// Reads nothing outside the function.
+struct ReadsNone;
+
+impl Analysis for ReadsNone {
+    type Result = usize;
+    const NAME: &'static str = "reads-none";
+    const READS_OUTER: bool = false;
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        function.layout().len()
+    }
+}
+
+/// A pass is run again only where what it read of the module has changed, so
+/// what it read has to be said: by the analysis it asks for, the first time and
+/// when the result is held, and by what it asks of the proxy.
+#[test]
+fn what_an_analysis_read_of_the_module_is_noted_each_time_it_is_asked_for() {
+    use crate::passes::read;
+    let module = module();
+    let id = module.named("f").unwrap();
+    let function = module.global(id).function().unwrap();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    let layout = DataLayout::default();
+    read::swap(0);
+    analyses.get::<ReadsNone>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), 0, "an analysis of the function alone reads nothing of the module");
+    analyses.get::<ReadsEffects>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), read::CALLEES | read::DECLARATIONS, "the first time: the proxy, and what the callees do");
+    analyses.get::<ReadsEffects>(&module.context, &layout, function);
+    assert_eq!(read::swap(0), read::CALLEES | read::DECLARATIONS, "held: it is still what the pass read");
+    analyses.outer();
+    assert_eq!(read::swap(0), read::DECLARATIONS, "the proxy asked for is the declarations read");
+}
+
+/// Which edits keep every live value's meaning, from the log alone: finding a
+/// value again and erasing what it replaced do; an operand set to another
+/// value, a store made and a block made do not.
+#[test]
+fn sound_edits_are_read_from_the_log_not_promised_by_a_pass() {
+    use crate::passes::sound_edits;
+    let mut module = parse::module(
+        "define i16 @f(i16 %x, ptr %p) {\nentry:\n  %a = add i16 %x, 1\n  %b = add i16 %x, 1\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let find = |function: &Function, name: &str| {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(|value| function.value(value).name.as_deref() == Some(name))
+            })
+            .expect("the instruction")
+    };
+    let value_of = |function: &Function, inst| function.instruction(inst).result.expect("a value");
+    let (a, b, c) = (find(function, "a"), find(function, "b"), find(function, "c"));
+    let before = function.mark();
+    function.replace_value(value_of(function, b), Operand::Value(value_of(function, a)));
+    function.erase(b).expect("unused now");
+    assert!(sound_edits(function, function.changes_since(before).unwrap()), "found again, then erased");
+    let before = function.mark();
+    function.set_operand(c, 0, Operand::Value(value_of(function, a)));
+    assert!(!sound_edits(function, function.changes_since(before).unwrap()), "an operand set to another value");
+    let before = function.mark();
+    let ret = function.terminator(function.entry().unwrap()).unwrap();
+    function.erase(ret).expect("the last instruction");
+    assert!(!sound_edits(function, function.changes_since(before).unwrap()), "a terminator erased");
+}
+
+thread_local!(static READS_RUN: Cell<usize> = const { Cell::new(0) });
+
+/// The values `%c` reads, as a result that names values.
+struct Reads;
+
+impl Analysis for Reads {
+    type Result = Vec<crate::module::ValueId>;
+    const NAME: &'static str = "reads";
+    const SOUND: bool = true;
+    const NAMES_VALUES: bool = true;
+
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Self::Result {
+        READS_RUN.with(|runs| runs.set(runs.get() + 1));
+        let c = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(|value| function.value(value).name.as_deref() == Some("c"))
+            })
+            .unwrap();
+        function
+            .instruction(c)
+            .operands
+            .iter()
+            .filter_map(|one| match one {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(crate::module::ValueId) -> Option<Operand>,
+        _: &[Change],
+        _: &Context,
+        _: &Function,
+    ) -> Option<Self::Result> {
+        old.iter()
+            .map(|value| match substituted(*value) {
+                None => Some(*value),
+                Some(Operand::Value(now)) => Some(now),
+                Some(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// A result that names values was derived again past a `replace_value`, though
+/// the value that took the place of the replaced one is known: a kept result is
+/// brought to it instead (LLVM's value handles follow a RAUW), one that cannot
+/// be is derived again.
+#[test]
+fn a_result_that_names_values_is_followed_through_a_substitution() {
+    let mut module = parse::module(
+        "define i16 @f(i16 %x) {\nentry:\n  %a = add i16 %x, 1\n  %b = add i16 %x, 1\n  %c = add i16 %a, %b\n  ret i16 %c\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let named = |function: &Function, name: &str| {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| {
+                function
+                    .instruction(inst)
+                    .result
+                    .is_some_and(|value| function.value(value).name.as_deref() == Some(name))
+            })
+            .expect("the instruction")
+    };
+    let (a, b) = (named(function, "a"), named(function, "b"));
+    let (a_value, b_value) = (function.instruction(a).result.unwrap(), function.instruction(b).result.unwrap());
+    assert_eq!(*analyses.get::<Reads>(context, &layout, function), vec![a_value, b_value]);
+    function.replace_value(b_value, Operand::Value(a_value));
+    function.erase(b).expect("unused now");
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    assert_eq!(*analyses.get::<Reads>(context, &layout, function), vec![a_value, a_value], "still named %b");
+    assert_eq!(READS_RUN.with(Cell::get), 1, "derived again past a substitution it could follow");
+}

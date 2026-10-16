@@ -92,12 +92,12 @@
 //! `Dominators` and `Loops`: only call attributes change.
 
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, ranges};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
-use num_bigint::BigInt;
 
 pub struct Ports;
 
@@ -165,15 +165,12 @@ fn silent(
                     let facts = bounded.get_or_insert_with(|| {
                         analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
                     });
-                    let scope = facts
-                        .as_ref()
-                        .as_ref()
-                        .ok()
-                        .and_then(|facts| facts.at(cfg::id(block)))
-                        .cloned()
-                        .unwrap_or_default();
-                    ranges::_operand(&memory, port, &scope, &held)
-                        .and_then(|interval| unsigned(&interval.low, &interval.high))
+                    let scope = facts.as_ref().as_ref().ok().map(|facts| facts.scope(&memory, cfg::id(block)));
+                    match &scope {
+                        Some(scope) => ranges::_operand(&memory, port, scope, &held),
+                        None => ranges::_operand(&memory, port, &ranges::Intervals::default(), &held),
+                    }
+                    .and_then(|interval| unsigned(&interval.low, &interval.high))
                 }
             };
             ports.is_some_and(|ports| !target.port_touches_memory(ports))

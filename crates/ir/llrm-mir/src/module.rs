@@ -83,6 +83,8 @@ pub struct Block {
     pub name: Option<String>,
     pub(crate) instructions: Vec<InstId>,
     pub(crate) erased: bool,
+    /// In the function's layout.
+    pub(crate) placed: bool,
 }
 
 impl Block {
@@ -149,6 +151,14 @@ pub enum Change {
         from: BlockId,
     },
     Rewritten(InstId),
+    /// Every use of `value` is about to become an operand that is the same
+    /// value (`replace_value`: a common subexpression, a load's stored value, a
+    /// constant folded to), each as an `Operand` entry then a `Rewritten`
+    /// one. What an analysis said of any value stays true.
+    Substituted {
+        from: ValueId,
+        to: Operand,
+    },
     /// Operand `index` of `inst` was `was`: logged before the `Rewritten` of
     /// the change, by what reads what an instruction read before (the
     /// liveness of a value it stopped reading, the edge a branch stopped
@@ -243,6 +253,12 @@ impl Mark {
     /// How many changes the function had logged at this point.
     pub fn position(&self) -> usize {
         self.at
+    }
+
+    /// The function's history this is a point in: equal for the points of one
+    /// function, other for a copy of it, which has its own.
+    pub fn lineage(&self) -> u64 {
+        self.uid
     }
 
     /// Whether `other` is a point in the same function's history: not a copy
@@ -467,6 +483,14 @@ impl Function {
 
     pub fn layout(&self) -> &[BlockId] {
         &self.layout
+    }
+
+    /// Whether `block` is in the layout.
+    pub fn is_placed(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.blocks[block.0 as usize].placed
     }
 
     pub fn entry(&self) -> Option<BlockId> {
