@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:532ea55a3710c37383ea7f08ecbbd61cffe2959def6783421dd5ceeef389dc86 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:4bf9c4931d73c71f174a841c2277f9f1c59610e33de2e3cf2aa8c17fb3cf2bca -->
 
 # inline
 
@@ -52,8 +52,10 @@ budget `max(6, min(24, call_cost / 2)) * limit / 225` (`Threshold::budget`),
 and the work copied at every site beyond the last must stay below the calls
 removed, in the target's clocks, or in code bytes where size outranks speed
 (`-Os`). A routine marked `alwaysinline` is a candidate at any size and
-`noinline` at none; `inlinehint` scales the budget by 325/225. A body held
-only to inline from (`available_externally`) is a candidate at any size.
+`noinline` at none; the caller's growth limit does not apply to
+`alwaysinline` (gcc's `DECL_DISREGARD_INLINE_LIMITS`). `inlinehint` scales
+the budget by 325/225. A body held only to inline from
+(`available_externally`) is a candidate at any size.
 
 A public callee, or one whose address is taken, stays defined; a private one
 goes with its last site. The last call of a function nothing else reaches

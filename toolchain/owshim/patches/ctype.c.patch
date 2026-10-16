@@ -23,7 +23,7 @@
      TypeHead = NULL;
      TagCount = 0;
      FieldCount = 0;
-@@ -370,6 +379,202 @@
+@@ -370,6 +379,206 @@
      }
  }
  
@@ -51,7 +51,7 @@
 +
 +/*
 + * llrm: gcc's attributes that state what a routine does and what it is not to be (spelled with or without the
-+ * underscores gcc allows around a name). noinline is a fact; the others change no meaning if left out. 0 for a name
++ * underscores gcc allows around a name). noinline and always_inline are facts; the others change no meaning if left out. 0 for a name
 + * that is not one of these, 1 for one that states nothing llrm uses, 2 for one that sets `*modifier`.
 + * An attribute that changes the program (packed, aligned, section, weak, alias...) is none of these, so it is an error.
 + */
@@ -60,7 +60,7 @@
 +    static const char * const harmless[] = {
 +        "unused", "used", "cold", "hot", "flatten", "noclone", "noipa", "noplt", "nothrow", "leaf", "pure", "const",
 +        "malloc", "warn_unused_result", "deprecated", "format", "format_arg", "nonnull", "returns_nonnull", "sentinel",
-+        "visibility", "artificial", "always_inline", "no_instrument_function", "no_sanitize", "no_sanitize_address",
++        "visibility", "artificial", "no_instrument_function", "no_sanitize", "no_sanitize_address",
 +        "no_stack_protector", "optimize", "target", "externally_visible", "no_reorder", "fallthrough", "alloc_size"
 +    };
 +    char        name[64];
@@ -81,6 +81,10 @@
 +    }
 +    if( strcmp( name, "noinline" ) == 0 ) {
 +        *modifier = LLRM_FLAG_NOINLINE;
++        return( 2 );
++    }
++    if( strcmp( name, "always_inline" ) == 0 ) {
++        *modifier = LLRM_FLAG_ALWAYSINLINE;
 +        return( 2 );
 +    }
 +    if( strcmp( name, "noreturn" ) == 0 ) {
@@ -226,7 +230,7 @@
  static void DeclSpecifiers( bool *plain_int, decl_info *info )
  {
      TYPEPTR             typ;
-@@ -501,112 +706,7 @@
+@@ -501,112 +710,7 @@
              break;
  
          case T___DECLSPEC:
@@ -340,14 +344,20 @@
              continue;
          case T_SAVED_ID:
          case T_ID:
-@@ -1002,6 +1102,16 @@
+@@ -1002,6 +1106,22 @@
  
  void AdjModsTypeNode( TYPEPTR *ptyp, type_modifiers decl_mod, SYMPTR sym )
  {
 +    /*
-+     * llrm: noinline is a fact of the symbol, not a modifier of its type: a prototype that says it and a
++     * llrm: noinline and always_inline are facts of the symbol, not a modifier of its type: a prototype that says it and a
 +     * definition that does not are the one function (gcc merges them), and no type differs for it.
 +     */
++    if( decl_mod & LLRM_FLAG_ALWAYSINLINE ) {
++        decl_mod &= ~LLRM_FLAG_ALWAYSINLINE;
++        if( sym != NULL ) {
++            sym->flags |= LLRM_SYM_ALWAYSINLINE;
++        }
++    }
 +    if( decl_mod & LLRM_FLAG_NOINLINE ) {
 +        decl_mod &= ~LLRM_FLAG_NOINLINE;
 +        if( sym != NULL ) {
@@ -357,7 +367,7 @@
      if( decl_mod ) {
          TYPEPTR     typ;
  
-@@ -1038,6 +1148,7 @@
+@@ -1038,6 +1158,7 @@
      decl_info           info;
      static field_level_stype struct_level = 0;
      const_val           cval;
@@ -365,7 +375,7 @@
  
      struct_level++;
      prev_unqualified_type = TYP_VOID;   /* so it doesn't match 1st time */
-@@ -1050,6 +1161,14 @@
+@@ -1050,6 +1171,14 @@
       */
      struct_size = start;
      next_offset = start;
@@ -380,7 +390,7 @@
      for(;;) {
          if( CurToken == T_SEMI_COLON && CompFlags.extensions_enabled ) {
              NextToken();
-@@ -1115,6 +1234,36 @@
+@@ -1115,6 +1244,36 @@
                  } else {
                      bits_width = U64Low( cval.value );
                  }
@@ -417,7 +427,7 @@
                  if( bits_width > bits_available || bits_width == 0 ) {
                      scalar_size = TypeSize( typ );
                      if( bits_available != bits_total ) {
-@@ -1139,6 +1288,11 @@
+@@ -1139,6 +1298,11 @@
                  }
                  bits_available -= bits_width;
              } else {
