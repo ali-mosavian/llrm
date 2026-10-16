@@ -110,8 +110,8 @@ pub fn bodies_printed() -> usize {
 pub fn digest(function: &Function) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut values: HashMap<ValueId, u32> = HashMap::default();
-    let mut blocks: HashMap<BlockId, u32> = HashMap::default();
+    let mut values: crate::dense::IdMap<ValueId, u32> = Default::default();
+    let mut blocks: crate::dense::IdMap<BlockId, u32> = Default::default();
     for &parameter in &function.parameters {
         let at = values.len() as u32;
         values.insert(parameter, at);
@@ -130,13 +130,13 @@ pub fn digest(function: &Function) -> u64 {
         }
     }
     for &block in &function.layout {
-        blocks[&block].hash(&mut hasher);
+        blocks.get(&block).hash(&mut hasher);
         for &inst in &function.block(block).instructions {
             let inst = function.instruction(inst);
             inst.opcode.hash(&mut hasher);
             inst.ty.hash(&mut hasher);
             inst.flags.words().hash(&mut hasher);
-            inst.result.map(|result| values[&result]).hash(&mut hasher);
+            inst.result.and_then(|result| values.get(&result).copied()).hash(&mut hasher);
             for operand in &inst.operands {
                 match operand {
                     Operand::Value(value) => (0u8, values.get(value).copied()).hash(&mut hasher),
