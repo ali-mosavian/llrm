@@ -127,6 +127,11 @@ pub(crate) fn _folded(
     analyses: &mut Analyses,
     calls: &Calls,
 ) -> bool {
+    // Floats start from a floating value: where there is none, no float fact
+    // or conversion exists, and the solve is a dataflow over memory for nothing.
+    if !floatfacts::touches(context, function) {
+        return false;
+    }
     let (facts, conversions) = {
         // The manager's solve, where it was of these writes.
         let solved = (*calls == manager::writes(context, layout, function, analyses))

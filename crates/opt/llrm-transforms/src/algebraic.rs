@@ -228,28 +228,31 @@ pub fn simplified(
         if divided_by_values { analyses.get::<Registers>(context, layout, function) } else { Default::default() };
     let outer = std::rc::Rc::clone(analyses.outer());
     let mut changed = false;
+    let mut work = crate::combine::Worklist::of(function);
     loop {
+        let mark = function.mark();
         let mut round = _whole_fixed(context, layout, function, &outer);
         round |= _unsigned_divisions(context, layout, function, &outer, analyses, changed || round, &facts, size);
         round |= _divisions(context, layout, function, &outer, &facts);
         round |= _redundant_masks(context, layout, function, &outer, analyses, changed || round);
         round |= _unread_bits(context, layout, function, analyses, changed || round);
         let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
-        for (_, inst) in function.walk().collect::<Vec<_>>() {
-            if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst, size);
-            }
-        }
+        work.reached_since(function, mark);
+        round |= work.drain(function, |function, inst| _rewritten(context, layout, function, &recurrences, inst, size));
+        let mark = function.mark();
         round |= _reassociated_recurrences(function);
         round |= _shared_shifts(context, function);
+        work.reached_since(function, mark);
         // Last, when no other rule has anything to do: a repeat may be a
         // difference the other rules cancel (`x - (x + 5 + x)`).
         if !round {
+            let mark = function.mark();
             for (_, inst) in function.walk().collect::<Vec<_>>() {
                 if !function.is_erased(inst) {
                     round |= _doubled_addend(context, function, inst);
                 }
             }
+            work.reached_since(function, mark);
         }
         if !round {
             return changed;

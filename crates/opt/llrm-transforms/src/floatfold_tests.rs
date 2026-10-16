@@ -341,3 +341,19 @@ fn test_a_widened_constant_is_a_constant_so_its_division_is_a_multiply() {
     );
     assert!(!text.contains("fdiv"), "{text}");
 }
+
+/// A body with no floating value was asked for the whole-function solve of
+/// float facts (a dataflow over memory) by every `fold`: 31 Minstr, 1% of the
+/// d_faces -O2 compile, to learn there was nothing to fold.
+#[test]
+fn test_a_body_with_no_float_is_not_solved_for_float_facts() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %x) {{\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}}\n"
+    ));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let calls = llrm_analysis::manager::writes(context, &layout, function, &mut analyses);
+    assert!(!super::_folded(context, &layout, function, &mut analyses, &calls));
+    assert!(analyses.cached::<llrm_analysis::manager::FloatFacts>().is_none(), "float facts were solved");
+}
