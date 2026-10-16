@@ -27,6 +27,24 @@ def test_a_missing_file_is_fetched_unpacked_and_cached(monkeypatch, tmp_path):
     assert corpus.path("t").read_bytes() == TEXT
 
 
+def test_two_jobs_fetching_at_once_do_not_share_a_partial_file(monkeypatch, tmp_path):
+    """Both wrote `signal.partial`; the first rename took it and the second died with FileNotFoundError (gate(tools) on #1857)."""
+    packed = tmp_path / "t.bz2"
+    packed.write_bytes(bz2.compress(TEXT))
+    register(monkeypatch, tmp_path, [packed.as_uri()])
+    replace, racing = Path.replace, []
+
+    def other_job_first(self, target):
+        if not racing:
+            racing.append(self)
+            corpus.path("t")  # the other job runs between this one's write and its rename
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", other_job_first)
+    assert corpus.path("t").read_bytes() == TEXT
+    assert list((tmp_path / "cache").glob("*.partial")) == []
+
+
 def test_a_cached_file_that_is_not_the_pinned_one_is_replaced_not_used(monkeypatch, tmp_path):
     """A truncated download in the cache read as the corpus: the scan ran over other bytes and printed other numbers."""
     packed = tmp_path / "t.bz2"
