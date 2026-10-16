@@ -16,7 +16,7 @@
 //! with the invertible log (rollback), and the epochs then read it.
 
 use crate::context::Context;
-use crate::dense::IdSet;
+use crate::dense::{IdMap, IdSet};
 use crate::module::{BlockId, Change, Function, InstId, Mark, Operand, ValueId};
 use crate::opcode::Opcode;
 use crate::types::Type;
@@ -405,20 +405,44 @@ impl Function {
                 out.memory_rewritten.insert(inst);
             }
         }
+        // What each terminator named at the mark: its operands now, with the
+        // replaced ones put back, in one pass over the log (not one per
+        // terminator).
+        let mut thens = IdMap::<u32, Vec<Operand>>::new();
+        for &(inst, _) in &terminators {
+            thens.insert(inst.0, self.instruction(inst).operands.clone());
+        }
+        if !thens.is_empty() {
+            for change in changes.iter().rev() {
+                match change {
+                    Change::Operand { inst, index, was } => {
+                        if let Some(then) = thens.get_mut(&inst.0) {
+                            then[*index as usize] = *was;
+                        }
+                    }
+                    Change::Operands { inst, was } => {
+                        if let Some(then) = thens.get_mut(&inst.0) {
+                            *then = was.to_vec();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         for (inst, at_mark) in terminators {
-            self.edges_of(inst, at_mark, changes, !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
+            self.edges_of(inst, at_mark, &thens[&inst.0], !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
         }
         // A terminator replaced by another naming the same block leaves the
-        // edge.
-        let all = std::mem::take(&mut out.cfg);
-        out.cfg = all
-            .iter()
-            .copied()
-            .filter(|&(from, to, edge)| {
-                let opposite = if edge == Edge::Added { Edge::Removed } else { Edge::Added };
-                !all.contains(&(from, to, opposite))
-            })
-            .collect();
+        // edge: a pair both added and removed is in neither.
+        let pair = |&(from, to, _): &(BlockId, BlockId, Edge)| (from.0, to.0);
+        let mut made: Vec<(u32, u32)> = out.cfg.iter().filter(|one| one.2 == Edge::Added).map(pair).collect();
+        let mut gone: Vec<(u32, u32)> = out.cfg.iter().filter(|one| one.2 == Edge::Removed).map(pair).collect();
+        made.sort_unstable();
+        gone.sort_unstable();
+        out.cfg.retain(|one| {
+            let key = pair(one);
+            !(made.binary_search(&key).is_ok() && gone.binary_search(&key).is_ok())
+        });
         let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
             let one = self.instruction(inst);
             named.extend(one.result);
@@ -468,44 +492,36 @@ impl Function {
         &self,
         inst: InstId,
         at_mark: Option<BlockId>,
-        changes: &[Change],
+        then: &[Operand],
         existed: bool,
         exists: bool,
         out: &mut Vec<(BlockId, BlockId, Edge)>,
     ) {
-        let mut then: Vec<Operand> = self.instruction(inst).operands.clone();
-        for change in changes.iter().rev() {
-            match change {
-                Change::Operand { inst: one, index, was } if *one == inst => then[*index as usize] = *was,
-                Change::Operands { inst: one, was } if *one == inst => then = was.to_vec(),
-                _ => {}
-            }
-        }
-        let targets = |operands: &[Operand]| -> Vec<BlockId> {
-            let mut out: Vec<BlockId> = Vec::new();
-            for operand in operands {
-                if let Operand::Block(block) = operand
-                    && !out.contains(block)
-                {
-                    out.push(*block);
-                }
-            }
-            out
+        // The blocks named, once each and in order: a switch of N arms names
+        // N, which a scan of the list for each would make N^2.
+        let targets = |operands: &[Operand]| -> (Vec<BlockId>, IdSet<BlockId>) {
+            let mut seen = IdSet::<BlockId>::new();
+            let list = operands
+                .iter()
+                .filter_map(|operand| if let Operand::Block(block) = operand { Some(*block) } else { None })
+                .filter(|block| seen.insert(*block))
+                .collect();
+            (list, seen)
         };
         let before = at_mark.filter(|_| existed);
         let after = self.parent(inst).filter(|_| exists);
-        let old: Vec<(BlockId, BlockId)> =
-            before.map(|from| targets(&then).into_iter().map(|to| (from, to)).collect()).unwrap_or_default();
-        let new: Vec<(BlockId, BlockId)> = after
-            .map(|from| targets(&self.instruction(inst).operands).into_iter().map(|to| (from, to)).collect())
-            .unwrap_or_default();
-        for &(from, to) in &old {
-            if !new.contains(&(from, to)) {
+        let (old, old_set) = if before.is_some() { targets(then) } else { Default::default() };
+        let (new, new_set) =
+            if after.is_some() { targets(&self.instruction(inst).operands) } else { Default::default() };
+        // From another block, every edge differs.
+        let same = before == after;
+        if let Some(from) = before {
+            for &to in old.iter().filter(|to| !same || !new_set.contains(to)) {
                 out.push((from, to, Edge::Removed));
             }
         }
-        for &(from, to) in &new {
-            if !old.contains(&(from, to)) {
+        if let Some(from) = after {
+            for &to in new.iter().filter(|to| !same || !old_set.contains(to)) {
                 out.push((from, to, Edge::Added));
             }
         }

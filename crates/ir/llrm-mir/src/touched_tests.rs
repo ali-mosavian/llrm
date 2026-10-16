@@ -219,3 +219,41 @@ fn a_replaced_operand_names_the_value_it_read_and_the_one_it_reads() {
     let touched = f.touched_since(mark).expect("history");
     assert_eq!(touched.named.iter().collect::<std::collections::BTreeSet<_>>(), [a, c, result].into_iter().collect());
 }
+
+/// A switch of many arms retargeted, then its whole list replaced: the digest
+/// names exactly the edges that differ from the mark's, and costs a scan of the
+/// log once, not once for each terminator and each arm (`cases(N)` at -O1:
+/// `analysis dominated-edges` read 3.4x a doubling with a pass per arm).
+#[test]
+fn the_edges_of_a_many_armed_switch_are_found_without_a_scan_per_arm() {
+    let arms = 200_usize;
+    let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n");
+    for k in 0..arms {
+        text += &format!("    i32 {k}, label %b{k}\n");
+    }
+    text += "  ]\nd:\n  ret i32 0\n";
+    for k in 0..arms {
+        text += &format!("b{k}:\n  br label %d\n");
+    }
+    text += "}\n";
+    let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+    let (first, last) = (block(f, "b0"), block(f, &format!("b{}", arms - 1)));
+    let mark = f.mark();
+    let switch = f.terminator(entry).unwrap();
+    // Arm 0 now goes to the last arm's block; every other arm is as it was.
+    let at = f.instruction(switch).operands.iter().position(|one| *one == Operand::Block(first)).unwrap();
+    f.set_operand(switch, at, Operand::Block(last));
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.cfg, [(entry, first, Edge::Removed)]);
+    // The list replaced by one naming `d` alone: every other edge goes.
+    let mut operands = f.instruction(switch).operands.clone();
+    for operand in operands.iter_mut().filter(|one| matches!(one, Operand::Block(_))) {
+        *operand = Operand::Block(d);
+    }
+    f.set_operands(switch, operands);
+    let touched = f.touched_since(mark).expect("history");
+    assert!(touched.cfg.iter().all(|&(from, _, edge)| from == entry && edge != Edge::Added), "{:?}", touched.cfg);
+    assert_eq!(touched.cfg.len(), arms, "each arm's block but d: {:?}", touched.cfg.len());
+}
