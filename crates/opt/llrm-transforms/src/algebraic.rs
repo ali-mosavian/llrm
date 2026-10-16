@@ -847,7 +847,8 @@ fn _recurrences(
     // rounds before changed, not worked out afresh for each round: 19 ms of 53
     // in this pass on d_faces -O1.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let shape = analyses.get::<Shape>(context, layout, function);
     let registers = analyses.get::<Registers>(context, layout, function);
@@ -1870,7 +1871,8 @@ fn _redundant_masks(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
@@ -1952,7 +1954,8 @@ fn _unread_bits_once(
         return false;
     }
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let read = analyses.get::<DemandedBits>(context, layout, function);
     // Bits read only shrink as the rewrites below go, so the answers stay sound
@@ -2025,7 +2028,8 @@ fn _unsigned_divisions(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
