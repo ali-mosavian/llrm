@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/ssaspill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/ssaspill.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:018fe422130eb11d48710502533e089d54030718b3b0b61cdf412548eb35b587 -->
+<!-- src: crates/backend/llrm-core/src/backend/ssaspill.rs sha256:e948ee349f9827c83b0b45fb9ce3efb405e23714d3fbe242ff95d4ddd0ce4dd3 -->
 
 # ssaspill
 
@@ -19,6 +19,8 @@ them (tier 0), some do (1), or none (2), then by next use. A value no
 predecessor ends with is taken only if it is a phi result arriving here or
 the block is a loop header the pass has admitted; it is otherwise reloaded
 where it is read.
+A header holds a value only while the loop's reloads that restore it, on any
+of its edges, run less than half as often as the reloads at its first uses.
 
 Within a block, Belady's rule decides eviction. Next-use distance is counted
 across blocks, with a large constant for a use beyond a loop exit. When an

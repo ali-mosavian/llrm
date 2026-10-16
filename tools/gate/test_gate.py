@@ -1175,7 +1175,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
     assert {"reference", "run", "tools", "python"} <= set(private), private
-    assert "unit" not in private and "cost" not in private
+    assert "unit" not in private
 
 
 def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_that_run_it():
@@ -1233,6 +1233,23 @@ def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_trace
     assert code == 0
 
 
+def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_nothing(tmp_path):
+    """CI had no counters (perf prints <not supported> on a hosted VM) and `measure` was left out of every run: callgrind counts there."""
+    import shutil
+
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name in ("sh", "grep"):
+        (tools / name).symlink_to(shutil.which(name))
+    (tools / "perf").write_text("#!/bin/sh\necho '<not supported>,,instructions:u,0,100.00,,'\n")
+    (tools / "perf").chmod(0o755)
+    env = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": str(tools), "QB45_DIR": ""}
+    assert {"perf", "counter"} <= gate.missing_capabilities(env).keys()
+    (tools / "valgrind").write_text("#!/bin/sh\n")
+    (tools / "valgrind").chmod(0o755)
+    got = gate.missing_capabilities(env)
+    assert "perf" in got and "counter" not in got
+    assert "counter" in gate.load()["capability"]
 def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
@@ -1259,3 +1276,10 @@ def test_the_tools_group_restores_a_pull_requests_base_counts_and_a_push_to_main
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     assert "LLRM_BENCH_RECORD: ${{ github.event_name == 'push'" in workflow and "key: ${{ steps.basecounts.outputs.head }}" in workflow
+
+
+def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
+    """Without QCPORT the cost rows of QCport's 65 modules are left out and measure judges the programs alone, as green."""
+    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
+    assert "measure" in p.steps and "cost" in gate.private_groups(p)
+    assert gate.private_env("/p", "cost")["QCPORT"] == "/p/rm-quake/src"

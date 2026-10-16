@@ -298,6 +298,23 @@ pub trait Analysis: 'static {
     /// naming one that is gone, and it is not kept past them.
     const NAMES_VALUES: bool = false;
 
+    /// `old` brought to the function after `changes`, which `sound_edits` found
+    /// keep every live value's meaning, equal to what `run` gives: each value
+    /// `substituted` names replaced by what took its place (LLVM's value
+    /// handles follow a RAUW the same way); none where it cannot be (it is
+    /// then derived again). Asked of a result that `NAMES_VALUES`, which is
+    /// kept only when it returns `Some`.
+    #[allow(unused_variables)]
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(crate::module::ValueId) -> Option<crate::module::Operand>,
+        changes: &[crate::module::Change],
+        context: &Context,
+        function: &Function,
+    ) -> Option<Self::Result> {
+        None
+    }
+
     /// Whether `old`, derived before sound edits, says nothing `fresh`, derived
     /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
     /// sound.
@@ -804,6 +821,7 @@ impl Outer {
 
     /// `cached`, borrowed for as long as the proxy.
     pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
+        read::note(read::of(M::NAME));
         self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
     }
 
@@ -817,6 +835,53 @@ impl Outer {
             && self.globals == other.globals
             && self.modules.len() == other.modules.len()
             && self.modules.iter().all(|(key, one)| other.modules.get(key).is_some_and(|two| Rc::ptr_eq(one, two)))
+    }
+}
+
+/// Which parts of the module's facts a pass has read, noted as they are: by
+/// what an analysis it asks for reads, and by what it asks of the proxy itself.
+/// A body's pipeline is run again only where a part a pass read has changed.
+pub mod read {
+    use std::cell::Cell;
+
+    /// What each function does to memory and how many registers its call
+    /// keeps (`CalleeEffects`, `CallRegisters`).
+    pub const CALLEES: u8 = 1;
+    /// Each function's summary (`Summaries`).
+    pub const SUMMARIES: u8 = 2;
+    /// What `GlobalsAA` holds.
+    pub const GLOBALS: u8 = 4;
+    /// What calling back into the module may do (`Callbacks`).
+    pub const CALLBACKS: u8 = 8;
+    /// The other functions' and variables' declarations, and the globals'
+    /// sizes.
+    pub const DECLARATIONS: u8 = 16;
+    pub const ALL: u8 = 31;
+
+    thread_local! {
+        static READ: Cell<u8> = const { Cell::new(0) };
+    }
+
+    /// Notes the parts `bits` as read.
+    pub fn note(bits: u8) {
+        READ.with(|read| read.set(read.get() | bits));
+    }
+
+    /// What was noted, replaced by `bits`.
+    pub fn swap(bits: u8) -> u8 {
+        READ.with(|read| read.replace(bits))
+    }
+
+    /// The part a module analysis of this name is.
+    pub fn of(name: &str) -> u8 {
+        match name {
+            "callee-effects" | "call-registers" => CALLEES,
+            "summaries" => SUMMARIES,
+            "globals-aa" => GLOBALS,
+            "callbacks" => CALLBACKS,
+            "declarations" | "global-sizes" | "type-ancestry" => DECLARATIONS,
+            _ => ALL,
+        }
     }
 }
 
@@ -854,6 +919,8 @@ struct Entry<A: Analysis> {
     outer: Rc<Outer>,
     /// The function's history when the result was derived.
     mark: crate::module::Mark,
+    /// Which parts of the module's facts it read (`read`).
+    bits: u8,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -894,7 +961,16 @@ impl<A: Analysis> Cached for Entry<A> {
         outer: &Rc<Outer>,
     ) -> bool {
         let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)));
-        A::covers(&self.result, &fresh, context, function)
+        // What `get` would hand out: brought to the function first.
+        let Some(changes) = function.changes_since(self.mark) else { return true };
+        if !A::NAMES_VALUES {
+            return A::covers(&self.result, &fresh, context, function);
+        }
+        let taken = substitutions(changes);
+        match A::remapped(&self.result, &|value| taken.resolve(value), changes, context, function) {
+            Some(now) => A::covers(&now, &fresh, context, function),
+            None => true,
+        }
     }
 
     fn mark(&self) -> crate::module::Mark {
@@ -986,7 +1062,6 @@ fn check_replay() -> bool {
 pub fn sound_edits(
     function: &Function,
     changes: &[crate::module::Change],
-    names_values: bool,
 ) -> bool {
     use crate::module::Change;
     use crate::module::Operand;
@@ -1006,10 +1081,8 @@ pub fn sound_edits(
     };
     for change in changes {
         match *change {
-            // A result that names values would name the replaced one.
-            Change::Substituted(_) if names_values => return false,
-            Change::Substituted(value) => {
-                replaced.insert(value);
+            Change::Substituted { from, .. } => {
+                replaced.insert(from);
             }
             Change::Operand { inst, was, .. } => match was {
                 Operand::Value(value) if replaced.contains(&value) => {
@@ -1051,6 +1124,36 @@ pub fn sound_edits(
     true
 }
 
+/// What the substitutions in a log came to: a value replaced by one replaced
+/// later is followed to the last.
+struct Substitutions(crate::dense::IdMap<crate::module::ValueId, crate::module::Operand>);
+
+fn substitutions(changes: &[crate::module::Change]) -> Substitutions {
+    let mut taken = crate::dense::IdMap::new();
+    for change in changes {
+        if let crate::module::Change::Substituted { from, to } = *change {
+            taken.insert(from, to);
+        }
+    }
+    Substitutions(taken)
+}
+
+impl Substitutions {
+    fn resolve(
+        &self,
+        value: crate::module::ValueId,
+    ) -> Option<crate::module::Operand> {
+        let mut now = *self.0.get(&value)?;
+        while let crate::module::Operand::Value(next) = now {
+            match self.0.get(&next) {
+                Some(&later) => now = later,
+                None => break,
+            }
+        }
+        Some(now)
+    }
+}
+
 impl Analyses {
     /// Drops what was kept only as sound: a named point (the start of a round,
     /// after the interprocedural step) where the facts are worked out afresh,
@@ -1080,11 +1183,22 @@ impl Analyses {
     }
 
     pub fn outer(&self) -> &Rc<Outer> {
+        read::note(read::DECLARATIONS);
+        &self.outer
+    }
+
+    /// The proxy, not noted as a read: for the manager's own use.
+    pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.
     pub fn cached<A: Analysis>(&self) -> Option<Rc<A::Result>> {
+        if A::READS_OUTER
+            && let Some(entry) = self.cache.get(&TypeId::of::<A>())
+        {
+            read::note(entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").bits);
+        }
         self.cache
             .get(&TypeId::of::<A>())
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
@@ -1101,7 +1215,12 @@ impl Analyses {
     ) {
         self.cache.insert(
             TypeId::of::<A>(),
-            Box::new(Entry::<A> { result, outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result,
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: if A::READS_OUTER { read::ALL } else { 0 },
+            }),
         );
     }
 
@@ -1115,11 +1234,16 @@ impl Analyses {
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+            if A::READS_OUTER {
+                read::note(entry.bits);
+            }
             counted(A::NAME, true);
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
+        let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
+        let mut old_reads = 0;
         let old_kept = if why() {
             self.kept.get(&key).map(|o| {
                 (Rc::clone(&o.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result), o.mark())
@@ -1132,6 +1256,7 @@ impl Analyses {
             // reference there is.
             let (result, outer, mark) = {
                 let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+                old_reads = old.bits;
                 (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
             };
             drop(held);
@@ -1141,7 +1266,16 @@ impl Analyses {
             if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
                 return None;
             }
-            if A::SOUND && sound_edits(function, changes, A::NAMES_VALUES) {
+            if A::SOUND && sound_edits(function, changes) {
+                // A result that names values names the replaced ones: it is
+                // brought to the values that took their place, or derived
+                // again.
+                let result = if A::NAMES_VALUES {
+                    let taken = substitutions(changes);
+                    Rc::new(A::remapped(&result, &|value| taken.resolve(value), changes, context, function)?)
+                } else {
+                    result
+                };
                 if check_replay() {
                     let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
@@ -1218,6 +1352,13 @@ impl Analyses {
             Some(made) => made,
             None => Rc::new(spanned_as("analysis", A::NAME, || A::run(context, layout, function, self))),
         };
+        // What it read of the module: what the result it was brought up to date
+        // from read, and what the bringing read.
+        let mine = read::swap(before_reads);
+        let bits = if A::READS_OUTER { mine | old_reads } else { 0 };
+        if A::READS_OUTER {
+            read::note(bits);
+        }
         if why() {
             let class = match self.evicted.remove(&key) {
                 Some(old) => {
@@ -1246,7 +1387,12 @@ impl Analyses {
         }
         self.cache.insert(
             key,
-            Box::new(Entry::<A> { result: Rc::clone(&result), outer: Rc::clone(&self.outer), mark: function.mark() }),
+            Box::new(Entry::<A> {
+                result: Rc::clone(&result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits,
+            }),
         );
         result
     }

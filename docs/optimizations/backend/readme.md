@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 93 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 94 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -66,6 +66,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 93 documented,
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
 | parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
 | peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |
+| phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
