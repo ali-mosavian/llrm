@@ -129,3 +129,7 @@ fn touched_by(
     }
     out
 }
+
+#[cfg(test)]
+#[path = "combine_tests.rs"]
+mod tests;
