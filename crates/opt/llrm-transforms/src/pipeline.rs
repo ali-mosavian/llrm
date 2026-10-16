@@ -232,10 +232,10 @@ pub struct Options {
     /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
     pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
-    /// (`-fallocation-search`).
+    /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
     /// Both routes through the machine phases are made and the cheaper kept
-    /// (`-fallocation-routes`); else the allocator alone.
+    /// (`-fallocation-routes`; -Omax); else the allocator alone.
     pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
@@ -288,8 +288,8 @@ impl Default for Options {
             expensive: true,
             switch_conversion: true,
             jump_tables: true,
-            search: true,
-            routes: true,
+            search: false,
+            routes: false,
             exhaustive: false,
         }
     }
@@ -298,7 +298,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, search: false, routes: false, ..Self::default() }
+        Self { optimize: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a
@@ -318,8 +318,6 @@ impl Options {
             // `-finline-small-functions`, and no allocation search or second
             // route: with them off compile is 34% less on d_faces.
             inline: inline::Threshold::new(0),
-            search: false,
-            routes: false,
             ipa_ranges: false,
             loop_intervals: false,
             pre: false,
@@ -386,6 +384,8 @@ impl Options {
             version: true,
             unroll_jam: true,
             interchange: true,
+            search: true,
+            routes: true,
             exhaustive: true,
             rounds: usize::MAX,
             ..Self::default()

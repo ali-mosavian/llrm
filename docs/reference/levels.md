@@ -89,7 +89,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | Second selection and machine run without callee facts, cheaper kept | x | x | x | x | on | x |
 | `lir frame` | on | on | on | on | on | on |
 | `lir far-indirect-calls` | on | on | on | on | on | on |
-| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
+| `lir ssaspill`: the spiller's route, kept if cheaper (`-fallocation-routes`) | x | x | x | x | on | x |
 | `candidate spiller` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate cost` | x | x | spill traffic >= 0.5% | spill traffic >= 0.5% | on | x |
 | `candidate allocator alone` | on | on | on | on | on | on |
@@ -101,7 +101,7 @@ TL;DR: what each `-O` level is, and for each limit its gcc and LLVM counterpart 
 | `lir twoaddr` | on | on | on | on | on | on |
 | `lir coalesce` | on | on | on | on | on | on |
 | `lir regalloc` | on | on | on | on | on | on |
-| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | x | <= 2 | <= 2 | <= 12 | x |
+| `regalloc candidates`, `regalloc trial`: allocations beyond the first (`-fallocation-search`) | x | x | x | x | <= 12 | x |
 | `lir parcopy` | on | on | on | on | on | on |
 | `lir peephole` | on | on | on | on | on | on |
 | `lir loopslots` | on | on | on | on | on | on |
@@ -135,8 +135,8 @@ Sources read:
 | `lsr` pointer for a stepped-some-trips counter (`induction::step_cycle`, `mirror.rs`) | none: gcc's `ivopts` and LLVM's LSR reduce an affine counter only | none | -O2 and up, not -Os; a target whose addresses take no scale: a counter that only some trips step (`if (...) ++i;`) read as `a[i]` gets a pointer that moves with it (quicksort -m16 -O2: memory operands -25%, 486 clocks -5.0%; 2026-10-11) |
 | `inline.last` / `inline-functions-called-once` | `-finline-functions-called-once` | -O1, not -Og ([606](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L606)) | every level above -O0, -Og too |
 | `inline` / `inline-functions` | `-finline-small-functions`, `-finline-functions` | -O2 ([627](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L627), [652](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L652)) | every level above -O0 | -O2 and up: at -O1 and -Og only the last call of a function goes in (`-finline-functions-called-once`), as gcc's. Measured on the -O1 it replaced: d_faces compile -0.6%, executed code and the 71 vsgcc programs unchanged (0 rows) |
-| `search` / `allocation-search` | none: gcc allocates once | no counterpart | -O2 and up. -O1 and -Og allocate once (d_faces -O1 compile -18%; d_faces clocks +2.5%, vsgcc geomean clocks -0.1%, 0 rows newly lost to gcc or clang; allocation-routes follows) |
-| `routes` / `allocation-routes` | none | no counterpart | -O2 and up. -O1 and -Og make the allocator's route alone (d_faces -O1 compile -23%, d_faces executed code unchanged; vsgcc geomean clocks +0.44% with search off as well, sieve +25%, x_dct +15%, 0 rows newly lost). The spiller's route alone costs the same compile (3,634 against 3,686 Minstr) and gives vsgcc +0.14% clocks, +0.04% code but d_faces code +4.4%: route B's own item |
+| `search` / `allocation-search` | none: gcc allocates once | no counterpart: LLVM's greedy allocator runs once | -Omax only. Every other level allocates once (d_faces compile -34% at -O2, -32% at -O3, -30% at -Os; vsgcc clocks +0.18% geomean, no row newly below the better of gcc and clang in clocks) |
+| `routes` / `allocation-routes` | none | no counterpart | -Omax only. Every other level makes the allocator's route alone (d_faces compile -24% at -O2, -23% at -O3, -20% at -Os with the search on; the figures above are with both off). Rows that lost: see the PR that made it the default |
 | `forward`, `drop_loads` / `gcse` | `-fgcse`, `-ftree-fre` | -O2 for `-fgcse` ([624](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L624)); `-ftree-fre` -O1 ([592](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L592)) | every level above -O0: value numbering that removes what is redundant on every path (a load a dominating load or store holds) and inserts nothing |
 | `pre` / `tree-pre` | `-ftree-pre` | -O2 ([646](https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/opts.cc#L646)) | -O2 and up: `gvn` also makes a partial redundancy full by inserting the computation or load on the path that lacks it. At -O1 the sift of x_heapsort reloaded the two cells its compare had loaded: 47542 clocks, 46162 with FRE (gcc -O1: 40567). User decision 2026-10-11 : -O1 compile +2.5% geomean (`tools/measure.py`) for -11.8% clocks; gcc -O1 has -ftree-fre |
 | (`algebraic`, `_narrowed_binary`) | InstCombine's `visitTrunc` | every level above -O0 | `trunc (add (ext x), c)` is `add x, c` whatever else reads the wide sum, where the narrow op needs no cut of its own (it was for a single-use sum). User decision 2026-10-12 (relayed by the coordinator): ring's compile +3.4% on the combined tip (1.033-1.035 at each level, over the 1.02 per-file limit) for ring -8% clocks and -8 bytes: its counter is read as a counter again, so `counted`, `lsr` and `indvars` work on it |
@@ -259,4 +259,4 @@ We match -O0 only: `Options::none()` has no allocation search, so a function is 
 
 -Os does not match. gcc's one region is the allocator without loop-tree regions; the counterpart here is no live-range splitting. Measured on 131 files: compile -35% (`d_faces`) and -20% (`d_alias`), but bytes +0.49% geomean, worst `pl_trace` +5.8%. Splitting earns its bytes in this allocator, so -Os splits.
 
-The allocator tries other shapes of a body (`-fallocation-search`) at every level but -O0, and every level but -O0 makes each function by the allocator alone and by the spiller's route and keeps the cheaper (`-fallocation-routes`). The switches are independent: `-fno-allocation-search` keeps the route. The search is the default because the 16-bit bench kernels lose 5-20% of their instructions without it (quicksort -O2 +20%: the `Scoped` shape keeps a loop's address base in a register). gcc runs IRA once at -O1, -O2 and -Os.
+A function is allocated once below -Omax, as LLVM's greedy allocator and gcc's IRA do. -Omax tries other shapes of a body (`-fallocation-search`) and makes each function by the allocator alone and by the spiller's route, keeping the cheaper (`-fallocation-routes`). The switches are independent and set either anywhere.
