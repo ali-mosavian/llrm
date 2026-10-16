@@ -21,6 +21,11 @@
 //! promotion are what leave these behind: a length every caller passes as 12,
 //! folded into the body, is still pushed at every call.
 //!
+//! `removed_with` also names the functions whose edit is more than that: the
+//! ones that lost a parameter, and a caller whose dropped argument was read by
+//! nothing else. A caller not named is vouched for ([`crate::settled`]): its
+//! passes need not look at the call again.
+//!
 //! # Example
 //! Before:
 //! ```mir
@@ -61,6 +66,15 @@ use llrm_mir::opcode::Opcode;
 /// The functions of `module` that lost a parameter, and the functions that call
 /// them.
 pub fn removed(module: &mut Module) -> Vec<GlobalId> {
+    removed_with(module).0
+}
+
+/// `removed`, and the functions whose edit is more than a call that takes
+/// fewer arguments: the ones that lost a parameter, and the callers an
+/// argument went from whose value then has no other reader (what computed it
+/// is dead now).
+pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    let mut unsound = BTreeSet::new();
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
@@ -93,14 +107,28 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
             let GlobalKind::Function(function) = &mut module.globals[caller.0 as usize].kind else {
                 unreachable!("a caller")
             };
+            for &parameter in &gone {
+                if let Some(&llrm_mir::module::Operand::Value(value)) =
+                    function.instruction(call).operands.get(parameter)
+                    && matches!(
+                        function.value(value).def,
+                        llrm_mir::module::ValueDef::Instruction(_)
+                    )
+                    && function.users(value).len() == 1
+                {
+                    unsound.insert(caller);
+                }
+            }
             for &parameter in gone.iter().rev() {
                 function.replace_argument(call, parameter, &[], ty);
             }
             changed.insert(caller);
         }
+        // The function itself has other parameters now.
+        unsound.insert(id);
         changed.insert(id);
     }
-    changed.into_iter().collect()
+    (changed.into_iter().collect(), unsound)
 }
 
 /// The parameters of `id` nothing reads but its own calls to itself, each as
