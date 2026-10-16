@@ -195,7 +195,7 @@ pub fn evaluated_with(
                 _substituted_exits(context, function, exit, &following, &swap)?
             }
         }
-        standing.changed();
+        standing.reshaped();
         changed = true;
     }
 }
@@ -208,7 +208,7 @@ fn _evaluation(
     outer: &Outer,
     standing: &mut Standing,
 ) -> Result<Option<Evaluation>, String> {
-    let shape = cfg::Shape::of(function);
+    let shape = standing.shape(function);
     let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
     let (facts, bounds) = standing.of_with_bounds(&unit);
     let unit = unit.with_registers(facts);
