@@ -94,7 +94,7 @@ target's OS layer interface. The target's physical addresses are defined as
 gcc's `__attribute__((...))` is read where gcc allows it on a declaration: before the type and after a declarator
 (`int f(void) __attribute__((noinline));`, which holds for the definition that follows it). The target's header spells it as
 Open Watcom's `__declspec( ... )`, and the patched front end reads the list, commas, arguments and `__name__` spellings
-included. `noinline` and `noreturn` state facts. `unused`, `used`, `always_inline`, `cold`, `hot`, `format`, `nonnull`,
+included. `noinline`, `always_inline` and `noreturn` state facts. `unused`, `used`, `cold`, `hot`, `format`, `nonnull`,
 `pure`, `const`, `malloc`, `deprecated`, `visibility` and a few others are read and dropped: leaving them out changes no
 meaning. Any other (`packed`, `aligned`, `section`, `weak`, `alias`) is an error, not ignored.
 

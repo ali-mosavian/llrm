@@ -22,6 +22,11 @@
 //!                                          target: %p = phi [%v, bridge], ..
 //! ```
 //!
+//! `conditions_decided` makes a phi operand that is a branch's own condition,
+//! read on the edge that branch's arm is, that arm's constant: `phi i1 [%c,
+//! %latch]` in an exit is `false` (GVN's `propagateEquality` for the edge's own
+//! phi uses, which `fold` runs after rotation and `gvn` before).
+//!
 //! `retarget` redirects every operand of a terminator that names one block to
 //! another, and `phis` lists a block's leading phis.
 //!
@@ -63,6 +68,7 @@
 //! Not a pass: a library. `split` is called by `loadjoins`, `rotate` and
 //! `unswitch`; `phis` and `retarget` by most of the CFG-rewriting passes.
 
+use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -134,6 +140,46 @@ pub fn split(
         function.set_operands(phi, operands);
     }
     Ok(bridge)
+}
+
+/// The edge's own phi uses: a phi in one arm of a `br i1` that takes the
+/// branch's own condition from the branch's block reads that arm's constant:
+/// the edge it is read on is the one the condition decides (GVN's
+/// `propagateEquality` over the edge's own phi uses). Loop rotation and `lcssa`
+/// make these (`phi i1 [%c, %latch]` in the exit, for a test after the loop),
+/// and no GVN runs after them; the branch on the phi then decides itself.
+/// Whether any use changed.
+pub fn conditions_decided(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
+    let mut found = Vec::new();
+    for &block in function.layout() {
+        let Some(last) = function.terminator(block) else { continue };
+        let branch = function.instruction(last);
+        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
+            continue;
+        };
+        if branch.opcode != Opcode::Br || taken == other {
+            continue;
+        }
+        for (target, holds) in [(taken, 1), (other, 0)] {
+            for one in function.users(condition) {
+                let user = function.instruction(one.user);
+                if user.opcode == Opcode::Phi
+                    && function.parent(one.user) == Some(target)
+                    && user.operands[one.index as usize + 1] == Operand::Block(block)
+                {
+                    found.push((*one, condition, holds));
+                }
+            }
+        }
+    }
+    for &(one, condition, holds) in &found {
+        let constant = context.int(function.value(condition).ty, holds);
+        function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
+    }
+    !found.is_empty()
 }
 
 /// `terminator`'s edges to `target` now go to `to`.

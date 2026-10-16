@@ -1196,6 +1196,19 @@ pub fn _register_effects(
     may_write: bool,
     flags: bool,
 ) -> Option<(Lanes, Lanes)> {
+    // Kept on the instruction: asked again by each pass of the peephole.
+    let (was, answer) = one.register_effects[usize::from(may_write) << 1 | usize::from(flags)]
+        .get_or_init(|| (bits, _register_effects_worked(regs, bits, one, may_write, flags)));
+    if *was == bits { *answer } else { _register_effects_worked(regs, bits, one, may_write, flags) }
+}
+
+fn _register_effects_worked(
+    regs: Regs,
+    bits: u32,
+    one: &Insn,
+    may_write: bool,
+    flags: bool,
+) -> Option<(Lanes, Lanes)> {
     // A symbol/source anchor is a placement fact, not an unknown machine
     // instruction.  Complete unrolling can leave many of these between a
     // definition and its ABI use; clearing liveness at each one kept dead
