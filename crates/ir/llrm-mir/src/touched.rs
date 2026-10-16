@@ -283,7 +283,7 @@ impl Function {
         &self,
         changes: &[Change],
     ) -> Option<Reach> {
-        let touched = self.touched_by(changes);
+        let touched = self.touched_with(changes, false);
         (!touched.parameters).then(|| touched.reach(self))
     }
 
@@ -291,6 +291,18 @@ impl Function {
     pub fn touched_by(
         &self,
         changes: &[Change],
+    ) -> Touched {
+        self.touched_with(changes, true)
+    }
+
+    /// `touched_by`, with the edges added and removed (`cfg`) found only where
+    /// asked: a consumer of `reach` needs to know that a terminator changed
+    /// (`terminators_rewritten`), not which edges differ, and a switch of N
+    /// arms rewritten for each of N edits costs N each time.
+    fn touched_with(
+        &self,
+        changes: &[Change],
+        edges: bool,
     ) -> Touched {
         let mut out = Touched::default();
         let mut added = IdSet::<InstId>::new();
@@ -405,6 +417,9 @@ impl Function {
                 out.memory_rewritten.insert(inst);
             }
         }
+        if !edges {
+            terminators.clear();
+        }
         // What each terminator named at the mark: its operands now, with the
         // replaced ones put back, in one pass over the log (not one per
         // terminator).
@@ -470,10 +485,14 @@ impl Function {
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
                     name_inst(&mut out.named, *inst);
                 }
-                Change::Operand { was: Operand::Value(value), .. } => {
-                    out.named.insert(*value);
+                Change::Operand { inst, was, .. } => {
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
+                    if let Operand::Value(value) = was {
+                        out.named.insert(*value);
+                    }
                 }
-                Change::Operands { was, .. } => {
+                Change::Operands { inst, was } => {
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
                     for operand in was.iter() {
                         if let Operand::Value(value) = operand {
                             out.named.insert(*value);
