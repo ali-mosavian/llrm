@@ -589,12 +589,13 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
-/// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers it saves
-/// are then all pushed at the entry, and the return sets SP from the frame register.
+/// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
+/// it saves are then all pushed at the entry, and the return sets SP from the
+/// frame register.
 fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
-    body.insns()
-        .iter()
-        .any(|one| one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK))))
+    body.insns().iter().any(|one| {
+        one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK)))
+    })
 }
 
 /// The registers `procedure` keeps for its caller: each one it names, or a call
