@@ -981,6 +981,8 @@ impl Fixed {
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
         run.fixed += 1;
         for iteration in 0..limit {
+            // A named point: what was kept as sound is worked out afresh.
+            analyses.refresh_soft();
             let before = run.version;
             run.rounds += 1;
             for (one, settled) in self.passes.iter_mut().zip(&mut settled) {

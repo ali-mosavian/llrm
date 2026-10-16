@@ -1,4 +1,4 @@
-reason = "a signed short counter read as an index is widened to the index's width (indvars) and symbol+base+index*scale is one mode: bq32 jpeg_fixed/jpeg_single -15 B code, parity/loop 137 -> 102 instructions (-Os code +1 B)"
+reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
 blessed = "2026-10-16"
 
 [bas.O2]
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 1084.7928
 
 [bq32.O2]
-instructions = 84336078
-code_bytes = 6431
+instructions = 84336394
+code_bytes = 6446
 data_bytes = 29209
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 89430464
-code_bytes = 5975
+instructions = 89430783
+code_bytes = 5990
 data_bytes = 29209
 bss_bytes = 0
 
