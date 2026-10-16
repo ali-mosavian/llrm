@@ -807,3 +807,29 @@ fn test_a_486_keeps_loads_in_a_loop_that_its_adds_take_from_memory() {
     let held = invariant_floats_on_a_486(16);
     assert!(held < 8, "{held} of 16 loads hoisted onto a stack of 8");
 }
+
+/// Each motion was priced on a copy of the whole function (`clone`, one per
+/// run priced): the price is now of the function with the run moved, given back
+/// as it was, so hoist copies nothing more than the manager does.
+#[test]
+fn test_pricing_a_motion_copies_the_function_no_more_than_the_manager_does() {
+    let text = two_inner_loops();
+    let copies = |with_hoist: bool| {
+        let mut module = parsed(&text);
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.require::<Summaries>();
+        if with_hoist {
+            passes.add(super::Hoist { size: true });
+        }
+        crate::profit::PRICED.with(|count| count.set((0, 0)));
+        let before = llrm_mir::journal::clones();
+        passes
+            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+            .unwrap();
+        (llrm_mir::journal::clones() - before, crate::profit::PRICED.with(std::cell::Cell::get).0)
+    };
+    let (without, _) = copies(false);
+    let (with, priced) = copies(true);
+    assert!(priced > 0, "the premise: a motion was priced");
+    assert_eq!(with, without, "copies beyond the manager's own");
+}
