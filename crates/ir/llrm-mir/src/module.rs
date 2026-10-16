@@ -642,6 +642,21 @@ impl Function {
     }
 
     /// Where the function stands now.
+    /// A number for the attributes the function carries, which are written
+    /// through the `pub` fields and move no mark: equal before and after means
+    /// no analysis that reads them has anything new to read.
+    pub fn attributes_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.ty.hash(&mut hasher);
+        self.parameter_attrs.hash(&mut hasher);
+        self.return_attrs.hash(&mut hasher);
+        self.attrs.hash(&mut hasher);
+        self.personality.hash(&mut hasher);
+        self.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
     }

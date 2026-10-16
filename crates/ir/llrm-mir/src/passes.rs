@@ -911,6 +911,14 @@ trait Cached {
     ) -> bool;
     /// The function's history when the result was derived.
     fn mark(&self) -> crate::module::Mark;
+    /// Whether the result was derived from `function` as it stands, under the
+    /// outer facts this cache reads: a pass that edited and put back, or
+    /// asked after its last edit, leaves it true whatever it reports.
+    fn current(
+        &self,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool;
 }
 
 struct Entry<A: Analysis> {
@@ -921,6 +929,8 @@ struct Entry<A: Analysis> {
     mark: crate::module::Mark,
     /// Which parts of the module's facts it read (`read`).
     bits: u8,
+    /// The function's attributes when the result was derived.
+    stamp: u64,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -975,6 +985,16 @@ impl<A: Analysis> Cached for Entry<A> {
 
     fn mark(&self) -> crate::module::Mark {
         self.mark
+    }
+
+    fn current(
+        &self,
+        function: &Function,
+        outer: &Rc<Outer>,
+    ) -> bool {
+        self.mark == function.mark()
+            && self.stamp == function.attributes_stamp()
+            && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
     }
 }
 
@@ -1220,6 +1240,7 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits: if A::READS_OUTER { read::ALL } else { 0 },
+                stamp: function.attributes_stamp(),
             }),
         );
     }
@@ -1392,6 +1413,7 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits,
+                stamp: function.attributes_stamp(),
             }),
         );
         result
@@ -1423,7 +1445,7 @@ impl Analyses {
         function: &Function,
         preserved: &PreservedAnalyses,
     ) {
-        self.drop_unpreserved(preserved);
+        self.drop_unpreserved(preserved, Some(function));
         self.vouched = Some(function.mark());
     }
 
@@ -1436,12 +1458,27 @@ impl Analyses {
         self.vouched = Some(function.mark());
     }
 
+    /// Drops what `preserved` does not keep, except (`current`) a result
+    /// derived from `function` as it stands: an edit that was made and put
+    /// back, or made before the result was asked for, left it true. Not one
+    /// the pass names as given up.
     fn drop_unpreserved(
         &mut self,
         preserved: &PreservedAnalyses,
+        current: Option<&Function>,
     ) {
-        let gone: Vec<TypeId> =
-            self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        let outer = Rc::clone(&self.outer);
+        let gone: Vec<TypeId> = self
+            .cache
+            .iter()
+            .filter(|(key, entry)| {
+                // A result a pass names as given up goes whatever the log says.
+                !entry.preserved(preserved)
+                    && (preserved.dropped.contains(*key)
+                        || !current.is_some_and(|function| entry.current(function, &outer)))
+            })
+            .map(|(key, _)| *key)
+            .collect();
         for key in gone {
             let entry = self.cache.remove(&key).expect("held");
             if entry.incremental() {
@@ -1877,7 +1914,7 @@ impl ModuleAnalyses {
     ) -> &mut Analyses {
         let cache = self.functions.entry(id).or_insert_with(|| Analyses::new(Rc::clone(outer)));
         if !Rc::ptr_eq(&cache.outer, outer) {
-            cache.drop_unpreserved(&PreservedAnalyses::function());
+            cache.drop_unpreserved(&PreservedAnalyses::function(), None);
             cache.outer = Rc::clone(outer);
         }
         cache

@@ -548,11 +548,12 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
-/// `LLRM_WHY`'s test form: an analysis a pass invalidated and that came to what
-/// it was is counted as `same`. 4209 of call-effects' 7009 runs over QCport at
-/// -O1 were so, and nothing said it until this did.
+/// A pass that invalidated and changed nothing since the result was derived
+/// left it true: it is kept, not worked out again to what it was (383 of the
+/// 2,248 results dropped at one d_faces -O2 compile were derived from the body
+/// as it stood; `LLRM_WHY` called their reruns `same-untouched`).
 #[test]
-fn a_recomputation_that_comes_to_the_same_result_is_counted() {
+fn a_result_the_body_has_not_moved_from_is_not_worked_out_again() {
     let module = module();
     let function = module.global(module.named("f").unwrap()).function().unwrap();
     let layout = DataLayout::default();
@@ -564,7 +565,7 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
     crate::passes::trace_recomputes(false);
-    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same-untouched", 1)]);
+    assert_eq!(counts, vec![("counted", "", "first", 1)]);
 }
 
 /// Told apart: a rerun on a body no pass touched since the result was made
