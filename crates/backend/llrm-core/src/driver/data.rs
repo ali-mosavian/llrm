@@ -56,6 +56,7 @@ impl Placed {
         module: &Module,
         data_space: u32,
         constants: Option<&str>,
+        bracketed: &[String],
         far_bss: bool,
         bss_begin: bool,
         segment_bytes: Option<usize>,
@@ -178,6 +179,18 @@ impl Placed {
         // before every `_BSS`.
         if bss_begin && let Some(at) = built.data.iter().position(|(segment, _)| segment == "_BSS") {
             built.data.insert(at, ("BSSB".to_owned(), Vec::new()));
+        }
+        // A segment a linker lays out between two markers, the markers declared
+        // around it in every object that has it.
+        for bracket in bracketed {
+            let [begin, middle, end] = bracket.split(':').collect::<Vec<_>>()[..] else { continue };
+            if let Some(at) = built.data.iter().position(|(segment, _)| segment == middle) {
+                for (name, place) in [(end, at + 1), (begin, at)] {
+                    if !built.data.iter().any(|(segment, _)| segment == name) {
+                        built.data.insert(place, (name.to_owned(), Vec::new()));
+                    }
+                }
+            }
         }
         built.private.extend(self.private.iter().cloned());
         Ok(())
