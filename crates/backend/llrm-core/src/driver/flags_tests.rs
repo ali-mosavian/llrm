@@ -26,8 +26,12 @@ fn pipeline(arguments: &[&str]) -> Options {
 /// of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's
 /// address base in a register. The default stays; the switch is there.)
 #[test]
-fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywhere() {
-    for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
+fn test_allocation_search_is_on_from_o2_and_a_flag_sets_it_anywhere() {
+    // gcc allocates once at -O1 (and -Og): no search, 18% of the -O1 compile of
+    // d_faces.
+    for (level, on) in
+        [("-O0", false), ("-O1", false), ("-Og", false), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)]
+    {
         assert_eq!(pipeline(&[level]).searches(), on, "{level}");
         assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
         assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
@@ -35,12 +39,16 @@ fn test_allocation_search_is_on_at_every_level_but_o0_and_a_flag_sets_it_anywher
 }
 
 /// A function is made by the allocator alone and by the spiller's route and the
-/// cheaper kept at every level but -O0: that choice, not the search of shapes,
-/// is what the single allocation lost at x_dct (+15% clocks), x_ll_arith
-/// (+17.6% code) and recmany (+13%) when both were turned off together.
+/// cheaper kept at every level from -O2 (-O1 makes the allocator's alone, as
+/// gcc's one allocation: 23% of its d_faces compile for 0 of its executed
+/// code): that choice, not the search of shapes, is what the single allocation
+/// lost at x_dct (+15% clocks), x_ll_arith (+17.6% code) and recmany (+13%)
+/// when both were turned off together.
 #[test]
-fn test_the_routes_are_compared_at_every_level_but_o0() {
-    for (level, on) in [("-O0", false), ("-O1", true), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)] {
+fn test_the_routes_are_compared_from_o2() {
+    for (level, on) in
+        [("-O0", false), ("-O1", false), ("-Og", false), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)]
+    {
         assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
         assert_eq!(
             pipeline(&[level, "-fno-allocation-search"]).compares_routes(),
@@ -96,7 +104,9 @@ fn each_level_selects_gcc_s_passes() {
     };
     let scalar = [true; 5];
     assert!(!pipeline(&["-O0"]).optimize);
-    assert_eq!(row("-O1"), (scalar, true, true, false, false, true, false, false, false, true));
+    // -O1 has gcc's `-finline-functions-called-once` and no
+    // `-finline-small-functions`.
+    assert_eq!(row("-O1"), (scalar, true, false, false, false, true, false, false, false, true));
     assert_eq!(row("-O2"), (scalar, true, true, true, true, true, false, false, false, true));
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
@@ -114,7 +124,7 @@ fn each_level_selects_gcc_s_passes() {
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
-        (90, 225, 250)
+        (0, 225, 250)
     );
     let max = pipeline(&["-Omax"]);
     assert_eq!(max.limits, Limits { target_percent: 200, max_unroll_iterations: 64, ..Limits::default() });
