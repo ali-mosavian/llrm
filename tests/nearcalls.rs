@@ -62,7 +62,10 @@ fn test_nib_enters_an_unexported_function_near() {
 
 #[test]
 fn test_basic_enters_a_module_internal_procedure_near() {
-    let source = "DECLARE FUNCTION Down% (n AS INTEGER)\nPRINT Down%(3)\nFUNCTION Down% (n AS INTEGER)\n  IF n = 0 THEN Down% = 0 ELSE Down% = Down%(n - 1) + n\nEND FUNCTION\n";
+    // The argument is read, not constant: `Down%(3)` folds to 6 and the
+    // procedure goes, and `Down%(n - 1) + n` is an accumulator that becomes a
+    // loop in the caller.
+    let source = "DECLARE FUNCTION Down% (n AS INTEGER)\nINPUT k%\nPRINT Down%(k%)\nFUNCTION Down% (n AS INTEGER)\n  IF n = 0 THEN Down% = 0 ELSE Down% = n - Down%(n - 1)\nEND FUNCTION\n";
     let asm = compiled(
         "llrm-qb",
         "near.bas",
