@@ -1448,3 +1448,31 @@ fn the_box_search_of_a_loop_does_not_work_out_the_guards_above_it() {
     let worked = crate::ranger::view_edges() - before;
     assert!(worked < guards, "{worked} edges worked out for a loop under {guards} guards");
 }
+
+/// Which loops hold what each loop starts from was asked of every loop for each
+/// start: N loops in a row asked N^2 times (4x per doubling, 7% of `analysis
+/// bounded` on `branches` at N=2048).
+#[test]
+fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
+    let asked = |loops: usize| {
+        let mut body = String::from("define i16 @f(i16 %n) {\nb0:\n  br label %h1\n\n");
+        for k in 1..=loops {
+            let next = if k < loops { format!("h{}", k + 1) } else { "out".into() };
+            body += &format!(
+                "h{k}:\n  %i{k} = phi i16 [ 0, %{} ], [ %j{k}, %h{k} ]\n  %j{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %j{k}, %n\n  br i1 %c{k}, label %h{k}, label %{next}\n\n",
+                if k == 1 { "b0".into() } else { format!("h{}", k - 1) }
+            );
+        }
+        body += "out:\n  ret i16 %n\n}\n";
+        let parsed = Parsed::new(&body);
+        let unit = parsed.unit();
+        let f = function(&parsed.module, "f");
+        let shape = unit.shape();
+        let before = super::hosts_asked();
+        let touched = std::collections::BTreeSet::from([block(f, "h1")]);
+        super::loops_reached(f, &shape, &touched, &Default::default(), &|_| false);
+        super::hosts_asked() - before
+    };
+    let (small, big) = (asked(32), asked(64));
+    assert!(big <= 2 * small + 64, "{small} -> {big} questions for 32 -> 64 loops");
+}

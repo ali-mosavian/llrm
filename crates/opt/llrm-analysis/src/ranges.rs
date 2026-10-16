@@ -1483,13 +1483,21 @@ pub fn loops_reached(
         })
         .map(|one| one.header)
         .collect();
+    // The loops holding each block, found once from the loops' blocks.
+    let mut holders: HashMap<i64, Vec<i64>> = HashMap::default();
+    for one in loops {
+        for &at in one.body.iter() {
+            HOSTS_ASKED.with(|asked| asked.set(asked.get() + 1));
+            holders.entry(at).or_default().push(one.header);
+        }
+    }
     // What each loop starts from, held by other loops.
-    let hosts: Vec<(i64, Vec<i64>)> = loops
+    let hosts: HashMap<i64, Vec<i64>> = loops
         .iter()
         .map(|one| {
             let held: BTreeSet<i64> = starts(one)
                 .into_iter()
-                .flat_map(|at| loops.iter().filter(move |other| other.body.contains(&at)).map(|other| other.header))
+                .flat_map(|at| holders.get(&at).into_iter().flatten().copied())
                 .filter(|header| *header != one.header)
                 .collect();
             (one.header, held.into_iter().collect())
@@ -1498,9 +1506,7 @@ pub fn loops_reached(
     loop {
         let before = dirty.len();
         for one in loops {
-            let hosted =
-                hosts.iter().any(|(header, held)| *header == one.header && held.iter().any(|at| dirty.contains(at)));
-            if hosted {
+            if hosts[&one.header].iter().any(|at| dirty.contains(at)) {
                 dirty.insert(one.header);
             }
         }
@@ -1514,6 +1520,14 @@ thread_local! {
     static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LOOPS_SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static ORDERS_FOUND: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static HOSTS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many (loop, block) pairs this thread has gone through to find the loops
+/// holding what a loop starts from (`loops_reached`), for a test that the work
+/// is not the loops squared.
+pub fn hosts_asked() -> usize {
+    HOSTS_ASKED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has found the order of a body's blocks to solve
