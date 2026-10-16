@@ -4355,7 +4355,7 @@ impl Selector<'_, '_, '_> {
                 };
                 let nonnegative = interval.low.sign() != num_bigint::Sign::Minus;
                 if signed || nonnegative {
-                    let (low, high) = (needs(&interval.low), needs(&interval.high));
+                    let (low, high) = (needs(&interval.low.to_big()), needs(&interval.high.to_big()));
                     // Every value of the range needs the whole width: the
                     // multiplier is that long, not merely unknown.
                     if nonnegative && low >= width {
