@@ -40,6 +40,7 @@ import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
 import icount  # noqa: E402
+import flatcount  # noqa: E402
 import dosbatch  # noqa: E402
 llrmbin = dosbatch.llrmbin
 import qb32  # noqa: E402
@@ -205,7 +206,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
-            built = qbbuild.one_target(variant.source, work, objects, (*flags, "-g"), qbbuild.FLAT, stem, listing, before=("debug", "codeview"))
+            built = qbbuild.one_target(variant.source, work, objects, (*flags, "-g"), qbbuild.FLAT, stem, listing, before=("debug", "codeview"), image=work / f"{stem}.elf")
             LOADERS[built.exe] = built.files
             return built.exe, listing
         tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
@@ -420,6 +421,23 @@ def net_times(measured: dict) -> dict:
     return {key: value for key, value in measured.items() if key[0] != "startup"}
 
 
+def flat_clocks(key: tuple, image: Path, region: str, instructions: int, cwd: Path) -> dict:
+    """The kernel's 486 clocks, from the emulator that prices the flat image (tools/bench/flatcount.py). The emulator counts every
+    instruction itself; DOSBox's count is the check that it ran the same kernel (within AGREE: DOSBox counts a long REP in slices of its
+    cycle budget, scroll's 58,321 against 21,015), and a price of another run is no price. Reported, not gated."""
+    if instructions > flatcount.LIMIT // 2:
+        print(f"WARNING {key}: no clocks: {instructions} instructions are too many to emulate", file=sys.stderr)
+        return {}
+    ran = flatcount.run(image, region.upper(), cwd)
+    if ran.error or ran.region is None:
+        print(f"WARNING {key}: no clocks: {ran.error}", file=sys.stderr)
+        return {}
+    if not flatcount.agrees(ran.region.instructions, instructions):
+        print(f"WARNING {key}: no clocks: the emulator counted {ran.region.instructions} instructions, DOSBox {instructions}", file=sys.stderr)
+        return {}
+    return {"clocks": ran.region.clocks}
+
+
 def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
     """The flat target's programs, each run on its own in DOSBox on virtual time with the emulator counting by function from the
     program's link map: `instructions` are the kernel's own, its entry to its return and what it called, as the real-mode
@@ -429,7 +447,8 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
     work.mkdir(parents=True, exist_ok=True)
 
     def one(item):
-        key, (stem, exe, obj, want, needed, listing, region) = item
+        key, (stem, exe, obj, want, needed, listing, region, *more) = item
+        image = more[0] if more else None  # the ELF the emulator prices; a row without one has no clocks
         if needed and "skip" in needed:
             return key, {"error": "skipped: " + needed["skip"]}
         ran = qbbuild.run(
@@ -446,7 +465,7 @@ def measure_flat(flat: dict, work: Path) -> dict[tuple[str, str, str], dict]:
         if not ran.sized.get(region.upper()):
             print(f"WARNING {key}: {region} has no length in the image's debug info, so code after it that no symbol names is counted in it", file=sys.stderr)
         data, bss = sizes.data_bytes(obj)
-        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
+        return key, {"instructions": ran.inclusive[region.upper()], "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss} | (flat_clocks(key, image, region, ran.inclusive[region.upper()], work / f"{stem}-{key[2]}") if image else {})
 
     with ThreadPoolExecutor() as pool:
         found = dict(pool.map(one, flat.items()))
@@ -494,7 +513,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             continue
         exe, listing = (folder / f"{stem}.exe", folder / f"{stem}.map") if variant.language in BASIC_LANGUAGES else result
         if variant.language == FLAT:
-            flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region)
+            flat[key] = (stem, exe, folder / f"{stem}.{qbbuild.FLAT}.obj", expected_output(directory), timing_input(variant, directory), listing, variant.region, folder / f"{stem}.elf")
             if directory == STARTUP:
                 plain[key] = exe
             else:
@@ -715,7 +734,7 @@ def clock_lines(measured: dict, selected: list[str]) -> list[str]:
     lines = []
     for (name, language, opt), got in sorted(measured.items()):
         if name in selected and language in (*LANGUAGES, *BASIC_LANGUAGES) and "clocks" in got:
-            lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions, {got['memory_operands']} memory operands")
+            lines.append(f"{name} {language} -{opt}: {got['clocks']} clocks, {got['instructions']} instructions" + (f", {got['memory_operands']} memory operands" if "memory_operands" in got else ""))
     return lines
 
 

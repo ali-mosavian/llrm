@@ -32,6 +32,8 @@ built here), and BC refuses the VBDOS-style `FUNCTION f (a AS INTEGER) AS LONG` 
 program a reference cannot build has no row, and the geomean covers the programs both sides have (`n=`).
 BCC runs at `-3`, llrm and Open Watcom at 486.
 
+The flat target (`bq32`) is counted by DOSBox, and its clocks come from `flatcount.py`: the same objects linked again as an ELF (`dosbatch.link_target(image=)`), run in unicorn from the program's entry with the DPMI and DOS calls its start-up makes answered, and priced by vsgcc's table over the kernel's instructions. The row has clocks only where the emulator's instruction count is DOSBox's (within 0.5% or 64: DOSBox counts a long REP in slices of its cycle budget, `scroll` reads 58,321 there and 21,015 here).
+
 BASIC is built on `llrm-qb`'s own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. `--runtime-frames` is not benchmarked.
 
 ## Against the base
