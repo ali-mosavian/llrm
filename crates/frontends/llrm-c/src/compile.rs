@@ -169,8 +169,9 @@ struct Args {
     /// The target, whose OS layer header a program that includes it is given
     /// (`os_header_directory`).
     target: std::rc::Rc<dyn llrm_target::Target>,
-    /// Watcom switches the program opts into, passed to wccq: -oa, -on.
-    watcom: Vec<&'static str>,
+    /// Watcom switches the program opts into, passed to wccq: -oa, -on, and
+    /// the preprocessor's -D and -U as its `-d` and `-u`.
+    watcom: Vec<String>,
     /// The target, the built-in DOS on a 386 unless `--machine` names
     /// another, and the pipeline.
     codegen: llrm_core::driver::Options,
@@ -282,7 +283,9 @@ impl Profile {
             long_double_bytes: 0,
             cdecl: text(abi, "cdecl")?,
             registers: text(abi, "registers")?,
-            header: text(frontend, "header")?,
+            // A family may state its own, as Open Watcom's, which has nothing
+            // of Borland's to undo.
+            header: text(abi, "header").or_else(|_| text(frontend, "header"))?,
             interrupt_parameters,
         })
     }
@@ -386,8 +389,19 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
             // Watcom's: relaxed alias checking; relaxed floating point.
-            "-oa" => watcom.push("-oa"),
-            "-on" => watcom.push("-on"),
+            "-oa" => watcom.push("-oa".to_owned()),
+            "-on" => watcom.push("-on".to_owned()),
+            // The value is joined (`-DX=1`) or the next argument (`-D X=1`).
+            "-D" | "-U" => {
+                let text = value(argument)?;
+                watcom.push(format!("-{}{text}", argument[1..].to_lowercase()));
+            }
+            // The language standard, as the front end's `-zastd=`.
+            flag if flag.starts_with("-std=") => watcom.push(format!("-zastd={}", &flag[5..])),
+            flag if flag.starts_with("-I") => include.push(flag[2..].to_owned()),
+            flag if flag.starts_with("-D") || flag.starts_with("-U") => {
+                watcom.push(format!("-{}{}", flag[1..2].to_lowercase(), &flag[2..]));
+            }
             flag if flag.starts_with('-') && flag.len() > 1 => {
                 return Err(format!("unrecognized arguments: {flag}"));
             }
@@ -453,7 +467,7 @@ pub fn main(argv: &[String]) -> i32 {
                     .map(|(name, address)| format!("-dPHYSICAL_{}=0x{address:X}UL", name.to_uppercase()))
                     .collect();
                 let switches: Vec<&str> =
-                    args.watcom.iter().copied().chain(defines.iter().map(String::as_str)).collect();
+                    args.watcom.iter().map(String::as_str).chain(defines.iter().map(String::as_str)).collect();
                 let profile =
                     Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).map_err(hir::Unsupported)?;
                 let record =
@@ -700,6 +714,63 @@ mod tests {
         let listing = llrm_core::backend::masm::text(&built).unwrap();
         let start = listing.find(&format!("{function} proc")).expect("the function");
         listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
+    }
+
+    /// `-DNAME=value`, `-UNAME` and `-Idir` were refused as unrecognized arguments, so
+    /// no source that selects its code by a macro the build sets (a library's
+    /// `-D__DOS__`) could be compiled. The front end must see them.
+    #[test]
+    fn test_defines_and_undefines_reach_the_front_end() {
+        let argv: Vec<String> = ["-DA=3", "-D", "B", "-UC", "-U", "D", "-Idir", "-I", "other", "x.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        assert_eq!(args.watcom, ["-dA=3", "-dB", "-uC", "-uD"]);
+        assert_eq!(args.include, ["dir", "other"]);
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("d.c");
+        std::fs::write(&source, "#ifndef WANTED\n#error WANTED is not defined\n#endif\nint f(void) { return WANTED; }\n")
+            .unwrap();
+        let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
+        assert!(super::recorded_for(&source, &[], false, &[], &profile).is_err(), "premise: -error without -D");
+        let made = super::recorded_for(&source, &[], false, &["-dWANTED=7"], &profile);
+        assert!(made.is_ok(), "{made:?}");
+    }
+
+    /// Open Watcom's own ABI read Borland's header: `__BORLANDC__` was defined,
+    /// `__segment` renamed away, `__STDC__` undone. Open Watcom's `malloc.h`
+    /// (`__segment __seg`) and every clib source with a `__BORLANDC__` branch
+    /// failed or took the wrong one. `-std=c99` is the front end's `-zastd=c99`.
+    #[test]
+    fn test_the_watcom_abi_has_no_borland_names_and_takes_a_language_standard() {
+        let argv: Vec<String> = ["-std=c99", "x.c"].map(str::to_owned).to_vec();
+        assert_eq!(super::parse_args(&argv).unwrap().watcom, ["-zastd=c99"]);
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("w.c");
+        std::fs::write(
+            &source,
+            "#ifdef __BORLANDC__\n#error Borland\n#endif\n#if __STDC_VERSION__ < 199901L\n#error not c99\n#endif\n\
+             int f(__segment s) { return (int)s; }\n",
+        )
+        .unwrap();
+        let watcom = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let made = super::recorded_for(&source, &[], false, &["-zastd=c99"], &watcom);
+        assert!(made.is_ok(), "{made:?}");
+        let borland = super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap();
+        assert!(super::recorded_for(&source, &[], false, &["-zastd=c99"], &borland).is_err(), "premise: Borland's keeps its names");
+    }
+
+    /// The front end predefined the build host's OS: a real-mode program saw
+    /// `__LINUX__` and no `__DOS__`, so every source that picks its system
+    /// calls by them (clib's `handleio`, `file`) took the Linux branch.
+    #[test]
+    fn test_real_mode_sources_see_dos_and_not_the_build_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("os.c");
+        std::fs::write(&source, "#ifndef __DOS__\n#error not DOS\n#endif\n#ifdef __LINUX__\n#error Linux\n#endif\nint x;\n").unwrap();
+        for family in ["cdecl", "watcom", "ia16", "regparm3"] {
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some(family)).unwrap();
+            let made = super::recorded_for(&source, &[], false, &[], &profile);
+            assert!(made.is_ok(), "{family}: {made:?}");
+        }
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object
