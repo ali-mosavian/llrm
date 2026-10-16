@@ -31,14 +31,15 @@ WAIVERS = "tools/bench/waivers"
 
 
 # What changes nothing a count is made of: a commit that touches only these has its parent's counts.
-INERT = {"docs", "editors", ".github", ".zed", ".gitignore", "readme.md", "license", "agents.md", "claude.md"}
+INERT = {"docs", "editors", ".github", ".zed", ".gitignore", "license"}  # and every top-level .md
 
 
 def compiler_key(sha: str, root: Path = ROOT) -> str:
     """What `sha`'s counts depend on, as one name: the hash of its top-level entries but the inert ones (docs, editor files, workflows). The
     key of the cache of a base's counts, so a docs-only commit finds its parent's, where its tree is new."""
     listing = subprocess.run(["git", "ls-tree", sha], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
-    kept = [line for line in listing if line.split("\t", 1)[1].lower() not in INERT]
+    names = [line.split("\t", 1)[1].lower() for line in listing]
+    kept = [line for line, name in zip(listing, names) if name not in INERT and not name.endswith(".md")]
     return hashlib.sha256("\n".join(kept).encode()).hexdigest()[:20]
 
 
