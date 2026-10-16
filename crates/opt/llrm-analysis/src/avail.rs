@@ -196,7 +196,7 @@ thread_local! {
 }
 
 /// How many times this thread has walked for every load, for a test that a
-/// function numbered twice walks once.
+/// function is walked once.
 pub fn walked() -> usize {
     WALKED.with(std::cell::Cell::get)
 }

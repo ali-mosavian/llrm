@@ -14,8 +14,7 @@
 //! certainly run (`_reaches`: in the same block before it, or in a dominating
 //! block), reads the earlier result and is erased. A load is reused only
 //! within its block and only if nothing between the two may write its bytes
-//! (`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
-//! store between them refuses it too.
+//! (`_undisturbed`, from `memoryssa::Accesses`).
 //!
 //! `equal_calls` makes two calls with one callee and arguments one when the
 //! caller's `silent` says they touch no memory: the later takes the earlier's
@@ -23,9 +22,6 @@
 //!
 //! `forwarded` is store-to-load forwarding across blocks: each load that
 //! `avail::forwardable_walk` says a known value serves becomes that value.
-//! `Crossings` answers whether a store lies on some path between the value's
-//! definition and the load, for `avoid_store_crossing`; `Forwarding` keeps the
-//! walk for the second numbering of one function.
 //!
 //! ```text
 //!   before                        after
@@ -261,14 +257,10 @@ pub fn _floating(opcode: &Opcode) -> bool {
 
 /// One operation where two computed the same thing from the same values;
 /// whether any went.
-///
-/// `avoid_store_crossing` keeps a load from being served across a store.
 pub fn subexpressions(
     function: &mut Function,
     accesses: &Accesses,
-    avoid_store_crossing: bool,
     program: Option<&ProgramProxy>,
-    crossed: &std::cell::Cell<bool>,
 ) -> Result<bool, String> {
     let dominance = cfg::Dominance::of(function);
     let order: IndexMap<BlockId, usize> =
@@ -300,20 +292,6 @@ pub fn subexpressions(
             if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses, program)) {
                 candidates.push((here, index, inst));
                 continue;
-            }
-            if loads
-                && instructions[where_ + 1..index]
-                    .iter()
-                    .any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. }))
-            {
-                // The one place `avoid_store_crossing` changes what is
-                // numbered: told, so a caller that runs this both
-                // ways can see when the second way is the first.
-                crossed.set(true);
-                if avoid_store_crossing {
-                    candidates.push((here, index, inst));
-                    continue;
-                }
             }
             let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
                 continue;
@@ -522,34 +500,8 @@ pub fn _undisturbed(
     between.iter().all(|&other| llrm_analysis::memoryssa::spares(accesses, program, read, other))
 }
 
-/// The walk's answer for every load in one gvn run, kept for the run's second
-/// numbering of the same function: it does not depend on
-/// `avoid_store_crossing`.
-#[derive(Default)]
-pub struct Forwarding {
-    walked: std::cell::OnceCell<Vec<avail::Forward>>,
-}
-
-impl Forwarding {
-    fn served(
-        &self,
-        unit: &memory::Unit,
-        accesses: &Accesses,
-        want: &IdSet<InstId>,
-    ) -> Vec<avail::Forward> {
-        self.walked.get_or_init(|| avail::forwardable_walk(unit, accesses, want)).clone()
-    }
-}
-
 /// Store-to-load forwarding: each load a known value serves becomes that
 /// value; whether any did. `accesses` are `function`'s as it stands.
-///
-/// `crossed` is set when a value serves a load across a store, the one thing
-/// `avoid_store_crossing` changes: where it is not set the run is the same
-/// either way.
-///
-/// `avoid_store_crossing` keeps a value from serving a load when a store
-/// lies on a path from its definition to the load.
 pub fn forwarded(
     context: &Context,
     layout: &DataLayout,
@@ -558,9 +510,6 @@ pub fn forwarded(
     accesses: &Accesses,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &llrm_analysis::cfg::Shape,
-    avoid_store_crossing: bool,
-    forwarding: &Forwarding,
-    crossed: &std::cell::Cell<bool>,
 ) -> Result<bool, String> {
     let want = function
         .walk()
@@ -571,18 +520,8 @@ pub fn forwarded(
         return Ok(false);
     }
     let unit = memory::Unit::within(context, layout, function, outer).with_registers(registers).with_shape(shape);
-    let crossings = Crossings::of(function, &shape.reaching);
-    // What each block holds is a fact of the instructions `function` has now,
-    // which a caller that runs this twice on one function works out once.
-    let served = forwarding
-        .served(&unit, accesses, &want)
-        .into_iter()
-        .filter(|one| {
-            let crosses = crossings.crosses(one.value, one.at);
-            crossed.set(crossed.get() || crosses);
-            !avoid_store_crossing || !crosses
-        })
-        .collect::<Vec<_>>();
+    // What each block holds is a fact of the instructions `function` has now.
+    let served = avail::forwardable_walk(&unit, accesses, &want);
     if served.is_empty() {
         return Ok(false);
     }
@@ -598,104 +537,16 @@ pub fn forwarded(
     Ok(true)
 }
 
-/// Whether stores lie on paths between instructions, asked many times of one
-/// function: where each instruction is and how many stores each block holds
-/// before each position are found once, and the blocks that reach a block once
-/// for each block asked of. Each ask was a scan of a block for the instruction,
-/// twice, and of the function for what reaches the load: quadratic in a large
-/// function.
-struct Crossings<'f> {
-    function: &'f Function,
-    places: BTreeMap<InstId, (BlockId, i64)>,
-    /// Per block, the stores among its first `n` instructions, at `n`.
-    stores: BTreeMap<BlockId, Vec<u32>>,
-    reaching: &'f cfg::Reaching,
-}
-
-impl<'f> Crossings<'f> {
-    fn of(
-        function: &'f Function,
-        reaching: &'f cfg::Reaching,
-    ) -> Self {
-        let mut places = BTreeMap::new();
-        let mut stores = BTreeMap::new();
-        for &block in function.layout() {
-            let mut counted = vec![0u32];
-            for (index, &inst) in function.block(block).instructions().iter().enumerate() {
-                places.insert(inst, (block, index as i64));
-                counted.push(
-                    counted[index] + u32::from(matches!(function.instruction(inst).opcode, Opcode::Store { .. })),
-                );
-            }
-            stores.insert(block, counted);
-        }
-        Self { function, places, stores, reaching }
-    }
-
-    /// Whether a store lies on some path from `holder`'s definition to `load`,
-    /// or `holder` is defined where no path from it reaches `load` first.
-    fn crosses(
-        &self,
-        holder: Operand,
-        load: InstId,
-    ) -> bool {
-        let function = self.function;
-        let Operand::Value(holder) = holder else {
-            return false;
-        };
-        let source = match function.value(holder).def {
-            ValueDef::Instruction(inst) => self.places[&inst],
-            _ => (function.entry().expect("a body"), -1),
-        };
-        let destination = self.places[&load];
-        let stores_in = |block: BlockId, low: i64, high: i64| {
-            let counted = &self.stores[&block];
-            let (low, high) = (low.max(0) as usize, (high.max(0) as usize).min(counted.len() - 1));
-            low < high && counted[high] > counted[low]
-        };
-        if source.0 == destination.0 {
-            return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
-        }
-        let reaching = self.reaching.to(function, destination.0);
-        if !reaching.contains(&source.0) {
-            return true;
-        }
-        let mut seen = IdSet::new();
-        let mut work = vec![source.0];
-        let mut arrived = false;
-        while let Some(at) = work.pop() {
-            if !reaching.contains(&at) || !seen.insert(at) {
-                continue;
-            }
-            let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
-            if stores_in(at, low, high) {
-                return true;
-            }
-            if at == destination.0 {
-                arrived = true;
-            } else {
-                work.extend(function.successors(at));
-            }
-        }
-        !arrived
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
     use llrm_analysis::memory::Unit;
     use llrm_analysis::memoryssa::Accesses;
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::module::Module;
-    use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-    use llrm_mir::opcode::Opcode;
     use llrm_mir::passes::Outer;
     use llrm_support::hash::IndexMap;
 
-    use super::{_trivial_phis, Crossings, forwarded, subexpressions};
+    use super::{_trivial_phis, forwarded, subexpressions};
     use crate::testing::{f, parsed, printed, results};
 
     /// `module`'s @f numbered.
@@ -708,7 +559,7 @@ mod tests {
             &IndexMap::default(),
         )
         .unwrap();
-        subexpressions(f(module), &accesses, false, None, &std::cell::Cell::new(false)).unwrap()
+        subexpressions(f(module), &accesses, None).unwrap()
     }
 
     /// `text` numbered: its printed form, and whether anything went. What
@@ -767,16 +618,13 @@ b0:
                 &IndexMap::default(),
             )
             .unwrap();
-            subexpressions(f(&mut module), &accesses, false, program, &std::cell::Cell::new(false)).unwrap()
+            subexpressions(f(&mut module), &accesses, program).unwrap()
         };
         assert!(reused(true) && !reused(false));
     }
 
     /// `text`'s @f forwarded, printed; what it returns for `XY` stays.
-    fn forwarded_of(
-        text: &str,
-        avoid_store_crossing: bool,
-    ) -> String {
+    fn forwarded_of(text: &str) -> String {
         let before = parsed(text);
         let mut module = before.clone();
         let (layout, outer) = (llrm_analysis::testing::layout(&module), Outer::of(&module, None));
@@ -794,19 +642,7 @@ b0:
             context, &layout, function, &outer,
         )));
         let shape = llrm_analysis::cfg::Shape::of(function);
-        let changed = forwarded(
-            context,
-            &layout,
-            function,
-            &outer,
-            &accesses,
-            &registers,
-            &shape,
-            avoid_store_crossing,
-            &super::Forwarding::default(),
-            &std::cell::Cell::new(false),
-        )
-        .unwrap();
+        let changed = forwarded(context, &layout, function, &outer, &accesses, &registers, &shape).unwrap();
         let text = printed(&module);
         assert_eq!(changed, text != printed(&before), "{text}");
         assert_eq!(results(&module, XY), results(&before, XY), "{text}");
@@ -830,7 +666,6 @@ b0:
   ret i16 %r
 }
 ",
-            false,
         );
         assert!(
             text.contains(
@@ -856,20 +691,18 @@ b0:
 }
 ";
 
-    /// A store to another cell leaves the value held; `avoid_store_crossing`
-    /// declines to hold it across one.
+    /// A store to another cell leaves the value held.
     #[test]
-    fn test_a_value_crosses_a_store_only_when_allowed() {
+    fn test_a_value_crosses_a_store_to_another_cell() {
         for store in ["store i16 %y, ptr %o", "store volatile i16 %y, ptr %o"] {
             let text = CROSSING.replace("STORE", store);
             assert!(
-                forwarded_of(&text, false).contains(
+                forwarded_of(&text).contains(
                     "  ret i16 %x
 "
                 ),
                 "{store}"
             );
-            assert_eq!(forwarded_of(&text, true), printed(&parsed(&text)), "{store}");
         }
     }
 
@@ -886,7 +719,7 @@ b0:
                 "{}\ndefine void @h() {{\nb0:\n  store i16 3, ptr @g\n  ret void\n}}\n",
                 CROSSING.replace("STORE", between)
             );
-            assert_eq!(forwarded_of(&text, false), printed(&parsed(&text)), "{between}");
+            assert_eq!(forwarded_of(&text), printed(&parsed(&text)), "{between}");
         }
     }
 
@@ -1369,134 +1202,5 @@ b2:
         _trivial_phis(module.function_mut("f").unwrap().1).unwrap();
         let after = printed(&module);
         assert!(after.matches("phi").count() == 1 && after.contains("add i16 %r, %t"), "{after}");
-    }
-    /// The scan the pass made for every served load (a block searched for the
-    /// instruction twice, the function for what reaches the load), kept
-    /// here as the reference: `Crossings` answers the same for every definition
-    /// and load of a function with a diamond, a loop and stores in every
-    /// block, and finds each position once.
-    fn reference_crosses_store(
-        function: &Function,
-        holder: Operand,
-        load: InstId,
-    ) -> bool {
-        let Operand::Value(holder) = holder else {
-            return false;
-        };
-        let place = |inst: InstId| {
-            let block = function.parent(inst).expect("placed");
-            (
-                block,
-                function.block(block).instructions().iter().position(|&one| one == inst).expect("in its block") as i64,
-            )
-        };
-        let source = match function.value(holder).def {
-            ValueDef::Instruction(inst) => place(inst),
-            _ => (function.entry().expect("a body"), -1),
-        };
-        let destination = place(load);
-        let stores_in = |block: BlockId, low: i64, high: i64| {
-            let instructions = function.block(block).instructions();
-            let range = low.max(0) as usize..(high.max(0) as usize).min(instructions.len());
-            instructions
-                .get(range)
-                .is_some_and(
-                    |run| run.iter().any(|&one| matches!(function.instruction(one).opcode, Opcode::Store { .. })),
-                )
-        };
-        if source.0 == destination.0 {
-            return source.1 >= destination.1 || stores_in(source.0, source.1 + 1, destination.1);
-        }
-        let mut reaching = BTreeSet::from([destination.0]);
-        let mut work = vec![destination.0];
-        while let Some(at) = work.pop() {
-            for parent in function.predecessors(at) {
-                if reaching.insert(parent) {
-                    work.push(parent);
-                }
-            }
-        }
-        if !reaching.contains(&source.0) {
-            return true;
-        }
-        let mut seen = BTreeSet::new();
-        let mut work = vec![source.0];
-        let mut arrived = false;
-        while let Some(at) = work.pop() {
-            if !reaching.contains(&at) || !seen.insert(at) {
-                continue;
-            }
-            let low = if at == source.0 { source.1 + 1 } else { 0 };
-            let high = if at == destination.0 { destination.1 } else { function.block(at).instructions().len() as i64 };
-            if stores_in(at, low, high) {
-                return true;
-            }
-            if at == destination.0 {
-                arrived = true;
-            } else {
-                work.extend(function.successors(at));
-            }
-        }
-        !arrived
-    }
-
-    #[test]
-    fn test_crossings_answer_as_the_scan_for_each_load_did() {
-        let mut module = parsed(
-            "@g = global i16 0
-@h = global i16 0
-
-define i16 @f(i16 %x, i1 %c, i16 %n) {
-b0:
-  %a = load i16, ptr @g
-  store i16 %x, ptr @h
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %b = load i16, ptr @g
-  store i16 %b, ptr @g
-  br label %b3
-
-b2:
-  %d = load i16, ptr @h
-  br label %b3
-
-b3:
-  %i = phi i16 [ 0, %b1 ], [ 0, %b2 ], [ %i2, %b3 ]
-  %e = load i16, ptr @g
-  %i2 = add i16 %i, 1
-  %m = icmp slt i16 %i2, %n
-  store i16 %e, ptr @h
-  br i1 %m, label %b3, label %b4
-
-b4:
-  %r = load i16, ptr @h
-  ret i16 %r
-}
-",
-        );
-        let function = f(&mut module);
-        let reaching = llrm_analysis::cfg::Reaching::default();
-        let crossings = Crossings::of(function, &reaching);
-        let values: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
-        let loads: Vec<_> = function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| matches!(
-                function.instruction(inst).opcode,
-                llrm_mir::opcode::Opcode::Load { .. }
-            ))
-            .collect();
-        assert!(loads.len() >= 5 && values.len() >= 8);
-        for &holder in &values {
-            for &load in &loads {
-                let operand = llrm_mir::module::Operand::Value(holder);
-                assert_eq!(
-                    crossings.crosses(operand, load),
-                    reference_crosses_store(function, operand, load),
-                    "{holder:?} to {load:?}"
-                );
-            }
-        }
     }
 }

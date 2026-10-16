@@ -41,14 +41,14 @@
 //! unknown. A call that may write the bytes, or a store that may overlap, ends
 //! the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 //!
-//! A value held across a store saves a load but lengthens a live range. Where a
-//! load was served across a store the function is numbered twice, once crossing
-//! stores and once avoiding them, and the crossing one stands unless the
-//! careful one prices lower (`profit::motion_price`: work weighted by block
-//! frequency plus the spill forecast against the target's registers). Where
-//! nothing spills the crossing one stands. Trip counts are the proven ones
-//! (`profit::proven_trips`). Without `pre` there is no pricing and a load is
-//! served wherever it is redundant on every path.
+//! A value held across a store saves a load but lengthens a live range. The
+//! function is numbered once and a load is served wherever it is redundant on
+//! every path, across a store or not (gcc's FRE and PRE do not price it
+//! either): a second numbering that kept those loads, priced against the
+//! target's registers, was made for 2,140 of 17,183 runs over the corpus and
+//! chosen in 252, for a median 0.7% of the modelled cost and a static code
+//! size 0.6% larger and executed instructions 0.2 to 0.5% higher on the
+//! programs that run it.
 //!
 //! `EqualCalls` runs the call numbering alone, before `tailrec`, so two equal
 //! calls are one before one of them becomes the loop's next trip (EarlyCSE
@@ -114,13 +114,13 @@
 //! # Runs
 //! `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after
 //! `dse`, before `promote`. Both are on at every optimizing level and are
-//! turned off together by `-fno-gcse`. `Gvn`'s PRE steps and pricing (`pre`)
+//! turned off together by `-fno-gcse`. `Gvn`'s PRE steps (`pre`)
 //! are on from -O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each
 //! runs once per body pass.
 //!
 //! # Needs
 //! [`crate::transform`], [`crate::loadjoins`], `memoryssa::Accesses`,
-//! `alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+//! `alias::PointsTo`, `Summaries` and registers.
 //!
 //! # Keeps
 //! Dominators and loops, unless a join split an edge.
@@ -144,12 +144,10 @@ use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, Preserv
 use llrm_support::hash::IndexMap;
 
 use crate::lcssa::{arms, from_arms, place_phi};
-use crate::profit::{self, OperationCosts};
 use crate::{edges, loadjoins, transform};
 
-/// The single value-reuse pass: scalar GVN and memory-aware PRE. The
-/// target's registers price it (`profit::registers`); none leaves pricing
-/// out. Without `pre` it only eliminates what is redundant on every path
+/// The single value-reuse pass: scalar GVN and memory-aware PRE. Without `pre`
+/// it only eliminates what is redundant on every path
 /// (gcc's `-ftree-fre`, -O1): nothing is inserted to make a partial
 /// redundancy full.
 pub struct Gvn {
@@ -177,24 +175,11 @@ impl FunctionPass for Gvn {
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
-        // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let trips = if !self.pre || !profit::registers(analyses.outer()).priced() {
-            IndexMap::default()
-        } else {
-            let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
-            profit::proven_trips(
-                &memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-                    .with_registers(&registers)
-                    .with_shape(&shape)
-                    .with_counted(&counted),
-                &registers,
-            )
-        };
-        match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre)
-        }) {
+        match accesses
+            .and_then(|accesses| optimized(unit, analyses.outer(), &accesses, pointers?, &registers, &shape, self.pre))
+        {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             Ok(false) => PreservedAnalyses::all(),
@@ -244,8 +229,7 @@ impl FunctionPass for EqualCalls {
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,
-/// `pointers` what each pointer points to, `trips` each loop's proven
-/// trips by latch.
+/// `pointers` what each pointer points to.
 ///
 /// Every edit replaces a value with an equal one and adds no memory
 /// access before `loadjoins`, so `accesses` stays true throughout.
@@ -254,7 +238,6 @@ pub fn optimized(
     outer: &Outer,
     accesses: &Accesses,
     pointers: &PointsTo,
-    trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
     pre: bool,
@@ -269,11 +252,7 @@ pub fn optimized(
     } else {
         registers
     };
-    let (numbered, subexpressed) =
-        // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
-        // load is served wherever it is redundant and nothing is numbered
-        // twice.
-        _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
+    let (numbered, subexpressed) = _numbered(unit, outer, accesses, registers, shape)?;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
@@ -353,104 +332,31 @@ thread_local! {
     static NUMBERINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread has numbered a function (once, or twice where a
-/// load could be served across a store), for a test that a function with no
-/// such load is numbered once.
+/// How many times this thread has numbered a function, for a test that a
+/// function is numbered once whatever it holds across a store.
 pub fn numberings() -> usize {
     NUMBERINGS.with(std::cell::Cell::get)
 }
 
-/// Local numbering, crossing stores only where the whole function prices
-/// lower for it: a provider held across a store saves loads but may spill.
-/// Whether it changed anything, and whether `subexpressions` did.
+/// Local numbering: loads served from stores, equal computations and equal
+/// calls made one. Whether it changed anything, and whether `subexpressions`
+/// did.
 fn _numbered(
     unit: &mut Unit,
     outer: &Outer,
     accesses: &Accesses,
-    costs: &OperationCosts,
-    room: crate::spill::Room,
-    trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
 ) -> Result<(bool, bool), String> {
-    // The walk over the function as it comes in: the same for both runs below,
-    // each of which changes a copy.
-    let forwarding = transform::Forwarding::default();
-    // Whether some load was served across a store: the one thing the second
-    // numbering does differently from the first.
-    let crossed = std::cell::Cell::new(false);
-    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
-        NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
-        let mut function = function.fork();
-        let forwarded = transform::forwarded(
-            unit.context,
-            unit.layout,
-            &mut function,
-            outer,
-            accesses,
-            registers,
-            shape,
-            avoid_store_crossing,
-            &forwarding,
-            &crossed,
-        )?;
-        let subexpressed =
-            transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
-        // Equal calls that touch nothing are one, after the arithmetic that
-        // makes their arguments equal.
-        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
-        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
-    };
-    let crossing = numbered(unit.function, false)?;
-    let price = |one: &Function| {
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
-        profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
-    };
-    // Where no load crossed a store, the second numbering is the first: it is
-    // neither made nor priced.
-    let chosen = if !room.priced() || !crossed.get() {
-        crossing
-    } else {
-        match crossing_price(unit, outer, costs, room, trips, &crossing.0) {
-            // The careful numbering forwards no load crossing one forwards, so
-            // where crossing spills nothing it can only be dearer in work: it
-            // is not made.
-            Some((_, true)) | None => crossing,
-            Some((crossed, false)) => {
-                let careful = numbered(unit.function, true)?;
-                if price(&careful.0).is_some_and(|kept| kept < crossed) { careful } else { crossing }
-            }
-        }
-    };
-    unit.function.adopt(chosen.0);
-    Ok(chosen.1)
-}
-
-/// What `function` costs, as `profit::motion_price` has it, and whether it fits
-/// its registers everywhere: the work is not weighed where it does.
-fn crossing_price(
-    unit: &Unit,
-    outer: &Outer,
-    costs: &OperationCosts,
-    room: crate::spill::Room,
-    trips: &IndexMap<i64, i64>,
-    function: &Function,
-) -> Option<(i64, bool)> {
-    let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, function, Some(trips))?;
-    let forecast = profit::spill_forecast(
-        unit.context,
-        unit.layout,
-        function,
-        costs,
-        room,
-        &|inst| crate::spill::kept_across(outer, unit.context, function, inst),
-        &frequency,
-    )?;
-    if forecast.peak <= 0 {
-        return Some((0, true));
-    }
-    let work = profit::weighted(unit.context, unit.layout, function, outer.callees(), costs, &frequency)?;
-    Some((work + forecast.cost, false))
+    NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
+    let mut function = unit.function.fork();
+    let forwarded = transform::forwarded(unit.context, unit.layout, &mut function, outer, accesses, registers, shape)?;
+    let subexpressed = transform::subexpressions(&mut function, accesses, Some(outer.program()))?;
+    // Equal calls that touch nothing are one, after the arithmetic that makes
+    // their arguments equal.
+    let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
+    unit.function.adopt(function);
+    Ok((forwarded || subexpressed || called, subexpressed || called))
 }
 
 /// Translate simultaneously: an incoming phi value belongs to the prior edge.

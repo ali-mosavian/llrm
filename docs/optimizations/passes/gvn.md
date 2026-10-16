@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:4bc34b84c9f9bc351f9248abf607ef0fce61c9ff3e2cc8accb5fcbc1e055b89b -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:fcb3e0fdb32c939cec19e0041d091535baea72402c9de01def81e2bee221e426 -->
 
 # gvn
 
@@ -46,14 +46,14 @@ its `CallEffects` from `Summaries`; without `Summaries` every callee is
 unknown. A call that may write the bytes, or a store that may overlap, ends
 the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 
-A value held across a store saves a load but lengthens a live range. Where a
-load was served across a store the function is numbered twice, once crossing
-stores and once avoiding them, and the crossing one stands unless the
-careful one prices lower (`profit::motion_price`: work weighted by block
-frequency plus the spill forecast against the target's registers). Where
-nothing spills the crossing one stands. Trip counts are the proven ones
-(`profit::proven_trips`). Without `pre` there is no pricing and a load is
-served wherever it is redundant on every path.
+A value held across a store saves a load but lengthens a live range. The
+function is numbered once and a load is served wherever it is redundant on
+every path, across a store or not (gcc's FRE and PRE do not price it
+either): a second numbering that kept those loads, priced against the
+target's registers, was made for 2,140 of 17,183 runs over the corpus and
+chosen in 252, for a median 0.7% of the modelled cost and a static code
+size 0.6% larger and executed instructions 0.2 to 0.5% higher on the
+programs that run it.
 
 `EqualCalls` runs the call numbering alone, before `tailrec`, so two equal
 calls are one before one of them becomes the loop's next trip (EarlyCSE
@@ -119,13 +119,13 @@ b3:
 ## Runs
 `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after
 `dse`, before `promote`. Both are on at every optimizing level and are
-turned off together by `-fno-gcse`. `Gvn`'s PRE steps and pricing (`pre`)
+turned off together by `-fno-gcse`. `Gvn`'s PRE steps (`pre`)
 are on from -O2, the -O1 level being FRE, and off with `-fno-tree-pre`. Each
 runs once per body pass.
 
 ## Needs
 [`crate::transform`](transform.md), [`crate::loadjoins`](loadjoins.md), `memoryssa::Accesses`,
-`alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+`alias::PointsTo`, `Summaries` and registers.
 
 ## Keeps
 Dominators and loops, unless a join split an edge.

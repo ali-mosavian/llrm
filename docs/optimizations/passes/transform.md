@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:64a706b3b9baf12c23b0a1379d6c566a721a1303a637728c72e891c6aab4eb45 -->
+<!-- src: crates/opt/llrm-transforms/src/transform.rs sha256:b7d5ba41d282f7c2aded34d944e7369647f5af9775156e1afd332d5a61ec2a0a -->
 
 # transform
 
@@ -19,8 +19,7 @@ here. An instruction whose key an earlier one has, where that one has
 certainly run (`_reaches`: in the same block before it, or in a dominating
 block), reads the earlier result and is erased. A load is reused only
 within its block and only if nothing between the two may write its bytes
-(`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
-store between them refuses it too.
+(`_undisturbed`, from `memoryssa::Accesses`).
 
 `equal_calls` makes two calls with one callee and arguments one when the
 caller's `silent` says they touch no memory: the later takes the earlier's
@@ -28,9 +27,6 @@ result where the earlier has certainly run.
 
 `forwarded` is store-to-load forwarding across blocks: each load that
 `avail::forwardable_walk` says a known value serves becomes that value.
-`Crossings` answers whether a store lies on some path between the value's
-definition and the load, for `avoid_store_crossing`; `Forwarding` keeps the
-walk for the second numbering of one function.
 
 ```text
   before                        after

@@ -258,66 +258,6 @@ fn test_gvn_joins_the_values_each_arm_stored() {
     assert_eq!(managed(&volatile), printed(&parsed(&volatile)));
 }
 
-/// `@x` loaded before a loop of `bound` trips and again after a store
-/// inside it, where serving the reload holds `%a` through a point that
-/// then spills. Priced at the conventional ten trips even when proven
-/// one, the reload was always served: a spill for one saved load. The
-/// registers are the target's; gvn used to ignore them. Where `%a` spills
-/// in the loop, each reload of it costs the load it saves.
-#[test]
-fn a_loop_of_proven_trips_prices_the_reload_it_serves() {
-    let text = |bound: &str| {
-        format!(
-            "@x = global i16 0
-@y = global i16 0
-@z = global i16 0
-
-define i16 @f(i16 %n, i16 %p) {{
-b0:
-  %a = load i16, ptr @x
-  store i16 %a, ptr @z
-  br label %b1
-
-b1:
-  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]
-  %more = icmp slt i16 %i, {bound}
-  br i1 %more, label %b2, label %b3
-
-b2:
-  %t1 = mul i16 %i, 3
-  %t2 = mul i16 %i, 5
-  %t3 = add i16 %t1, %t2
-  store i16 %t3, ptr @y
-  %b = load i16, ptr @x
-  store i16 %b, ptr @z
-  %i.next = add i16 %i, 1
-  br label %b1
-
-b3:
-  %q = mul i16 %p, %p
-  %r = add i16 %q, %p
-  ret i16 %r
-}}
-"
-        )
-    };
-    let reloads = |bound: &str, registers: i64| {
-        let before = parsed(&text(bound));
-        let mut module = before.clone();
-        let mut manager = PassManager::default();
-        manager.require::<Summaries>();
-        manager.add(Gvn::default());
-        manager
-            .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
-            .unwrap();
-        let inputs: &[&[i128]] = &[&[0, 1], &[1, 2], &[5, 3]];
-        assert_eq!(results(&module, inputs), results(&before, inputs));
-        printed(&module).contains("%b = load i16, ptr @x")
-    };
-    assert!(reloads("1", 4));
-    assert!(!reloads("%n", 6), "room for %a: serving the reload saves a load per trip");
-}
-
 /// Without `Summaries` required the pass runs, as an LLVM function pass
 /// does without a cached outer result: every call unknown, so less
 /// precise. It panicked.
@@ -734,65 +674,6 @@ fn a_pass_derives_the_shape_of_its_body_once_however_many_loops_it_has() {
     assert!(derived <= 8, "{derived} shapes derived for one pass over a body of {loops} loops");
 }
 
-/// Gvn priced the loops from trip counts it proved for itself, which
-/// `Annotated` had proved already for the same body: 20 sequential loops were
-/// proved 60 times, 20 now. The counts are the manager's, proved once.
-#[test]
-fn a_pass_takes_the_trip_counts_the_manager_proved() {
-    // The check proves them again to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_COUNTED").is_some() {
-        return;
-    }
-    let loops = 20;
-    let mut text = String::from("@y = global i16 0\n\ndefine i16 @f(i16 %n) {\nb0:\n  br label %h0\n\n");
-    for at in 0..loops {
-        let next = if at + 1 == loops { "end".to_owned() } else { format!("h{}", at + 1) };
-        let from = if at == 0 { "b0".to_owned() } else { format!("h{}", at - 1) };
-        text += &format!(
-            "h{at}:\n  %i{at} = phi i16 [ 0, %{from} ], [ %n{at}, %l{at} ]\n  %c{at} = icmp slt i16 %i{at}, 9\n  br i1 %c{at}, label %l{at}, label %{next}\n\nl{at}:\n  %v{at} = load i16, ptr @y\n  store i16 %i{at}, ptr @y\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n"
-        );
-    }
-    text += "end:\n  ret i16 %n\n}\n";
-    let mut module = parsed(&text);
-    let before = llrm_analysis::induction::proved();
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn::default());
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 4, ..Default::default() }))
-        .unwrap();
-    let proved = llrm_analysis::induction::proved() - before;
-    assert!(proved <= loops, "{proved} loops proved for one pass over a body of {loops} loops");
-}
-
-/// A function numbered twice walks once (the walk does not depend on
-/// `avoid_store_crossing`).
-#[test]
-fn a_function_numbered_twice_walks_once() {
-    let text = "@x = global i16 0
-@y = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %p, ptr @y
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-";
-    let mut module = parsed(text);
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn::default());
-    let (walked, numbered) = (llrm_analysis::avail::walked(), super::numberings());
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 1, ..Default::default() }))
-        .unwrap();
-    assert_eq!(super::numberings() - numbered, 2, "the function is numbered both ways");
-    assert_eq!(llrm_analysis::avail::walked() - walked, 1, "the walk ran again for the second numbering");
-}
-
 /// The walk forwards a stored value to its load.
 #[test]
 fn the_walk_alone_forwards_a_stored_value_to_its_load() {
@@ -814,23 +695,23 @@ b0:
     assert!(printed(&module).contains("  store i16 %x, ptr @g\n  ret i16 %x\n"), "{}", printed(&module));
 }
 
-/// A function numbered both ways (crossing stores and not) and priced twice,
-/// 4067 times over QCport and the programs at -O2: 72% of them priced alike and
-/// the second won 2.3%. The ways differ only where a load is served across a
-/// store; where none is, the second numbering is the first and is neither made
-/// nor priced.
+/// A function was numbered a second time, keeping the loads served across a
+/// store, and both numberings priced against the registers: 117 M, 2% of the
+/// -O2 compile of d_faces, for a choice made in 252 of 17,183 runs over the
+/// corpus that raised executed instructions and code size where it ran. One
+/// numbering, and one walk, however few registers there are.
 #[test]
-fn test_a_function_with_no_load_served_across_a_store_is_numbered_once() {
-    let numberings = |text: &str, registers: i64| {
+fn test_a_function_is_numbered_and_walked_once_whatever_it_holds_across_a_store() {
+    let count = |text: &str, registers: i64| {
         let mut module = parsed(text);
         let mut manager = PassManager::default();
         manager.require::<Summaries>();
         manager.add(Gvn::default());
-        let before = super::numberings();
+        let (numbered, walked) = (super::numberings(), llrm_analysis::avail::walked());
         manager
             .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers, ..Default::default() }))
             .unwrap();
-        super::numberings() - before
+        (super::numberings() - numbered, llrm_analysis::avail::walked() - walked)
     };
     let plain = "@x = global i16 0
 @z = global i16 0
@@ -856,37 +737,10 @@ b0:
   ret i16 %r
 }
 ";
-    assert_eq!(numberings(plain, 6), 1, "the second numbering is the first");
-    assert_eq!(numberings(across, 1), 2, "a load served across a store is numbered both ways where crossing spills");
-}
-
-/// Crossing the store is dearer only through the registers it holds a value in:
-/// where the function fits its registers everywhere, the careful numbering
-/// (which keeps the load) can only cost more work, and is not made or priced.
-/// The forecast it needed was 40% of gvn on a 2048-statement function.
-#[test]
-fn a_load_served_across_a_store_is_numbered_once_where_crossing_spills_nothing() {
-    let across = "@x = global i16 0
-@y = global i16 0
-
-define i16 @f(i16 %p) {
-b0:
-  %a = load i16, ptr @x
-  store i16 %p, ptr @y
-  %b = load i16, ptr @x
-  %r = add i16 %a, %b
-  ret i16 %r
-}
-";
-    let mut module = parsed(across);
-    let mut manager = PassManager::default();
-    manager.require::<Summaries>();
-    manager.add(Gvn::default());
-    let before = super::numberings();
-    manager
-        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
-        .unwrap();
-    assert_eq!(super::numberings() - before, 1);
+    for registers in [1, 6] {
+        assert_eq!(count(plain, registers), (1, 1), "{registers} registers");
+        assert_eq!(count(across, registers), (1, 1), "a load served across a store, {registers} registers");
+    }
 }
 
 /// The three kinds of load the deleted availability map forwarded and the
