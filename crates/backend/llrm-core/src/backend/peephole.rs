@@ -1655,11 +1655,11 @@ fn _loaded_scaled_add<'a>(
 fn _loaded_addresses(
     regs: Regs,
     bits: u32,
-    block: &LirBlock,
+    block: &Block,
     flags_dead_out: bool,
     uses: &Counter,
     cpu: &Profile,
-) -> Result<LirBlock, String> {
+) -> Result<Block, String> {
     let dead = _flags_dead_after(regs, bits, block, flags_dead_out);
     let mut insns = block.insns.to_vec();
     let work: Vec<usize> =
@@ -1703,7 +1703,7 @@ fn _loaded_addresses(
     }
     let insns: Vec<_> =
         insns.into_iter().enumerate().filter(|(index, _)| !removed.contains(index)).map(|(_, one)| one).collect();
-    Ok(block.with_insns(insns).into_inner())
+    Ok(block.with_insns(insns))
 }
 
 /// The instructions of `block` after which no arithmetic flag is read,

@@ -96,6 +96,7 @@ pub fn combined(body: &LirBody) -> LirBody {
     let nothing = Semantics { name: Some(String::new()), ..Semantics::new(Operation::Nothing) };
     for block in &mut out.blocks {
         let mut insns = block.insns.to_vec();
+        let mut changed = false;
         let mut pending: Option<(usize, (Mem, i64))> = None;
         for index in 0..insns.len() {
             let one = Arc::clone(&insns[index]);
@@ -122,13 +123,16 @@ pub fn combined(body: &LirBody) -> LirBody {
                     emptied.what = Some(nothing.clone());
                     emptied.symbol = Some(false);
                     insns[index] = Arc::new(emptied);
+                    changed = true;
                     pending = None;
                     continue;
                 }
             }
             pending = current.map(|current| (index, current));
         }
-        block.insns = insns.into();
+        if changed {
+            block.insns = insns.into();
+        }
     }
     out
 }

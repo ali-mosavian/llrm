@@ -4953,3 +4953,24 @@ fn a_pass_that_changes_nothing_returns_every_block_as_it_was() {
         assert!(result.blocks[0].insns.same_as(&input.blocks[0].insns));
     }
 }
+
+/// `addresses` and `storecombine` made a new block of every block, found
+/// nothing or not, so every later reader of block identity (`needs::Contents`)
+/// saw 290 of 290 blocks of d_faces -O1 changed.
+#[test]
+fn test_a_sub_pass_that_finds_nothing_keeps_every_block() {
+    let copy = insn(
+        0,
+        Some((0, 2)),
+        Some(sem(Operation::Move, "mov", vec![rl(RegId::AX, 2)], vec![rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    );
+    let input = body("keep", 0, vec![block(0, vec![Arc::new(copy)], vec![]).into()]);
+    let same = |result: &LirBody| {
+        result.blocks.len() == input.blocks.len()
+            && result.blocks.iter().zip(&input.blocks).all(|(one, two)| one.insns.same_as(&two.insns))
+    };
+    assert!(same(&addresses(&input, "386").unwrap()), "addresses");
+    assert!(same(&crate::backend::storecombine::combined(&input)), "storecombine");
+}
