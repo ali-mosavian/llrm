@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -1322,3 +1322,12 @@ def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     assert cfg["groups"]["perf"] == ["pytest-perf"] and "pytest-perf" not in cfg["groups"]["python"]
     assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
+
+
+def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():
+    """The hosted planner has no counters: pytest-perf was skipped in the plan, so no `perf` group was ever made and the scaling tests ran nowhere."""
+    missing = {"perf": "no counters here"}
+    p = gate.plan(["tools/linkrecipe.py"])
+    assert "pytest-perf" in gate.skipped_steps(p.steps, missing, p.languages)
+    assert "pytest-perf" not in gate.skipped_steps(p.steps, gate.assumed(missing, {"GATE_PLAN_ASSUME": "perf"}), p.languages)
+    assert "GATE_PLAN_ASSUME=perf" in (gate.ROOT / ".github/workflows/ci.yml").read_text()

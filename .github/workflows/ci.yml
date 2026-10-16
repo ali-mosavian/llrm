@@ -65,6 +65,8 @@ jobs:
         run: |
           # A pull request is checked out as its merge with the base: the first parent is the base's tip.
           if [ "${{ github.event_name }}" = pull_request ]; then base=HEAD^1; elif [ "${{ github.ref }}" = refs/heads/main ]; then base=${{ github.event.before }}; else base=origin/main; fi
+          # The planner is a hosted VM with no perf counters; the perf jobs run where there are some, and each job checks for itself.
+          export GATE_PLAN_ASSUME=perf
           json=$(python3 tools/gate/gate.py plan --json --base "$base")
           echo "$json"
           echo "base=$base" >> "$GITHUB_OUTPUT"

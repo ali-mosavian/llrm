@@ -636,6 +636,11 @@ def perf_files() -> list[str]:
     return sorted(f for f, needs in declared_requirements().items() if "perf" in needs)
 
 
+def assumed(missing: dict[str, str], environ) -> dict[str, str]:
+    """`missing` without the capabilities GATE_PLAN_ASSUME names: a plan is for the jobs' runners, not for the host that makes it."""
+    return {c: why for c, why in missing.items() if c not in environ.get("GATE_PLAN_ASSUME", "").split(",")}
+
+
 def python_tests_unusable(missing: dict[str, str], root: Path = ROOT) -> list[str]:
     """Python test files whose own REQUIRES names a capability this host lacks."""
     return sorted(f for f, needs in declared_requirements(root).items() if any(c in missing for c in needs))
@@ -667,7 +672,7 @@ def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
     steps = {"lang": "run", "bin": "integration"}  # the step that runs a language or a cheap test binary
     need = {steps.get(key.split(":")[0], key) if ":" in key else key for key, caps in cfg["requires"].items() if private & set(caps)}
     if any(private & set(caps) for caps in declared_requirements(root).values()):
-        need |= {"pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests"}
+        need |= {"pytest", "pytest-programs", "pytest-quick", "changed-tests"}
     return sorted(one for g, members in cfg["groups"].items() if any(s in p.steps and s in need for s in members) for one in shard_names(g))
 
 
@@ -988,7 +993,10 @@ def main() -> int:
     p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
-    skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
+    missing = missing_capabilities()
+    if args.command == "plan":  # the jobs' runners may have what the planner's host lacks (perf counters); a job checks for itself
+        missing = assumed(missing, os.environ)
+    skipped = skipped_steps(p.steps, missing, p.languages)
     if args.json:
         print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped}))
         return 0
