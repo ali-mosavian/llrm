@@ -876,6 +876,36 @@ mod tests {
         assert!(cdecl.contains("public _main") && !cdecl.contains("main_"), "{cdecl}");
     }
 
+    /// `#pragma aux f "_*"` and `"*"` name a function by their pattern, and
+    /// the register convention's `name_` replaced it: clib's `__CMain` was
+    /// `_CMain_`, and nothing the start-up calls was found.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_pragma_names_a_function_register_convention_or_not() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("names.c");
+        std::fs::write(
+            &source,
+            "void plain(void);\n#pragma aux plain \"*\"\nvoid plain(void) {}\n\
+             void under(void);\n#pragma aux under \"_*\"\nvoid under(void) {}\n\
+             void dunder(void);\n#pragma aux dunder \"__*\"\nvoid dunder(void) {}\n\
+             void unmarked(void) {}\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records names.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm =
+            llrm_core::backend::masm::text(&super::selected(&text, "names", None, &options).unwrap()).unwrap();
+        let mut publics: Vec<&str> = asm.lines().filter_map(|line| line.strip_prefix("public ")).collect();
+        publics.sort_unstable();
+        assert_eq!(publics, ["__dunder", "_under", "plain", "unmarked_"], "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`

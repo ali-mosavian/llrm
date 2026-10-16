@@ -6,6 +6,7 @@ def read(path):
     """{'publics': set, 'externs': set, 'code': bytes, 'data': bytes} of the object at `path`."""
     raw = open(path, "rb").read()
     names, segs = [], []
+    module = ""
     publics, externs = set(), set()
     at = 0
     while at + 3 <= len(raw):
@@ -13,6 +14,8 @@ def read(path):
         body = raw[at + 3 : at + 3 + length - 1]
         at += 3 + length
         wide = kind & 1
+        if kind == 0x80 and not module:
+            module = body[1 : 1 + body[0]].decode("latin1")
         if kind == 0x96:
             i = 0
             while i < len(body):
@@ -48,4 +51,4 @@ def read(path):
                 i += 1 + n + (4 if wide else 2) + 1
     code = sum(s for _, k, s in segs if k.upper() == "CODE")
     data = sum(s for _, k, s in segs if k.upper() != "CODE")
-    return {"publics": publics, "externs": externs, "code": code, "data": data, "segs": segs}
+    return {"module": module, "publics": publics, "externs": externs, "code": code, "data": data, "segs": segs}

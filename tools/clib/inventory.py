@@ -38,6 +38,19 @@ def objects(clib, tag="d16"):
                 yield sub, name, opts.get(name, ""), post.get(name, "")
 
 
+def resolved(text):
+    """The compiler switches in a makefile's `NAME_opts` value: `$($(processor)_option_X)` is `-X`, a
+    `-I"$(clib_dir)/D/h"` is the include directory (`includes`), anything else spelled with a macro is dropped."""
+    found = []
+    for word in text.split():
+        m = re.fullmatch(r"\$\(\$\(processor\)_(?:\$\(model\)_)?option_(\w+)\)", word)
+        if m:
+            found.append("-" + m[1])
+        elif "$" not in word and not word.startswith("-I"):
+            found.append(word)
+    return found
+
+
 def source(clib, sub, name):
     deps = clib / sub / "deps.mif"
     if deps.exists():
@@ -67,7 +80,8 @@ def run(job, args):
     sub, name, opts, post = job
     clib = args.ow / "bld" / "clib"
     src = source(clib, sub, name)
-    record = {"dir": sub, "obj": name, "src": str(src.relative_to(args.ow)) if src else None}
+    record = {"dir": sub, "obj": name, "src": str(src.relative_to(args.ow)) if src else None,
+              "standalone": "-zld" in post.split()}
     if src is None:
         return {**record, "status": "nosource"}
     out = args.out / "obj" / sub / f"{name}.obj"
@@ -75,19 +89,22 @@ def run(job, args):
     started = time.monotonic()
     if args.reference and src.suffix == ".c":
         cmd = [str(args.reference / "bwcc"), "-zq", "-we", "-j", "-zastd=c99", "-zl", "-x", "-xx", "-zam", "-wpx", "-s",
-               "-oabelr", "-om", *args.ref_flags, "-mm", "-nt=_TEXT", "-fpc", "-0", "-bt=dos", *opts.split(), *post.split(),
+               "-oabelr", "-om", *args.ref_flags, "-mm", "-nt=_TEXT", "-fpc", "-0", "-bt=dos", *resolved(opts), *resolved(post),
                *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
         tool = "bwcc"
     elif args.reference:
         cmd = [str(args.reference / "bwasm"), "-q", "-we", "-w8", "-cx", "-ee", "-fpc", "-0", "-mm", "-nt=_TEXT", "-bt=dos",
-               *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
+               *resolved(opts), *resolved(post), *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
         tool = "bwasm"
     elif src.suffix == ".c":
-        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-fobject-format=omf", *args.flags,
+        # The makefile's -os asks for size, for this object alone.
+        size = ["-Os"] if "-os" in resolved(opts) + resolved(post) else []
+        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-fobject-format=omf", *args.flags, *size,
                *includes(args.ow, clib, sub, opts, args.headers), "-o", str(out), str(src)]
         tool = "llrm-c"
     else:
-        cmd = [str(args.jwasm), "-q", "-omf", "-Cp", "-Zg", "-Zm", "-0", "-D__WASM__", "-D__MEDIUM__", "-D__FPC__", "-D__DOS__", "-D_M_I86", "-Fo" + str(out),
+        cmd = [str(args.jwasm), "-q", "-omf", "-Cp", "-Zg", "-Zm", "-0", "-D__WASM__", "-D__MEDIUM__",
+               "-D__FPI87__" if "-fpi87" in resolved(opts) + resolved(post) else "-D__FPC__", "-D__DOS__", "-D_M_I86", "-Fo" + str(out),
                *includes(args.ow, clib, sub, opts, args.headers), str(src)]
         tool = "jwasm"
     done = subprocess.run(cmd, capture_output=True, text=True, cwd=args.out, errors="replace")

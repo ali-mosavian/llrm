@@ -383,9 +383,11 @@ impl Unit {
                 if let Some(pattern) = &entry {
                     symbol.pattern = pattern.clone();
                 }
-            } else if let Some(pattern) =
-                registers.clone().filter(|_| symbol.register_parms && symbol.register_list == self.default_registers)
-            {
+            } else if let Some(pattern) = registers.clone().filter(|_| {
+                // Open Watcom's own spelling of a function in registers is
+                // `*_`; a pragma that gave another (`"*"`, `"_*"`) keeps it.
+                symbol.register_parms && symbol.register_list == self.default_registers && symbol.pattern == "*_"
+            }) {
                 // In its default registers: the convention this ABI states for
                 // them spells it, whatever Open Watcom's was.
                 symbol.pattern = pattern;
