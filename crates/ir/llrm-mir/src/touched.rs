@@ -17,6 +17,7 @@
 
 use crate::context::Context;
 use crate::dense::IdSet;
+use crate::kinds::{self, Kinds, Reads};
 use crate::module::{BlockId, Change, Function, InstId, Mark, Operand, ValueId};
 use crate::opcode::Opcode;
 use crate::types::Type;
@@ -205,6 +206,122 @@ impl Touched {
     ) -> impl Iterator<Item = u32> + '_ {
         let from = self.operand_edits.partition_point(|&(one, _)| one.0 < inst.0);
         self.operand_edits[from..].iter().take_while(move |&&(one, _)| one == inst).map(|&(_, index)| index)
+    }
+
+    /// The classes of instruction the edits touched (added, moved, rewritten,
+    /// erased), and the changes that are no instruction's: a block made or
+    /// erased or an edge changed (`CFG`), the parameters (`SIGNATURE`).
+    pub fn kinds(
+        &self,
+        context: &Context,
+        function: &Function,
+    ) -> Kinds {
+        let mut found = Kinds::NONE;
+        for inst in self.insts.iter().chain(self.erased.iter()) {
+            found = found | kinds::of(context, function, inst);
+        }
+        if !self.blocks_created.is_empty() || !self.blocks_erased.is_empty() || !self.cfg.is_empty() {
+            found = found | Kinds::CFG;
+        }
+        if self.parameters {
+            found = found | Kinds::SIGNATURE;
+        }
+        found
+    }
+
+    /// Whether the edits leave a result of what `reads` declares as it was
+    /// (LLVM's `Result::invalidate`; `Depends::unaffected` in class form): no
+    /// erased instruction held an entry of it or had an effect it models, and
+    /// no instruction added, moved or rewritten, nor any its value reaches, is
+    /// one it models.
+    pub fn leaves(
+        &self,
+        context: &Context,
+        function: &Function,
+        reads: &Reads,
+    ) -> bool {
+        // A block made or erased is seen by every reader that takes `CFG`; an
+        // edge retargeted is the terminator rewritten, a `BRANCH` class change.
+        if (!self.blocks_created.is_empty() || !self.blocks_erased.is_empty()) && reads.kinds.meets(Kinds::CFG) {
+            return false;
+        }
+        if self.parameters && reads.kinds.meets(Kinds::SIGNATURE) {
+            return false;
+        }
+        for inst in self.erased.iter() {
+            let class = kinds::of(context, function, inst);
+            if reads.keyed.meets(class)
+                || (crate::depends::effectful(&function.instruction(inst).opcode) && reads.kinds.meets(class))
+            {
+                return false;
+            }
+        }
+        self.reached(context, function, reads, |_, class| reads.kinds.meets(class)).is_none()
+    }
+
+    /// The blocks holding an instruction an edit touched or reached that
+    /// `reads` models, for a reader that can look at those alone; none where
+    /// it cannot say (the CFG or the signature changed, or an erased
+    /// instruction it models: the blocks of every edit are then the least).
+    pub fn blocks_meeting(
+        &self,
+        context: &Context,
+        function: &Function,
+        reads: &Reads,
+    ) -> Option<IdSet<BlockId>> {
+        if ((!self.blocks_created.is_empty() || !self.blocks_erased.is_empty()) && reads.kinds.meets(Kinds::CFG))
+            || (self.parameters && reads.kinds.meets(Kinds::SIGNATURE))
+        {
+            return None;
+        }
+        let mut blocks = IdSet::<BlockId>::new();
+        if self.erased.iter().any(|inst| {
+            let class = kinds::of(context, function, inst);
+            reads.keyed.meets(class) || reads.kinds.meets(class)
+        }) {
+            blocks.extend(self.blocks.iter());
+        }
+        let mut hit = |inst: InstId| {
+            if let Some(block) = function.parent(inst) {
+                blocks.insert(block);
+            }
+        };
+        let _ = self.reached(context, function, reads, |inst, class| {
+            if reads.kinds.meets(class) {
+                hit(inst);
+            }
+            false
+        });
+        Some(blocks)
+    }
+
+    /// Walks the instructions the edits touched and what their values reach
+    /// (past `reads.stops`), calling `look` with each and its class; the first
+    /// instruction `look` says yes to.
+    fn reached(
+        &self,
+        context: &Context,
+        function: &Function,
+        reads: &Reads,
+        mut look: impl FnMut(InstId, Kinds) -> bool,
+    ) -> Option<InstId> {
+        let mut work: Vec<InstId> = self.insts.iter().collect();
+        let mut seen: IdSet<InstId> = self.insts.clone();
+        while let Some(inst) = work.pop() {
+            if look(inst, kinds::of(context, function, inst)) {
+                return Some(inst);
+            }
+            let (Some(result), Some(stops)) = (function.instruction(inst).result, reads.stops) else { continue };
+            for user in function.users(result) {
+                if stops.meets(kinds::of(context, function, user.user)) {
+                    continue;
+                }
+                if seen.insert(user.user) {
+                    work.push(user.user);
+                }
+            }
+        }
+        None
     }
 
     /// Whether a load, a store or a call was added, removed, moved or

@@ -25,6 +25,15 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
   or loops `Touched::reach` the changes (a change to a terminator or to the
   CFG redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
+- `Reads` (in [`crate::kinds`]) is the same declaration in the vocabulary of
+  instruction classes (`Kinds`: load, store, phi and select each by the class
+  of the value they carry, integer, float, pointer or aggregate; call, gep,
+  cast, arithmetic, branch; a block made or erased; the signature), with the
+  classes whose erasure removes an entry (`keyed`) and the classes a change
+  does not flow past (`stops`). `Touched::leaves(&Reads)` is `Depends::unaffected`
+  in this form, `Touched::kinds` the classes an edit touched, and
+  `Touched::blocks_meeting(&Reads)` the blocks a regional run of a pass looks
+  at. A test holds the class form to the predicate form on a script of edits.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`.
 
