@@ -604,9 +604,11 @@ impl Intrinsic {
             if types.int_bits(*returns) != Some(32) {
                 return Err("Intrinsic has incorrect return type!".to_owned());
             }
+            // The places' addresses first, then the arguments the code finds on
+            // the stack.
             if *variadic
-                || parameters.len() != places.len()
-                || !parameters.iter().all(|one| matches!(types.get(*one), Type::Pointer(_)))
+                || parameters.len() < places.len()
+                || !parameters[..places.len()].iter().all(|one| matches!(types.get(*one), Type::Pointer(_)))
             {
                 return Err("Intrinsic has incorrect argument type!".to_owned());
             }
