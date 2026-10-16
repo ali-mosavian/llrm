@@ -2162,3 +2162,78 @@ impl Held {
 #[cfg(test)]
 #[path = "manager_tests.rs"]
 mod tests;
+
+/// `LLRM_CHECK_ORDER`: some function analyses asked of `function`, each when
+/// a hash of `mix` and its number falls on one in eight. A result a pass reads
+/// must be a function of the body, not of when something first asked; asked
+/// early and left to be kept past the edits after it, an analysis shows it.
+pub fn ask_some(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    analyses: &mut Analyses,
+    mix: u64,
+) {
+    let mut number = 0u64;
+    let mut chosen = || {
+        number += 1;
+        (mix.wrapping_add(number).wrapping_mul(0xD6E8_FEB8_6659_FD93) >> 40) % 8 == 0
+    };
+    if chosen() {
+        analyses.get::<Shape>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ExposedFrames>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PointerValues>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Pointers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Annotated>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<CallEffects>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Writes>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Registers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DemandedBits>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<AssumptionCache>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Followers>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Counted>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<PlainAccesses>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<ThroughMemory>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<FloatFacts>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<DominatedEdges>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<Bounded>(context, layout, function);
+    }
+    if chosen() {
+        analyses.get::<TableLoads>(context, layout, function);
+    }
+    if chosen() {
+        let _ = memoryssa::Accesses::managed(context, layout, function, analyses);
+    }
+}
