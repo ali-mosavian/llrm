@@ -39,7 +39,9 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   folding and value numbering the same way. `Analyses::refresh_soft` drops what
   was kept this way at the start of each round of a fixed point, so the facts are
   worked out afresh once a round. `ThroughMemory` is `SOUND`: on `d_faces` -O1 it is derived 49 times
-  instead of 62 and the compile takes 1.3% fewer instructions.
+  instead of 62 and the compile takes 1.3% fewer instructions. `PointerValues` is `SOUND` too
+  (where a value may point; `covers` is `Provenance::covers`, as a fresh solve may know more):
+  derived 105 times instead of 181, 78.2 -> 54.5 Minstr own, the compile 0.4% fewer instructions.
 - `NAMES_VALUES` with `remapped`: the result holds values (a `MemRef`'s
   pointer or root), not facts keyed by them. Uses replaced by an equal value
   (`Change::Substituted { from, to }`) leave it naming a value that is then

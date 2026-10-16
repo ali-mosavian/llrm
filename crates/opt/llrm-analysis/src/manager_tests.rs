@@ -1255,3 +1255,43 @@ entry:
     let again = analyses.get::<ThroughMemory>(context, &layout, function);
     assert!(!Rc::ptr_eq(&kept, &again), "an operand set to another value kept what was said of it");
 }
+
+/// `PointerValues` was derived again after every edit that touched the
+/// function: `d_faces` -O1 derived it 181 times, 76 of them after edits that
+/// keep every value's meaning. Where a pointer may point stands past those, and
+/// is derived again past an edit that makes a pointer another one.
+#[test]
+fn pointer_values_kept_as_sound_stand_past_edits_that_keep_every_values_meaning() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f(ptr %p, ptr %q, i16 %x) {{
+entry:
+  %a = getelementptr i8, ptr %p, i16 4
+  %b = getelementptr i8, ptr %p, i16 4
+  %c = getelementptr i8, ptr %b, i16 1
+  store i16 %x, ptr %c
+  ret void
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let (context, function) = module.function_mut("f").unwrap();
+    let first = analyses.get::<super::PointerValues>(context, &layout, function);
+    let inst_of = |function: &llrm_mir::module::Function, name: &str| {
+        let value = value(function, name);
+        function.walk().map(|(_, inst)| inst).find(|&inst| function.instruction(inst).result == Some(value)).unwrap()
+    };
+    // %b is %a: found again and replaced, then erased.
+    let (a, b) = (value(function, "a"), inst_of(function, "b"));
+    function.replace_value(value(function, "b"), Operand::Value(a));
+    function.erase(b).expect("unused now");
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    let kept = analyses.get::<super::PointerValues>(context, &layout, function);
+    assert!(Rc::ptr_eq(&first, &kept), "an edit that keeps every meaning derived where the pointers point again");
+    // %a is made from %q: it points elsewhere.
+    let other = Operand::Value(value(function, "q"));
+    function.set_operand(inst_of(function, "a"), 0, other);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    let again = analyses.get::<super::PointerValues>(context, &layout, function);
+    assert!(!Rc::ptr_eq(&kept, &again), "a pointer made another one kept where it was said to point");
+}
