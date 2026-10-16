@@ -1,0 +1,13 @@
+[Unit]
+Description=tinytim CI heartbeat for ali-mosavian/llrm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ghrunner
+ExecStart=/usr/bin/python3 /opt/ghrunner/supervisor.py heartbeat
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=tinytim ephemeral CI runner slot %i for ali-mosavian/llrm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ghrunner
+ExecStart=/usr/bin/python3 /opt/ghrunner/supervisor.py slot %i
+Restart=always
+RestartSec=10
+Delegate=yes
+# AllowedCPUs comes from the drop-in install.sh writes (the slot's two physical cores). Below interactive work.
+CPUWeight=20
+MemoryMax=20G
+TasksMax=8192
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
