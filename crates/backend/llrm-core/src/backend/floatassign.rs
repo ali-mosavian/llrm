@@ -661,7 +661,7 @@ fn _stacked(
         placement.add_links(&links);
         placement.scan();
         placement.iterate();
-        for bundle in placement.finish() {
+        for bundle in placement.finish().iter() {
             stacked.entry(bundle).or_default().insert(value);
         }
     }

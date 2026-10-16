@@ -101,6 +101,16 @@ impl<K: Dense> IdSet<K> {
         self.len = 0;
     }
 
+    /// Takes the greatest member out (a worklist that works from the top, as
+    /// `BTreeSet::pop_last`).
+    pub fn pop_last(&mut self) -> Option<K> {
+        let (at, word) = self.words.iter().enumerate().rfind(|(_, word)| **word != 0)?;
+        let bit = 63 - word.leading_zeros() as usize;
+        self.words[at] &= !(1 << bit);
+        self.len -= 1;
+        Some(K::at(at * 64 + bit))
+    }
+
     /// The members, ascending.
     pub fn iter(&self) -> impl Iterator<Item = K> + '_ {
         self.words
@@ -858,5 +868,30 @@ mod share_tests {
         one.insert(3, 99);
         assert!(!one.same(&two));
         assert_eq!(std::thread::spawn(move || two.get(&3).copied()).join().unwrap(), Some(3));
+    }
+
+    /// A worklist that works from the top takes the greatest id out each time,
+    /// as `BTreeSet::pop_last` does, and allocates nothing once the set is
+    /// sized.
+    #[test]
+    fn pop_last_takes_the_greatest_member_out_as_a_btree_set_does() {
+        use super::IdSet;
+        let ids = [3_usize, 64, 65, 500, 7, 4095];
+        let mut set: IdSet<usize> = ids.iter().copied().collect();
+        let mut tree: std::collections::BTreeSet<usize> = ids.iter().copied().collect();
+        loop {
+            let (one, other) = (set.pop_last(), tree.pop_last());
+            assert_eq!(one, other);
+            assert_eq!(set.len(), tree.len());
+            if one.is_none() {
+                break;
+            }
+            // Pushing back below the top keeps both in step.
+            if tree.len() == 3 {
+                set.insert(10);
+                tree.insert(10);
+            }
+        }
+        assert!(set.is_empty() && IdSet::<usize>::new().pop_last().is_none());
     }
 }
