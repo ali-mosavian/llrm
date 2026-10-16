@@ -24,7 +24,7 @@
 //!   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
 //!   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
 //!     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>gvn dse promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+//!     rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>indvars gvn dse promote<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
 //!     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
 //!     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
 //!     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -240,10 +240,11 @@ pub struct Options {
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
     pub exhaustive: bool,
-    /// How many rounds of the body's passes run at most. A round after the
-    /// third found nothing on the 71 programs of the vsgcc tables and
-    /// QCport (the objects are the same), and the fourth and fifth of
-    /// d_faces were 354 Minstr; -Omax runs to the fixed point. A round that
+    /// How many rounds of the body's passes run at most. With `indvars` and
+    /// `dse` placed as clang places them, a fourth round found nothing on the
+    /// 71 programs of the vsgcc tables or on d_faces at -O2 and -Os (the
+    /// objects are the same) and cost 143 Minstr of d_faces -O2; -O3 and
+    /// -Omax keep the fourth and the fixed point. A round that
     /// follows an unroll which changed the body runs past the budget, to clean
     /// the straight line it made.
     pub rounds: usize,
@@ -347,6 +348,7 @@ impl Options {
     /// `-fpeel-loops` only).
     pub fn standard() -> Self {
         Self {
+            rounds: 3,
             limits: Limits { grows: false, ..Self::default().limits },
             peel: false,
             unswitch: false,
@@ -404,6 +406,7 @@ impl Options {
     /// clone that folds away.
     pub fn size() -> Self {
         Self {
+            rounds: 3,
             limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default().for_size(),
             for_size: true,
@@ -512,6 +515,13 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before gvn: a far pointer cast from a near one is read as the near
         // one.
         Box::new(inferspace::InferAddressSpaces),
+        // Before gvn, as clang's IndVarSimplify is in the loop passes that
+        // precede its GVN (L760-L787): the exit values it makes constant are
+        // numbered in the same round, not the next.
+        Box::new(indvars::IndVars {
+            exit_values: false,
+            unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+        }),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // After the values are numbered, as clang's DSE follows its GVN and
         // MemCpyOpt (PassBuilderPipelines.cpp,
@@ -521,10 +531,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dse::Dse),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
-        Box::new(indvars::IndVars {
-            exit_values: false,
-            unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
-        }),
         Box::new(algebraic::Algebraic { size: applied.options.prefers_size() }),
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),

@@ -1098,7 +1098,7 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
         count.get()
     };
     let runs = |rounds: usize| through(pipeline::Options { rounds, ..pipeline::Options::standard() });
-    assert_eq!(runs(4), 4, "the budget ends the rounds");
+    assert_eq!(runs(3), 3, "the budget ends the rounds");
     assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
     // -O1 ran four rounds, the third of which changed five passes of d_faces
     // and the fourth none: 253 of 3,084 Minstr for the rounds after the
@@ -1106,9 +1106,9 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
     // clocks).
     assert_eq!(through(pipeline::Options::basic()), 2, "-O1 runs two rounds");
     assert_eq!(pipeline::Options::basic().rounds, 2);
-    assert_eq!(pipeline::Options::standard().rounds, 4);
+    assert_eq!(pipeline::Options::standard().rounds, 3);
     assert_eq!(pipeline::Options::speed().rounds, 4);
-    assert_eq!(pipeline::Options::size().rounds, 4);
+    assert_eq!(pipeline::Options::size().rounds, 3);
     assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
 }
 
@@ -1419,4 +1419,17 @@ fn dse_follows_gvn_in_the_round() {
     let at =
         |name: &str| order.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} is not in {order:?}"));
     assert!(at("gvn") < at("dse"), "{order:?}");
+}
+
+/// `indvars` ran after `gvn`: a loop-exit value it made constant was numbered a
+/// round later, with the single-entry phi it left, and d_faces -O2 needed a
+/// fourth round for the chain that follows (`fold`, `decide`, `lcssa`, `gvn`).
+/// As clang's IndVarSimplify precedes its GVN (PassBuilderPipelines.cpp
+/// L760-L787).
+#[test]
+fn indvars_precedes_gvn_in_the_round() {
+    let order = pipeline::passes();
+    let at =
+        |name: &str| order.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} is not in {order:?}"));
+    assert!(at("indvars") < at("gvn"), "{order:?}");
 }
