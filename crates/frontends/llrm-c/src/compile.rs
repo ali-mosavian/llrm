@@ -1161,6 +1161,24 @@ mod tests {
         assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 
+    /// Every module's code was in `<MODULE>_TEXT`, so a near call between
+    /// modules (clib's `__set_errno_dos`, declared near) reached into another
+    /// segment. `-mcode-segment=_TEXT` puts them all in one.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_segment_may_be_named_for_every_module() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("one.c");
+        std::fs::write(&source, "int one(void) { return 1; }\n").unwrap();
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "one.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records one.c");
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "one", None, &args.codegen).unwrap()).unwrap();
+        assert!(asm.lines().any(|one| one == ".code _TEXT"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
