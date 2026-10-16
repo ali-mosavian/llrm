@@ -32,6 +32,16 @@ impl Dense for usize {
     }
 }
 
+/// A block's address (`cfg::id`): its position in the function, never negative.
+impl Dense for i64 {
+    fn index(self) -> usize {
+        usize::try_from(self).expect("a dense address is not negative")
+    }
+    fn at(index: usize) -> Self {
+        i64::try_from(index).expect("an id fits i64")
+    }
+}
+
 /// A set of ids, a bit each.
 #[derive(Clone)]
 pub struct IdSet<K> {
@@ -99,6 +109,57 @@ impl<K: Dense> IdSet<K> {
     pub fn clear(&mut self) {
         self.words.fill(0);
         self.len = 0;
+    }
+
+    /// Whether every member of this set is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.words.iter().enumerate().all(|(at, word)| word & !other.words.get(at).copied().unwrap_or(0) == 0)
+    }
+
+    /// Whether no member is in both.
+    pub fn is_disjoint(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.words.iter().zip(&other.words).all(|(one, two)| one & two == 0)
+    }
+
+    /// Removes and returns the least member.
+    pub fn pop_first(&mut self) -> Option<K> {
+        let (at, word) = self.words.iter_mut().enumerate().find(|(_, word)| **word != 0)?;
+        let bit = word.trailing_zeros() as usize;
+        *word &= *word - 1;
+        self.len -= 1;
+        Some(K::at(at * 64 + bit))
+    }
+
+    /// The members not in `other`, ascending.
+    pub fn difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> impl Iterator<Item = K> + 'a {
+        self.iter().filter(|key| !other.contains(key))
+    }
+
+    /// Adds every member of `other`; whether any was new.
+    pub fn union_with(
+        &mut self,
+        other: &Self,
+    ) -> bool {
+        if self.words.len() < other.words.len() {
+            self.words.resize(other.words.len(), 0);
+        }
+        let mut len = 0;
+        for (at, word) in self.words.iter_mut().enumerate() {
+            *word |= other.words.get(at).copied().unwrap_or(0);
+            len += word.count_ones() as usize;
+        }
+        let grew = len != self.len;
+        self.len = len;
+        grew
     }
 
     /// Only the members `keep` says to.
