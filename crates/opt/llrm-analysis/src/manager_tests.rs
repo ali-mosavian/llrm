@@ -1333,4 +1333,3 @@ b0:
         "what was brought up to date is what deriving it afresh gives"
     );
 }
-
