@@ -70,7 +70,9 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 | Option | Does |
 |---|---|
-| `-I DIR`, `--include DIR` | Add an include directory |
+| `-I DIR`, `-IDIR`, `--include DIR` | Add an include directory |
+| `-DNAME[=VALUE]`, `-UNAME` | Define or undefine a macro (`-D NAME` too) |
+| `-std=c99` | The language standard, the front end's `-zastd=` |
 | `-oa` | Open Watcom's relaxed alias checking: an object whose address is never taken is unaliased |
 | `-on` | Open Watcom's relaxed floating point |
 | `--dump DIR` | Write every stage to `DIR` |
@@ -82,7 +84,7 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 The shared options of `llrm-qb`, `llrm-c` and `llrm-nib` apply: `-O0` to
 `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`,
-`-m[no-]stack-is-data`, `-m[no-]far-bss`, `-m[no-]bss-begin` (an empty `BSSB` segment
+`-m[no-]stack-is-data`, `-m[no-]far-bss`, `-mcode-segment=NAME` (every module's code in the one segment, as Open Watcom's `-nt=`), `-m[no-]bss-begin` (an empty `BSSB` segment
 ahead of each object's `_BSS`, where a start-up zeroes from it, as the QB runtime's does), `--machine`, `-fstack-usage` and
 `-Wstack-usage`. `llrm-c --help` prints the full list.
 
