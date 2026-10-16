@@ -2166,6 +2166,7 @@ pub fn bounded_solved(
             &predecessors,
             &positions,
             &operations,
+            &loop_.body,
         );
         let boxes = inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?;
         if !counted && boxes.is_empty() {
