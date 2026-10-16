@@ -4,7 +4,7 @@
     inventory.py --ow SRC --out DIR [--model mm] [--only SUBSTR] [-j N]
 
 The object list is the library's own (`objects.mif` tags, `deps.mif` sources), the
-flags are `flags.mif`'s. See docs/working/clib-build.md.
+flags are `flags.mif`'s. See docs/frontends/c/clib.md.
 """
 import argparse
 import json

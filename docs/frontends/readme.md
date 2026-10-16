@@ -8,6 +8,7 @@ input to MIR, which the shared optimizer and backend take from there.
 | `llrm-qb` | QuickBASIC, QBasic, PDS and VBDOS source, QuickrBASIC | [qb](qb/readme.md) |
 | `llrm-nib` | Nib source | [nib](nib/readme.md) |
 | `llrm-c` | C source, through Open Watcom's front end | [c](c/readme.md) |
+| `llrm-c`, the library | Open Watcom's clib built by `llrm-c` | [clib](c/clib.md) |
 | `llrm-omf` | Microsoft BASIC compiler objects | [bc](bc.md) |
 
 Each frontend's calling conventions are in [abi](../abi/readme.md).

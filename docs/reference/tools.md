@@ -25,6 +25,7 @@ name them in an environment variable, listed in the tool's header.
 | `debug-gate.env` | Source it before the tests so a missing debugger tool fails a debug-information test instead of skipping it |
 | `llrmbin.py` | Where the built binaries are |
 | `linkrecipe.py` | A target's link recipe, read from its `object.toml` |
+| `clib/` | Open Watcom's clib built by `llrm-c`: inventory, headers, library, comparison with the pinned compiler's, the library's own tests ([clib](../frontends/c/clib.md)) |
 | `dosbatch/dosbatch.py` | Many programs, one DOSBox-X launch: build, run each under a time budget, read what it printed |
 | `dosbatch/cpulimit.py`, `dosbatch/conftest.py` | A host command stopped by CPU seconds; the slow DOS tier (`-m slow_dos` or `LLRM_DOS_SLOW=1`) |
 | `dosbatch/corpus.py` | Corpora too big for the tree: fetched once, cached, verified against a pinned SHA-256 |

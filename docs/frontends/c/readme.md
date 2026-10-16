@@ -36,7 +36,7 @@ The front end does the parsing, type checking, constant folding and struct
 layout; `cgshim.c` records what it asks of its code generator, and nothing
 generates code there. What the stream carries and what `llrm-c` does with it
 is in [the front end contract](ow-contract.md). `llrm-c` also accepts a
-recorded stream (`.cgs`) as its input.
+recorded stream (`.cgs`) as its input. Open Watcom's C library built by it: [clib](clib.md).
 
 ## Targets and ABI
 
