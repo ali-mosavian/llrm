@@ -203,3 +203,19 @@ fn a_retargeted_branch_is_a_change_of_the_cfg_in_the_reach() {
     f.set_operand(br, 1, Operand::Block(join));
     assert!(f.touched_since(mark).expect("history").reach(f).cfg_changed());
 }
+
+/// An operand replaced: the digest names the value it read before as well as
+/// the one it reads now, and the instruction's own result. The pressure update
+/// kept a private list of these.
+#[test]
+fn a_replaced_operand_names_the_value_it_read_and_the_one_it_reads() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (x, result) = named(f, "x");
+    let a = f.parameters()[0];
+    let c = f.parameters()[1];
+    let mark = f.mark();
+    f.set_operand(x, 0, Operand::Value(c));
+    let touched = f.touched_since(mark).expect("history");
+    assert_eq!(touched.named.iter().collect::<std::collections::BTreeSet<_>>(), [a, c, result].into_iter().collect());
+}

@@ -63,6 +63,10 @@ pub struct Touched {
     /// Instructions added, moved or rewritten since the mark and still there:
     /// where `reach` starts.
     pub insts: IdSet<InstId>,
+    /// The results and operands of the instructions added, erased, moved,
+    /// cloned or rewritten, and the operands an edit replaced: every value
+    /// whose reads or definition an edit touched.
+    pub named: IdSet<ValueId>,
     /// A terminator was added, erased or moved.
     pub terminators_made: bool,
     /// A terminator was rewritten (it may name the same blocks).
@@ -332,6 +336,7 @@ impl Function {
                     }
                 }
                 Change::Operand { inst, .. } | Change::Operands { inst, .. } => {
+                    out.blocks.extend(self.parent(inst));
                     if let Some(result) = self.instruction(inst).result {
                         out.operands_changed.insert(result);
                     }
@@ -414,16 +419,37 @@ impl Function {
                 !all.contains(&(from, to, opposite))
             })
             .collect();
+        let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
+            let one = self.instruction(inst);
+            named.extend(one.result);
+            for operand in &one.operands {
+                if let Operand::Value(value) = operand {
+                    named.insert(*value);
+                }
+            }
+        };
         for change in changes {
-            match *change {
+            match change {
                 Change::Inserted { inst, .. }
                 | Change::Erased { inst, .. }
                 | Change::Moved { inst, .. }
                 | Change::Cloned { to: inst, .. } => {
-                    out.terminators_made |= self.instruction(inst).opcode.is_terminator();
+                    out.terminators_made |= self.instruction(*inst).opcode.is_terminator();
+                    name_inst(&mut out.named, *inst);
                 }
                 Change::Rewritten(inst) => {
-                    out.terminators_rewritten |= self.instruction(inst).opcode.is_terminator();
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
+                    name_inst(&mut out.named, *inst);
+                }
+                Change::Operand { was: Operand::Value(value), .. } => {
+                    out.named.insert(*value);
+                }
+                Change::Operands { was, .. } => {
+                    for operand in was.iter() {
+                        if let Operand::Value(value) = operand {
+                            out.named.insert(*value);
+                        }
+                    }
                 }
                 _ => {}
             }
