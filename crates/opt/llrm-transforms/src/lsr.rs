@@ -621,7 +621,7 @@ pub fn reduced(
 
 /// The blocks of `function` and where each goes.
 fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
-    function.layout().iter().map(|&block| (block, function.successors(block))).collect()
+    function.layout().iter().map(|&block| (block, function.successors(block).into())).collect()
 }
 
 /// What an edit that left the blocks and their edges as `before` had them

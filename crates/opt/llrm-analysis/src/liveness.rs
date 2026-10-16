@@ -527,7 +527,7 @@ pub fn ranges_of(
                 if !(read || settled(result, home)) {
                     continue;
                 }
-                for from in before.get_or_insert_with(home, || function.predecessors(home)).clone() {
+                for from in before.get_or_insert_with(home, || function.predecessors(home).into()).clone() {
                     if arm(phi, from) == Some(value) {
                         pending.push(Reach::Out(from, value));
                     }
@@ -576,7 +576,7 @@ pub fn ranges_of(
                         continue;
                     }
                     found.get_or_insert_with(value, Range::default).into.push(id(block));
-                    let from = before.get_or_insert_with(block, || function.predecessors(block));
+                    let from = before.get_or_insert_with(block, || function.predecessors(block).into());
                     pending.extend(from.iter().map(|&from| Reach::Out(from, value)));
                 }
             }

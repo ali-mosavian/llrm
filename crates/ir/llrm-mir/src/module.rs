@@ -538,12 +538,12 @@ impl Function {
     pub fn successors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
-        let mut out = Vec::new();
+        let mut out = crate::blocklist::BlockList::new();
         for operand in operands {
             if let Operand::Block(target) = operand
                 && !out.contains(target)
@@ -557,7 +557,7 @@ impl Function {
     /// The blocks `operands` name, once each, by a set: a switch of N cases
     /// named N blocks, and a scan of what was listed for each was N^2.
     #[cold]
-    fn listed_once(operands: &[Operand]) -> Vec<BlockId> {
+    fn listed_once(operands: &[Operand]) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         operands
             .iter()
@@ -570,12 +570,12 @@ impl Function {
     pub fn predecessors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let users = self.block_users(block);
         if users.len() > SCAN {
             return self.parents_once(users);
         }
-        let mut out = Vec::new();
+        let mut out = crate::blocklist::BlockList::new();
         for one in users {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
@@ -593,7 +593,7 @@ impl Function {
     fn parents_once(
         &self,
         users: &[Use],
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         users
             .iter()
