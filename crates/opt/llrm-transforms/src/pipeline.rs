@@ -232,10 +232,10 @@ pub struct Options {
     /// gcc's `-fexpensive-optimizations` (-O2 and up): the passes it gates.
     pub expensive: bool,
     /// The allocator tries other shapes of a body and keeps the cheapest
-    /// (`-fallocation-search`).
+    /// (`-fallocation-search`; -Omax: gcc and LLVM allocate once).
     pub search: bool,
     /// Both routes through the machine phases are made and the cheaper kept
-    /// (`-fallocation-routes`); else the allocator alone.
+    /// (`-fallocation-routes`; -Omax); else the allocator alone.
     pub routes: bool,
     /// With `search`, every shape rather than the one the spills suggest
     /// (`-fallocation-search-all`; -Omax).
@@ -243,7 +243,9 @@ pub struct Options {
     /// How many rounds of the body's passes run at most. A round after the
     /// third found nothing on the 71 programs of the vsgcc tables and
     /// QCport (the objects are the same), and the fourth and fifth of
-    /// d_faces were 354 Minstr; -Omax runs to the fixed point.
+    /// d_faces were 354 Minstr; -Omax runs to the fixed point. A round that
+    /// follows an unroll which changed the body runs past the budget, to clean
+    /// the straight line it made.
     pub rounds: usize,
 }
 
@@ -288,8 +290,8 @@ impl Default for Options {
             expensive: true,
             switch_conversion: true,
             jump_tables: true,
-            search: true,
-            routes: true,
+            search: false,
+            routes: false,
             exhaustive: false,
         }
     }
@@ -298,7 +300,7 @@ impl Default for Options {
 impl Options {
     /// -O0.
     pub fn none() -> Self {
-        Self { optimize: false, search: false, routes: false, ..Self::default() }
+        Self { optimize: false, ..Self::default() }
     }
 
     /// -O1: gcc's: the scalar passes and `-finline-functions-called-once`; a
@@ -318,8 +320,9 @@ impl Options {
             // `-finline-small-functions`, and no allocation search or second
             // route: with them off compile is 34% less on d_faces.
             inline: inline::Threshold::new(0),
-            search: false,
-            routes: false,
+            // gcc runs each pass once: the third round changed five passes of
+            // d_faces and the fourth none, 253 of 3,084 Minstr at -O1.
+            rounds: 2,
             ipa_ranges: false,
             loop_intervals: false,
             pre: false,
@@ -386,6 +389,8 @@ impl Options {
             version: true,
             unroll_jam: true,
             interchange: true,
+            search: true,
+            routes: true,
             exhaustive: true,
             rounds: usize::MAX,
             ..Self::default()
@@ -1003,8 +1008,12 @@ impl Fixed {
         // instead of consuming the limit.
         let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
         run.fixed += 1;
+        // The last round unrolled a loop: the straight line it made is cleaned
+        // by the round after the budget, as gcc's cleanup follows its complete
+        // unroll.
+        let mut unrolled = false;
         for iteration in 0..limit {
-            if iteration >= self.rounds {
+            if iteration >= self.rounds && !unrolled {
                 self.report_unspent(unit, analyses, iteration);
                 run.settled(unit, analyses);
                 return Ok(());
@@ -1035,9 +1044,11 @@ impl Fixed {
             }
             // Ask at the original pipeline boundary: fully converging the
             // scalar passes first destroys matmul's exact counted-loop shape.
+            unrolled = false;
             if !self.unrollers.is_empty() && unroll_settled != Some(run.version) {
                 let name = format!("{prefix}r{:02}-unroll", iteration + 1);
                 if run.step(&mut *self.unrollers[0], &name, unit, analyses) {
+                    unrolled = true;
                     // A copy's constant indices are new exact leaves, so it
                     // crosses the structural boundary before the scalar
                     // passes settle it.

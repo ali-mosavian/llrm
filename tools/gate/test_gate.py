@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -294,7 +294,9 @@ def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
     assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
-    assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
+    whole = gate.commands(p, gate.load(), gate.packages())
+    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in whole["pytest"], "the perf files are the pytest-perf step's"
+    assert "vsgcc/test_scaling.py" in whole["pytest-perf"] and "vsgcc/test_scaling_gate.py" in whole["pytest-perf"] and "--ignore" not in whole["pytest-perf"]
 
 
 def test_a_new_test_file_declares_its_own_need_and_is_ignored_where_it_is_missing(tmp_path):
@@ -634,11 +636,11 @@ def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
 def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
     """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
     tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
-    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "facts"]
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "pytest-perf", "facts"]
     assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
     narrow = gate.plan(["tests/target_facts.rs"])
-    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
-    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "facts", "torture"]
+    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "pytest-perf", "integration", "fmt"], narrow
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "pytest-perf", "facts", "torture"]
     assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
     # compiler source, or a Cargo file anywhere, takes the tiers as before
     assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
@@ -1174,7 +1176,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
-    assert {"reference", "run", "tools", "python"} <= set(private), private
+    assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
 
 
@@ -1205,12 +1207,30 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
         local = gate.plan(files)
         out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
         ci = json.loads(out.stdout)
-        in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
+        in_groups = sorted({step for steps in ci["groups"].values() for step in steps})  # the bench shards all run the one step
         assert ci["tier"] == local.tier, files
-        assert sorted(in_groups + list(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
+        assert sorted(set(in_groups) | set(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
     assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
+
+
+def test_the_checks_that_build_nothing_run_alone_before_the_build():
+    """#1873's gate (unit) failed on formatting after a long run: a mistake the tree alone shows must fail before any build or gate starts."""
+    cfg = gate.load()
+    assert set(cfg["groups"]["static"]) <= gate.NO_BINARIES | {"products"} and "fmt" in cfg["groups"]["static"]
+    assert not {"fmt", "docs", "products"} & {s for g, steps in cfg["groups"].items() if g != "static" for s in steps}
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "  build:\n    needs: [plan, static]" in workflow and 'if g != "static"' in workflow, "the matrix never runs the static group"
+    assert "needs: [plan, build]\n    # A skipped ancestor" in workflow and "needs.build.result == 'success' }}" in workflow, "a skipped static job must not skip the gate"
+
+
+def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
+    """Forty drafts running the full gate would swamp the runners: ready_for_review starts it, the merge loop reads only `PASS at`."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
+    assert "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
+    assert "DRAFT at ${head:0:12}" in workflow
 
 
 def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
@@ -1271,11 +1291,23 @@ def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_mis
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
 
 
-def test_the_tools_group_restores_a_pull_requests_base_counts_and_a_push_to_main_records_its_own():
-    """The bench step was 20 of the tools group's 22 minutes: it built and measured the base every run."""
+def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_the_base_on_a_push():
+    """The bench step was 2400 s of a 4-thread slot on a base-cache miss (#1866 timed out at 3600 s): six shards measure a slice each."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
-    assert "LLRM_BENCH_RECORD: ${{ github.event_name == 'push'" in workflow and "key: ${{ steps.basecounts.outputs.head }}" in workflow
+    merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
+    assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
+    assert "needs: [plan, static, build, gate, bench-merge]" in workflow
+    assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
+
+
+def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slice():
+    p = gate.plan(["bench/fib/fib.c"], "full")
+    groups = gate.groups_of(p, {})
+    n = gate.load()["bench"]["shards"]
+    assert [g for g in groups if g.startswith("bench")] == [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
+    assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
 def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
@@ -1283,3 +1315,58 @@ def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
     p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
     assert "measure" in p.steps and "cost" in gate.private_groups(p)
     assert gate.private_env("/p", "cost")["QCPORT"] == "/p/rm-quake/src"
+
+
+def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
+    """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
+    cfg = gate.load()
+    assert cfg["groups"]["perf"] == ["pytest-perf"] and "pytest-perf" not in cfg["groups"]["python"]
+    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
+    assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
+
+
+def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():
+    """The hosted planner has no counters: pytest-perf was skipped in the plan, so no `perf` group was ever made and the scaling tests ran nowhere."""
+    missing = {"perf": "no counters here"}
+    p = gate.plan(["tools/linkrecipe.py"])
+    assert "pytest-perf" in gate.skipped_steps(p.steps, missing, p.languages)
+    assert "pytest-perf" not in gate.skipped_steps(p.steps, gate.assumed(missing, {"GATE_PLAN_ASSUME": "perf"}), p.languages)
+    assert "GATE_PLAN_ASSUME=perf" in (gate.ROOT / ".github/workflows/ci.yml").read_text()
+
+
+def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_tests_ran_hosted():
+    """#1890 let the scaling tests skip on a hosted fallback and print PASS; they just caught two real superlinears, so a compiler change waits for tinytim."""
+    assert gate.touches_compiler(["crates/backend/llrm-core/src/lib.rs"]) and not gate.touches_compiler(["tools/x.py", ".github/workflows/ci.yml", "docs/x.md"])
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert 'PERF SKIPPED at ${head:0:12}' in workflow and 'needs.plan.outputs.compiler }}" = true' in workflow
+    sys.path.insert(0, str(gate.ROOT / "tools" / "ci"))
+    import pick_runners
+    assert pick_runners.pick(["perf", "unit"], "", False, 0)["perf_hosted"] == ["perf"], "a fork's pull request: no tinytim"
+    assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == [], "queued on tinytim instead"
+
+
+def test_the_ci_line_names_the_parent_and_a_stale_workflow_is_never_a_pass():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "PASS at ${head:0:12}$on" in workflow and "STALE WORKFLOW (not a pass) at ${head:0:12}$on" in workflow
+    assert "python3 tools/ci/stale_workflow.py" in workflow and 'BASE_REF: ${{ github.event.pull_request.base.ref }}' in workflow
+
+
+def test_a_group_of_tree_only_checks_has_no_build_and_a_group_that_runs_binaries_does():
+    """#1882's static job built the workspace from cold (701 s) before the build job even started: it has no target dir to reuse."""
+    p = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full")
+    assert "build" not in gate.group_plan(p, "static").steps
+    assert "build" in gate.group_plan(p, "unit").steps and "build" in gate.group_plan(p, "python").steps and gate.group_plan(p, "build").steps == ["build"]
+    assert gate.TREE_ONLY == set(gate.load()["groups"]["static"])
+
+
+def test_the_bench_shards_and_regroupings_keep_the_job_count_down():
+    """The account runs 20 hosted jobs at once; each job costs 70-140 s of set-up. A group under ~2 minutes of work is not its own job."""
+    cfg = gate.load()
+    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport"]
+
+
+def test_the_draft_verdict_comes_from_the_api_at_plan_time_and_is_checked_again_at_the_end():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "python3 tools/ci/pr_state.py" in workflow and "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
+    assert "DRAFT RUN OF A READY PR (not a pass)" in workflow
+    assert "runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '\"ubuntu-24.04\"') }}" in workflow

@@ -912,7 +912,9 @@ pub fn selected_with<'c>(
     let secondary = wide.filter(|form| form.before_spill(&cpu.operations));
     let dword_indexed = wide.is_some() && function.walk().any(|(_, inst)| dword_indexed(module, function, inst));
     let (facts, typed) = match secondary.is_some() || dword_indexed {
-        false => (Facts::default(), BTreeSet::new()),
+        // The bounds are kept either way: a division is priced by its
+        // dividend's.
+        false => (scoped, BTreeSet::new()),
         true => {
             let typed = function
                 .walk()
@@ -4264,7 +4266,7 @@ impl Selector<'_, '_, '_> {
                 next
             };
             let both = remainder == result || self.paired.contains_key(&inst);
-            let bits = self.significant_bits(instruction.operands[0], signed);
+            let bits = self.significant_bits(instruction.operands[0], signed, inst);
             let reciprocal = if signed {
                 division::reciprocal(dividend, constant, &[quotient, remainder], &mut fresh, self.cpu, both, bits)
             } else {
@@ -4319,25 +4321,54 @@ impl Selector<'_, '_, '_> {
     /// (`valuetracking`: LLVM's `ComputeNumSignBits`, and the zero half of
     /// `computeKnownBits`): a multiply that ends early on a short multiplier is
     /// priced by it.
+    /// How many low bits hold the dividend, where known to be fewer than its
+    /// width less the sign: the 486's multiply ends early on a short r/m
+    /// operand, so a reciprocal is priced by them. From its known bits and,
+    /// at the division, the bounds `scoped` proves of it. None: not proven.
     fn significant_bits(
         &self,
         operand: Operand,
         signed: bool,
+        at: InstId,
     ) -> Option<i64> {
         let context = &self.module.context;
         let width = i64::from(self.function.operand_type(context, operand).and_then(|ty| context.types.int_bits(ty))?);
-        let bits = if signed {
+        let mut bits = if signed {
             width - i64::from(llrm_mir::valuetracking::sign_bits(context, self.function, operand)) + 1
         } else {
-            width
-                - i64::from(
-                    llrm_mir::valuetracking::known_zero(context, self.function, operand)
-                        .leading_zeros()
-                        .saturating_sub(128 - width as u32)
-                        .min(width as u32),
-                )
+            // The leading bits proven zero: the mask's top ones within the
+            // width.
+            let zero = llrm_mir::valuetracking::known_zero(context, self.function, operand);
+            width - i64::from((zero << (128 - width as u32)).leading_ones().min(width as u32))
         };
-        (bits < width).then_some(bits)
+        if let Operand::Value(value) = operand {
+            let interval = self
+                .function
+                .parent(at)
+                .and_then(|block| self.facts.get(&cfg::id(block)))
+                .and_then(|known| known.get(&value))
+                .filter(|interval| i64::from(interval.width) == width);
+            if let Some(interval) = interval {
+                let needs = |number: &num_bigint::BigInt| {
+                    let magnitude = if number.sign() == num_bigint::Sign::Minus { -number - 1 } else { number.clone() };
+                    i64::try_from(magnitude.bits()).unwrap_or(width) + i64::from(signed)
+                };
+                let nonnegative = interval.low.sign() != num_bigint::Sign::Minus;
+                if signed || nonnegative {
+                    let (low, high) = (needs(&interval.low.to_big()), needs(&interval.high.to_big()));
+                    // Every value of the range needs the whole width: the
+                    // multiplier is that long, not merely unknown.
+                    if nonnegative && low >= width {
+                        return Some(width);
+                    }
+                    bits = bits.min(low.max(high));
+                }
+            }
+        }
+        // A bound that says no more than the type's own (not negative, not
+        // above its largest) is not about the length: the values a loop counter
+        // takes run far below `INT_MAX`, and the minimum is gcc's guess.
+        (bits + 1 < width).then_some(bits)
     }
 
     fn memory(
@@ -5183,8 +5214,9 @@ impl Selector<'_, '_, '_> {
             bytes[offset..offset + 2].copy_from_slice(&((disp + addend) as u16).to_le_bytes());
             patched.push((offset, disp, addend));
         }
+        let pushed = arguments.get(patched.len()..).unwrap_or_default();
         self.inline_places.insert(at, patched);
-        self.called(inst, convention, Callee::Inline(name, bytes), &[], at, out)
+        self.called(inst, convention, Callee::Inline(name, bytes), pushed, at, out)
     }
 
     /// The low and the high word of a dword: the words it was joined from, else
@@ -5564,7 +5596,10 @@ impl Selector<'_, '_, '_> {
             Callee::Inline(..) if Intrinsic::named(&name) == Some(Intrinsic::Asm) => {
                 self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?
             }
-            Callee::Inline(..) => crate::abi::runtime::inline_code(&name),
+            // Arguments the code finds on the stack are popped after it.
+            Callee::Inline(..) => {
+                crate::abi::runtime::Contract { caller_cleanup: pushed, ..crate::abi::runtime::inline_code(&name) }
+            }
             _ if extra > 0 => self.abi.contract(&name, false, excess).map_err(Unselected)?,
             _ => self.abi.contract(&name, pops, pushed - hidden_popped).map_err(Unselected)?,
         };

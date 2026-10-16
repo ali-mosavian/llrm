@@ -132,13 +132,16 @@ impl Registers {
         self.entry(name).filter(|one| one.whole != one.name).map(|one| one.high)
     }
 
-    /// Whether `name` is a whole register that holds a number: not a half and
-    /// not a segment.
+    /// Whether `name` is a whole register that holds a number: not a half, and
+    /// not a segment register a block may not change (`es` may be set by inline
+    /// code, `ds` may not).
     pub fn is_word(
         &self,
         name: &str,
     ) -> bool {
-        self.entry(name).is_some_and(|one| one.whole == one.name) && !self.segments.iter().any(|one| one == name)
+        let segment = self.segments.iter().any(|one| one == name);
+        self.entry(name).is_some_and(|one| one.whole == one.name)
+            && (!segment || self.clobbered.iter().any(|one| one == name))
     }
 
     /// Whether `saved` holds every general register (the accumulator, the other
@@ -281,7 +284,26 @@ mod tests {
         assert_eq!(names("2200:0"), ["es", "di"]);
         assert_eq!(names("c:0"), ["bx"]);
         assert_eq!(names("2:0"), ["al"]);
-        assert_eq!(names("10103:0"), ["ax", "si", "st0"]);
+        assert_eq!(names("10103:0"), ["si", "ax", "st0"]);
+    }
+
+    /// `[__si __ax]` is a far pointer whose segment is SI (clib's `_fmemmove`
+    /// moves SI into DS), whichever way it is written. A set read in bit order
+    /// took AX for the segment, and `_fmemmove` copied from the wrong place.
+    /// Each row is what Open Watcom's compiler does with that pair.
+    #[test]
+    fn test_the_segment_of_a_register_pair_is_the_one_the_front_end_picks() {
+        for (set, high, low) in [
+            ("103:0", "si", "ax"),
+            ("10c:0", "si", "bx"),
+            ("230:0", "cx", "di"),
+            ("300:0", "di", "si"),
+            ("f0:0", "cx", "dx"),
+            ("20c:0", "di", "bx"),
+            ("2200:0", "es", "di"),
+        ] {
+            assert_eq!(names(set), [high, low], "{set}");
+        }
     }
 
     #[test]

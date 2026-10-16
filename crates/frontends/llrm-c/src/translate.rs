@@ -169,11 +169,21 @@ pub fn program(
     // by the symbols it asks for.
     let data = unreferenced_externs_dropped(data.clone(), &functions);
     let (types, alias_classes) = types.finished();
+    // A module that defines the entry asks for its start-up, and for what
+    // builds `argv` where the entry takes arguments.
+    let mut requests = Vec::new();
+    if let Some(entry) = unit.procs.iter().find(|one| unit.symbols[&one.symbol].is_entry(&unit.entry)) {
+        requests.extend(profile.entry_requests.iter().cloned());
+        if !entry.parms.is_empty() {
+            requests.extend(profile.entry_argument_requests.iter().cloned());
+        }
+    }
     let module = h::Module {
         data,
         callables,
         alias_classes,
         debug,
+        requests,
         facts: facts.finish(),
         ..h::Module::new(1, name, types, functions)
     };
@@ -186,6 +196,7 @@ pub fn program(
         promises,
         preserved: preserved.iter().map(|one| one.value().to_owned()).collect(),
         constant_segment: Some("CONST".to_owned()),
+        bracketed_segments: profile.bracketed_segments.clone(),
         ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module])
     })
 }
@@ -2964,8 +2975,46 @@ impl<'a, 't> Body<'a, 't> {
             .filter(|one| !one.is_empty())
             .collect();
         let default = symbol.register_list == self.unit.default_registers;
-        if default && !parms.is_empty() {
+        // The default list and a pragma's `[__ax __bx __cx __dx]` are the same
+        // set; a lone 64-bit parameter is the latter.
+        let quad = match parms.as_slice() {
+            [(_, one)] => {
+                let ty = self.ty(one)?;
+                self.types.get(ty).width == 8
+            }
+            _ => false,
+        };
+        if default && !parms.is_empty() && !quad {
             return self.refuse(format!("{name} is inline code with parameters in the default registers"));
+        }
+        // `__parm __caller []`: every parameter on the stack, popped by the
+        // caller, the code run between the pushes and the pop.
+        if !default && listed.is_empty() && !parms.is_empty() {
+            if !code.fixups.is_empty() {
+                return self.refuse(format!("{name} is inline code with a parameter on the stack and symbols"));
+            }
+            let mut operands = Vec::new();
+            for (node, type_) in &parms {
+                operands.push(value_ref(self.value_as(node, type_)?));
+            }
+            let callee = llrm_mir::intrinsics::code_name(&code.data, &[]);
+            self.callable(&callee);
+            let order = (0..operands.len() as i64).rev().collect();
+            let int = self.types.int(4, false);
+            let result = self.value(int);
+            self.call_site(
+                Some(&callee),
+                Some(result),
+                operands,
+                order,
+                StackCleanup::Caller,
+                CallDistance::Near,
+                None,
+                Vec::new(),
+                Vec::new(),
+                None,
+            );
+            return Ok(Got::Returned(None));
         }
         if !default && listed.len() < parms.len() {
             return self.refuse(format!("{name} is inline code with a parameter on the stack"));
@@ -3004,7 +3053,9 @@ impl<'a, 't> Body<'a, 't> {
                 }
                 // A byte register takes the low byte of a value of a byte or a
                 // word.
-                ([register], 1) if registers.half(register).is_some() => {
+                // A byte register takes the low byte of a value of a byte or a
+                // word.
+                ([register], 1 | 2) if registers.half(register).is_some() => {
                     let high = registers.half(register).expect("a half");
                     let root = registers.whole_of(register).to_owned();
                     let wide = self.resized(value, false, word);
@@ -3017,6 +3068,21 @@ impl<'a, 't> Body<'a, 't> {
                     let top = self.resized(top, false, word);
                     let bottom = self.resized(whole, false, word);
                     for (register, part) in [(high, top), (low, bottom)] {
+                        inputs.push((register.clone(), vec![(part, false)]));
+                    }
+                }
+                // Four words, the target's order (the top one first), whichever
+                // order the pragma lists them in.
+                (four, 8)
+                    if four.len() == registers.quad.len() && registers.quad.iter().all(|one| four.contains(one)) =>
+                {
+                    let quad = self.types.int(8, false);
+                    let whole = self.resized(value, false, quad);
+                    for (at, register) in registers.quad.iter().enumerate() {
+                        let shift = 16 * (registers.quad.len() - 1 - at) as i64;
+                        let moved = self.constant(quad, Number::Int(shift.into()));
+                        let moved = self.op(Op::Shr, quad, vec![value_ref(whole), value_ref(moved)]);
+                        let part = self.resized(moved, false, word);
                         inputs.push((register.clone(), vec![(part, false)]));
                     }
                 }
@@ -3052,7 +3118,14 @@ impl<'a, 't> Body<'a, 't> {
         }
         // What it answers in.
         let target = symbol.call_target;
-        let result_type = self.ty(&call.type_)?;
+        // A small struct is answered as the integer of its size, and kept in a
+        // temporary.
+        let aggregate = self.types.aggregate(&call.type_);
+        let result_type = match aggregate {
+            Some(size @ (1 | 2 | 4)) => self.types.raw(size),
+            Some(size) => return self.refuse(format!("{name} answers with a {size}-byte struct")),
+            None => self.ty(&call.type_)?,
+        };
         let returns_void = self.types.shape(result_type) == Shape::Void;
         let answer: Vec<String> = if returns_void {
             Vec::new()
@@ -3146,8 +3219,39 @@ impl<'a, 't> Body<'a, 't> {
                 let joined = self.op(Op::Or, dword, vec![value_ref(high), value_ref(low)]);
                 self.fitted(joined, ty)
             }
+            four if !self.unit.hardware.quad.is_empty()
+                && four.len() == self.unit.hardware.quad.len()
+                && self.unit.hardware.quad.iter().all(|one| four.contains(one)) =>
+            {
+                let quad = self.types.int(8, false);
+                let order = self.unit.hardware.quad.clone();
+                let mut joined = None;
+                for (at, register) in order.iter().enumerate() {
+                    let word = self.resized(part(register), false, quad);
+                    let shift = 16 * (order.len() - 1 - at) as i64;
+                    let moved = self.constant(quad, Number::Int(shift.into()));
+                    let word = self.op(Op::Shl, quad, vec![value_ref(word), value_ref(moved)]);
+                    joined = Some(match joined {
+                        Some(high) => self.op(Op::Or, quad, vec![value_ref(high), value_ref(word)]),
+                        None => word,
+                    });
+                }
+                self.fitted(joined.expect("four words"), ty)
+            }
             _ => return self.refuse(format!("{name} answers in {} registers", answer.len())),
         };
+        if let Some(size) = aggregate {
+            let ty = self.types.of(Shape::Bytes(size), None);
+            let temporary = self.local(&format!("r{}", self.places.len() + 1), ty, size);
+            let address = self.address_of(temporary);
+            let raw = self.types.raw(size);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(address, 0, raw, false)), value_ref(value)],
+            );
+            return Ok(Got::Value(address));
+        }
         Ok(Got::Returned(Some(value)))
     }
 

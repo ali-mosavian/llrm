@@ -1401,11 +1401,35 @@ impl<'a> Unit<'a> {
         operand: Operand,
     ) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
         let Operand::Value(value) = operand else { return None };
+        DEFINITIONS_READ.with(|read| {
+            if let Some(read) = read.borrow_mut().as_mut() {
+                read.push(value);
+            }
+        });
         match self.function.value(value).def {
             ValueDef::Instruction(inst) => Some((inst, self.function.instruction(inst))),
             ValueDef::Argument(_) => None,
         }
     }
+}
+
+thread_local! {
+    /// The values whose defining instruction a decomposition is reading, while
+    /// one is (`reading`).
+    static DEFINITIONS_READ: std::cell::RefCell<Option<Vec<ValueId>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `work`, and every value whose defining instruction it asked of
+/// `Unit::defining`: the values an edit would have to touch to change what
+/// `work` made, however far from the pointer the helper that read it was (a
+/// far pointer's selector is the operand of the cast two instructions back).
+fn reading<T>(work: impl FnOnce() -> T) -> (T, Vec<ValueId>) {
+    let outer = DEFINITIONS_READ.with(|read| read.replace(Some(Vec::new())));
+    let made = work();
+    let mut mine = DEFINITIONS_READ.with(|read| read.replace(outer)).unwrap_or_default();
+    mine.sort_unstable_by_key(|value| value.0);
+    mine.dedup();
+    (made, mine)
 }
 
 /// Whether `inst` marks an object's lifetime, which names it without handing
@@ -1433,12 +1457,15 @@ pub struct Standing<'h> {
     /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
+    /// The blocks, edges and loops of the body, as `held` has them or derived
+    /// once: they stand while the body's blocks and edges do (`reshaped`).
+    shape: Option<std::rc::Rc<crate::cfg::Shape>>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None }
+        Self { held: Some(registers), bounds: None, derived: None, shape: None }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1446,12 +1473,36 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None }
+        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None }
+        Self { held: None, bounds: None, derived: None, shape: None }
+    }
+
+    /// `self`, the shape of the body as the manager found it.
+    pub fn with_shape(
+        mut self,
+        shape: std::rc::Rc<crate::cfg::Shape>,
+    ) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+
+    /// The shape of `function`, found once while its blocks and edges stand.
+    pub fn shape(
+        &mut self,
+        function: &Function,
+    ) -> std::rc::Rc<crate::cfg::Shape> {
+        std::rc::Rc::clone(self.shape.get_or_insert_with(|| std::rc::Rc::new(crate::cfg::Shape::of(function))))
+    }
+
+    /// The body's blocks or edges changed: its shape, and with it what was
+    /// found of it, no longer holds.
+    pub fn reshaped(&mut self) {
+        self.shape = None;
+        self.changed();
     }
 
     /// The body changed: what was found of it no longer holds.
@@ -1839,12 +1890,9 @@ impl MemRef {
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self {
-            typed: typed(unit, inst),
-            lineage: lineage(unit, inst),
-            volatile,
-            ..Self::at_tracing(unit, pointer, width, Some(chain))
-        })
+        let (made, read) = reading(|| Self::at_tracing(unit, pointer, width, Some(&mut *chain)));
+        chain.extend(read);
+        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..made })
     }
 
     /// Whether the access names its bytes outright rather than reaching

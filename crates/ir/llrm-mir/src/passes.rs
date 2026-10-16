@@ -1428,6 +1428,20 @@ impl Analyses {
         self.vouched = Some(function.mark());
     }
 
+    /// `invalidate`, unless `function` is as the last call left it: nothing
+    /// was edited since, so what is held stands. A pass that asks again
+    /// between rules, and drops for the edit of the rule before, pays for
+    /// the edit only when there was one.
+    pub fn invalidate_if_edited(
+        &mut self,
+        function: &Function,
+        preserved: &PreservedAnalyses,
+    ) {
+        if self.vouched != Some(function.mark()) {
+            self.invalidate(function, preserved);
+        }
+    }
+
     /// Every result held stands, as `function` is now: a pass that edited and
     /// put back, or that changed nothing.
     pub fn vouch(
