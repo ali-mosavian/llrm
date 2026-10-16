@@ -104,6 +104,8 @@ pub fn bits(
 ) -> String {
     match width {
         0 => "?".to_owned(),
+        // Ten bytes is x87's extended real, whatever the operation says.
+        10 => "f80".to_owned(),
         bytes => format!("{}{}", if float { 'f' } else { 'i' }, bytes * 8),
     }
 }
