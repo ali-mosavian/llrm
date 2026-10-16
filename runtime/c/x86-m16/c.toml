@@ -83,8 +83,8 @@ cdecl = "cdecl16"
 registers = "watcall16"
 
 # Open Watcom's own: no -ecc, so an unmarked function takes its registers; `__watcall` keeps Open Watcom's meaning, which Borland's
-# runtime does not have (borland.h moves its declarations to cdecl). Its structs pack to 2, its own default, and it has none of
-# Borland's names to undo: its header is empty.
+# runtime does not have (borland.h moves its declarations to cdecl). Its structs pack to 2 and its char is unsigned, its own
+# defaults (its library is built with `-fsigned-char`), and it has none of Borland's names to undo: its header is empty.
 [frontend.abi.watcom]
 convention = "cdecl16"
 header = "crates/frontends/llrm-c/src/watcom.h"
@@ -95,7 +95,7 @@ entry_requests = ["_cstart_"]
 # order, and the linker lays segments out as it first meets them.
 bracketed_segments = ["XIB:XI:XIE", "YIB:YI:YIE"]
 entry_argument_requests = ["__argc"]
-flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
+flags = ["-mm", "-3", "-fpi87", "-fp3", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"
 registers = "watcall16"
 

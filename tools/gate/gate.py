@@ -35,7 +35,7 @@ import proctree
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
-NO_BINARIES = {"pytest", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
+NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
 SERIAL_STEPS = frozenset({"rfmt-post"})
 
 
@@ -253,6 +253,12 @@ def smoke_plan(files: list[str]) -> Plan:
     return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
 
 
+def touches_compiler(files: list[str], forced: str = "auto") -> bool:
+    """Whether the diff changes the compiler's source (tiers.toml [compiler]): what the perf-counter tests and measure judge."""
+    cfg = load()
+    return forced != "auto" or any(matches(f, cfg["compiler"]["paths"]) for f in files if not matches(f, cfg["inert"]["paths"]))
+
+
 def plan(files: list[str], forced: str = "auto") -> Plan:
     if forced == "smoke":
         return smoke_plan(files)
@@ -282,7 +288,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
     steps = []
     if cargo or p.tier == "full":
         steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
-    steps += ["pytest"]
+    steps += ["pytest", "pytest-perf"]
     if cargo and p.tier != "full" and any(matches(f, cfg["scan_inputs"]["paths"]) for f in live):
         steps.append("scans")
     if not cargo and p.tier != "full" and any(f.startswith("tools/torture/") for f in live):
@@ -333,7 +339,7 @@ def step_of_source(path: str, cfg: dict) -> str | None:
     if path.startswith("crates/") and path.endswith(".rs"):
         return "lib"
     if path.endswith(".py") and (path.startswith("tests/") or Path(path).name.startswith("test_")):
-        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest"
+        return "pytest-programs" if name in ("test_programs_compile", "test_loops", "test_innerloops") else "pytest-perf" if path in perf_files() else "pytest"
     return None
 
 
@@ -358,7 +364,7 @@ def readers(directory: str, cfg: dict) -> set[str]:
 def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
     """The steps for a diff with none of the compiler's source: each covers the files it was written for. The binaries are built first
     where a step runs them."""
-    steps = ["pytest"]
+    steps = ["pytest", "pytest-perf"]
     if any(f.startswith("tests/") and (f.endswith(".rs") or f.startswith("tests/common/")) or matches(f, cfg["integration_inputs"]["paths"]) for f in live):
         steps.append("integration")
     # tests/target_facts.rs reads every .py and .sh under tools/, crates/ and src/ (a tools-only PR landed four copies of a target fact):
@@ -520,7 +526,11 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         if cfg["fmt"]["enforced"]
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
-        "pytest": cfg_pytest(skip_py),
+        "pytest": cfg_pytest(skip_py + tuple(perf_files())),
+        # The tests that read hardware counters, alone: the one job that needs a runner with them (tiers.toml [requires]).
+        "pytest-perf": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
+        + " ".join(perf_files())
+        + " -- -q -p no:cacheprovider -p pytest_cpulimit",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',
@@ -625,6 +635,16 @@ def declared_requirements(root: Path = ROOT) -> dict[str, list[str]]:
                 if isinstance(node, ast.Assign) and [t.id for t in node.targets if isinstance(t, ast.Name)] == ["REQUIRES"]:
                     out[f] = list(ast.literal_eval(node.value))
     return out
+
+
+def perf_files() -> list[str]:
+    """The Python test files that declare `REQUIRES = ["perf"]`: the pytest-perf step's, left out of pytest."""
+    return sorted(f for f, needs in declared_requirements().items() if "perf" in needs)
+
+
+def assumed(missing: dict[str, str], environ) -> dict[str, str]:
+    """`missing` without the capabilities GATE_PLAN_ASSUME names: a plan is for the jobs' runners, not for the host that makes it."""
+    return {c: why for c, why in missing.items() if c not in environ.get("GATE_PLAN_ASSUME", "").split(",")}
 
 
 def python_tests_unusable(missing: dict[str, str], root: Path = ROOT) -> list[str]:
@@ -769,7 +789,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
@@ -976,12 +996,16 @@ def main() -> int:
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
             os.execv(wrapped[0], wrapped)  # before the first line is printed: the re-executed run prints it
         print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
-    p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
+    files = args.files if args.files is not None else changed_files(args.base)
+    p = plan(files, args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
-    skipped = skipped_steps(p.steps, missing_capabilities(), p.languages)
+    missing = missing_capabilities()
+    if args.command == "plan":  # the jobs' runners may have what the planner's host lacks (perf counters); a job checks for itself
+        missing = assumed(missing, os.environ)
+    skipped = skipped_steps(p.steps, missing, p.languages)
     if args.json:
-        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped}))
+        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped, "compiler": touches_compiler(files, args.tier)}))
         return 0
     print(f"tier {p.tier}: {p.reason}")
     for step, why in skipped.items():
