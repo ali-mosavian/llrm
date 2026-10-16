@@ -1089,6 +1089,28 @@ impl Analysis for PointerValues {
     type Result = Result<alias::PointValues, String>;
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
+    const SOUND: bool = true;
+    /// What it says of a pointer is where the value may point, which edits that
+    /// keep every value's meaning do not move (a fresh derivation may know
+    /// less of where, never elsewhere); a value made since has no entry
+    /// (unknown), and none is asked of an erased one.
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        _context: &Context,
+        function: &Function,
+    ) -> bool {
+        match (old, fresh) {
+            (Ok(old), Ok(fresh)) => old.values.iter().all(|(value, provenance)| {
+                use llrm_mir::module::ValueDef;
+                match function.value(*value).def {
+                    ValueDef::Instruction(inst) if function.is_erased(inst) => true,
+                    _ => fresh.values.get(value).is_none_or(|now| provenance.covers(now)),
+                }
+            }),
+            (old, fresh) => old == fresh,
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
