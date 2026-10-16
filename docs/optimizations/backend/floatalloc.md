@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatalloc.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:f49ec6299a8251d45a5141ce8d01ab9fd862cbd0fbabbe65fdf870c42096312c -->
+<!-- src: crates/backend/llrm-core/src/backend/floatalloc.rs sha256:55d890806b1ef0db282f6a7f576361216b2259895b3fd6541a39abf62db1f7d1 -->
 
 # floatalloc
 
@@ -47,6 +47,12 @@ later:
  fld  st(1)           ; copy of right       [right', left', right, left]
  fsubp st(1), st(0)   ; left' - right'      [result, right, left]
 ```
+
+A store or a compare that reads a value still live does not copy it first:
+`fst`, `fist` (a word or a dword; `fistt` for `fisttp`) leave the value on
+the stack, and `fcom`/`fcomp st(i)` compare it where it lies, as gcc's
+reg-stack and LLVM's `X86FloatingPoint` do. A quadword conversion has only
+its popping form and keeps the copy.
 
 More than eight operands on the stack is refused. Order, rounding and
 storage conversions are not changed.

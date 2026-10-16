@@ -78,6 +78,7 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 | `-g` | CodeView line numbers, symbols and types |
 | `-fsanitize=stack` | Check the stack on entry, comparing with Open Watcom's `_STACKLOW` and calling `__STKOVERFLOW` |
 | `-ftrapv`, `-fwrapv` | Signed overflow traps, or wraps |
+| `-fexcess-precision=standard`, `-ffloat-store` | A conversion to a float type rounds to that type (C11 6.3.1.4, 6.3.1.5); by default x87 keeps the wider value in its register, as gcc's fast mode does |
 
 The shared options of `llrm-qb`, `llrm-c` and `llrm-nib` apply: `-O0` to
 `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og`, `-f[no-]PASS`, `-march`, `-mtune`,

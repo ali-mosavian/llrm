@@ -118,8 +118,8 @@ mod tests {
     /// them so.
     #[test]
     fn the_cost_and_latency_tables_list_the_forms_they_did() {
-        assert_eq!(COST.len(), 58);
-        assert_eq!(LATENCY.len(), 58);
+        assert_eq!(COST.len(), 63);
+        assert_eq!(LATENCY.len(), 63);
         assert_eq!(COST.keys().next(), Some(&"alu_rr"));
         assert_eq!(COST.keys().last(), Some(&"jcc_not_taken"));
         assert_eq!(LATENCY.keys().last(), Some(&"jcc_not_taken"));
