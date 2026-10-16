@@ -37,13 +37,13 @@
 //!
 //! B0  entry  → B1                                                   ×1.0
 //!     #20  v1         = elided      v5
-//!      #2  bx         = mov.i2      1
-//!      #3  cx         = mov.i2      0
+//!      #2  bx         = mov.i16      1
+//!      #3  cx         = mov.i16      0
 //!      #4               jmp         B1
 //!
 //!     B1  ← B0 B3  → B3 B2  loop                                        ×32.0
-//!          #5  ax         = sub.i2      ax, 1
-//!          #6               cmp.i2      ax, -1
+//!          #5  ax         = sub.i16      ax, 1
+//!          #6               cmp.i16      ax, -1
 //!          #7               jne         B3 else B2                            ; 97% taken
 //! ```
 //!
