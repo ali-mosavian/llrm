@@ -1363,3 +1363,36 @@ fn test_the_recurrences_of_a_body_are_asked_of_the_manager_not_derived_again() {
     let derived = llrm_analysis::consts::register_derivations() - before;
     assert!(derived <= 1, "{derived} derivations of the registers for one body");
 }
+
+/// Two rules read the body's loops and each derived them again in every round
+/// of the pass: 114 derivations of the shape for 46 runs on d_faces -O2
+/// (18 M), the CFG being as it was throughout. One, the manager's.
+#[test]
+fn test_the_rounds_of_a_pass_share_one_shape() {
+    // A chain of sums that folds one step a round, so that the pass makes
+    // several rounds, in a loop and with a division for each rule.
+    let text = "define i16 @f(i16 %n, i16 %x) {
+entry:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %entry ], [ %next, %head ]
+  %a = add i16 %i, %x
+  %b = add i16 %a, 1
+  %c = add i16 %b, 2
+  %d = add i16 %c, 3
+  %q = sdiv i16 %d, 4
+  %next = add i16 %i, 1
+  %more = icmp slt i16 %next, %n
+  br i1 %more, label %head, label %done
+
+done:
+  ret i16 %q
+}
+";
+    let before = llrm_analysis::cfg::shapes_derived();
+    let (_, after) = simplified(text);
+    let derived = llrm_analysis::cfg::shapes_derived() - before;
+    assert!(printed(&after).contains("sdiv") || printed(&after).contains("ashr"), "{}", printed(&after));
+    assert!(derived <= 2, "{derived} shapes derived for one pass over one body");
+}
