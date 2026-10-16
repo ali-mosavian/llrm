@@ -194,14 +194,15 @@ jobs:
         with:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.base }}
-      - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
-        env:
-          LLRM_BENCH_RECORD: ${{ github.event_name == 'push' && '1' || '' }}
+      # A main push records its counts first and saves them at once: the gate run below measures the base too, and saved them at its end.
+      - if: matrix.group == 'tools' && github.event_name == 'push'
+        run: uv run -q --project tools python tools/bench/bench.py --record
       - if: matrix.group == 'tools' && github.event_name == 'push' && success()
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.head }}
+      - run: JOBS=$(nproc) python3 tools/gate/gate.py run --group ${{ matrix.group }} --base "${{ needs.plan.outputs.base }}"
       # A private group's logs stay in its job log (the failing excerpt): its tools' output is not uploaded.
       - if: always() && steps.private.outputs.needed != 'true'
         uses: actions/upload-artifact@v4
