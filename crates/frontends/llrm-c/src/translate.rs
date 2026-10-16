@@ -690,9 +690,29 @@ struct Body<'a, 't> {
     line: i64,
 }
 
+// The front end's call class, for inline code that states its registers
+// (x86auxcc.h and cgauxcc.h).
+const SPECIAL_RETURN: i64 = 0x1;
+const MODIFY_EXACT: i64 = 0x40;
+const NO_MEMORY: i64 = 0x300;
+
 /// Whether inline code is `symbol`: `_asm`, or `__emit__`'s bytes.
 fn inline(symbol: &hir::Symbol) -> bool {
     symbol.code.is_some() || EMITTED.contains(&symbol.name.as_str())
+}
+
+/// Whether inline code says its registers: a parameter list, a result, or what
+/// it modifies, none of them the default's. Its caller's code does not leave
+/// the answer in dx:ax for a function to return.
+fn states_registers(
+    symbol: &hir::Symbol,
+    unit: &hir::Unit,
+) -> bool {
+    symbol.code.is_some()
+        && (symbol.register_list != unit.default_registers
+            || symbol.call_target & (SPECIAL_RETURN | MODIFY_EXACT) != 0
+            || crate::hwreg::Set::parse(&symbol.saved_registers)
+                .is_some_and(|saved| !saved.is_empty() && saved.low & 0x3ff != 0x3ff))
 }
 
 /// The inline code a statement runs as its last call, if it is a
@@ -712,7 +732,11 @@ fn inline_statement(
         .get(&hir::handle(&call.target))
         .is_some_and(
             |target| target.call == "CGFEName"
-                && target.args.first().and_then(|symbol| unit.symbols.get(&hir::handle(symbol))).is_some_and(inline),
+                && target
+                    .args
+                    .first()
+                    .and_then(|symbol| unit.symbols.get(&hir::handle(symbol)))
+                    .is_some_and(|symbol| inline(symbol) && !states_registers(symbol, unit)),
         )
 }
 
@@ -2879,6 +2903,230 @@ impl<'a, 't> Body<'a, 't> {
         });
     }
 
+    /// Pragma inline code, which says its registers (`__parm [__dx]`, `__value
+    /// [__ax]`, `__modify`): an `asm` instruction whose inputs and outputs are
+    /// those registers, and whose clobbers are what the front end says the
+    /// code does not keep. The `llrm.ia16.code` form below takes its arguments
+    /// as frame places and answers in dx:ax, which is Borland's `__emit__`.
+    fn inline_registers(
+        &mut self,
+        call: &hir::Call,
+        symbol: &hir::Symbol,
+        code: &hir::Code,
+    ) -> R<Got> {
+        use crate::hwreg::Set;
+        let name = symbol.name.clone();
+        if !code.fixups.is_empty() {
+            return self.refuse(format!("{name} is inline code with registers and a symbol reference"));
+        }
+        // Source order: the call lists its last argument first.
+        let parms: Vec<(String, String)> = call.parms.iter().rev().cloned().collect();
+        let listed: Vec<&str> =
+            symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
+        let default = symbol.register_list == self.unit.default_registers;
+        if default && !parms.is_empty() {
+            return self.refuse(format!("{name} is inline code with parameters in the default registers"));
+        }
+        if !default && listed.len() < parms.len() {
+            return self.refuse(format!("{name} is inline code with a parameter on the stack"));
+        }
+        let word = self.types.int(2, false);
+        // Each input register, whole, with the bytes of it that are set.
+        let mut inputs: Vec<(&'static str, Vec<(i64, bool)>)> = Vec::new();
+        for ((node, type_), set) in parms.iter().zip(&listed) {
+            let value = self.value_as(node, type_)?;
+            // A pointer is its own bits.
+            let value = if matches!(self.shape(value), Shape::Pointer(_)) {
+                let width = self.types.get(self.type_of(value)).width;
+                let int = self.types.int(width, false);
+                self.op(Op::Convert, int, vec![value_ref(value)])
+            } else {
+                value
+            };
+            let Some(set) = Set::parse(set).and_then(Set::names) else {
+                return self.refuse(format!("{name}'s parameter is in a register this target lacks"));
+            };
+            let bytes = match self.shape(value) {
+                Shape::Int(width, _) | Shape::Pointer(width) | Shape::Float(width) => width,
+                Shape::Bool => self.types.word(),
+                _ => return self.refuse(format!("{name}'s parameter is not a scalar")),
+            };
+            if matches!(self.shape(value), Shape::Float(_)) {
+                return self.refuse(format!("{name} takes a float in a register"));
+            }
+            let dword = self.types.int(4, false);
+            let whole = (bytes == 4).then(|| self.resized(value, false, dword));
+            match (set.as_slice(), bytes) {
+                ([register], 1 | 2) if !matches!(*register, "ds" | "es") && register.len() == 2 && !register.ends_with(['h', 'l']) => {
+                    let wide = self.resized(value, false, word);
+                    inputs.push((register, vec![(wide, false)]));
+                }
+                ([register], 1) if matches!(*register, "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh") => {
+                    let wide = self.resized(value, false, word);
+                    let (root, high) = match register.as_bytes() {
+                        [r, b'l'] => (*r, false),
+                        [r, b'h'] => (*r, true),
+                        _ => unreachable!("a byte register"),
+                    };
+                    let root: &'static str = match root {
+                        b'a' => "ax",
+                        b'b' => "bx",
+                        b'c' => "cx",
+                        _ => "dx",
+                    };
+                    inputs.push((root, vec![(wide, high)]));
+                }
+                ([high, low], 4) => {
+                    let whole = whole.expect("a double word");
+                    let sixteen = self.constant(dword, Number::Int(16.into()));
+                    let top = self.op(Op::Shr, dword, vec![value_ref(whole), value_ref(sixteen)]);
+                    let top = self.resized(top, false, word);
+                    let bottom = self.resized(whole, false, word);
+                    for (register, part) in [(high, top), (low, bottom)] {
+                        let register: &'static str = register;
+                        inputs.push((register, vec![(part, false)]));
+                    }
+                }
+                _ => return self.refuse(format!("{name}'s parameter does not fit its registers {set:?}")),
+            }
+        }
+        // A register two bytes are set in is one word.
+        let mut operands = Vec::new();
+        let mut registers: Vec<String> = Vec::new();
+        let mut at = 0;
+        while at < inputs.len() {
+            let root = inputs[at].0;
+            let mut parts: Vec<(i64, bool)> = Vec::new();
+            while at < inputs.len() && inputs[at].0 == root {
+                parts.extend(inputs[at].1.iter().copied());
+                at += 1;
+            }
+            let mut value = None;
+            for (part, high) in parts {
+                let part = if high {
+                    let eight = self.constant(word, Number::Int(8.into()));
+                    self.op(Op::Shl, word, vec![value_ref(part), value_ref(eight)])
+                } else {
+                    part
+                };
+                value = Some(match value {
+                    Some(low) => self.op(Op::Or, word, vec![value_ref(low), value_ref(part)]),
+                    None => part,
+                });
+            }
+            operands.push(value_ref(value.expect("a part")));
+            registers.push(root.to_owned());
+        }
+        // What it answers in.
+        let target = symbol.call_target;
+        let result_type = self.ty(&call.type_)?;
+        let returns_void = self.types.shape(result_type) == Shape::Void;
+        let answer: Vec<&'static str> = if returns_void {
+            Vec::new()
+        } else if target & SPECIAL_RETURN != 0 {
+            match Set::parse(&symbol.return_registers).and_then(Set::names) {
+                Some(names) => names,
+                None => return self.refuse(format!("{name} answers in a register this target lacks")),
+            }
+        } else {
+            match self.types.get(result_type).width {
+                1 => vec!["al"],
+                2 => vec!["ax"],
+                4 => vec!["dx", "ax"],
+                _ => return self.refuse(format!("{name} answers in the default registers with a result this size")),
+            }
+        };
+        let wholes: Vec<&'static str> = answer
+            .iter()
+            .map(|one| match *one {
+                "al" | "ah" => "ax",
+                "bl" | "bh" => "bx",
+                "cl" | "ch" => "cx",
+                "dl" | "dh" => "dx",
+                other => other,
+            })
+            .collect();
+        // What it changes: whatever it does not keep, and, unless it says
+        // exactly, what it takes and answers in.
+        let saved = Set::parse(&symbol.saved_registers).unwrap_or_default();
+        let mut changed = Set { low: 0xffff_ffff, high: 0xffff_ffff }.without(saved).without(Set { low: 0xfffc_0000, high: 0xffff_fffc });
+        if target & MODIFY_EXACT == 0 {
+            for set in listed.iter().filter_map(|one| Set::parse(one)) {
+                changed = changed.with(set);
+            }
+            changed = changed.with(Set::parse(&symbol.return_registers).unwrap_or_default());
+            changed = changed.with(Set { low: 0x3, high: 0 });
+        }
+        let changed = changed.whole();
+        let mut clobbers: Vec<String> = Vec::new();
+        for (bits, register) in [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x2000, "es")] {
+            if changed.low & bits == bits && !wholes.contains(&register) {
+                clobbers.push(register.to_owned());
+            }
+        }
+        if changed.low & 0x1_0000 != 0 || changed.low & 0x5c00 != 0 {
+            return self.refuse(format!("{name} changes a register an inline block cannot declare"));
+        }
+        clobbers.push("flags".to_owned());
+        let memory = symbol.call_class & NO_MEMORY != NO_MEMORY;
+        // One result per register it answers in.
+        let mut results = Vec::new();
+        let mut seen: Vec<&'static str> = Vec::new();
+        for register in &wholes {
+            if !seen.contains(register) {
+                seen.push(register);
+                results.push(self.value(word));
+            }
+        }
+        let outputs: Vec<String> = seen.iter().map(|one| (*one).to_owned()).collect();
+        self.instruction(Op::Asm, results.clone(), operands);
+        let instruction = self.blocks[self.current].instructions.last_mut().expect("the asm instruction");
+        instruction.asm = Some(h::Asm {
+            code: code.data.iter().map(|one| i64::from(*one)).collect(),
+            inputs: registers,
+            outputs,
+            clobbers,
+            memory,
+        });
+        if returns_void {
+            return Ok(Got::Returned(None));
+        }
+        let ty = result_type;
+        let part = |register: &str| results[seen.iter().position(|one| *one == register).expect("an output")];
+        let value = match answer.as_slice() {
+            [_] => {
+                let whole = part(wholes[0]);
+                let narrow = answer[0].len() == 2 && answer[0].ends_with(['h', 'l']);
+                let whole = if narrow {
+                    let whole = if answer[0].ends_with('h') {
+                        let eight = self.constant(word, Number::Int(8.into()));
+                        self.op(Op::Shr, word, vec![value_ref(whole), value_ref(eight)])
+                    } else {
+                        whole
+                    };
+                    let byte = self.types.int(1, false);
+                    self.op(Op::Convert, byte, vec![value_ref(whole)])
+                } else {
+                    whole
+                };
+                self.fitted(whole, ty)
+            }
+            [_, _] => {
+                let dword = self.types.int(4, false);
+                let high = part(wholes[0]);
+                let low = part(wholes[1]);
+                let high = self.resized(high, false, dword);
+                let sixteen = self.constant(dword, Number::Int(16.into()));
+                let high = self.op(Op::Shl, dword, vec![value_ref(high), value_ref(sixteen)]);
+                let low = self.resized(low, false, dword);
+                let joined = self.op(Op::Or, dword, vec![value_ref(high), value_ref(low)]);
+                self.fitted(joined, ty)
+            }
+            _ => return self.refuse(format!("{name} answers in {} registers", answer.len())),
+        };
+        Ok(Got::Returned(Some(value)))
+    }
+
     /// Inline code as a call of `llrm.ia16.code`, each frame place it names
     /// an argument; `__emit__`'s are its constant arguments' bytes.
     fn inline_code(
@@ -2905,6 +3153,9 @@ impl<'a, 't> Body<'a, 't> {
                 hir::Code { data, fixups: Vec::new() }
             }
         };
+        if let Some(code) = symbol.code.as_ref().filter(|_| states_registers(symbol, self.unit)) {
+            return self.inline_registers(call, symbol, code);
+        }
         let mut places = Vec::new();
         let mut operands = Vec::new();
         for fixup in &code.fixups {

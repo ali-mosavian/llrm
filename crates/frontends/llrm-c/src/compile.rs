@@ -773,6 +773,48 @@ mod tests {
         }
     }
 
+    /// Inline code that says its registers (`#pragma aux f = "..." __parm
+    /// [__dx]`) was laid down with its parameters dropped: Open Watcom's
+    /// `cgets` ran `int 21h` function 0Ah on whatever `dx` held. Each
+    /// parameter is in its register before the bytes.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_gets_its_parameters_in_the_registers_it_names() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("regs.c");
+        std::fs::write(
+            &source,
+            "extern void buffered(char *s);\n\
+             #pragma aux buffered = \"mov ah,0ah\" \"int 21h\" __parm __caller [__dx] __value __modify __exact [__ah]\n\
+             extern unsigned char add2(unsigned char a, unsigned char b);\n\
+             #pragma aux add2 = \"add al,bl\" __parm [__al] [__bl] __value [__al] __modify __exact [__al]\n\
+             char buf[10];\n\
+             void fill(void) { buffered(buf); }\n\
+             unsigned char sum(unsigned char x, unsigned char y) { return add2(x, y); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records regs.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let built = super::selected(&text, "regs", None, &options).unwrap();
+        let asm = llrm_core::backend::masm::text(&built).unwrap();
+        let before = |function: &str, bytes: &str, register: &str| {
+            let from = asm.find(&format!("{function} proc")).expect("the function");
+            let body: Vec<&str> =
+                asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+            let at = body.iter().position(|one| one.starts_with(bytes)).expect("the inline bytes");
+            body[..at].iter().any(|one| {
+                one.strip_prefix("mov ").or_else(|| one.strip_prefix("movzx ")).is_some_and(|rest| rest.starts_with(register))
+            })
+        };
+        assert!(before("fill_", "db 0b4h,00ah", "dx,"), "{asm}");
+        assert!(before("sum_", "db 002h,0c3h", "bx,"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`

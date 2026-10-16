@@ -75,7 +75,7 @@ def run(job, args):
     started = time.monotonic()
     if args.reference and src.suffix == ".c":
         cmd = [str(args.reference / "bwcc"), "-zq", "-we", "-j", "-zastd=c99", "-zl", "-x", "-xx", "-zam", "-wpx", "-s",
-               "-oabelr", "-om", "-mm", "-nt=_TEXT", "-fpc", "-0", "-bt=dos", *opts.split(), *post.split(),
+               "-oabelr", "-om", *args.ref_flags, "-mm", "-nt=_TEXT", "-fpc", "-0", "-bt=dos", *opts.split(), *post.split(),
                *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
         tool = "bwcc"
     elif args.reference:
@@ -110,6 +110,7 @@ def main():
     ap.add_argument("--jwasm", type=Path)
     ap.add_argument("--reference", type=Path, help="Open Watcom's own bwcc and bwasm directory: build with them instead")
     ap.add_argument("--headers", type=Path, required=True, help="installed Open Watcom h directory")
+    ap.add_argument("--ref-flag", dest="ref_flags", action="append", default=[], help="extra bwcc flag, e.g. -os")
     ap.add_argument("flags", nargs="*")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
