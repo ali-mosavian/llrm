@@ -1,0 +1,26 @@
+reason = "#1758: a double is on an 8-byte boundary (Intel486 data sheet 240440-002, section 10.1 and Table 2.1: 3 clocks per misaligned access). A function holding a double keeps the call stack aligned (a pad push per call) and its frame objects aligned: jpeg bq32 +1..4 instructions of 63M..89M; the first double constant after other data in nib's segment takes up to 3 bytes of padding."
+
+[[row]]
+label = "jpeg_fixed bq32 -O2"
+counter = "instructions"
+to = 84336398
+
+[[row]]
+label = "jpeg_fixed bq32 -Os"
+counter = "instructions"
+to = 89430784
+
+[[row]]
+label = "jpeg_single bq32 -O2"
+counter = "instructions"
+to = 63438976
+
+[[row]]
+label = "stft_single nib -O2"
+counter = "data_bytes"
+to = 1092
+
+[[row]]
+label = "stft_single nib -Os"
+counter = "data_bytes"
+to = 1092
