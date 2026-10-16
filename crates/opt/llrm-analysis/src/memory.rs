@@ -260,19 +260,22 @@ impl Ord for MemoryObject {
 /// A `MemoryObject` as its module's interner numbered it: a small id compared,
 /// hashed and ordered as an integer, with the fields the passes ask of every
 /// slice beside it, so a slice is `Copy` and asking costs nothing. The rest
-/// (the identity, the generation) is `ObjectInterner::object`. Interned by
-/// every field, the facts too, so two spellings that differ in a fact are two
-/// objects here and a set keeps both (none was seen to differ in 1,700 programs
-/// and QCport). The order is the order of first interning in the module, which
-/// the same module always makes the same way; nothing may depend on it being
-/// `MemoryObject`'s.
+/// (the identity, the generation) is `ObjectInterner::object`. Interned by the
+/// object's identity (kind, identity, generation, extent) alone: the same
+/// object spelled with other facts (a frame slot whose address an edit
+/// stopped exposing) is the same number, so a result kept past the edit and
+/// one derived after it name it alike. The facts (`addressed`, `captured`,
+/// `constant`) are what the body that made the reference had of the object,
+/// read through the accessors; they are not its identity. The order is the
+/// order of first interning in the module, which the same module always makes
+/// the same way; nothing may depend on it being `MemoryObject`'s.
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectRef {
     id: u32,
     pub kind: MemoryKind,
-    pub addressed: bool,
-    pub captured: bool,
-    pub constant: bool,
+    addressed: bool,
+    captured: bool,
+    constant: bool,
     pub extent: Option<i64>,
     /// The identity where it is a number, which is all the passes make: a name
     /// or a tuple (a test's, the linear region's) is `Other`, and
@@ -338,6 +341,22 @@ impl ObjectRef {
     pub fn id(self) -> u32 {
         self.id
     }
+
+    /// Some code computes its address, so a pointer of unknown origin may hold
+    /// it: as the state of the body that interned this reference had it.
+    pub fn addressed(self) -> bool {
+        self.addressed
+    }
+
+    /// Its address can be found from outside this activation.
+    pub fn captured(self) -> bool {
+        self.captured
+    }
+
+    /// Writing it is undefined.
+    pub fn constant(self) -> bool {
+        self.constant
+    }
 }
 
 impl PartialEq for ObjectRef {
@@ -386,9 +405,6 @@ impl PartialEq for Exact {
         other: &Self,
     ) -> bool {
         self.0 == other.0
-            && self.0.addressed == other.0.addressed
-            && self.0.captured == other.0.captured
-            && self.0.constant == other.0.constant
     }
 }
 
@@ -400,7 +416,6 @@ impl std::hash::Hash for Exact {
         state: &mut H,
     ) {
         self.0.hash(state);
-        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
     }
 }
 
@@ -439,6 +454,7 @@ impl ObjectInterner {
         object: MemoryObject,
     ) -> ObjectRef {
         self.lookups.set(self.lookups.get() + 1);
+        let (addressed, captured, constant) = (object.addressed, object.captured, object.constant);
         let mut held = self.held.borrow_mut();
         let (objects, ids) = &mut *held;
         let key = Exact(object);
@@ -455,9 +471,9 @@ impl ObjectInterner {
         ObjectRef {
             id,
             kind: one.kind,
-            addressed: one.addressed,
-            captured: one.captured,
-            constant: one.constant,
+            addressed,
+            captured,
+            constant,
             extent: one.extent,
             key: Key::of(&one.identity),
         }
@@ -474,7 +490,12 @@ impl ObjectInterner {
         &self,
         one: ObjectRef,
     ) -> MemoryObject {
-        self.held.borrow().0[one.id as usize].clone()
+        MemoryObject {
+            addressed: one.addressed,
+            captured: one.captured,
+            constant: one.constant,
+            ..self.held.borrow().0[one.id as usize].clone()
+        }
     }
 }
 
@@ -2353,6 +2374,34 @@ mod tests {
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
     }
 
+    /// An edit stopped exposing a frame slot and its object was a second
+    /// number: a result kept past the edit named it 15 (addressed), one
+    /// derived after it 17 (not), and a query between the two found two
+    /// objects that cannot alias (`i64_param_home.c` at -O2 -m32 lost the home
+    /// store of its i64 parameter). An object is one number whatever its
+    /// facts, each reference keeping the facts it was made with.
+    #[test]
+    fn an_object_is_one_number_whatever_facts_its_references_carry() {
+        let interner = super::ObjectInterner::default();
+        let slot = |exposed: bool| {
+            interner.intern(MemoryObject {
+                identity: Some(Identity::Value(1)),
+                extent: Some(8),
+                addressed: exposed,
+                captured: exposed,
+                ..MemoryObject::new(MemoryKind::Frame)
+            })
+        };
+        let (kept, fresh) = (slot(true), slot(false));
+        assert_eq!(kept, fresh);
+        assert_eq!(kept.id(), fresh.id());
+        assert!(kept.addressed() && kept.captured(), "each reference keeps the facts it was made with");
+        assert!(!fresh.addressed() && !fresh.captured());
+        assert!(super::objects_may_alias(&kept, &fresh), "the same object");
+        assert!(!interner.object(fresh).addressed, "and gives them back");
+        assert_eq!(Provenance::one(kept).union(&Provenance::one(fresh)).slices.len(), 1, "a set holds it once");
+    }
+
     /// A set of slices compared the objects' identities (strings, tuples) tree
     /// against tree at every step of every insert, and cloned them:
     /// `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%,
@@ -2404,16 +2453,16 @@ mod tests {
         assert_eq!(some(&[1, 3]), one);
     }
 
-    /// Two spellings of an object that differ in a fact are two objects here,
-    /// and one spelling is one object however often it is interned.
+    /// One object is one object however often it is interned; another extent
+    /// is another object.
     #[test]
-    fn an_object_is_interned_by_every_field_once() {
+    fn an_object_is_interned_by_its_identity_once() {
         let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
         let (one, again) = (super::ObjectRef::from(global.clone()), super::ObjectRef::from(global.clone()));
         assert_eq!(one, again);
         assert_eq!(one.id(), again.id());
-        let private = super::ObjectRef::from(MemoryObject { captured: false, ..global });
-        assert_ne!(one, private);
+        let longer = super::ObjectRef::from(MemoryObject { extent: Some(4), ..global });
+        assert_ne!(one, longer);
     }
 
     /// A process-wide interner numbered objects by everything interned before

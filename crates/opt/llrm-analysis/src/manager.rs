@@ -955,7 +955,7 @@ fn carried(
                     ..*one
                 });
             }
-            None => *unknown |= one.object.captured,
+            None => *unknown |= one.object.captured(),
         }
     }
     out
