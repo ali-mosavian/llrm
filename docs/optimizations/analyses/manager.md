@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:c5d1afcc70b98e091a860fa79492ea1f7d9bc24fb24887239a72bb16b16a2597 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:8062cebf309c9665d4e22ccc7d0ddcbd12c333c90bfa5e015dcd49e92811a780 -->
 
 # manager
 
@@ -92,8 +92,9 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  Bounded          Registers, Counted, DominatedEdges
  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
  Accesses         Annotated, CallEffects                  (memoryssa)
- ThroughMemory    Writes, Annotated, Registers
- FloatFacts       ThroughMemory, Writes, Annotated, Registers
+ PlainAccesses    Writes, Annotated                       (the graph's structure, once)
+ ThroughMemory    PlainAccesses, Writes, Annotated, Registers
+ FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
  Published        Pointers, ExposedFrames                 (observers)
 ```
 

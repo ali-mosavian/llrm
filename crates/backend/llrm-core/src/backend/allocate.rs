@@ -148,7 +148,9 @@
 //! the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 //! `Unfolded` that the spills admit is tried, plus `Whole` without
 //! splitting. A trial is kept only if it is cheaper and spilled none of its
-//! protected values. The frame is restored between trials.
+//! protected values: it stops at the first spill of one (`ABANDONED`), since
+//! the rounds after it could not change what is kept. The frame is restored
+//! between trials.
 //!
 //! ## Applying
 //! `applied` replaces every operand's value by its register at its width
@@ -1476,88 +1478,6 @@ const INF: f64 = f64::INFINITY;
 /// N rounds of N steps.
 pub const HINT_DEPTH: usize = 128;
 
-/// The fixed register each value reaches through the fewest copies, up to
-/// `HINT_DEPTH` of them.
-///
-/// A loop's sum placed before the return's copy to AX is otherwise seated
-/// where nothing asked, and whatever took AX leaves a move on the exit.
-fn _wanted(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-) -> IndexMap<u32, RegId> {
-    let found = _wanted_within(hints, fixed, HINT_DEPTH);
-    if llrm_support::env_set("LLRM_CHECK_WANTED") {
-        // The unbounded walk reaches the same values by the same registers as
-        // far as the bound goes: every value the bounded one holds is
-        // held alike, and where the walk ended before the bound nothing
-        // more is reached.
-        let whole = _wanted_within(hints, fixed, usize::MAX);
-        assert!(
-            found.iter().all(|(value, register)| whole.get(value) == Some(register)),
-            "a value the bounded hint walk reached differs from the unbounded one"
-        );
-        let deepest = _wanted_depth(hints, fixed);
-        assert!(
-            deepest > HINT_DEPTH || found == whole,
-            "the hint walk ended within {HINT_DEPTH} levels ({deepest}) yet differs from the unbounded one"
-        );
-    }
-    found
-}
-
-/// How many levels the unbounded walk takes.
-fn _wanted_depth(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-) -> usize {
-    let mut seen: BTreeSet<u32> = fixed.keys().copied().collect();
-    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    let mut levels = 0;
-    while !frontier.is_empty() {
-        levels += 1;
-        let mut reached = Vec::new();
-        for value in frontier {
-            for other in hints.get(&value).into_iter().flatten() {
-                if seen.insert(*other) {
-                    reached.push(*other);
-                }
-            }
-        }
-        frontier = reached;
-    }
-    levels
-}
-
-fn _wanted_within(
-    hints: &IndexMap<u32, Vec<u32>>,
-    fixed: &IndexMap<u32, RegId>,
-    depth: usize,
-) -> IndexMap<u32, RegId> {
-    // Only the values that are reached are kept: a pinned value is looked up in
-    // `fixed`, which is not copied.
-    let mut wanted: IndexMap<u32, RegId> = IndexMap::with_capacity_and_hasher(hints.len(), Default::default());
-    let mut frontier: Vec<u32> = fixed.keys().copied().collect();
-    let mut levels = 0;
-    while !frontier.is_empty() && levels < depth {
-        levels += 1;
-        let mut reached = Vec::new();
-        for value in frontier {
-            let register = match fixed.get(&value) {
-                Some(register) => _whole(*register),
-                None => wanted[&value],
-            };
-            for other in hints.get(&value).into_iter().flatten() {
-                if !fixed.contains_key(other) && !wanted.contains_key(other) {
-                    wanted.insert(*other, register);
-                    reached.push(*other);
-                }
-            }
-        }
-        frontier = reached;
-    }
-    wanted
-}
-
 /// The registers wanted by the values that want one and have none yet, where
 /// they are live: found by looking at every such value until enough is asked
 /// since the intervals last moved, then by a tree over where they are live.
@@ -2061,6 +1981,7 @@ fn _allocated(
     // and `RS_Spill`.
     let mut pieces: BTreeSet<u32> = BTreeSet::new();
     let mut splits_made = 0_usize;
+    let abandon: BTreeSet<u32> = ABANDON_IF_SPILLED.with(|set| set.borrow().clone());
     let no_preference = IndexMap::default();
     let preferred = preferred.unwrap_or(&no_preference);
 
@@ -2107,7 +2028,9 @@ fn _allocated(
     for Reverse(Queued(_, _, one)) in &queue {
         *waiting.entry(*one).or_insert(0) += 1;
     }
-    let mut wanted = _wanted(&facts.hints, &fixed);
+    // The fixed register each value reaches through the fewest copies, up to
+    // `HINT_DEPTH` of them, kept up to date by what each rewrite names.
+    let mut walk = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
     let mut claims = Claims::default();
     let mut fenced: BTreeSet<u32> = fixed.keys().copied().chain(protected.iter().copied()).collect();
     let mut seen = 0;
@@ -2154,11 +2077,11 @@ fn _allocated(
                 }
             }
             if votes.is_empty() {
-                if let Some(register) = wanted.get(&value) {
+                if let Some(register) = walk.wanted().get(&value) {
                     *votes.entry(*register).or_insert(0) += 1;
                 }
             }
-            let claimed = claims.by(&wanted, &facts.live, value, &mine, &r#where);
+            let claimed = claims.by(walk.wanted(), &facts.live, value, &mine, &r#where);
             order.sort_by_key(|register| {
                 (-votes.get(&_whole(*register)).copied().unwrap_or(0), claimed.contains(&_whole(*register)))
             });
@@ -2461,6 +2384,9 @@ fn _allocated(
                         if kept.contains(one) {
                             stage.insert(*one, Stage::Assign);
                         } else {
+                            if abandon.contains(one) {
+                                return Err(Error::Value(ABANDONED.to_owned()));
+                            }
                             spilled.insert(*one);
                             stage.insert(*one, Stage::Done);
                         }
@@ -2545,7 +2471,17 @@ fn _allocated(
             }
             required_seen = Some(crate::analysis::facts::Stamp::of(&body));
         });
-        wanted = llrm_support::debug::timed("after wanted", || _wanted(&facts.hints, &fixed));
+        llrm_support::debug::timed("after wanted", || {
+            walk.update(&facts.hints, &fixed, changes.as_ref().map(|changes| &changes.touched));
+        });
+        if llrm_support::env_set("LLRM_CHECK_WANTED") {
+            let whole = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
+            assert!(
+                walk.wanted() == whole.wanted(),
+                "{}: the hint walk kept up to date differs from one made afresh",
+                body.name
+            );
+        }
         claims = Claims::default();
         match &changes {
             // Only the intervals of the values the rewrite named moved.
@@ -2676,6 +2612,32 @@ fn _allocated(
         body,
         spilled,
     ))
+}
+
+/// What a trial's allocation returns once a value its shape protects is
+/// spilled: whatever else it does it is dropped (`kept` below), so the rounds
+/// after that spill are work no output reads.
+pub const ABANDONED: &str = "trial abandoned: a value it protects was spilled";
+
+thread_local! {
+    /// The values whose spilling makes the allocation running (a trial) one
+    /// that cannot be kept.
+    static ABANDON_IF_SPILLED: std::cell::RefCell<BTreeSet<u32>> = const { std::cell::RefCell::new(BTreeSet::new()) };
+    /// Whether trials are abandoned (a test turns it off to see that no output
+    /// changes), and how many were.
+    static ABANDONING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static ABANDONED_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many trials this thread abandoned, for a test.
+pub fn abandoned_trials() -> usize {
+    ABANDONED_TRIALS.with(std::cell::Cell::get)
+}
+
+/// Whether trials are abandoned once a protected value is spilled (on); a test
+/// turns it off.
+pub fn abandoning(on: bool) {
+    ABANDONING.with(|flag| flag.set(on));
 }
 
 thread_local! {
@@ -4132,8 +4094,18 @@ impl RegAlloc {
                     }
                     frame.borrow_mut().restore(&start);
                     TRIALS.with(|count| count.set(count.get() + 1));
-                    let trial = match run("regalloc trial", &candidate, &unspillable, &protected, splitting) {
+                    if ABANDONING.with(std::cell::Cell::get) {
+                        ABANDON_IF_SPILLED.with(|set| *set.borrow_mut() = kept.clone());
+                    }
+                    let trial = run("regalloc trial", &candidate, &unspillable, &protected, splitting);
+                    ABANDON_IF_SPILLED.with(|set| set.borrow_mut().clear());
+                    let trial = match trial {
                         Ok(trial) => trial,
+                        Err(Error::Value(text)) if text == ABANDONED => {
+                            ABANDONED_TRIALS.with(|count| count.set(count.get() + 1));
+                            llrm_support::debug!("regalloc", "  trial {shape:?} (splitting {splitting}): abandoned");
+                            continue;
+                        }
                         Err(other) => return Err(other),
                     };
                     llrm_support::debug!(

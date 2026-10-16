@@ -55,22 +55,23 @@
 //! ```text
 //!   #  phase (name)             module        notes
 //!   1  far-indirect-calls       farcall       memory operand for a far call
-//!   2  SsaSpill                 ssaspill      spiller route only
-//!   3  phielim                  phielim       phis -> copy groups; SSA ends
-//!   4  pressuresink             pressuresink  move a load to its one reader
-//!   5  floatfold                floatfold     float load as memory operand
-//!   6  floatassign              floatassign   x87 stack slots per value
-//!   7  floatalloc               floatalloc    x87 stack form
-//!   8  TwoAddress               twoaddr       c := a+b  ->  c := a; c += b
-//!   9  Coalescer                coalesce      remove a copy that can share
-//!  10  RegAlloc                 allocate      assign registers, split, spill
-//!  11  parcopy                  parcopy       sequence the copy groups
-//!  12  prologue                 prologue      reserve the frame; skipped by
+//!   2  SharedConstants          phiconst      one value for a constant several phi edges carry
+//!   3  SsaSpill                 ssaspill      spiller route only
+//!   4  phielim                  phielim       phis -> copy groups; SSA ends
+//!   5  pressuresink             pressuresink  move a load to its one reader
+//!   6  floatfold                floatfold     float load as memory operand
+//!   7  floatassign              floatassign   x87 stack slots per value
+//!   8  floatalloc               floatalloc    x87 stack form
+//!   9  TwoAddress               twoaddr       c := a+b  ->  c := a; c += b
+//!  10  Coalescer                coalesce      remove a copy that can share
+//!  11  RegAlloc                 allocate      assign registers, split, spill
+//!  12  parcopy                  parcopy       sequence the copy groups
+//!  13  prologue                 prologue      reserve the frame; skipped by
 //!                                             assemble, masm writes it
-//!  13  peephole                 peephole      one sweep of local rewrites
-//!  14  loopslots                loopslots     loop spill slots in registers
-//!  15  schedule                 schedule      latency-aware order
-//!  16  jumps                    jumps         block order, jumps, tails
+//!  14  peephole                 peephole      one sweep of local rewrites
+//!  15  loopslots                loopslots     loop spill slots in registers
+//!  16  schedule                 schedule      latency-aware order
+//!  17  jumps                    jumps         block order, jumps, tails
 //! ```
 //!
 //! Phases 4 to 9 are in `machine_with` before `allocate`; `allocate` calls
@@ -160,6 +161,7 @@ pub mod fpconvert;
 pub mod frame;
 pub mod framefree;
 pub mod globals;
+pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
 
@@ -198,6 +200,7 @@ pub mod overlap;
 pub mod parcopy;
 pub mod peep;
 pub mod peephole;
+pub mod phiconst;
 pub mod phielim;
 pub mod pointers;
 pub mod postings;

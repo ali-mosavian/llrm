@@ -12,7 +12,7 @@ bench/NAME/
   NAME.bas  NAME.c  NAME.nib    one variant per language (the .bas is built three ways: bas, bq16, bq32)
   NAME.out                      what all three print
   bench.toml                    description, kernel names, gaps
-  expected.toml                 the blessed counts (bench.py --bless)
+  expected.toml                 the references' counts (bench.py --references --bless)
 ```
 
 Each variant has a kernel function (`bench_NAME` in C and Nib, `BenchName` in
@@ -47,13 +47,12 @@ variant may be missing, or use an idiom instead of the real thing, only when
 
 ## expected.toml
 
-`reason` and `blessed` (a date) say why and when the file last changed. One
-table per language and level, `[c.O2]`, `[nib.Os]`, ..., holds `instructions`,
-`memory_operands`, `code_bytes`, `data_bytes`, `bss_bytes` and, for DOSBox-timed
-variants, `kernel_ms`. Tables `[bcc.*]`, `[ow.*]`, `[tc.*]`, `[tcpp.*]`,
-`[bc.*]`, `[pds71.*]` and `[vbdos.*]` hold the reference compilers' counts.
+`reason` and `blessed` (a date) say why and when the file last changed. One table per reference compiler and level, `[bcc.O2]`,
+`[ow.Os]`, `[tc.*]`, `[tcpp.*]`, `[bc.*]`, `[pds71.*]`, `[vbdos.*]` (and `[bas.*]`), holds `instructions`, `memory_operands`, `code_bytes`,
+`data_bytes`, `bss_bytes` and, for DOSBox-timed variants, `kernel_ms`. The compiler's own counts are in no file: each PR is judged against
+the base's, measured by the base's own tree (`tools/bench/readme.md`).
 
-Only `tools/bench/bench.py --bless --reason TEXT` writes it.
+Only `tools/bench/bench.py --references --bless --reason TEXT` writes it.
 
 `bench/parity/expected.json` is the value each parity program returns, read by
 `tests/toolchain.rs`.

@@ -253,6 +253,12 @@ impl Mark {
         self.at
     }
 
+    /// The function's history this is a point in: equal for the points of one
+    /// function, other for a copy of it, which has its own.
+    pub fn lineage(&self) -> u64 {
+        self.uid
+    }
+
     /// Whether `other` is a point in the same function's history: not a copy
     /// that took its own.
     pub fn same_history(

@@ -1518,3 +1518,16 @@ b1:
     let main = want.split("define i16 @main").nth(1).expect("main");
     assert!(!main.contains("call i16"), "{want}");
 }
+
+/// x_hanoi2 -O3 ran 196,652 clocks against gcc's 119,908: `mv` (27 operations,
+/// a call of 14) was refused as a copy of itself under a budget of 16, the
+/// threshold's 250 over 225 of -O2's 15, where gcc's -O3
+/// `max-inline-insns-auto` is 30 (opts.cc:690-694), twice -O2's. A function
+/// copies itself where it grows by that many operations.
+#[test]
+fn test_the_budget_of_a_recursive_call_doubles_at_o3_as_gccs_does() {
+    assert_eq!(Threshold::new(225).recursive_budget(12), Some(15));
+    assert_eq!(Threshold::new(250).recursive_budget(12), Some(30));
+    // -O1 keeps the ordinary budget: it has no -finline-functions.
+    assert_eq!(Threshold::new(225 * 6 / 15).recursive_budget(12), Threshold::new(225 * 6 / 15).budget(12));
+}

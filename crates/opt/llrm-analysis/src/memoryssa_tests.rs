@@ -67,6 +67,26 @@ fn incoming(access: &Access) -> Vec<(Option<i64>, usize)> {
     edges
 }
 
+/// Each client of a body made the graph's structure again (147 builds for
+/// d_faces' 48 float solves and 63 through-memory ones, 61.7 M instructions,
+/// one more of them per walk that placed an index). Graphs of one body state
+/// and one set of accesses share it; a copy of the accesses, or the body
+/// changed, makes its own.
+#[test]
+fn graphs_of_one_body_and_accesses_share_one_structure() {
+    let parsed = diamond();
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &Calls::default());
+    let before = structures_made();
+    let first = built(&unit, &accesses);
+    let registers = Default::default();
+    let second = built(&unit.with_registers(&registers), &accesses);
+    assert_eq!(structures_made() - before, 1);
+    assert_eq!(first.sites.len(), second.sites.len());
+    built(&unit, &accesses.clone());
+    assert_eq!(structures_made() - before, 2, "a copy of the accesses may be changed: it starts without the structure");
+}
+
 /// Each arm stores the cell; the join loads it.
 fn diamond() -> Parsed {
     Parsed::new(&format!(

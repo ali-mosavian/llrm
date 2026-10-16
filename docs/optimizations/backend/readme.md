@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 92 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 94 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -42,6 +42,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 92 documented,
 | frame | The stack frame of one function body: where each spill slot, temporary and selector-made stack object lives, and how many bytes the prologue reserves. | `lir frame` in `assemble::staged`, once per function after selection and | [frame](frame.md) |
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
+| hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
@@ -65,6 +66,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 92 documented,
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |
 | parcopy | Writes each parallel copy group (the copies a phi becomes on an edge, which happen at once) as a sequence of moves that computes the same thing. | After `regalloc`, before `prologue` and the peephole, once per body, at | [parcopy](parcopy.md) |
 | peephole | Local rewrites of allocated LIR that need the final physical registers. | Once per body, as the machine phase after `prologue` and before `loopslots` | [peephole](peephole.md) |
+| phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | pointers | Advances a packed huge pointer by a displacement as arithmetic on its 32-bit form. | Nothing outside the file's own tests: a grep finds no caller. Isel states | [pointers](pointers.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |

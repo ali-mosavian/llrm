@@ -116,6 +116,7 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
     if not name:
         return
     late, same, last, at = expiry(session, LONGEST), 0, None, None
+    began, cpu, seen, shown = time.monotonic(), guest_seconds(session), [], []
     while not late():
         now = guest_seconds(session)
         if at is None or now - at >= LOOK_CPU:
@@ -124,8 +125,13 @@ def settled(session, work: Path, name: str | None, before: bytes | None) -> None
             if same >= LOOKS and (before is None or look != before):
                 return
             last = look
+            seen.append(look)
         time.sleep(LOOK_EVERY)
-    raise TimeoutError(f"the screen never settled for {name}")
+    # What a runner that never settled looked like: a picture that moves for ever, one that never left `before`, or no looks at all.
+    raise TimeoutError(
+        f"the screen never settled for {name}: {len(seen)} looks in {guest_seconds(session) - cpu:.1f} CPU s and {time.monotonic() - began:.1f} s wall, "
+        f"{len(set(seen))} distinct pictures, {'still the one before the step' if set(seen) <= {before} else 'last ' + ' '.join(map(str, seen[-5:]))}"
+    )
 
 
 def play(exe: Path, work: Path, steps: list, demo: str | None = None) -> dict[str, Path]:
@@ -218,8 +224,9 @@ def candidate_shots(name: str, built: dict, work: Path) -> dict[str, dict[str, P
     return shots
 
 
-def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]]]:
-    """For each demo and target of ours, the checkpoints that differ from BCOM45's: [] where it looks the same."""
+def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] | Exception]:
+    """For each demo and target of ours, the checkpoints that differ from BCOM45's: [] where it looks the same. A demo that could not be
+    played is its exception, not a failure of the others': GORILLA's `never settled` read as NIBBLES's too."""
     objects = qbbuild.runtimes(work)
 
     def one(name: str) -> dict[str, list[str]]:
@@ -232,4 +239,19 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]]]
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}
-        return {name: future.result() for name, future in futures.items()}
+        return {name: outcome(future) for name, future in futures.items()}
+
+
+def outcome(future):
+    """What a demo's run gave: its differences, or the exception that stopped it."""
+    try:
+        return future.result()
+    except Exception as why:
+        return why
+
+
+def of(results: dict, name: str) -> dict[str, list[str]]:
+    """`name`'s differences from `run`'s results; raises only if `name` itself could not be played."""
+    if isinstance(results[name], Exception):
+        raise results[name]
+    return results[name]
