@@ -209,6 +209,11 @@ pub struct Profile {
     /// An interrupt handler's parameters, in order: the registers its frame
     /// holds, by name. None where the target has no interrupt handlers.
     pub interrupt_parameters: Vec<String>,
+    /// Symbols a module that defines the entry asks its linker for, and, where
+    /// the entry takes parameters, more: Open Watcom's `_cstart_` and `__argc`
+    /// (its start-up, and what builds `argv`).
+    pub entry_requests: Vec<String>,
+    pub entry_argument_requests: Vec<String>,
 }
 
 impl Profile {
@@ -273,7 +278,20 @@ impl Profile {
                 .map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string"))
                 .collect::<Result<_, _>>()?,
         };
+        let names = |key: &str| -> Result<Vec<String>, String> {
+            abi.get(key)
+                .map(|list| {
+                    list.as_array()
+                        .ok_or_else(|| format!("frontend.abi.{key} is not a list"))?
+                        .iter()
+                        .map(|one| one.as_str().map(str::to_owned).ok_or_else(|| format!("a {key} name is not a string")))
+                        .collect()
+                })
+                .unwrap_or(Ok(Vec::new()))
+        };
         Ok(Self {
+            entry_requests: names("entry_requests")?,
+            entry_argument_requests: names("entry_argument_requests")?,
             cpu: text(frontend, "watcom_cpu")?,
             convention: text(abi, "convention")?,
             entry: text(frontend, "entry")?,
@@ -1118,6 +1136,35 @@ mod tests {
         };
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
         assert!(!asm.contains("DGROUP"), "{asm}");
+    }
+
+    /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
+    /// and `__argc` where `main` takes arguments: they pull in the start-up
+    /// and the module that builds `argv`. Without them a program linked against
+    /// the library had `argc` 0 and no `argv[0]`, and needed `_cstart_` named on
+    /// the link line.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_module_with_main_asks_its_linker_for_the_start_up_and_for_argv() {
+        let directory = tempfile::tempdir().unwrap();
+        let listing = |name: &str, text: &str| {
+            let source = directory.path().join(format!("{name}.c"));
+            std::fs::write(&source, text).unwrap();
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+            let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records it");
+            let options = llrm_core::driver::Options {
+                abi: Some("watcom".to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            llrm_core::backend::masm::text(&super::selected(&recorded, name, None, &options).unwrap()).unwrap()
+        };
+        let argv = listing("withargs", "int main(int argc, char **argv) { return argc; }\n");
+        assert!(argv.contains("extern _cstart_:near") && argv.contains("extern __argc:near"), "{argv}");
+        let bare = listing("bare", "int main(void) { return 0; }\n");
+        assert!(bare.contains("extern _cstart_:near") && !bare.contains("__argc"), "{bare}");
+        let other = listing("other", "int helper(int a) { return a; }\n");
+        assert!(!other.contains("_cstart_") && !other.contains("__argc"), "{other}");
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object

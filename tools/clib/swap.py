@@ -32,6 +32,7 @@ def main():
     ap.add_argument("--llrm-c", type=Path, required=True)
     ap.add_argument("--headers", type=Path, required=True)
     ap.add_argument("--expect", type=Path, required=True, help="the output the program must print")
+    ap.add_argument("flags", nargs="*", help="more switches for llrm-c (after --)")
     a = ap.parse_args()
     import dosbatch
 
@@ -41,7 +42,7 @@ def main():
     manifest = json.loads((a.lib / "manifest.json").read_text())
     members = a.lib / "members"
     obj = work / "prog.obj"
-    subprocess.run([str(a.llrm_c), "-m16", "-mabi=watcom", "-std=c99", "-fobject-format=omf", f"-I{a.headers}", "-o", str(obj), str(a.program)], check=True)
+    subprocess.run([str(a.llrm_c), "-m16", "-mabi=watcom", "-std=c99", "-fobject-format=omf", f"-I{a.headers}", *a.flags, "-o", str(obj), str(a.program)], check=True)
     link = lambda lib, exe, mapf: subprocess.run(
         [str(a.wlink), "format", "dos", "option", "quiet", f"option", f"map={mapf}", "reference", "_cstart_", "file", str(obj), "library", str(lib), "name", str(exe)],
         stdin=subprocess.DEVNULL, capture_output=True)
@@ -49,7 +50,7 @@ def main():
     mapped = set(re.findall(r"^[0-9a-f]{4}:[0-9a-f]{4}\*?\s+(\S+)$", (work / "base.map").read_text(), re.M))
     swaps = []
     for key, origin in manifest.items():
-        if origin != "llrm-c":
+        if origin not in ("llrm-c", "jwasm"):
             continue
         d, name = key.split("/")
         theirs = a.ref / "obj" / d / f"{name}.obj"
@@ -70,10 +71,12 @@ def main():
         shutil.rmtree(w / "m")
     base = dosbatch.Job("base", "exe", work / "base.exe", budget_ms=20000)
     results = dosbatch.run([base] + [j for _, j in jobs], work / "dos")
-    want = a.expect.read_text()
-    print("base:", "PASS" if results["base"].text == want else "FAIL")
+    # The program prints its own name, which differs between the runs.
+    norm = lambda text: re.sub(r"c:\\\w+\.exe", "PROGRAM", text, flags=re.I)
+    want = norm(a.expect.read_text())
+    print("base:", "PASS" if norm(results["base"].text) == want else "FAIL")
     for name, job in jobs:
-        if results[job.stem].text == want:
+        if norm(results[job.stem].text) == want:
             print("fixes:", name)
     print(len(jobs), "swaps tried")
 

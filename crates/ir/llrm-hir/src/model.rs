@@ -962,6 +962,10 @@ pub struct Module {
     /// Each source line's BASIC line number, where a statement table
     /// reports one: (line, number).
     pub line_numbers: Vec<(i64, i64)>,
+    /// Symbols a linker is asked for though nothing names them, so that it
+    /// pulls in the library module that defines them: a start-up, an
+    /// argument parser.
+    pub requests: Vec<String>,
 }
 
 impl Module {
@@ -982,6 +986,7 @@ impl Module {
             facts: Vec::new(),
             debug: None,
             line_numbers: Vec::new(),
+            requests: Vec::new(),
         }
     }
 
