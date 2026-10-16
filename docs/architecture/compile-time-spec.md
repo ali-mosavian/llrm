@@ -307,7 +307,7 @@ Each replacement is priced with the executed-work model where the decision is ma
 
 One allocation and one route are the default from stage 0b, by the user's decision. Stage 0b records, per row, what dropping best-of-six cost; on the fn it was +1.2% static instructions at -O1 to -O3 and +2.5% instructions with +4.3% memory operands at -Os (review 2.2). The in-run decisions of 4.2 are the follow-up that recovers those rows. Each decision lands on its own, and the gate compiles every corpus object with and without it and reports per row.
 - **m32:** the vsgcc table (`run.sh`, `table.py`). Executed instructions, memory operands and code bytes per program and level for llrm-single, llrm-today, gcc and clang.
-- **m16:** `tools/bench` rows against `expected.toml`, and the DOS compilers' rows ([vs-borland-watcom](../comparison/vs-borland-watcom.md)); the m32-vs-m16 requirement ([m32-vs-m16](../comparison/m32-vs-m16.md)).
+- **m16:** `tools/bench` rows against the base's counts, and the DOS compilers' rows ([vs-borland-watcom](../comparison/vs-borland-watcom.md)); the m32-vs-m16 requirement ([m32-vs-m16](../comparison/m32-vs-m16.md)).
 - **Landing rule for a decision**, at -O1, -O2, -O3 and -Os, m16 and m32:
   - no row has more executed instructions or memory operands than without it;
   - no -Os row has more code bytes;

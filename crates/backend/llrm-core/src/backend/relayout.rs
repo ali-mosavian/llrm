@@ -182,6 +182,21 @@ struct Moves<'a> {
 }
 
 impl Moves<'_> {
+    /// The first byte of the slot `home` in the new layout: what a cell moved
+    /// out of it is tagged with.
+    fn home(
+        &self,
+        home: i64,
+    ) -> Option<i64> {
+        if home == 0 {
+            return Some(0);
+        }
+        if let Some(found) = self.homes.get(&home) {
+            return Some(*found);
+        }
+        self.frame.extents.iter().any(|(start, _)| *start == home).then_some(home - self.hole)
+    }
+
     /// Where the byte at `disp` of a cell tagged with slot `home` is in the new
     /// layout.
     fn disp(
@@ -208,15 +223,15 @@ impl Moves<'_> {
         addr: Addr,
         offset: i64,
     ) -> Option<(Addr, i64)> {
-        let new = match (addr.space, addr.slot_home()) {
-            (Space::Frame, Some(home)) => self.disp(home, addr.disp)?,
+        let (new, home) = match (addr.space, addr.slot_home()) {
+            (Space::Frame, Some(home)) => (self.disp(home, addr.disp)?, self.home(home)?),
             (Space::Frame, None) => return None,
             _ => return Some((addr, offset)),
         };
         // `offset` repeats the displacement on a cell the spiller made from a
         // folded frame address.
         let offset = if addr.space == Space::Frame && addr.disp != 0 && offset == addr.disp { new } else { offset };
-        Some((Addr { disp: new, ..addr }, offset))
+        Some((Addr { disp: new, ..addr }.in_slot(home), offset))
     }
 
     fn mem(
@@ -319,7 +334,9 @@ impl Moves<'_> {
         Some(match &one.place {
             DebugPlace::At(addr) if addr.space == Space::Frame => match addr.slot_home() {
                 Some(home) => DebugVariable {
-                    place: DebugPlace::At(Addr { disp: self.disp(home, addr.disp)?, ..*addr }),
+                    place: DebugPlace::At(
+                        Addr { disp: self.disp(home, addr.disp)?, ..*addr }.in_slot(self.home(home)?),
+                    ),
                     ..one.clone()
                 },
                 None => return None,
@@ -425,5 +442,26 @@ mod tests {
         let moves = Moves { frame: &frame, homes: &homes, hole: 6 };
         let reach = |ranges: &[(i64, i64)]| crate::model::lir::outside(&ranges.iter().copied().collect());
         assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
+    }
+
+    /// The second layout moved a cell but kept its old slot's tag, so the tags
+    /// of the body did not name the slots of its frame: d_faces -Os had ten
+    /// cells in no slot (`frame.slots`, `extents`), which a pass that lays
+    /// slots out by their uses must refuse.
+    #[test]
+    fn test_a_cell_moved_to_the_second_layout_is_tagged_with_the_slot_it_moved_to() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(0);
+        frame.extents = vec![(-100, 32)];
+        let homes = [(-12, -20)].into_iter().collect();
+        let moves = Moves { frame: &frame, homes: &homes, hole: 8 };
+        let cell = |disp: i64, home: i64| Addr::new(Space::Frame, disp).in_slot(home);
+        let (spilled, _) = moves.addr(cell(-10, -12), 0).expect("a spill slot moves");
+        assert_eq!((spilled.disp, spilled.slot_home()), (-18, Some(-20)));
+        let (laid, _) = moves.addr(cell(-90, -100), 0).expect("an extent moves");
+        assert_eq!((laid.disp, laid.slot_home()), (-98, Some(-108)));
+        let (incoming, _) = moves.addr(cell(8, 0), 0).expect("an incoming argument stays");
+        assert_eq!((incoming.disp, incoming.slot_home()), (8, Some(0)));
     }
 }

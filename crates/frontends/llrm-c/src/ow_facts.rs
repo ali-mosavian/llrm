@@ -60,10 +60,12 @@ const NO_MEMORY_CHANGED: i64 = 0x200;
 /// Not Open Watcom's: `__attribute__((noinline))`, the bit
 /// `toolchain/owshim/llrmattr.h` adds to the class.
 const NO_INLINE: i64 = 0x800;
+/// Not Open Watcom's either: `__attribute__((always_inline))`.
+const ALWAYS_INLINE: i64 = 0x1000;
 
 /// Every bit the call class has, and what is done with it: a bit not in this
 /// table is refused, not dropped.
-const CLASS: [(i64, &str, Bit); 12] = [
+const CLASS: [(i64, &str, Bit); 13] = [
     (0x1, "REVERSE_PARMS", Bit::Abi("Symbol::in_order")),
     (ABORTS, "ABORTS", Bit::Fact),
     (NORETURN, "NORETURN", Bit::Fact),
@@ -76,6 +78,7 @@ const CLASS: [(i64, &str, Bit); 12] = [
     (NO_MEMORY_CHANGED, "NO_MEMORY_CHANGED", Bit::Fact),
     (0x400, "DLL_EXPORT", Bit::Ignored("a Windows export")),
     (NO_INLINE, "NO_INLINE", Bit::Fact),
+    (ALWAYS_INLINE, "ALWAYS_INLINE", Bit::Fact),
 ];
 
 /// The facts a routine's call class states: it does not return, it is not
@@ -98,6 +101,9 @@ pub fn of_call_class(class: i64) -> Result<Vec<Fact>, Unsupported> {
     }
     if class & NO_INLINE != 0 {
         facts.push(Fact::Inline(Inlining::Never));
+    }
+    if class & ALWAYS_INLINE != 0 {
+        facts.push(Fact::Inline(Inlining::Always));
     }
     match (class & NO_MEMORY_READ != 0, class & NO_MEMORY_CHANGED != 0) {
         (true, true) => facts.push(Fact::Memory(Effect::None)),
@@ -195,6 +201,13 @@ mod tests {
         assert_eq!(of_call_class(0x804).unwrap(), vec![Fact::NoReturn, Fact::Inline(Inlining::Never)]);
     }
 
+    /// `__attribute__((always_inline))` was read and dropped: eight calls of an
+    /// always-inline routine stayed eight calls at every level.
+    #[test]
+    fn a_call_class_states_that_a_routine_is_always_inlined() {
+        assert_eq!(of_call_class(0x1000).unwrap(), vec![Fact::Inline(Inlining::Always)]);
+    }
+
     #[test]
     fn restrict_states_noalias_of_the_parameter_it_names() {
         let mut unit = Unit::default();
@@ -215,7 +228,7 @@ mod tests {
         assert_eq!(of_call_class(0x40).unwrap(), Vec::<Fact>::new());
         assert!(returns_twice(0x40) && !returns_twice(0x80));
         assert!(of_call_class(0x88).unwrap_err().0.contains("PARMS_BY_ADDRESS"));
-        assert!(of_call_class(0x1000).unwrap_err().0.contains("no table"));
+        assert!(of_call_class(0x2000).unwrap_err().0.contains("no table"));
         // The ABI bits and the ignored one pass.
         assert_eq!(of_call_class(0x1 | 0x10 | 0x20 | 0x80 | 0x400).unwrap(), Vec::<Fact>::new());
         // Each bit is in the table once.

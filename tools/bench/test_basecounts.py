@@ -107,32 +107,10 @@ def test_the_base_is_measured_by_its_own_trees_bench_not_the_heads(monkeypatch, 
     assert "--no-judge" not in command, "a bench.py without the flag is not given it"
 
 
-def test_the_two_judges_name_where_they_differ():
-    old = ["fib bq32 -O2: instructions 101 > 100 (worse)", "fib c -O2: code_bytes 5 < 6 (better: --bless --reason)", "fib bas -O2: instructions 2 > 1 (worse)"]
-    worse = [("fib bq32 -O2", "instructions", 100, 101)]
-    assert bc.differences(old, worse, [("fib c -O2", "code_bytes", 6, 5)]) == [], "bas is a reference: not compared"
-    assert bc.differences(old, [], []) == [
-        "fib bq32 -O2 instructions: expected.toml says worse, the base says same",
-        "fib c -O2 code_bytes: expected.toml says better, the base says same",
-    ]
-
-
-def test_a_dry_run_that_fails_prints_why_and_never_fails_the_gate(monkeypatch):
-    import types
-
-    import bench
-
-    boom = types.SimpleNamespace(git=lambda *a: (_ for _ in ()).throw(RuntimeError("no git")))
-    monkeypatch.setitem(sys.modules, "measure", boom)
-    lines = bench.base_dry_run({}, types.SimpleNamespace(opt=["O2"], work=Path("/x")), [])
-    assert lines == ["BASE: dry run failed: RuntimeError: no git"]
-
-
 def test_a_base_that_does_not_measure_says_why_on_one_line_the_gate_prints(monkeypatch, tmp_path):
     """Train 5's gate printed `BASE: dry run failed: SystemExit: se did not measure:`: the reason was on the lines below, which the gate's
     filter drops."""
     import subprocess
-    import types
 
     monkeypatch.setattr(bc.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "Traceback\nBuildError: llrm-c: unrecognized arguments: -mbss-begin\n"))
     try:
@@ -141,16 +119,11 @@ def test_a_base_that_does_not_measure_says_why_on_one_line_the_gate_prints(monke
         assert "\n" not in str(why) and "unrecognized arguments: -mbss-begin" in str(why), str(why)
     else:
         raise AssertionError("a base that wrote nothing was taken for measured")
-    import bench
 
-    boom = types.SimpleNamespace(git=lambda *a: (_ for _ in ()).throw(SystemExit("a\nb")))
-    monkeypatch.setitem(sys.modules, "measure", boom)
-    (line,) = bench.base_dry_run({}, types.SimpleNamespace(opt=["O2"], work=Path("/x")), [])
-    assert line == "BASE: dry run failed: SystemExit: a b"
 
-def test_a_waiver_excuses_the_one_count_the_committed_judge_would_fail_and_the_bless_spends_it(tmp_path, monkeypatch):
-    """Train 5's batch of clean PRs moved jpeg_fixed bq32 -Os by +2 together: the train may not raise a count, so the owner's waiver (the
-    row, the counter, the count it may reach) lets exactly that count through, and the bless that writes it removes the waiver."""
+def test_a_waiver_excuses_the_one_count_it_names_and_no_other(monkeypatch):
+    """Train 5's batch of clean PRs moved jpeg_fixed bq32 -Os by +2 together: the owner's waiver (the row, the counter, the count it may
+    reach) lets exactly that count through."""
     import bench
 
     want = {"instructions": 100, "code_bytes": 5}
@@ -159,12 +132,6 @@ def test_a_waiver_excuses_the_one_count_the_committed_judge_would_fail_and_the_b
     assert bench.against("jpeg_fixed bq32 -Os", {"instructions": 103, "code_bytes": 5}, want, waiver)[0].endswith("(worse)"), "another count"
     assert bench.against("jpeg_fixed bq32 -O2", {"instructions": 102, "code_bytes": 5}, want, waiver)[0].endswith("(worse)"), "another row"
     assert bench.against("jpeg_fixed bq32 -Os", {"instructions": 102, "code_bytes": 6}, want, waiver)[0].endswith("(worse)"), "another counter"
-    (tmp_path / bc.WAIVERS).mkdir(parents=True)
-    (tmp_path / bc.WAIVERS / "w.toml").write_text('reason = "r"\n[[row]]\nlabel = "jpeg_fixed bq32 -Os"\ncounter = "instructions"\nto = 102\n')
-    (tmp_path / bc.WAIVERS / "other.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 5\n')
-    measured = {("jpeg_fixed", "bq32", "Os"): {"instructions": 102}, ("fib", "c", "O2"): {"instructions": 9}}
-    assert bc.consume_waivers(tmp_path, measured) == ["w.toml"]
-    assert [p.name for p in (tmp_path / bc.WAIVERS).glob("*.toml")] == ["other.toml"], "a waiver whose row is not at its count stays"
 
 
 def test_waivers_live_outside_bench_where_every_tool_that_lists_the_benchmarks_would_take_them_for_a_program():

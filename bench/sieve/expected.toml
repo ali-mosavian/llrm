@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 17646
@@ -15,62 +15,6 @@ code_bytes = 271
 data_bytes = 15
 bss_bytes = 0
 kernel_ms = 0.2568
-
-[bq16.O2]
-instructions = 22883
-memory_operands = 6065
-code_bytes = 298
-data_bytes = 15
-bss_bytes = 0
-
-[bq16.Os]
-instructions = 22907
-memory_operands = 6088
-code_bytes = 283
-data_bytes = 15
-bss_bytes = 0
-
-[bq32.O2]
-instructions = 22785
-code_bytes = 321
-data_bytes = 21
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 22800
-code_bytes = 289
-data_bytes = 21
-bss_bytes = 0
-
-[c.O2]
-instructions = 12151
-memory_operands = 2901
-code_bytes = 180
-data_bytes = 0
-bss_bytes = 0
-
-[c.Os]
-instructions = 12882
-memory_operands = 3495
-code_bytes = 113
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.1766
-
-[nib.O2]
-instructions = 12141
-memory_operands = 2727
-code_bytes = 133
-data_bytes = 0
-bss_bytes = 0
-
-[nib.Os]
-instructions = 12876
-memory_operands = 3495
-code_bytes = 110
-data_bytes = 0
-bss_bytes = 0
-kernel_ms = 0.1776
 
 [ow.O2]
 instructions = 19596

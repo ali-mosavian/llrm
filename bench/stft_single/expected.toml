@@ -1,4 +1,4 @@
-reason = "doubles on 8 bytes (Intel486 data sheet 240440-002, section 10.1, Table 2.1): functions holding a double keep the call stack aligned (a pad push per call) and their frame objects and constants are 8-aligned; stft nib data +3 B of padding, bq32 -Os stft +1/+6 instructions, jpeg bq32 +-6 instructions and +-9 code bytes"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
 blessed = "2026-10-15"
 
 [bas.O2]
@@ -12,54 +12,6 @@ code_bytes = 1198
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 871.4082
-
-[bq16.O2]
-code_bytes = 1235
-data_bytes = 4701
-bss_bytes = 0
-kernel_ms = 1132.917
-
-[bq16.Os]
-code_bytes = 1170
-data_bytes = 4701
-bss_bytes = 0
-kernel_ms = 1132.0913
-
-[bq32.O2]
-instructions = 72232466
-code_bytes = 1390
-data_bytes = 4733
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 73091465
-code_bytes = 1357
-data_bytes = 4733
-bss_bytes = 0
-
-[c.O2]
-code_bytes = 795
-data_bytes = 39
-bss_bytes = 5122
-kernel_ms = 325.0158
-
-[c.Os]
-code_bytes = 783
-data_bytes = 39
-bss_bytes = 5122
-kernel_ms = 322.3449
-
-[nib.O2]
-code_bytes = 2337
-data_bytes = 1092
-bss_bytes = 0
-kernel_ms = 646.3399
-
-[nib.Os]
-code_bytes = 2401
-data_bytes = 1092
-bss_bytes = 0
-kernel_ms = 653.1238
 
 [bcc.O2]
 code_bytes = 1115
