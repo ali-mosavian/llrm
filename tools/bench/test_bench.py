@@ -21,12 +21,13 @@ class GateTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("(worse)", problems[0])
 
-    def test_a_better_count_fails_until_it_is_blessed(self):
-        problems = bench.against("x", {"instructions": 100, "memory_operands": 39}, BASE)
-        self.assertIn("(better: --bless", problems[0])
+    def test_a_better_count_passes_and_is_the_next_base(self):
+        """A better count failed until someone blessed it into expected.toml: every PR that moved a count edited the file and conflicted with the next."""
+        self.assertEqual(bench.against("x", {"instructions": 100, "memory_operands": 39}, BASE), [])
 
-    def test_no_baseline_is_a_failure_not_a_pass(self):
-        self.assertEqual(len(bench.against("x", dict(BASE), None)), 1)
+    def test_a_row_with_no_base_is_not_judged(self):
+        """A new program has no base to be worse than."""
+        self.assertEqual(bench.against("x", dict(BASE), None), [])
 
 
 class LinkTests(unittest.TestCase):
@@ -110,7 +111,8 @@ class ReferenceTests(unittest.TestCase):
             (root / "x" / "x.out").write_text("0\n")
             bench.write_expected(root / "x", {("x", "c", "O2"): self.LLRM, ("x", "bcc", "O2"): self.BCC}, "x", "test")
             out = io.StringIO()
-            with mock.patch.object(bench, "BENCH", root), mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--opt", "O2", *extra]), redirect_stdout(out):
+            base = {("x", "c", "O2"): self.LLRM}
+            with mock.patch.object(bench, "BENCH", root), mock.patch.object(bench, "base_rows", return_value=(base, {"x"}, "0" * 40)), mock.patch.object(bench, "measure_all", return_value=measured), mock.patch("sys.argv", ["bench", "--opt", "O2", *extra]), redirect_stdout(out):
                 return bench.main(), out.getvalue()
 
     def test_the_gate_passes_on_the_blessed_numbers(self):
@@ -213,10 +215,8 @@ class SizeTests(unittest.TestCase):
         for counter in ("data_bytes", "bss_bytes"):
             self.assertIn("(worse)", bench.against("x", SIZED | {counter: SIZED[counter] + 1}, SIZED)[0])
 
-    def test_a_baseline_without_sizes_fails_until_blessed(self):
-        problems = bench.against("x", dict(SIZED), {"instructions": 100, "memory_operands": 40})
-        self.assertEqual(len(problems), 3)
-        self.assertIn("no baseline for code_bytes", problems[0])
+    def test_a_counter_the_base_lacks_is_not_judged(self):
+        self.assertEqual(bench.against("x", dict(SIZED), {"instructions": 100, "memory_operands": 40}), [])
 
     def test_the_size_ratio_to_a_reference_may_not_worsen(self):
         """llrm's code grew 200 -> 260 against BCC's 300: the ratio went 0.67 -> 0.87."""
@@ -302,16 +302,6 @@ def test_every_basic_benchmark_has_a_variant_on_our_runtime_with_the_same_kernel
     assert have["bq16"].source == have["bas"].source
 
 
-def test_fib_on_our_runtime_counts_what_is_blessed(tmp_path):
-    """Built `-fqb-runtime=llrm`, linked by jwlink (no Microsoft LINK), counted by the emulator from the kernel's entry."""
-    fib = bench.BENCH / "fib"
-    variant = next(one for one in bench.variants(fib) if one.language == "bq16")
-    objects = bench.qbbuild.runtimes(tmp_path / "runtime")
-    built = bench.build(variant, "O2", tmp_path, "V000", objects)
-    assert not isinstance(built, str), built
-    counts = bench.measure(("V000", built[0], built[1], variant.region, bench.expected_output(fib), tmp_path / "V000.obj"))
-    assert counts["instructions"] == bench.read_expected(fib)["bq16"]["O2"]["instructions"]
-
 
 class TimedOnlyTests(unittest.TestCase):
     """grep scans 10 MB: the emulator would step ~10^8 instructions, so it is sized and timed, not counted."""
@@ -335,11 +325,11 @@ class TimedOnlyTests(unittest.TestCase):
         sized = {"code_bytes": 12, "data_bytes": 0, "bss_bytes": 40}
         self.assertEqual(bench.against("grep c -O2", sized, sized | {"kernel_ms": 3.4}), [])
 
-    def test_the_time_of_a_timed_only_program_gates_both_ways(self):
+    def test_the_time_of_a_timed_only_program_may_not_rise(self):
         want = {"kernel_ms": 100.0}
         self.assertEqual(bench.time_against("g", {"kernel_ms": 100.5}, want), [])
         self.assertIn("(worse)", bench.time_against("g", {"kernel_ms": 103.0}, want)[0])
-        self.assertIn("(better: --bless", bench.time_against("g", {"kernel_ms": 97.0}, want)[0])
+        self.assertEqual(bench.time_against("g", {"kernel_ms": 97.0}, want), [])
         self.assertEqual(bench.time_against("g", {}, want), [])  # not run with --time
 
     def test_sizes_and_time_are_blessed_without_an_instruction_count(self):
@@ -500,19 +490,19 @@ def test_a_file_readers_count_does_not_move_with_what_dos_does(tmp_path):
     assert all("instructions" in one for one in counts.values()), counts
     assert len({one["instructions"] for one in counts.values()}) == 1, counts
 
-def test_no_bench_program_runs_long_enough_for_a_timer_tick_at_the_flat_rate():
+def test_a_bq32_program_that_runs_long_enough_for_a_timer_tick_at_the_flat_rate_fails():
     """A tick is 55 ms of the emulated clock: at 100,000 instructions a millisecond that was 5.5M instructions, and each of the
     13 to 114 ticks in a long kernel (stft, grep) ran the extender's interrupt handler (~120 instructions, its length by where it
-    landed) inside the counted function: a few bytes of code anywhere moved the row by tens (#1603: -40 on stft_single)."""
-    import tomllib
+    landed) inside the counted function: a few bytes of code anywhere moved the row by tens (#1603: -40 on stft_single). The check read the
+    committed counts; the counts are measured now, so the judge reads them."""
+    limit = bench.qb32.BENCH_RATE * 55
+    fib = bench.BENCH / "fib"
 
-    longest = max(
-        counts["instructions"]
-        for path in bench.BENCH.rglob("expected.toml")
-        for level in tomllib.loads(path.read_text()).get("bq32", {}).values()
-        for counts in [level]
-    )
-    assert longest < bench.qb32.BENCH_RATE * 55, (longest, bench.qb32.BENCH_RATE)
+    def rows(instructions):
+        return {("fib", one.language, "O2"): {"instructions": instructions} if one.language == "bq32" else {"skip": "not this test's"} for one in bench.variants(fib)}
+
+    assert not [one for one in bench.judge(rows(limit - 1), ["fib"], ["O2"], {}, set()) if "timer tick" in one]
+    assert [one for one in bench.judge(rows(limit), ["fib"], ["O2"], {}, set()) if "timer tick" in one]
 
 
 def test_the_levels_are_measured_at_once_and_a_failure_at_any_of_them_reaches_the_result(monkeypatch, tmp_path):
@@ -546,42 +536,55 @@ def _main(monkeypatch, capsys, argv, problems, tmp_path):
     monkeypatch.setattr(sys, "argv", ["bench.py", *argv, "--work", str(tmp_path)])
     monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
     monkeypatch.setattr(bench, "judge", lambda *a: list(problems))
+    monkeypatch.setattr(bench, "base_rows", lambda args: ({}, set(), "0" * 40))
     monkeypatch.setattr(bench, "standing", lambda *a: [])
     monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
     code = bench.main()
     return code, capsys.readouterr().out
 
 
-BETTER = "a c -O2: instructions 90 < 100 (better: --bless --reason)"
 WORSE = "b c -O2: instructions 110 > 100 (worse)"
 
 
-def test_a_better_count_still_fails_the_gate_outside_a_batch(monkeypatch, capsys, tmp_path):
-    code, out = _main(monkeypatch, capsys, [], [BETTER], tmp_path)
-    assert code == 1 and f"FAIL {BETTER}" in out
+def test_a_worse_count_fails_the_gate_and_nothing_else_does(monkeypatch, capsys, tmp_path):
+    code, out = _main(monkeypatch, capsys, [], [WORSE], tmp_path)
+    assert code == 1 and f"FAIL {WORSE}" in out
+    code, out = _main(monkeypatch, capsys, [], [], tmp_path)
+    assert code == 0 and "BETTER" not in out and "0 problems" in out
 
 
-def test_in_a_batch_a_better_count_is_listed_not_failed_and_a_worse_one_still_fails(monkeypatch, capsys, tmp_path):
-    """Two PRs that improve one row: the second is below the first's baseline, and failed 'better' until someone blessed it by hand."""
-    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER], tmp_path)
-    assert code == 0 and f"BETTER {BETTER}" in out and "1 better" in out and "FAIL" not in out
-    code, out = _main(monkeypatch, capsys, ["--batch"], [BETTER, WORSE], tmp_path)
-    assert code == 1 and f"FAIL {WORSE}" in out and f"BETTER {BETTER}" in out
-
-
-def test_a_batch_bless_refuses_while_anything_but_a_better_count_fails(monkeypatch, capsys, tmp_path):
-    """Blessing writes expected.toml: it must never write over a worse number or a missing baseline."""
-    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER, WORSE], tmp_path)
-    assert code == 1 and "not blessing" in out
-    code, out = _main(monkeypatch, capsys, ["--batch", "--bless", "--reason", "train: #1 #2"], [BETTER], tmp_path)
-    assert code == 0 and "blessed" in out
-
-
-def test_a_bless_still_needs_a_reason():
+def test_a_bless_records_references_only_and_needs_a_reason():
     import subprocess
 
-    done = subprocess.run([sys.executable, str(Path(bench.__file__)), "--bless", "--batch"], capture_output=True, text=True)
-    assert done.returncode == 2 and "--reason" in done.stderr
+    for argv in (["--bless"], ["--bless", "--references"], ["--bless", "--reason", "r"]):
+        done = subprocess.run([sys.executable, str(Path(bench.__file__)), *argv], capture_output=True, text=True)
+        assert done.returncode == 2 and "--reason" in done.stderr, (argv, done.stderr)
+
+
+def test_the_gate_fails_with_the_reason_when_the_base_cannot_be_measured(monkeypatch, capsys, tmp_path):
+    def broken(args):
+        raise SystemExit("measure: the base abc does not build")
+
+    monkeypatch.setattr(bench, "base_rows", broken)
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {})
+    assert bench.main() == 1
+    assert "FAIL BASE: the base could not be measured: SystemExit: measure: the base abc does not build" in capsys.readouterr().out
+
+
+def test_two_prs_that_each_change_one_rows_count_are_judged_each_on_its_own_delta(tmp_path):
+    """Every PR that moved a count re-blessed bench/NAME/expected.toml, so the second PR to touch a benchmark conflicted with the first (all
+    five of a train did, on jpeg_fixed). Now no file holds the count: each PR is measured against the base it branched from."""
+    fib = bench.BENCH / "fib"
+
+    def counts(instructions):
+        return {("fib", one.language, "O2"): {"instructions": instructions, "memory_operands": 40} if one.language == "c" else {"skip": "no"} for one in bench.variants(fib)}
+
+    base_a, base_b = counts(100), counts(90)  # base_b: after the first PR landed, 100 -> 90
+    first, second = counts(90), counts(95)  # the second branched from the old base: 100 -> 95
+    judged = lambda measured, base: bench.judge(measured, ["fib"], ["O2"], {key: row for key, row in base.items() if "skip" not in row}, {"fib"})
+    assert judged(first, base_a) == [] and judged(second, base_a) == []
+    assert "instructions 95 > 90 (worse)" in judged(second, base_b)[0]  # rebased onto the first, it is judged on that base
 
 
 def _c_build_commands(monkeypatch, tmp_path, name):
@@ -620,3 +623,20 @@ def test_the_m32_table_builds_llrm_with_no_inlining_flag_either():
     """The two targets' tables compare the same inlining: build.sh passes llrm no -fno-inline-functions."""
     text = (bench.ROOT / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
     assert [line for line in text.splitlines() if "$LLRM" in line and "-fno-inline-functions" in line] == []
+
+
+def test_a_pr_that_makes_a_row_worse_than_its_base_fails_and_only_a_waiver_for_that_count_excuses_it(monkeypatch):
+    """With no count file left, the base is the only thing a regression can be judged against: it must still fail the step."""
+    fib = bench.BENCH / "fib"
+
+    def rows(instructions):
+        return {("fib", one.language, "O2"): {"instructions": instructions, "memory_operands": 40} if one.language == "c" else {"skip": "no"} for one in bench.variants(fib)}
+
+    base = {key: row for key, row in rows(100).items() if "skip" not in row}
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: [])
+    own = lambda problems: [one for one in problems if "instructions 10" in one and "> 100 (worse)" in one]  # the ratio to a reference is judged too
+    assert own(bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})) == ["fib c -O2: instructions 101 > 100 (worse)"]
+    waiver = [{"label": "fib c -O2", "counter": "instructions", "to": 101, "reason": "r", "file": "w.toml"}]
+    monkeypatch.setattr(bench.basecounts, "waivers", lambda root=None: waiver)
+    assert own(bench.judge(rows(101), ["fib"], ["O2"], base, {"fib"})) == []
+    assert own(bench.judge(rows(102), ["fib"], ["O2"], base, {"fib"})) == ["fib c -O2: instructions 102 > 100 (worse)"]
