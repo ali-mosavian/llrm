@@ -35,6 +35,7 @@ import proctree
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 LANGUAGES = ("qb", "c", "nib")
+TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
 SERIAL_STEPS = frozenset({"rfmt-post"})
 
@@ -792,6 +793,14 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
+def group_plan(p: Plan, group: str) -> Plan:
+    """`p` cut to the steps of CI job group `group` ("build": the build alone, for the job that makes what the others share). A group of
+    checks that read the tree has no target dir to reuse, and gets no build: it would be the workspace's, from cold."""
+    members = [] if group == "build" else load()["groups"][group]
+    builds = group == "build" or any(m not in TREE_ONLY for m in members)
+    return Plan(p.tier, p.reason, [s for s in p.steps if (s == "build" and builds) or s in members], p.packages, p.languages, p.files)
+
+
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     group, shard = shard_of(group)
     target = os.environ.get("CARGO_TARGET_DIR")
@@ -811,8 +820,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     unset = tuple(v for c in missing for v in load()["capability"][c]["require"])
     skipped = skipped_steps(p.steps, missing, languages)
     if group:
-        members = [] if group == "build" else load()["groups"][group]  # "build": the build alone, for the job that makes what the others share
-        p = Plan(p.tier, p.reason, [s for s in p.steps if s == "build" or s in members], p.packages, p.languages, p.files)
+        p = group_plan(p, group)
     start = time.time()
     results: dict[str, tuple[int, float, float]] = {}
 
