@@ -554,21 +554,31 @@ fn _control(
                 Instruction { opcode: Opcode::Br, operands, .. } if operands.len() == 3
             ),
         );
-    if control.succ.len() != 2
-        || entered.len() != 1
-        || exits.len() != 1
-        || !conditional
-        || inside.iter().any(|at| function.successors(cfg::block(*at)).is_empty())
-    {
+    if control.succ.len() != 2 || entered.len() != 1 || exits.len() != 1 || !conditional {
         return None;
     }
-    // Any other way out must stop the program: the count holds whenever it goes
-    // on.
-    let elsewhere = inside
-        .iter()
-        .filter(|at| **at != control.at)
-        .flat_map(|at| block_of(*at).succ.into_iter().filter(|to| !inside.contains(to)))
-        .collect::<BTreeSet<_>>();
+    // One pass over the loop's blocks, by their terminators' operands: a block
+    // that goes nowhere ends the program, and any other way out must stop it:
+    // the count holds whenever it goes on. (`successors` made a list for each
+    // block, and a nest of loops asked it of every block of every loop.)
+    let mut elsewhere = BTreeSet::new();
+    for &at in inside {
+        let mut goes = false;
+        if let Some(last) = function.terminator(cfg::block(at)) {
+            for operand in &function.instruction(last).operands {
+                if let Operand::Block(to) = *operand {
+                    goes = true;
+                    let to = cfg::id(to);
+                    if at != control.at && !inside.contains(&to) {
+                        elsewhere.insert(to);
+                    }
+                }
+            }
+        }
+        if !goes {
+            return None;
+        }
+    }
     // Or, where `leaving`, go on: the count then holds as long as the loop
     // does.
     let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
@@ -2126,18 +2136,26 @@ pub fn gcd(
     one
 }
 
-/// The values a loop does not define.
-#[derive(Clone, Debug, Default)]
-pub struct Invariant {
-    defined: llrm_mir::dense::IdSet<ValueId>,
+/// The values a loop does not define: asked of the value's own definition, not
+/// of a set made of every instruction of the loop (each proof made it several
+/// times: a nest of loops each held the whole nest's values).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Invariant<'a> {
+    over: Option<(&'a Function, &'a llrm_mir::forest::Body)>,
 }
 
-impl Invariant {
+impl Invariant<'_> {
     pub fn contains(
         &self,
         value: ValueId,
     ) -> bool {
-        !self.defined.contains(&value)
+        let Some((function, inside)) = self.over else { return true };
+        match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(inst) => {
+                !function.parent(inst).is_some_and(|block| inside.contains(&cfg::id(block)))
+            }
+            llrm_mir::module::ValueDef::Argument(_) => true,
+        }
     }
 
     /// A constant, or a value the loop does not define.
@@ -2154,16 +2172,11 @@ impl Invariant {
 }
 
 /// What the blocks `inside` do not define.
-pub fn invariant(
-    function: &Function,
-    inside: &llrm_mir::forest::Body,
-) -> Invariant {
-    let defined = inside
-        .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions())
-        .filter_map(|&inst| function.instruction(inst).result)
-        .collect();
-    Invariant { defined }
+pub fn invariant<'a>(
+    function: &'a Function,
+    inside: &'a llrm_mir::forest::Body,
+) -> Invariant<'a> {
+    Invariant { over: Some((function, inside)) }
 }
 
 /// The header phis that one invariant or constant step advances on every
@@ -3027,7 +3040,7 @@ struct Walk<'a> {
     loop_: &'a Loop,
     counters: &'a IndexMap<ValueId, Affine>,
     priced: bool,
-    still: Invariant,
+    still: Invariant<'a>,
     facts: std::borrow::Cow<'a, IndexMap<ValueId, Known>>,
 }
 
