@@ -274,22 +274,22 @@ def sample(cmd: list[str], env: dict | None = None, timeout: float = 120) -> tup
     must be given the same strings.
     """
     source = Path(cmd[-1]) if cmd and cmd[-1].endswith(".c") else None
-    with tempfile.TemporaryDirectory(prefix="llrm-", dir="/tmp") as here, tempfile.NamedTemporaryFile("r") as out:
+    with tempfile.TemporaryDirectory(prefix="llrm-", dir="/tmp") as here:
         if source is not None and source.is_file():
             shutil.copyfile(source, Path(here) / "src.c")
             cmd = [*cmd[:-1], "src.c"]
         if Path(cmd[0]).name.startswith("llrm-") and Path(cmd[0]).is_file():
             (Path(here) / Path(cmd[0]).name).symlink_to(Path(cmd[0]).resolve())
             cmd = [f"./{Path(cmd[0]).name}", *cmd[1:]]
-        done = subprocess.run([*levels_time.UNRANDOMIZED, "perf", "stat", "-x,", "-e", "instructions:u,task-clock", "-o", out.name, *cmd], capture_output=True, text=True, timeout=max(timeout * WALL_PER_CPU, WALL_FLOOR), cwd=here, env=measured_environment(env), preexec_fn=_cpu_limited(timeout))
-        # perf stat exits 0 for a child a signal killed, and says only what the shell would.
+        timeout = timeout * (levels_time.SLOWDOWN if levels_time.backend() == "callgrind" else 1)  # a budget of the compiler's own CPU seconds
+        count, clock, done = levels_time.counted(cmd, env=measured_environment(env), preexec=_cpu_limited(timeout), timeout=max(timeout * WALL_PER_CPU, WALL_FLOOR), cwd=here)
+        # the counting tool exits 0 for a child a signal killed, and says only what the shell would.
         if "CPU time limit exceeded" in done.stderr or done.returncode in (-signal.SIGXCPU, 128 + signal.SIGXCPU):
             raise TimeoutError(f"{' '.join(cmd[-1:])}: more than {timeout:g} CPU seconds")
         if done.returncode:
             said = [l for l in (done.stderr or done.stdout).splitlines() if l and not l.startswith(("[time]", "[mir]"))]
             raise RuntimeError(f"{' '.join(cmd[-1:])}: " + " | ".join(said)[:300])
-        found = {l.split(",")[2]: int(float(l.split(",")[0])) for l in out.read().splitlines() if l and not l.startswith("#")}
-    return found["instructions:u"], found["task-clock"], done.stderr
+    return count, clock, done.stderr
 
 
 def measure(cmd: list[str], runs: int = 3, env: dict | None = None) -> dict:

@@ -986,6 +986,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.call_registers()
     }
 
+    fn float_registers(&self) -> i64 {
+        self.machine.float_registers()
+    }
+
     fn far_access_registers(&self) -> i64 {
         self.machine.far_access_registers()
     }

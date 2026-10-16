@@ -156,7 +156,7 @@ impl Epochs {
                 self.cfg += 1;
                 return;
             }
-            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => return,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => return,
             Change::Inserted { inst, .. }
             | Change::Moved { inst, .. }
             | Change::Rewritten(inst)
@@ -271,7 +271,7 @@ impl Function {
                 }
                 Change::Parameters => out.parameters = true,
                 // What it changed is in the `Rewritten` of each user.
-                Change::Substituted(_) => {}
+                Change::Substituted { .. } => {}
             }
         }
         // An instruction added and erased inside the window changed nothing.

@@ -95,6 +95,7 @@ sys.path.insert(0, str(VSGCC))
 import benchlist  # noqa: E402
 import llrmbin  # noqa: E402
 import scaling_gate  # noqa: E402
+import levels_time  # noqa: E402
 
 sys.path.insert(0, str(HERE / "gate"))
 import gate  # noqa: E402
@@ -133,6 +134,7 @@ def method() -> str:
         digest.update(str(one.name).encode() + b"\0" + one.read_bytes())
     digest.update(b"qcport" if qcport else b"-")
     digest.update(PROFILE.encode())
+    digest.update(levels_time.backend().encode())  # the counts of one backend are not another's
     return digest.hexdigest()[:12]
 
 

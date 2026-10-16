@@ -154,6 +154,26 @@ impl Globals {
     pub fn entries(&self) -> &BTreeSet<String> {
         &self.entries
     }
+
+    /// A number that is the same for two results where a body that names only
+    /// the globals `ids` reads the same of both: what is tracked, named and
+    /// entered at all, and what each of `ids` is as a body here and as a
+    /// writer.
+    pub fn read_by(
+        &self,
+        ids: &BTreeSet<GlobalId>,
+    ) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (&self.tracked, &self.named, &self.entries).hash(&mut hasher);
+        // By what each is, not by its id: a copy of a body is the body.
+        let mut each: Vec<(bool, Option<&BTreeSet<GlobalId>>)> =
+            ids.iter().map(|id| (self.bodies.contains(id), self.writes.get(id))).collect();
+        each.sort_unstable();
+        each.dedup();
+        each.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// The globals `constant` holds the address of, through aggregates and

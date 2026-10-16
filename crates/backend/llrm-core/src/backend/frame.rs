@@ -24,6 +24,17 @@
 //!
 //! *Frame layout, incoming arguments at the top*
 //!
+//! A spill slot is aligned as its width is, up to `align`: the target's stack
+//! slot (4 in flat code, a word in real mode), or its stack alignment (8) for a
+//! function that needs the stack aligned (`calleefacts`: one holding a double
+//! or calling one that does), as gcc's `assign_stack_local` and LLVM's
+//! `calculateFrameObjectOffsets` do. A dword or a quad off its alignment costs
+//! a 486 3 clocks (Intel486 data sheet 240440-002, section 10.1, Clock Count
+//! Assumptions 2; Table 2.1 gives the alignments). The frame register is
+//! 8-aligned where the stack is at the call (`masm::parts` rounds the frame,
+//! `isel` pads a call's arguments), so a displacement that is a multiple of 8
+//! is an aligned address.
+//!
 //! `of` builds the frame after selection. It scans the body for the lowest
 //! frame cell referenced (outgoing native stack arguments excepted) and, for a
 //! BASIC procedure that enters through the runtime's frame call, for the
@@ -157,6 +168,10 @@ pub struct Frame {
     /// Whether the spiller gives each spilled value a slot of its own, to be
     /// shared once the allocation is chosen (`spiller::slots_colored`).
     pub defer_colours: bool,
+    /// The most a slot is aligned to, in bytes: the target's stack slot, so a
+    /// dword or a quad is not left across a doubleword boundary, which a 486
+    /// charges 3 clocks for (`WORD` where BC's frame is word-aligned).
+    pub align: i64,
 }
 
 impl Frame {
@@ -171,6 +186,7 @@ impl Frame {
             hole: 0,
             extents: Vec::new(),
             defer_colours: false,
+            align: WORD,
         }
     }
 
@@ -316,8 +332,16 @@ impl Frame {
         }
         if !self.slots.contains_key(&value) {
             let capacity = width.max(WORD);
+            // Aligned as its width is, at most to `align`: gcc's
+            // `assign_stack_local` and LLVM's `calculateFrameObjectOffsets`.
+            let align = (1 << capacity.ilog2()).min(self.align).max(1);
+            let below = |at: i64| at.div_euclid(align) * align;
             let filled = self.slots.values().copied().filter(|home| *home >= -self.hole).min().unwrap_or(0);
-            let home = if filled - capacity >= -self.hole { filled - capacity } else { self.lowest() - capacity };
+            let home = if below(filled - capacity) >= -self.hole {
+                below(filled - capacity)
+            } else {
+                below(self.lowest() - capacity)
+            };
             self.slots.insert(value.clone(), home);
             self.capacities.insert(self.slots[&value], capacity);
         }
@@ -521,6 +545,25 @@ mod tests {
         assert_eq!(frame.home_of(-292), Some(-288), "before the start");
         assert_eq!(frame.home_of(-160), Some(-160), "the start of one slot is the end of another");
         assert_eq!(frame.home_of(6), Some(0), "an incoming argument");
+    }
+
+    /// d_faces' spills sat at `[esp+210]`: a quad and its dwords at 2 mod 4 in
+    /// flat code (30 of 62 qword and 81 of 187 dword stack operands), each
+    /// 3 clocks more on a 486. The slot is aligned as its width is, up to
+    /// the target's.
+    #[test]
+    fn test_a_slot_is_aligned_to_its_width_up_to_the_targets_stack_slot() {
+        let mut flat = super::Frame::new(0);
+        flat.align = 4;
+        let homes: Vec<i64> = [(1_i64, 2), (2, 8), (3, 2), (4, 4), (5, 8)]
+            .iter()
+            .map(|&(value, width)| flat.slot(value, width).expect("a slot"))
+            .collect();
+        assert!(homes[1] % 4 == 0 && homes[3] % 4 == 0 && homes[4] % 4 == 0, "{homes:?}");
+        assert!(homes[0] % 2 == 0 && homes[2] % 2 == 0, "{homes:?}");
+        let mut real = super::Frame::new(0);
+        assert_eq!(real.slot(1_i64, 2).expect("a slot"), -2);
+        assert_eq!(real.slot(2_i64, 8).expect("a slot"), -10, "real mode keeps BC's words");
     }
 
     #[test]
