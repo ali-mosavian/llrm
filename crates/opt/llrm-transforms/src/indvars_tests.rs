@@ -667,3 +667,62 @@ fn counters_that_start_or_step_otherwise_stay_two() {
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }
+
+/// A loop `indvars` has nothing to do for.
+const IDLE_LOOP: &str = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b1 ]
+  %s = phi i16 [ 0, %b0 ], [ %t, %b1 ]
+  %t = add i16 %s, %i
+  %next = add i16 %i, 1
+  %c = icmp slt i16 %next, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %t
+}
+";
+
+/// Asks the manager for what `indvars` starts from, and nothing else.
+struct AsksWhatIndVarsDoes;
+
+impl llrm_mir::passes::FunctionPass for AsksWhatIndVarsDoes {
+    fn name(&self) -> &'static str {
+        "asks-what-indvars-does"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Each step of a run found the loops of the body for itself (`Shape::of`: the
+/// dominators and the loop forest again): the exit values, the exits, the
+/// widening, the counters merged: 25 of 119 Minstr of `indvars` at d_faces
+/// -O2. A run that changes no block finds them no more often than the manager
+/// does for the facts the run starts from.
+#[test]
+fn a_run_that_changes_no_block_finds_the_loops_once() {
+    let derived = |pass: Box<dyn FnOnce(&mut Module)>| {
+        let mut module = parsed(IDLE_LOOP);
+        let before = cfg::shapes_derived();
+        pass(&mut module);
+        cfg::shapes_derived() - before
+    };
+    let manager = derived(Box::new(|module| {
+        managed(module, AsksWhatIndVarsDoes);
+    }));
+    let indvars = derived(Box::new(|module| {
+        managed(module, IndVars { exit_values: true, unrolls: None });
+    }));
+    assert_eq!(indvars, manager);
+}
