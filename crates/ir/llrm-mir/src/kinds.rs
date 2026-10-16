@@ -85,6 +85,13 @@ impl Kinds {
     /// store, a call, a landing pad, a terminator. A volatile load is told
     /// from the others by the reader, not here.
     pub const EFFECTFUL: Self = Self(Self::STORE.0 | Self::CALL.0 | Self::LANDINGPAD.0 | Self::TERMINATOR.0);
+    /// Instructions that read, write or make memory: what a pass about memory
+    /// looks at (its addresses are `ADDRESS`).
+    pub const MEMORY: Self = Self(Self::LOAD.0 | Self::STORE.0 | Self::CALL.0 | Self::INVOKE.0 | Self::ALLOCA.0);
+    /// What makes the CFG: a block made or erased, a branch, an invoke, a phi.
+    pub const STRUCTURE: Self = Self(Self::CFG.0 | Self::BRANCH.0 | Self::INVOKE.0 | Self::PHI.0);
+    /// What computes an address.
+    pub const ADDRESS: Self = Self(Self::GEP.0 | Self::CAST_PTR.0 | Self::PHI_PTR.0 | Self::SELECT_PTR.0);
     pub const ALL: Self = Self((1 << 31) - 1);
 
     pub fn meets(
@@ -238,6 +245,10 @@ pub fn of(
 }
 
 impl Reads {
+    /// A reader that looks at all of the function: every class, each followed to
+    /// its users. What a pass is until it says what it looks at.
+    pub const EVERYTHING: Self = Self { kinds: Kinds::ALL, keyed: Kinds::ALL, stops: Some(Kinds::NONE) };
+
     /// A reader that sees every change of the CFG and of the signature, as
     /// `Depends` does: its result has a part for each block and each parameter.
     pub fn analysis(
@@ -342,6 +353,20 @@ impl Edits {
             }
         }
         found
+    }
+
+    /// Edits that reach every reader: a history that is gone, or a function put
+    /// in place of the one that was.
+    pub fn everything() -> Self {
+        Self {
+            direct: Kinds::ALL,
+            flowed: Kinds::ALL,
+            erased: Kinds::ALL,
+            erased_effectful: Kinds::ALL,
+            blocks_changed: true,
+            signature: true,
+            ..Self::default()
+        }
     }
 
     /// The edits of `other` as well.

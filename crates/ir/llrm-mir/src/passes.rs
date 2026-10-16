@@ -2025,13 +2025,14 @@ pub trait FunctionPass {
     fn adds_memory_operations(&self) -> bool {
         true
     }
-    /// The parts of a function the pass looks at (`footprint`). A pass that
-    /// found nothing to do is not run again until an edit reaches one of
-    /// them: gcc's `TODO_*` flags and LLVM's preserved analyses say the
-    /// same of what a pass needs again. A pass that states less than
-    /// everything says why.
-    fn reads(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint::ALL
+    /// What the pass looks at (`kinds::Reads`): the classes of instruction whose
+    /// change it can see, and whether a change flows to the users of its value.
+    /// A pass that found nothing to do is not run again until an edit reaches
+    /// what it reads: gcc's `TODO_*` flags and LLVM's preserved analyses say the
+    /// same of what a pass needs again. A pass that states less than everything
+    /// says why.
+    fn reads(&self) -> crate::kinds::Reads {
+        crate::kinds::Reads::EVERYTHING
     }
 
     fn run(

@@ -6,7 +6,7 @@
 //! A pass that changed nothing is noted as it runs: the parts of the module's
 //! facts it read (`llrm_mir::passes::read`, noted by the analyses it asks for
 //! and by what it asks of the proxy). When a run ends, each such pass that no
-//! edit has reached since (`FunctionPass::reads`, `llrm_mir::footprint`) is
+//! edit has reached since (`FunctionPass::reads`, `llrm_mir::kinds`) is
 //! recorded for the body's history and its name: the point in the change log,
 //! and a number for each part of what it could read outside the body (`slice`).
 //! Asked to run again, the pass is skipped when the record holds: the body's
@@ -62,7 +62,7 @@
 //! `Settled` (the records, held by the module's [`Context`]) and `slice`.
 //!
 //! # Needs
-//! [`llrm_mir::footprint`], [`llrm_analysis::globalsaa`], and the module
+//! [`llrm_mir::kinds`], [`llrm_analysis::globalsaa`], and the module
 //! analyses of the proxy a pass reads (`Outer`).
 //!
 //! # See also
@@ -76,7 +76,7 @@ use std::hash::{Hash, Hasher};
 
 use llrm_analysis::manager::{Callbacks, GlobalsAA, Summaries};
 use llrm_mir::context::{Context, GlobalId};
-use llrm_mir::footprint::{self, Footprint};
+use llrm_mir::kinds::{Edits, Reads};
 use llrm_mir::module::{Change, Function, GlobalKind, Mark, MetadataOperand, Operand};
 use llrm_mir::passes::{Outer, Unit, read};
 use llrm_support::hash::HashMap;
@@ -91,7 +91,7 @@ pub struct Settled {
     /// What the last asked stretch of a log reached, for the passes that ask of
     /// the same stretch one after the other: history, from, to, vouched
     /// stretches, reached.
-    last: RefCell<Option<(u64, usize, usize, usize, Footprint)>>,
+    last: RefCell<Option<(u64, usize, usize, usize, Edits)>>,
 }
 
 struct Record {
@@ -128,9 +128,10 @@ impl Settled {
     pub fn holds(
         &self,
         pass: &'static str,
+        context: &Context,
         function: &Function,
         slice: Slice,
-        reads: Footprint,
+        reads: &Reads,
     ) -> bool {
         let now = function.mark();
         let found = self.found.borrow();
@@ -143,24 +144,25 @@ impl Settled {
         if now.position() == record.mark.position() {
             return true;
         }
-        !self.reached(function, record.mark).meets(reads)
+        !self.reached(context, function, record.mark).meets(reads).unwrap_or(true)
     }
 
     /// What the edits since `from` reach, the vouched ones left out.
     fn reached(
         &self,
+        context: &Context,
         function: &Function,
         from: Mark,
-    ) -> Footprint {
+    ) -> Edits {
         let now = function.mark();
         let stretches = self.sound.borrow().get(&now.lineage()).map_or(0, Vec::len);
         let key = (now.lineage(), from.position(), now.position(), stretches);
-        if let Some((a, b, c, d, found)) = *self.last.borrow()
-            && (a, b, c, d) == key
+        if let Some((a, b, c, d, found)) = &*self.last.borrow()
+            && (*a, *b, *c, *d) == key
         {
-            return found;
+            return found.clone();
         }
-        let Some(changes) = function.changes_since(from) else { return Footprint::ALL };
+        let Some(changes) = function.changes_since(from) else { return Edits::everything() };
         let sound = self.sound.borrow();
         let vouched = sound.get(&now.lineage());
         let reached: Vec<Change> = changes
@@ -172,8 +174,8 @@ impl Settled {
             })
             .map(|(_, change)| change.clone())
             .collect();
-        let found = footprint::of(function, &reached);
-        *self.last.borrow_mut() = Some((key.0, key.1, key.2, key.3, found));
+        let found = function.edits_of(context, &reached);
+        *self.last.borrow_mut() = Some((key.0, key.1, key.2, key.3, found.clone()));
         found
     }
 

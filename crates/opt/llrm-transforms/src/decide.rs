@@ -104,7 +104,7 @@ use llrm_analysis::ranges;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::footprint::Footprint;
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
@@ -124,8 +124,8 @@ impl FunctionPass for Decide {
     /// A branch is decided from what is known of its condition (the values it
     /// is made of, and the memory they were loaded from) along the edges
     /// that run: not from a value nothing above reads.
-    fn reads(&self) -> Footprint {
-        Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

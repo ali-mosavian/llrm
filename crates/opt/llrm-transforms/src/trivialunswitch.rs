@@ -116,7 +116,7 @@
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;
 use llrm_mir::context::Context;
-use llrm_mir::footprint::Footprint;
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -134,8 +134,8 @@ impl FunctionPass for TrivialUnswitch {
 
     /// A branch is moved out of a loop where its condition is invariant: the
     /// condition's values and the memory they load, and the loop's shape.
-    fn reads(&self) -> Footprint {
-        Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

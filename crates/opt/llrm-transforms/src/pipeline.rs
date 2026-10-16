@@ -66,7 +66,7 @@
 //! A round runs the remaining passes in order. The body is at a fixed point
 //! when a round changes nothing; a pass reports a change by preserving less
 //! than every analysis. A pass that changed nothing is skipped until an edit
-//! reaches what it reads (`FunctionPass::reads`, `footprint::of`). The limit
+//! reaches what it reads (`FunctionPass::reads`, `kinds::Edits`). The limit
 //! is `max(16, size + 1)` rounds, and a round that reproduces an earlier
 //! printed body is an error, so an oscillating pair fails at once. `sroa` and
 //! `promote` are skipped on a body with an irreducible loop: promotion needs
@@ -1032,8 +1032,7 @@ impl Fixed {
                     // Edits since it found nothing to do, none of which reaches
                     // what it reads.
                     run.classify(unit);
-                    let reached = run.reached_since(stretches);
-                    if !reached.meets(one.reads()) {
+                    if !run.reached_since(stretches, &one.reads()) {
                         run.unreached += 1;
                         run.check_skipped(&mut **one, unit, analyses);
                         continue;
@@ -1196,9 +1195,9 @@ struct Run {
     idle_with_analyses: u64,
     useful_with_analyses: u64,
     /// Where the log of edits has been classified to, and what each stretch of
-    /// it reached (`footprint::of`), found once for every pass that asks.
+    /// it touched (`kinds::Edits`), found once for every pass that asks.
     classified: llrm_mir::module::Mark,
-    stretches: Vec<llrm_mir::footprint::Footprint>,
+    stretches: Vec<llrm_mir::kinds::Edits>,
     /// Passes not run because no edit since they found nothing reached what
     /// they read.
     unreached: usize,
@@ -1213,7 +1212,7 @@ struct Run {
     rerun: bool,
     /// What each pass last found nothing on in this run: where, and what it
     /// read.
-    idle_at: Vec<(&'static str, llrm_mir::module::Mark, u8, llrm_mir::footprint::Footprint)>,
+    idle_at: Vec<(&'static str, llrm_mir::module::Mark, u8, llrm_mir::kinds::Reads)>,
 }
 
 impl Run {
@@ -1226,25 +1225,26 @@ impl Run {
         unit: &Unit,
     ) {
         let now = unit.function.mark();
-        let reached = if !now.same_history(self.classified) {
-            llrm_mir::footprint::Footprint::ALL
+        let edits = if !now.same_history(self.classified) {
+            llrm_mir::kinds::Edits::everything()
         } else if now.position() != self.classified.position() {
             unit.function
                 .changes_since(self.classified)
-                .map_or(llrm_mir::footprint::Footprint::ALL, |changes| llrm_mir::footprint::of(unit.function, changes))
+                .map_or_else(llrm_mir::kinds::Edits::everything, |changes| unit.function.edits_of(unit.context, changes))
         } else {
             return;
         };
-        self.stretches.push(reached);
+        self.stretches.push(edits);
         self.classified = now;
     }
 
-    /// What the stretches since the `len`th reached.
+    /// Whether the stretches since the `len`th reached what `reads` looks at.
     fn reached_since(
         &self,
         len: usize,
-    ) -> llrm_mir::footprint::Footprint {
-        self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
+        reads: &llrm_mir::kinds::Reads,
+    ) -> bool {
+        self.stretches[len..].iter().any(|edits| edits.meets(reads).unwrap_or(true))
     }
 
     /// The passes that found nothing and that no edit since reaches are
@@ -1260,20 +1260,22 @@ impl Run {
         }
         let _span = llrm_support::debug::span("settled remember");
         let slice = self.slice(unit, analyses);
-        let mut classified: Vec<(usize, llrm_mir::footprint::Footprint)> = Vec::new();
+        let mut classified: Vec<(usize, llrm_mir::kinds::Edits)> = Vec::new();
         for &(name, mark, bits, reads) in &self.idle_at {
-            let reached = match classified.iter().find(|(at, _)| *at == mark.position()) {
-                Some(&(_, found)) => found,
+            let at = match classified.iter().position(|(at, _)| *at == mark.position()) {
+                Some(at) => at,
                 None => {
-                    let found =
-                        unit.function.changes_since(mark).map_or(llrm_mir::footprint::Footprint::ALL, |changes| {
-                            llrm_mir::footprint::of(unit.function, changes)
+                    let found = unit
+                        .function
+                        .changes_since(mark)
+                        .map_or_else(llrm_mir::kinds::Edits::everything, |changes| {
+                            unit.function.edits_of(unit.context, changes)
                         });
                     classified.push((mark.position(), found));
-                    found
+                    classified.len() - 1
                 }
             };
-            if !reached.meets(reads) {
+            if !classified[at].1.meets(&reads).unwrap_or(true) {
                 self.records.note(name, unit.function, slice, bits);
             }
         }
@@ -1312,7 +1314,7 @@ impl Run {
         let mut skipped = false;
         if self.rerun {
             let slice = self.slice(unit, analyses);
-            skipped = self.records.holds(name, unit.function, slice, pass.reads());
+            skipped = self.records.holds(name, unit.context, unit.function, slice, &pass.reads());
         }
         let checking = skipped && settled_checked();
         if skipped && !checking {

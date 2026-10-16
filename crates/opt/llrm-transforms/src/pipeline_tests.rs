@@ -955,7 +955,7 @@ fn test_a_noisy_clock_still_shows_the_analysis_billed_and_none_does_not() {
 /// Finds nothing to do, and counts how often it was asked.
 struct Watch {
     name: &'static str,
-    reads: llrm_mir::footprint::Footprint,
+    reads: llrm_mir::kinds::Reads,
     runs: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
@@ -964,7 +964,7 @@ impl llrm_mir::passes::FunctionPass for Watch {
         self.name
     }
 
-    fn reads(&self) -> llrm_mir::footprint::Footprint {
+    fn reads(&self) -> llrm_mir::kinds::Reads {
         self.reads
     }
 
@@ -1018,11 +1018,11 @@ impl llrm_mir::passes::FunctionPass for Fold {
 /// x_popcount -O2's compile was passes that found nothing (decide alone 3.4 of
 /// 94 Minstr), and a late fold (`& 3` over a sum masked again) cost it x1.024.
 /// A pass says what it reads (`FunctionPass::reads`), the driver what the edits
-/// reached (`footprint::of`): decide, which reads conditions, memory and
+/// reached (`kinds::Edits`): decide, which reads conditions, memory and
 /// the CFG, is not run again; one that reads everything is.
 #[test]
 fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
-    use llrm_mir::footprint::Footprint;
+    use llrm_mir::kinds::{Kinds, Reads};
     let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
     let mut module = llrm_analysis::testing::parsed(text);
     let (narrow, wide) = (std::rc::Rc::new(std::cell::Cell::new(0)), std::rc::Rc::new(std::cell::Cell::new(0)));
@@ -1031,10 +1031,10 @@ fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
     fixed.passes = vec![
         Box::new(Watch {
             name: "narrow",
-            reads: Footprint::CONTROL | Footprint::MEMORY | Footprint::STRUCTURE,
+            reads: Reads { kinds: Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) },
             runs: std::rc::Rc::clone(&narrow),
         }),
-        Box::new(Watch { name: "wide", reads: Footprint::ALL, runs: std::rc::Rc::clone(&wide) }),
+        Box::new(Watch { name: "wide", reads: Reads::EVERYTHING, runs: std::rc::Rc::clone(&wide) }),
         Box::new(Fold { done: false }),
     ];
     crate::testing::managed(&mut module, fixed);
@@ -1240,7 +1240,7 @@ fn watching(
     fixed.only = false;
     fixed.passes = vec![
         Box::new(ReadsCallees { runs: std::rc::Rc::clone(reader) }),
-        Box::new(Watch { name: "blind", reads: llrm_mir::footprint::Footprint::ALL, runs: std::rc::Rc::clone(blind) }),
+        Box::new(Watch { name: "blind", reads: llrm_mir::kinds::Reads::EVERYTHING, runs: std::rc::Rc::clone(blind) }),
     ];
     fixed
 }
