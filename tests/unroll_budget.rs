@@ -61,7 +61,7 @@ fn test_each_target_unrolls_to_the_budget_its_description_states() {
     for (flags, budget) in
         [(&["-m32", "-O3", "-march=i486"][..], 300), (&["-m32", "-Omax", "-march=i486"][..], 300), (&["-O3"][..], 400)]
     {
-        let sweep: Vec<_> = (1..=10).map(|steps| verdict(flags, steps)).collect();
+        let sweep: Vec<_> = (1..=16).map(|steps| verdict(flags, steps)).collect();
         for (steps, &(scaled, named, boost, admitted)) in sweep.iter().enumerate() {
             assert_eq!(named, budget, "{flags:?} x{}: the budget the description states", steps + 1);
             assert_eq!(
