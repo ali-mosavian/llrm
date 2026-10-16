@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/promote.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/promote.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/promote.rs sha256:5e3a0f4dba8807d80c4c18088e32814f66fb467698bb7ecb77ac5dc7597b73e1 -->
+<!-- src: crates/opt/llrm-transforms/src/promote.rs sha256:af34d674d2a2de7505db7203308f7d93cc78956c3ae7082d4e78ff0b126f1865 -->
 
 # promote
 
@@ -42,10 +42,15 @@ entry, and renames down the dominator tree. Each planned load is replaced
 by the stored operand or the phi. With `-g`, the debug record of the
 variable a cell is gets the value, or a piece of it.
 
+A cell whose alloca has a name names its values: the phi and each stored
+operand that has none are `name.1`, `name.2`, ... in the order the walk
+meets them, so a dump of the promoted body says which variable a value is a
+version of.
+
 ```text
  b1: store 7, %a   b2: store %d, %a       b1: store 7, %a   b2: store %d, %a
- b3: %x = load %a             =>          b3: %x = phi [7, b1], [%d, b2]
-     %y = add %x, 1                           %y = add %x, 1
+ b3: %x = load %a             =>          b3: %a.1 = phi [7, b1], [%d, b2]
+     %y = add %x, 1                           %y = add %a.1, 1
 ```
 
 ## Example

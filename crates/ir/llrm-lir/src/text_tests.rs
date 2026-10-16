@@ -245,6 +245,26 @@ fn a_named_slot_replaces_the_frame_displacement() {
     assert_eq!(render(&save, &syntax).to_string(), "store.i16 [slot0], v3");
 }
 
+/// A frame address printed `&bp+bp-12`: the place and the register it is
+/// reached through, said twice. It is the slot where the caller names slots,
+/// and the displacement from the frame where not.
+#[test]
+fn a_frame_address_does_not_name_the_frame_register_twice() {
+    let frame_address = AddressRef { through: RegId::BP, ..AddressRef::new(Some(Addr::new(Space::Frame, -12))) };
+    let lea = what(Operation::Address, "lea", vec![value(4, 2)], vec![Loc::Address(frame_address)]);
+    assert_eq!(text(&lea), "v4 = lea.i16 &bp-12");
+    let slot = |addr: &Addr| Some(format!("slot{}", (-addr.disp - 2) / 2));
+    let syntax = Syntax {
+        block: &block,
+        value: &|n| format!("v{n}"),
+        frame: &slot,
+        callee: None,
+        arguments: &[],
+        otherwise: None,
+    };
+    assert_eq!(render(&lea, &syntax).to_string(), "v4 = lea.i16 &slot5");
+}
+
 /// A ten-byte source of a float operation printed `t2:i80`: x87's extended real
 /// is a float whichever operation reads it.
 #[test]
