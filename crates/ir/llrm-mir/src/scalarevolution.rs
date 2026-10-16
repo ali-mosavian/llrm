@@ -324,7 +324,7 @@ pub fn counted(
     evolution: &Evolution,
     one: &Loop,
 ) -> Option<Counted> {
-    one.blocks.iter().find_map(|&block| {
+    one.blocks.iter().find_map(|block| {
         if !one.latches.iter().all(|&latch| tree.dominates(block, latch)) {
             return None;
         }

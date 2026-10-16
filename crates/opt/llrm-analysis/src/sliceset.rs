@@ -276,6 +276,17 @@ impl PartialEq for SliceSet {
 
 impl Eq for SliceSet {}
 
+/// The slices in order, as `eq` compares them.
+impl std::hash::Hash for SliceSet {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        self.len().hash(state);
+        self.iter().for_each(|one| one.hash(state));
+    }
+}
+
 impl From<BTreeSet<Slice>> for SliceSet {
     fn from(own: BTreeSet<Slice>) -> Self {
         Self { own, base: None }
@@ -435,5 +446,27 @@ mod tests {
         assert_eq!(held, put);
         assert!(put.base().is_none());
         assert_eq!(held.len(), put.len());
+    }
+
+    /// Two sets that are equal hash alike, held by reference or put into the
+    /// set itself: the facts a body read are told by their hashes.
+    #[test]
+    fn sets_that_are_equal_hash_alike_held_by_reference_or_not() {
+        use std::hash::{Hash, Hasher};
+        let hashed = |set: &SliceSet| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            set.hash(&mut hasher);
+            hasher.finish()
+        };
+        let mut set = SliceSet::new();
+        for one in slices(3) {
+            set.insert(one);
+        }
+        let shared = Rc::new(Shared::of(set.iter().copied().collect()));
+        let held = SliceSet::shared(&shared);
+        let mut put = held.clone();
+        put.materialize();
+        assert_eq!(held, put);
+        assert_eq!(hashed(&held), hashed(&put));
     }
 }

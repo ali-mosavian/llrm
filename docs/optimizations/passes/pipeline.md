@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0cd23c27bfe161c5d2462fa760dbf85fbec318db4779406dc7705fbb0b60ade6 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:00b0982bbee987fcf64c0ba458f483f9def7ab64f52c9fba02152cb0fb5d16ff -->
 
 # pipeline
 
@@ -14,6 +14,10 @@ address passes that run once, after the program is settled. Every pass
 after `globalopt` is a function, module or program pass of the manager.
 With `LLRM_VERIFY` set the module is verified after each manager pass;
 with `Applied::dump` set each changed step of each body is written there.
+A body sent back through `Fixed` by a later stage starts only the passes
+that found nothing last time and read nothing that changed since
+([`crate::settled`](settled.md)); `LLRM_CHECK_SETTLED=1` runs them and fails where one
+changes the body.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
