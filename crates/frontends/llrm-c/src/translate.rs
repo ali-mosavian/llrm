@@ -3213,12 +3213,12 @@ impl<'a, 't> Body<'a, 't> {
         }
         let changed = changed.whole();
         let mut clobbers: Vec<String> = Vec::new();
-        for (bits, register) in [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x2000, "es")] {
+        for (bits, register) in [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x800, "sp"), (0x2000, "es")] {
             if changed.low & bits == bits && !wholes.contains(&register) {
                 clobbers.push(register.to_owned());
             }
         }
-        if changed.low & 0x1_0000 != 0 || changed.low & 0x5c00 != 0 {
+        if changed.low & 0x1_0000 != 0 || changed.low & 0x5400 != 0 {
             return self.refuse(format!("{name} changes a register an inline block cannot declare"));
         }
         clobbers.push("flags".to_owned());

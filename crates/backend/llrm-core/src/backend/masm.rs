@@ -715,8 +715,18 @@ fn parts(
     let framed = framed_by(reserve);
     let reserve = held(reserve);
     let (bp, sp) = (reg(FRAME), reg(STACK));
-    let mut leave: Vec<Semantics> =
-        saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])).collect();
+    // Inline code that moves SP (`alloca`) leaves the saved registers below an
+    // unknown distance: SP is set from the frame register first.
+    let moved = !omit
+        && framed
+        && procedure.body.insns().iter().any(|one| one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK))));
+    let mut leave: Vec<Semantics> = Vec::new();
+    if moved {
+        let below = reserve + slot * saved.len() as i64;
+        let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
+        leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
+    }
+    leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
     if omit && reserve != 0 {
         leave.push(semantics(
             Operation::Binary,
