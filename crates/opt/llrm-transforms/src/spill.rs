@@ -1610,7 +1610,7 @@ impl llrm_mir::passes::Analysis for Pressure {
                     | C::Operand { inst, .. }
                     | C::Operands { inst, .. } => *inst,
                     // Each user is told by its own entries.
-                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters | C::Substituted(_) => continue,
+                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters | C::Substituted { .. } => continue,
                 };
                 touched.extend(function.parent(inst).map(cfg::id));
             }

@@ -360,7 +360,7 @@ pub fn hoisted(body: &LirBody) -> LirBody {
     let regs = body.regs();
     let natural = loops::loops(&body.blocks, Some(body.entry));
     let zero = before(body);
-    let untouched = |inside: &BTreeSet<i64>, roots: Roots| {
+    let untouched = |inside: &loops::Body, roots: Roots| {
         body.blocks
             .iter()
             .filter(|block| inside.contains(&block.at))
