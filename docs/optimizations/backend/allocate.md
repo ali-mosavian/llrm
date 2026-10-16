@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:1892bb1477d5c7b6b998c6060583fd0e35a2d6ec462d280198c3e158f0af9fd6 -->
+<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:631f1234396d010c7a369c68054b704b85ab320a46dd2cd103a224dfb327039e -->
 
 # allocate
 
@@ -118,9 +118,11 @@ itself evicted cannot ping-pong. A value that cannot be spilled may break
 the cascade of a spillable one.
 
 When a split or a spill changes the body, the facts are recomputed from
-what changed, pins are found again for the changed blocks, the union is
-refreshed, any placed value that now overlaps another or has a clobber in
-its range is unplaced, and every new, moved or unplaced value re-enters
+what changed (a value's width stays unless a reader as wide is gone, and
+then readers are looked at only until one is as wide), pins are found again
+for the changed blocks, the union is refreshed, any placed value that now
+overlaps another or has a clobber in its range is unplaced, and every new,
+moved or unplaced value re-enters
 the queue. The loop stops when the queue is empty (`BUDGET` visits at
 most, 200000).
 
@@ -152,11 +154,10 @@ weighted by block frequency); the cheapest wins.
 Unless the search is exhaustive (`-fallocation-search-all`, -Omax) only
 the first shape in the order `Retainable`, `Scoped`, `Addressed`,
 `Unfolded` that the spills admit is tried, plus `Whole` without
-splitting, and only that shape is made: the rewritten bodies of the others
-cost 104 M of `d_faces` -O1's 7.1 G and were dropped unused. A trial is kept
-only if it is cheaper and spilled none of its protected values: it stops at the
-first spill of one (`ABANDONED`), since the rounds after it could not change
-what is kept. The frame is restored between trials.
+splitting. A trial is kept only if it is cheaper and spilled none of its
+protected values: it stops at the first spill of one (`ABANDONED`), since
+the rounds after it could not change what is kept. The frame is restored
+between trials.
 
 ### Applying
 `applied` replaces every operand's value by its register at its width

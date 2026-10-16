@@ -113,9 +113,11 @@
 //! the cascade of a spillable one.
 //!
 //! When a split or a spill changes the body, the facts are recomputed from
-//! what changed, pins are found again for the changed blocks, the union is
-//! refreshed, any placed value that now overlaps another or has a clobber in
-//! its range is unplaced, and every new, moved or unplaced value re-enters
+//! what changed (a value's width stays unless a reader as wide is gone, and
+//! then readers are looked at only until one is as wide), pins are found again
+//! for the changed blocks, the union is refreshed, any placed value that now
+//! overlaps another or has a clobber in its range is unplaced, and every new,
+//! moved or unplaced value re-enters
 //! the queue. The loop stops when the queue is empty (`BUDGET` visits at
 //! most, 200000).
 //!
@@ -1744,8 +1746,7 @@ impl Facts {
         let widths = llrm_support::debug::timed("facts widths", || match prior {
             Some((before, changes, _)) => {
                 let _ = before;
-                let found =
-                    _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
+                let found = _widest_after(carried_widths.take().expect("carried with the prior facts"), body, changes);
                 if llrm_support::env_set("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
@@ -2851,24 +2852,73 @@ fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
         .chain(one.widths.iter().copied())
 }
 
-/// `_widest` of the body made from one whose widths are `held`, where only the
-/// values in `touched` are named by an instruction that is in one body alone:
-/// theirs are worked out again from where they occur.
+/// How wide `one` names `value`, if it does.
+fn _width_of(
+    one: &Insn,
+    value: u32,
+) -> Option<u32> {
+    #[cfg(test)]
+    WIDTH_VISITS.with(|count| count.set(count.get() + 1));
+    _named_widths(one).filter(|(named, _)| *named == value).map(|(_, width)| width).max()
+}
+
+// Instructions looked at for a value's width, for a test that a hub read by
+// thousands is not looked at in all of them each time one changes.
+#[cfg(test)]
+thread_local! {
+    static WIDTH_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `_widest` of the body made from one whose widths are `held`. A touched value
+/// keeps its width unless an instruction that named it that wide is gone, and
+/// then the instructions that name it are looked at until one is as wide (the
+/// ones the rewrite did not touch were no wider): a value read by thousands
+/// was walked in all of them at each change to one (`live` at N=512: 366 M of
+/// the 1.1 G the facts took, 4x for a doubling).
 fn _widest_after(
     held: IndexMap<u32, u32>,
     body: &LirBody,
-    touched: &crate::support::hash::HashSet<u32>,
+    changes: &ranges::Changes,
 ) -> IndexMap<u32, u32> {
     let mut out = held;
-    for value in touched {
-        out.swap_remove(value);
-    }
+    let widest_in = |insns: &[Arc<Insn>]| {
+        let mut found = IndexMap::<u32, u32>::default();
+        for one in insns {
+            for (named, width) in _named_widths(one).filter(|(named, _)| changes.touched.contains(named)) {
+                let widest = found.entry(named).or_insert(0);
+                *widest = (*widest).max(width);
+            }
+        }
+        found
+    };
+    let (lost, gained) = (widest_in(&changes.gone), widest_in(&changes.added));
     crate::backend::postings::following(body, |postings| {
-        for value in touched {
-            for (_, one) in postings.named_insns(*value, true) {
-                for (named, width) in _named_widths(one).filter(|(named, _)| named == value) {
-                    let widest = out.entry(named).or_insert(0);
-                    *widest = (*widest).max(width);
+        for value in &changes.touched {
+            let added = gained.get(value).copied();
+            let width = match out.get(value).copied() {
+                None => added,
+                Some(was) if lost.get(value).is_none_or(|lost| *lost < was) => Some(was.max(added.unwrap_or(0))),
+                Some(was) => {
+                    let mut widest: Option<u32> = None;
+                    for (_, one) in postings
+                        .defs_insns(*value)
+                        .chain(postings.uses_insns(*value))
+                        .chain(postings.needs_insns(*value))
+                    {
+                        widest = widest.max(_width_of(one, *value));
+                        if widest.is_some_and(|found| found >= was) {
+                            break;
+                        }
+                    }
+                    widest.map(|found| found.max(added.unwrap_or(0)))
+                }
+            };
+            match width {
+                Some(width) => {
+                    out.insert(*value, width);
+                }
+                None => {
+                    out.swap_remove(value);
                 }
             }
         }
@@ -5063,6 +5113,37 @@ mod tests {
         let found = super::_named_among(&body, &BTreeSet::from([1, 2, 3]));
         assert_eq!(found, BTreeSet::from([1, 2]), "value 3 is named nowhere");
         assert_eq!(body.facts.0.counted("named-among"), 3, "asked of the three values, from the postings");
+    }
+
+    /// A value read by 300 instructions had all of them looked at for its
+    /// width at each change to one (`live` at N=512: 366 M of the facts'
+    /// 1.1 G, 4x for a doubling). The width a change leaves is found from the
+    /// instructions it removed and added, and the rest looked at only until one
+    /// is as wide.
+    #[test]
+    fn test_a_value_read_by_many_keeps_its_width_without_a_look_at_each_reader() {
+        let at = |at: i64, what: Semantics, defines: Vec<u32>, uses: Vec<u32>| {
+            Insn::new(at, Some((at, at + 1)), Some(what), defines, uses)
+        };
+        let read = |at_: i64, width: u32| {
+            at(at_, semantics(Operation::Compare, "cmp", vec![], vec![held(1, width), imm(0, width)]), vec![], vec![1])
+        };
+        let make = |last: u32| {
+            let mut insns =
+                vec![at(0, semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(1, 4)]), vec![1], vec![])];
+            insns.extend((1..=300).map(|one| read(one, 4)));
+            insns.push(read(301, last));
+            body_of("f", 0, insns)
+        };
+        let (before, after) = (make(4), make(2));
+        let changes = ranges::changes(&before, &after).expect("the same blocks");
+        assert_eq!(changes.touched, [1].into_iter().collect(), "premise: the hub is the one value touched");
+        let held = _widest(&before);
+        WIDTH_VISITS.with(|count| count.set(0));
+        let found = _widest_after(held, &after, &changes);
+        let visits = WIDTH_VISITS.with(std::cell::Cell::get);
+        assert_eq!(found, _widest(&after), "the width kept differs from the width worked out");
+        assert!(visits <= 4, "{visits} of the 302 instructions that name the value were looked at");
     }
 
     /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and
