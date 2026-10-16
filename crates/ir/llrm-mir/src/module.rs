@@ -83,6 +83,8 @@ pub struct Block {
     pub name: Option<String>,
     pub(crate) instructions: Vec<InstId>,
     pub(crate) erased: bool,
+    /// In the function's layout.
+    pub(crate) placed: bool,
 }
 
 impl Block {
@@ -481,6 +483,14 @@ impl Function {
 
     pub fn layout(&self) -> &[BlockId] {
         &self.layout
+    }
+
+    /// Whether `block` is in the layout.
+    pub fn is_placed(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.blocks[block.0 as usize].placed
     }
 
     pub fn entry(&self) -> Option<BlockId> {

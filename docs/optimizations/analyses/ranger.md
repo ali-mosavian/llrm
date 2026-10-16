@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranger.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranger.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:4a7ed7ee474d79371fdceb41545900b725e2af344c24b87e5cc06476b0ba4c09 -->
+<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:43da706a46a62c29a1c0fb16adb55258816393ecf0a012d191965b8d7c3449b8 -->
 
 # ranger
 
@@ -16,6 +16,11 @@ block starts from (its sole predecessor's, narrowed by the edge; or its
 immediate dominator's), else what the program declares of it. Nothing is
 solved for a value nobody asks of, and an answer is the one the table
 gives: `LLRM_CHECK_REPLAY` asks every value at every block both ways.
+
+The walk up the blocks stops at the definition and does not start for a
+block the definition does not dominate (nothing above holds the value), and
+each block it passes keeps the answer, so a value is walked to once from
+each block that asks, not once per question.
 
 A loop's blocks are asked the same way (`LoopView`): the facts the edges and
 assumes above a block give, and the loop's operations worked from them, one

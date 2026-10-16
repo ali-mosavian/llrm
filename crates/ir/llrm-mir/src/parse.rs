@@ -1214,7 +1214,7 @@ impl Parser {
         if let Name::Named(text) = name {
             local.function.blocks[id.0 as usize].name = Some(text);
         }
-        local.function.layout.push(id);
+        local.function.insert_block(id, None).expect("a block defined once and not yet placed");
         Ok(id)
     }
 

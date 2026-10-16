@@ -940,7 +940,7 @@ impl Function {
     ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
-        self.blocks.push(Block { name, instructions: Vec::new(), erased: false });
+        self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
         self.block_uses.push(Vec::new());
         self.log(Change::BlockCreated(id));
         id
@@ -952,7 +952,7 @@ impl Function {
         block: BlockId,
         after: Option<BlockId>,
     ) -> Result<(), String> {
-        if self.layout.contains(&block) || self.block(block).erased {
+        if self.is_placed(block) || self.block(block).erased {
             return Err(format!("block {} is already placed or erased", block.0));
         }
         let at = match after {
@@ -966,6 +966,7 @@ impl Function {
             }
         };
         self.layout.insert(at, block);
+        self.blocks[block.0 as usize].placed = true;
         Ok(())
     }
 
@@ -978,6 +979,7 @@ impl Function {
                 self.log(Change::Erased { inst, block, next });
             }
             self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
             self.log(Change::BlockErased(block));
         }
         self.names = NameIndex::default();
@@ -1002,6 +1004,7 @@ impl Function {
         self.layout.retain(|one| *one != block);
         self.release_name(block);
         self.blocks[block.0 as usize].erased = true;
+        self.blocks[block.0 as usize].placed = false;
         self.log(Change::BlockErased(block));
         Ok(())
     }
