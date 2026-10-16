@@ -59,12 +59,12 @@ use llrm_lir::registers::Regs;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops as loopy;
-use crate::backend::liveness::{_backwards, _declared, _terminator, _universe};
+use crate::backend::liveness::{_backwards, _declared, _terminator, _universe, with_effect};
 use crate::backend::peephole::{_lanes, _register_effects, Lanes, id};
 use crate::model::ir::{Loc, Operation, Reg};
 use crate::model::lir::{self, Block, Insn, LirBody};
-use crate::support::hash::HashSet;
 use crate::support::hash::IndexMap;
+use crate::support::hash::{HashMap, HashSet};
 
 fn _plain(one: &Insn) -> bool {
     one.what.is_some()
@@ -122,6 +122,7 @@ pub fn touches(
 /// writes on the way cannot be why the last copy before the exit is wrong.
 fn _between(
     at_of: &IndexMap<i64, &Block>,
+    predecessors: &IndexMap<i64, Vec<i64>>,
     inside: &BTreeSet<i64>,
     copy_at: i64,
     exit_from: i64,
@@ -146,14 +147,100 @@ fn _between(
             continue;
         }
         backward.insert(at);
-        queue.extend(
-            inside
-                .iter()
-                .copied()
-                .filter(|one| at_of[one].succ.contains(&at) && *one != copy_at && forward.contains(one)),
-        );
+        // The blocks that lead to `at`, by its predecessors: not every block of
+        // the loop asked whether it does (the square of the loop).
+        queue.extend(predecessors[&at].iter().copied().filter(|one| *one != copy_at && forward.contains(one)));
     }
     Some(forward.intersection(&backward).copied().collect())
+}
+
+/// What a run of instructions reads and writes, as `touches` asks it of each:
+/// the union of the lanes, and whether any instruction's are not known.
+#[derive(Clone, Copy, Default)]
+struct Touched {
+    reads: Lanes,
+    writes: Lanes,
+    unknown: bool,
+}
+
+impl Touched {
+    fn of(
+        regs: Regs,
+        bits: u32,
+        one: &Insn,
+    ) -> Self {
+        if _terminator(one.what.as_ref()) {
+            return Self::default();
+        }
+        let mut effects = _register_effects(regs, bits, one, true, true);
+        if effects.is_none() {
+            effects = _declared(regs, one);
+        }
+        match effects {
+            Some((reads, writes)) => Self { reads, writes, unknown: false },
+            None => Self { unknown: true, ..Self::default() },
+        }
+    }
+
+    fn of_block(
+        regs: Regs,
+        bits: u32,
+        block: &Block,
+    ) -> Self {
+        block.insns.iter().fold(Self::default(), |so_far, one| so_far.with(&Self::of(regs, bits, one)))
+    }
+
+    fn with(
+        mut self,
+        other: &Self,
+    ) -> Self {
+        self.reads = self.reads.or(&other.reads);
+        self.writes = self.writes.or(&other.writes);
+        self.unknown |= other.unknown;
+        self
+    }
+
+    /// Whether some instruction `touches` either of the two ways the sink asks.
+    fn blocks(
+        &self,
+        both: &Lanes,
+        written: &Lanes,
+    ) -> bool {
+        self.unknown || !both.is_disjoint(&self.writes) || !written.is_disjoint(&self.reads)
+    }
+}
+
+/// What each suffix of `block` touches, by where it starts (the last: nothing).
+fn _suffixes(
+    regs: Regs,
+    bits: u32,
+    block: &Block,
+) -> Vec<Touched> {
+    let mut touched = vec![Touched::default(); block.insns.len() + 1];
+    for (at, one) in block.insns.iter().enumerate().rev() {
+        touched[at] = Touched::of(regs, bits, one).with(&touched[at + 1]);
+    }
+    touched
+}
+
+/// The lanes live after each instruction of `block`, given those live after
+/// the block.
+fn _live_after(
+    regs: Regs,
+    bits: u32,
+    block: &Block,
+    after: Lanes,
+    universe: &Lanes,
+) -> Vec<Lanes> {
+    let mut live = vec![after; block.insns.len()];
+    let mut current = after;
+    for (at, one) in block.insns.iter().enumerate().rev() {
+        live[at] = current;
+        current = with_effect(regs, bits, one, |effect| {
+            effect.map_or_else(|| *universe, |effect| effect.live_before(&current))
+        });
+    }
+    live
 }
 
 /// Per loop block, the lanes live on entry along paths that stay in the loop.
@@ -201,6 +288,9 @@ pub fn sunk(body: &LirBody) -> LirBody {
         }
     }
 
+    // What a whole block touches, made once for the body.
+    let mut whole: HashMap<i64, Touched> = HashMap::default();
+    let mut suffixes: HashMap<i64, Vec<Touched>> = HashMap::default();
     let mut moved: IndexMap<i64, Vec<Arc<Insn>>> = IndexMap::default();
     let mut removed: HashSet<usize> = HashSet::default();
     for found_loop in &found {
@@ -219,7 +309,14 @@ pub fn sunk(body: &LirBody) -> LirBody {
         if !at_of.contains_key(&exit_at) || predecessors[&exit_at] != [source_at] {
             continue;
         }
-        let round_into = _round(regs, body.bits, &at_of, &inside, &universe);
+        // Solved when a copy first needs it: most loops have none to move.
+        let round_cell = std::cell::OnceCell::new();
+        let round_into = || round_cell.get_or_init(|| _round(regs, body.bits, &at_of, &inside, &universe));
+        // What a block's copies read is made once for the block, not for each
+        // copy: the rest of the block cloned and walked for each was the square
+        // of the block.
+        let mut lives: HashMap<i64, Vec<Lanes>> = HashMap::default();
+        let mut between: HashMap<i64, Option<Touched>> = HashMap::default();
         // Every way out runs the copy first: a loop left from its header
         // before any trip never ran its latch.
         for block in inside.iter().map(|at| at_of[at]).filter(|block| dominance.dominates(block.at, source_at)) {
@@ -235,28 +332,46 @@ pub fn sunk(body: &LirBody) -> LirBody {
                 if written.is_empty() || read.is_empty() || !written.is_disjoint(&read) {
                     continue;
                 }
+                // Between the copy and the exit nothing writes either side or
+                // reads the copy: local to the blocks, asked before the
+                // liveness of the whole loop, which only a copy
+                // that passes needs.
+                let touched = suffixes.entry(block.at).or_insert_with(|| _suffixes(regs, body.bits, block));
+                let both: Lanes = written.or(&read);
+                // The rest of its own block alone settles most copies.
+                if touched[index + 1].blocks(&both, &written) {
+                    continue;
+                }
+                // What the blocks on the way to the exit touch, together.
+                let Some(rest) = *between.entry(block.at).or_insert_with(|| {
+                    let blocks = _between(&at_of, &predecessors, &inside, block.at, source_at)?;
+                    Some(blocks.iter().fold(Touched::default(), |so_far, at| {
+                        let one = whole.entry(*at).or_insert_with(|| Touched::of_block(regs, body.bits, at_of[at]));
+                        so_far.with(one)
+                    }))
+                }) else {
+                    continue;
+                };
+                if touched[index + 1].with(&rest).blocks(&both, &written) {
+                    continue;
+                }
                 // Dead on every way round, nested loops included. Asked only at
                 // the header, PRECALCULATIONS' inner loop read the copy again
                 // and the copy left both loops.
-                let after: Lanes = block
-                    .succ
-                    .iter()
-                    .filter(|to| inside.contains(to))
-                    .flat_map(|to| round_into[to].iter().copied())
-                    .collect();
-                let rest_of_block = block.with_insns(block.insns[index + 1..].to_vec());
-                if !written.is_disjoint(&_backwards(regs, body.bits, &rest_of_block, after, &universe)) {
-                    continue;
-                }
-                let Some(rest) = _between(&at_of, &inside, block.at, source_at) else {
-                    continue;
-                };
-                let later: Vec<&Arc<Insn>> =
-                    block.insns[index + 1..].iter().chain(rest.iter().flat_map(|at| at_of[at].insns.iter())).collect();
-                let both: Lanes = written.or(&read);
-                if later.iter().any(|other| {
-                    touches(regs, body.bits, other, &both, false) || touches(regs, body.bits, other, &written, true)
-                }) {
+                let live = lives
+                    .entry(block.at)
+                    .or_insert_with(
+                        || {
+                            let after: Lanes = block
+                                .succ
+                                .iter()
+                                .filter(|to| inside.contains(to))
+                                .flat_map(|to| round_into()[to].iter().copied())
+                                .collect();
+                            _live_after(regs, body.bits, block, after, &universe)
+                        },
+                    );
+                if !written.is_disjoint(&live[index]) {
                     continue;
                 }
                 removed.insert(id(one));

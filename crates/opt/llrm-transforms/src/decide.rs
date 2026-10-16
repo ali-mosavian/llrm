@@ -93,7 +93,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
-use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::consts::{self, Known, masked};
 use llrm_analysis::graph::loops;
 use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
@@ -162,7 +162,11 @@ fn _decided(
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
+    // What is known through memory is the manager's, as every other client
+    // reads it.
+    let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+    let facts = Result::as_ref(&*through).map_err(String::clone)?;
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), facts)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -176,10 +180,11 @@ fn _decided(
 }
 
 /// Each block whose terminator's way is known, with that way.
-fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
+fn _decisions(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
-    let calls = Calls::default();
-    let facts = consts::known_walked(unit, &calls);
     // Points-to only for a pointer compared with null, as LLVM asks
     // isKnownNonZero of one value rather than solving every pointer.
     let pointers = std::cell::OnceCell::new();

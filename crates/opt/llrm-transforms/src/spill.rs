@@ -1481,6 +1481,8 @@ impl llrm_mir::passes::Analysis for Pressure {
                 }
                 Change::Cloned { to, .. } => name_inst(&mut named, *to),
                 Change::Rewritten(inst) => name_inst(&mut named, *inst),
+                // Each user is told by its own entries.
+                Change::Substituted(_) => {}
                 Change::Operand { inst, was, index } => {
                     name_operand(&mut named, was);
                     if function.instruction(*inst).opcode.is_terminator()
@@ -1607,7 +1609,8 @@ impl llrm_mir::passes::Analysis for Pressure {
                     | C::Rewritten(inst)
                     | C::Operand { inst, .. }
                     | C::Operands { inst, .. } => *inst,
-                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters => continue,
+                    // Each user is told by its own entries.
+                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters | C::Substituted(_) => continue,
                 };
                 touched.extend(function.parent(inst).map(cfg::id));
             }

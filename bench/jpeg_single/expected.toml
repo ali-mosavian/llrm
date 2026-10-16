@@ -1,5 +1,5 @@
-reason = "the value solve of points-to is one flow-insensitive worklist with the memory SSA of private slots (#1756): bq32 jpeg_fixed/jpeg_single -O2/-Os run 886 to 3,026 instructions fewer; nothing else moves"
-blessed = "2026-10-15"
+reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
+blessed = "2026-10-16"
 
 [bas.O2]
 code_bytes = 5212
@@ -26,14 +26,14 @@ bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63440134
-code_bytes = 6278
+instructions = 63438975
+code_bytes = 6231
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64613330
-code_bytes = 5868
+instructions = 64612173
+code_bytes = 5824
 data_bytes = 29697
 bss_bytes = 0
 

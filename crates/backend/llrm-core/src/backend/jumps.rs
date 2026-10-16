@@ -911,6 +911,8 @@ fn _placed(
     let tests = _tests(&natural, body.entry, &by_at);
     // loops() is innermost first.  A block in nested loops follows the nearest
     // loop's trace before an exit from it; the outer trace resumes afterwards.
+    // Each loop's body is the forest's view, shared by its blocks: a copy for
+    // each block was the square of a nest's depth.
     let mut inside: IndexMap<i64, loopy::Body> = IndexMap::default();
     for found in &natural {
         for at in &found.body {
@@ -1030,7 +1032,7 @@ fn _placed(
             });
         }
         (current, source) = (
-            _onward(body.bits, block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties),
+            _onward(body.bits, block, &done, inside.get(&block.at).map_or(&empty, |one| one), Some(&by_at), odds, ties),
             Some(at),
         );
     }

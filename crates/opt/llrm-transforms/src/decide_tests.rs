@@ -334,6 +334,25 @@ fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided() {
     assert!(!after.contains("br i1"), "{after}");
 }
 
+/// Decide solved memory for the body itself (164 M instructions over 36 runs on
+/// d_faces, 'mir decide'), beside the manager's `ThroughMemory` every other
+/// client reads. What the manager holds of the body is what it decides from.
+#[test]
+fn decide_reads_the_managers_facts_through_memory_and_derives_none() {
+    let text = ACROSS_READONLY_CALL.replace(
+        "  ret i16 %v\n",
+        "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
+    );
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    let _ = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, &layout, function);
+    let before = llrm_analysis::consts::memory_derivations();
+    assert!(super::_decided(context, &layout, function, &mut analyses).expect("decides"));
+    assert_eq!(llrm_analysis::consts::memory_derivations() - before, 0);
+}
+
 /// Whether @f still has a block named `name`.
 fn has(
     module: &Module,

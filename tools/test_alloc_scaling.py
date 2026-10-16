@@ -521,3 +521,21 @@ def test_a_local_split_asks_the_postings_for_the_references_of_the_value_and_not
         source.write_text(scaling.AXES["cells"](448))
         run = steps(compiler, source, "-O2")
     assert run["split local"] < 45, f"cells N=448 -O2: split local cost {run['split local']} Minstr (45 allowed; 82 before): {run}"
+
+
+def test_the_peephole_grows_as_a_loop_nest_does():
+    """`lir peephole` took 6.3x as long for a loop nest 4x as deep (4.3x the instructions) at -O2: `copysink` walked every block of a loop
+    to find the path from each copy to the exit and solved the loop's liveness for each loop around it, whether or not a copy could move.
+    A copy its own block settles is left there, and the paths and the liveness are made once for a block and a loop."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        spent = {}
+        for n in (16, 64):
+            source = Path(work) / f"nest{n}.c"
+            source.write_text(scaling.AXES["nest"](n))
+            spent[n] = steps(compiler, source, "-O2")["lir peephole"]
+    grown = spent[64] / max(spent[16], 1e-9)
+    assert grown < 5.2, f"a nest 4x as deep cost {grown:.2f} times as much in `lir peephole` (5.2 allowed; 6.29 before): {spent}"

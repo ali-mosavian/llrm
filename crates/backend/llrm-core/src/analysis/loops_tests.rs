@@ -190,14 +190,35 @@ fn test_dominators_are_what_the_definition_says_on_random_graphs() {
 /// body laid out against its flow was a round of the body for each block. 4,000
 /// blocks took 0.66 s, in `irreducible`, which `lir jumps` runs for every tail
 /// copy it tries (#560).
+/// Whether `work` at four times the size does under 6 times the steps (linear
+/// is 4, quadratic 16). A count: load does not move it, and the wall clock did
+/// (164 ms for 4,000 blocks at load 200, against a 100 ms bound).
+fn grows_linearly(work: impl Fn(usize) -> u64) -> bool {
+    work(8000) < 6 * work(2000)
+}
+
+fn reversed_body(n: i64) -> Vec<LirBlock> {
+    (0..n).rev().map(|at| block(at, &[(at + 1).min(n)])).chain([block(n, &[])]).collect()
+}
+
 #[test]
 fn test_dominance_of_a_body_laid_out_against_its_flow_is_not_quadratic() {
-    let n = 4000;
-    let reversed: Vec<Block> = (0..n).rev().map(|at| block(at, &[(at + 1).min(n)])).chain([block(n, &[])]).collect();
-    let started = std::time::Instant::now();
-    let found = dominance(&reversed, Some(0));
-    assert!(found.dominates(0, n) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));
-    assert!(started.elapsed().as_secs_f64() < 0.1, "{:?} for 4,000 blocks", started.elapsed());
+    let found = dominance(&reversed_body(4000), Some(0));
+    assert!(found.dominates(0, 4000) && found.dominates(1500, 2000) && !found.dominates(2000, 1500));
+    let steps = |n: usize| {
+        let blocks = reversed_body(n as i64);
+        let before = llrm_support::graph::dominance_work();
+        drop(llrm_support::graph::dominance(&blocks, Some(0)));
+        llrm_support::graph::dominance_work() - before
+    };
+    assert!(grows_linearly(steps), "{} steps for 2,000 blocks, {} for 8,000", steps(2000), steps(8000));
+}
+
+/// The bound must fail what it is for: a quadratic count.
+#[test]
+fn test_the_slope_check_fails_a_quadratic_and_passes_a_linear() {
+    assert!(!grows_linearly(|n| (n * n) as u64));
+    assert!(grows_linearly(|n| (3 * n) as u64));
 }
 
 /// A nest of `depth` loops: header k (block k) goes into the next loop, or its

@@ -33,6 +33,7 @@ def differences(tmp_path_factory):
 
 @pytest.mark.parametrize("name", ["NIBBLES", "GORILLA"])
 def test_the_demo_shows_what_bcom45_shows_where_nothing_is_random(differences, name: str):
-    assert len(differences[name]) == len(qbbuild.TARGETS)
-    for target, wrong in differences[name].items():
+    shown = qb32demos.of(differences, name)
+    assert len(shown) == len(qbbuild.TARGETS)
+    for target, wrong in shown.items():
         assert wrong == [], f"{target}: {wrong}"
