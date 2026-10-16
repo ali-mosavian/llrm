@@ -383,3 +383,14 @@ done:
     let printed = folded(text, &[&[-3], &[0], &[3], &[4], &[7]]);
     assert!(printed.contains("%s = phi"), "{printed}");
 }
+
+/// Each guard an exit asked for climbed the branches above its loop and found
+/// the body's assumptions again from its instructions: 765 times at 64 loops,
+/// half of `indvars`' cost there. They are found once for the body.
+#[test]
+fn the_assumptions_of_a_body_are_found_once_for_all_the_guards_its_exits_ask() {
+    let before = llrm_analysis::assumptions::built();
+    folded(&checked("%len"), INPUTS);
+    let built = llrm_analysis::assumptions::built() - before;
+    assert!(built <= 2, "{built} assumption tables built for one body");
+}
