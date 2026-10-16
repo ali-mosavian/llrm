@@ -208,7 +208,12 @@ fn test_huge_array_loops_are_the_same_in_basic_c_and_nib() {
         let languages = kernels(dir, stem, basic);
         let [(_, bas), (_, c), (_, nib)] = &languages;
         assert!(!c.is_empty(), "premise: {stem}.c has loops");
-        if bas != c || nib != c {
+        // `% 251` in bench/huge: C proves its dividend 16 bits and prices the
+        // reciprocal against `div` exactly (a tie, #1880); Basic and Nib keep
+        // the counter in a frame slot, unproven, and take it at the early-out
+        // minimum. The rest of every loop is the same.
+        let divides = stem == "huge";
+        if bas != nib || (!divides && bas != c) || (divides && bas.len() != c.len()) {
             let show = |loops: &Vec<(Vec<String>, bool)>| {
                 loops.iter().map(|(one, _)| one.join("\n")).collect::<Vec<_>>().join("\n--\n")
             };
