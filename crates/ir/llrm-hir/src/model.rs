@@ -1209,6 +1209,10 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Segments a linker lays out between two markers, as `BEGIN:MIDDLE:END`
+    /// (`XIB:XI:XIE`): a module with a MIDDLE declares the markers around it,
+    /// so that whichever object the linker meets first, they bracket it.
+    pub bracketed_segments: Vec<String>,
     /// Each procedure compares SP with the runtime's limit on entry: where
     /// `-fsanitize=stack` asks, never otherwise.
     pub stack_check: Option<StackCheck>,
@@ -1236,6 +1240,7 @@ impl Program {
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            bracketed_segments: Vec::new(),
             stack_check: None,
         }
     }

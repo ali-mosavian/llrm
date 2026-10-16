@@ -179,6 +179,7 @@ pub fn compiled(
                 module,
                 mir.segments.data_space,
                 program.constant_segment.as_deref(),
+                &program.bracketed_segments,
                 options.machine.far_bss,
                 options.machine.bss_begin,
                 options.arch.layout().segment_bytes(),

@@ -523,6 +523,9 @@ impl _Plain for model::Program {
         if self.constant_segment.is_some() {
             out.insert("constant_segment".to_owned(), self.constant_segment._plain());
         }
+        if !self.bracketed_segments.is_empty() {
+            out.insert("bracketed_segments".to_owned(), self.bracketed_segments._plain());
+        }
         Json::Dict(out)
     }
 }
@@ -1676,6 +1679,7 @@ static PROGRAM: _Record = _Record {
         ("entries", _Hint::Tuple(&_Hint::Str), false),
         ("preserved", _Hint::Tuple(&_Hint::Str), false),
         ("constant_segment", _Hint::Union(&[_Hint::Str, _Hint::NoneType]), false),
+        ("bracketed_segments", _Hint::Tuple(&_Hint::Str), false),
     ],
     build: |args| {
         _object(model::Program {
@@ -1694,6 +1698,7 @@ static PROGRAM: _Record = _Record {
             entries: _default(args, "entries", Vec::new())?,
             preserved: _default(args, "preserved", Vec::new())?,
             constant_segment: _default(args, "constant_segment", None)?,
+            bracketed_segments: _default(args, "bracketed_segments", Vec::new())?,
             stack_check: None,
         })
     },
