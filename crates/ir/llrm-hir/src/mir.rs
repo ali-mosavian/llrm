@@ -2296,7 +2296,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             for place in &group.places {
                 self.frame.insert(place.id, (self.objects.len(), place.offset - group.start));
             }
-            self.objects.push(self.b.alloca(group.ty, ""));
+            // A group is places that share bytes; the first names it.
+            let name = group.places.first().map_or("", |place| place.name.as_str());
+            self.objects.push(self.b.alloca(group.ty, name));
         }
         if interrupted(self.function) {
             self.passed = Some(self.b.parameter(0));
