@@ -767,3 +767,14 @@ fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
     let (small, large) = (visits(40), visits(80));
     assert!(large < 3 * small, "{small} blocks walked for 40 loops, {large} for 80");
 }
+
+/// Two functions that differ only in what their values are called are the same
+/// function: a pass that compares a function before and after must not see a
+/// rename as a change.
+#[test]
+fn functions_that_differ_only_in_value_names_are_equal() {
+    let named = format!("{DATALAYOUT}define i16 @f(i16 %n) {{\nb:\n  %next = add i16 %n, 1\n  ret i16 %next\n}}\n");
+    let numbered = format!("{DATALAYOUT}define i16 @f(i16 %0) {{\nb:\n  %1 = add i16 %0, 1\n  ret i16 %1\n}}\n");
+    let (named, numbered) = (parse::module(&named).expect("parses"), parse::module(&numbered).expect("parses"));
+    assert!(named.globals == numbered.globals);
+}

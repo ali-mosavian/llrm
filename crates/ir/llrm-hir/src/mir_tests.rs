@@ -193,7 +193,7 @@ fn an_array_element_is_its_linear_index_into_the_array() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "  %2 = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 30, i1 false)\n  %3 = sub i16 %1, 0\n  %4 = sub i16 %0, 1\n  %5 = mul i16 %3, 3\n  %6 = add i16 %5, %4\n  %7 = getelementptr inbounds i16, ptr %2, i16 %6\n  %8 = load i16, ptr %7, !tbaa !2\n  ret i16 %8\n";
+    let body = "  %A = alloca [30 x i8]\n  call void @llvm.memset.p0.i16(ptr %A, i8 0, i16 30, i1 false)\n  %2 = sub i16 %1, 0\n  %3 = sub i16 %0, 1\n  %4 = mul i16 %2, 3\n  %5 = add i16 %4, %3\n  %6 = getelementptr inbounds i16, ptr %A, i16 %5\n  %7 = load i16, ptr %6, !tbaa !2\n  ret i16 %7\n";
     assert!(text.contains(body), "{text}");
 }
 
@@ -292,7 +292,7 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
-        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"),
+        text.contains("  %2 = load i16, ptr %1, !tbaa !2\n  store i16 %2, ptr addrspace(1) %0, !tbaa !6\n"),
         "{text}"
     );
     assert!(
@@ -472,7 +472,7 @@ fn an_index_is_extended_to_the_pointers_index_width() {
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
         text.contains(
-            "  %2 = zext i8 %0 to i16\n  %3 = sub i16 %2, 0\n  %4 = getelementptr inbounds i16, ptr %1, i16 %3\n"
+            "  %1 = zext i8 %0 to i16\n  %2 = sub i16 %1, 0\n  %3 = getelementptr inbounds i16, ptr %A, i16 %2\n"
         ),
         "{text}"
     );
@@ -565,7 +565,7 @@ fn locals_are_zeroed_and_overlapping_ones_share_an_alloca() {
     let emitted = emit(&program).remove(0);
     assert_eq!(llrm_mir::lint::poison(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let entry = "  %0 = alloca [4 x i8]\n  %1 = alloca i16\n  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 4, i1 false)\n  store i16 0, ptr %1\n";
+    let entry = "  %LOW = alloca [4 x i8]\n  %X = alloca i16\n  call void @llvm.memset.p0.i16(ptr %LOW, i8 0, i16 4, i1 false)\n  store i16 0, ptr %X\n";
     assert!(text.contains(entry), "{text}");
 }
 
@@ -589,8 +589,8 @@ fn a_locals_scope_is_its_lifetime_markers() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %0)\n"), "{text}");
-    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %0)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.start.p0(i64 2, ptr %X)\n"), "{text}");
+    assert!(text.contains("  call void @llvm.lifetime.end.p0(i64 2, ptr %X)\n"), "{text}");
     assert_eq!(text.matches("declare void @llvm.lifetime.start.p0").count(), 1, "{text}");
 }
 
@@ -928,7 +928,7 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) {\nb1:\n  %t = alloca i16\n  %1 = getelementptr inbounds i8, ptr %0, i16 2\n  %2 = load i16, ptr %1, !tbaa !7\n  %3 = icmp slt i16 %2, 0\n  %4 = zext i1 %3 to i16\n  store i16 %4, ptr %t, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
     assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
 }

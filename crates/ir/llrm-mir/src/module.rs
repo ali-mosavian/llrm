@@ -60,11 +60,22 @@ pub enum ValueDef {
     Instruction(InstId),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct ValueData {
     pub ty: TypeId,
+    /// What a dump calls the value. Not part of what it is: two functions that
+    /// differ only in names are equal, so no pass sees a rename as a change.
     pub name: Option<String>,
     pub def: ValueDef,
+}
+
+impl PartialEq for ValueData {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.ty == other.ty && self.def == other.def
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
