@@ -51,6 +51,8 @@ jobs:
       base: ${{ steps.plan.outputs.base }}
       groups: ${{ steps.plan.outputs.groups }}
       static: ${{ steps.plan.outputs.static }}
+      compiler: ${{ steps.plan.outputs.compiler }}
+      perf_hosted: ${{ steps.runners.outputs.perf_hosted }}
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
@@ -75,6 +77,7 @@ jobs:
           echo "private=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["private"]))')" >> "$GITHUB_OUTPUT"
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
           echo "tier=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" >> "$GITHUB_OUTPUT"
+          echo "compiler=$(echo "$json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["compiler"]).lower())')" >> "$GITHUB_OUTPUT"
           python3 tools/gate/gate.py plan --base "$base" | tee -a "$GITHUB_STEP_SUMMARY"
       # tinytim when its heartbeat is fresh and a runner idle, else hosted (tools/ci/pick_runners.py). A fork's pull request is always hosted.
       - id: runners
@@ -88,6 +91,7 @@ jobs:
           echo "$json"
           echo "build=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["build"]))')" >> "$GITHUB_OUTPUT"
           echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["groups"]))')" >> "$GITHUB_OUTPUT"
+          echo "perf_hosted=$(echo "$json" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["perf_hosted"]))')" >> "$GITHUB_OUTPUT"
           summary=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])')
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
           echo "Runners: $summary" >> "$GITHUB_STEP_SUMMARY"
@@ -289,6 +293,12 @@ jobs:
             line="GATE ${{ needs.plan.outputs.tier }} DRAFT at ${head:0:12}: static=${{ needs.static.result }}, the gate runs when it is ready for review (not a pass)"
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
+          fi
+          # The counter tests judge the compiler: a pull request that changes its source is not a pass while they ran on a runner with none.
+          if [ "${{ github.event_name }}" = pull_request ] && [ "${{ needs.plan.outputs.compiler }}" = true ] && [ -n "${{ needs.plan.outputs.perf_hosted }}" ] && [ "${{ needs.gate.result }}" = success ]; then
+            line="GATE ${{ needs.plan.outputs.tier }} PERF SKIPPED at ${head:0:12}: ${{ needs.plan.outputs.perf_hosted }} ran hosted (no counters); re-run when tinytim is idle"
+            echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
           if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}"

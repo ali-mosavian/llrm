@@ -253,6 +253,12 @@ def smoke_plan(files: list[str]) -> Plan:
     return Plan("smoke", "the fast tier cut to the smoke steps", steps, fast.packages, fast.languages, list(files))
 
 
+def touches_compiler(files: list[str], forced: str = "auto") -> bool:
+    """Whether the diff changes the compiler's source (tiers.toml [compiler]): what the perf-counter tests and measure judge."""
+    cfg = load()
+    return forced != "auto" or any(matches(f, cfg["compiler"]["paths"]) for f in files if not matches(f, cfg["inert"]["paths"]))
+
+
 def plan(files: list[str], forced: str = "auto") -> Plan:
     if forced == "smoke":
         return smoke_plan(files)
@@ -990,7 +996,8 @@ def main() -> int:
         if not args.json and (wrapped := scoped([sys.executable, *sys.argv])):
             os.execv(wrapped[0], wrapped)  # before the first line is printed: the re-executed run prints it
         print(f"gate: HEAD {head} {'dirty (allowed)' if dirty else 'clean'}", flush=True)
-    p = plan(args.files if args.files is not None else changed_files(args.base), args.tier)
+    files = args.files if args.files is not None else changed_files(args.base)
+    p = plan(files, args.tier)
     if args.steps:
         p = restricted(p, args.steps, set(commands(p, load(), packages())) | set(load()["exclusive"]))
     missing = missing_capabilities()
@@ -998,7 +1005,7 @@ def main() -> int:
         missing = assumed(missing, os.environ)
     skipped = skipped_steps(p.steps, missing, p.languages)
     if args.json:
-        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped}))
+        print(json.dumps({"tier": p.tier, "steps": p.steps, "groups": groups_of(p, skipped), "private": private_groups(p), "skipped": skipped, "compiler": touches_compiler(files, args.tier)}))
         return 0
     print(f"tier {p.tier}: {p.reason}")
     for step, why in skipped.items():
