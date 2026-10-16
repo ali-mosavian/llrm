@@ -953,6 +953,19 @@ pub struct Structure {
     /// exactly, the object and bytes: a read placed exactly elsewhere in
     /// the same object, or in one it cannot alias, is not written.
     exacts: llrm_mir::dense::IdMap<InstId, (ObjectRef, i128, i128)>,
+    /// What the defs of each block can write, found when a walk first meets a
+    /// block's chain (`summary`).
+    summaries: std::cell::OnceCell<llrm_support::hash::HashMap<i64, BlockWrites>>,
+}
+
+/// The defs of one block, taken together: the state before the first of them,
+/// the objects any can write, and who they are. A walk that reaches the end of
+/// the block and finds the cell's objects among none of those writes goes to
+/// the state before the block's first def, without visiting each.
+struct BlockWrites {
+    before: usize,
+    reach: Reach,
+    defs: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -1144,6 +1157,48 @@ impl MemorySSA<'_> {
         }
         asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// The block's defs taken together, if `access` is the last state its chain
+    /// leaves and the block has one or more defs.
+    fn block_writes(
+        &self,
+        access: &Access,
+    ) -> Option<&BlockWrites> {
+        let block = access.block?;
+        if access.kind != Kind::Def || self.ends.get(&block).copied().flatten() != Some(access.id) {
+            return None;
+        }
+        self.summaries
+            .get_or_init(|| {
+                let mut by_block: llrm_support::hash::HashMap<i64, BlockWrites> = Default::default();
+                for def in self.accesses.iter().filter(|one| one.kind == Kind::Def) {
+                    let (Some(block), Some(site), Some(defining)) = (def.block, def.site, def.defining) else {
+                        continue;
+                    };
+                    let one = by_block
+                        .entry(block)
+                        .or_insert_with(
+                            || BlockWrites {
+                                before: defining,
+                                reach: Reach::default(),
+                                defs: Vec::new(),
+                            },
+                        );
+                    // The first def of a block has the lowest id, and its
+                    // `defining` is the state the block is entered in.
+                    let Reach { unknown, objects } = Reach::of(&self.written[&site]);
+                    one.reach.unknown |= unknown;
+                    for object in objects {
+                        if !one.reach.objects.contains(&object) {
+                            one.reach.objects.push(object);
+                        }
+                    }
+                    one.defs.push(def.id);
+                }
+                by_block
+            })
+            .get(&block)
     }
 
     /// `cell`'s number among the cells asked about; the cell is copied only the
@@ -1489,6 +1544,19 @@ impl MemorySSA<'_> {
                 continue;
             }
             let access = self.access(current);
+            // The chain of a block none of whose defs can write the cell: its
+            // end is the state before the first of them.
+            if jumping
+                && edge.is_none()
+                && edge_memory.is_none()
+                && access.kind == Kind::Def
+                && let Some(block) = self.block_writes(access)
+                && block.reach.misses(memory)
+                && boundary.is_none_or(|stop| !block.defs.contains(&stop))
+            {
+                pending.push(Some(block.before));
+                continue;
+            }
             match access.kind {
                 Kind::Live => {
                     ended(table, &mut chain, current);
@@ -1732,7 +1800,19 @@ fn structure_of(
         })
         .collect();
     let ends = outgoing.iter().map(|(block, state)| (*block, Some(resolved(&replacements, *state)))).collect();
-    Structure { ends, live, accesses, sites, phis, written, reaches: Default::default(), span, fixed, exacts }
+    Structure {
+        ends,
+        live,
+        accesses,
+        sites,
+        phis,
+        written,
+        reaches: Default::default(),
+        span,
+        fixed,
+        exacts,
+        summaries: Default::default(),
+    }
 }
 
 #[cfg(test)]
