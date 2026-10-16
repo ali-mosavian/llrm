@@ -702,7 +702,6 @@ mod tests {
         listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
     }
 
-
     /// A table of function pointers initialised with integer constants
     /// (`SIG_IGN`, `SIG_DFL`), in a model with far code, had 2-byte entries
     /// where code pointers are 4: clib's signal table was half its size and
@@ -713,8 +712,11 @@ mod tests {
     fn test_a_code_pointer_constant_in_data_is_as_wide_as_the_model_says() {
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("table.c");
-        std::fs::write(&source, "typedef void (*handler)(int);\nhandler table[3] = { (handler)1, (handler)2, (handler)0 };\n")
-            .unwrap();
+        std::fs::write(
+            &source,
+            "typedef void (*handler)(int);\nhandler table[3] = { (handler)1, (handler)2, (handler)0 };\n",
+        )
+        .unwrap();
         let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records table.c");
         let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGInteger")).collect();
         assert_eq!(data.len(), 3, "{recorded}");

@@ -328,7 +328,8 @@ fn objects(unit: &hir::Unit) -> R<Vec<Object>> {
                 }
                 ("DGBytes", [_, data]) => object.bytes.extend(crate::compile::hex_bytes(data)),
                 ("DGInteger", [value, type_]) => {
-                    // A code pointer is as wide as the model's: a far one where code is.
+                    // A code pointer is as wide as the model's: a far one where
+                    // code is.
                     let width = if *type_ == "TY_CODE_PTR" && unit.target & hir::BIG_CODE != 0 {
                         4
                     } else {
