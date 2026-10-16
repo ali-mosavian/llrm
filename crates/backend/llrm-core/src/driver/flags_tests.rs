@@ -26,9 +26,15 @@ fn pipeline(arguments: &[&str]) -> Options {
 /// `-f[no-]allocation-routes` set each anywhere, and the two are independent.
 #[test]
 fn test_a_function_is_allocated_once_below_omax_and_the_flags_set_each_anywhere() {
-    for (level, on) in
-        [("-O0", false), ("-O1", false), ("-Og", false), ("-O2", false), ("-Os", false), ("-O3", false), ("-Omax", true)]
-    {
+    for (level, on) in [
+        ("-O0", false),
+        ("-O1", false),
+        ("-Og", false),
+        ("-O2", false),
+        ("-Os", false),
+        ("-O3", false),
+        ("-Omax", true),
+    ] {
         assert_eq!(pipeline(&[level]).searches(), on, "{level}");
         assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
         assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
