@@ -1401,11 +1401,35 @@ impl<'a> Unit<'a> {
         operand: Operand,
     ) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
         let Operand::Value(value) = operand else { return None };
+        DEFINITIONS_READ.with(|read| {
+            if let Some(read) = read.borrow_mut().as_mut() {
+                read.push(value);
+            }
+        });
         match self.function.value(value).def {
             ValueDef::Instruction(inst) => Some((inst, self.function.instruction(inst))),
             ValueDef::Argument(_) => None,
         }
     }
+}
+
+thread_local! {
+    /// The values whose defining instruction a decomposition is reading, while
+    /// one is (`reading`).
+    static DEFINITIONS_READ: std::cell::RefCell<Option<Vec<ValueId>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `work`, and every value whose defining instruction it asked of
+/// `Unit::defining`: the values an edit would have to touch to change what
+/// `work` made, however far from the pointer the helper that read it was (a
+/// far pointer's selector is the operand of the cast two instructions back).
+fn reading<T>(work: impl FnOnce() -> T) -> (T, Vec<ValueId>) {
+    let outer = DEFINITIONS_READ.with(|read| read.replace(Some(Vec::new())));
+    let made = work();
+    let mut mine = DEFINITIONS_READ.with(|read| read.replace(outer)).unwrap_or_default();
+    mine.sort_unstable_by_key(|value| value.0);
+    mine.dedup();
+    (made, mine)
 }
 
 /// Whether `inst` marks an object's lifetime, which names it without handing
@@ -1865,12 +1889,9 @@ impl MemRef {
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self {
-            typed: typed(unit, inst),
-            lineage: lineage(unit, inst),
-            volatile,
-            ..Self::at_tracing(unit, pointer, width, Some(chain))
-        })
+        let (made, read) = reading(|| Self::at_tracing(unit, pointer, width, Some(&mut *chain)));
+        chain.extend(read);
+        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..made })
     }
 
     /// Whether the access names its bytes outright rather than reaching
