@@ -74,6 +74,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::kinds::Kinds;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::spaces::Spaces;
 use llrm_mir::types::{Type, TypeId};
@@ -84,6 +85,11 @@ pub struct InferAddressSpaces;
 impl FunctionPass for InferAddressSpaces {
     fn name(&self) -> &'static str {
         "inferspace"
+    }
+
+    /// The address space a pointer value flows to.
+    fn reads(&self) -> llrm_mir::kinds::Reads {
+        llrm_mir::kinds::Reads { kinds: Kinds::ADDRESS | Kinds::LOAD | Kinds::STORE | Kinds::CALL | Kinds::INVOKE | Kinds::STRUCTURE, keyed: Kinds::ADDRESS | Kinds::LOAD | Kinds::STORE | Kinds::CALL | Kinds::INVOKE | Kinds::STRUCTURE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

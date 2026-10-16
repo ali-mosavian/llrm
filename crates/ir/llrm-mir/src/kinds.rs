@@ -393,6 +393,24 @@ impl Edits {
         }
     }
 
+    /// The classes of the edits that reach `reads`, for `LLRM_WHY`: what a
+    /// reader was run for.
+    pub fn why(
+        &self,
+        reads: &Reads,
+    ) -> Kinds {
+        let flowing = Self::flow(reads).unwrap_or(true);
+        let mut found = Kinds::NONE;
+        if self.blocks_changed && reads.kinds.meets(Kinds::CFG) {
+            found = found | Kinds::CFG;
+        }
+        if self.signature && reads.kinds.meets(Kinds::SIGNATURE) {
+            found = found | Kinds::SIGNATURE;
+        }
+        found = found | Kinds(reads.keyed.0 & self.erased.0) | Kinds(reads.kinds.0 & self.erased_effectful.0);
+        found | Kinds(reads.kinds.0 & self.reached(flowing).0)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.direct.is_none() && self.erased.is_none() && !self.blocks_changed && !self.signature
     }

@@ -142,6 +142,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
@@ -160,6 +161,13 @@ pub struct Fill {
 impl FunctionPass for Fill {
     fn name(&self) -> &'static str {
         "fill"
+    }
+
+    /// Stores, loads and calls with the addresses and counts that make them one
+    /// fill, move or copy.
+    fn reads(&self) -> Reads {
+        let kinds = Kinds::MEMORY | Kinds::ADDRESS | Kinds::ARITH | Kinds::CAST | Kinds::STRUCTURE;
+        Reads { kinds, keyed: kinds, stops: None }
     }
 
     fn run(
@@ -195,6 +203,13 @@ pub struct Merge {
 impl FunctionPass for Merge {
     fn name(&self) -> &'static str {
         "merge"
+    }
+
+    /// Stores, loads and calls with the addresses and counts that make them one
+    /// fill, move or copy.
+    fn reads(&self) -> Reads {
+        let kinds = Kinds::MEMORY | Kinds::ADDRESS | Kinds::ARITH | Kinds::CAST | Kinds::STRUCTURE;
+        Reads { kinds, keyed: kinds, stops: None }
     }
 
     fn run(

@@ -67,6 +67,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{CallInfo, Flags, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
 
 use crate::counting;
@@ -82,6 +83,13 @@ pub struct MemCpyOpt {
 impl FunctionPass for MemCpyOpt {
     fn name(&self) -> &'static str {
         "memcpyopt"
+    }
+
+    /// Stores, loads and calls with the addresses and counts that make them one
+    /// fill, move or copy.
+    fn reads(&self) -> Reads {
+        let kinds = Kinds::MEMORY | Kinds::ADDRESS | Kinds::ARITH | Kinds::CAST | Kinds::STRUCTURE;
+        Reads { kinds, keyed: kinds, stops: None }
     }
 
     fn run(

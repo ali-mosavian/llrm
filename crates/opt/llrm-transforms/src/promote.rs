@@ -334,10 +334,12 @@ impl FunctionPass for Promote {
         "promote"
     }
 
-    /// A load becomes the value a store left in its cell: memory operations
-    /// (and what addresses them) and the CFG.
+    /// A load becomes the value a store left in its cell: memory operations,
+    /// what addresses them, and the CFG. The value stored is not looked at, so
+    /// a change to the values that make it does not reach this.
     fn reads(&self) -> Reads {
-        Reads { kinds: Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
+        let kinds = Kinds::MEMORY | Kinds::ADDRESS | Kinds::STRUCTURE;
+        Reads { kinds, keyed: kinds, stops: None }
     }
 
     fn run(

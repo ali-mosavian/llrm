@@ -127,6 +127,7 @@ use llrm_mir::facts::Fact;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode, Tail};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::counting;
@@ -139,6 +140,11 @@ pub struct TailRecursion;
 impl FunctionPass for TailRecursion {
     fn name(&self) -> &'static str {
         "tailrec"
+    }
+
+    /// Self calls in tail position.
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::CALL | Kinds::INVOKE | Kinds::RET | Kinds::ALLOCA | Kinds::STRUCTURE, keyed: Kinds::CALL | Kinds::INVOKE | Kinds::RET | Kinds::ALLOCA | Kinds::STRUCTURE, stops: None }
     }
 
     fn run(

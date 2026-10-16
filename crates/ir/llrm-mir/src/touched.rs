@@ -437,7 +437,8 @@ impl Function {
         context: &Context,
         changes: &[Change],
     ) -> kinds::Edits {
-        kinds::Edits::of(&self.touched_by(changes), context, self)
+        // Edges are a branch rewritten, a class of their own: not found here.
+        kinds::Edits::of(&self.touched_with(changes, false), context, self)
     }
 
     /// What the edits since `mark` touched, by class and by block

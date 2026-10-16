@@ -88,7 +88,7 @@ impl FunctionPass for Dse {
     /// A store is dead by what reads or overwrites its cell on every path after
     /// it: memory operations (and what addresses them) and the CFG.
     fn reads(&self) -> Reads {
-        Reads { kinds: Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
+        Reads { kinds: Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::MEMORY | Kinds::STRUCTURE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

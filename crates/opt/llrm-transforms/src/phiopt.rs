@@ -118,6 +118,7 @@ use llrm_mir::context::{ConstantKind, Context, mask, signed};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::target::{Machine, OperationCosts};
 use llrm_mir::types::TypeId;
@@ -133,6 +134,11 @@ pub struct PhiOpt {
 impl FunctionPass for PhiOpt {
     fn name(&self) -> &'static str {
         "phiopt"
+    }
+
+    /// The diamonds the CFG and its phis make.
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::STRUCTURE, keyed: Kinds::STRUCTURE, stops: None }
     }
 
     fn run(

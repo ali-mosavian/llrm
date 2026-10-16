@@ -97,6 +97,7 @@ use llrm_analysis::{cfg, ranges};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::{Attribute, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 
 pub struct Ports;
@@ -104,6 +105,11 @@ pub struct Ports;
 impl FunctionPass for Ports {
     fn name(&self) -> &'static str {
         "ports"
+    }
+
+    /// A port call's constant arguments.
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::CALL | Kinds::INVOKE, keyed: Kinds::CALL | Kinds::INVOKE, stops: None }
     }
 
     fn run(

@@ -135,7 +135,7 @@ impl FunctionPass for TrivialUnswitch {
     /// A branch is moved out of a loop where its condition is invariant: the
     /// condition's values and the memory they load, and the loop's shape.
     fn reads(&self) -> Reads {
-        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
+        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

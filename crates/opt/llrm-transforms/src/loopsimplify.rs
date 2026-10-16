@@ -175,7 +175,7 @@ impl FunctionPass for LoopSimplify {
     /// Preheaders, latches and dedicated exits are made from the CFG's shape
     /// alone.
     fn reads(&self) -> Reads {
-        Reads { kinds: Kinds::STRUCTURE, keyed: Kinds::NONE, stops: None }
+        Reads { kinds: Kinds::STRUCTURE, keyed: Kinds::STRUCTURE, stops: None }
     }
 
     fn run(

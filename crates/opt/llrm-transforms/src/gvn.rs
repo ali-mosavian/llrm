@@ -140,6 +140,7 @@ use llrm_analysis::{cfg, ssa};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_support::hash::IndexMap;
 
@@ -225,6 +226,11 @@ pub struct EqualCalls;
 impl FunctionPass for EqualCalls {
     fn name(&self) -> &'static str {
         "equalcalls"
+    }
+
+    /// Two calls with the same operands, and the memory between them.
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::MEMORY | Kinds::STRUCTURE, stops: None }
     }
 
     fn run(

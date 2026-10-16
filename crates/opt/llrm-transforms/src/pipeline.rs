@@ -1032,7 +1032,7 @@ impl Fixed {
                     // Edits since it found nothing to do, none of which reaches
                     // what it reads.
                     run.classify(unit);
-                    if !run.reached_since(stretches, &one.reads()) {
+                    if !run.reached_since(stretches, &one.reads(), one.name()) {
                         run.unreached += 1;
                         run.check_skipped(&mut **one, unit, analyses);
                         continue;
@@ -1243,8 +1243,14 @@ impl Run {
         &self,
         len: usize,
         reads: &llrm_mir::kinds::Reads,
+        name: &str,
     ) -> bool {
-        self.stretches[len..].iter().any(|edits| edits.meets(reads).unwrap_or(true))
+        let reached = self.stretches[len..].iter().any(|edits| edits.meets(reads).unwrap_or(true));
+        if reached && llrm_support::env_set("LLRM_WHY_REACHED") {
+            let why = self.stretches[len..].iter().fold(llrm_mir::kinds::Kinds::NONE, |all, edits| all | edits.why(reads));
+            eprintln!("[why] {name} reached by {:?}", why.names());
+        }
+        reached
     }
 
     /// The passes that found nothing and that no edit since reaches are

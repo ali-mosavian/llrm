@@ -125,7 +125,7 @@ impl FunctionPass for Decide {
     /// is made of, and the memory they were loaded from) along the edges
     /// that run: not from a value nothing above reads.
     fn reads(&self) -> Reads {
-        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::NONE, stops: Some(Kinds::NONE) }
+        Reads { kinds: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, keyed: Kinds::BRANCH | Kinds::MEMORY | Kinds::STRUCTURE, stops: Some(Kinds::NONE) }
     }
 
     fn run(

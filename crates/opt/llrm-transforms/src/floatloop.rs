@@ -135,6 +135,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::kinds::{Kinds, Reads};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
 
@@ -146,6 +147,11 @@ pub struct FloatLoop;
 impl FunctionPass for FloatLoop {
     fn name(&self) -> &'static str {
         "floatloop"
+    }
+
+    /// Float recurrences of a loop.
+    fn reads(&self) -> Reads {
+        Reads { kinds: Kinds::FLOAT | Kinds::ARITH | Kinds::CAST | Kinds::CALL | Kinds::INVOKE | Kinds::STRUCTURE, keyed: Kinds::FLOAT | Kinds::ARITH | Kinds::CAST | Kinds::CALL | Kinds::INVOKE | Kinds::STRUCTURE, stops: Some(Kinds::NONE) }
     }
 
     fn run(
