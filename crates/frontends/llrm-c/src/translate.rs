@@ -3067,7 +3067,8 @@ impl<'a, 't> Body<'a, 't> {
                     let wide = self.resized(value, false, word);
                     inputs.push((register, vec![(wide, false)]));
                 }
-                ([register], 1) if matches!(*register, "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh") => {
+                // A byte register takes the low byte of a value of a byte or a word.
+                ([register], 1 | 2) if matches!(*register, "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh") => {
                     let wide = self.resized(value, false, word);
                     let (root, high) = match register.as_bytes() {
                         [r, b'l'] => (*r, false),

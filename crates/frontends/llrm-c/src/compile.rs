@@ -1026,6 +1026,34 @@ mod tests {
         assert!(asm.contains("extern fixed_:near") && asm.contains("extern reach_:far"), "{asm}");
     }
 
+    /// `outp( int port, int value )` is `__parm [__dx] [__al]`: an int in a
+    /// byte register, which clib's `outp` could not be built with.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_byte_register_takes_the_low_byte_of_an_int() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("port.c");
+        std::fs::write(
+            &source,
+            "extern void out(int port, int value);\n\
+             #pragma aux out = \"out dx,al\" __parm [__dx] [__al] __modify __exact []\n\
+             void put(int port, int value) { out(port, value); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records port.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "port", None, &options).unwrap()).unwrap();
+        let body: Vec<&str> = asm.lines().map(str::trim).skip_while(|one| *one != "put_ proc far").collect();
+        let at = body.iter().position(|one| *one == "db 0eeh").expect("the out");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov dx, ")), "{body:?}");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov ax, ")), "{body:?}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
