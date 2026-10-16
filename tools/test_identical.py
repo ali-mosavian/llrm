@@ -102,8 +102,12 @@ def _bench_or_skip(tmp_path):
         pytest.skip("no built binaries")
     try:
         return identical.bench_compiles(tmp_path)
-    except (ImportError, SystemExit) as error:
+    except (ImportError, FileNotFoundError) as error:
         pytest.skip(f"bench harness unavailable: {error}")
+    except SystemExit as error:  # only the binaries: a corpus smaller than known is the failure this test is for
+        if "binaries" not in str(error):
+            raise
+        pytest.skip(str(error))
 
 
 def test_the_bench_programs_are_compiled_with_the_harnesss_flags(tmp_path):
