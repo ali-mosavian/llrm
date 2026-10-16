@@ -231,6 +231,17 @@ pub fn hoisted(
     changed
 }
 
+/// What pricing the moved function found.
+struct Priced {
+    held: i64,
+    moved: i64,
+    uncounted: i64,
+    floats: BTreeSet<ValueId>,
+    /// The values crossing the loop that the spill model spills and no
+    /// displacement or rebuild makes free.
+    paying: BTreeSet<ValueId>,
+}
+
 /// `run` less what the function prices higher for: while moving it before
 /// `before` costs more than leaving it, the values crossing the loop that the
 /// spill model spills, and the instructions reading them, stay in the loop.
@@ -238,7 +249,7 @@ pub fn hoisted(
 /// displacement the accesses fold or a value made again at each read, is not
 /// counted.
 fn _affordable(
-    unit: &passes::Unit,
+    unit: &mut passes::Unit,
     outer: &Outer,
     mut run: Vec<InstId>,
     before: InstId,
@@ -249,11 +260,13 @@ fn _affordable(
     frequency: &std::collections::BTreeMap<i64, i64>,
     held: &mut Option<i64>,
 ) -> Vec<InstId> {
-    let price =
-        |function: &Function| profit::motion_price(unit.context, unit.layout, outer, function, costs, room, frequency);
-    // A run that is let go leaves the function as the clone priced it, whose
+    let price = |unit: &passes::Unit| {
+        profit::motion_price(unit.context, unit.layout, outer, unit.function, costs, room, frequency)
+    };
+    // A run that is let go leaves the function as the move priced it, whose
     // price is then the next loop's `kept`.
-    let Some(kept) = held.take().or_else(|| price(unit.function)) else { return run };
+    let Some(kept) = held.take().or_else(|| price(unit)) else { return run };
+
     // Where no register is priced the price is the work alone, a sum over the
     // instructions each at its block's frequency: moving `run` changes it by
     // what each costs at the preheader's frequency less at its own. The
@@ -261,17 +274,10 @@ fn _affordable(
     // loops: 2.3 G of hoist on `branches` at N=1024, 4x a doubling).
     let unpriced = !room.priced();
     while !run.is_empty() {
-        let moved = (!unpriced || cfg!(test)).then(|| {
-            let mut hoisted = unit.function.clone();
-            for &inst in &run {
-                hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
-            }
-            hoisted
-        });
-        // The price of the moved function is its work and the forecast below,
-        // which is found once (it was found twice: 41% of hoist on a 16-deep
-        // nest, where the loops' passes cost 6 G).
-        let work = if unpriced {
+        // What the move changes of the work, found where the instructions
+        // stand now: each costs what it does at the preheader's frequency less
+        // at its own.
+        let by = if unpriced {
             let at = frequency.get(&into).copied().unwrap_or(1);
             let by: Option<i64> = run
                 .iter()
@@ -282,99 +288,106 @@ fn _affordable(
                 })
                 .sum();
             let Some(by) = by else { return run };
-            #[cfg(test)]
-            assert_eq!(
-                profit::weighted(
-                    unit.context,
-                    unit.layout,
-                    moved.as_ref().expect("cloned under test"),
-                    outer.callees(),
-                    costs,
-                    frequency
-                ),
-                Some(kept + by),
-                "the work of the moved function is not the kept work and what each instruction's move changes"
-            );
-            kept + by
+            Some(by)
         } else {
-            let Some(work) = profit::weighted(
+            None
+        };
+        // Priced on the function with the run moved, then given back as it
+        // was: what is read of it below is where the instructions stand now.
+        let speculation = (!unpriced || cfg!(test)).then(|| {
+            let checkpoint = unit.function.checkpoint();
+            for &inst in &run {
+                unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
+            }
+            checkpoint
+        });
+        let priced = (|| {
+            let hoisted: &Function = unit.function;
+            // The price of the moved function is its work and the forecast
+            // below, which is found once (it was found twice: 41%
+            // of hoist on a 16-deep nest, where the loops' passes
+            // cost 6 G).
+            let work = if let Some(by) = by {
+                #[cfg(test)]
+                assert_eq!(
+                    profit::weighted(unit.context, unit.layout, hoisted, outer.callees(), costs, frequency),
+                    Some(kept + by),
+                    "the work of the moved function is not the kept work and what each instruction's move changes"
+                );
+                kept + by
+            } else {
+                profit::weighted(unit.context, unit.layout, hoisted, outer.callees(), costs, frequency)?
+            };
+            // A floating value held across the loop is released after it, once
+            // for each time the loop is entered.
+            let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
+                .into_iter()
+                .filter(|&value| matches!(
+                    unit.context.types.get(hoisted.value(value).ty),
+                    Type::Float(_)
+                ))
+                .collect();
+            let forecast = profit::spill_forecast(
                 unit.context,
                 unit.layout,
-                moved.as_ref().expect("cloned where priced"),
-                outer.callees(),
+                hoisted,
                 costs,
+                room,
+                &|inst| crate::spill::kept_across(outer, unit.context, hoisted, inst),
                 frequency,
-            ) else {
-                return run;
-            };
-            work
-        };
-        let hoisted = moved.as_ref().unwrap_or(unit.function);
-        // A floating value held across the loop is released after it, once for
-        // each time the loop is entered.
-        let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
-            .into_iter()
-            .filter(|&value| matches!(
-                unit.context.types.get(hoisted.value(value).ty),
-                Type::Float(_)
-            ))
-            .collect();
-        let Some(forecast) = profit::spill_forecast(
-            unit.context,
-            unit.layout,
-            hoisted,
-            costs,
-            room,
-            &|inst| crate::spill::kept_across(outer, unit.context, hoisted, inst),
-            frequency,
-        ) else {
-            return run;
-        };
-        let moved = work
-            + forecast.cost
-            + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
-        // Asked of the values the spill model spills that cross the loop, which
-        // are none in most loops: the traffic of every cell of the
-        // function is not found until one is asked.
-        let traffic = std::cell::OnceCell::new();
-        let traffic = || {
-            traffic.get_or_init(|| {
-                let cells = crate::spill::cells(hoisted);
-                crate::spill::traffic(hoisted, frequency, &cells, costs, &|_| true, &|value| {
-                    crate::spill::words(unit.context, unit.layout, hoisted, value)
+            )?;
+            let moved = work
+                + forecast.cost
+                + floats.len() as i64 * costs.float_release * frequency.get(&into).copied().unwrap_or(1);
+            // Asked of the values the spill model spills that cross the loop,
+            // which are none in most loops: the traffic of every
+            // cell of the function is not found until one is asked.
+            let traffic = std::cell::OnceCell::new();
+            let traffic = || {
+                traffic.get_or_init(|| {
+                    let cells = crate::spill::cells(hoisted);
+                    crate::spill::traffic(hoisted, frequency, &cells, costs, &|_| true, &|value| {
+                        crate::spill::words(unit.context, unit.layout, hoisted, value)
+                    })
                 })
-            })
-        };
-        let free = |value: ValueId| {
-            _displacement(hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
-        };
-        let crossing = _crossed_values(hoisted, &run)
-            .into_iter()
-            .filter(|value| forecast.spilled.contains(value))
-            .collect::<BTreeSet<_>>();
-        let uncounted: i64 = crossing
-            .iter()
-            .filter(|&&value| free(value))
-            .filter_map(|value| traffic().get(value))
-            .map(|one| one.price(costs))
-            .sum();
-        for value in forecast.spilled.iter() {
-            if let ValueDef::Instruction(def) = hoisted.value(value).def {
-                llrm_support::debug!(
-                    "hoist",
-                    "  spilled {value:?} = {:?} {:?}",
-                    hoisted.instruction(def).opcode,
-                    hoisted.instruction(def).operands
-                );
+            };
+            let free = |value: ValueId| {
+                _displacement(hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
+            };
+            let crossing = _crossed_values(hoisted, &run)
+                .into_iter()
+                .filter(|value| forecast.spilled.contains(value))
+                .collect::<BTreeSet<_>>();
+            let uncounted: i64 = crossing
+                .iter()
+                .filter(|&&value| free(value))
+                .filter_map(|value| traffic().get(value))
+                .map(|one| one.price(costs))
+                .sum();
+            let paying: BTreeSet<ValueId> = crossing.iter().copied().filter(|&value| !free(value)).collect();
+            for value in forecast.spilled.iter() {
+                if let ValueDef::Instruction(def) = hoisted.value(value).def {
+                    llrm_support::debug!(
+                        "hoist",
+                        "  spilled {value:?} = {:?} {:?}",
+                        hoisted.instruction(def).opcode,
+                        hoisted.instruction(def).operands
+                    );
+                }
             }
+            llrm_support::debug!(
+                "hoist",
+                "kept {kept}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}",
+                floats.len(),
+                crossing,
+                forecast.spilled
+            );
+            Some(Priced { held: work + forecast.cost, moved, uncounted, floats, paying })
+        })();
+        if let Some(checkpoint) = speculation {
+            unit.function.rollback(checkpoint);
         }
-        llrm_support::debug!(
-            "hoist",
-            "kept {kept}, moved {moved}, uncounted {uncounted}, floats {}, crossing {:?}, spilled {:?}",
-            floats.len(),
-            crossing,
-            forecast.spilled
-        );
+        let Some(Priced { held: priced_held, moved, uncounted, floats, paying }) = priced else { return run };
         // The class holds only so many floating values: of those the run holds
         // across the loop, what the loop's own values leave room for are held,
         // and the rest stay where they are read (a register stack that is
@@ -407,12 +420,11 @@ fn _affordable(
             }
         };
         if beyond.is_empty() && moved - uncounted <= kept {
-            *held = Some(work + forecast.cost);
+            *held = Some(priced_held);
             return run;
         }
         let costly = moved - uncounted > kept;
-        let mut stay: BTreeSet<ValueId> =
-            if costly { crossing.into_iter().filter(|&value| !free(value)).collect() } else { BTreeSet::new() };
+        let mut stay: BTreeSet<ValueId> = if costly { paying } else { BTreeSet::new() };
         stay.extend(beyond.iter());
         // What costs its release more than it saves stays, with what reads it.
         if costly && costs.float_release > 0 {
