@@ -1174,7 +1174,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
-    assert {"reference", "run", "tools", "python"} <= set(private), private
+    assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
 
 
@@ -1205,9 +1205,9 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
         local = gate.plan(files)
         out = sp.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", *files], capture_output=True, text=True, cwd=gate.ROOT)
         ci = json.loads(out.stdout)
-        in_groups = sorted(step for steps in ci["groups"].values() for step in steps)
+        in_groups = sorted({step for steps in ci["groups"].values() for step in steps})  # the bench shards all run the one step
         assert ci["tier"] == local.tier, files
-        assert sorted(in_groups + list(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
+        assert sorted(set(in_groups) | set(ci["skipped"])) == sorted(s for s in local.steps if s != "build"), (files, ci)
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "gate.py plan --json" in workflow and "gate.py run --group ${{ matrix.group }}" in workflow, "the jobs come from the planner"
     assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
@@ -1271,13 +1271,22 @@ def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_mis
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
 
 
-def test_the_tools_group_restores_a_pull_requests_base_counts_and_a_push_to_main_records_its_own():
-    """The bench step was 20 of the tools group's 22 minutes: it built and measured the base every run."""
+def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_the_base_on_a_push():
+    """The bench step was 2400 s of a 4-thread slot on a base-cache miss (#1866 timed out at 3600 s): six shards measure a slice each."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
-    record, gate_run = workflow.index("bench.py --record"), workflow.index("gate.py run --group ${{ matrix.group }}")
-    saved = workflow.index("key: ${{ steps.basecounts.outputs.head }}")
-    assert record < saved < gate_run, "saved before the gate run, which measures the base"
+    merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
+    assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
+    assert "needs: [plan, build, gate, bench-merge]" in workflow
+
+
+def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slice():
+    p = gate.plan(["bench/fib/fib.c"], "full")
+    groups = gate.groups_of(p, {})
+    n = gate.load()["bench"]["shards"]
+    assert [g for g in groups if g.startswith("bench")] == [f"bench-{i}" for i in range(1, n + 1)] and groups["tools"] == ["torture"]
+    assert gate.shard_of("bench-3") == ("bench", f"3/{n}") and gate.shard_of("tools") == ("tools", None)
+    assert "--shard" in gate.commands(p, gate.load(), gate.packages())["bench"]
 
 
 def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
