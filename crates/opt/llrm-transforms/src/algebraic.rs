@@ -100,7 +100,8 @@
 //! # Needs
 //! `ranges` (non-negative dividends, redundant masks), `DemandedBits` (unread
 //! bits), `Registers` and `consts` (divisors known through phis), `induction`
-//! (recurrences).
+//! (recurrences, over the manager's `Shape` and `Registers`, which a round that
+//! edited the body invalidates).
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved; other

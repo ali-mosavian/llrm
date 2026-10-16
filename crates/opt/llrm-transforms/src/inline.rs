@@ -47,8 +47,10 @@
 //! and the work copied at every site beyond the last must stay below the calls
 //! removed, in the target's clocks, or in code bytes where size outranks speed
 //! (`-Os`). A routine marked `alwaysinline` is a candidate at any size and
-//! `noinline` at none; `inlinehint` scales the budget by 325/225. A body held
-//! only to inline from (`available_externally`) is a candidate at any size.
+//! `noinline` at none; the caller's growth limit does not apply to
+//! `alwaysinline` (gcc's `DECL_DISREGARD_INLINE_LIMITS`). `inlinehint` scales
+//! the budget by 325/225. A body held only to inline from
+//! (`available_externally`) is a candidate at any size.
 //!
 //! A public callee, or one whose address is taken, stays defined; a private one
 //! goes with its last site. The last call of a function nothing else reaches
@@ -1236,6 +1238,11 @@ fn grows_within_limits(
     callee: &Function,
     moved: bool,
 ) -> bool {
+    // gcc's `DECL_DISREGARD_INLINE_LIMITS`: `always_inline` is held to no limit
+    // of size.
+    if stated(callee) == Some(Inlining::Always) {
+        return true;
+    }
     let callee_size = semantic_count(callee);
     let base = if caller.base > 0 { caller.base } else { own };
     let after = own + callee_size;
