@@ -193,6 +193,37 @@ fn worked_out(
     })
 }
 
+thread_local! {
+    /// The effects of the blocks asked about, by their instruction lists, which
+    /// the entry holds so the address is not reused.
+    static BLOCK_EFFECTS: std::cell::RefCell<crate::support::hash::HashMap<(usize, u32), (crate::model::lir::Insns, std::rc::Rc<Vec<Option<Effect>>>)>> =
+        std::cell::RefCell::new(Default::default());
+}
+
+/// `_effects`, kept for as long as the block is the same instructions: a pass
+/// that changes one block leaves the others' effects as they were.
+pub fn effects_kept(
+    regs: Regs,
+    bits: u32,
+    block: &LirBlock,
+) -> std::rc::Rc<Vec<Option<Effect>>> {
+    let key = (block.insns.key(), bits);
+    if let Some(held) =
+        BLOCK_EFFECTS.with(|held| held.borrow().get(&key).map(|(_, effects)| std::rc::Rc::clone(effects)))
+    {
+        return held;
+    }
+    let effects = std::rc::Rc::new(_effects(regs, bits, block));
+    BLOCK_EFFECTS.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.len() > 50_000 {
+            held.clear();
+        }
+        held.insert(key, (block.insns.clone(), std::rc::Rc::clone(&effects)));
+    });
+    effects
+}
+
 /// Each instruction's effect in `block`, decoded once for a fixed point to
 /// reuse.
 pub fn _effects(
@@ -339,8 +370,8 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         .collect();
     let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let effects: IndexMap<i64, Vec<Option<Effect>>> =
-        blocks.iter().map(|(at, block)| (*at, _effects(regs, body.bits, block))).collect();
+    let effects: IndexMap<i64, std::rc::Rc<Vec<Option<Effect>>>> =
+        blocks.iter().map(|(at, block)| (*at, effects_kept(regs, body.bits, block))).collect();
     // The least fixed point of a backward problem, found by a worklist that
     // starts from the last block: a block is recomputed when a successor's
     // lanes changed. Taken round the layout from the first block, each
@@ -360,7 +391,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
         let after = if successors[&at].is_empty() {
             universe.clone()
         } else {
-            successors[&at].iter().flat_map(|to| into[to].iter().copied()).collect()
+            successors[&at].iter().fold(Lanes::new(), |all, to| all.or(&into[to]))
         };
         let before = _before(&effects[&at], after, &universe);
         if before != into[&at] {
@@ -377,7 +408,7 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
 
 thread_local! {
     /// The body `dead_at_exit` last answered for, and its answer.
-    static EXITS: std::cell::RefCell<Option<(LirBody, IndexMap<i64, Lanes>)>> = const { std::cell::RefCell::new(None) };
+    static EXITS: std::cell::RefCell<Option<(LirBody, std::rc::Rc<IndexMap<i64, Lanes>>)>> = const { std::cell::RefCell::new(None) };
     static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -389,7 +420,7 @@ pub fn exits_computed() -> usize {
 
 /// Whether `body` is `kept` over again: the same blocks of the same
 /// instructions, which are immutable.
-fn unchanged(
+pub(crate) fn unchanged(
     kept: &LirBody,
     body: &LirBody,
 ) -> bool {
@@ -403,19 +434,43 @@ fn unchanged(
         })
 }
 
+/// The last answer to a question about a body, kept while the body is the same
+/// instructions: the sub-passes of a clean-up ask in turn and most leave the
+/// body as it was.
+pub struct Kept<T>(std::cell::RefCell<Option<(LirBody, std::rc::Rc<T>)>>);
+
+impl<T> Kept<T> {
+    pub const fn new() -> Self {
+        Self(std::cell::RefCell::new(None))
+    }
+
+    pub fn of(
+        &self,
+        body: &LirBody,
+        work: impl FnOnce() -> T,
+    ) -> std::rc::Rc<T> {
+        if let Some((_, answer)) = self.0.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)) {
+            return std::rc::Rc::clone(answer);
+        }
+        let answer = std::rc::Rc::new(work());
+        *self.0.borrow_mut() = Some((body.clone(), std::rc::Rc::clone(&answer)));
+        answer
+    }
+}
+
 /// Per block, the lanes nothing reads again after it. Ten passes of the
 /// peephole ask in turn, most leaving the body as it was (the same
 /// instructions, shared): the last answer stands for a body that is the same
 /// (#924: 500,000 decodes of 16,000 instructions in one module).
-pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
-    if let Some(answer) = EXITS
-        .with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone()))
-    {
+pub fn dead_at_exit(body: &LirBody) -> std::rc::Rc<IndexMap<i64, Lanes>> {
+    if let Some(answer) = EXITS.with(|held| {
+        held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| std::rc::Rc::clone(answer))
+    }) {
         return answer;
     }
     EXITS_COMPUTED.with(|count| count.set(count.get() + 1));
-    let answer = _dead_at_exit(body);
-    EXITS.with(|held| *held.borrow_mut() = Some((body.clone(), answer.clone())));
+    let answer = std::rc::Rc::new(_dead_at_exit(body));
+    EXITS.with(|held| *held.borrow_mut() = Some((body.clone(), std::rc::Rc::clone(&answer))));
     answer
 }
 
@@ -426,7 +481,7 @@ fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
             let live: Lanes = if successors[at].is_empty() {
                 universe.clone()
             } else {
-                successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
+                successors[at].iter().fold(Lanes::new(), |all, to| all.or(&into[to]))
             };
             (*at, universe.minus(&live))
         })

@@ -200,6 +200,15 @@ fn copied(
     }
 }
 
+thread_local! {
+    static KEPT: liveness::Kept<HashMap<usize, Roots>> = const { liveness::Kept::new() };
+}
+
+/// `before`, kept for the next sub-pass that asks of the same body.
+pub fn before_kept(body: &LirBody) -> std::rc::Rc<HashMap<usize, Roots>> {
+    KEPT.with(|kept| kept.of(body, || before(body)))
+}
+
 /// Before each instruction, by `id`, the roots whose upper half is zero.
 pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
     let regs = body.regs();

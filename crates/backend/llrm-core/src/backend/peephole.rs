@@ -2877,7 +2877,7 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
             if block.succ.is_empty() {
                 exits.clone()
             } else {
-                block.succ.iter().flat_map(|at| live_in.get(at).unwrap_or(&exits).iter().copied()).collect()
+                block.succ.iter().fold(Lanes::new(), |all, at| all.or(live_in.get(at).unwrap_or(&exits)))
             }
         },
         |at, after| steps[&at].iter().rev().fold(after.clone(), |live, (reads, writes)| live.minus(writes).or(reads)),

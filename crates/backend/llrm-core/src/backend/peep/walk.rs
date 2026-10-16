@@ -404,10 +404,10 @@ pub struct Facts<'a> {
     pub regs: Regs,
     /// How many times each value is read, where the caller counted.
     counts: Option<&'a Counter>,
-    exits: OnceCell<IndexMap<i64, Lanes>>,
+    exits: OnceCell<std::rc::Rc<IndexMap<i64, Lanes>>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
-    zero: OnceCell<HashMap<usize, upperzero::Roots>>,
+    zero: OnceCell<std::rc::Rc<HashMap<usize, upperzero::Roots>>>,
     /// The mode the code runs in: how an instruction encodes, and what it
     /// touches.
     bits: u32,
@@ -553,7 +553,7 @@ impl<'a> Cx<'a> {
         one: &Arc<Insn>,
     ) -> upperzero::Roots {
         self.facts.zero.get_or_init(|| {
-            crate::support::debug::timed("peep facts upper zero", || upperzero::before(self.facts.body()))
+            crate::support::debug::timed("peep facts upper zero", || upperzero::before_kept(self.facts.body()))
         })[&id(one)]
     }
 

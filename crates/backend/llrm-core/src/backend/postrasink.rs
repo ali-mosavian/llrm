@@ -122,7 +122,7 @@ fn live_in(body: &LirBody) -> IndexMap<i64, Lanes> {
         &nodes,
         Direction::Backward,
         |_| Lanes::new(),
-        |at, into| succ[&at].iter().filter_map(|to| into.get(to)).flat_map(|lanes| lanes.iter().copied()).collect(),
+        |at, into| succ[&at].iter().filter_map(|to| into.get(to)).fold(Lanes::new(), |all, lanes| all.or(lanes)),
         |at, after| _before(&decoded[&at], after.clone(), &universe),
     )
     .output

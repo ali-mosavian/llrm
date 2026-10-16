@@ -646,6 +646,12 @@ pub struct LirBlock {
 pub struct Insns(Arc<[Arc<Insn>]>);
 
 impl Insns {
+    /// The allocation's address: equal for `same_as` lists. Only meaningful
+    /// while the list is held.
+    pub fn key(&self) -> usize {
+        Arc::as_ptr(&self.0) as *const () as usize
+    }
+
     /// `change` made to a copy of the instructions, which then are these: the
     /// way a test or a one-off edit changes a block.
     pub fn edit<R>(
