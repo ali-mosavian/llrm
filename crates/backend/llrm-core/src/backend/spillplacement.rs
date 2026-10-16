@@ -255,8 +255,12 @@ pub struct Placement<'a> {
     pub bundles: &'a Bundles,
     pub frequency: Arc<IndexMap<i64, f64>>,
     nodes: Vec<Node>,
-    active: BTreeSet<usize>,
-    todo: BTreeSet<usize>,
+    /// The bundles a query has touched, and whether each is (by bundle).
+    active: Vec<usize>,
+    is_active: Vec<bool>,
+    /// The bundles to settle, the largest first, and whether each waits.
+    todo: std::collections::BinaryHeap<usize>,
+    waiting: Vec<bool>,
     /// Bundles that turned positive since the last scan or iteration.
     pub recent: Vec<usize>,
     threshold: f64,
@@ -274,8 +278,10 @@ impl<'a> Placement<'a> {
             bundles,
             frequency,
             nodes: vec![Node::default(); bundles.blocks.len()],
-            active: BTreeSet::new(),
-            todo: BTreeSet::new(),
+            active: Vec::new(),
+            is_active: vec![false; bundles.blocks.len()],
+            todo: std::collections::BinaryHeap::new(),
+            waiting: vec![false; bundles.blocks.len()],
             recent: Vec::new(),
             threshold: 2.0 / 16384.0,
         }
@@ -283,18 +289,33 @@ impl<'a> Placement<'a> {
 
     pub fn prepare(&mut self) {
         self.recent.clear();
-        self.todo.clear();
-        self.active.clear();
+        while let Some(bundle) = self.todo.pop() {
+            self.waiting[bundle] = false;
+        }
+        for bundle in self.active.drain(..) {
+            self.is_active[bundle] = false;
+        }
+    }
+
+    /// Settle `bundle` (a set: waiting twice is once).
+    fn wait(
+        &mut self,
+        bundle: usize,
+    ) {
+        if !std::mem::replace(&mut self.waiting[bundle], true) {
+            self.todo.push(bundle);
+        }
     }
 
     fn activate(
         &mut self,
         bundle: usize,
     ) {
-        self.todo.insert(bundle);
-        if !self.active.insert(bundle) {
+        self.wait(bundle);
+        if std::mem::replace(&mut self.is_active[bundle], true) {
             return;
         }
+        self.active.push(bundle);
         self.nodes[bundle].clear(self.threshold);
         // A bundle joining many blocks needs many of them to want a register.
         if self.bundles.blocks[bundle].len() > 100 {
@@ -309,14 +330,27 @@ impl<'a> Placement<'a> {
         for one in constraints {
             let frequency = self.frequency[&one.block] * one.weight;
             let (entry, exit) = self.bundles.of[&one.block];
-            if one.entry != Border::DontCare {
-                self.activate(entry);
-                self.nodes[entry].bias(frequency, one.entry);
-            }
-            if one.exit != Border::DontCare {
-                self.activate(exit);
-                self.nodes[exit].bias(frequency, one.exit);
-            }
+            self.constrain(entry, exit, frequency, one.entry, one.exit);
+        }
+    }
+
+    /// What one block wants at its borders, for a caller that has the block's
+    /// bundles and its frequency (times the constraint's weight).
+    pub fn constrain(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+        on_entry: Border,
+        on_exit: Border,
+    ) {
+        if on_entry != Border::DontCare {
+            self.activate(entry);
+            self.nodes[entry].bias(frequency, on_entry);
+        }
+        if on_exit != Border::DontCare {
+            self.activate(exit);
+            self.nodes[exit].bias(frequency, on_exit);
         }
     }
 
@@ -330,10 +364,21 @@ impl<'a> Placement<'a> {
         for block in blocks {
             let frequency = self.frequency[block] * if strong { 2.0 } else { 1.0 };
             let (entry, exit) = self.bundles.of[block];
-            for bundle in [entry, exit] {
-                self.activate(bundle);
-                self.nodes[bundle].bias(frequency, Border::PrefSpill);
-            }
+            self.prefer_stack(entry, exit, frequency);
+        }
+    }
+
+    /// `add_pref_spill` for a block of known bundles, at `frequency` already
+    /// doubled where strong.
+    pub fn prefer_stack(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+    ) {
+        for bundle in [entry, exit] {
+            self.activate(bundle);
+            self.nodes[bundle].bias(frequency, Border::PrefSpill);
         }
     }
 
@@ -344,15 +389,25 @@ impl<'a> Placement<'a> {
     ) {
         for block in blocks {
             let (entry, exit) = self.bundles.of[block];
-            if entry == exit {
-                continue;
-            }
-            self.activate(entry);
-            self.activate(exit);
             let frequency = self.frequency[block];
-            self.nodes[entry].link(exit, frequency);
-            self.nodes[exit].link(entry, frequency);
+            self.link_bundles(entry, exit, frequency);
         }
+    }
+
+    /// `add_links` for a block of known bundles and frequency.
+    pub fn link_bundles(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+    ) {
+        if entry == exit {
+            return;
+        }
+        self.activate(entry);
+        self.activate(exit);
+        self.nodes[entry].link(exit, frequency);
+        self.nodes[exit].link(entry, frequency);
     }
 
     fn update(
@@ -386,14 +441,19 @@ impl<'a> Placement<'a> {
             .map(|(_, other)| *other)
             .filter(|other| self.nodes[*other].value != value)
             .collect();
-        self.todo.extend(dissenting);
+        for other in dissenting {
+            self.wait(other);
+        }
         true
     }
 
     /// Whether any bundle wants a register once the constraints are in.
     pub fn scan(&mut self) -> bool {
         self.recent.clear();
-        for bundle in self.active.clone() {
+        // In bundle order, as the set this was kept in iterated.
+        self.active.sort_unstable();
+        for at in 0..self.active.len() {
+            let bundle = self.active[at];
             self.update(bundle);
             if self.nodes[bundle].must_spill() {
                 continue;
@@ -410,11 +470,18 @@ impl<'a> Placement<'a> {
         let mut limit = self.nodes.len() * 10;
         while limit > 0 {
             limit -= 1;
-            let Some(bundle) = self.todo.pop_last() else { break };
+            let Some(bundle) = self.todo.pop() else { break };
+            self.waiting[bundle] = false;
             if self.update(bundle) && self.nodes[bundle].prefers_register() {
                 self.recent.push(bundle);
             }
         }
+    }
+
+    /// `finish`, ascending, to search.
+    pub fn finished(&mut self) -> Vec<usize> {
+        self.active.sort_unstable();
+        self.active.iter().copied().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
     }
 
     /// The bundles that settled in a register.

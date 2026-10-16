@@ -2906,6 +2906,31 @@ pub struct Masks {
     added: Option<Vec<Arc<Mask>>>,
 }
 
+/// The points that destroy one register, as `Masks::destroyed_within` asks.
+pub struct Destroyers<'a> {
+    lists: [&'a [i64]; 3],
+}
+
+impl Destroyers<'_> {
+    /// The first and last point in `lo..hi`.
+    pub fn within(
+        &self,
+        lo: i64,
+        hi: i64,
+    ) -> Option<(i64, i64)> {
+        let mut found: Option<(i64, i64)> = None;
+        for list in self.lists {
+            let from = list.partition_point(|slot| *slot < lo);
+            let to = from + list[from..].partition_point(|slot| *slot < hi);
+            if from < to {
+                let (first, last) = (list[from], list[to - 1]);
+                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
+            }
+        }
+        found
+    }
+}
+
 /// Where one register is destroyed, sorted: before the point's own reads
 /// (`read`), during it (`during`), or only its high half (`high`).
 #[derive(Clone, Default)]
@@ -3100,22 +3125,22 @@ impl Masks {
         lo: i64,
         hi: i64,
     ) -> Option<(i64, i64)> {
-        let reaching = self.reaching(register)?;
-        let lists: &[&Vec<i64>] = if width > 2 {
-            &[&reaching.read, &reaching.during, &reaching.high]
-        } else {
-            &[&reaching.read, &reaching.during]
-        };
-        let mut found: Option<(i64, i64)> = None;
-        for list in lists {
-            let from = list.partition_point(|slot| *slot < lo);
-            let to = list.partition_point(|slot| *slot < hi);
-            if from < to {
-                let (first, last) = (list[from], list[to - 1]);
-                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
-            }
+        self.destroyers(register, width).within(lo, hi)
+    }
+
+    /// Where `register` is destroyed, found once for the many spans a
+    /// candidate asks of it.
+    pub fn destroyers(
+        &self,
+        register: RegId,
+        width: u32,
+    ) -> Destroyers<'_> {
+        match self.reaching(register) {
+            Some(one) => Destroyers {
+                lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }],
+            },
+            None => Destroyers { lists: [&[], &[], &[]] },
         }
-        found
     }
 
     fn reaching(

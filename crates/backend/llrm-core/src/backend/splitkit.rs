@@ -101,6 +101,8 @@ use crate::model::ir::{self, Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 use crate::support::hash::IndexMap;
 
+mod cost;
+
 /// Carve spilled address operands -- base, index, selector -- into the
 /// natural loops that reuse them.
 pub fn loop_bases(
@@ -1083,6 +1085,8 @@ fn named_in(
 pub struct Occupied<'a> {
     held: Holders<'a>,
     masks: &'a allocate::Masks,
+    /// `LLRM_CHECK_OCCUPIED`.
+    checking: bool,
 }
 
 enum Holders<'a> {
@@ -1100,7 +1104,7 @@ enum Holders<'a> {
         value: u32,
         /// A register with few holders is gathered, once, where it is first
         /// asked.
-        gathered: std::cell::RefCell<IndexMap<RegId, (Vec<Segment>, Vec<i64>)>>,
+        gathered: std::cell::RefCell<IndexMap<RegId, std::rc::Rc<(Vec<Segment>, Vec<i64>)>>>,
     },
 }
 
@@ -1123,7 +1127,7 @@ impl<'a> Occupied<'a> {
                     .collect(),
             );
         }
-        Self { held: Holders::Built { segments, reach }, masks }
+        Self { held: Holders::Built { segments, reach }, masks, checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED") }
     }
 
     /// The occupants `union` has, but `value`.
@@ -1133,7 +1137,11 @@ impl<'a> Occupied<'a> {
         value: u32,
         masks: &'a allocate::Masks,
     ) -> Self {
-        Self { held: Holders::Union { union, live, value, gathered: Default::default() }, masks }
+        Self {
+            held: Holders::Union { union, live, value, gathered: Default::default() },
+            masks,
+            checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED"),
+        }
     }
 }
 
@@ -1179,29 +1187,8 @@ impl Occupied<'_> {
                 .unwrap_or_default(),
             Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
                 let mut gathered = gathered.borrow_mut();
-                let (all, reach) = gathered
-                    .entry(whole)
-                    .or_insert_with(
-                        || {
-                            let mut all: Vec<Segment> = union
-                                .holders(&whole)
-                                .into_iter()
-                                .filter(|other| other != value)
-                                .filter_map(|other| live.get(&other))
-                                .flat_map(|one| one.segments.iter().copied())
-                                .collect();
-                            all.sort_by_key(|one| (one.start, one.end));
-                            let mut furthest = i64::MIN;
-                            let reach = all
-                                .iter()
-                                .map(|one| {
-                                    furthest = furthest.max(one.end);
-                                    furthest
-                                })
-                                .collect();
-                            (all, reach)
-                        },
-                    );
+                let found = gathered.entry(whole).or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
+                let (all, reach) = &**found;
                 let from = reach.partition_point(|end| *end <= span.0);
                 let to = from + all[from..].partition_point(|one| one.start < span.1);
                 all[from..to]
@@ -1223,6 +1210,54 @@ impl Occupied<'_> {
                     .collect()
             }
         }
+    }
+
+    /// The segments `union` holds `whole` with, but those of `value`, by
+    /// start, and the furthest end among them up to each.
+    fn gather(
+        union: &LiveUnion,
+        live: &crate::backend::live::LiveRanges,
+        value: u32,
+        whole: RegId,
+    ) -> (Vec<Segment>, Vec<i64>) {
+        let mut all: Vec<Segment> = union
+            .holders(&whole)
+            .into_iter()
+            .filter(|other| *other != value)
+            .filter_map(|other| live.get(&other))
+            .flat_map(|one| one.segments.iter().copied())
+            .collect();
+        all.sort_by_key(|one| (one.start, one.end));
+        let mut furthest = i64::MIN;
+        let reach = all
+            .iter()
+            .map(|one| {
+                furthest = furthest.max(one.end);
+                furthest
+            })
+            .collect();
+        (all, reach)
+    }
+
+    /// What `register` meets, found once for the spans a candidate asks of it.
+    fn cursor(
+        &self,
+        register: RegId,
+        width: u32,
+    ) -> Cursor<'_> {
+        let whole = allocate::_whole(register);
+        let held = match &self.held {
+            Holders::Built { segments, reach } => segments.get(&whole).map(|all| Holding::Borrowed(all, &reach[&whole])),
+            Holders::Union { union, live, value, gathered } if !union.many(&whole) => {
+                let mut gathered = gathered.borrow_mut();
+                let found = gathered
+                    .entry(whole)
+                    .or_insert_with(|| std::rc::Rc::new(Self::gather(union, live, *value, whole)));
+                Some(Holding::Shared(std::rc::Rc::clone(found)))
+            }
+            Holders::Union { .. } => None,
+        };
+        Cursor { occupied: self, whole, register, width, held, destroyers: self.masks.destroyers(whole, width) }
     }
 
     /// `interference`, looking at every segment and point.
@@ -1263,6 +1298,61 @@ impl Occupied<'_> {
             })
             .map(|mask| (mask.slot, mask.slot));
         held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)))
+    }
+}
+
+/// The segments that hold a register, sorted by start, with the furthest end
+/// among them up to each.
+enum Holding<'a> {
+    Borrowed(&'a [Segment], &'a [i64]),
+    Shared(std::rc::Rc<(Vec<Segment>, Vec<i64>)>),
+}
+
+/// `Occupied::interference` of one register, its holders and the points that
+/// destroy it found once: a span asks two searches in each.
+struct Cursor<'a> {
+    occupied: &'a Occupied<'a>,
+    whole: RegId,
+    register: RegId,
+    width: u32,
+    /// None where the register has so many holders that they are looked up in
+    /// the union.
+    held: Option<Holding<'a>>,
+    destroyers: allocate::Destroyers<'a>,
+}
+
+impl Cursor<'_> {
+    fn at(
+        &self,
+        span: (i64, i64),
+    ) -> Option<(i64, i64)> {
+        let (low, high) = span;
+        let Some(held) = &self.held else {
+            return self.occupied.interference(self.register, self.width, span);
+        };
+        let (all, reach): (&[Segment], &[i64]) = match held {
+            Holding::Borrowed(all, reach) => (all, reach),
+            Holding::Shared(found) => (&found.0, &found.1),
+        };
+        let from = reach.partition_point(|end| *end <= low);
+        let to = from + all[from..].partition_point(|one| one.start < high);
+        let mut found: Option<(i64, i64)> = None;
+        for one in all[from..to].iter().filter(|one| one.end > low) {
+            let (first, last) = (one.start.max(low), one.end.min(high) - 1);
+            found = Some(found.map_or((first, last), |(a, b)| (a.min(first), b.max(last))));
+        }
+        let found = match (found, self.destroyers.within(low, high)) {
+            (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+            (one, other) => one.or(other),
+        };
+        if self.occupied.checking {
+            assert_eq!(
+                found,
+                self.occupied.interference_by_scan(self.whole, self.width, span),
+                "interference in span {span:?}"
+            );
+        }
+        found
     }
 }
 
@@ -1634,6 +1724,81 @@ fn _whole_range_scan(
 /// its copies cost, and none is the whole range.
 #[allow(clippy::too_many_arguments)]
 pub fn placed(
+    body: &LirBody,
+    value: u32,
+    index: &Indexes,
+    live: &dyn allocate::LiveAt,
+    bundles: &spillplacement::Bundles,
+    candidates: &[RegId],
+    occupied: &Occupied,
+    width: u32,
+    saving: &dyn Fn(&Insn) -> f64,
+) -> Vec<Region> {
+    let blocks = Blocks::of(body);
+    let analysis = analysed_in(&blocks, value, live);
+    if analysis.uses.is_empty() {
+        return Vec::new();
+    }
+    if !blocks.plain {
+        return placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving);
+    }
+    let mut placement = spillplacement::Placement::new(body, bundles);
+    let frame = cost::Frame::new(&blocks, &analysis, &placement, index, value);
+    // The compact region: the use clusters, with no register's interference.
+    let mut none = |_: usize| None;
+    let mut compact_held = None;
+    if frame.rows() > frame.uses() {
+        placement.prepare();
+        if frame.constrain(&mut placement, &mut none) {
+            let active = frame.grow(&mut placement, None);
+            let settled = placement.finished();
+            compact_held = Some(frame.held(&active, &settled, &mut none));
+        }
+    }
+    let mut best: Option<(f64, cost::Held)> = None;
+    let mut tried = BTreeSet::new();
+    for register in candidates {
+        if !tried.insert(allocate::_whole(*register)) {
+            continue;
+        }
+        let mut asked = frame.interference(occupied, *register, width, index);
+        let mut blocked = |row: usize| asked.at(row);
+        placement.prepare();
+        if !frame.constrain(&mut placement, &mut blocked) {
+            continue;
+        }
+        let active = frame.grow(&mut placement, Some(&mut blocked));
+        let settled = placement.finished();
+        let held = frame.held(&active, &settled, &mut blocked);
+        let saved = frame.price(&held, live, &placement, saving);
+        if saved > 0.0 && best.as_ref().is_none_or(|(found, _)| saved > *found) {
+            best = Some((saved, held));
+        }
+    }
+    let mut regions = Vec::new();
+    let mut compact = compact_held.unwrap_or_else(|| frame.nothing());
+    if let Some((_, held)) = &best {
+        frame.take_out(&mut compact, held);
+        regions.push(frame.region(held));
+    }
+    if frame.price(&compact, live, &placement, saving) > 0.0 {
+        regions.push(frame.region(&compact));
+    }
+    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        assert_eq!(
+            regions,
+            placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving),
+            "{}: the regions of value#{value} differ from the scan",
+            body.name
+        );
+    }
+    regions
+}
+
+/// `placed`, a `Region` made and priced for every candidate: what
+/// `LLRM_CHECK_SPLIT` holds the table to, and a body with phis.
+#[allow(clippy::too_many_arguments)]
+fn placed_scan(
     body: &LirBody,
     value: u32,
     index: &Indexes,
