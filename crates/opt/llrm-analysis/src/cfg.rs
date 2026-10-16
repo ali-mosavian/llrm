@@ -436,7 +436,7 @@ pub fn natural(
                 found.push(Loop {
                     header: id(successor),
                     latches: one.latches.iter().map(|&latch| id(latch)).collect(),
-                    body: one.blocks.iter().map(|&inside| id(inside)).collect(),
+                    body: one.blocks.iter().map(|inside| id(inside)).collect(),
                 });
             }
         }

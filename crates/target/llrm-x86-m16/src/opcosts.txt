@@ -28,6 +28,8 @@ float_add = x87_add
 float_multiply = x87_mul
 float_divide = x87_div
 float_load = x87_load
+# A load folded into `fadd m32` costs what the memory form costs more than the register one.
+float_load_folded = x87_add_m - x87_add
 float_store = x87_store
 # Unpriced in clocks: no audited price for the 386 to the Core (x86-m32 has the 486 and P5). Bytes: [size].
 float_release = 0
@@ -71,6 +73,7 @@ pop_r = 1
 alu_ri = 3
 ret_pop = 3
 x87_add = 6
+x87_add_m = 6
 x87_mul = 6
 x87_div = 6
 x87_load = 6
