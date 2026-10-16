@@ -2382,14 +2382,25 @@ pub fn initialized(
             state[index] = Some(_with(held, low, high));
         }
     };
-    let transfer = |at: i64, mut state: State| -> State {
+    // What each instruction of a block does to the state, in the order the walk
+    // meets them (backwards): the reads of a body's own slices and the
+    // bytes written. None of it depends on the state, so it is found once for
+    // the block and not again for every round of the fixed point
+    // (`MemRef::of` was 17 M of a d_faces -O2 compile, asked 29,389 times for
+    // what one pass over the instructions needs).
+    enum Step {
+        Read(Slice),
+        Write(usize, i64, i64),
+    }
+    let steps_of = |at: i64| -> Vec<Step> {
+        let mut steps = Vec::new();
         for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
                 for one in
                     effect.loads.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter())
                 {
-                    read(&mut state, one);
+                    steps.push(Step::Read(one.clone()));
                 }
                 let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
                 let declared = llrm_mir::memory::callee(unit.context, function, inst)
@@ -2406,7 +2417,7 @@ pub fn initialized(
                     let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
                     let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
                     for (low, high) in ranges {
-                        written(&mut state, index, one.low + low, one.low + high);
+                        steps.push(Step::Write(index, one.low + low, one.low + high));
                     }
                 }
                 continue;
@@ -2418,11 +2429,22 @@ pub fn initialized(
                     if let [one] = slices.iter().collect::<Vec<_>>()[..]
                         && let (Some(index), true) = (_parameter(one), one.high == one.low + 1)
                     {
-                        written(&mut state, index, one.low, one.low + one.width);
+                        steps.push(Step::Write(index, one.low, one.low + one.width));
                     }
                 }
                 Opcode::Store { .. } => {}
-                _ => slices.iter().for_each(|one| read(&mut state, one)),
+                _ => steps.extend(slices.iter().map(|one| Step::Read(one.clone()))),
+            }
+        }
+        steps
+    };
+    let steps: IndexMap<i64, Vec<Step>> =
+        cfg::graph(function).iter().map(|block| (block.at, steps_of(block.at))).collect();
+    let transfer = |at: i64, mut state: State| -> State {
+        for step in &steps[&at] {
+            match step {
+                Step::Read(one) => read(&mut state, one),
+                Step::Write(index, low, high) => written(&mut state, *index, *low, *high),
             }
         }
         state

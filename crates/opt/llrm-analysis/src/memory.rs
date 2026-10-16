@@ -1683,6 +1683,13 @@ struct Held {
 /// call summary asks of its callees in between.
 const ACCESS_VERSIONS: usize = 8;
 
+#[cfg(test)]
+thread_local! {
+    /// How many times `MemRef::of` was asked on this thread, for the tests that
+    /// pin how often a walk asks it.
+    pub static MEMREF_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 thread_local! {
     static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -1828,6 +1835,8 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
+        #[cfg(test)]
+        MEMREF_ASKS.with(|asks| asks.set(asks.get() + 1));
         let key = (unit.function.mark(), unit.spaces());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
