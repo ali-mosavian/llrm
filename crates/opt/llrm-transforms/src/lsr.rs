@@ -503,7 +503,7 @@ fn _calls(
         | Change::Rewritten(inst) => inst,
         Change::Cloned { to, .. } => to,
         // What an operand was is told before the `Rewritten` that decides.
-        Change::Operand { .. } | Change::Operands { .. } => return false,
+        Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => return false,
         Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return true,
     };
     matches!(

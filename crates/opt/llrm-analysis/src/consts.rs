@@ -1039,7 +1039,7 @@ fn _pointer_stores(
     calls: &Calls,
 ) -> llrm_mir::dense::IdMap<ValueId, Operand> {
     let function = unit.function;
-    let accesses = Accesses::plain(unit, calls);
+    let accesses = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let candidates = function
         .walk()
         .filter_map(|(block, inst)| Some((block, inst, avail::loaded_into(unit, &accesses, inst)?)))
@@ -1303,7 +1303,7 @@ pub fn cells_read(
     };
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));
-    let accesses = Accesses::plain(unit, calls);
+    let accesses = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let known = known.iter().map(|(value, fact)| (value, fact.clone())).collect::<IndexMap<_, _>>();
     let unit = &unit.with_registers(&known);
     let graph = memoryssa::built(unit, &accesses).with_known(_intervals(&known));
@@ -1386,7 +1386,7 @@ pub fn known_walked_over(
     let annotated = unit.references.is_none().then(|| unit.annotated().ok()).flatten();
     let unit = &annotated.as_ref().map_or(*unit, |references| unit.with_references(references));
     let function = unit.function;
-    let plain = Accesses::plain(unit, calls);
+    let plain = Accesses::shared_or(unit, || Accesses::plain(unit, calls));
     let left = exit_loads(unit, &plain, &registers, exits);
     let wanted = |result: ValueId| _width(unit, Operand::Value(result)).is_some();
     let solve = |accesses: &Accesses| {
@@ -1476,8 +1476,13 @@ pub fn known_walked_over(
             .copied()
             .filter(|(_, segment)| allowed.as_ref().is_none_or(|allowed| allowed.contains(segment)))
             .collect();
-        let accesses = plain.clone().without_absolute_writes(&assumed.iter().map(|(inst, _)| *inst).collect());
-        let facts = solve(&accesses);
+        // With none assumed the accesses are the shared ones, and so is their
+        // graph.
+        let facts = if assumed.is_empty() {
+            solve(&plain)
+        } else {
+            solve(&plain.clone().into_owned().without_absolute_writes(&assumed.iter().map(|(inst, _)| *inst).collect()))
+        };
         let resolved: llrm_mir::dense::IdSet<ValueId> =
             assumed.iter().map(|(_, segment)| *segment).filter(|segment| facts.contains_key(segment)).collect();
         if assumed.iter().all(|(_, segment)| resolved.contains(segment)) {

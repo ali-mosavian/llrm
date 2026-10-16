@@ -55,13 +55,13 @@ def label(key: tuple[str, str, str]) -> str:
     return f"{key[0]} {key[1]} -{key[2]}"
 
 
-def base_counts(sha: str, opts: list[str], tree_of, build, measure_with, cache: Path | None = None) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
+def base_counts(sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
     """(`sha`'s rows (ours only), its programs' hashes): stored by its tree, else measured with the compiler `build(sha)` names (a release
     directory) by `measure_with(directory, opts)`, which returns (bench.py's rows, programs()) of the base's own tree: its harness and its
     programs, as it was. Nothing of the head enters the key, so a base is measured once."""
     cache = cache or CACHE
     tree = tree_of(sha) or sha
-    path = cache / f"{tree}-own.json"
+    path = cache / f"{tree}-own{'-timed' if timed else ''}.json"
     stored = json.loads(path.read_text()) if path.is_file() else {"rows": {}, "programs": {}}
     have = rows_of(stored["rows"])
     if all(any(key[2] == opt for key in have) for opt in opts):
@@ -83,18 +83,6 @@ def waivers(root: Path = ROOT) -> list[dict]:
         for row in data.get("row", []):
             out.append({**row, "reason": data.get("reason", ""), "file": path.name})
     return out
-
-
-def consume_waivers(root: Path, measured: dict) -> list[str]:
-    """Delete the waiver files whose every row the blessed counts now are: the baseline carries them, so the waiver is spent."""
-    spent = []
-    for path in sorted((root / WAIVERS).glob("*.toml")):
-        rows = tomllib.loads(path.read_text()).get("row", [])
-        parts = [row["label"].split(" ") for row in rows]
-        if rows and all(measured.get((p[0], p[1], p[2].lstrip("-")), {}).get(row["counter"]) == row["to"] for p, row in zip(parts, rows)):
-            path.unlink()
-            spent.append(path.name)
-    return spent
 
 
 def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None = None) -> tuple[list[tuple], list[tuple], list[str]]:
@@ -122,25 +110,7 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
     return worse, better, stale
 
 
-OLD = re.compile(r"^(?P<label>.+): (?P<counter>[a-z_]+) (?P<now>\d+) (?P<op>[<>]) (?P<then>\d+) \((?P<kind>worse|better)")
-
-
-def differences(old: list[str], worse: list[tuple], better: list[tuple]) -> list[str]:
-    """Where the committed baselines and the base disagree: rows one judge fails or improves that the other does not."""
-    seen_old = {}
-    for line in old:
-        found = OLD.match(line)
-        if found and found["label"].split(" ")[1] in OURS:
-            seen_old[(found["label"], found["counter"])] = found["kind"]
-    seen_new = {(one[0], one[1]): "worse" for one in worse} | {(one[0], one[1]): "better" for one in better}
-    out = []
-    for key in sorted(seen_old.keys() | seen_new.keys()):
-        if seen_old.get(key) != seen_new.get(key):
-            out.append(f"{key[0]} {key[1]}: expected.toml says {seen_old.get(key, 'same')}, the base says {seen_new.get(key, 'same')}")
-    return out
-
-
-def measure_in_subprocess(directory: Path, opts: list[str], work: Path) -> tuple[dict, dict[str, str]]:
+def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
     pass flags the base's compiler does not know). A subprocess: the harness binds its compiler's directory at import."""
@@ -150,6 +120,8 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path) -> tuple
     env = {**os.environ, "LLRM_BIN": str(directory)}
     env.pop("LLRM_BENCH_BASE", None)
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
+    if timed:
+        command.append("--time")
     if (tree / "tools/bench/bench.py").is_file() and "--no-judge" in (tree / "tools/bench/bench.py").read_text():
         command.append("--no-judge")
     done = subprocess.run(command, cwd=tree, env=env, capture_output=True, text=True)

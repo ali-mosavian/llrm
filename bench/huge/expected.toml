@@ -1,5 +1,5 @@
-reason = "Spill slots are shared once over the kept allocation (LLVM StackSlotColoring, GCC IRA slot reuse): hot slots nearest the displacement reach (huge bq16 -O2 code -2.3%, grep bq16 -O2 -2.7%, jpeg c -O2 -2.3%) and identity copies between slots that now share one dropped; no row worse"
-blessed = "2026-10-14"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
 instructions = 609952
@@ -16,64 +16,6 @@ code_bytes = 320
 data_bytes = 13
 bss_bytes = 0
 kernel_ms = 9.4309
-
-[bq16.O2]
-instructions = 811085
-memory_operands = 122709
-code_bytes = 342
-data_bytes = 13
-bss_bytes = 0
-
-[bq16.Os]
-instructions = 891720
-memory_operands = 123140
-code_bytes = 334
-data_bytes = 13
-bss_bytes = 0
-
-[bq32.O2]
-instructions = 806324
-code_bytes = 258
-data_bytes = 19
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 565726
-code_bytes = 243
-data_bytes = 19
-bss_bytes = 0
-
-[c.O2]
-instructions = 569421
-memory_operands = 82405
-code_bytes = 205
-data_bytes = 80400
-bss_bytes = 0
-kernel_ms = 7.5968
-
-[c.Os]
-instructions = 650016
-memory_operands = 82800
-code_bytes = 193
-data_bytes = 80400
-bss_bytes = 0
-kernel_ms = 8.6713
-
-[nib.O2]
-instructions = 569421
-memory_operands = 82405
-code_bytes = 208
-data_bytes = 0
-bss_bytes = 80400
-kernel_ms = 8.2682
-
-[nib.Os]
-instructions = 650016
-memory_operands = 82800
-code_bytes = 196
-data_bytes = 0
-bss_bytes = 80400
-kernel_ms = 9.3428
 
 [ow.O2]
 instructions = 6756017

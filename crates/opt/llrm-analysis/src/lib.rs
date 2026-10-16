@@ -128,6 +128,7 @@ pub mod peelsize;
 pub mod pointerfacts;
 pub mod ranger;
 pub mod ranges;
+pub mod references;
 pub mod regions;
 pub mod sliceset;
 pub mod slotstores;

@@ -68,8 +68,9 @@
 //!  Bounded          Registers, Counted, DominatedEdges
 //!  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
 //!  Accesses         Annotated, CallEffects                  (memoryssa)
-//!  ThroughMemory    Writes, Annotated, Registers
-//!  FloatFacts       ThroughMemory, Writes, Annotated, Registers
+//!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
+//!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
+//!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
 //!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
@@ -154,6 +155,7 @@ use crate::floatfacts;
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
+use crate::memoryssa;
 use crate::ranges;
 
 impl<'a> Unit<'a> {
@@ -187,6 +189,7 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            plain: None,
             point_values: None,
             callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
             loop_intervals: outer.loop_intervals(),
@@ -1257,8 +1260,13 @@ impl Analysis for TableLoads {
                 | Change::Moved { inst, .. }
                 | Change::Rewritten(inst) => work.push(inst),
                 Change::Cloned { to, .. } => work.push(to),
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
-                }
+                // Each use of a substituted value is rewritten, in an entry of
+                // its own.
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted(_) => {}
                 Change::Parameters => return None,
             }
         }
@@ -1343,7 +1351,11 @@ impl Analysis for Registers {
                 | Change::Moved { inst, .. }
                 | Change::Rewritten(inst) => inst,
                 Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted(_) => {
                     continue;
                 }
                 // An argument's fact is of its position.
@@ -1581,7 +1593,7 @@ fn reached_through(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
@@ -1655,6 +1667,33 @@ pub fn writes(
     Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
 }
 
+/// The body's accesses as `Accesses::plain` makes them, each call writing what
+/// `Writes` says, with the graph they make kept in them: one per body state for
+/// `ThroughMemory`, `FloatFacts` and each walk they make, where each of them
+/// made the graph again (a whole-function pass of the body, 147 times for
+/// d_faces' 48 float solves and 63 through-memory ones).
+pub struct PlainAccesses;
+
+impl Analysis for PlainAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "plain-accesses";
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer())
+            .with_references(references)
+            .with_exposed(&exposed);
+        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls)))
+    }
+}
+
 /// Float values, integers and memory in one solve, each call writing what
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
@@ -1686,12 +1725,17 @@ impl Analysis for FloatFacts {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
         let through = analyses.get::<ThroughMemory>(context, layout, function);
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_annotated(&references)
             .with_exposed(&exposed);
+        let unit = match &*plain {
+            Ok(plain) => unit.with_plain(plain),
+            Err(_) => unit,
+        };
         match &*through {
             Ok(integers) => floatfacts::solved_over(&unit, &calls, integers),
             Err(_) => floatfacts::solved_with(&unit, &calls),
@@ -1706,6 +1750,27 @@ pub struct ThroughMemory;
 impl Analysis for ThroughMemory {
     type Result = Result<IndexMap<ValueId, Known>, String>;
     const NAME: &'static str = "through-memory";
+    const SOUND: bool = true;
+    /// What it says of a live value is a number the value has, which edits
+    /// that keep every value's meaning do not change; a fresh derivation may
+    /// know more (a constant folded), never another number.
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        _context: &Context,
+        function: &Function,
+    ) -> bool {
+        match (old, fresh) {
+            (Ok(old), Ok(fresh)) => old.iter().all(|(value, fact)| {
+                use llrm_mir::module::ValueDef;
+                match function.value(*value).def {
+                    ValueDef::Instruction(inst) if function.is_erased(inst) => true,
+                    _ => fresh.get(value).is_none_or(|now| now == fact),
+                }
+            }),
+            (old, fresh) => old == fresh,
+        }
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -1719,12 +1784,17 @@ impl Analysis for ThroughMemory {
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_references(references)
             .with_shape(&shape)
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_exposed(&exposed);
+        let unit = match &*plain {
+            Ok(plain) => unit.with_plain(plain),
+            Err(_) => unit,
+        };
         Ok(consts::known_walked(&unit, &calls))
     }
 }
