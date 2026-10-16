@@ -42,7 +42,10 @@ def main():
     manifest = json.loads((a.lib / "manifest.json").read_text())
     members = a.lib / "members"
     obj = work / "prog.obj"
-    subprocess.run([str(a.llrm_c), "-m16", "-mabi=watcom", "-std=c99", "-fobject-format=omf", f"-I{a.headers}", *a.flags, "-o", str(obj), str(a.program)], check=True)
+    if a.program.suffix == ".obj":
+        shutil.copy(a.program, obj)
+    else:
+        subprocess.run([str(a.llrm_c), "-m16", "-mabi=watcom", "-std=c99", "-fobject-format=omf", f"-I{a.headers}", *a.flags, "-o", str(obj), str(a.program)], check=True)
     link = lambda lib, exe, mapf: subprocess.run(
         [str(a.wlink), "format", "dos", "option", "quiet", f"option", f"map={mapf}", "file", str(obj), "library", str(lib), "name", str(exe)],
         stdin=subprocess.DEVNULL, capture_output=True)
