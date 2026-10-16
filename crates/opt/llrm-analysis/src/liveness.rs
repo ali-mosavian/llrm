@@ -91,8 +91,8 @@ use crate::cfg::id;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Liveness {
-    pub live_in: BTreeMap<i64, BTreeSet<ValueId>>,
-    pub live_out: BTreeMap<i64, BTreeSet<ValueId>>,
+    pub live_in: BTreeMap<i64, IdSet<ValueId>>,
+    pub live_out: BTreeMap<i64, IdSet<ValueId>>,
 }
 
 /// The local values an instruction reads.
@@ -195,7 +195,7 @@ pub fn pressure_of(
             continue;
         }
         let mut alive = found.live_out[&id(block)].clone();
-        let size = |alive: &BTreeSet<ValueId>| alive.iter().filter(|&&one| counted(one)).count();
+        let size = |alive: &IdSet<ValueId>| alive.iter().filter(|&one| counted(one)).count();
         peak = peak.max(size(&alive));
         for op in split(function, block).1.into_iter().rev() {
             if let Some(one) = op.result {
@@ -211,8 +211,8 @@ pub fn pressure_of(
 /// An instruction, the values live before it and those live across it.
 pub struct LivePoint {
     pub inst: InstId,
-    pub before: BTreeSet<ValueId>,
-    pub across: BTreeSet<ValueId>,
+    pub before: IdSet<ValueId>,
+    pub across: IdSet<ValueId>,
 }
 
 /// The values live before each instruction of `block` but its phis, and
@@ -299,7 +299,7 @@ pub fn live_steps(
         steps.push(Step { inst, read, made });
     }
     steps.reverse();
-    Steps { first: alive.into_iter().collect(), steps }
+    Steps { first: alive.iter().collect(), steps }
 }
 
 /// How many values `counted` says are live before each instruction of
@@ -312,7 +312,7 @@ pub fn pressure_points(
 ) -> Vec<(InstId, usize)> {
     live_points(function, found, block)
         .into_iter()
-        .map(|point| (point.inst, point.before.iter().filter(|&&one| counted(one)).count()))
+        .map(|point| (point.inst, point.before.iter().filter(|&one| counted(one)).count()))
         .collect()
 }
 
@@ -413,7 +413,7 @@ pub fn live_where(
     }
     let mut found = solved(function, &|value| needed.contains(&value));
     for set in found.live_in.values_mut().chain(found.live_out.values_mut()) {
-        set.retain(|value| wanted(*value));
+        set.retain(|value| wanted(value));
     }
     found
 }
@@ -779,7 +779,7 @@ pub(crate) fn live_dense(function: &Function) -> Liveness {
             }
         }
     }
-    let sets = |found: &[Bits]| -> BTreeMap<i64, BTreeSet<ValueId>> {
+    let sets = |found: &[Bits]| -> BTreeMap<i64, IdSet<ValueId>> {
         layout.iter().zip(found).map(|(&block, set)| (id(block), set.iter().map(|one| values[one]).collect())).collect()
     };
     Liveness { live_in: sets(&live_in), live_out: sets(&live_out) }
@@ -982,11 +982,17 @@ join:
         let some = live_where(f, &|one| one == y || one == z);
         for (blocks, kept) in [(&whole.live_in, &some.live_in), (&whole.live_out, &some.live_out)] {
             for (at, live) in blocks {
-                let wanted: Vec<ValueId> = live.iter().copied().filter(|one| *one == y || *one == z).collect();
-                assert_eq!(kept[at].iter().copied().collect::<Vec<_>>(), wanted, "block {at}");
+                let wanted: Vec<ValueId> = live.iter().filter(|one| *one == y || *one == z).collect();
+                assert_eq!(kept[at].iter().collect::<Vec<_>>(), wanted, "block {at}");
             }
         }
-        assert!(some.live_in.values().chain(some.live_out.values()).flatten().all(|one| *one == y || *one == z));
+        assert!(
+            some.live_in
+                .values()
+                .chain(some.live_out.values())
+                .flat_map(|set| set.iter())
+                .all(|one| one == y || one == z)
+        );
     }
 
     #[test]
