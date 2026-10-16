@@ -1,6 +1,7 @@
 """`uv run --project tools python -m unittest discover -s tools/bench`"""
 
 import sys
+import json
 import unittest
 from pathlib import Path
 
@@ -562,6 +563,38 @@ def test_record_keeps_the_heads_counts_without_measuring_a_base(monkeypatch, cap
     monkeypatch.setattr(bench, "base_rows", no_base)
     code, out = _main(monkeypatch, capsys, ["--record"], [], tmp_path)
     assert code == 0 and list((tmp_path / "cache").glob("*-own.json")) and "problems" not in out
+
+
+def shard_file(folder, index, problems=(), measured=None):
+    folder.mkdir(parents=True, exist_ok=True)
+    data = {"measured": measured or {}, "base": {}, "same": [], "problems": list(problems), "base_sha": "a" * 40}
+    (folder / f"shard-{index}.json").write_text(json.dumps(data))
+
+
+def test_the_merge_names_a_shard_that_left_no_result_and_fails(tmp_path, capsys):
+    """A shard that died before writing its file would otherwise leave its rows unjudged and the run green."""
+    shard_file(tmp_path, 1)
+    shard_file(tmp_path, 3)
+    assert bench.merge(tmp_path, 3, ["O2"], False) == 1
+    assert "bench shard 2 of 3" in capsys.readouterr().out
+
+
+def test_the_merge_prints_every_shards_problems_last_and_fails_on_one(tmp_path, capsys):
+    shard_file(tmp_path, 1, problems=[WORSE])
+    shard_file(tmp_path, 2)
+    assert bench.merge(tmp_path, 2, ["O2"], False) == 1
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[-2] == f"FAIL {WORSE}" and lines[-1].endswith("1 problems")
+
+
+def test_a_shard_judges_and_writes_only_its_own_slice(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(bench.shards, "of", lambda index, count: ["fib"])
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--shard", "2/3", "--json", str(tmp_path / "out"), "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda select, *a, **k: {("fib", "c", "O2"): {"instructions": 5}} if select == ["fib"] else {})
+    monkeypatch.setattr(bench, "judge", lambda *a: [])
+    monkeypatch.setattr(bench, "base_rows", lambda args, only=None: ({("fib", "c", "O2"): {"instructions": 5}}, {"fib"}, "b" * 40))
+    assert bench.main() == 0
+    assert json.loads((tmp_path / "out/shard-2.json").read_text())["measured"] == {"fib/c/O2": {"instructions": 5}}
 
 
 def test_a_bless_records_references_only_and_needs_a_reason():
