@@ -131,6 +131,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::context::signed;
+use llrm_mir::dense::IdSet;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
@@ -1128,8 +1129,8 @@ pub fn edges_solved(
         });
     };
     let shape = unit.shape();
-    // A change that left the CFG as it was (`reached_by`) leaves the order of
-    // the blocks as it was.
+    // A change that left the CFG as it was (`Touched::reach`) leaves the order
+    // of the blocks as it was.
     let order = match before {
         Some((states, _)) if !llrm_support::env_set("LLRM_CHECK_REPLAY") => states.order.clone(),
         _ => {
@@ -1454,13 +1455,13 @@ impl Lookup for BlockScope<'_, '_> {
 pub fn loops_reached(
     function: &llrm_mir::module::Function,
     shape: &cfg::Shape,
-    blocks: &BTreeSet<BlockId>,
-    conditions: &BTreeSet<BlockId>,
+    blocks: &IdSet<BlockId>,
+    conditions: &IdSet<BlockId>,
     edges_changed: &dyn Fn(i64) -> bool,
 ) -> BTreeSet<i64> {
     let loops = &shape.loops;
-    let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
-    let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
+    let reached: BTreeSet<i64> = blocks.iter().map(cfg::id).collect();
+    let judged: Vec<i64> = conditions.iter().map(cfg::id).collect();
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
     // Where each loop starts from: the block its header's dominator is, and the
@@ -1559,6 +1560,18 @@ pub fn bounded_solved(
     lazy: bool,
 ) -> Result<Bounds, String> {
     let function = unit.function;
+    // Every loop's proof, outer loops first, found once and sharing what the
+    // proofs of one body share: a unit that carries none proved each loop
+    // alone, and the loops around it again for each (`scoped`, for
+    // instruction selection: 3.6 M a proof at 64 loops).
+    let proved;
+    let unit = &match (unit.counted, lazy) {
+        (None, false) => {
+            proved = induction::counted_all(&Unit { registers: Some(facts), ..*unit });
+            Unit { counted: Some(&proved), registers: Some(facts), ..*unit }
+        }
+        _ => *unit,
+    };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
@@ -2171,6 +2184,19 @@ pub fn bounded_solved(
             }
             Ok(Rc::new(settle(scoped, known, id)))
         };
+        // What the edges above the loop say of a value made outside it, read
+        // where the loop's dominator ends: asked of the values the box search
+        // reads, not worked out for the whole chain of guards.
+        let dominator = shape.dominance.immediate(loop_.header);
+        let above = |value: ValueId| -> Option<Interval> {
+            let outside = match function.value(value).def {
+                ValueDef::Instruction(inst) => {
+                    function.parent(inst).is_some_and(|block| !loop_.body.contains(&cfg::id(block)))
+                }
+                ValueDef::Argument(_) => true,
+            };
+            edges_at(dominator?, &value).filter(|_| outside)
+        };
         let context = crate::ranger::LoopContext::new(
             unit,
             facts,
@@ -2181,6 +2207,7 @@ pub fn bounded_solved(
             &positions,
             &operations,
             &loop_.body,
+            &above,
         );
         let boxes = inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?;
         if !counted && boxes.is_empty() {
@@ -2250,6 +2277,24 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn edge_deltas() -> usize {
     EDGE_DELTAS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static REPLAYING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with the box search checking its loop view against the table
+/// (`LLRM_CHECK_REPLAY`), on this thread.
+#[cfg(test)]
+pub(crate) fn replayed<R>(body: impl FnOnce() -> R) -> R {
+    REPLAYING.with(|on| on.set(true));
+    let found = body();
+    REPLAYING.with(|on| on.set(false));
+    found
+}
+
+fn replaying() -> bool {
+    check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
 }
 
 fn check_scopes() -> bool {
@@ -2367,7 +2412,7 @@ fn inductive_boxes(
                 let Some(delta) = &scopes[latch] else { continue };
                 let scope = crate::ranger::Leaving { delta, at: view.swept_at(*latch) };
                 let asked = _operand(unit, *value, &scope, facts).filter(|interval| interval.width == *width);
-                if check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                if replaying() {
                     let mut assumed = known.clone();
                     assumed.extend(round_boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
                     let assumed = closed(assumed);

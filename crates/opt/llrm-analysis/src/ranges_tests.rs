@@ -1449,6 +1449,37 @@ fn the_box_search_of_a_loop_does_not_work_out_the_guards_above_it() {
     assert!(worked < guards, "{worked} edges worked out for a loop under {guards} guards");
 }
 
+/// A loop's box search did not read the edges above the loop, taking `known`
+/// to hold what they narrow (#1854): under `if (n == 0) return` the step `n`
+/// was [0, 3] in the loop view and [1, 3] in the table, and
+/// `LLRM_CHECK_REPLAY` panicked on `shrink_wrapped_frame.c`.
+#[test]
+fn the_box_search_of_a_loop_reads_what_the_guards_above_it_narrow() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 range(i32 0, 4) %n) {
+b0:
+  %z = icmp eq i32 %n, 0
+  br i1 %z, label %out, label %pre
+
+pre:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %pre ], [ %j, %h ]
+  %k = phi i32 [ -16, %pre ], [ %k1, %h ]
+  %j = add i32 %i, %n
+  %k1 = add i32 %k, 1
+  %d = icmp ne i32 %k1, 0
+  br i1 %d, label %h, label %out
+
+out:
+  ret i32 7
+}
+",
+    );
+    super::replayed(|| bounded(&parsed.unit()).unwrap());
+}
+
 /// Which loops hold what each loop starts from was asked of every loop for each
 /// start: N loops in a row asked N^2 times (4x per doubling, 7% of `analysis
 /// bounded` on `branches` at N=2048).
@@ -1469,10 +1500,46 @@ fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
         let f = function(&parsed.module, "f");
         let shape = unit.shape();
         let before = super::hosts_asked();
-        let touched = std::collections::BTreeSet::from([block(f, "h1")]);
+        let touched: llrm_mir::dense::IdSet<_> = [block(f, "h1")].into_iter().collect();
         super::loops_reached(f, &shape, &touched, &Default::default(), &|_| false);
         super::hosts_asked() - before
     };
     let (small, big) = (asked(32), asked(64));
     assert!(big <= 2 * small + 64, "{small} -> {big} questions for 32 -> 64 loops");
+}
+
+/// `scoped` (instruction selection) proved each loop alone, each finding the
+/// body's congruences again: 3.6 M a proof, 500 M of 23.7 G at 64 loops. The
+/// proofs of a body share them.
+#[test]
+fn the_proofs_of_a_body_without_proofs_share_its_congruences() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %h1
+
+h1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %h1 ]
+  %i.next = add i16 %i, 2
+  %c1 = icmp ne i16 %i.next, %n
+  br i1 %c1, label %h1, label %p2
+
+p2:
+  br label %h2
+
+h2:
+  %j = phi i16 [ 0, %p2 ], [ %j.next, %h2 ]
+  %j.next = add i16 %j, 2
+  %c2 = icmp ne i16 %j.next, %n
+  br i1 %c2, label %h2, label %out
+
+out:
+  ret i16 0
+}
+",
+    );
+    let (proved, found) = (crate::induction::proved(), crate::alias::congruences_found());
+    let _ = bounded(&parsed.unit()).unwrap();
+    assert_eq!(crate::induction::proved() - proved, 2, "premise: each loop is proved once");
+    assert_eq!(crate::alias::congruences_found() - found, 1, "the body's congruences found once for both");
 }

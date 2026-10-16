@@ -352,6 +352,9 @@ pub fn inline_code(name: &str) -> Contract {
         evidence: "inline assembly: every register assumed clobbered, the result left in AX or DX:AX".to_owned(),
         inputs: Some(BTreeSet::new()),
         flags_result: false,
+        // Code that lowers SP says so (`asm`'s declared clobbers): the rest
+        // leaves it.
+        clobbers: worst(name).clobbers.into_iter().filter(|one| *one != Reg::Sp).collect(),
         ..worst(name)
     }
 }

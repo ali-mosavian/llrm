@@ -647,6 +647,45 @@ fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own()
     assert_eq!(found, forecast, "{found} traffics for {forecast} forecasts");
 }
 
+/// Each forecast of a clone solved the whole function's liveness again, 354 of
+/// the 560 M instructions the spill model took on d_faces at -Os; the clone's
+/// is the base's with the values the run moved solved again.
+#[test]
+fn test_a_motion_is_priced_without_solving_the_clone_s_liveness_whole() {
+    let text = two_inner_loops();
+    let mut after = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    let solved = llrm_analysis::liveness::solves();
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let solved = llrm_analysis::liveness::solves() - solved;
+    let (_, forecast) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(forecast >= 3, "{forecast} forecasts");
+    assert!(solved < forecast, "{solved} liveness solves for {forecast} forecasts");
+}
+
+/// The cached pressure was the function's before the pass moved anything, so
+/// the loop after an accepted motion priced its clone from a base that lacked
+/// it (`LLRM_CHECK_VIEW`: x_life -O2, forecast cost 669951 vs 1003142). Under
+/// test `_affordable` asserts its base is the function's own.
+#[test]
+fn test_a_clone_is_priced_from_the_pressure_of_the_function_after_a_motion() {
+    let mut after = parsed(&two_inner_loops());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let (priced, _) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(priced >= 2, "{priced} loops priced: none after a motion");
+}
+
 /// The invariant `double` loads of a loop, hoisted: how many are in the
 /// preheader when `count` globals are summed each trip, on a target whose
 /// floating load costs `load`, `folded` where the add takes it from memory,
