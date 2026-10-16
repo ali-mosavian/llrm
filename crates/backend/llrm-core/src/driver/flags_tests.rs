@@ -19,37 +19,26 @@ fn pipeline(arguments: &[&str]) -> Options {
     parsed(arguments).unwrap().pipeline()
 }
 
-/// The allocator tries other shapes of a body at every level but -O0, and
-/// `-f[no-]allocation-search` sets it anywhere. (gcc runs IRA once; turning the
-/// search off at -O1 to -Os cuts QCport's compile 26-29% for +0.1% of its bytes
-/// and nothing on the 66 m32 programs, but costs the 16-bit bench kernels 5-20%
-/// of their instructions: quicksort -O2 +20%, where `Scoped` keeps a loop's
-/// address base in a register. The default stays; the switch is there.)
+/// A function is allocated once at every level below -Omax, as gcc's IRA and
+/// LLVM's greedy allocator do: no search of other shapes and no second route
+/// (d_faces compile -34% at -O2, -32% at -O3, -30% at -Os; no vsgcc row newly
+/// below the better of gcc and clang in clocks). `-f[no-]allocation-search` and
+/// `-f[no-]allocation-routes` set each anywhere, and the two are independent.
 #[test]
-fn test_allocation_search_is_on_from_o2_and_a_flag_sets_it_anywhere() {
-    // gcc allocates once at -O1 (and -Og): no search, 18% of the -O1 compile of
-    // d_faces.
-    for (level, on) in
-        [("-O0", false), ("-O1", false), ("-Og", false), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)]
-    {
+fn test_a_function_is_allocated_once_below_omax_and_the_flags_set_each_anywhere() {
+    for (level, on) in [
+        ("-O0", false),
+        ("-O1", false),
+        ("-Og", false),
+        ("-O2", false),
+        ("-Os", false),
+        ("-O3", false),
+        ("-Omax", true),
+    ] {
         assert_eq!(pipeline(&[level]).searches(), on, "{level}");
+        assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
         assert!(pipeline(&[level, "-fallocation-search"]).searches(), "{level}");
         assert!(!pipeline(&[level, "-fno-allocation-search"]).searches(), "{level}");
-    }
-}
-
-/// A function is made by the allocator alone and by the spiller's route and the
-/// cheaper kept at every level from -O2 (-O1 makes the allocator's alone, as
-/// gcc's one allocation: 23% of its d_faces compile for 0 of its executed
-/// code): that choice, not the search of shapes, is what the single allocation
-/// lost at x_dct (+15% clocks), x_ll_arith (+17.6% code) and recmany (+13%)
-/// when both were turned off together.
-#[test]
-fn test_the_routes_are_compared_from_o2() {
-    for (level, on) in
-        [("-O0", false), ("-O1", false), ("-Og", false), ("-O2", true), ("-Os", true), ("-O3", true), ("-Omax", true)]
-    {
-        assert_eq!(pipeline(&[level]).compares_routes(), on, "{level}");
         assert_eq!(
             pipeline(&[level, "-fno-allocation-search"]).compares_routes(),
             on,
@@ -57,7 +46,7 @@ fn test_the_routes_are_compared_from_o2() {
         );
     }
     assert!(pipeline(&["-O0", "-fallocation-routes"]).compares_routes());
-    assert!(!pipeline(&["-O2", "-fno-allocation-routes"]).compares_routes());
+    assert!(!pipeline(&["-Omax", "-fno-allocation-routes"]).compares_routes());
 }
 
 /// Only -Omax tries every shape of a body; the other levels try the one its
