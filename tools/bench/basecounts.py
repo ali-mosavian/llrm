@@ -78,10 +78,13 @@ def label(key: tuple[str, str, str]) -> str:
     return f"{key[0]} {key[1]} -{key[2]}"
 
 
-def base_counts(sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
+def base_counts(
+    sha: str, opts: list[str], tree_of, build, measure_with, timed: bool = False, cache: Path | None = None, only: list[str] | None = None
+) -> tuple[dict[tuple[str, str, str], dict], dict[str, str]]:
     """(`sha`'s rows (ours only), its programs' hashes): stored by its tree, else measured with the compiler `build(sha)` names (a release
     directory) by `measure_with(directory, opts)`, which returns (bench.py's rows, programs()) of the base's own tree: its harness and its
-    programs, as it was. Nothing of the head enters the key, so a base is measured once."""
+    programs, as it was. Nothing of the head enters the key, so a base is measured once. `only` (benchmark names; a shard of the bench step):
+    a miss measures just those, with `measure_with(directory, opts, only)`, and stores nothing: a part is not the base."""
     cache = cache or CACHE
     tree = tree_of(sha) or sha
     path = cache / f"{tree}-own{'-timed' if timed else ''}.json"
@@ -89,6 +92,9 @@ def base_counts(sha: str, opts: list[str], tree_of, build, measure_with, timed: 
     have = rows_of(stored["rows"])
     if all(any(key[2] == opt for key in have) for opt in opts):
         return have, stored["programs"]
+    if only:
+        rows, hashes = measure_with(build(sha), opts, only)
+        return have | {key: value for key, value in rows.items() if key[1] in OURS}, hashes
     rows, hashes = measure_with(build(sha), opts)
     have |= {key: value for key, value in rows.items() if key[1] in OURS}
     cache.mkdir(parents=True, exist_ok=True)
@@ -139,7 +145,7 @@ def stale_summary(stale: list[str]) -> list[str]:
     return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
 
 
-def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False) -> tuple[dict, dict[str, str]]:
+def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False, only: list[str] | None = None) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
     pass flags the base's compiler does not know). A subprocess: the harness binds its compiler's directory at import."""
@@ -151,6 +157,7 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     command = [sys.executable, str(tree / "tools/bench/bench.py"), "--opt", *opts, "--json", str(out), "--work", str(work / "run")]
     if timed:
         command.append("--time")
+    command += only or []
     if (tree / "tools/bench/bench.py").is_file() and "--no-judge" in (tree / "tools/bench/bench.py").read_text():
         command.append("--no-judge")
     done = subprocess.run(command, cwd=tree, env=env, capture_output=True, text=True)

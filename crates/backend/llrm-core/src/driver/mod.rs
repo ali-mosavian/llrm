@@ -161,6 +161,13 @@ pub fn compiled(
                 &*options.arch,
             )
         })?;
+        // What a frontend asks the linker for though nothing names it.
+        for name in &hir.requests {
+            assembled.requests.insert(name.clone());
+            if !assembled.externs.iter().any(|(one, _)| one == name) {
+                assembled.externs.push((name.clone(), "near".to_owned()));
+            }
+        }
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
             debug.cfa = options.cfa_locations();
@@ -172,6 +179,7 @@ pub fn compiled(
                 module,
                 mir.segments.data_space,
                 program.constant_segment.as_deref(),
+                &program.bracketed_segments,
                 options.machine.far_bss,
                 options.machine.bss_begin,
                 options.arch.layout().segment_bytes(),
