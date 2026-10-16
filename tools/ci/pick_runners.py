@@ -39,7 +39,8 @@ def pick(groups: list[str], heartbeat: str, eligible: bool, now: float) -> dict:
             out[group] = HOSTED
     jobs = {"build": HOSTED, **out}
     names = {kind: " ".join(j for j, r in jobs.items() if r == where) for kind, where in (("tinytim", TINYTIM), ("hosted", HOSTED))}
-    return {"build": HOSTED, "groups": out, "summary": "; ".join(f"{kind}: {v}" for kind, v in names.items() if v)}
+    # A perf job on a hosted runner skips its counter steps: the caller decides whether that passes (a change to the compiler's source must not).
+    return {"build": HOSTED, "groups": out, "perf_hosted": sorted(g for g in out if g in PERF and out[g] == HOSTED), "summary": "; ".join(f"{kind}: {v}" for kind, v in names.items() if v)}
 
 
 if __name__ == "__main__":
