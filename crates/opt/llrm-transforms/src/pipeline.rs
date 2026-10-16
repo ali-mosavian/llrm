@@ -1321,12 +1321,15 @@ impl Run {
             return false;
         }
         self.steps += 1;
-        // `LLRM_CHECK_ORDER=SEED`: some analyses asked at this pass's entry, which
-        // ones by the seed, the step and the body, so that each is first asked
-        // earlier than a pass needs it, somewhere else on every seed. A result a
-        // pass reads is a function of the body: the object is the lazy one's.
+        // `LLRM_CHECK_ORDER=SEED`: some analyses asked at this pass's entry,
+        // which ones by the seed, the step and the body, so that each
+        // is first asked earlier than a pass needs it, somewhere else
+        // on every seed. A result a pass reads is a function of the
+        // body: the object is the lazy one's.
         if let Some(seed) = order_seed() {
-            let mix = seed ^ (self.steps as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (unit.function.mark().position() as u64);
+            let mix = seed
+                ^ (self.steps as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (unit.function.mark().position() as u64);
             llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
         }
         let before = unit.function.mark();

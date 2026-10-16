@@ -70,7 +70,12 @@ def same(job: tuple[str, str, Path, list[str]], old: str, new: str, work: Path) 
     outs = []
     for tag, compiler in (("old", old), ("new", new)):
         out = work / f"{name.replace('/', '_')}{level}.{tag}.obj"
-        env = {**os.environ, **{f"LLRM_CHECK_{one}": "1" for one in CHECKS}} if tag == "new" else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
+        # A value already set in the environment stays (LLRM_CHECK_ORDER=SEED), so a run can be repeated under other seeds.
+        env = (
+            {**os.environ, **{f"LLRM_CHECK_{one}": "1" for one in CHECKS if f"LLRM_CHECK_{one}" not in os.environ}}
+            if tag == "new"
+            else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
+        )
         done = subprocess.run([compiler, level, *flags, str(source), "-o", str(out)], capture_output=True, text=True, env=env)
         if done.returncode:
             return name, level, f"{tag} failed: {done.stderr[-200:]}"
