@@ -16,11 +16,6 @@ counter = "memory_operands"
 to = 21634
 
 [[row]]
-label = "nbody_single bas -Os"
-counter = "memory_operands"
-to = 192105
-
-[[row]]
 label = "nbody_single bq16 -Os"
 counter = "memory_operands"
 to = 192105
@@ -29,3 +24,13 @@ to = 192105
 label = "nbody_single c -Os"
 counter = "memory_operands"
 to = 192111
+
+[[row]]
+label = "fpbench c -Os"
+counter = "memory_operands"
+to = 3963
+
+[[row]]
+label = "fpbench nib -Os"
+counter = "memory_operands"
+to = 3963

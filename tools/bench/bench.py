@@ -636,11 +636,14 @@ def time_against(label: str, got: dict, want: dict | None) -> list[str]:
     return []
 
 
-def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict) -> list[str]:
+def ratio_problems(label: str, reference: str, got: dict, want: dict, ref: dict, waived: list[dict] = ()) -> list[str]:
     """llrm/reference worse than it was blessed at. Against a stored reference this is the count gate seen from the
-    reference's side; it stays a gate of its own for the day the reference is re-blessed."""
+    reference's side; it stays a gate of its own for the day the reference is re-blessed. A count a waiver excuses is excused here
+    too: the ratio is that count over the reference's, so the waived trade failed it again, a row at a time."""
     problems = []
     for counter in (*COUNTERS, *SIZES, "kernel_ms"):
+        if any(w["label"] == label and w["counter"] == counter and w["to"] == got.get(counter) for w in waived):
+            continue
         if all(counter in one for one in (got, want, ref)) and ref[counter] > 0:
             now, then = got[counter] / ref[counter], want[counter] / ref[counter]
             time = counter == "kernel_ms"
@@ -698,7 +701,7 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     for reference in REFERENCES.get(variant.language, ()):
                         ref = baseline.get(reference, {}).get(reference_level(reference, opt))
                         if want and ref:
-                            problems += ratio_problems(label, reference, got, want, ref)
+                            problems += ratio_problems(label, reference, got, want, ref, waived)
             for reference in REFERENCES.get(variant.language, ()):
                 for level in sorted({reference_level(reference, opt) for opt in opts}):
                     if (name, reference, level) in measured:
