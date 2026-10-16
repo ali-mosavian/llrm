@@ -2587,3 +2587,40 @@ fn loops_of_one_symbolic_bound_or_one_constant_count_make_the_same_trips() {
     assert!(!same_trips(&proof(4), &proof(6)), "8 against 9");
     assert!(!same_trips(&proof(0), &proof(4)), "a count against a symbol");
 }
+
+/// A nest of D loops built the set of every value its loop defines for each of
+/// its proofs, several times each: a proof of the outer loop of 64 held the
+/// values of all 64 (counted 497 M at depth 64, 311 M asked of each value's own
+/// definition). What a loop defines is the same either way.
+#[test]
+fn a_value_is_invariant_where_the_loop_does_not_define_it() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n) {
+b0:
+  %a = add i16 %n, 1
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %b0 ], [ %j, %h ]
+  %j = add i16 %i, %a
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %h, label %out
+
+out:
+  ret i16 %j
+}
+",
+    );
+    let body = parsed.only_loop();
+    let function = parsed.function();
+    let still = invariant(function, &body.body);
+    assert!(still.contains(parsed.value("n")), "an argument");
+    assert!(still.contains(parsed.value("a")), "made above the loop");
+    assert!(!still.contains(parsed.value("i")), "the header's phi");
+    assert!(!still.contains(parsed.value("j")), "made in the loop");
+    assert!(!still.contains(parsed.value("c")), "made in the loop");
+    assert!(
+        invariant(function, &llrm_mir::forest::Body::from_blocks([])).contains(parsed.value("j")),
+        "no loop defines nothing"
+    );
+}

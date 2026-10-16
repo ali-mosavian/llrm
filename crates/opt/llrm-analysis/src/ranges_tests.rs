@@ -1507,3 +1507,39 @@ fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
     let (small, big) = (asked(32), asked(64));
     assert!(big <= 2 * small + 64, "{small} -> {big} questions for 32 -> 64 loops");
 }
+
+/// `scoped` (instruction selection) proved each loop alone, each finding the
+/// body's congruences again: 3.6 M a proof, 500 M of 23.7 G at 64 loops. The
+/// proofs of a body share them.
+#[test]
+fn the_proofs_of_a_body_without_proofs_share_its_congruences() {
+    let parsed = Parsed::new(
+        "define i16 @f(i16 %n) {
+b0:
+  br label %h1
+
+h1:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %h1 ]
+  %i.next = add i16 %i, 2
+  %c1 = icmp ne i16 %i.next, %n
+  br i1 %c1, label %h1, label %p2
+
+p2:
+  br label %h2
+
+h2:
+  %j = phi i16 [ 0, %p2 ], [ %j.next, %h2 ]
+  %j.next = add i16 %j, 2
+  %c2 = icmp ne i16 %j.next, %n
+  br i1 %c2, label %h2, label %out
+
+out:
+  ret i16 0
+}
+",
+    );
+    let (proved, found) = (crate::induction::proved(), crate::alias::congruences_found());
+    let _ = bounded(&parsed.unit()).unwrap();
+    assert_eq!(crate::induction::proved() - proved, 2, "premise: each loop is proved once");
+    assert_eq!(crate::alias::congruences_found() - found, 1, "the body's congruences found once for both");
+}
