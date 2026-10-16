@@ -188,3 +188,10 @@ def test_the_counts_a_main_push_records_are_the_next_pull_requests_base_without_
 
     have, hashes = bc.base_counts("sha", ["O2"], lambda sha: "k1", never, never, cache=cache)
     assert have == {("fib", "c", "O2"): {"instructions": 7}} and "fib" in hashes, "ours only: the reference's row is not recorded"
+
+
+def test_stale_waivers_are_one_line_of_file_names():
+    """Twenty-nine BASE-STALE lines sat above the FAIL lines of #1771 and hid them."""
+    stale = [f"a.toml: row{i} instructions to {i}" for i in range(29)] + ["b.toml: x instructions to 1"]
+    assert bc.stale_summary(stale) == ["BASE-STALE 30 waivers in 2 files, delete them: a.toml b.toml"]
+    assert bc.stale_summary([]) == []

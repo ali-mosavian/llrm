@@ -814,11 +814,11 @@ def main() -> int:
     print(*standing(measured, args.select, args.opt), sep="\n")
     if args.select:
         print(*clock_lines(measured, args.select), sep="\n")
-    for one in problems:
-        print("FAIL", one)
     stale = [] if args.select else basecounts.judge(measured, base, basecounts.waivers(), same)[2]  # a selection leaves the other rows' waivers unused
-    print(f"BASE {base_sha[:9]}: {len(base)} rows" + (f"; {len(stale)} stale waivers (delete them)" if stale else ""))
-    print(*(f"BASE-STALE {one}" for one in stale), sep="\n")
+    print(f"BASE {base_sha[:9]}: {len(base)} rows")
+    print(*basecounts.stale_summary(stale), sep="\n")
+    for one in problems:  # last: the tail of the log is what a reader sees
+        print("FAIL", one)
     print(f"{len(measured)} measurements: {len(problems)} problems")
     return 1 if problems else 0
 

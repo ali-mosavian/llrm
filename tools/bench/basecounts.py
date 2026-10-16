@@ -133,6 +133,12 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
     return worse, better, stale
 
 
+def stale_summary(stale: list[str]) -> list[str]:
+    """The stale waivers (judge's third value) as one line naming their files: 29 rows of them buried the failures under them."""
+    files = sorted({one.split(":", 1)[0] for one in stale})
+    return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
+
+
 def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
