@@ -1037,6 +1037,71 @@ fn a_fold_does_not_rerun_the_passes_that_read_nothing_it_reached() {
     assert_eq!(narrow.get(), 1, "decide-like: the fold reached no condition, no memory and no block");
 }
 
+/// Changes the constant of @f's add on each of its first `left` runs, the way a
+/// chain of folds does one step per round.
+struct Chain {
+    left: usize,
+    runs: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl llrm_mir::passes::FunctionPass for Chain {
+    fn name(&self) -> &'static str {
+        "chain"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        self.runs.set(self.runs.get() + 1);
+        if self.left == 0 {
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        self.left -= 1;
+        let (_, add) = unit
+            .function
+            .walk()
+            .find(|&(_, one)| {
+                unit.function.instruction(one).opcode
+                    == llrm_mir::opcode::Opcode::Binary(llrm_mir::opcode::BinaryOp::Add)
+            })
+            .expect("an add");
+        let ty = unit.function.instruction(add).ty;
+        let operands = unit.function.instruction(add).operands.clone();
+        let constant = llrm_mir::module::Operand::Constant(unit.context.int(ty, 10 + self.left as i128));
+        unit.function.set_operands(add, vec![operands[0], constant]);
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The rounds of a body's passes were bounded by its size (`max(16, blocks +
+/// insts + 1)`) and nothing else: the fourth and fifth round of d_faces'
+/// hottest body were 354 of its 6,246 Minstr, and found nothing the 284 rows of
+/// the vsgcc tables and the 65 QCport modules show (the objects are the same).
+/// `Options::rounds` bounds them; -Omax runs to the fixed point.
+#[test]
+fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
+    let text = "define i16 @f(i16 %x) {\nb0:\n  %y = add i16 %x, 1\n  ret i16 %y\n}\n";
+    let runs = |rounds: usize| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let options = pipeline::Options { rounds, ..pipeline::Options::basic() };
+        let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), options, ..Applied::default() });
+        fixed.only = false;
+        fixed.passes = vec![Box::new(Chain { left: 8, runs: std::rc::Rc::clone(&count) })];
+        crate::testing::managed(&mut module, fixed);
+        count.get()
+    };
+    assert_eq!(runs(4), 4, "the budget ends the rounds");
+    assert_eq!(runs(usize::MAX), 9, "premise: the chain runs to its end when nothing bounds it");
+    assert_eq!(pipeline::Options::basic().rounds, 4);
+    assert_eq!(pipeline::Options::standard().rounds, 4);
+    assert_eq!(pipeline::Options::speed().rounds, 4);
+    assert_eq!(pipeline::Options::size().rounds, 4);
+    assert_eq!(pipeline::Options::aggressive().rounds, usize::MAX);
+}
+
 /// Six sweeps of `p[j] += v[j]` over 100 cells, as bench/particle makes them,
 /// through the whole pipeline at -O3 with and without unroll-and-jam, and at
 /// -O2: the jam changes the code of -O3 alone, and the nest computes what it
