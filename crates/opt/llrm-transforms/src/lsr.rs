@@ -452,7 +452,10 @@ impl Analysis for Products {
         if _graph(function) != previous.edges {
             return None;
         }
-        let reach = llrm_analysis::manager::reached_keeping_edges(function, changes)?;
+        let reach = function.reach_of(changes)?;
+        if reach.cfg {
+            return None;
+        }
         if previous.by_block.is_none() || changes.iter().any(|one| _calls(function, one)) {
             return None;
         }
@@ -468,7 +471,7 @@ impl Analysis for Products {
         if trips != previous.trips {
             return None;
         }
-        let weighed = reach.conditions.iter().copied().collect::<Vec<_>>();
+        let weighed = reach.conditions.iter().collect::<Vec<_>>();
         let by_header = profit::counted_by_header(&shape, Some(&trips))?;
         let taken = llrm_analysis::branchprob::taken_from(
             view.context,
