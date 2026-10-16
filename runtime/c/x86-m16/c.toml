@@ -51,6 +51,9 @@ entry_convention = "watcall16"
 # Its linker is asked for the start-up (`_cstart_`, the object file's entry), and for `__argc`, which builds argv, where
 # `main` takes arguments: the references Open Watcom's own compiler leaves in a module with a `main`.
 entry_requests = ["_cstart_"]
+# Its start-up runs the initializers and finalizers laid between these markers; every Open Watcom object declares them in
+# order, and the linker lays segments out as it first meets them.
+bracketed_segments = ["XIB:XI:XIE", "YIB:YI:YIE"]
 entry_argument_requests = ["__argc"]
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"

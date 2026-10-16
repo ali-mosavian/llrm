@@ -214,6 +214,9 @@ pub struct Profile {
     /// (its start-up, and what builds `argv`).
     pub entry_requests: Vec<String>,
     pub entry_argument_requests: Vec<String>,
+    /// Segments the target's linker lays out between two markers, as
+    /// `BEGIN:MIDDLE:END` (`XIB:XI:XIE`).
+    pub bracketed_segments: Vec<String>,
 }
 
 impl Profile {
@@ -290,6 +293,7 @@ impl Profile {
                 .unwrap_or(Ok(Vec::new()))
         };
         Ok(Self {
+            bracketed_segments: names("bracketed_segments")?,
             entry_requests: names("entry_requests")?,
             entry_argument_requests: names("entry_argument_requests")?,
             cpu: text(frontend, "watcom_cpu")?,
@@ -1165,6 +1169,32 @@ mod tests {
         assert!(bare.contains("extern _cstart_:near") && !bare.contains("__argc"), "{bare}");
         let other = listing("other", "int helper(int a) { return a; }\n");
         assert!(!other.contains("_cstart_") && !other.contains("__argc"), "{other}");
+    }
+
+    /// A module with initializers in `XI` declared no `XIB` before it or `XIE`
+    /// after, so the linker, meeting `XI` first, laid it out ahead of the
+    /// begin marker: the start-up's range of initializers was empty and
+    /// `argv` was never built.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_segment_between_markers_is_declared_with_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("brackets.c");
+        std::fs::write(
+            &source,
+            "static void init(void) {}\n\
+             static struct { char kind; void (*run)(void); } __based( __segname( \"XI\" ) ) entry = { 1, init };\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brackets.c");
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "brackets.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "brackets", None, &args.codegen).unwrap()).unwrap();
+        let order: Vec<&str> =
+            asm.lines().filter_map(|one| one.strip_suffix(" segment word public 'DATA'")).collect();
+        assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object

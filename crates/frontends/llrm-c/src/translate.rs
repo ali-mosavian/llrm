@@ -196,6 +196,7 @@ pub fn program(
         promises,
         preserved: preserved.iter().map(|one| one.value().to_owned()).collect(),
         constant_segment: Some("CONST".to_owned()),
+        bracketed_segments: profile.bracketed_segments.clone(),
         ..h::Program::new(h::Dialect::C, h::RuntimeProfile::Freestanding, vec![module])
     })
 }
