@@ -483,7 +483,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
     selected = set(p.packages or pkgs)
     ct = " ".join(f"-p {n} --test {t}" for n, t in crate_tests(pkgs) if n in selected)
     bench = (
-        f'out=$(uv run -q --project tools python tools/bench/bench.py); echo "$out" | grep -aE "^(FAIL|SKIP|BASE[A-Z-]*:? )|measurements:"; '
+        f'out=$(uv run -q --project tools python tools/bench/bench.py ${{BENCH_SHARD:+--shard "$BENCH_SHARD" --json "$CARGO_TARGET_DIR/bench-shards"}}); echo "$out" | grep -aE "^(FAIL|SKIP|BASE[A-Z-]*:? )|measurements:"; '
         'echo "$out" | tail -1 | grep -q " 0 problems"'
     )
     def cfg_pytest(skipped: tuple[str, ...], durations: str = "pytest-durations") -> str:
@@ -639,6 +639,18 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
     return langs, frozenset(k[4:] for k, hit in out.items() if hit and k.startswith("bin:"))
 
 
+def shard_names(group: str) -> list[str]:
+    """`bench` as the CI jobs `bench-1` .. `bench-N`: the bench step is cut into slices that run on their own runners; any other group as itself."""
+    return [f"{group}-{i}" for i in range(1, load()["bench"]["shards"] + 1)] if group == "bench" else [group]
+
+
+def shard_of(group: str | None) -> tuple[str | None, str | None]:
+    """(the group, its BENCH_SHARD "I/N") for a job named `bench-I`; any other group as it is."""
+    if group and (one := re.fullmatch(r"bench-(\d+)", group)):
+        return "bench", f"{one[1]}/{load()['bench']['shards']}"
+    return group, None
+
+
 def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
     """The groups of this plan that need a capability only the private checkout has: their jobs read it, and a fork's pull request fails them."""
     cfg = load()
@@ -647,7 +659,7 @@ def private_groups(p: Plan, root: Path = ROOT) -> list[str]:
     need = {steps.get(key.split(":")[0], key) if ":" in key else key for key, caps in cfg["requires"].items() if private & set(caps)}
     if any(private & set(caps) for caps in declared_requirements(root).values()):
         need |= {"pytest", "pytest-programs", "pytest-quick", "changed-tests"}
-    return sorted(g for g, members in cfg["groups"].items() if any(s in p.steps and s in need for s in members))
+    return sorted(one for g, members in cfg["groups"].items() if any(s in p.steps and s in need for s in members) for one in shard_names(g))
 
 
 def private_env(directory: str, group: str = "") -> dict[str, str]:
@@ -658,7 +670,7 @@ def private_env(directory: str, group: str = "") -> dict[str, str]:
 
 def groups_of(p: Plan, skipped: dict[str, str]) -> dict[str, list[str]]:
     """The CI job groups that have a step to run: group -> its steps in the plan, minus the skipped."""
-    return {g: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped])}
+    return {one: run for g, members in load()["groups"].items() if (run := [s for s in members if s in p.steps and s not in skipped]) for one in shard_names(g)}
 
 
 STALL_CODE = 79
@@ -761,11 +773,14 @@ USES_BINARIES = ("pytest", "pytest-programs", "pytest-quick", "changed-tests", "
 
 
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
+    group, shard = shard_of(group)
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
     env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
+    if shard:
+        env["BENCH_SHARD"] = shard
     logs = Path(target) / "gate-logs"
     logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()
@@ -921,7 +936,7 @@ def scoped(argv: list[str], environ: dict | None = None, have: str | None = None
 def main() -> int:
     kill_on_term()
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["plan", "run", "bisect", "main", "private-env", "private-repo", "private-public"])
+    ap.add_argument("command", choices=["plan", "run", "bisect", "main", "private-env", "private-repo", "private-public", "shards"])
     ap.add_argument("rest", nargs="*")
     ap.add_argument("--base", default="origin/main")
     ap.add_argument("--files", nargs="*")
@@ -939,6 +954,9 @@ def main() -> int:
     if args.command in ("private-repo", "private-public"):
         cfg = load()["private"]
         print(cfg["repo"] if args.command == "private-repo" else "\n".join(f"{k}={v}" for k, v in cfg["public"].items()))
+        return 0
+    if args.command == "shards":  # for the merge job: how many bench shards to wait for
+        print(load()["bench"]["shards"])
         return 0
     if args.command == "private-env":  # for `>> "$GITHUB_ENV"`: paths only, nothing read from the checkout
         for name, value in private_env(args.rest[0], args.group or "").items():
