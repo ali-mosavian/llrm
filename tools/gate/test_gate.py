@@ -1176,7 +1176,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
-    assert {"qcport", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
+    assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
 
 
@@ -1193,7 +1193,7 @@ def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_tha
 
 def test_a_group_may_point_a_variable_somewhere_else():
     """test_identical read the qb-quake variant as QCport (10 modules of 65) when QCPORT was its src: dfaces has a variable of its own."""
-    assert gate.private_env("/p", "qcport")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
     assert gate.private_env("/p", "python")["QCPORT"] == "/p/rm-quake/src"
     assert gate.private_env("/p", "python")["DFACES_SRC"] == "/p/qbq-llrm/src"
     assert "QCPORT" not in gate.private_env("/p", "unit")
@@ -1343,3 +1343,23 @@ def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_te
     import pick_runners
     assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == ["perf"]
     assert pick_runners.pick(["perf", "unit"], "1000 2", True, 1000)["perf_hosted"] == []
+
+
+def test_the_ci_line_names_the_parent_and_a_stale_workflow_is_never_a_pass():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "PASS at ${head:0:12}$on" in workflow and "STALE WORKFLOW (not a pass) at ${head:0:12}$on" in workflow
+    assert "python3 tools/ci/stale_workflow.py" in workflow and 'BASE_REF: ${{ github.event.pull_request.base.ref }}' in workflow
+
+
+def test_a_group_of_tree_only_checks_has_no_build_and_a_group_that_runs_binaries_does():
+    """#1882's static job built the workspace from cold (701 s) before the build job even started: it has no target dir to reuse."""
+    p = gate.plan(["crates/backend/llrm-core/src/lib.rs"], "full")
+    assert "build" not in gate.group_plan(p, "static").steps
+    assert "build" in gate.group_plan(p, "unit").steps and "build" in gate.group_plan(p, "python").steps and gate.group_plan(p, "build").steps == ["build"]
+    assert gate.TREE_ONLY == set(gate.load()["groups"]["static"])
+
+
+def test_the_bench_shards_and_regroupings_keep_the_job_count_down():
+    """The account runs 20 hosted jobs at once; each job costs 70-140 s of set-up. A group under ~2 minutes of work is not its own job."""
+    cfg = gate.load()
+    assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport"]

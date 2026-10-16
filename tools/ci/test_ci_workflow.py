@@ -27,5 +27,5 @@ def test_perf_may_only_be_missing_on_a_hosted_runner():
 
 
 def test_the_verdict_line_keeps_its_form_and_names_the_runners():
-    """Parity needs `GATE <tier> PASS at <head12>` unchanged; the runners follow it, so one PR passing on tinytim and failing hosted is legible."""
-    assert 'line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}"' in CI and "[runners: ${{ needs.plan.outputs.runner_summary }}]" in CI
+    """Parity needs `GATE <tier> PASS at <head12>` (a pull request's adds ` on <parent12>`); the runners follow it, so one PR passing on tinytim and failing hosted is legible."""
+    assert 'line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"' in CI and "[runners: ${{ needs.plan.outputs.runner_summary }}]" in CI

@@ -239,7 +239,7 @@ fn positive_reciprocal<'a>(
     }
     // The magic is in the accumulator and the dividend where the early-out
     // reads: its bits set the price.
-    let multiply_cost = timing::multiply_clocks(cpu, i64::from(width), bits)?;
+    let multiply_cost = timing::multiply_clocks(cpu, i64::from(width), Some(bits.unwrap_or(0)))?;
     let divide_cost = timing::signed_divide(cpu, i64::from(width))?;
     let (Some(multiply_cost), Some(divide_cost)) = (multiply_cost, divide_cost) else {
         return Ok(None);
@@ -438,7 +438,8 @@ pub fn unsigned_reciprocal<'a>(
     if width != 4 || !(2 < divisor && divisor < 1 << 31) || (divisor & (divisor - 1)) == 0 || cpu.size {
         return Ok(None);
     }
-    let (Some(multiply), Some(divide)) = (timing::multiply_clocks(cpu, 4, bits)?, timing::unsigned_divide(cpu, 4)?)
+    let (Some(multiply), Some(divide)) =
+        (timing::multiply_clocks(cpu, 4, Some(bits.unwrap_or(0)))?, timing::unsigned_divide(cpu, 4)?)
     else {
         return Ok(None);
     };
@@ -818,10 +819,10 @@ mod tests {
     /// The 486's multiply ends early on a short r/m operand: 10 + max(bits, 3),
     /// 13 to 42 clocks, against `div`'s 40. The dividend is that operand,
     /// so a reciprocal is priced by its bits: a dividend known to need all 32
-    /// keeps the division (the old price, the maximum, for every dividend:
-    /// LNGMXX lost to it), one of unknown length is priced at the middle of
-    /// the range, a short one wins by more. A Pentium's multiply is 10 whatever
-    /// the operand.
+    /// keeps the division, one of unknown length is priced at the early-out
+    /// minimum (gcc's assumption: it multiplies by the reciprocal whatever the
+    /// dividend), a short one is priced exactly. A Pentium's multiply is 10
+    /// whatever the operand.
     #[test]
     fn test_unsigned_reciprocal_follows_the_cpu_and_the_dividends_length() {
         let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
@@ -834,6 +835,8 @@ mod tests {
         };
         assert_eq!((attempt("386", Some(32)), attempt("486", Some(32)), attempt("P5", Some(32))), (false, false, true));
         assert_eq!((attempt("386", None), attempt("486", None), attempt("P5", None)), (true, true, true));
+        // 31 bits: the multiply takes 41 of the 486's 42.
+        assert!(!attempt("486", Some(31)) && attempt("486", Some(16)));
         assert_eq!((attempt("386", Some(12)), attempt("486", Some(12)), attempt("P5", Some(12))), (true, true, true));
     }
 
@@ -842,6 +845,9 @@ mod tests {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
         let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, "386", true, None), Ok(None));
+        assert_eq!(
+            reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, "386", true, Some(32)),
+            Ok(None)
+        );
     }
 }
