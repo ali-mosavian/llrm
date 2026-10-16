@@ -1,5 +1,6 @@
 //! HIR to MIR, as clang's CodeGen emits LLVM IR: data objects become
-//! globals, local places allocas, HIR values SSA values. What MIR cannot
+//! globals, local places allocas (named after the place, which is how a dump
+//! says `count` for a Nib or QB local), HIR values SSA values. What MIR cannot
 //! hold yet is refused whole with the reason: a function is left declared,
 //! a data object an external global, so what refers to them still verifies.
 
