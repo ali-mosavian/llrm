@@ -1099,6 +1099,27 @@ mod tests {
         assert!(asm.lines().any(|one| one == ".code _TEXT"), "{asm}");
     }
 
+    /// `far_pointer == NULL`, where `NULL` is `((void *)0)`: the constant was
+    /// converted from a near pointer, to the data segment's offset 0, so a
+    /// far null pointer compared unequal to it. clib's own `memtest` said so
+    /// of `_fmemchr`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_constant_zero_is_the_null_pointer_of_a_far_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("null.c");
+        std::fs::write(&source, "int isnull(void far *p) { return p == (void *)0; }\n").unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records null.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
+        assert!(!asm.contains("DGROUP"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`

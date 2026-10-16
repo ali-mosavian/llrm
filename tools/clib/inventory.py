@@ -56,7 +56,23 @@ def resolved(text):
     return found
 
 
-def source(clib, sub, name):
+def aliases(aliasgen, ow, out, tag="d16"):
+    """The alias stubs of `alias/gen/aliases.dat`, written by Open Watcom's aliasgen (the sub-library `alias`
+    has no objects.mif of its own): (directory, object, options, post options), sources in `out/gen/alias`."""
+    gen = out / "gen" / "alias"
+    (gen / "a").mkdir(parents=True, exist_ok=True)
+    data = ow / "bld" / "clib" / "alias" / "gen" / "aliases.dat"
+    subprocess.run([str(aliasgen), str(data), str(gen / "a") + "/", str(gen / "objs.gmk")], check=False,
+                   capture_output=True)
+    for line in (gen / "objs.gmk").read_text().splitlines():
+        parts = line.split()
+        if len(parts) > 2 and parts[0] == "!inject" and tag in parts[2:]:
+            yield "alias", parts[1][: -len(".obj")], "", ""
+
+
+def source(clib, sub, name, gen=None):
+    if sub == "alias":
+        return gen / "alias" / "a" / f"{name}.gas"
     deps = clib / sub / "deps.mif"
     if deps.exists():
         m = re.search(rf"^{re.escape(name)}\.obj\s*:\s*(\S+)", deps.read_text(errors="replace"), re.M)
@@ -84,8 +100,8 @@ def includes(ow, clib, sub, extra, headers):
 def run(job, args):
     sub, name, opts, post = job
     clib = args.ow / "bld" / "clib"
-    src = source(clib, sub, name)
-    record = {"dir": sub, "obj": name, "src": str(src.relative_to(args.ow)) if src else None,
+    src = source(clib, sub, name, args.out / "gen")
+    record = {"dir": sub, "obj": name, "src": (str(src.relative_to(args.ow)) if src.is_relative_to(args.ow) else str(src.relative_to(args.out))) if src else None,
               "standalone": "-zld" in post.split()}
     if src is None:
         return {**record, "status": "nosource"}
@@ -104,7 +120,7 @@ def run(job, args):
     elif src.suffix == ".c":
         # The makefile's -os asks for size, for this object alone.
         size = ["-Os"] if "-os" in resolved(opts) + resolved(post) else []
-        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-fobject-format=omf", *args.flags, *size,
+        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "-fobject-format=omf", *args.flags, *size,
                *includes(args.ow, clib, sub, opts, args.headers), "-o", str(out), str(src)]
         tool = "llrm-c"
     else:
@@ -135,13 +151,18 @@ def main():
     ap.add_argument("-j", type=int, default=os.cpu_count())
     ap.add_argument("--llrm-c", type=Path)
     ap.add_argument("--jwasm", type=Path)
+    ap.add_argument("--aliasgen", type=Path, help="Open Watcom's aliasgen, for the alias stubs (default: beside the reference tools)")
     ap.add_argument("--reference", type=Path, help="Open Watcom's own bwcc and bwasm directory: build with them instead")
     ap.add_argument("--headers", type=Path, required=True, help="installed Open Watcom h directory")
     ap.add_argument("--ref-flag", dest="ref_flags", action="append", default=[], help="extra bwcc flag, e.g. -os")
     ap.add_argument("flags", nargs="*")
     args = ap.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    jobs = [j for j in objects(args.ow / "bld" / "clib") if args.only in f"{j[0]}/{j[1]}"]
+    found = list(objects(args.ow / "bld" / "clib"))
+    aliasgen = args.aliasgen or (args.reference / "aliasgen" if args.reference else None)
+    if aliasgen and aliasgen.exists():
+        found += list(aliases(aliasgen, args.ow, args.out))
+    jobs = [j for j in found if args.only in f"{j[0]}/{j[1]}"]
     with ThreadPoolExecutor(args.j) as pool, open(args.out / "results.jsonl", "w") as log:
         for record in pool.map(lambda j: run(j, args), jobs):
             log.write(json.dumps(record) + "\n")

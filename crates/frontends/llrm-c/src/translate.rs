@@ -1952,6 +1952,17 @@ impl<'a, 't> Body<'a, 't> {
         node: &str,
         type_: &str,
     ) -> R<i64> {
+        // A constant 0 is the null pointer of whatever pointer it is used as: converted
+        // from a near one it would be the data segment's offset 0.
+        if let Some(tree) = self.unit.nodes.get(&hir::handle(node))
+            && tree.call == "CGInteger"
+            && tree.args.first().is_some_and(|value| hir::int(value) == 0)
+        {
+            let ty = self.ty(type_)?;
+            if matches!(self.types.shape(ty), Shape::Pointer(_) | Shape::Huge) {
+                return Ok(self.constant(ty, Number::Int(0)));
+            }
+        }
         let got = self.eval(node)?;
         let value = self.scalar(got)?;
         let from = self.type_of_node(node);
