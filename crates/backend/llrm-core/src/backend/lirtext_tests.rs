@@ -8,7 +8,7 @@ use llrm_lir::registers::RegId;
 use llrm_lir::{Held, Imm, Loc, Operation, Reg, Semantics};
 
 use super::lirtext::{Calls, Mode, Style, lir_stage_with};
-use crate::model::lir::{Insn, LirBlock, LirBody, Phi};
+use crate::model::lir::{Insn, LirBlock, LirBody, Phi, ValueNames};
 use crate::support::hash::IndexMap;
 
 const BB1: i64 = 0x40;
@@ -126,14 +126,14 @@ fn dump(mode: Mode) -> String {
 }
 
 /// Printed `nothing` for an operation selection had removed, hiding that it
-/// still defined `v5` from `v2`.
+/// still defined `t5` from `t2`.
 #[test]
 fn an_elided_operation_still_says_what_it_defines_and_reads() {
     let one = Insn { defines: vec![5], uses: vec![2], widths: vec![(5, 2)], ..insn(3, crate::model::lir::inert()) };
     let block = LirBlock::new(0, vec![Arc::new(one)]);
     let body = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
     let text = lir_stage_with("T", &[("f".to_owned(), body)], &Calls::default(), Mode::Compact, Style::Plain);
-    assert!(text.contains("     #1  v5         = elided      v2\n"), "{text}");
+    assert!(text.contains("     #1  t5         = elided      t2\n"), "{text}");
 }
 
 /// Said `0x0012  jl   ; inserted` with no target, a call with neither callee
@@ -141,25 +141,25 @@ fn an_elided_operation_still_says_what_it_defines_and_reads() {
 #[test]
 fn a_body_says_where_it_goes_what_it_calls_and_nothing_else() {
     let expected = "\
-fn f(v1@ax) -> @eax   ; calls clobber eax ecx
+fn f(t1@ax) -> @eax   ; calls clobber eax ecx
 frame  slot0 [bp-4] 2 B
 
 B0  entry  → B1
-     #2  v2         = mov.i16     1
+     #2  t2         = mov.i16     1
      #3               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
-         #4  v5         = phi         B0: v2, B1: v4
-         #5  v4         = sub.i16     v5, 1
-         #6               cmp.i16     v4, -1
+         #4  t5         = phi         B0: t2, B1: t4
+         #5  t4         = sub.i16     t5, 1
+         #6               cmp.i16     t4, -1
          #7               jne         B1 else B2
 
 B2  ← B1  → exit
-     #8  v7         = load.i16    [slot0]                               ; reload
-     #9  v10@eax    = call        fib(v7@ax)
-    #10  v11@eax    = call        fib(v7@ax)
-    #11  v12@eax    = call        log(v7@ax)                            ; also clobbers esi
-    #12               ret         v12@eax
+     #8  t7         = load.i16    [slot0]                               ; reload
+     #9  t10@eax    = call        fib(t7@ax)
+    #10  t11@eax    = call        fib(t7@ax)
+    #11  t12@eax    = call        log(t7@ax)                            ; also clobbers esi
+    #12               ret         t12@eax
 
 ";
     let text = dump(Mode::Compact);
@@ -267,7 +267,7 @@ fn an_inserted_instruction_changes_one_line_of_the_diff() {
     let added: Vec<_> = new.iter().filter(|line| !old.contains(line)).collect();
     assert!(removed.is_empty(), "{removed:#?}");
     assert_eq!(added.len(), 1, "{added:#?}");
-    assert!(added[0].contains("#13") && added[0].contains("v9"), "{added:#?}");
+    assert!(added[0].contains("#13") && added[0].contains("t9"), "{added:#?}");
 }
 
 fn dump_of(body: &LirBody) -> String {
@@ -316,5 +316,136 @@ fn a_phi_is_numbered_and_keeps_its_number() {
     assert_eq!(phi.label.get(), 4);
     let renamed = Phi { result: 9, ..phi.clone() };
     assert_eq!(renamed.label.get(), 4);
-    assert!(dump_of(&body).contains("     #4  v5         = phi"), "{}", dump_of(&body));
+    assert!(dump_of(&body).contains("     #4  t5         = phi"), "{}", dump_of(&body));
+}
+
+/// Every value printed `v12`, whatever it was. A value MIR named prints as it
+/// is named, a copy of it too, and a name two values share means one.
+#[test]
+fn a_named_value_prints_by_name_and_its_copy_keeps_it() {
+    let mut body = body();
+    body.names = ValueNames::of([(2, "i".to_owned()), (5, "i".to_owned())]);
+    let copy = Insn::new(
+        20,
+        Some((20, 20)),
+        Some(what(Operation::Move, "mov", vec![held(30, 2)], vec![held(2, 2)], None)),
+        vec![],
+        vec![],
+    );
+    let mut insns: Vec<Arc<Insn>> = body.blocks[0].insns.iter().cloned().collect();
+    insns.insert(2, Arc::new(copy));
+    let mut blocks = body.blocks.clone();
+    blocks[0] = blocks[0].with_insns(insns);
+    let body = body.with_blocks(blocks);
+    let text = dump_of(&body);
+    assert!(text.contains("  i          = mov.i16     1"), "{text}");
+    assert!(text.contains("  i          = mov.i16     i"), "the copy keeps the name\n{text}");
+    assert!(text.contains("i.2        = phi         B0: i, B1: t4"), "{text}");
+    assert!(!text.contains("v2") && !text.contains("v30"), "{text}");
+}
+
+/// The arms of a phi are listed by block: built in another order they print as
+/// the same phi, and the line matches the block header's predecessors.
+#[test]
+fn a_phis_arms_are_listed_by_block() {
+    let body = body();
+    body.number_insns();
+    let phi = &body.blocks[1].phis[0];
+    let swapped = Phi { incoming: phi.incoming.iter().rev().cloned().collect(), ..phi.clone() };
+    let mut blocks = body.blocks.clone();
+    let mut reordered = (*blocks[1]).clone();
+    reordered.phis = vec![swapped].into();
+    blocks[1] = reordered.into();
+    let swapped = body.with_blocks(blocks);
+    assert_eq!(dump_of(&swapped), dump_of(&body));
+}
+
+/// After the phis are gone a value is defined again and again; one copy of a
+/// named value kept its name through all of them, so `y6.1` read as written
+/// where it was a new version. A copy keeps the name only while it is defined
+/// once.
+#[test]
+fn a_copy_keeps_a_name_only_while_it_is_defined_once() {
+    let mut body = body();
+    body.names = ValueNames::of([(2, "i".to_owned())]);
+    let copy = |at, to, from| {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(what(Operation::Move, "mov", vec![held(to, 2)], vec![held(from, 2)], None)),
+            vec![],
+            vec![],
+        ))
+    };
+    let mut insns: Vec<Arc<Insn>> = body.blocks[0].insns.iter().cloned().collect();
+    insns.insert(2, copy(20, 30, 2));
+    insns.insert(3, copy(21, 31, 2));
+    insns.insert(4, copy(22, 31, 30));
+    let mut blocks = body.blocks.clone();
+    blocks[0] = blocks[0].with_insns(insns);
+    let text = dump_of(&body.with_blocks(blocks));
+    assert!(text.contains("  i          = mov.i16     i"), "defined once: {text}");
+    assert!(!text.contains("i          = mov.i16     i\n         #5  i"), "{text}");
+    assert_eq!(text.matches("t31").count(), 2, "defined twice: {text}");
+}
+
+/// A name kept from an earlier phase, when the value was a copy defined once,
+/// does not follow it into the phase that defines it a second time.
+#[test]
+fn a_kept_copy_name_is_dropped_when_the_value_is_defined_again() {
+    let mut body = body();
+    body.names = ValueNames::of([(2, "i".to_owned())]);
+    let copy = |at, to, from| {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at)),
+            Some(what(Operation::Move, "mov", vec![held(to, 2)], vec![held(from, 2)], None)),
+            vec![],
+            vec![],
+        ))
+    };
+    let with = |body: &LirBody, extra: Vec<Arc<Insn>>| {
+        let mut insns: Vec<Arc<Insn>> = body.blocks[0].insns.iter().cloned().collect();
+        for (at, one) in extra.into_iter().enumerate() {
+            insns.insert(2 + at, one);
+        }
+        let mut blocks = body.blocks.clone();
+        blocks[0] = blocks[0].with_insns(insns);
+        body.with_blocks(blocks)
+    };
+    let mut once = with(&body, vec![copy(20, 30, 2)]);
+    once.names = once.with_inherited_names();
+    assert!(dump_of(&once).contains("  i          = mov.i16     i"), "{}", dump_of(&once));
+    let twice = with(&once, vec![copy(21, 30, 5)]);
+    let text = dump_of(&twice);
+    assert!(text.contains("  t30        = mov.i16     i") && text.contains("  t30        = mov.i16     t5"), "{text}");
+}
+
+/// Several values merged into one number have the name they all had, else none:
+/// the name of one of them would be another's.
+#[test]
+fn a_merged_web_keeps_a_name_only_if_every_member_has_it() {
+    let names =
+        ValueNames::of([(1, "sum".to_owned()), (2, "sum".to_owned()), (3, "n".to_owned()), (4, "sum".to_owned())]);
+    // `ValueNames::of` renames the second `sum`; read the names it made.
+    let (first, second) = (names.get(1).unwrap().0.to_owned(), names.get(2).unwrap().0.to_owned());
+    assert_ne!(first, second);
+    assert_eq!(names.joined(&[(1, 1)]).get(1).map(|(name, _)| name), Some("sum"), "a number joined to itself");
+    assert_eq!(names.joined(&[(2, 1)]).get(1), None, "two different names");
+    assert_eq!(names.joined(&[(3, 1)]).get(1), None, "two different names");
+    assert_eq!(names.joined(&[(5, 1)]).get(1), None, "one member has no name");
+    assert_eq!(names.joined(&[(5, 1)]).get(5), None);
+    let same = ValueNames::of([(1, "i".to_owned())]);
+    assert_eq!(same.joined(&[(1, 1)]).get(1).map(|(name, _)| name), Some("i"));
+}
+
+/// A number no instruction names is gone, and a pass may give it to a new
+/// value, which must not read as the old one.
+#[test]
+fn a_name_goes_with_its_number() {
+    let names = ValueNames::of([(1, "i".to_owned()), (2, "j".to_owned())]);
+    let present: std::collections::BTreeSet<u32> = [1].into_iter().collect();
+    let kept = names.only(&present);
+    assert_eq!(kept.get(1).map(|(name, _)| name), Some("i"));
+    assert_eq!(kept.get(2), None);
 }

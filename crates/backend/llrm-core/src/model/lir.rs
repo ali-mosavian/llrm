@@ -143,6 +143,93 @@ impl PartialEq for Label {
 
 impl Eq for Label {}
 
+/// The names values carry, by number: what a dump calls a value instead of
+/// `t12`. Shared, so a body made from another costs nothing, and equal whatever
+/// it holds, like `DebugTags`: a name is said, never compared.
+#[derive(Clone, Debug, Default)]
+pub struct ValueNames(Arc<std::collections::BTreeMap<u32, (String, bool)>>);
+
+impl PartialEq for ValueNames {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for ValueNames {}
+
+impl ValueNames {
+    /// `named` values; a name two values share (`lsr.iv` in two loops) is
+    /// kept by the lower number and suffixed `.2`, `.3` on the others, so a
+    /// name means one value.
+    pub fn of(named: impl IntoIterator<Item = (u32, String)>) -> Self {
+        let mut found: std::collections::BTreeMap<u32, (String, bool)> =
+            named.into_iter().map(|(value, name)| (value, (name, false))).collect();
+        let mut uses: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+        for (name, _) in found.values_mut() {
+            let times = uses.entry(name.clone()).or_insert(0);
+            *times += 1;
+            if *times > 1 {
+                *name = format!("{name}.{times}");
+            }
+        }
+        Self(Arc::new(found))
+    }
+
+    /// The names after `joins` (each `(gone, kept)`): a web of merged values
+    /// has the name its members all have, else none. A merge leaves one number
+    /// for what were several values, and the name of one of them would be
+    /// another's.
+    #[must_use]
+    pub fn joined(
+        &self,
+        joins: &[(u32, u32)],
+    ) -> Self {
+        let mut found = (*self.0).clone();
+        let mut members: std::collections::BTreeMap<u32, Vec<u32>> = std::collections::BTreeMap::new();
+        for &(gone, kept) in joins.iter().filter(|(gone, kept)| gone != kept) {
+            members.entry(kept).or_insert_with(|| vec![kept]).push(gone);
+        }
+        for (kept, all) in members {
+            let names: Vec<Option<&str>> =
+                all.iter().map(|one| self.0.get(one).map(|(name, _)| name.as_str())).collect();
+            if names[0].is_none() || names.iter().any(|name| *name != names[0]) {
+                found.remove(&kept);
+            }
+            for gone in all.into_iter().filter(|one| *one != kept) {
+                found.remove(&gone);
+            }
+        }
+        Self(Arc::new(found))
+    }
+
+    /// The names of the values in `present` alone: a number no instruction
+    /// names is gone, and a pass may give it to a new value.
+    #[must_use]
+    pub fn only(
+        &self,
+        present: &BTreeSet<u32>,
+    ) -> Self {
+        let kept = self.0.iter().filter(|(value, _)| present.contains(value)).map(|(k, v)| (*k, v.clone()));
+        Self(Arc::new(kept.collect()))
+    }
+
+    /// The name of `value`, and whether it was given by a copy rather than
+    /// by MIR.
+    pub fn get(
+        &self,
+        value: u32,
+    ) -> Option<(&str, bool)> {
+        self.0.get(&value).map(|(name, inherited)| (name.as_str(), *inherited))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
 /// One machine instruction, as the thing that emits it needs it.
 ///
 /// `call` is a shared owned reference
@@ -1039,6 +1126,8 @@ pub struct LirBody {
     pub facts: crate::analysis::facts::Kept,
     /// The last number a dump gave an instruction (`LirBody::number_insns`).
     pub last_label: Label,
+    /// What values are called in a dump (`ValueNames`).
+    pub names: ValueNames,
 }
 
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
@@ -1198,6 +1287,94 @@ impl LirBody {
         self.last_label.set(next);
     }
 
+    /// Every value number the body names.
+    pub fn value_numbers(&self) -> BTreeSet<u32> {
+        let mut found = BTreeSet::new();
+        for block in &self.blocks {
+            for phi in block.phis.iter() {
+                found.insert(phi.result);
+                found.extend(phi.incoming.iter().map(|(_, value)| *value));
+            }
+            for insn in block.insns.iter() {
+                found.extend(insn.defines.iter().chain(&insn.uses));
+                found.extend(insn.requires.iter().chain(&insn.delivers).map(|(held, _)| held.value));
+                for one in insn.what.iter().flat_map(|what| what.dests.iter().chain(&what.sources)) {
+                    found.extend(llrm_lir::values(one).into_iter().map(|held| held.value));
+                    if let crate::model::ir::Loc::Held(held) = one {
+                        found.insert(held.value);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// How many times each value is defined: once in SSA, any number after
+    /// the phis are gone.
+    pub fn definitions(&self) -> std::collections::BTreeMap<u32, u32> {
+        let mut found = std::collections::BTreeMap::new();
+        for block in &self.blocks {
+            let phis = block.phis.iter().map(|phi| phi.result);
+            let defined = block
+                .insns
+                .iter()
+                .flat_map(
+                    |insn| {
+                        let dests = insn
+                            .what
+                            .iter()
+                            .flat_map(|what| what.dests.iter())
+                            .filter_map(
+                                |one| match one {
+                                    crate::model::ir::Loc::Held(held) => Some(held.value),
+                                    _ => None,
+                                },
+                            );
+                        dests.chain(insn.delivers.iter().map(|(held, _)| held.value))
+                    },
+                );
+            for value in phis.chain(defined) {
+                *found.entry(value).or_insert(0) += 1;
+            }
+        }
+        found
+    }
+
+    /// The names, and those a copy gives: a value defined once by a plain move
+    /// of a named value is that value under another number, and keeps its
+    /// name through the passes that make it (a split, a phi copy). A value
+    /// defined again is another version and keeps none. Changes nothing of
+    /// the body.
+    pub fn with_inherited_names(&self) -> ValueNames {
+        let mut found = (*self.names.0).clone();
+        let defined = self.definitions();
+        let copies: Vec<(u32, u32)> = self
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|insn| insn.what.as_ref())
+            .filter_map(|what| match (what.op, what.dests.as_slice(), what.sources.as_slice()) {
+                (Operation::Move, [crate::model::ir::Loc::Held(to)], [crate::model::ir::Loc::Held(from)]) => {
+                    Some((to.value, from.value))
+                }
+                _ => None,
+            })
+            .filter(|(to, _)| defined.get(to) == Some(&1))
+            .collect();
+        loop {
+            let before = found.len();
+            for (to, from) in &copies {
+                if let (false, Some((name, _))) = (found.contains_key(to), found.get(from).cloned()) {
+                    found.insert(*to, (name, true));
+                }
+            }
+            if found.len() == before {
+                break;
+            }
+        }
+        ValueNames(Arc::new(found))
+    }
+
     /// Constructs Python's five-required-field `LirBody` form.
     #[must_use]
     pub fn new(
@@ -1234,6 +1411,7 @@ impl LirBody {
             arguments_in_cells: Arc::default(),
             facts: Default::default(),
             last_label: Label::default(),
+            names: ValueNames::default(),
         }
     }
 
@@ -1297,6 +1475,7 @@ impl LirBody {
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
             facts: self.facts.clone(),
             last_label: self.last_label.clone(),
+            names: self.names.clone(),
         }
     }
 

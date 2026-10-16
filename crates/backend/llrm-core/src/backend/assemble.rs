@@ -1114,6 +1114,10 @@ fn phased_to(
         }
         if llrm_support::env_set("ISEL_DUMP") {
             use std::io::IsTerminal as _;
+            // Kept, so a copy's name survives the pass that removes the copy; a
+            // number no instruction names is dropped, for a pass to
+            // give to a new value.
+            body.names = body.with_inherited_names().only(&body.value_numbers());
             let mode = if std::env::var("ISEL_DUMP").is_ok_and(|how| how == "verbose") {
                 crate::backend::lirtext::Mode::Verbose
             } else {

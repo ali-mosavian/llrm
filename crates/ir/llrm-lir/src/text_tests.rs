@@ -54,6 +54,7 @@ fn text(one: &Semantics) -> String {
         one,
         &Syntax {
             block: &block,
+            value: &|number| format!("v{number}"),
             frame: &|_| None,
             callee: Some(("fib", false)),
             arguments: &["v12@ax".to_owned()],
@@ -230,9 +231,33 @@ fn a_mask_prints_in_hex_at_its_width_and_other_immediates_in_decimal() {
 #[test]
 fn a_named_slot_replaces_the_frame_displacement() {
     let slot = |addr: &Addr| Some(format!("slot{}", (-addr.disp - 2) / 2));
-    let syntax = Syntax { block: &block, frame: &slot, callee: None, arguments: &[], otherwise: None };
+    let syntax = Syntax {
+        block: &block,
+        value: &|n| format!("v{n}"),
+        frame: &slot,
+        callee: None,
+        arguments: &[],
+        otherwise: None,
+    };
     let load = what(Operation::Move, "mov", vec![value(3, 2)], vec![frame(-4, 2)]);
     assert_eq!(render(&load, &syntax).to_string(), "v3 = load.i16 [slot1]");
     let save = what(Operation::Move, "mov", vec![frame(-2, 2)], vec![value(3, 2)]);
     assert_eq!(render(&save, &syntax).to_string(), "store.i16 [slot0], v3");
+}
+
+/// A ten-byte source of a float operation printed `t2:i80`: x87's extended real
+/// is a float whichever operation reads it.
+#[test]
+fn an_extended_real_operand_is_f80() {
+    let multiply = what(
+        Operation::FloatArith,
+        "fmul",
+        vec![st_loc()],
+        vec![Loc::Held(Held { value: 2, width: 10 }), frame(-8, 8)],
+    );
+    assert_eq!(text(&multiply), "st0 = fmul.f64 v2:f80, [bp-8]");
+}
+
+fn st_loc() -> Loc {
+    Loc::st(0)
 }
