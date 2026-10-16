@@ -12,6 +12,11 @@
 //! solved for a value nobody asks of, and an answer is the one the table
 //! gives: `LLRM_CHECK_REPLAY` asks every value at every block both ways.
 //!
+//! The walk up the blocks stops at the definition and does not start for a
+//! block the definition does not dominate (nothing above holds the value), and
+//! each block it passes keeps the answer, so a value is walked to once from
+//! each block that asks, not once per question.
+//!
 //! A loop's blocks are asked the same way (`LoopView`): the facts the edges and
 //! assumes above a block give, and the loop's operations worked from them, one
 //! value at a block. An answer keeps the boxed values it read, so the next
@@ -43,19 +48,31 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use llrm_mir::dense::IdMap;
 use llrm_mir::module::{InstId, Operand, ValueDef, ValueId};
 use llrm_support::hash::HashMap;
+use llrm_support::hash::SparseIdMap;
 
 use crate::cfg;
 use crate::memory::{Knowns, Unit};
 use crate::ranges::{self, Interval, Intervals, Lookup};
 
+thread_local! {
+    static VIEW_EDGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many edges this thread's loop views have worked out, for a test that a
+/// box search reads the edges inside its loop and not those above it.
+pub fn view_edges() -> usize {
+    VIEW_EDGES.with(std::cell::Cell::get)
+}
+
 /// What the ranger has worked out of one body: the answers it keeps.
 #[derive(Default)]
 struct Memo {
     /// (value, block) -> what holds after the block's own instructions.
-    own: RefCell<IdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
+    own: RefCell<SparseIdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
+    /// (value, block) -> what holds at the start of the block (`inherited`).
+    inherits: RefCell<SparseIdMap<ValueId, HashMap<i64, Option<Rc<Interval>>>>>,
     /// Block -> what the edge from its sole predecessor sets, where it has one.
     edges: RefCell<HashMap<i64, Rc<Option<Intervals>>>>,
     /// Block -> what each of its assumes sets below it, in order.
@@ -63,6 +80,8 @@ struct Memo {
     /// Block -> the predecessor its edge is taken from.
     sole: RefCell<HashMap<i64, Option<i64>>>,
     failed: RefCell<Option<String>>,
+    /// Blocks `inherited` has stepped through, over every question.
+    steps: std::cell::Cell<u64>,
 }
 
 /// The edges' facts of a body as the manager keeps them: nothing is worked out
@@ -103,9 +122,15 @@ impl EdgeFacts {
         EdgeRanger::with(Rc::clone(&self.memo), unit, facts)
     }
 
+    /// The blocks stepped through, over every question asked: the work of
+    /// finding what a block starts from.
+    pub fn steps(&self) -> u64 {
+        self.memo.steps.get()
+    }
+
     /// How many answers are held.
     pub fn answers(&self) -> usize {
-        self.memo.own.borrow().iter().map(|(_, held)| held.len()).sum()
+        self.memo.own.borrow().values().map(|held| held.len()).sum()
     }
 
     /// Every block's facts, as the table gave them: asked of every value at
@@ -146,7 +171,10 @@ impl EdgeFacts {
         let mut kept = |at: i64| *judged.entry(at).or_insert_with(|| keep(at));
         match Rc::get_mut(&mut self.memo) {
             Some(memo) => {
-                for (_, held) in memo.own.get_mut().iter_mut() {
+                for held in memo.own.get_mut().values_mut() {
+                    held.retain(|at, _| kept(*at));
+                }
+                for held in memo.inherits.get_mut().values_mut() {
                     held.retain(|at, _| kept(*at));
                 }
                 memo.edges.get_mut().retain(|at, _| kept(*at));
@@ -159,7 +187,12 @@ impl EdgeFacts {
                 for (value, held) in self.memo.own.borrow().iter() {
                     let stands: HashMap<i64, Option<Rc<Interval>>> =
                         held.iter().filter(|(at, _)| kept(**at)).map(|(at, found)| (*at, found.clone())).collect();
-                    memo.own.borrow_mut().insert(value, stands);
+                    memo.own.borrow_mut().insert(*value, stands);
+                }
+                for (value, held) in self.memo.inherits.borrow().iter() {
+                    let stands: HashMap<i64, Option<Rc<Interval>>> =
+                        held.iter().filter(|(at, _)| kept(**at)).map(|(at, found)| (*at, found.clone())).collect();
+                    memo.inherits.borrow_mut().insert(*value, stands);
                 }
                 *memo.edges.borrow_mut() = self
                     .memo
@@ -263,7 +296,7 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             return found.clone();
         }
         let found = self.worked(value, at).map(Rc::new);
-        self.memo.own.borrow_mut().get_or_insert_with(value, HashMap::default).insert(at, found.clone());
+        self.memo.own.borrow_mut().entry(value).or_default().insert(at, found.clone());
         found
     }
 
@@ -305,8 +338,9 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
 
     /// What `value` holds at the start of `at`: walked up the blocks that start
     /// each from the one above, to the first that says something of it (an edge
-    /// or an assume) or makes it. The blocks between keep no answer: GCC's
-    /// `range_on_entry` finds the nearest block with one the same way.
+    /// or an assume) or makes it, as GCC's `range_on_entry` finds the nearest
+    /// block with one. Every block passed has the same answer and keeps it, so
+    /// a block is passed once for a value.
     fn inherited(
         &self,
         value: ValueId,
@@ -317,8 +351,38 @@ impl<'a, 'u> EdgeRanger<'a, 'u> {
             ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
             ValueDef::Argument(_) => None,
         };
+        // Nothing above a definition holds the value, and a block the
+        // definition does not dominate has not seen it.
+        if made_in.is_some_and(|def| def == at || !self.shape().dominance.dominates(def, at)) {
+            return None;
+        }
+        let mut passed = Vec::new();
+        let found = self.walked(value, at, made_in, &mut passed);
+        if !passed.is_empty() {
+            let mut held = self.memo.inherits.borrow_mut();
+            let held = held.entry(value).or_default();
+            for block in passed {
+                held.insert(block, found.clone());
+            }
+        }
+        found
+    }
+
+    /// `inherited`'s walk from `at`, with the blocks it passed.
+    fn walked(
+        &self,
+        value: ValueId,
+        at: i64,
+        made_in: Option<i64>,
+        passed: &mut Vec<i64>,
+    ) -> Option<Rc<Interval>> {
         let mut here = at;
         loop {
+            if let Some(found) = self.memo.inherits.borrow().get(&value).and_then(|held| held.get(&here)) {
+                return found.clone();
+            }
+            passed.push(here);
+            self.memo.steps.set(self.memo.steps.get() + 1);
             let above = match self.sole(here) {
                 Some(parent) => {
                     let delta = self.edge(parent, here);
@@ -437,7 +501,9 @@ pub struct LoopContext<'a, 'u> {
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
-    made: std::cell::OnceCell<IdMap<ValueId, InstId>>,
+    /// The blocks of the loop.
+    pub body: &'a llrm_mir::forest::Body,
+    made: std::cell::OnceCell<SparseIdMap<ValueId, InstId>>,
 }
 
 impl<'a, 'u> LoopContext<'a, 'u> {
@@ -451,14 +517,15 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
         positions: &'a std::collections::BTreeMap<i64, usize>,
         operations: &'a [InstId],
+        body: &'a llrm_mir::forest::Body,
     ) -> Self {
-        Self { unit, facts, shape, assumed, graph, predecessors, positions, operations, made: Default::default() }
+        Self { unit, facts, shape, assumed, graph, predecessors, positions, operations, body, made: Default::default() }
     }
 
     /// The value each operation makes, found when first asked.
-    fn makers(&self) -> &IdMap<ValueId, InstId> {
+    fn makers(&self) -> &SparseIdMap<ValueId, InstId> {
         self.made.get_or_init(|| {
-            let mut found = IdMap::new();
+            let mut found = SparseIdMap::default();
             for &inst in self.operations {
                 if let Some(result) = self.unit.function.instruction(inst).result {
                     found.insert(result, inst);
@@ -494,12 +561,12 @@ pub struct LoopView<'r, 'a, 'u> {
     boxes: RefCell<Intervals>,
     round: std::cell::Cell<u32>,
     /// The round each box last changed in.
-    changed: RefCell<IdMap<ValueId, u32>>,
+    changed: RefCell<SparseIdMap<ValueId, u32>>,
     /// The boxed values read by the answers being worked out, innermost last.
     reading: RefCell<Vec<Vec<ValueId>>>,
-    closed: RefCell<IdMap<ValueId, Held<Option<Rc<Interval>>>>>,
+    closed: RefCell<SparseIdMap<ValueId, Held<Option<Rc<Interval>>>>>,
     layers: RefCell<HashMap<i64, Held<Rc<Vec<Intervals>>>>>,
-    swept: RefCell<IdMap<ValueId, HashMap<i64, Held<Option<Rc<Interval>>>>>>,
+    swept: RefCell<SparseIdMap<ValueId, HashMap<i64, Held<Option<Rc<Interval>>>>>>,
     failed: RefCell<Option<String>>,
 }
 
@@ -682,14 +749,17 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         made
     }
 
-    /// The edges into blocks with no other way in, on the dominators of `at`,
-    /// in the order of the layout.
+    /// The edges into blocks with no other way in, on the dominators of `at`
+    /// inside the loop, in the order of the layout. The edges above the loop
+    /// narrow only values made outside it, which `known` holds narrowed by them
+    /// already (`bounded_solved` reads each at the loop's dominator), so they
+    /// are not worked out again for each loop.
     fn chain(
         &self,
         at: i64,
     ) -> Vec<(usize, usize, i64)> {
         let mut found = Vec::new();
-        let mut above = Some(at);
+        let mut above = Some(at).filter(|one| self.ctx.body.contains(one));
         while let Some(one) = above {
             if let Some(parents) = self.ctx.predecessors.get(&one).filter(|parents| parents.len() == 1)
                 && let Some(&from) = parents.iter().next().and_then(|parent| self.ctx.positions.get(parent))
@@ -700,7 +770,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
                     }
                 }
             }
-            above = self.ctx.shape.dominance.immediate(one);
+            above = self.ctx.shape.dominance.immediate(one).filter(|up| self.ctx.body.contains(up));
         }
         found.sort_unstable();
         found
@@ -725,6 +795,7 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let ctx = self.ctx;
         let mut deltas: Vec<Intervals> = Vec::new();
         for (from, _, successor) in self.chain(at) {
+            VIEW_EDGES.with(|count| count.set(count.get() + 1));
             let delta = ranges::edge_delta(
                 ctx.unit,
                 cfg::block(ctx.graph[from].at),
@@ -794,7 +865,8 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
         let reads = self.end();
         self.swept
             .borrow_mut()
-            .get_or_insert_with(value, HashMap::default)
+            .entry(value)
+            .or_default()
             .insert(at, Held { answer: found.clone(), round: self.round.get(), reads });
         found
     }
