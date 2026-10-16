@@ -14,11 +14,11 @@ A `.out` is derived from what the program means, never from a compiler's output 
 
 ## How much work: `tools/bench`
 
-Executed instructions and memory operands of each benchmark's kernel, per language and level, counted in a real-mode emulator. Deterministic: no clock, no DOSBox setting. `bench/NAME/expected.toml` is the baseline and the PR gate:
+Executed instructions and memory operands of each benchmark's kernel, per language and level, counted in a real-mode emulator. Deterministic: no clock, no DOSBox setting. The base's counts (the merge-base with `origin/main`, measured by its own tree) are the baseline and the PR gate:
 
     uv run --project tools python tools/bench/bench.py
 
-A count above its baseline fails; one below fails too until `--bless --reason "..."` records it, so the baseline only ratchets and every change carries its reason. See [tools/bench](../../../tools/bench/readme.md) and [bench](../../../bench/readme.md).
+A count above the base's fails unless a waiver (`tools/bench/waivers`) names it; one below passes and is the next base. No file holds the compiler's counts: only the reference compilers' are stored (`bench/NAME/expected.toml`). See [tools/bench](../../../tools/bench/readme.md) and [bench](../../../bench/readme.md).
 
 It is an executed-instruction count. It models no latency, so it ranks code for an in-order machine and says nothing about a Pentium's pairing or a 486's cache.
 

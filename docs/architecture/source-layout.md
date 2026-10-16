@@ -55,7 +55,7 @@ in [readme.md](readme.md).
 | `build.rs` | Builds jwasm, jwlink and the headless DOSBox-X beside the binaries (features `jw`, `dosrun`) |
 | `runtime/` | `qb` (the QB runtime in C), `c` and `nib` (per-target `x86-m16`, `x86-m32` descriptions and startup), `shared` (DOS facts and OS descriptions) |
 | `tests/` | Integration tests (`*.rs`, `test_*.py`), `run` and `check` suites per language, `differential`, `inputs`, `fixtures`, host shims (`hostalloc`, `hostgfx`) |
-| `bench/` | Benchmark programs with `expected.toml` baselines; see `bench/readme.md` |
+| `bench/` | Benchmark programs and the reference compilers' counts (`expected.toml`); see `bench/readme.md` |
 | `examples/` | Nib, BASIC, Pascal, C interop and `dot` example programs |
 | `tools/` | Developer tools: `bench`, `loops`, `e2e`, `dosbatch`, `gate`, `ci`, `callconv`, `torture`, `qcport`, `analysis`, `rfmt-post`, and scripts; see `tools/readme.md` |
 | `toolchain/` | Bootstrap scripts and `owshim`, the patched Open Watcom capture |

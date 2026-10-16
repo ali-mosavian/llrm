@@ -160,6 +160,7 @@ pub mod fpconvert;
 pub mod frame;
 pub mod framefree;
 pub mod globals;
+pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
 

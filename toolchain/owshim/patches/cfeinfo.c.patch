@@ -8,15 +8,18 @@
  #include <ctype.h>
  #include "cgdefs.h"
  #include "cg.h"
-@@ -511,6 +512,12 @@
+@@ -511,6 +512,15 @@
              if( sym.mods & FLAG_EXPORT ) {
                  cclass |= FECALL_GEN_DLL_EXPORT;
              }
 +            /*
-+             * llrm: __attribute__((noinline)); read by the recording shim as the call class's bit.
++             * llrm: __attribute__((noinline)) and ((always_inline)); read by the recording shim as the call class's bit.
 +             */
 +            if( sym.flags & LLRM_SYM_NOINLINE ) {
 +                cclass |= (call_class)LLRM_FECALL_NOINLINE;
++            }
++            if( sym.flags & LLRM_SYM_ALWAYSINLINE ) {
++                cclass |= (call_class)LLRM_FECALL_ALWAYSINLINE;
 +            }
              if( IsInLineFunc( sym_handle ) ) {
                  cclass |= FECALL_GEN_MAKE_CALL_INLINE;

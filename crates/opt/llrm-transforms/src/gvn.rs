@@ -343,7 +343,10 @@ fn propagated(unit: &mut Unit) -> bool {
         let constant = unit.context.int(ty, holds);
         unit.function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
     }
-    !found.is_empty()
+    // The branch's own edge: a phi in an arm that takes the condition from the
+    // branch's block.
+    let on_edges = crate::edges::conditions_decided(unit.context, unit.function);
+    !found.is_empty() || on_edges
 }
 
 thread_local! {
