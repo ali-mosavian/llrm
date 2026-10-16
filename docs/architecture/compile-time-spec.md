@@ -466,3 +466,5 @@ Where d_faces -O2 spends its container cost (callgrind, main 3dc0221a6, dist bui
 | `dominators::postorder` | 16.0 | hash (#1927) |
 
 The mechanism in each PR: ids that are dense are bit sets or arrays indexed by id, an answer that is a list is a slice, and a list that is built is built in a few allocations. Each lands with a test of the allocations it makes and with identical objects.
+
+`Function::successors` and `predecessors` (42 M of a Vec per ask) hold up to four blocks inline now (`BlockList`, -0.5% instructions). The `String::write_str` site (23 M) is the MIR printer: `Fixed` prints the whole body each round as its oscillation guard, which goes with the rounds (R3), not with a container change.
