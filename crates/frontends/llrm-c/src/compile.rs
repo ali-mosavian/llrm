@@ -724,6 +724,41 @@ mod tests {
         listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
     }
 
+    /// A table of function pointers initialised with integer constants
+    /// (`SIG_IGN`, `SIG_DFL`), in a model with far code, had 2-byte entries
+    /// where code pointers are 4: clib's signal table was half its size and
+    /// `signal` answered the wrong previous handler.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_code_pointer_constant_in_data_is_as_wide_as_the_model_says() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("table.c");
+        std::fs::write(
+            &source,
+            "typedef void (*handler)(int);\nhandler table[3] = { (handler)1, (handler)2, (handler)0 };\n",
+        )
+        .unwrap();
+        let recorded = super::recorded(&source, &[], false, &[]).expect("wccq records table.c");
+        let data: Vec<&str> = recorded.lines().filter(|line| line.contains("DGInteger")).collect();
+        assert_eq!(data.len(), 3, "{recorded}");
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records table.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "table", None, &options).unwrap()).unwrap();
+        let bytes: usize = asm
+            .lines()
+            .skip_while(|one| *one != "_table label byte")
+            .skip(1)
+            .take_while(|one| one.starts_with("db "))
+            .map(|one| one[3..].split(',').count())
+            .sum();
+        assert_eq!(bytes, 12, "{asm}");
+    }
+
     /// `-DNAME=value`, `-UNAME` and `-Idir` were refused as unrecognized
     /// arguments, so no source that selects its code by a macro the build
     /// sets (a library's `-D__DOS__`) could be compiled. The front end must

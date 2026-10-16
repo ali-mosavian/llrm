@@ -105,6 +105,12 @@ express (a register convention of a function's own, a parameter on the stack) is
 A number used as a pointer (`NULL`, Open Watcom's `SIG_DFL` = `(handler)2`) is the pointer with those bits, whatever
 pointer it is used as: as a far pointer its segment is 0, not the data segment a near pointer would be given.
 
+## Code pointers in data
+
+A function's address in static data is as wide as a code pointer of the model: 4 bytes where code is far (medium,
+large), 2 where it is near. At two bytes in a far-code model a table of handlers (Open Watcom's `signal` table) was
+half its size.
+
 ## `__attribute__`
 
 gcc's `__attribute__((...))` is read where gcc allows it on a declaration: before the type and after a declarator
