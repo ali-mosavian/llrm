@@ -1163,3 +1163,25 @@ b0:
         assert_eq!(after.matches("load i16, ptr %qq").count() == 2, reloaded, "{both}\n{after}");
     }
 }
+
+/// One register short of room for the reload's provider, crossing the store
+/// spills and the careful numbering is made and priced. Its price cannot be
+/// less than its work, yet it was forecast for spills (a whole-function
+/// forecast; skipping it takes 61 M off the 3,540 M d_faces -O2 compile) though
+/// that work alone is already past what crossing costs. The answer is the same, and
+/// one forecast is made, not two.
+#[test]
+fn a_numbering_dearer_in_work_than_the_crossing_one_is_not_forecast_for_spills() {
+    let text = "@x = global i16 0\n@y = global i16 0\n@z = global i16 0\n\ndefine i16 @f(i16 %n, i16 %p) {\nb0:\n  %a = load i16, ptr @x\n  store i16 %a, ptr @z\n  br label %b1\n\nb1:\n  %i = phi i16 [ 0, %b0 ], [ %i.next, %b2 ]\n  %more = icmp slt i16 %i, %n\n  br i1 %more, label %b2, label %b3\n\nb2:\n  %t1 = mul i16 %i, 3\n  %t2 = mul i16 %i, 5\n  %t3 = add i16 %t1, %t2\n  store i16 %t3, ptr @y\n  %b = load i16, ptr @x\n  store i16 %b, ptr @z\n  %i.next = add i16 %i, 1\n  br label %b1\n\nb3:\n  %q = mul i16 %p, %p\n  %r = add i16 %q, %p\n  ret i16 %r\n}\n";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 5, ..Default::default() }))
+        .unwrap();
+    let (_, forecasts) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(!printed(&module).contains("%b = load i16, ptr @x"), "the reload is served");
+    assert_eq!(forecasts, 1, "{forecasts} whole-function forecasts for the two numberings");
+}
