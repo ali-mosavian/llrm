@@ -93,9 +93,15 @@ pub struct CalleeFacts {
     eligible: BTreeSet<String>,
     written: RefCell<BTreeMap<String, Written>>,
     /// The functions that need the stack aligned at their entry: those holding
-    /// a double or an extended real (their 8-byte slots) and every function
-    /// that calls one of them directly.
+    /// a double or an extended real (their 8-byte slots), those that call code
+    /// the module does not show (an indirect call, a declaration: it may hold
+    /// one), and every function that calls one of them directly. A call
+    /// through a pointer has no name: it is entered aligned too.
     aligned: BTreeSet<String>,
+    /// The functions only their module's direct calls reach.
+    private: BTreeSet<String>,
+    /// Whether a call through a pointer is entered aligned.
+    pointers: bool,
 }
 
 /// Whether some function of `module` has a value of type double or x87
@@ -125,13 +131,29 @@ impl CalleeFacts {
 
     /// The functions of `module` that may take part, and the order to machine
     /// them in: callees before their callers.
-    pub fn of(module: &Module) -> (Self, Vec<GlobalId>) {
+    pub fn of(
+        module: &Module,
+        size: bool,
+    ) -> (Self, Vec<GlobalId>) {
         let graph = CallGraph::new(module);
         let private = direct_only(module);
-        let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
+        // A declaration is code the module does not show: it may hold a double.
+        // Tuned for size, only a double the module shows pays for it.
+        let mut aligned: BTreeSet<GlobalId> = module
+            .functions()
+            .filter(|(_, global, function)| {
+                !size
+                    && function.is_declaration()
+                    && !global.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+            })
+            .map(|(id, ..)| id)
+            .collect();
         for id in graph.bottom_up() {
             let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
-            if holds_doubles(module, function) || graph.callees_of(id).iter().any(|callee| aligned.contains(callee)) {
+            if holds_doubles(module, function)
+                || !size && graph.calls_unknown(id)
+                || graph.callees_of(id).iter().any(|callee| aligned.contains(callee))
+            {
                 aligned.insert(id);
             }
         }
@@ -146,6 +168,8 @@ impl CalleeFacts {
                 eligible,
                 written: RefCell::default(),
                 aligned: aligned.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
+                pointers: !size,
+                private: private.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
             },
             graph.bottom_up(),
         )
@@ -161,7 +185,32 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        if self.aligned.contains(name) { arch.stack_alignment() } else { arch.stack_slot_bytes() }
+        if name.is_empty() && self.pointers || self.aligned.contains(name) {
+            arch.stack_alignment()
+        } else {
+            arch.stack_slot_bytes()
+        }
+    }
+
+    /// The bytes a call of `name` pushes first, above `pushed` bytes of
+    /// arguments, to enter it with the stack aligned. A callee that pops its
+    /// arguments pops the pad too, so only a private one (every caller known)
+    /// is padded.
+    pub fn pad(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+        pushed: i64,
+        callee_pops: bool,
+    ) -> i64 {
+        let align = self.stack_alignment(arch, name);
+        if align <= arch.stack_slot_bytes()
+            || arch.object().bitness != 32
+            || callee_pops && !self.private.contains(name)
+        {
+            return 0;
+        }
+        (align - pushed % align) % align
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -272,7 +321,7 @@ mod tests {
         text: &str,
         name: &str,
     ) -> bool {
-        CalleeFacts::of(&parsed(text)).0.takes_part(name)
+        CalleeFacts::of(&parsed(text), false).0.takes_part(name)
     }
 
     /// An internal function only called directly, in no cycle, takes part; what
@@ -314,7 +363,7 @@ mod tests {
         let module =
             parsed(&format!("define i16 @f(i16 %x) {{\nb0:\n  %r = call i16 @leaf(i16 %x)\n  ret i16 %r\n}}\n{LEAF}"));
         let order: Vec<_> =
-            CalleeFacts::of(&module).1.into_iter().filter_map(|id| module.global(id).name.clone()).collect();
+            CalleeFacts::of(&module, false).1.into_iter().filter_map(|id| module.global(id).name.clone()).collect();
         assert_eq!(order, ["leaf", "f"]);
     }
 
@@ -353,7 +402,7 @@ mod tests {
             enter: false,
             free: false,
         };
-        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        let facts = CalleeFacts::of(&parsed(LEAF), false).0;
         facts.record("leaf", &body, &frame(vec![(RegId::ESI, RegId::SI), (RegId::EDI, RegId::DI)]));
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
         facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]));

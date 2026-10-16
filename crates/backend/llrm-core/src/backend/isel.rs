@@ -385,6 +385,7 @@ fn convention(
     layout: &DataLayout,
     global: GlobalId,
     arch: &dyn llrm_target::Target,
+    callee_facts: &CalleeFacts,
 ) -> Result<Convention, Unselected> {
     let global = module.global(global);
     let Some(function) = global.function() else { return refuse("a variable has no convention") };
@@ -498,7 +499,8 @@ fn convention(
         )
     });
     let popped = if pops {
-        cursor - first
+        let name = global.name.as_deref().unwrap_or_default();
+        cursor - first + callee_facts.pad(arch, name, cursor - first, true)
     } else if result_slot {
         arch.stack_slot_bytes()
     } else {
@@ -891,7 +893,7 @@ pub fn selected_with<'c>(
     };
     let Some(layout) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(layout).map_err(Unselected)?;
-    let convention = convention(module, &layout, global, arch)?;
+    let convention = convention(module, &layout, global, arch, callee_facts)?;
     let unit = Unit::of(module, &layout, function).with_spaces(arch.layout().spaces.roles);
     // The body is not changed while it is selected: what is known of it without
     // memory is found once.
@@ -5549,14 +5551,9 @@ impl Selector<'_, '_, '_> {
         }
         // The stack a multiple of the target's alignment at the call, as the
         // callee assumes it: what the arguments leave short is pushed first,
-        // above them, and the caller removes it with them. A callee that pops
-        // its own arguments cannot be told to leave a pad.
-        let align = self.callee_facts.stack_alignment(self.arch, &name);
-        let pad = if pops || align <= self.arch.stack_slot_bytes() || self.arch.object().bitness != 32 {
-            0
-        } else {
-            (align - pushed % align) % align
-        };
+        // above them, and removed with them (by a callee that pops its own
+        // arguments, too).
+        let pad = self.callee_facts.pad(self.arch, &name, pushed, pops);
         for _ in 0..pad / self.arch.stack_slot_bytes() {
             out.insert(
                 first_push,

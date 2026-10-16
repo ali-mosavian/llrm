@@ -5,11 +5,19 @@
 use std::process::Command;
 
 fn listing(source: &str) -> String {
+    listing_with(source, &["-mabi=sysv", "-O2"])
+}
+
+fn listing_with(
+    source: &str,
+    flags: &[&str],
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        .args(["-m32", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .args(flags)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -59,10 +67,11 @@ fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
     assert!(text.contains("pushd 0"), "{text}");
 }
 
-/// A module that holds no double pays nothing for it: no pad, no rounding.
+/// A module that holds no double and calls nothing it does not show pays
+/// nothing for it: no pad, no rounding.
 #[test]
 fn a_module_of_integers_pays_nothing_for_it() {
-    let text = listing("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n");
+    let text = listing("static int g(int a) { return a * a; }\nint f(int a) { return g(a) + g(a + 1); }\n");
     assert!(!text.contains("pushd 0"), "{text}");
     assert!(!text.contains("sub esp"), "{text}");
 }
@@ -91,4 +100,61 @@ fn the_wide_constants_are_laid_out_before_the_narrow_ones() {
     let wide = text.find("db 09ah,099h,099h,099h,099h,099h,0b9h,03fh").expect("the double 0.1");
     let narrow = text.find("db 000h,000h,000h,03eh").expect("the float 0.125");
     assert!(wide < narrow, "{text}");
+}
+
+/// A private callee that pops its arguments pops the pad too: `decay` took 20
+/// bytes and was entered with the stack 4 off a multiple of 8, so each of its
+/// quad accesses cost 3 clocks (recfloat -O1, 2,500 misaligned operands).
+#[test]
+fn a_callee_that_pops_its_arguments_pops_the_pad() {
+    let text = listing_with(
+        "static double decay(double x, double acc, int n)
+{ return n ? decay(x * 0.5 + 1.0, acc + x, n - 1) : acc; }
+double top(int n) { return decay(100.0, 0.0, n); }",
+        &["-O1"],
+    );
+    assert!(text.contains("ret 24"), "{text}");
+    assert!(text.contains("pushd 0"), "{text}");
+}
+
+/// A function that calls code the module does not show (a declaration, a
+/// pointer) may call one that holds a double, so its frame keeps the call
+/// boundary aligned: a frameless `main` calling through a pointer entered the
+/// kernel 4 mod 8 (recfloat -O1: 2,500 misaligned operands, +10% clocks once
+/// its callee-pop pad was right).
+#[test]
+fn a_function_that_calls_unseen_code_keeps_the_call_boundary_aligned() {
+    for source in
+        ["extern void g(void);\nvoid f(void) { g(); g(); }\n", "void (*volatile p)(void);\nvoid f(void) { p(); }\n"]
+    {
+        let text = listing(source);
+        assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
+    }
+}
+
+/// Unseen code is entered aligned too: a call with one argument word pushes
+/// the pad (nbody -O1 through a pointer: 19,204 misaligned operands).
+#[test]
+fn a_call_of_unseen_code_pads_its_arguments() {
+    for source in
+        ["extern void g(int);\nvoid f(void) { g(1); }\n", "void (*volatile p)(int);\nvoid f(void) { p(1); }\n"]
+    {
+        let text = listing(source);
+        assert!(text.contains("pushd 0"), "{text}");
+    }
+}
+
+/// Tuned for size, unseen code does not force the rounding or the pad: -Os is
+/// gated by bytes (+7 in every object), and only a double the module shows
+/// pays for alignment.
+#[test]
+fn tuned_for_size_unseen_code_costs_no_bytes() {
+    for source in
+        ["extern void g(int);\nvoid f(void) { g(1); g(2); }\n", "void (*volatile p)(int);\nvoid f(void) { p(1); }\n"]
+    {
+        let text = listing_with(source, &["-mabi=sysv", "-Os"]);
+        assert!(!text.contains("pushd 0") && !text.contains("sub esp"), "{text}");
+    }
+    let text = listing_with(MODULE, &["-mabi=sysv", "-Os"]);
+    assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
 }
