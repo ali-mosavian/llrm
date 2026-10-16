@@ -855,6 +855,28 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// `Annotated` worked out every value's stride congruence (`congruences_with`,
+/// a pass over the loops' inductions) in every solve, for the accesses with a
+/// variable index alone to ask: 24.0 M of d_faces' 3,218 M at -O1, 123 solves
+/// for 4,185 asks. A body with none asks none.
+#[test]
+fn test_annotated_asks_no_strides_of_accesses_without_a_variable_index() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %i) {{\nb:\n  %a = alloca [8 x i16]\n  %m = and i16 %i, 7\n  %q = getelementptr i16, ptr %a, i16 %m\n  %w = load i16, ptr %q\n  ret i16 %w\n}}\n\ndefine i16 @g(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let before = crate::alias::congruences_found();
+    let (context, g) = module.function_mut("g").expect("@g");
+    analyses.get::<Annotated>(context, &layout, g);
+    assert_eq!(crate::alias::congruences_found() - before, 0, "strides worked out for no access that asks");
+    let mut analyses = Analyses::new(outer);
+    let (context, f) = module.function_mut("f").expect("@f");
+    analyses.get::<Annotated>(context, &layout, f);
+    assert_eq!(crate::alias::congruences_found() - before, 1, "a variable index asks once");
+}
+
 /// `Summaries` solved where every pointer points for the direct summary, for
 /// the calls' facts and for each summarized call: 4 to 5 value solves a body
 /// state, 11.0% of QCport's -O1 compile with the rest of the family. One a

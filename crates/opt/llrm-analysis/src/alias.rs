@@ -3611,7 +3611,8 @@ pub fn annotated_with(
         }
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
-    let strides = congruences_with(unit, known);
+    // Only an access with a variable index asks: 4,185 lookups in 123 solves.
+    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
@@ -3683,6 +3684,12 @@ pub fn annotated_with(
 
     let mut out = IndexMap::default();
     for (block, inst) in unit.function.walk() {
+        if !matches!(
+            unit.function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
+            continue;
+        }
         if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
             out.insert(inst, tag(&reference, cfg::id(block))?);
         }
