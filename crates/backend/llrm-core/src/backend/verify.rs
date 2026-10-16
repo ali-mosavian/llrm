@@ -54,6 +54,7 @@ use std::fmt;
 
 use llrm_lir::registers::RegId;
 
+use crate::backend::lirtext::{block_name, place as where_is};
 use crate::backend::peephole::is_frame_base;
 use crate::model::ir::{self, Loc, Operation};
 use crate::model::lir::{Block, LirBlock, LirBody};
@@ -116,7 +117,10 @@ fn _flat(body: &LirBody) -> Vec<String> {
                     _ => None,
                 };
                 if let Some(what) = named {
-                    out.push(format!("{:#06x} names {what}, which a target with one address space has not", one.at));
+                    out.push(format!(
+                        "{} names {what}, which a target with one address space has not",
+                        where_is(body, one.at)
+                    ));
                 }
             }
         }
@@ -152,7 +156,7 @@ fn _slots(body: &LirBody) -> Vec<String> {
             for place in what.dests.iter().chain(&what.sources) {
                 let addr = place.address().and_then(|one| one.addr);
                 if let Some(addr) = addr.filter(|addr| addr.space == ir::Space::Frame && addr.slot_home().is_none()) {
-                    out.push(format!("{:#06x}: a frame cell at {} names no slot", one.at, addr.disp));
+                    out.push(format!("{}: a frame cell at bp{:+} names no slot", where_is(body, one.at), addr.disp));
                 }
             }
         }
@@ -165,13 +169,17 @@ fn _blocks(body: &LirBody) -> Vec<String> {
     let mut out = vec![];
     let at_of: BTreeMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     if !at_of.contains_key(&body.entry) {
-        out.push(format!("the entry {:#06x} is not one of this body's blocks", body.entry));
+        out.push(format!("the entry {} is not one of this body's blocks", block_name(body, body.entry)));
         return out;
     }
     for block in &body.blocks {
         for r#where in &block.succ {
             if !at_of.contains_key(r#where) {
-                out.push(format!("block {:#06x} goes to {:#06x}, which is not in this body", block.at, r#where));
+                out.push(format!(
+                    "{} goes to {}, which is not in this body",
+                    block_name(body, block.at),
+                    block_name(body, *r#where)
+                ));
             }
         }
     }
@@ -183,9 +191,12 @@ fn _blocks(body: &LirBody) -> Vec<String> {
             leaves.sort_unstable();
             leaves.dedup();
             if listed != leaves || listed.iter().any(|one| !at_of.contains_key(one)) {
+                let names = |ats: &[i64]| ats.iter().map(|at| block_name(body, *at)).collect::<Vec<_>>().join(" ");
                 out.push(format!(
-                    "block {:#06x}'s table jump lists blocks {listed:x?} and the block goes to {leaves:x?}",
-                    block.at
+                    "{}'s table jump lists blocks {} and the block goes to {}",
+                    block_name(body, block.at),
+                    names(&listed),
+                    names(&leaves)
                 ));
             }
         }
@@ -200,7 +211,7 @@ fn _blocks(body: &LirBody) -> Vec<String> {
     }
     for block in &body.blocks {
         if !seen.contains(&block.at) && !_ownership_only(block) {
-            out.push(format!("block {:#06x} is not reachable from the entry", block.at));
+            out.push(format!("{} is not reachable from the entry", block_name(body, block.at)));
         }
     }
     out
@@ -246,12 +257,16 @@ fn _spans(body: &LirBody) -> Vec<String> {
                 continue;
             };
             if hi < lo {
-                out.push(format!("{:#06x} covers {lo:#x}..{hi:#x}, which runs backwards", one.at));
+                out.push(format!("{} covers {lo:#x}..{hi:#x}, which runs backwards", where_is(body, one.at)));
                 continue;
             }
             for byte in lo..hi {
                 if let Some(owner) = claimed.get(&byte) {
-                    out.push(format!("byte {byte:#06x} is claimed by {owner:#06x} and by {:#06x}", one.at));
+                    out.push(format!(
+                        "byte {byte:#06x} is claimed by {} and by {}",
+                        where_is(body, *owner),
+                        where_is(body, one.at)
+                    ));
                     break;
                 }
                 claimed.insert(byte, one.at);
@@ -277,8 +292,8 @@ fn _wide_addresses(body: &LirBody) -> Vec<String> {
             ] {
                 if register != RegId::None && !framed && regs.width_of(register).is_some_and(|width| width < wide) {
                     out.push(format!(
-                        "{:#06x} addresses through {}, narrower than this target's {wide}-byte addresses",
-                        one.at,
+                        "{} addresses through {}, narrower than this target's {wide}-byte addresses",
+                        where_is(body, one.at),
                         regs.name(register).unwrap_or("?")
                     ));
                 }
@@ -309,12 +324,16 @@ fn _operands(body: &LirBody) -> Vec<String> {
                 }
                 let register = reg.register.index() as u32;
                 if !regs.described(reg.register) {
-                    out.push(format!("{:#06x} names {register}, which is not a register this target has", one.at));
+                    out.push(format!(
+                        "{} names {register}, which is not a register this target has",
+                        where_is(body, one.at)
+                    ));
                 }
                 if regs.width_of(reg.register).is_some_and(|width| width != i64::from(reg.width)) {
                     out.push(format!(
-                        "{:#06x} names {register} at width {}, which is not the width that register is",
-                        one.at, reg.width
+                        "{} names {register} at width {}, which is not the width that register is",
+                        where_is(body, one.at),
+                        reg.width
                     ));
                 }
             }
@@ -348,12 +367,8 @@ fn _values(
         }
     }
     if !in_ssa && body.blocks.iter().any(|block| !block.phis.is_empty()) {
-        let stuck: Vec<String> = body
-            .blocks
-            .iter()
-            .filter(|block| !block.phis.is_empty())
-            .map(|block| format!("{:#06x}", block.at))
-            .collect();
+        let stuck: Vec<String> =
+            body.blocks.iter().filter(|block| !block.phis.is_empty()).map(|block| block_name(body, block.at)).collect();
         out.push(format!("a phi survives at {} after elimination", stuck.join(", ")));
     }
 
@@ -510,7 +525,7 @@ mod tests {
         let work = Insn::new(2, Some((2, 4)), Some(push), vec![], vec![]);
         let body =
             body("dead-work", vec![LirBlock::new(1, vec![]).into(), LirBlock::new(2, vec![Arc::new(work)]).into()]);
-        assert!(verify(&body, false).iter().any(|complaint| complaint.contains("block 0x0002 is not reachable")));
+        assert!(verify(&body, false).iter().any(|complaint| complaint.contains("B1 is not reachable")));
     }
 
     /// A flat target has one address space and no segments: what its
@@ -568,7 +583,9 @@ mod tests {
         };
         let bare = ir::Addr::new(ir::Space::Frame, -4);
         assert!(named(bare, false).is_empty(), "an untagged body is not checked");
-        assert!(named(bare, true).iter().any(|complaint| complaint.contains("a frame cell at -4 names no slot")));
+        assert!(
+            named(bare, true).iter().any(|complaint| complaint.contains("B0.0: a frame cell at bp-4 names no slot"))
+        );
         assert!(named(bare.in_slot(-4), true).is_empty());
         assert!(named(ir::Addr::new(ir::Space::Literal, -4), true).is_empty());
     }

@@ -1,47 +1,52 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:f85d13d5a719fd98e0b3015e01ba396b360d7e7f21afac9f44dcbaf8a390240e -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:2b9f4d03b35f0edd276e1aee38676abc69e63a800ae2414792c8aac95ff7ebf4 -->
 
 # lirtext
 
-LIR as text, one stage at a time: what `ISEL_DUMP` prints after each
-machine phase.
+LIR as text: the one printer of a body, used by every dump, check message
+and test. `ISEL_DUMP=1` prints it after each machine phase;
+`ISEL_DUMP=verbose` adds what the compact form leaves out.
 
 ## How it works
-`lir_stage` prints a `=== stage` line, then for each body its name and
-instruction count, each block by address, its phis (`v3 := phi ...`) and
-its instructions as `dests := name sources`, with `; notes` for what a phase
-attached (`inserted`, `parallel-copy N`, `spill reload`, `frame adjust`,
-`requires`, `delivers`, `clobbers`).
-Addresses are hex with at least four digits, and the format is short enough
-to diff between stages.
+Per body: a banner, a `fn` line (the registers its arguments arrive in, the
+registers it returns in), a `frame` line naming the frame's slots, then
+each block. A block is a header (`B1  ← B0 B2  → B2 B3  loop  ×8.0`) and
+its instructions, set in fixed columns: its position in the block, the
+destination, `=`, the opcode with its width, the operands, then `; notes`.
+Blocks are named by position and every target says its block, so no address
+appears: two dumps of the same body differ only where the instructions do.
+A block is indented four spaces for each loop around it, so a loop is a
+shape on the page; its header says `loop` and, for an innermost loop whose
+trip count is known, the count. Operand and instruction text is
+`llrm_lir::text`.
 
-```text
-=== PhiElimination
-  f: 2 instructions
-    block 0x0000
-      0x0004  v5 := mov v2  ; inserted; parallel-copy 1
-```
+A note is printed only where it says something: `spill` and `reload` for
+frame traffic, `copy` for a phi's parallel copy, `remat`, `frame` for a
+frame adjustment, `N% taken` on a branch whose odds isel stated, `elided`
+for an operation selection removed that still carries a value (`v5 =
+elided v2`). A call lists its clobbers only as a difference from the
+body's most common set, which the `fn` line states. Verbose adds what an
+instruction needs and gives in registers, the source bytes it covers, its
+line, and each block's live-in and live-out values.
 
 ## Example
-The first block of `main` after phi elimination:
+The loop of a Fibonacci function, after the allocator:
 
 ```lir
-=== PhiElimination
-  main: 18 instructions
-    block 0x0000
-      0x0001  [[bp-0x4]] := mov 0x30000  ; inserted
-      ; ...
-      0x0002  v2 := mov v3  ; inserted
-      0x0003  v1 := mov -7  ; inserted
-      0x0003  v5 := mov v1  ; inserted; parallel-copy 1
-      0x0003  jmp   ; inserted
+═══ _f@3 · RegAlloc · m16 ═══════════════════════════════════════════════════════
+fn _f@3(v5@ax) -> @eax
+
+B0  entry  → B1                                                    ×1.0
+  0  bx      = mov.i16     1
+  1  cx      = mov.i16     0
+  2           jmp         B1
+
+    B1  ← B0 B3  → B3 B2  loop                                     ×32.0
+      3  ax      = sub.i16     ax, 1
+      4           cmp.i16      ax, -1
+      5           jne         B3 else B2                        ; 97% taken
 ```
 
-The `v5 := mov v1` is the copy that replaced the loop header's phi.
-
-From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
-called from `main`) at `-m16 -O2`.
-
 ## Used by
-`assemble` after each machine phase when `ISEL_DUMP` is set; the register
-allocator's tests print input and result with it.
+`assemble` after each machine phase when `ISEL_DUMP` is set, the checks of
+`verify` to name a place, and the allocator's tests.

@@ -170,9 +170,9 @@ impl ControlFlow<'_> {
             for block in &placed.blocks {
                 llrm_support::debug!(
                     "blocks",
-                    "{} {:#06x} freq {} insns {}",
+                    "{} {} freq {} insns {}",
                     placed.name,
-                    block.at,
+                    crate::backend::lirtext::block_name(&placed, block.at),
                     frequency.block(block.at),
                     block.insns.len()
                 );

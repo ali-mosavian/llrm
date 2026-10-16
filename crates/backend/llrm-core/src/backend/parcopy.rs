@@ -86,6 +86,7 @@ use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::cpu::Profile;
 use crate::backend::lanes::Lanes;
+use crate::backend::lirtext::insn_text;
 use crate::backend::peephole::{_lanes, _register_effects, id};
 use crate::backend::{liveness, masm, regthrash, target};
 use crate::model::ir::{self, Loc, Mem, Operation, Reg, Semantics};
@@ -462,8 +463,8 @@ fn _rotated(
         let one = writes.get(&place).copied().filter(|one| !cycle.iter().any(|each| **each == ***one));
         let Some(one) = one else {
             return Err(Malformed(format!(
-                "{:#06x} is in a copy group that is not a permutation of its places",
-                start.at
+                "`{}` is in a copy group that is not a permutation of its places",
+                insn_text(start)
             )));
         };
         cycle.push(Arc::clone(one));
@@ -548,7 +549,7 @@ fn _rotated(
             target::pushed_width(&source(one)).is_some() && target::popped_width(regs, &dest(one)).is_some()
         })
         .ok_or_else(|| {
-            Malformed(format!("{:#06x} is in a copy cycle no move of which the stack can carry", start.at))
+            Malformed(format!("`{}` is in a copy cycle no move of which the stack can carry", insn_text(start)))
         })?;
     let count = cycle.len();
     cycle.rotate_left((closing + 1) % count);
@@ -604,10 +605,10 @@ fn _place(
 ) -> Result<String, Malformed> {
     let what = one.what.as_ref();
     if what.is_none_or(|what| what.op != Operation::Move || what.dests.len() != 1 || what.sources.len() != 1) {
-        return Err(Malformed(format!("{:#06x} is in a copy group and is not a move", one.at)));
+        return Err(Malformed(format!("`{}` is in a copy group and is not a move", insn_text(one))));
     }
     if where_.len() != 1 {
-        return Err(Malformed(format!("{:#06x} names {} places on one side", one.at, where_.len())));
+        return Err(Malformed(format!("`{}` names {} places on one side", insn_text(one), where_.len())));
     }
     _named(&where_[0])
 }
