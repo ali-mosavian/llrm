@@ -1093,7 +1093,7 @@ impl Analysis for PointerValues {
     type Result = Result<alias::PointValues, String>;
     const NAME: &'static str = "pointer-values";
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: models_wide, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
