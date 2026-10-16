@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -294,7 +294,9 @@ def test_a_python_test_file_that_needs_a_missing_probe_is_left_out_of_pytest_by_
     p = gate.plan(["tools/linkrecipe.py"])
     cmds = gate.commands(p, gate.load(), gate.packages(), frozenset(), tuple(gate.python_tests_unusable(missing)))
     assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in cmds["pytest"] and "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling_gate.py" in cmds["pytest"]
-    assert "test_scaling" not in gate.commands(p, gate.load(), gate.packages())["pytest"]
+    whole = gate.commands(p, gate.load(), gate.packages())
+    assert "--ignore=crates/target/llrm-x86-m32/vsgcc/test_scaling.py" in whole["pytest"], "the perf files are the pytest-perf step's"
+    assert "vsgcc/test_scaling.py" in whole["pytest-perf"] and "vsgcc/test_scaling_gate.py" in whole["pytest-perf"] and "--ignore" not in whole["pytest-perf"]
 
 
 def test_a_new_test_file_declares_its_own_need_and_is_ignored_where_it_is_missing(tmp_path):
@@ -634,11 +636,11 @@ def test_the_build_makes_one_set_of_crates_for_the_binaries_and_the_tests():
 def test_a_diff_without_compiler_source_plans_only_the_steps_that_cover_its_files():
     """The user's rule: a PR that changes nothing under crates/ or in the Cargo files does not run the compiler gate, it merges on narrow
     tests of what it changed. A gate.py edit planned the full tier (every step, 4,340 CPU-s); its own tests are the pytest step."""
-    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "facts"]
+    assert gate.plan(["tools/gate/gate.py", "tools/gate/test_gate.py"]).steps == ["pytest", "pytest-perf", "facts"]
     assert gate.plan(["tools/measure.py"]).steps[-1] == "measure" and "lib" not in gate.plan(["tools/measure.py"]).steps
     narrow = gate.plan(["tests/target_facts.rs"])
-    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "integration", "fmt"], narrow
-    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "facts", "torture"]
+    assert narrow.tier == "fast" and narrow.steps == ["build", "pytest", "pytest-perf", "integration", "fmt"], narrow
+    assert gate.plan(["tools/torture/torture.py"]).steps == ["build", "pytest", "pytest-perf", "facts", "torture"]
     assert "build" not in gate.plan(["tools/gate/tiers.toml"]).steps
     # compiler source, or a Cargo file anywhere, takes the tiers as before
     assert gate.plan(["crates/ir/llrm-mir/src/lib.rs", "tools/gate/gate.py"]).tier == "full"
@@ -1174,7 +1176,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
-    assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
+    assert {"qcport", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
 
 
@@ -1191,7 +1193,7 @@ def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_tha
 
 def test_a_group_may_point_a_variable_somewhere_else():
     """test_identical read the qb-quake variant as QCport (10 modules of 65) when QCPORT was its src: dfaces has a variable of its own."""
-    assert gate.private_env("/p", "reference")["QCPORT"] == "/p/rm-quake/src"
+    assert gate.private_env("/p", "qcport")["QCPORT"] == "/p/rm-quake/src"
     assert gate.private_env("/p", "python")["QCPORT"] == "/p/rm-quake/src"
     assert gate.private_env("/p", "python")["DFACES_SRC"] == "/p/qbq-llrm/src"
     assert "QCPORT" not in gate.private_env("/p", "unit")
@@ -1296,6 +1298,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
     assert "needs: [plan, static, build, gate, bench-merge]" in workflow
+    assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
 def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slice():
@@ -1312,3 +1315,20 @@ def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
     p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
     assert "measure" in p.steps and "cost" in gate.private_groups(p)
     assert gate.private_env("/p", "cost")["QCPORT"] == "/p/rm-quake/src"
+
+
+def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
+    """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
+    cfg = gate.load()
+    assert cfg["groups"]["perf"] == ["pytest-perf"] and "pytest-perf" not in cfg["groups"]["python"]
+    assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
+    assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
+
+
+def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():
+    """The hosted planner has no counters: pytest-perf was skipped in the plan, so no `perf` group was ever made and the scaling tests ran nowhere."""
+    missing = {"perf": "no counters here"}
+    p = gate.plan(["tools/linkrecipe.py"])
+    assert "pytest-perf" in gate.skipped_steps(p.steps, missing, p.languages)
+    assert "pytest-perf" not in gate.skipped_steps(p.steps, gate.assumed(missing, {"GATE_PLAN_ASSUME": "perf"}), p.languages)
+    assert "GATE_PLAN_ASSUME=perf" in (gate.ROOT / ".github/workflows/ci.yml").read_text()
