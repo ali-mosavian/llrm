@@ -1,18 +1,6 @@
 reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
 blessed = "2026-10-15"
 
-[bas.O2]
-code_bytes = 1776
-data_bytes = 4677
-bss_bytes = 0
-kernel_ms = 1261.3369
-
-[bas.Os]
-code_bytes = 1712
-data_bytes = 4677
-bss_bytes = 0
-kernel_ms = 1263.1086
-
 [bcc.O2]
 code_bytes = 1190
 data_bytes = 15

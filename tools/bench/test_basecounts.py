@@ -25,8 +25,8 @@ def test_a_row_worse_than_the_bases_fails_and_a_better_one_passes_and_nothing_is
 
 
 def test_rows_the_base_lacks_and_the_reference_compilers_and_failed_rows_are_not_judged():
-    base = {FIB: row(100), ("fib", "bas", "O2"): row(10), ("sieve", "c", "O2"): {"error": "x"}}
-    got = {FIB: row(100), ("new", "c", "O2"): row(5), ("fib", "bas", "O2"): row(99), ("sieve", "c", "O2"): row(7)}
+    base = {FIB: row(100), ("fib", "ow", "O2"): row(10), ("sieve", "c", "O2"): {"error": "x"}}
+    got = {FIB: row(100), ("new", "c", "O2"): row(5), ("fib", "ow", "O2"): row(99), ("sieve", "c", "O2"): row(7)}
     assert bc.judge(got, base, []) == ([], [], [])
 
 
@@ -41,6 +41,14 @@ def test_a_waiver_excuses_the_one_row_counter_and_count_it_names_and_goes_stale_
     assert stale == ["x.toml: fib bq32 -O2 instructions to 120"], "a waiver that excused nothing is stale"
 
 
+def test_a_bas_row_that_gets_worse_fails_and_a_waiver_excuses_it():
+    """llrm-qb's BASIC is ours: its rows were judged against stored tables --bless no longer writes, so a deliberate change could be neither waived nor blessed."""
+    key = ("fib", "bas", "O2")
+    waiver = [{"label": "fib bas -O2", "counter": "instructions", "to": 120, "reason": "trade", "file": "x.toml"}]
+    assert bc.judge({key: row(120)}, {key: row(100)}, [])[0] == [("fib bas -O2", "instructions", 100, 120)]
+    assert bc.judge({key: row(120)}, {key: row(100)}, waiver)[0] == []
+
+
 def test_waivers_are_read_one_file_each(tmp_path):
     (tmp_path / bc.WAIVERS).mkdir(parents=True)
     (tmp_path / bc.WAIVERS / "a.toml").write_text('reason = "r"\n[[row]]\nlabel = "fib c -O2"\ncounter = "instructions"\nto = 7\n')
@@ -53,13 +61,13 @@ def test_the_base_is_measured_once_per_tree_and_a_missing_level_is_measured_agai
 
     def measure_with(directory, opts):
         made.append((directory, tuple(opts)))
-        rows = {("fib", "c", opt): row(1) for opt in opts} | {("fib", "bas", "O2"): row(9)}
+        rows = {("fib", "c", opt): row(1) for opt in opts} | {("fib", "ow", "O2"): row(9)}
         return rows, {"fib": "h1"}
 
     args = dict(tree_of=lambda sha: "t" + sha, build=lambda sha: Path("/b") / sha, measure_with=measure_with, cache=tmp_path)
     rows, hashes = bc.base_counts("s1", ["O2"], **args)
     assert bc.base_counts("s1", ["O2"], **args) == (rows, hashes) and made == [(Path("/b/s1"), ("O2",))]
-    assert ("fib", "bas", "O2") not in rows, "the reference compilers' rows are not the base's"
+    assert ("fib", "ow", "O2") not in rows, "the reference compilers' rows are not the base's"
     assert hashes == {"fib": "h1"}
     bc.base_counts("s1", ["O2", "Os"], **args)
     assert made[-1] == (Path("/b/s1"), ("O2", "Os")) and len(made) == 2
@@ -171,7 +179,7 @@ def test_a_commit_that_changes_only_docs_has_its_parents_key_and_one_that_change
 
 
 def test_the_counts_a_main_push_records_are_the_next_pull_requests_base_without_measuring_it(tmp_path):
-    rows = {"fib/c/O2": {"instructions": 7}, "fib/bas/O2": {"instructions": 9}}
+    rows = {"fib/c/O2": {"instructions": 7}, "fib/ow/O2": {"instructions": 9}}
     cache = tmp_path / "cache"
     bc.record(bc.rows_of(rows), cache, "k1", bc.ROOT)
 
