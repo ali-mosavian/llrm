@@ -95,7 +95,8 @@ pub struct CalleeFacts {
     /// The functions that need the stack aligned at their entry: those holding
     /// a double or an extended real (their 8-byte slots), those that call code
     /// the module does not show (an indirect call, a declaration: it may hold
-    /// one), and every function that calls one of them directly.
+    /// one), and every function that calls one of them directly. A call
+    /// through a pointer has no name: it is entered aligned too.
     aligned: BTreeSet<String>,
     /// The functions only their module's direct calls reach.
     private: BTreeSet<String>,
@@ -131,16 +132,18 @@ impl CalleeFacts {
     pub fn of(module: &Module) -> (Self, Vec<GlobalId>) {
         let graph = CallGraph::new(module);
         let private = direct_only(module);
-        let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
+        // A declaration is code the module does not show: it may hold a double.
+        let mut aligned: BTreeSet<GlobalId> = module
+            .functions()
+            .filter(|(_, global, function)| {
+                function.is_declaration() && !global.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+            })
+            .map(|(id, ..)| id)
+            .collect();
         for id in graph.bottom_up() {
             let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
-            let unknown = graph.calls_unknown(id)
-                || graph.callees_of(id).iter().any(|&callee| {
-                    module.global(callee).function().is_some_and(|one| one.is_declaration())
-                        && !module.global(callee).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
-                });
             if holds_doubles(module, function)
-                || unknown
+                || graph.calls_unknown(id)
                 || graph.callees_of(id).iter().any(|callee| aligned.contains(callee))
             {
                 aligned.insert(id);
@@ -173,7 +176,7 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        if self.aligned.contains(name) { arch.stack_alignment() } else { arch.stack_slot_bytes() }
+        if name.is_empty() || self.aligned.contains(name) { arch.stack_alignment() } else { arch.stack_slot_bytes() }
     }
 
     /// The bytes a call of `name` pushes first, above `pushed` bytes of

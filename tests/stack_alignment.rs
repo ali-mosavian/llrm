@@ -131,3 +131,15 @@ fn a_function_that_calls_unseen_code_keeps_the_call_boundary_aligned() {
         assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
     }
 }
+
+/// Unseen code is entered aligned too: a call with one argument word pushes
+/// the pad (nbody -O1 through a pointer: 19,204 misaligned operands).
+#[test]
+fn a_call_of_unseen_code_pads_its_arguments() {
+    for source in
+        ["extern void g(int);\nvoid f(void) { g(1); }\n", "void (*volatile p)(int);\nvoid f(void) { p(1); }\n"]
+    {
+        let text = listing(source);
+        assert!(text.contains("pushd 0"), "{text}");
+    }
+}
