@@ -17,6 +17,10 @@
 //! A header holds a value only while the loop's reloads that restore it, on any
 //! of its edges, run less than half as often as the reloads at its first uses.
 //!
+//! What lives through an instruction must fit the registers it keeps: not those
+//! it clobbers, and for a value wider than the registers' low half not those
+//! whose high half it clobbers (`clobbers_high`) either.
+//!
 //! Within a block, Belady's rule decides eviction. Next-use distance is counted
 //! across blocks, with a large constant for a use beyond a loop exit. When an
 //! instruction needs more registers than there are, the held value with the
@@ -616,6 +620,16 @@ enum File {
     Selector,
 }
 
+/// How the values that live through an instruction fit what it leaves.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Survival {
+    Fits,
+    /// More than the registers it keeps.
+    Over,
+    /// More wide ones than the registers it keeps whole.
+    OverWide,
+}
+
 /// The registers one file's values may sit in: all of them, or one class's.
 struct Machine<'a> {
     confined: &'a Classes,
@@ -693,6 +707,31 @@ impl<'a> Machine<'a> {
     /// only for the `acting` values, which an instruction needs in it just
     /// now (a value waiting in another register costs a copy to act, not a
     /// place).
+    /// Whether `held`, living through an instruction, sits in the registers it
+    /// leaves: those it does not clobber, and for a value wider than the
+    /// registers' low half those whose high half it keeps too (`wide`).
+    fn survives(
+        &self,
+        held: &BTreeSet<u32>,
+        clobbered: &BTreeSet<RegId>,
+        high: &BTreeSet<RegId>,
+        wide: &BTreeSet<u32>,
+    ) -> Survival {
+        if held.len() > self.general.difference(clobbered).count() {
+            return Survival::Over;
+        }
+        let whole = self.general.iter().filter(|register| !clobbered.contains(*register) && !high.contains(*register));
+        if held.iter().filter(|value| wide.contains(*value)).count() > whole.count() {
+            return Survival::OverWide;
+        }
+        let classed = self.pools.iter().all(|class| {
+            let left = class.difference(clobbered).count();
+            let counted = |value: &u32| self.class(*value).is_some_and(|mine| mine.len() == 1 && mine.is_subset(class));
+            held.iter().filter(|value| counted(value)).count() <= left
+        });
+        if classed { Survival::Fits } else { Survival::Over }
+    }
+
     fn fits(
         &self,
         held: &BTreeSet<u32>,
@@ -1530,6 +1569,13 @@ fn simulated(
 ) -> Simulated {
     let k = machine.general.len();
     let wanted = |value: u32| machine.registered(value) && !skip.contains(&value);
+    // Values wider than the registers' low half: a call that destroys only a
+    // register's high half still destroys them.
+    let wide: BTreeSet<u32> = crate::backend::allocate::_widest(body)
+        .into_iter()
+        .filter(|(_, bytes)| *bytes > body.bits / 8)
+        .map(|(value, _)| value)
+        .collect();
     let places = Places::of(body, flow);
     let shared = shared_slots(body, &places, flow, remakes, &wanted, memory);
     let mut edits: IndexMap<i64, Arc<Edits>> = IndexMap::default();
@@ -1697,6 +1743,38 @@ fn simulated(
                         .copied();
                     let Some(victim) = victim else { break };
                     across.remove(&victim);
+                    held.remove(&victim);
+                    leaving.push(victim);
+                }
+            }
+            // What lives through the instruction sits in a register it does
+            // not destroy, whatever registers its own operands take.
+            let destroyed = |registers: &BTreeSet<RegId>| -> BTreeSet<RegId> {
+                registers
+                    .iter()
+                    .map(|register| _whole(*register))
+                    .filter(|register| machine.general.contains(register))
+                    .collect()
+            };
+            let (clobbered, high) = (destroyed(&one.clobbers), destroyed(&one.clobbers_high));
+            if !clobbered.is_empty() || !high.is_empty() {
+                loop {
+                    let survivors: BTreeSet<u32> = held
+                        .iter()
+                        .copied()
+                        .filter(|value| flow.live_after(*at, position, *value) && !made.contains(value))
+                        .collect();
+                    let over = machine.survives(&survivors, &clobbered, &high, &wide);
+                    if over == Survival::Fits {
+                        break;
+                    }
+                    let keep: BTreeSet<u32> = used.union(&made).copied().collect();
+                    let victim = survivors
+                        .iter()
+                        .filter(|value| !keep.contains(*value) && (over == Survival::Over || wide.contains(*value)))
+                        .max_by_key(|value| (!hot(value), flow.next_use(*at, position, **value), **value))
+                        .copied();
+                    let Some(victim) = victim else { break };
                     held.remove(&victim);
                     leaving.push(victim);
                 }
