@@ -1941,6 +1941,32 @@ pub fn bounded_solved(
                 Rc::new(found)
             }))
         };
+        let narrow_by = |edges: &[(usize, usize, i64)], scoped: &mut Intervals| -> Result<(), String> {
+            for &(from, _, successor) in edges {
+                if let Some(delta) =
+                    edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), scoped, Some(&facts))?
+                {
+                    scoped.extend(delta);
+                }
+            }
+            Ok(())
+        };
+        let outer_narrowing = |edges: &[(usize, usize, i64)], known: &Intervals| -> Result<Rc<Intervals>, String> {
+            if let Some(found) = outer_delta.borrow().as_ref() {
+                return Ok(Rc::clone(found));
+            }
+            let mut narrowed = known.clone();
+            narrow_by(edges, &mut narrowed)?;
+            let mut delta = Intervals::default();
+            for (value, interval) in narrowed.iter() {
+                if known.get(&value) != Some(interval) {
+                    delta.insert(value, interval.clone());
+                }
+            }
+            let delta = Rc::new(delta);
+            *outer_delta.borrow_mut() = Some(Rc::clone(&delta));
+            Ok(delta)
+        };
         let scope_at = |at: i64, known: &Intervals, id: u64, every_block: bool| -> Result<Rc<Intervals>, String> {
             let mut scoped = known.clone();
             // The edges into a block with no other way in, from a block that
@@ -1976,32 +2002,6 @@ pub fn bounded_solved(
                 let outer = every.iter().take_while(|(from, _, _)| !loop_.body.contains(&graph[*from].at)).count();
                 let rest = every.split_off(outer);
                 (Rc::new(every), rest)
-            };
-            let narrow_by = |edges: &[(usize, usize, i64)], scoped: &mut Intervals| -> Result<(), String> {
-                for &(from, _, successor) in edges {
-                    if let Some(delta) =
-                        edge_delta(unit, cfg::block(graph[from].at), cfg::block(successor), scoped, Some(&facts))?
-                    {
-                        scoped.extend(delta);
-                    }
-                }
-                Ok(())
-            };
-            let outer_narrowing = |edges: &[(usize, usize, i64)], known: &Intervals| -> Result<Rc<Intervals>, String> {
-                if let Some(found) = outer_delta.borrow().as_ref() {
-                    return Ok(Rc::clone(found));
-                }
-                let mut narrowed = known.clone();
-                narrow_by(edges, &mut narrowed)?;
-                let mut delta = Intervals::default();
-                for (value, interval) in narrowed.iter() {
-                    if known.get(&value) != Some(interval) {
-                        delta.insert(value, interval.clone());
-                    }
-                }
-                let delta = Rc::new(delta);
-                *outer_delta.borrow_mut() = Some(Rc::clone(&delta));
-                Ok(delta)
             };
             // A prefix of the edges inside the loop is kept where the blocks it
             // leads to are more than the passes over the state it
@@ -2182,7 +2182,14 @@ pub fn bounded_solved(
             &operations,
             &loop_.body,
         );
-        let boxes = inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?;
+        // What the edges above the loop narrow, which a box search does not
+        // walk for each block: `known` holds it narrowed once.
+        let narrowed = {
+            let mut narrowed = known.clone();
+            narrowed.extend(outer_narrowing(&outer_chain(), &known)?.iter().map(|(v, i)| (v, i.clone())));
+            narrowed
+        };
+        let boxes = inductive_boxes(unit, loop_, facts, &narrowed, &candidates, &closed, &scope_at, &context)?;
         if !counted && boxes.is_empty() {
             continue;
         }
@@ -2250,6 +2257,24 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn edge_deltas() -> usize {
     EDGE_DELTAS.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static REPLAYING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `body` with the box search checking its loop view against the table
+/// (`LLRM_CHECK_REPLAY`), on this thread.
+#[cfg(test)]
+pub(crate) fn replayed<R>(body: impl FnOnce() -> R) -> R {
+    REPLAYING.with(|on| on.set(true));
+    let found = body();
+    REPLAYING.with(|on| on.set(false));
+    found
+}
+
+fn replaying() -> bool {
+    check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
 }
 
 fn check_scopes() -> bool {
@@ -2367,7 +2392,7 @@ fn inductive_boxes(
                 let Some(delta) = &scopes[latch] else { continue };
                 let scope = crate::ranger::Leaving { delta, at: view.swept_at(*latch) };
                 let asked = _operand(unit, *value, &scope, facts).filter(|interval| interval.width == *width);
-                if check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") {
+                if replaying() {
                     let mut assumed = known.clone();
                     assumed.extend(round_boxes.iter().map(|(phi, interval)| (phi, interval.clone())));
                     let assumed = closed(assumed);
