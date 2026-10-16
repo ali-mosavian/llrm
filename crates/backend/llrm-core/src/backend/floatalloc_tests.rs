@@ -1793,3 +1793,147 @@ fn test_a_loop_that_rounds_between_conversions_is_not_entered_truncating() {
         assert!(!names.contains(&"fldcw".to_owned()), "{result:?}");
     }
 }
+
+fn names_in_order(result: &LirBody) -> Vec<String> {
+    result.insns().iter().map(|one| name(one).to_owned()).filter(|name| name.starts_with('f')).collect()
+}
+
+/// d_faces ifloor: `(long)x` and then `x` again was `fld x; fld st(0); fistp
+/// m`: a copy and a popping store. The 387 stores a word or a dword without
+/// popping (`fist`; here its truncating pseudo `fistt`), as gcc's reg-stack and
+/// LLVM's X86FloatingPoint do.
+#[test]
+fn test_a_conversion_store_of_a_value_read_again_does_not_copy_it() {
+    let cells = _cells([-4, -8, -12], 4);
+    let body = _body(vec![
+        _load(1, &cells[0]),
+        sem(Operation::FloatStore, "fisttp", vec![m(&cells[1])], vec![fl(1)]),
+        _store(&cells[2], 1),
+    ]);
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-12)));
+    assert_eq!(names, ["fnstcw", "fld", "fldcw", "fist", "fldcw", "fstp"], "{names:?}");
+}
+
+/// A quadword has only the popping form: a copy is made.
+#[test]
+fn test_a_quadword_conversion_store_of_a_live_value_keeps_its_copy() {
+    let (x, wide, out) = (frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8));
+    let body =
+        _body(vec![_load(1, &x), sem(Operation::FloatStore, "fisttp", vec![m(&wide)], vec![fl(1)]), _store(&out, 1)]);
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-24)));
+    assert_eq!(names, ["fnstcw", "fld", "fld", "fldcw", "fistp", "fldcw", "fstp"], "{names:?}");
+}
+
+fn compare_body(
+    left_lives: bool,
+    right_lives: bool,
+) -> LirBody {
+    let (a, b, store_a, store_b) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4), frame_cell(-16, 4));
+    // negated loads: a plain load beside its one reader is fused into the
+    // compare as a memory operand
+    let mut body = _body(vec![_load(3, &a), fchs(1, 3), _load(4, &b), fchs(2, 4)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    let mut at = 24;
+    for (lives, value, cell) in [(left_lives, 1, &store_a), (right_lives, 2, &store_b)] {
+        if lives {
+            insns.push(Arc::new(Insn::new(at, Some((at, at + 8)), Some(_store(cell, value)), vec![], vec![value])));
+            at += 8;
+        }
+    }
+    body.blocks[0].insns = insns.into();
+    body
+}
+
+/// d_faces ifloor: `x < 0.0` was `fldz; fld st(1); fxch st(1); fcompp` and a
+/// `fstp st(0)` after; `fcom` and `fcomp` take any slot, so the live value is
+/// compared where it lies.
+#[test]
+fn test_a_compare_against_a_value_read_again_does_not_copy_it() {
+    let one_lives = names_in_order(&with_frame(&compare_body(false, true), &mut Frame::new(-16)));
+    assert_eq!(one_lives, ["fld", "fchs", "fld", "fchs", "fxch", "fcomp", "fnstsw", "fstp"], "{one_lives:?}");
+    let both_live = names_in_order(&with_frame(&compare_body(true, true), &mut Frame::new(-16)));
+    assert_eq!(both_live, ["fld", "fchs", "fld", "fchs", "fxch", "fcom", "fnstsw", "fstp", "fstp"], "{both_live:?}");
+}
+
+/// Where no trap is unmasked (not BASIC's runtime) the order of the exceptions
+/// is not observable, so a loaded value is read again from its cell after an
+/// instruction that can raise, instead of held on the stack or spilled to a
+/// cell of its own: d_faces' loop invariants were `fld m32; fstp m64` before
+/// the loop and `fmul m64` in it.
+#[test]
+fn test_a_first_read_moves_past_a_trapping_instruction_where_no_trap_is_unmasked() {
+    let cells = _cells([-4, -8, -12, -16, -20, -24], 4);
+    let (x, y, c, z, out, other) = (&cells[0], &cells[1], &cells[2], &cells[3], &cells[4], &cells[5]);
+    let (a, b, f, q, g, r) = (2, 3, 4, 5, 6, 7);
+    let body = _body(vec![
+        _load(a, x),
+        _load(b, y),
+        _load(f, c),
+        _arithmetic("fdiv", q, fl(a), fl(b)),
+        _store(out, q),
+        _load(g, z),
+        _arithmetic("fmul", r, fl(g), fl(f)),
+        _store(other, r),
+    ]);
+    let result = allocated(&phielim::eliminated(&body).unwrap(), None, None, false, "386").unwrap();
+    let insns = result.insns();
+    let readers: Vec<usize> =
+        insns.iter().enumerate().filter(|(_, one)| what(one).sources.contains(&m(c))).map(|(index, _)| index).collect();
+    let division = insns.iter().position(|one| name(one).starts_with("fdiv")).unwrap();
+    assert!(readers.len() == 1 && readers[0] > division, "{readers:?} {division}");
+    let (memory, stack) = _x87(&insns, &[(x, 6.0), (y, 3.0), (c, 0.5), (z, 4.0)]);
+    assert_eq!((memory[out], memory[other], stack), (2.0, 2.0, vec![]));
+}
+
+/// d_faces: both operands dying, the right not beneath the left, was three
+/// exchanges around `fcompp` (and `fxch st(2); fxch st(2)` pairs): the left is
+/// put on top and the compare names the right's slot, which a dead value then
+/// leaves with one `fstp st(i)`.
+#[test]
+fn test_a_compare_of_two_dying_values_apart_needs_no_rotation() {
+    let (a, b, c, out) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4), frame_cell(-16, 4));
+    let mut body = _body(vec![_load(5, &a), fchs(1, 5), _load(6, &b), fchs(3, 6), _load(7, &c), fchs(2, 7)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    // compare value 1 (deepest) with 2 (on top): 3 stays, read after the
+    // compare
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&out, 3)), vec![], vec![3])));
+    body.blocks[0].insns = insns.into();
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-16)));
+    let exchanges = names.iter().filter(|name| *name == "fxch").count();
+    assert!(exchanges <= 1, "{names:?}");
+    assert!(!names.iter().any(|name| name == "fcompp") || exchanges == 0, "{names:?}");
+}
+
+/// The left lives and the right dies: `fcom st(i)`, and the right leaves with
+/// `fstp st(i)`, no copy of the left.
+#[test]
+fn test_a_compare_that_keeps_its_left_and_drops_its_right_copies_nothing() {
+    let (a, b, out) = (frame_cell(-4, 4), frame_cell(-8, 4), frame_cell(-12, 4));
+    let mut body = _body(vec![_load(5, &a), fchs(1, 5), _load(6, &b), fchs(2, 6)]);
+    let mut insns = body.blocks[0].insns.to_vec();
+    insns.push(Arc::new(Insn::new(
+        16,
+        Some((16, 24)),
+        Some(sem(Operation::Compare, "fcom", vec![], vec![fl(1), fl(2)])),
+        vec![],
+        vec![1, 2],
+    )));
+    insns.push(Arc::new(Insn::new(24, Some((24, 32)), Some(_store(&out, 1)), vec![], vec![1])));
+    body.blocks[0].insns = insns.into();
+    let names = names_in_order(&with_frame(&body, &mut Frame::new(-16)));
+    assert_eq!(names.iter().filter(|name| *name == "fld").count(), 2, "{names:?}");
+}

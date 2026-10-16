@@ -50,6 +50,9 @@ pub struct Options {
     /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g`
     /// writes any.
     pub debug_format: llrm_object::debug::Format,
+    /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
+    /// rounds to its type.
+    pub float_store: bool,
 }
 
 impl Options {
@@ -71,6 +74,7 @@ impl Options {
             object_format: "omf",
             debug_format: Default::default(),
             abi: None,
+            float_store: false,
         }
     }
 
@@ -115,6 +119,7 @@ impl Options {
             self.pipeline.searches_all(),
             self.pipeline.compares_routes(),
             self.pipeline.optimize,
+            self.float_store,
         )
     }
 }

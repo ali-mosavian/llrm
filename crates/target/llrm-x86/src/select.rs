@@ -1165,7 +1165,8 @@ pub static INT_SIZED: LazyLock<IndexMap<u32, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([(2, "M16INT"), (4, "M32INT"), (8, "M64INT")]));
 pub const FLOAT_MEMORY: [&str; 11] =
     ["fld", "fstp", "fst", "fadd", "fsub", "fmul", "fdiv", "fsubr", "fdivr", "fcom", "fcomp"];
-pub const INT_MEMORY: [&str; 9] = ["fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr"];
+pub const INT_MEMORY: [&str; 11] =
+    ["fild", "fistp", "fist", "fiadd", "fisub", "fimul", "fidiv", "fisubr", "fidivr", "ficom", "ficomp"];
 
 /// An x87 instruction against memory -- `fld [x]`, `fmul [x]`, `fistp [x]`.
 pub fn float_memory(
@@ -1521,6 +1522,16 @@ pub fn float_stack(
         .flatten();
     if let Some(index) = fxch {
         return _assemble(&raised(create_reg_reg(Code::Fxch_st0_sti, RegId::ST0, stack_register(index))), at, true);
+    }
+    // COMPARE, "fcom" or "fcomp", (), (St(0), St(index)): st(0) against any
+    // slot, popped or not
+    let compare =
+        (what.op == Operation::Compare && dests.is_empty() && sources.len() == 2 && st_index(&sources[0]) == Some(0))
+            .then(|| st_index(&sources[1]))
+            .flatten();
+    if let (Some(index), Some(name @ ("fcom" | "fcomp"))) = (compare, name) {
+        let code = if name == "fcom" { Code::Fcom_st0_sti } else { Code::Fcomp_st0_sti };
+        return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
     }
     // FLOAT_ARITH, name, (St(dest),), (left, St(source)) if left == dests[0]
     let arith = (what.op == Operation::FloatArith && dests.len() == 1 && sources.len() == 2 && sources[0] == dests[0])
@@ -2173,6 +2184,9 @@ pub fn emit_in(
     if op == Operation::Compare && name.starts_with('f') {
         // st(0) is implicit; what is encoded is the memory operand, if any.
         let memory: Vec<&ir::Mem> = sources.iter().filter_map(mem_of).collect();
+        if memory.is_empty() && matches!(name, "fcom" | "fcomp") {
+            return float_stack(what, at);
+        }
         return if memory.is_empty() { bare(name, at) } else { float_memory(name, memory[0], at) };
     }
     if op == Operation::Barrier
