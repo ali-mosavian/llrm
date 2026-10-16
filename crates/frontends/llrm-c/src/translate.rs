@@ -3015,7 +3015,9 @@ impl<'a, 't> Body<'a, 't> {
                 }
                 // A byte register takes the low byte of a value of a byte or a
                 // word.
-                ([register], 1) if registers.half(register).is_some() => {
+                // A byte register takes the low byte of a value of a byte or a
+                // word.
+                ([register], 1 | 2) if registers.half(register).is_some() => {
                     let high = registers.half(register).expect("a half");
                     let root = registers.whole_of(register).to_owned();
                     let wide = self.resized(value, false, word);
@@ -3063,7 +3065,14 @@ impl<'a, 't> Body<'a, 't> {
         }
         // What it answers in.
         let target = symbol.call_target;
-        let result_type = self.ty(&call.type_)?;
+        // A small struct is answered as the integer of its size, and kept in a
+        // temporary.
+        let aggregate = self.types.aggregate(&call.type_);
+        let result_type = match aggregate {
+            Some(size @ (1 | 2 | 4)) => self.types.raw(size),
+            Some(size) => return self.refuse(format!("{name} answers with a {size}-byte struct")),
+            None => self.ty(&call.type_)?,
+        };
         let returns_void = self.types.shape(result_type) == Shape::Void;
         let answer: Vec<String> = if returns_void {
             Vec::new()
@@ -3159,6 +3168,18 @@ impl<'a, 't> Body<'a, 't> {
             }
             _ => return self.refuse(format!("{name} answers in {} registers", answer.len())),
         };
+        if let Some(size) = aggregate {
+            let ty = self.types.of(Shape::Bytes(size), None);
+            let temporary = self.local(&format!("r{}", self.places.len() + 1), ty, size);
+            let address = self.address_of(temporary);
+            let raw = self.types.raw(size);
+            self.instruction(
+                Op::Store,
+                Vec::new(),
+                vec![Operand::IndirectPlace(indirect(address, 0, raw, false)), value_ref(value)],
+            );
+            return Ok(Got::Value(address));
+        }
         Ok(Got::Returned(Some(value)))
     }
 
