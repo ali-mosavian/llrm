@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:75b29798a3b16527a7c52c5b9c5a52076b02ab460707f0f626f503f1edebb1c1 -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:951cd9524c108f3132a8112c2cd9bfcfa9f1b6d4bb8d8cc129741ee1e5ec157b -->
 
 # splitkit
 
@@ -13,9 +13,7 @@ strategies choose where a piece holds the value, in order:
 - `local`: for a value live in one block, the longest run of references that
   some candidate register is free across, when that is at least two and not
   all of them (`tryLocalSplit`).
-- `placed`: by region (`tryRegionSplit`). The positions that name the value are
-  found once for all its candidates (`Blocks::names`) and the blocks' frequencies
-  are a fact of the function's shape (`spillplacement::Levels`). For each candidate register,
+- `placed`: by region (`tryRegionSplit`). For each candidate register,
   [`crate::backend::spillplacement`](spillplacement.md) settles which edge bundles hold the
   value in a register, weighting blocks by frequency against the
   interference of that register. The best candidate's region comes first,
@@ -31,6 +29,13 @@ split.
 
 `carved` (`SplitEditor`) makes a region: a fresh value for the piece, read
 inside the region, joined by copies at each crossing.
+
+A region split costs, for each candidate register, in proportion to the
+blocks the value is live in (200-500 instructions a block, through the
+constraints, the growth, the region and its benefit), as LLVM's does. Where
+N loops each leave a value live across all of them (`unrolled`), doubling
+N doubles the candidates (x1.9) and the cost of each (x2.3): a leaner loop
+does not change that, a smaller range or fewer candidates would.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%

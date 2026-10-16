@@ -25,6 +25,13 @@
 //! `carved` (`SplitEditor`) makes a region: a fresh value for the piece, read
 //! inside the region, joined by copies at each crossing.
 //!
+//! A region split costs, for each candidate register, in proportion to the
+//! blocks the value is live in (200-500 instructions a block, through the
+//! constraints, the growth, the region and its benefit), as LLVM's does. Where
+//! N loops each leave a value live across all of them (`unrolled`), doubling
+//! N doubles the candidates (x1.9) and the cost of each (x2.3): a leaner loop
+//! does not change that, a smaller range or fewer candidates would.
+//!
 //! ```mermaid
 //! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
 //! flowchart TB
