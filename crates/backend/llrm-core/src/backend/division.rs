@@ -271,9 +271,10 @@ fn positive_reciprocal<'a>(
     if !remainder {
         reconstruction = 0;
     }
-    // Materialize magic, seed multiply, preserve dividend and correction,
-    // and seed reconstruction. Allocation may eliminate some of these moves.
-    let copies = if remainder { 5 } else { 4 };
+    // The copies the emitted code has: the magic, the sign's seed (`shr` takes
+    // the high half and `sar` keeps it), and with a remainder the quotient the
+    // product is built on.
+    let copies = if remainder { 3 } else { 2 };
     let mut estimate = copies * cost("mov_rr")?
         + multiply_cost
         + reconstruction
@@ -667,6 +668,23 @@ mod tests {
                 (false, true, true),
                 "divisor {divisor}"
             );
+        }
+    }
+
+    /// `state % 14` of a 17-bit `state` (bench/switch) stayed `cdq; idiv`
+    /// (43 clocks) at its proven 18 bits: the estimate charged five
+    /// register copies, the emitted `x % d` has three (the magic, the sign's
+    /// seed, the quotient the product is built on) and runs in 38.
+    #[test]
+    fn test_a_signed_remainder_is_priced_by_the_copies_it_emits() {
+        let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).unwrap();
+        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
+        let mut count = 4..;
+        let mut fresh = || count.next().unwrap();
+        for (divisor, bits) in [(14, 18), (10, 18)] {
+            let parts =
+                reciprocal(ir::Held { value: 1, width: 4 }, divisor, &results, &mut fresh, m32, true, Some(bits)).unwrap();
+            assert!(parts.is_some(), "{divisor} at {bits} bits");
         }
     }
 
