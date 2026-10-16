@@ -1332,3 +1332,14 @@ def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_th
     assert "pytest-perf" in gate.skipped_steps(p.steps, missing, p.languages)
     assert "pytest-perf" not in gate.skipped_steps(p.steps, gate.assumed(missing, {"GATE_PLAN_ASSUME": "perf"}), p.languages)
     assert "GATE_PLAN_ASSUME=perf" in (gate.ROOT / ".github/workflows/ci.yml").read_text()
+
+
+def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_tests_ran_hosted():
+    """#1890 let the scaling tests skip on a hosted fallback and print PASS; they just caught two real superlinears, so a compiler change waits for tinytim."""
+    assert gate.touches_compiler(["crates/backend/llrm-core/src/lib.rs"]) and not gate.touches_compiler(["tools/x.py", ".github/workflows/ci.yml", "docs/x.md"])
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert 'PERF SKIPPED at ${head:0:12}' in workflow and 'needs.plan.outputs.compiler }}" = true' in workflow
+    sys.path.insert(0, str(gate.ROOT / "tools" / "ci"))
+    import pick_runners
+    assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == ["perf"]
+    assert pick_runners.pick(["perf", "unit"], "1000 2", True, 1000)["perf_hosted"] == []
