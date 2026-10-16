@@ -67,6 +67,14 @@ pub struct Touched {
     /// cloned or rewritten, and the operands an edit replaced: every value
     /// whose reads or definition an edit touched.
     pub named: IdSet<ValueId>,
+    /// Instructions the mark saw and since erased (an arena slot keeps an
+    /// erased instruction's opcode and operands, so what it read is known by
+    /// id); not those made and erased inside the window.
+    pub erased: IdSet<InstId>,
+    /// Each operand slot an edit set, sorted: `(inst, index)`, or `(inst,
+    /// u32::MAX)` where the whole list was replaced. `operands_edited` asks it
+    /// by instruction.
+    pub operand_edits: Vec<(InstId, u32)>,
     /// A terminator was added, erased or moved.
     pub terminators_made: bool,
     /// A terminator was rewritten (it may name the same blocks).
@@ -186,6 +194,17 @@ impl Touched {
                 || !self.cfg.is_empty(),
             rewired: self.terminators_rewritten,
         }
+    }
+
+    /// The operand slots of `inst` an edit set, in order (`u32::MAX` where the
+    /// whole list was replaced): a store's value operand told from its
+    /// address.
+    pub fn operands_edited(
+        &self,
+        inst: InstId,
+    ) -> impl Iterator<Item = u32> + '_ {
+        let from = self.operand_edits.partition_point(|&(one, _)| one.0 < inst.0);
+        self.operand_edits[from..].iter().take_while(move |&&(one, _)| one == inst).map(|&(_, index)| index)
     }
 
     /// Whether a load, a store or a call was added, removed, moved or
@@ -408,6 +427,7 @@ impl Function {
             if touches_memory(&one.opcode) {
                 out.memory_removed.insert(inst);
             }
+            out.erased.insert(inst);
         }
         for inst in ghosts.iter() {
             if let Some(result) = self.instruction(inst).result {
@@ -494,13 +514,15 @@ impl Function {
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
                     name_inst(&mut out.named, *inst);
                 }
-                Change::Operand { inst, was, .. } => {
+                Change::Operand { inst, was, index } => {
+                    out.operand_edits.push((*inst, *index));
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
                     if let Operand::Value(value) = was {
                         out.named.insert(*value);
                     }
                 }
                 Change::Operands { inst, was } => {
+                    out.operand_edits.push((*inst, u32::MAX));
                     out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
                     for operand in was.iter() {
                         if let Operand::Value(value) = operand {
@@ -516,6 +538,8 @@ impl Function {
                 out.insts.insert(inst);
             }
         }
+        out.operand_edits.sort_unstable_by_key(|&(inst, index)| (inst.0, index));
+        out.operand_edits.dedup();
         out
     }
 
