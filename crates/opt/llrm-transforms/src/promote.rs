@@ -867,7 +867,7 @@ fn rewrite(
         .map(|(_, inst)| function.instruction(inst))
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
-        .collect::<BTreeSet<_>>();
+        .collect::<llrm_mir::dense::IdSet<ValueId>>();
     let poison = plan
         .types
         .iter()

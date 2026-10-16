@@ -171,7 +171,7 @@ pub fn _removable(
     callees: &Callees,
     function: &Function,
     inst: InstId,
-    alive: &BTreeSet<ValueId>,
+    alive: &llrm_mir::dense::IdSet<ValueId>,
 ) -> bool {
     !_kept(context, callees, function, inst)
         && function.instruction(inst).result.is_none_or(|result| !alive.contains(&result))
