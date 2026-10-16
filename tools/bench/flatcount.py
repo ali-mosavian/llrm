@@ -85,7 +85,7 @@ def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
 
     state = {"heap": HEAP, "ret": None, "entry_sp": 0, "done": False, "before": None, "first": True, "files": {}, "next": 5}
     counts = icount.Counts()
-    price, multiplier_of = icount._prices()
+    price, multiplier_of, _prefixes = icount._prices()
     instructions: dict[int, tuple] = {}
     read, write = uc.reg_read, uc.reg_write
 
@@ -171,25 +171,26 @@ def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
         elif address == state["ret"] and read(UC_X86_REG_ESP) > state["entry_sp"]:
             before = state["before"]
             if before is not None:
-                counts.clocks += price(before[1], True, state["first"], before[2], before[3])  # the `ret`
+                counts.clocks += price(before[1], True, state["first"], before[2], before[3], before[4])  # the `ret`
             state["before"], state["done"] = None, True
             uc.emu_stop()
             return
         info = instructions.get(address)
         if info is None:
-            one = Decoder(32, bytes(uc.mem_read(address, min(size, 15))), ip=address).decode()
+            raw = bytes(uc.mem_read(address, min(size, 15)))
+            one = Decoder(32, raw, ip=address).decode()
             memory = 0 if one.mnemonic == Mnemonic.LEA else sum(1 for at in range(one.op_count) if one.op_kind(at) in icount.MEMORY_KINDS)
             repeated = one.has_rep_prefix or one.has_repe_prefix or one.has_repne_prefix
-            info = instructions[address] = (one, memory, repeated)
-        one, memory, repeated = info
+            info = instructions[address] = (one, memory, repeated, _prefixes(raw))
+        one, memory, repeated, prefixes = info
         before = state["before"]
         if repeated and read(UC_X86_REG_ECX) == 0 and before is not None and before[0] == address:
             return  # the last firing of a repeated string instruction that ran, with ECX at 0, does nothing (one with ECX 0 to start with is counted once)
         if before is not None:
-            counts.clocks += price(before[1], address != before[0] + before[1].len, state["first"], before[2], before[3])
+            counts.clocks += price(before[1], address != before[0] + before[1].len, state["first"], before[2], before[3], before[4])
         state["first"] = not (repeated and before is not None and before[0] == address)
         factor = icount._multiplier(multiplier_of, uc, one) if one.mnemonic in (Mnemonic.MUL, Mnemonic.IMUL) else None
-        state["before"] = (address, one, memory, factor)
+        state["before"] = (address, one, memory, factor, prefixes)
         # DOSBox counts a repeated string instruction once, the hook here fires once per iteration: the count is the first firing's, the
         # clocks (the table's first-iteration and per-iteration prices) are every firing's.
         if not (repeated and before is not None and before[0] == address):
