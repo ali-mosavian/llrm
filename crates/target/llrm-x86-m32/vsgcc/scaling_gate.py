@@ -68,10 +68,10 @@ def count(command: list[str]) -> int:
     """User-space instructions of one run. A counter that reads nothing is unavailable, not zero work."""
     try:
         got = scaling.sample(command)[0]
-    except (ValueError, KeyError) as why:
-        raise NoCounter(f"perf gave no instruction count ({why!r})")
+    except (ValueError, KeyError, RuntimeError) as why:
+        raise NoCounter(f"{levels_time.backend()} gave no instruction count ({why!r})")
     if got <= 0:
-        raise NoCounter("perf counted 0 instructions")
+        raise NoCounter(f"{levels_time.backend()} counted 0 instructions")
     return got
 
 
@@ -135,6 +135,10 @@ def pass_ratios(axis: str, level: str, work: Path, command=levels_time.command, 
 
 
 def measure_passes(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[float, float, float, float]]:
+    """Each step's cost at N/2, N and 2N and the whole compile's. The compiler counts a step itself with `perf_event_open` (CPU time where
+    it cannot): under callgrind there is no such counter, so no steps are measured and none are judged (the totals still are)."""
+    if levels_time.backend() != "perf":
+        return {}
     with tempfile.TemporaryDirectory(dir=scaling.os.environ.get("CARGO_TARGET_DIR")) as tmp:
         todo = [(a, l) for a in axes for l in levels]
         with ThreadPoolExecutor(jobs) as pool:

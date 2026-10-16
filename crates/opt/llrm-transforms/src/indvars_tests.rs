@@ -244,6 +244,88 @@ fn a_counter_extended_past_the_index_width_stays() {
     assert!(!changed, "{after}");
 }
 
+/// `clearing` for `short i`: signed, tested by `slt`, read through `sext`.
+fn clearing_signed(layout: &str) -> String {
+    clearing(layout).replace("icmp ult i16", "icmp slt i16").replace("zext i16 %i to i32", "sext i16 %i to i32")
+}
+
+/// d_faces: `short k; for (k = 0; k < n; k++) a[k]` is `inc cx; movsx esi,cx;
+/// cmp cx,bx; jl` a trip (12,700 of the 18,142 `movsx` the file executes
+/// against gcc's 5,459). The counter is below `n` when it is stepped, so
+/// the step never passes the width's largest value, and its sign extension is
+/// the counter of the index's width (LLVM's `WidenIV` with `sext` and `nsw`;
+/// gcc's ivopts on the loop bound).
+#[test]
+fn a_signed_counter_extended_to_the_index_width_is_that_wide() {
+    let (changed, after) = widening(&clearing_signed("e-p:32:32-n8:16:32"));
+    assert!(changed, "{after}");
+    assert!(after.contains("icmp slt i32 %widen.iv"), "{after}");
+    assert!(after.contains("sext i16 %n to i32"), "{after}");
+    assert!(!after.contains("sext i16 %i to i32"), "{after}");
+}
+
+/// bench/lru's `for (short i = 0; i < 3; i++)` stores to five arrays: `unroll`
+/// takes it whole where its size fits the rolled loop's, which it did to the
+/// operation and no longer did with the counter widened (one operation
+/// fewer rolled): a signed counter of a loop of a few trips is widened only
+/// once `unroll` has had it.
+#[test]
+fn a_signed_counter_of_a_loop_that_unroll_may_take_is_widened_only_late() {
+    let text = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 3");
+    let early = through(&text, &[&[0], &[1]], |context, layout, function, analyses| {
+        super::widened_with(
+            context,
+            layout,
+            function,
+            analyses.outer(),
+            &mut llrm_analysis::memory::Standing::underived(),
+            Some(16),
+        )
+    });
+    assert!(!early.0, "{}", printed(&early.1));
+    let (changed, after) = widening(&text);
+    assert!(changed && after.contains("icmp slt i32 %widen.iv"), "{after}");
+    // A loop of many trips is widened at once.
+    let long = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 40");
+    let first = through(&long, &[&[0], &[1]], |context, layout, function, analyses| {
+        super::widened_with(
+            context,
+            layout,
+            function,
+            analyses.outer(),
+            &mut llrm_analysis::memory::Standing::underived(),
+            Some(16),
+        )
+    });
+    assert!(first.0, "{}", printed(&first.1));
+}
+
+/// A start below zero is a negative number of the wide width, not the narrow
+/// pattern.
+#[test]
+fn a_signed_counter_from_a_negative_start_is_widened_from_the_negative_number() {
+    // The index is the counter plus 8, so that the interpreter's buffer holds
+    // it.
+    let text = clearing_signed("e-p:32:32-n8:16:32")
+        .replace("[ 0, %b0 ]", "[ -5, %b0 ]")
+        .replace(
+            "%p = getelementptr inbounds i8, ptr %buf, i32 %w",
+            "%v = add i32 %w, 8\n  %p = getelementptr inbounds i8, ptr %buf, i32 %v",
+        );
+    let (changed, after) = widening(&text);
+    assert!(changed, "{after}");
+    assert!(after.contains("phi i32 [ -5, %b0 ]"), "{after}");
+}
+
+/// An unsigned counter read through `sext` is not a signed one: its sign
+/// extension differs past 32767.
+#[test]
+fn an_unsigned_counter_read_through_sext_is_not_widened() {
+    let text = clearing("e-p:32:32-n8:16:32").replace("zext i16 %i to i32", "sext i16 %i to i32");
+    let (changed, after) = widening(&text);
+    assert!(!changed, "{after}");
+}
+
 /// bench/nbody: `for (unsigned short j = i + 1; j < 4; ++j) x[j]`: a start the
 /// loop does not define. The narrow counter was `inc bx; movzx esi,bx; cmp
 /// bx,4` each trip (38 instructions an iteration against gcc's 27); its zero
@@ -366,7 +448,7 @@ end:
     );
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(AsksBounds);
-    manager.add(super::IndVars { exit_values: false });
+    manager.add(super::IndVars { exit_values: false, unrolls: None });
     let before = llrm_analysis::ranges::loops_solved();
     manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
     // The pass that asks, and the one indvars's evaluation of the loop leaves
@@ -418,7 +500,7 @@ b3:
 fn with_exit_values(text: &str) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { exit_values: true });
+    manager.add(super::IndVars { exit_values: true, unrolls: None });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -569,7 +651,7 @@ fn header_phis(module: &mut Module) -> usize {
 #[test]
 fn counters_with_one_start_and_one_step_are_one_counter() {
     let mut module = parsed(&two_counters(0, 1));
-    managed(&mut module, IndVars { exit_values: false });
+    managed(&mut module, IndVars { exit_values: false, unrolls: None });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let mut other = parsed(&two_counters(0, 1));
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -581,7 +663,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_that_start_or_step_otherwise_stay_two() {
     for (start, step) in [(1, 1), (0, 2)] {
         let mut module = parsed(&two_counters(start, step));
-        managed(&mut module, IndVars { exit_values: false });
+        managed(&mut module, IndVars { exit_values: false, unrolls: None });
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }

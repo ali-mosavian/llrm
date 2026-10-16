@@ -113,6 +113,16 @@ impl Pool {
     }
 }
 
+/// `entries` with the 8-byte and wider ones first: each is on an 8-byte
+/// boundary (a 486 takes 3 clocks more for a double off one: Intel486 data
+/// sheet 240440-002, section 10.1 and Table 2.1), and after them the narrow
+/// ones fill no gap.
+pub fn wide_first<'a>(entries: impl Iterator<Item = (&'a [u8], i64)>) -> Vec<(&'a [u8], i64)> {
+    let mut all: Vec<_> = entries.collect();
+    all.sort_by_key(|(bytes, _)| bytes.len() < 8);
+    all
+}
+
 /// Whether `name` is a label assembly made for the pool: `$K` a constant, `$J`
 /// a jump table.
 pub fn is_pool(name: &str) -> bool {

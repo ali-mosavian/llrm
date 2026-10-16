@@ -320,6 +320,12 @@ pub trait Target {
     /// stack cell holds.
     fn stack_slot_bytes(&self) -> i64;
 
+    /// The bytes the stack pointer is a multiple of at a call (`calling.toml`'s
+    /// `stack_alignment`): a slot's worth unless it says more.
+    fn stack_alignment(&self) -> i64 {
+        self.stack_slot_bytes()
+    }
+
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
@@ -444,6 +450,7 @@ pub trait Target {
             stack: self.stack_pointer(),
             saved: self.callee_saved(),
             slot: self.stack_slot_bytes(),
+            align: self.stack_alignment(),
             optional: self.frame_optional(),
             enter: self.frame_enter(),
             free: false,
@@ -474,6 +481,10 @@ pub struct FrameRegisters {
     pub saved: Vec<(RegId, RegId)>,
     /// The bytes the stack is kept a multiple of.
     pub slot: i64,
+    /// The bytes the stack pointer is a multiple of at a call, as the callee
+    /// assumes it (its frame cells then sit on their alignments): a slot's
+    /// worth where the target says no more.
+    pub align: i64,
     /// A function that needs no frame register may leave it out.
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.

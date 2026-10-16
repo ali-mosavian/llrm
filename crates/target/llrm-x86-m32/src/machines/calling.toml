@@ -23,6 +23,8 @@ convention = "sysv32"
 [watcall32]
 cc = "watcall"
 slot_bytes = 4
+# A double on the stack is 8-aligned (a 486 takes 3 clocks more for each access off its alignment); gcc keeps 16.
+stack_alignment = 8
 order = "right-to-left"
 cleanup = "callee"
 argument_registers = ["eax", "edx", "ebx", "ecx"]
@@ -72,6 +74,8 @@ float = ["st0"]
 [cdecl32]
 cc = "cdecl"
 slot_bytes = 4
+# A double on the stack is 8-aligned (a 486 takes 3 clocks more for each access off its alignment); gcc keeps 16.
+stack_alignment = 8
 # Arguments are pushed right to left, so the first is lowest.
 order = "right-to-left"
 cleanup = "caller"
