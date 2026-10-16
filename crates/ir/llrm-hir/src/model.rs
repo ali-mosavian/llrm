@@ -945,6 +945,10 @@ pub struct Module {
     /// Each source line's BASIC line number, where a statement table
     /// reports one: (line, number).
     pub line_numbers: Vec<(i64, i64)>,
+    /// Symbols a linker is asked for though nothing names them, so that it
+    /// pulls in the library module that defines them: a start-up, an
+    /// argument parser.
+    pub requests: Vec<String>,
 }
 
 impl Module {
@@ -965,6 +969,7 @@ impl Module {
             facts: Vec::new(),
             debug: None,
             line_numbers: Vec::new(),
+            requests: Vec::new(),
         }
     }
 
@@ -1204,6 +1209,10 @@ pub struct Program {
     /// The segment of the constants the compiler makes; None: the default
     /// data segment.
     pub constant_segment: Option<String>,
+    /// Segments a linker lays out between two markers, as `BEGIN:MIDDLE:END`
+    /// (`XIB:XI:XIE`): a module with a MIDDLE declares the markers around it,
+    /// so that whichever object the linker meets first, they bracket it.
+    pub bracketed_segments: Vec<String>,
     /// Each procedure compares SP with the runtime's limit on entry: where
     /// `-fsanitize=stack` asks, never otherwise.
     pub stack_check: Option<StackCheck>,
@@ -1231,6 +1240,7 @@ impl Program {
             entries: Vec::new(),
             preserved: Vec::new(),
             constant_segment: None,
+            bracketed_segments: Vec::new(),
             stack_check: None,
         }
     }

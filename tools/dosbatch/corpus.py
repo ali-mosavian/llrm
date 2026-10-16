@@ -89,7 +89,10 @@ def path(name: str) -> Path:
         return file
     data = fetch(name, corpus)
     CACHE.mkdir(parents=True, exist_ok=True)
-    partial = file.with_name(file.name + ".partial")
-    partial.write_bytes(data)
-    partial.replace(file)
+    partial = file.with_name(f"{file.name}.{os.getpid()}.{os.urandom(4).hex()}.partial")  # one job's own: two jobs sharing the cache raced on one name
+    try:
+        partial.write_bytes(data)
+        partial.replace(file)
+    finally:
+        partial.unlink(missing_ok=True)
     return file

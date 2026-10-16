@@ -96,9 +96,17 @@ Open Watcom's `#pragma aux name = "bytes" __parm [..] __value [..] __modify [..]
 parameters in the registers it names and answers in the registers it names. `llrm-c` turns it into an `asm` block:
 the parameters are its inputs, the answer its outputs, and what it modifies its clobbers. A register it modifies is
 saved by a function that keeps that register for its caller. Where a register pair holds a far pointer, the segment is
-the register Open Watcom's compiler picks (the segment registers always; otherwise by its preference). The registers, their bits and ranks are the target's description (`[frontend.registers]` of its `c.toml`), not the
+the register Open Watcom's compiler picks (a segment register always; otherwise the offset is the first of ax, bx, si, di, dx, cx). The registers, their bits and ranks are the target's description (`[frontend.registers]` of its `c.toml`), not the
 front end's. What it cannot
 express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
+
+## The start-up and init segments
+
+With `-fentry-requests` (a program linked against Open Watcom's library; llrm's own runtime has no `_cstart_`) a module that defines `main` asks its linker for the start-up (`_cstart_`) and, where `main`
+takes arguments, for `__argc`, which builds `argv`: the references Open Watcom's own compiler leaves there
+(`entry_requests` in the target's `c.toml`). Segments a linker lays out between two markers (`XIB:XI:XIE`, the init and
+final routines the start-up walks) are declared with their markers in every object (`bracketed_segments`): without
+them a linker laid the ranges out empty, `argc` was 0 and no initializer ran.
 
 ## Numbers as pointers
 
