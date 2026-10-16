@@ -1213,6 +1213,15 @@ def test_what_ci_runs_for_a_diff_is_what_gate_run_plans_for_it():
     assert all(f"--tier {t}" not in workflow for t in ("fast", "full", "smoke")), "the workflow does not choose a tier of its own"
 
 
+def test_the_checks_that_build_nothing_run_alone_before_the_build():
+    """#1873's gate (unit) failed on formatting after a long run: a mistake the tree alone shows must fail before any build or gate starts."""
+    cfg = gate.load()
+    assert set(cfg["groups"]["static"]) <= gate.NO_BINARIES | {"products"} and "fmt" in cfg["groups"]["static"]
+    assert not {"fmt", "docs", "products"} & {s for g, steps in cfg["groups"].items() if g != "static" for s in steps}
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "  build:\n    needs: [plan, static]" in workflow and 'if g != "static"' in workflow, "the matrix never runs the static group"
+
+
 def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow
@@ -1277,7 +1286,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert "needs: [plan, build, gate, bench-merge]" in workflow
+    assert "needs: [plan, static, build, gate, bench-merge]" in workflow
 
 
 def test_the_bench_step_is_cut_into_the_configured_shards_each_with_its_own_slice():

@@ -181,7 +181,8 @@ slow_pytest = [
 shards = 6
 
 [groups]
-unit = ["lib", "doc", "crate-tests", "scans", "fmt", "rfmt-post", "docs", "facts", "products"]
+unit = ["lib", "doc", "crate-tests", "scans", "rfmt-post", "facts"]
+static = ["fmt", "docs", "products"]  # read the tree, build nothing: CI runs them first and alone, so a format error fails in minutes
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs", "pytest-quick", "changed-tests"]
