@@ -305,9 +305,15 @@ pub fn assembled_by(
             _ => {}
         }
     }
-    for (bytes, id) in pool.borrow().entries() {
+    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
+        // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
+        // off it (Intel486 data sheet 240440-002, section 10.1 and
+        // Table 2.1).
+        if bytes.len() >= 8 {
+            data.push(masm::Datum::Align(masm::Align { to: 8 }));
+        }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
     data.extend(masm::jump_tables(&procedures, &mut names, module));
@@ -502,6 +508,10 @@ fn machined_once(
     MACHINED.with(|count| count.set(count.get() + 1));
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
+    // The allocas move down by the hole: a multiple of the stack alignment, or
+    // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands).
+    let spilled =
+        if frame.align > 4 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
     let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(first);
@@ -996,6 +1006,7 @@ fn staged(
         selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    registers.align = target.facts.stack_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
     // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
@@ -1037,6 +1048,7 @@ fn staged(
     let mut frame =
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
+    frame.align = registers.align.max(registers.slot).max(frame.align);
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;

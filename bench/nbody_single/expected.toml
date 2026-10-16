@@ -1,5 +1,5 @@
-reason = "word add/sub/mul promotion: bytes down in most bq32 rows; four rows worse by +2 bytes / <=0.001% instructions"
-blessed = "2026-10-14"
+reason = "#1804 (hoist prices a float load its reader folds as the reader's own memory form): bas rows re-recorded by hand, since --bless now records references only: nbody -O2 +2.1% instructions and +6.9% memory operands at 20 B less code and -1.4% clocks; nbody -Os -6.5% instructions; nbody_single -Os +33% memory operands at -2.4% instructions and 8 B less code"
+blessed = "2026-10-16"
 
 [bas.O2]
 instructions = 1037180
@@ -10,72 +10,12 @@ bss_bytes = 0
 kernel_ms = 13.8467
 
 [bas.Os]
-instructions = 1037186
-memory_operands = 144105
-code_bytes = 383
+instructions = 1013186
+memory_operands = 192105
+code_bytes = 375
 data_bytes = 145
 bss_bytes = 0
 kernel_ms = 13.8467
-
-[bq16.O2]
-instructions = 1037180
-memory_operands = 144105
-code_bytes = 393
-data_bytes = 145
-bss_bytes = 0
-kernel_ms = 13.8412
-
-[bq16.Os]
-instructions = 1037186
-memory_operands = 144105
-code_bytes = 388
-data_bytes = 145
-bss_bytes = 0
-kernel_ms = 13.8413
-
-[bq32.O2]
-instructions = 1037183
-code_bytes = 474
-data_bytes = 151
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 1037191
-code_bytes = 461
-data_bytes = 151
-bss_bytes = 0
-
-[c.O2]
-instructions = 1037186
-memory_operands = 144111
-code_bytes = 335
-data_bytes = 24
-bss_bytes = 96
-kernel_ms = 13.8369
-
-[c.Os]
-instructions = 1037186
-memory_operands = 144111
-code_bytes = 335
-data_bytes = 24
-bss_bytes = 96
-kernel_ms = 13.8369
-
-[nib.O2]
-instructions = 1276428
-memory_operands = 229174
-code_bytes = 564
-data_bytes = 32
-bss_bytes = 0
-kernel_ms = 17.0272
-
-[nib.Os]
-instructions = 1276464
-memory_operands = 229174
-code_bytes = 558
-data_bytes = 32
-bss_bytes = 0
-kernel_ms = 17.0277
 
 [ow.O2]
 instructions = 1088249

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:081c289a197e0a3ccefb11481358802acc005d7f2436fbff70d8deec1230f72c -->
+<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:64374f5280e67ee4422f9d469e3df14d26d65d78d52ce03f8814a03e54de1d8a -->
 
 # edges
 
@@ -26,6 +26,11 @@ edge that is not a conditional one. Block ids are never reused, so
                                                  br target
                                          target: %p = phi [%v, bridge], ..
 ```
+
+`conditions_decided` makes a phi operand that is a branch's own condition,
+read on the edge that branch's arm is, that arm's constant: `phi i1 [%c,
+%latch]` in an exit is `false` (GVN's `propagateEquality` for the edge's own
+phi uses, which `fold` runs after rotation and `gvn` before).
 
 `retarget` redirects every operand of a terminator that names one block to
 another, and `phis` lists a block's leading phis.

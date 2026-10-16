@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadargs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadargs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadargs.rs sha256:9411c90b051902ebb72e7ab1e716f6b09bc367da5743bd4f756d6b2367984d7d -->
+<!-- src: crates/opt/llrm-transforms/src/deadargs.rs sha256:4b3f7b6cc871940b113d8f3c8f6aba7fd3c2705c21b2b00f2c82c4edd11f640c -->
 
 # deadargs
 
@@ -25,6 +25,11 @@ Each dead parameter is removed from the function and the argument from every
 call, in the function itself and its callers. Constant propagation and
 promotion are what leave these behind: a length every caller passes as 12,
 folded into the body, is still pushed at every call.
+
+`removed_with` also names the functions whose edit is more than that: the
+ones that lost a parameter, and a caller whose dropped argument was read by
+nothing else. A caller not named is vouched for ([`crate::settled`](settled.md)): its
+passes need not look at the call again.
 
 ## Example
 Before:

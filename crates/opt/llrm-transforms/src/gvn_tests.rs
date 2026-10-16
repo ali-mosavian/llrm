@@ -447,6 +447,31 @@ b4:
     );
 }
 
+/// The edge's own phi uses count: a phi in an arm that takes the branch's
+/// condition from the branch's block reads that arm's constant, though the
+/// arm's block does not dominate the block the phi's operand comes from (the
+/// branch's own).
+#[test]
+fn a_condition_is_known_in_a_phi_of_the_arm_on_its_own_edge() {
+    let after = managed(
+        "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  %k = icmp ugt i16 %x, 1
+  br i1 %k, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i1 [ %k, %b0 ], [ true, %b1 ]
+  %n = zext i1 %p to i16
+  ret i16 %n
+}
+",
+    );
+    assert!(!after.contains("phi i1 [ %k"), "{after}");
+}
+
 /// A segment made a far pointer twice is one pointer: segld's load of
 /// `a(i)` went through a second cast pair, so no store was seen to reach it.
 #[test]

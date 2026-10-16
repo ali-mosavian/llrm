@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/frame.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/frame.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:e088d20d350e601e22727ef3d5c36286e1e229c89db07d1849ac876485e8f677 -->
+<!-- src: crates/backend/llrm-core/src/backend/frame.rs sha256:57b6e6fca542e496ce896932d2900cb927e4f4f1b87775fbb7e83c94a18d3d78 -->
 
 # frame
 
@@ -28,6 +28,17 @@ block-beta
 ```
 
 *Frame layout, incoming arguments at the top*
+
+A spill slot is aligned as its width is, up to `align`: the target's stack
+slot (4 in flat code, a word in real mode), or its stack alignment (8) for a
+function that needs the stack aligned (`calleefacts`: one holding a double
+or calling one that does), as gcc's `assign_stack_local` and LLVM's
+`calculateFrameObjectOffsets` do. A dword or a quad off its alignment costs
+a 486 3 clocks (Intel486 data sheet 240440-002, section 10.1, Clock Count
+Assumptions 2; Table 2.1 gives the alignments). The frame register is
+8-aligned where the stack is at the call (`masm::parts` rounds the frame,
+`isel` pads a call's arguments), so a displacement that is a multiple of 8
+is an aligned address.
 
 `of` builds the frame after selection. It scans the body for the lowest
 frame cell referenced (outgoing native stack arguments excepted) and, for a

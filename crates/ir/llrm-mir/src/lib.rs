@@ -18,6 +18,7 @@ pub mod facts;
 mod facts_coverage;
 mod facts_rewrite;
 pub mod footprint;
+pub mod forest;
 pub mod hash;
 pub mod interpret;
 pub mod intrinsics;

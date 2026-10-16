@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:c5d1afcc70b98e091a860fa79492ea1f7d9bc24fb24887239a72bb16b16a2597 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:8062cebf309c9665d4e22ccc7d0ddcbd12c333c90bfa5e015dcd49e92811a780 -->
 
 # manager
 
@@ -43,10 +43,10 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   (`Change::Substituted { from, to }`) leave it naming a value that is then
   erased, so it is brought to what took the place (`remapped`, the way LLVM's
   value handles follow a replace-all-uses), or derived again where it returns
-  none. `Annotated` is kept this way, and `CallEffects` (`MemRef::renamed`; none where the
+  none. `CallEffects` is kept this way (`MemRef::renamed`; none where the
   replaced value is an object's own address, keys an object of the provenance, or
-  is the scaled index): derived 86 times instead of 113 on `d_faces` -O1, 63.9 -> 46.1
-  Minstr own, the compile 0.3% fewer instructions. `covers` also asserts it names no
+  is the scaled index): derived 100 times instead of 127 on `d_faces` -O1, 71.9 -> 56.3
+  Minstr own, the compile 0.5% fewer instructions. `covers` also asserts it names no
   erased value.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
@@ -97,8 +97,9 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  Bounded          Registers, Counted, DominatedEdges
  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
  Accesses         Annotated, CallEffects                  (memoryssa)
- ThroughMemory    Writes, Annotated, Registers
- FloatFacts       ThroughMemory, Writes, Annotated, Registers
+ PlainAccesses    Writes, Annotated                       (the graph's structure, once)
+ ThroughMemory    PlainAccesses, Writes, Annotated, Registers
+ FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
  Published        Pointers, ExposedFrames                 (observers)
 ```
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postrasink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postrasink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:adee885b8a760f2d6e033794ce257d63ae66952c8f834a9f2c8ae4635b6277d7 -->
+<!-- src: crates/backend/llrm-core/src/backend/postrasink.rs sha256:81e361de86862d8d2c649662076120e244349db33791ea0c6ee306df7a7d9fcc -->
 
 # postrasink
 
@@ -45,6 +45,11 @@ and no store of a saved register, and the prologue can be placed after the
 test, as gcc and LLVM do. A store of a slot only one successor reads can be
 the only thing that made a frame necessary on the other path.
 
+`latched` is the other way round: a block of copies alone on a back edge,
+whose one predecessor branches to it and elsewhere, has them run before that
+branch when the other way out does not read what they write, and the edge
+block keeps only its jump (a back edge's `mov; jmp` becomes a `jl`).
+
 ## Example
 A function copies its argument into `DI`, then either returns at once or
 loops reading `DI`.
@@ -89,7 +94,7 @@ From unit test `test_a_copy_only_one_successor_reads_moves_into_it` in
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), after `spillforward`: a reload
 on the other path is gone by then, so the store need not run there. Once per
-peephole run.
+peephole run. `latched` follows it.
 
 ## Keeps
 The body is returned unchanged where no block with several successors holds

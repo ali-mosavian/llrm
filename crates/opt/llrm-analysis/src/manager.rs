@@ -67,8 +67,9 @@
 //!  Bounded          Registers, Counted, DominatedEdges
 //!  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
 //!  Accesses         Annotated, CallEffects                  (memoryssa)
-//!  ThroughMemory    Writes, Annotated, Registers
-//!  FloatFacts       ThroughMemory, Writes, Annotated, Registers
+//!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
+//!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
+//!  FloatFacts       ThroughMemory, PlainAccesses, Writes, Annotated, Registers
 //!  Published        Pointers, ExposedFrames                 (observers)
 //! ```
 //!
@@ -139,7 +140,7 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
-use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, Operand, ValueId};
+use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
@@ -153,6 +154,7 @@ use crate::floatfacts;
 use crate::globalsaa::{self, Globals, ProgramGlobals};
 use crate::induction;
 use crate::memory::{Identity, MemRef, MemoryKind, MemoryObject, ObjectInterner, Slice, Unit};
+use crate::memoryssa;
 use crate::ranges;
 
 impl<'a> Unit<'a> {
@@ -186,8 +188,10 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            plain: None,
             point_values: None,
-            callbacks: outer.cached_ref::<Callbacks>().and_then(|one| one.as_ref().ok()),
+            callbacks: None,
+            callbacks_from: Some(outer),
             loop_intervals: outer.loop_intervals(),
             congruent: None,
             proved: None,
@@ -1135,73 +1139,6 @@ pub struct Annotated;
 impl Analysis for Annotated {
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
-    const SOUND: bool = true;
-    const NAMES_VALUES: bool = true;
-
-    /// What it says of an instruction that is still there holds: the access is
-    /// the same pointer and bytes (a fresh `root` may be further back, where
-    /// the value that took a replaced one's place is itself a GEP, which is
-    /// less to know, not wrong), and it names no value that is gone. One made
-    /// since has no entry (unknown), one erased is not asked.
-    fn covers(
-        old: &Self::Result,
-        fresh: &Self::Result,
-        _context: &Context,
-        function: &Function,
-    ) -> bool {
-        let live = |value: ValueId| match function.value(value).def {
-            llrm_mir::module::ValueDef::Instruction(inst) => !function.is_erased(inst),
-            _ => true,
-        };
-        let names_live = |one: &MemRef| {
-            [one.pointer, one.root, one.segment].iter().flatten().all(|operand| match operand {
-                Operand::Value(value) => live(*value),
-                _ => true,
-            }) && one.base.is_none_or(live)
-        };
-        match (old, fresh) {
-            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, one)| {
-                function.is_erased(*inst)
-                    || (names_live(one)
-                        && fresh.get(inst).is_some_and(|now| {
-                            now.pointer == one.pointer
-                                && now.width == one.width
-                                && now.volatile == one.volatile
-                                && now.typed == one.typed
-                        }))
-            }),
-            (old, fresh) => old == fresh,
-        }
-    }
-
-    fn remapped(
-        old: &Self::Result,
-        substituted: &dyn Fn(ValueId) -> Option<Operand>,
-        _context: &Context,
-        _function: &Function,
-    ) -> Option<Self::Result> {
-        let follow = |operand: Option<Operand>| match operand {
-            Some(Operand::Value(value)) => Some(Some(substituted(value).unwrap_or(Operand::Value(value)))),
-            other => Some(other),
-        };
-        let refs = old.as_ref().ok()?;
-        let mut made = IndexMap::default();
-        for (inst, one) in refs {
-            let mut one = one.clone();
-            one.pointer = follow(one.pointer)?;
-            one.root = follow(one.root)?;
-            one.segment = follow(one.segment)?;
-            if let Some(base) = one.base {
-                one.base = match substituted(base) {
-                    None => Some(base),
-                    Some(Operand::Value(now)) => Some(now),
-                    Some(_) => return None,
-                };
-            }
-            made.insert(*inst, one);
-        }
-        Some(Ok(made))
-    }
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -1272,7 +1209,8 @@ impl Analysis for CallEffects {
     /// the same bytes by the value that replaced one found equal.
     fn remapped(
         old: &Self::Result,
-        substituted: &dyn Fn(ValueId) -> Option<Operand>,
+        substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
+        _changes: &[llrm_mir::module::Change],
         _context: &Context,
         _function: &Function,
     ) -> Option<Self::Result> {
@@ -1658,6 +1596,33 @@ pub fn writes(
     Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).cloned().unwrap_or_default()
 }
 
+/// The body's accesses as `Accesses::plain` makes them, each call writing what
+/// `Writes` says, with the graph they make kept in them: one per body state for
+/// `ThroughMemory`, `FloatFacts` and each walk they make, where each of them
+/// made the graph again (a whole-function pass of the body, 147 times for
+/// d_faces' 48 float solves and 63 through-memory ones).
+pub struct PlainAccesses;
+
+impl Analysis for PlainAccesses {
+    type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
+    const NAME: &'static str = "plain-accesses";
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
+        let references = analyses.get::<Annotated>(context, layout, function);
+        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let unit = Unit::within(context, layout, function, analyses.outer())
+            .with_references(references)
+            .with_exposed(&exposed);
+        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls)))
+    }
+}
+
 /// Float values, integers and memory in one solve, each call writing what
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
@@ -1689,12 +1654,17 @@ impl Analysis for FloatFacts {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
         let through = analyses.get::<ThroughMemory>(context, layout, function);
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_annotated(&references)
             .with_exposed(&exposed);
+        let unit = match &*plain {
+            Ok(plain) => unit.with_plain(plain),
+            Err(_) => unit,
+        };
         match &*through {
             Ok(integers) => floatfacts::solved_over(&unit, &calls, integers),
             Err(_) => floatfacts::solved_with(&unit, &calls),
@@ -1743,12 +1713,17 @@ impl Analysis for ThroughMemory {
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_references(references)
             .with_shape(&shape)
             .with_assumptions(&assumptions)
             .with_registers(&registers)
             .with_exposed(&exposed);
+        let unit = match &*plain {
+            Ok(plain) => unit.with_plain(plain),
+            Err(_) => unit,
+        };
         Ok(consts::known_walked(&unit, &calls))
     }
 }

@@ -92,6 +92,29 @@ pub struct CalleeFacts {
     callees: Option<std::rc::Rc<llrm_mir::memory::Callees>>,
     eligible: BTreeSet<String>,
     written: RefCell<BTreeMap<String, Written>>,
+    /// The functions that need the stack aligned at their entry: those holding
+    /// a double or an extended real (their 8-byte slots) and every function
+    /// that calls one of them directly.
+    aligned: BTreeSet<String>,
+}
+
+/// Whether some function of `module` has a value of type double or x87
+/// extended.
+fn holds_doubles(
+    module: &Module,
+    function: &llrm_mir::Function,
+) -> bool {
+    use llrm_mir::types::{FloatKind, Type};
+    let wide = |ty| matches!(
+        module.context.types.get(ty),
+        Type::Float(FloatKind::Double | FloatKind::X86Fp80)
+    );
+    function.parameters().iter().any(|&one| wide(function.value(one).ty))
+        || function
+            .layout()
+            .iter()
+            .flat_map(|&block| function.block(block).instructions())
+            .any(|&inst| wide(function.instruction(inst).ty))
 }
 
 impl CalleeFacts {
@@ -105,6 +128,13 @@ impl CalleeFacts {
     pub fn of(module: &Module) -> (Self, Vec<GlobalId>) {
         let graph = CallGraph::new(module);
         let private = direct_only(module);
+        let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
+        for id in graph.bottom_up() {
+            let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
+            if holds_doubles(module, function) || graph.callees_of(id).iter().any(|callee| aligned.contains(callee)) {
+                aligned.insert(id);
+            }
+        }
         let eligible = private
             .iter()
             .filter(|&&id| !graph.recursive(id))
@@ -115,9 +145,23 @@ impl CalleeFacts {
                 callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))),
                 eligible,
                 written: RefCell::default(),
+                aligned: aligned.iter().filter_map(|&id| module.global(id).name.clone()).collect(),
             },
             graph.bottom_up(),
         )
+    }
+
+    /// The bytes the stack pointer is a multiple of when `name` is entered: the
+    /// target's alignment where it needs the stack aligned (a quad on its stack
+    /// is then 8-aligned, which a 486 charges 3 clocks for otherwise: Intel486
+    /// data sheet 240440-002, section 10.1 and Table 2.1), else a slot, so code
+    /// that holds no double pays nothing for it.
+    pub fn stack_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        if self.aligned.contains(name) { arch.stack_alignment() } else { arch.stack_slot_bytes() }
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -304,6 +348,7 @@ mod tests {
             stack: RegId::SP,
             saved,
             slot: 2,
+            align: 2,
             optional: false,
             enter: false,
             free: false,

@@ -334,6 +334,25 @@ fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided() {
     assert!(!after.contains("br i1"), "{after}");
 }
 
+/// Decide solved memory for the body itself (164 M instructions over 36 runs on
+/// d_faces, 'mir decide'), beside the manager's `ThroughMemory` every other
+/// client reads. What the manager holds of the body is what it decides from.
+#[test]
+fn decide_reads_the_managers_facts_through_memory_and_derives_none() {
+    let text = ACROSS_READONLY_CALL.replace(
+        "  ret i16 %v\n",
+        "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
+    );
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    let _ = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, &layout, function);
+    let before = llrm_analysis::consts::memory_derivations();
+    assert!(super::_decided(context, &layout, function, &mut analyses).expect("decides"));
+    assert_eq!(llrm_analysis::consts::memory_derivations() - before, 0);
+}
+
 /// Whether @f still has a block named `name`.
 fn has(
     module: &Module,
@@ -641,4 +660,78 @@ b:
     let before = llrm_analysis::ranges::loops_solved();
     decided(context, &layout, function, &outer).expect("decides");
     assert_eq!(llrm_analysis::ranges::loops_solved() - before, 1, "the loop's bounds were worked out more than once");
+}
+
+/// `zip(a, b)` bounded by both slices' lengths: the header copy's phi takes
+/// `%10` from `b25`, the edge where `%10` is false, so it is `false` there and
+/// the branch on the phi is threaded. Only a literal arm was a constant
+/// to `decide`: the arm became one when `gvn` rewrote it, a round later, and
+/// the nib test
+/// `test_a_zip_loop_tested_for_equality_ends_on_the_flags_of_its_byte_counter`
+/// needed a fourth round of the pipeline (and failed under a budget of three).
+/// One run decides it.
+#[test]
+fn test_a_run_of_decide_leaves_nothing_for_another() {
+    let text = "define i32 @f(ptr addrspace(1) %0, ptr addrspace(1) %1) {
+b1:
+  %2 = load i16, ptr addrspace(1) %0
+  %3 = load i16, ptr addrspace(1) %1
+  %4 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %5 = load ptr addrspace(1), ptr addrspace(1) %4
+  %6 = getelementptr i8, ptr addrspace(1) %1, i16 4
+  %7 = load ptr addrspace(1), ptr addrspace(1) %6
+  br label %b3
+
+b3:
+  %8 = phi i16 [ 0, %b1 ], [ %24, %b11 ]
+  %9 = phi i32 [ 0, %b1 ], [ %23, %b11 ]
+  %10 = icmp ult i16 %8, %2
+  br i1 %10, label %b6, label %b25
+
+b4:
+  br i1 %10, label %b9, label %b10
+
+b5:
+  %11 = phi i32 [ %9, %b7 ]
+  ret i32 %11
+
+b6:
+  %12 = icmp ult i16 %8, %3
+  br label %b7
+
+b7:
+  %13 = phi i1 [ %10, %b25 ], [ %12, %b6 ]
+  br i1 %13, label %b4, label %b5
+
+b9:
+  %14 = mul i16 %8, 2
+  %15 = getelementptr inbounds i8, ptr addrspace(1) %5, i16 %14
+  %16 = icmp ult i16 %8, %3
+  br i1 %16, label %b11, label %b12
+
+b10:
+  unreachable
+
+b11:
+  %17 = getelementptr inbounds i8, ptr addrspace(1) %7, i16 %14
+  %18 = load i16, ptr addrspace(1) %15
+  %19 = sext i16 %18 to i32
+  %20 = load i16, ptr addrspace(1) %17
+  %21 = sext i16 %20 to i32
+  %22 = mul i32 %19, %21
+  %23 = add i32 %9, %22
+  %24 = add i16 %8, 1
+  br label %b3
+
+b12:
+  unreachable
+
+b25:
+  br label %b7
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, Decide);
+    assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
+    assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
 }

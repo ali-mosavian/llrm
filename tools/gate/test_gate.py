@@ -985,14 +985,10 @@ def test_a_passed_smoke_run_leaves_a_mark_for_its_head_that_the_train_reads(tmp_
     assert gate.smoked("abc123") and not gate.smoked("abc124")
 
 
-def test_the_bench_step_runs_in_batch_mode_only_when_the_train_asks_and_still_needs_zero_problems(monkeypatch):
-    plan = gate.plan(["tools/gate/gate.py"], "full")
-    monkeypatch.delenv("LLRM_BENCH_BATCH", raising=False)
-    plain = gate.commands(plan, gate.load(), gate.packages())["bench"]
-    monkeypatch.setenv("LLRM_BENCH_BATCH", "1")
-    batch = gate.commands(plan, gate.load(), gate.packages())["bench"]
-    assert "--batch" not in plain and "bench.py --batch" in batch
-    assert '" 0 problems"' in batch, "a batch's better counts pass; its problems must still be zero"
+def test_the_bench_step_needs_zero_problems_and_has_no_batch_mode():
+    """The train's batch mode (a better count passes, the train blesses it) is gone with the committed counts: a better count always passes."""
+    command = gate.commands(gate.plan(["tools/gate/gate.py"], "full"), gate.load(), gate.packages())["bench"]
+    assert "--batch" not in command and "BETTER" not in command and '" 0 problems"' in command
 
 
 def test_a_step_that_gets_little_cpu_on_a_loaded_host_is_not_stalled(tmp_path, monkeypatch):
@@ -1109,20 +1105,20 @@ def test_smoke_runs_the_pytest_files_that_are_not_slow_and_the_full_step_does_no
 
 
 def test_the_bench_step_prints_every_problem_row_not_the_last_three_lines(tmp_path):
-    """Train 3's bench step said `424 measurements: 22 problems, 2 better` under only the 2 BETTER lines: `tail -3` cut the 20 FAIL rows."""
+    """Train 3's bench step said `424 measurements: 22 problems` under only the last lines: `tail -3` cut the 20 FAIL rows."""
     import os
     import subprocess as sp
 
     (tmp_path / "uv").write_text(
         "#!/bin/sh\n"
         + "".join(f"echo 'FAIL row{n}: instructions 10 > 9 (worse)'\n" for n in range(20))
-        + "echo 'BETTER rowa: instructions 8 < 9'\necho 'BETTER rowb: instructions 8 < 9'\necho '424 measurements: 20 problems, 2 better'\n"
+        + "echo '424 measurements: 20 problems'\n"
     )
     (tmp_path / "uv").chmod(0o755)
     command = gate.commands(gate.plan(["bench/fib/fib.c"], "full"), gate.load(), gate.packages())["bench"]
     done = sp.run(["bash", "-c", command], capture_output=True, text=True, env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"})
     assert done.returncode != 0
-    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "BETTER rowa" in done.stdout and "20 problems" in done.stdout, done.stdout
+    assert all(f"FAIL row{n}:" in done.stdout for n in range(20)) and "20 problems" in done.stdout, done.stdout
 
 
 def test_smoke_runs_the_source_scans_that_are_root_test_binaries_and_the_other_tiers_do_not_twice():
@@ -1179,7 +1175,7 @@ def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
     private = gate.private_groups(p)
     assert {"reference", "run", "tools", "python"} <= set(private), private
-    assert "unit" not in private and "cost" not in private
+    assert "unit" not in private
 
 
 def test_every_tool_directory_a_private_capability_needs_is_set_for_the_jobs_that_run_it():
@@ -1237,6 +1233,23 @@ def test_a_plan_that_builds_nothing_on_a_fresh_target_says_so_instead_of_a_trace
     assert code == 0
 
 
+def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_nothing(tmp_path):
+    """CI had no counters (perf prints <not supported> on a hosted VM) and `measure` was left out of every run: callgrind counts there."""
+    import shutil
+
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    for name in ("sh", "grep"):
+        (tools / name).symlink_to(shutil.which(name))
+    (tools / "perf").write_text("#!/bin/sh\necho '<not supported>,,instructions:u,0,100.00,,'\n")
+    (tools / "perf").chmod(0o755)
+    env = {"HOME": str(tmp_path), "GATE_ALLOW_MISSING": "1", "PATH": str(tools), "QB45_DIR": ""}
+    assert {"perf", "counter"} <= gate.missing_capabilities(env).keys()
+    (tools / "valgrind").write_text("#!/bin/sh\n")
+    (tools / "valgrind").chmod(0o755)
+    got = gate.missing_capabilities(env)
+    assert "perf" in got and "counter" not in got
+    assert "counter" in gate.load()["capability"]
 def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
@@ -1256,3 +1269,10 @@ def test_a_step_that_skips_itself_fails_where_only_named_capabilities_may_be_mis
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 77
     monkeypatch.setenv("GATE_ALLOW_MISSING", "perf")
     assert gate.run_step("skipped", "exit 77", tmp_path, env)[1] == 1
+
+
+def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
+    """Without QCPORT the cost rows of QCport's 65 modules are left out and measure judges the programs alone, as green."""
+    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"])
+    assert "measure" in p.steps and "cost" in gate.private_groups(p)
+    assert gate.private_env("/p", "cost")["QCPORT"] == "/p/rm-quake/src"

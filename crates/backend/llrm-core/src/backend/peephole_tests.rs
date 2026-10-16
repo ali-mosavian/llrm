@@ -1866,6 +1866,45 @@ fn test_a_zero_test_before_a_branch_and_a_jump_reads_the_step() {
     assert_eq!(names, ["add", "", "jne", "jmp"]);
 }
 
+/// queens -O3 kept `sub eax,[esp+20]; cmp eax,0; je` where the spiller had
+/// folded the subtrahend into the sub: 5,676 executed `test eax,eax`, 5,676 of
+/// the row's 13,766 extra clocks. The sub's flags are the test whatever its
+/// source, where no instruction stands between.
+#[test]
+fn test_a_zero_test_after_a_step_with_a_memory_source_reads_the_step() {
+    let bx = rl(RegId::BX, 2);
+    let cell = Loc::Mem(Mem { through: RegId::BP, ..Mem::new(frame(-10), 2) });
+    let step = insn(
+        0,
+        Some((0, 3)),
+        Some(sem(Operation::Binary, "sub", vec![bx.clone()], vec![bx.clone(), cell])),
+        vec![],
+        vec![],
+    );
+    let compare =
+        insn(3, Some((3, 6)), Some(sem(Operation::Compare, "cmp", vec![], vec![bx, im(0, 2)])), vec![], vec![]);
+    let branch = insn(6, Some((6, 8)), Some(semt(Operation::Branch, "je", vec![], vec![], Some(0))), vec![], vec![]);
+    let ax = rl(RegId::AX, 2);
+    let flags = insn(
+        10,
+        Some((10, 12)),
+        Some(sem(Operation::Binary, "xor", vec![ax.clone()], vec![ax.clone(), ax])),
+        vec![],
+        vec![],
+    );
+    let exit = insn(12, Some((12, 13)), Some(sem(Operation::Return, "", vec![], vec![])), vec![], vec![]);
+    let blocks = vec![
+        block(0, vec![Arc::new(step), Arc::new(compare), Arc::new(branch)], vec![0, 10]),
+        block(10, vec![Arc::new(flags), Arc::new(exit)], vec![]),
+    ];
+    let names = tested(rules(), &body("zero", 0, crate::model::lir::shared(blocks))).blocks[0]
+        .insns
+        .iter()
+        .map(|one| one.what.as_ref().and_then(|what| what.name.clone()).unwrap_or_default())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["sub", "", "je"]);
+}
+
 /// rcflip's RAMP kept `add si,2; cmp si,0; jne`: an anchor carrying a
 /// phi's value sat between the test and its branch.
 #[test]

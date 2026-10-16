@@ -93,7 +93,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
-use llrm_analysis::consts::{self, Calls, Known, masked};
+use llrm_analysis::consts::{self, Known, masked};
 use llrm_analysis::graph::loops;
 use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
@@ -162,7 +162,11 @@ fn _decided(
         analyses.invalidate(function, &PreservedAnalyses::none());
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()))?;
+    // What is known through memory is the manager's, as every other client
+    // reads it.
+    let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+    let facts = Result::as_ref(&*through).map_err(String::clone)?;
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), facts)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -176,10 +180,11 @@ fn _decided(
 }
 
 /// Each block whose terminator's way is known, with that way.
-fn _decisions(unit: &Unit) -> Result<Vec<(BlockId, BlockId)>, String> {
+fn _decisions(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
-    let calls = Calls::default();
-    let facts = consts::known_walked(unit, &calls);
     // Points-to only for a pointer compared with null, as LLVM asks
     // isKnownNonZero of one value rather than solving every pointer.
     let pointers = std::cell::OnceCell::new();
@@ -413,6 +418,34 @@ pub fn _executable_successors(
     Some(all)
 }
 
+/// `value` as a constant in `from`, a block whose one predecessor branches on
+/// it: false where `from` is the branch's false side, true where it is the true
+/// side (LLVM JumpThreading's `getKnownConstant` of an edge).
+fn known_on_edge(
+    context: &mut Context,
+    function: &Function,
+    value: ValueId,
+    from: BlockId,
+) -> Option<Operand> {
+    let [only] = function.predecessors(from)[..] else { return None };
+    let branch = function.instruction(function.terminator(only)?);
+    let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
+        return None;
+    };
+    if branch.opcode != Opcode::Br || condition != value || taken == other {
+        return None;
+    }
+    let ty = function.value(value).ty;
+    let bit = if from == taken {
+        1
+    } else if from == other {
+        0
+    } else {
+        return None;
+    };
+    Some(Operand::Constant(context.int(ty, bit)))
+}
+
 /// A predecessor that only jumps to a block holding just a phi and a
 /// branch on it, and gives the phi a constant, goes straight where that
 /// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
@@ -441,6 +474,12 @@ pub fn _phi_threaded(
             continue;
         }
         for (value, from) in crate::lcssa::arms(function, phi) {
+            // A condition is its own answer on the edge that its branch
+            // settles.
+            let value = match value {
+                Operand::Value(one) => known_on_edge(context, function, one, from).unwrap_or(value),
+                other => other,
+            };
             let Operand::Constant(id) = value else { continue };
             let ConstantKind::Int(bits) = context.get(id).kind else { continue };
             let target = if bits & 1 == 1 { taken } else { other };

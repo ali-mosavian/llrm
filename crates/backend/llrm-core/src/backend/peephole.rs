@@ -323,7 +323,7 @@ impl Peephole {
         let body = spillforward::forwarded(&body);
         // After the forwarding: a reload on the other path is gone, and the
         // store need not run there.
-        let body = crate::backend::postrasink::sunk(&body);
+        let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
         let body = storecombine::combined(&body);
         let body = pushed_constants(self.rules, &body);
         let body = far_loads(
@@ -360,7 +360,8 @@ impl Peephole {
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            let body = zero_extensions(self.rules, &widened_moves(self.rules, &body));
+            let body =
+                zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
             gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
         } else {
             body
@@ -385,14 +386,16 @@ impl Peephole {
     }
 }
 
-/// A call's `add sp,2*n` as `n` pops into a dead scratch register, as BCC
-/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`).
-/// The add's flags must be dead: a pop sets none.
+/// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
+/// -Os cleans them, where the CPU prices it (`Profile::pops_arguments`). A
+/// pop takes back the mode's word: 2 bytes in 16-bit code, 4 in 32-bit. The
+/// add's flags must be dead: a pop sets none.
 pub fn popped_arguments(
     body: &LirBody,
     cpu: &Profile,
 ) -> Result<LirBody, String> {
     let regs = body.regs();
+    let unit = i64::from(body.bits / 8);
     let arithmetic =
         RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
     let exits = liveness::dead_at_exit(body);
@@ -410,9 +413,9 @@ pub fn popped_arguments(
                 {
                     match what.sources.as_slice() {
                         [first, Loc::Imm(Imm { value, address: None, .. })]
-                            if *first == sp && value % 2 == 0 && *value > 0 =>
+                            if *first == sp && value % unit == 0 && *value > 0 =>
                         {
-                            value / 2
+                            value / unit
                         }
                         _ => 0,
                     }
@@ -431,7 +434,12 @@ pub fn popped_arguments(
                     let pop = || {
                         Arc::new(with_what(
                             one,
-                            semantics(Operation::Pop, "pop", vec![Loc::Reg(reg(register, 2))], vec![]),
+                            semantics(
+                                Operation::Pop,
+                                "pop",
+                                vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
+                                vec![],
+                            ),
                         ))
                     };
                     insns.extend((0..words).map(|_| pop()));
@@ -1183,6 +1191,19 @@ pub fn _register_effects_of_what(
 }
 
 pub fn _register_effects(
+    regs: Regs,
+    bits: u32,
+    one: &Insn,
+    may_write: bool,
+    flags: bool,
+) -> Option<(Lanes, Lanes)> {
+    // Kept on the instruction: asked again by each pass of the peephole.
+    let (was, answer) = one.register_effects[usize::from(may_write) << 1 | usize::from(flags)]
+        .get_or_init(|| (bits, _register_effects_worked(regs, bits, one, may_write, flags)));
+    if *was == bits { *answer } else { _register_effects_worked(regs, bits, one, may_write, flags) }
+}
+
+fn _register_effects_worked(
     regs: Regs,
     bits: u32,
     one: &Insn,
@@ -2374,6 +2395,8 @@ static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHM
 /// overflow or adjust flags it would have cleared. Work independent of the
 /// computation may stand between them, in the block or in a sole predecessor
 /// that only falls into it: the computation sinks to just before the test.
+/// A computation with a memory source stays where it is, and answers a test it
+/// is beside.
 pub fn tested(
     rules: &peep::Rules,
     body: &LirBody,
@@ -2560,7 +2583,10 @@ fn _flag_source(
                 .as_ref()
                 .is_some_and(|what| what.sources.iter().all(|source| matches!(source, Loc::Reg(_) | Loc::Imm(_))));
             let (reads, writes) = (registers(&effect.reads), registers(&effect.writes));
-            return (operands_in_registers
+            // A memory source is read where it is: only a setter that moves
+            // down past other work must have its operands in
+            // registers.
+            return ((operands_in_registers || crossed.is_empty())
                 && crossed.iter().all(|other: &liveness::Effect| {
                     other.writes.is_disjoint(&reads)
                         && other.reads.is_disjoint(&writes)
