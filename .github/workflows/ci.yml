@@ -7,8 +7,12 @@
 # The tools that are not in this repository (Turbo C++, CodeView, QB 4.5, PDS, BCC, QCport's Borland build) are in a private
 # repository (tools/gate/tiers.toml [private]), read with a read-only deploy key (secret LLRM_PRIVATE_KEY) by the jobs of the groups
 # that need them, into the runner's temp directory: never cached, uploaded as an artifact (those groups' logs are not) or printed.
-# A pull request from a fork cannot read the secret: its private groups fail, named. Only `perf` may be missing (no counters on a
-# hosted VM: `measure` and the scaling tests are not run here); any other capability missing is a red job, not a skip.
+# A pull request from a fork cannot read the secret: its private groups fail, named. Only `perf` may be missing, and only on a hosted
+# runner (no counters on a VM: `measure` and the scaling tests are not run there); any other capability missing is a red job, not a skip.
+#
+# Runners: the heavy groups (tools/ci/pick_runners.py HEAVY) and build prefer tinytim, three ephemeral rootless-podman runners
+# (tools/ci/selfhosted, docs/working/ci.md). `plan` reads the repository variable TINYTIM_HEARTBEAT ("epoch idle", written each minute by
+# the supervisor): missing, older than 3 minutes or zero idle means every job runs on ubuntu-24.04. A fork's pull request never gets tinytim.
 #
 # Caches (all restored by .github/actions/setup; each key is what invalidates it):
 #   llrm-forks   ~/.cache/llrm: JWasm, JWlink, DOSBox-X, the Open Watcom tree, the gcc torture corpus. Key: hash of the
@@ -47,6 +51,8 @@ jobs:
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
+      runner_build: ${{ steps.runners.outputs.build }}
+      runner_groups: ${{ steps.runners.outputs.groups }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,11 +69,22 @@ jobs:
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
           echo "tier=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" >> "$GITHUB_OUTPUT"
           python3 tools/gate/gate.py plan --base "$base" | tee -a "$GITHUB_STEP_SUMMARY"
+      # tinytim when its heartbeat is fresh and a runner idle, else hosted (tools/ci/pick_runners.py). A fork's pull request is always hosted.
+      - id: runners
+        env:
+          HEARTBEAT: ${{ vars.TINYTIM_HEARTBEAT }}
+          FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          GROUPS_JSON: ${{ steps.plan.outputs.groups }}
+        run: |
+          json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$FORK")
+          echo "$json"
+          echo "build=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["build"]))')" >> "$GITHUB_OUTPUT"
+          echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["groups"]))')" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
     if: needs.plan.outputs.any == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner_build) }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -76,6 +93,9 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           save: "true"
+      # tinytim has perf (the sysctl and a seccomp profile allowing perf_event_open): nothing may be missing there.
+      - if: runner.environment == 'self-hosted'
+        run: echo "GATE_ALLOW_MISSING=" >> "$GITHUB_ENV"
       # The workspace's own outputs, from the last main build: cargo rebuilds only what changed since (restore_mtime.py).
       - id: target
         uses: actions/cache/restore@v4
@@ -108,7 +128,7 @@ jobs:
 
   gate:
     needs: [plan, build]
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -119,6 +139,9 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup
+      # tinytim has perf (the sysctl and a seccomp profile allowing perf_event_open): nothing may be missing there.
+      - if: runner.environment == 'self-hosted'
+        run: echo "GATE_ALLOW_MISSING=" >> "$GITHUB_ENV"
       - id: private
         run: echo "needed=${{ contains(fromJSON(needs.plan.outputs.private), matrix.group) }}" >> "$GITHUB_OUTPUT"
       # A fork's pull request cannot read the secret.

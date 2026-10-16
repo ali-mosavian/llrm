@@ -9,6 +9,12 @@ A green CI run means what `gate.py run` passing locally means: the same planner,
 3. The run's last job prints `GATE <tier> PASS at <head sha>`, or `FAIL: <groups>`, the line `gate.py run` prints.
 4. Per pull request CI tests that PR merged with main as it is then. Batch interactions are the periodic full gate on main's job and the merger's premerge against current main.
 
+## Runners
+
+Build and the heavy groups (`python`, `tools`, `reference`, `cost`) prefer tinytim; the rest, and anything tinytim cannot take, run on `ubuntu-24.04`. GitHub has no "prefer A, else B", so `plan` chooses: `tools/ci/pick_runners.py` reads the repository variable `TINYTIM_HEARTBEAT` (`<epoch> <idle runners>`, written each minute by the supervisor). Missing, older than 3 minutes or zero idle means hosted, so a dead tinytim never blocks a run. A fork's pull request is always hosted. Between `plan` and the job another run can take the idle runner; the job then waits for a free one.
+
+tinytim (`tools/ci/selfhosted`, `install.sh`): user `ghrunner`, which cannot read the secrets in `~alim`, runs `ghrunner.service`. Per job the supervisor gets a single-use JIT config from the API and starts a rootless podman container (crun) of the runner image; one job, then the container is gone. The PAT (`/etc/ghrunner/pat`, Administration and Variables on this repository) stays outside the containers. No Docker. Limits: 3 slots of 8 cores (cores 8-31; 0-7 stay free), 24 cores and 192 GB in total, low CPU weight. `perf` works there (host `kernel.perf_event_paranoid=-1`, a seccomp profile that allows `perf_event_open`), so `GATE_ALLOW_MISSING` is empty on tinytim and `perf` only on hosted. The private tools are cloned inside the container (see below) and die with it. "Require approval for all outside contributors" is on.
+
 ## Public and private steps
 
 Hosted runners hold the public tools only. What the repository must not hold is in a private repository, `ali-mosavian/llrm-private-tools`, read by a deploy key kept as the secret `LLRM_PRIVATE_KEY`:

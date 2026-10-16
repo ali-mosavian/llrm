@@ -1,0 +1,19 @@
+# One job per container: the runner image for the tinytim ephemeral runners. Build: install.sh.
+FROM ubuntu:24.04
+ARG RUNNER_VERSION=2.338.0
+ARG RUNNER_SHA256=af4b794c1bc41d73d40535e3fe092a39f9679cd8d965954c2aca25a05ca41d32
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+      ca-certificates curl git jq sudo zstd xz-utils unzip openssh-client build-essential python3 python3-venv \
+      linux-tools-generic linux-tools-common libicu74 libssl3t64 && rm -rf /var/lib/apt/lists/*
+# /usr/bin/perf is a wrapper wanting tools of the host's exact kernel; the real binary works on any.
+RUN ln -sf "$(ls /usr/lib/linux-tools/*/perf | tail -1)" /usr/local/bin/perf
+RUN useradd -m -s /bin/bash runner && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner
+USER runner
+WORKDIR /home/runner
+RUN curl -fsSL -o r.tgz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-x64-${RUNNER_VERSION}.tar.gz" \
+ && echo "${RUNNER_SHA256}  r.tgz" | sha256sum -c - && tar xzf r.tgz && rm r.tgz
+RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+ENV PATH=/home/runner/.cargo/bin:$PATH
+# The jit config arrives in ACTIONS_RUNNER_INPUT_JITCONFIG; the runner exits after its one job.
+ENTRYPOINT ["./run.sh"]

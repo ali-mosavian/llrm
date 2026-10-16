@@ -1,0 +1,20 @@
+[Unit]
+Description=tinytim ephemeral CI runners for ali-mosavian/llrm
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ghrunner
+ExecStart=/usr/bin/python3 /opt/ghrunner/supervisor.py
+Restart=always
+RestartSec=10
+Delegate=cpu cpuset memory pids io
+# 3 slots x 8 cores; below interactive work.
+CPUQuota=2400%
+CPUWeight=20
+MemoryMax=192G
+TasksMax=24000
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
