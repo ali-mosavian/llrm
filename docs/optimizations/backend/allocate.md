@@ -137,8 +137,7 @@ the one it has, so each joined copy becomes a deleted move.
 
 ### Candidates
 The first run (`regalloc base`) is a full allocation of the prepared body.
-If it spilled, and the profile has `search` (`-fallocation-search`; off at
--O0), the spilled values suggest other shapes of the same body and each is
+If it spilled, and the profile has `search` (`-fallocation-search`; -Omax), the spilled values suggest other shapes of the same body and each is
 allocated and priced (`_emitted`: instructions and memory operands
 weighted by block frequency); the cheapest wins.
 

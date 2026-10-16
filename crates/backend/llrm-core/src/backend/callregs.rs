@@ -131,7 +131,7 @@ fn _names(general: &[RegId]) -> IndexMap<RegId, BTreeSet<String>> {
     general
         .iter()
         .copied()
-        .chain([RegId::ES])
+        .chain([RegId::ES, ir::STACK])
         .map(|register| {
             (
                 register,

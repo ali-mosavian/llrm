@@ -34,9 +34,9 @@ def straight(n: int) -> str:
     return "unsigned fn(unsigned a, unsigned b, unsigned c, unsigned d) {\n" + body + "    return a ^ b ^ c ^ d;\n}\n"
 
 
-def steps(compiler: Path, source: Path, level: str = "-O1") -> dict[str, float]:
+def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str) -> dict[str, float]:
     """Each step's own instructions in millions (`LLRM_DEBUG=time`'s `[instr]` rows); skips where the host has no counter."""
-    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, *flags, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     assert done.returncode == 0, done.stderr[-500:]
     rows = re.findall(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", done.stderr, re.M)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
@@ -274,7 +274,8 @@ def test_a_memory_phi_asks_its_own_slot_sharing_and_not_a_pass_over_every_block(
     with tempfile.TemporaryDirectory() as work:
         source = Path(work) / "branches.c"
         source.write_text(scaling.AXES["branches"](400))
-        run = steps(compiler, source, "-O2")
+        # The spiller's route, which -Omax alone makes by default, is the subject.
+        run = steps(compiler, source, "-O2", "-fallocation-routes")
     assert run["ssa simulated"] < 150, f"branches N=400 -O2: ssa simulated cost {run['ssa simulated']} Minstr (150 allowed; 693 before): {run}"
 
 

@@ -131,6 +131,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::context::signed;
+use llrm_mir::dense::IdSet;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
@@ -1128,8 +1129,8 @@ pub fn edges_solved(
         });
     };
     let shape = unit.shape();
-    // A change that left the CFG as it was (`reached_by`) leaves the order of
-    // the blocks as it was.
+    // A change that left the CFG as it was (`Touched::reach`) leaves the order
+    // of the blocks as it was.
     let order = match before {
         Some((states, _)) if !llrm_support::env_set("LLRM_CHECK_REPLAY") => states.order.clone(),
         _ => {
@@ -1454,13 +1455,13 @@ impl Lookup for BlockScope<'_, '_> {
 pub fn loops_reached(
     function: &llrm_mir::module::Function,
     shape: &cfg::Shape,
-    blocks: &BTreeSet<BlockId>,
-    conditions: &BTreeSet<BlockId>,
+    blocks: &IdSet<BlockId>,
+    conditions: &IdSet<BlockId>,
     edges_changed: &dyn Fn(i64) -> bool,
 ) -> BTreeSet<i64> {
     let loops = &shape.loops;
-    let reached: BTreeSet<i64> = blocks.iter().map(|block| cfg::id(*block)).collect();
-    let judged: Vec<i64> = conditions.iter().map(|block| cfg::id(*block)).collect();
+    let reached: BTreeSet<i64> = blocks.iter().map(cfg::id).collect();
+    let judged: Vec<i64> = conditions.iter().map(cfg::id).collect();
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
     // Where each loop starts from: the block its header's dominator is, and the
