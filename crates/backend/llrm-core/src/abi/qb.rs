@@ -199,7 +199,8 @@ pub fn asm_call(name: &str) -> Option<Result<(Contract, Registers), AbiError>> {
                     | runtime::Reg::Cx
                     | runtime::Reg::Dx
                     | runtime::Reg::Si
-                    | runtime::Reg::Di => crate::backend::inline_asm::machine(one, bits)
+                    | runtime::Reg::Di
+                    | runtime::Reg::Sp => crate::backend::inline_asm::machine(one, bits)
                         .ok_or_else(|| AbiError(format!("inline assembly passes a value in {}", one.name()))),
                     other => Err(AbiError(format!("inline assembly passes a value in {}", other.name()))),
                 })

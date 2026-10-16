@@ -18,8 +18,8 @@
 //!   arithmetic leaves them standing.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
 //!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-//!   or loops `reached_by` the changes (a change to a terminator or to the CFG
-//!   redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
+//!   or loops `Touched::reach` the changes (a change to a terminator or to the
+//!   CFG redoes all); `Accesses` in [`crate::memoryssa`] survives pure moves.
 //! - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
 //!   fresh `run`.
 //!
@@ -121,10 +121,10 @@
 //! `CallEffects`, `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
 //! `Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
 //! `Bounded`; module entries `GlobalsAA`, `Summaries`, `Callbacks`; program
-//! entry `ProgramSummaries`; `Held`, `Ranges`, `reached_by`, `call_effects`,
-//! `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s `Accesses`,
-//! [`crate::observers`]'s `Published` and [`crate::noreturn`]'s `TerminalSites`
-//! are entries defined beside their analyses.
+//! entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
+//! `call_effects`, `writes`. [`crate::cfg`]'s `Shape`, [`crate::memoryssa`]'s
+//! `Accesses`, [`crate::observers`]'s `Published` and [`crate::noreturn`]'s
+//! `TerminalSites` are entries defined beside their analyses.
 //!
 //! # Needs
 //! [`crate::alias`], [`crate::consts`], [`crate::globalsaa`],
@@ -141,7 +141,7 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
-use llrm_mir::module::{BlockId, Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
+use llrm_mir::module::{Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
@@ -1553,8 +1553,8 @@ impl Analysis for Counted {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
-        let reach = reached_with_cfg(function, changes)?;
-        let reached = reach.blocks;
+        let reach = function.reach_of(changes)?;
+        let (reached, cfg_changed) = (reach.blocks.clone(), reach.cfg_changed());
         let shape = analyses.get::<Shape>(context, layout, function);
         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
         if !shape.loops.iter().map(|one| one.header).eq(previous.keys().copied()) {
@@ -1573,111 +1573,11 @@ impl Analysis for Counted {
         // branches of the blocks that dominate it.
         Some(induction::counted_renewed(&unit, previous, |one| {
             one.body.iter().any(|at| reached.contains(&crate::cfg::block(*at)))
-                || (reach.cfg
+                || (cfg_changed
                     && (function.predecessors(crate::cfg::block(one.header)).iter().any(|pred| reached.contains(pred))
-                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(*r), one.header))))
+                        || reached.iter().any(|r| shape.dominance.dominates(crate::cfg::id(r), one.header))))
         }))
     }
-}
-
-/// What a change reached: the blocks holding an instruction it touched, or one
-/// that reads a value a touched instruction makes, or one that reads the value
-/// such a reader makes, and so on; and of those the blocks whose branch, or
-/// assume, or call, is one that reads a value the change made, which can alter
-/// what holds below them.
-pub struct Reach {
-    pub blocks: BTreeSet<BlockId>,
-    pub conditions: BTreeSet<BlockId>,
-    /// A change was to the CFG: a terminator, or a block made or erased. Only
-    /// `reached_with_cfg` finds one.
-    pub cfg: bool,
-}
-
-/// `reached_by`, where a change to the CFG is reported (`Reach::cfg`), its
-/// blocks among those reached, and not a reason to start again: for a fact
-/// that is dropped where it is reached, and all of it when the CFG changed.
-pub fn reached_with_cfg(
-    function: &Function,
-    changes: &[Change],
-) -> Option<Reach> {
-    reached_through(function, changes, false, true)
-}
-
-/// What `changes` reached; none where a change was to the CFG.
-pub fn reached_by(
-    function: &Function,
-    changes: &[Change],
-) -> Option<Reach> {
-    reached_through(function, changes, false, false)
-}
-
-/// `reached_by` for a caller that has checked the edges are the ones it had:
-/// a rewritten terminator is a touched instruction, not a change of the CFG.
-pub fn reached_keeping_edges(
-    function: &Function,
-    changes: &[Change],
-) -> Option<Reach> {
-    reached_through(function, changes, true, false)
-}
-
-fn reached_through(
-    function: &Function,
-    changes: &[Change],
-    edges_kept: bool,
-    cfg_ok: bool,
-) -> Option<Reach> {
-    let mut cfg = false;
-    let mut blocks = BTreeSet::new();
-    let mut work: Vec<InstId> = Vec::new();
-    for change in changes {
-        let (inst, placed) = match *change {
-            Change::Parameters => return None,
-            Change::BlockCreated(block) | Change::BlockErased(block) => {
-                if !cfg_ok {
-                    return None;
-                }
-                cfg = true;
-                blocks.insert(block);
-                continue;
-            }
-            Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
-            Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
-            Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => continue,
-            Change::Cloned { to, .. } => (to, Vec::new()),
-        };
-        if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
-        {
-            if !cfg_ok {
-                return None;
-            }
-            cfg = true;
-        }
-        blocks.extend(placed);
-        work.push(inst);
-    }
-    let mut seen: BTreeSet<InstId> = work.iter().copied().collect();
-    let mut conditions = BTreeSet::new();
-    while let Some(inst) = work.pop() {
-        blocks.extend(function.parent(inst));
-        if let Some(block) = function.parent(inst)
-            && (function.instruction(inst).opcode.is_terminator()
-                || matches!(
-                    function.instruction(inst).opcode,
-                    Opcode::Call(_) | Opcode::Invoke(_)
-                ))
-        {
-            conditions.insert(block);
-        }
-        if let Some(result) = function.instruction(inst).result {
-            for user in function.users(result) {
-                if seen.insert(user.user) {
-                    work.push(user.user);
-                }
-            }
-        }
-    }
-    Some(Reach { blocks, conditions, cfg })
 }
 
 /// What each call writes, as `CallEffects` says: the `Calls` consts and
@@ -1893,12 +1793,12 @@ impl Analysis for DominatedEdges {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         previous.as_ref().as_ref().ok()?;
-        let reach = reached_with_cfg(function, changes)?;
-        if reach.cfg {
+        let reach = function.reach_of(changes)?;
+        if reach.cfg_changed() {
             return Some(Ok(crate::ranger::EdgeFacts::default()));
         }
         let shape = analyses.get::<Shape>(context, layout, function);
-        let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
+        let reached: BTreeSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
         Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
     }
@@ -1951,13 +1851,16 @@ impl Analysis for Bounded {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let bounds = previous.as_ref().ok()?;
-        let reach = reached_by(function, changes)?;
+        let reach = function.reach_of(changes)?;
+        if reach.cfg_changed() {
+            return None;
+        }
         let shape = analyses.get::<Shape>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
         edges.as_ref().as_ref().ok()?;
         // A loop starts from the edges' facts of its dominator: those of a
         // block a change reached or one it dominates may have changed.
-        let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
+        let reached: BTreeSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
             dominated_by(&shape, &reached, at)
         });
