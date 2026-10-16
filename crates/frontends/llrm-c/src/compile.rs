@@ -1054,6 +1054,32 @@ mod tests {
         assert!(body[..at].iter().any(|one| one.starts_with("mov ax, ")), "{body:?}");
     }
 
+    /// Inline code answering a small struct in registers (`div_t` in
+    /// `[__dx __ax]`) was refused ("a 4-byte aggregate as a value"), and
+    /// clib's `div`, `delay` and `__getctime` with it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_may_answer_a_small_struct() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pair.c");
+        std::fs::write(
+            &source,
+            "typedef struct { int quot; int rem; } pair;\nextern pair split(int a, int b);\n\
+             #pragma aux split = \"cwd\" \"idiv cx\" __parm [__ax] [__cx] __value [__dx __ax] __modify __exact [__ax __dx]\n\
+             pair run(int a, int b) { return split(a, b); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records pair.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "pair", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("db 099h,0f7h,0f9h") && asm.contains("retf"), "{asm}");
+    }
+
     /// Watcom's -oa lets a store through a pointer leave alone every object
     /// the unit never takes the address of: INIT `sw` said so, and llrm-c
     /// read only its debug bits, so `after_store` read `counter` and `seen`
