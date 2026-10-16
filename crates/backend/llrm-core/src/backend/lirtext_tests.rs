@@ -145,17 +145,17 @@ fn f(v1@ax) -> @eax   ; calls clobber eax ecx
 frame  slot0 [bp-4] 2 B
 
 B0  entry  → B1
-    0  v2         = mov.i2      1
+    0  v2         = mov.i16     1
     1               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
         0  v5         = phi         B0: v2, B1: v4
-        1  v4         = sub.i2      v5, 1
-        2               cmp.i2      v4, -1
+        1  v4         = sub.i16     v5, 1
+        2               cmp.i16     v4, -1
         3               jne         B1 else B2
 
 B2  ← B1  → exit
-    0  v7         = load.i2     [slot0]                                 ; reload
+    0  v7         = load.i16    [slot0]                                 ; reload
     1  v10@eax    = call        fib(v7@ax)
     2  v11@eax    = call        fib(v7@ax)
     3  v12@eax    = call        log(v7@ax)                              ; also clobbers esi

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:df6561108f6dfc0b4fd83794d01eef059a9dfe6c2afe5ae32557ae7f8a35219e -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:2b9f4d03b35f0edd276e1aee38676abc69e63a800ae2414792c8aac95ff7ebf4 -->
 
 # lirtext
 
@@ -37,13 +37,13 @@ The loop of a Fibonacci function, after the allocator:
 fn _f@3(v5@ax) -> @eax
 
 B0  entry  → B1                                                    ×1.0
-  0  bx      = mov.i2     1
-  1  cx      = mov.i2     0
+  0  bx      = mov.i16     1
+  1  cx      = mov.i16     0
   2           jmp         B1
 
     B1  ← B0 B3  → B3 B2  loop                                     ×32.0
-      3  ax      = sub.i2     ax, 1
-      4           cmp.i2      ax, -1
+      3  ax      = sub.i16     ax, 1
+      4           cmp.i16      ax, -1
       5           jne         B3 else B2                        ; 97% taken
 ```
 
