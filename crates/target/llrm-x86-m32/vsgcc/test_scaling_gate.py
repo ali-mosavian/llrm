@@ -661,6 +661,19 @@ def test_a_nest_of_loops_proves_each_loop_from_its_own_blocks_on_the_nest_axis(t
     assert cost[128] <= 3.75 * cost[64], f"analysis counted {cost[64]:.0f} -> {cost[128]:.0f} Minstr"
 
 
+def test_liveness_is_a_dataflow_over_bit_rows_not_a_step_for_each_value_in_each_block_on_the_joins_axis(tmp_path):
+    """`liveness::solved` followed each value back from its reads, a map lookup and a set insert for each (value, block) it is live in: on
+    `joins` -O2 the spill model of gvn's numberings solved it nine times a compile, and `mir gvn` read 2,496 -> 8,741 Minstr at N=256, 512
+    (3.5 per doubling; 3.8 at 1,024). As a union over successors of rows of bits it reads 1,320 -> 3,706 (2.8). More than 3.2 per
+    doubling fails."""
+    cost = {}
+    for size in (256, 512):
+        source = tmp_path / f"joins_{size}.c"
+        source.write_text(scaling.AXES["joins"](size))
+        cost[size] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["mir gvn"]
+    assert cost[512] <= 3.2 * cost[256], f"mir gvn {cost[256]:.0f} -> {cost[512]:.0f} Minstr"
+
+
 def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
     """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
     walked once per web for every instruction of the block, with three hash lookups per pair to count it: `lir coalesce` read
