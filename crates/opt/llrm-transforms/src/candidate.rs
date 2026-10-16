@@ -134,15 +134,17 @@ pub fn adopted(
     gain: Gain,
     baseline: Baseline,
 ) -> bool {
-    let mut kept = match baseline {
+    // The body as `reoptimize` leaves it, priced in place and given back as it
+    // was: only the candidate replaces it.
+    let checkpoint = match baseline {
         Baseline::Kept => None,
-        Baseline::Reoptimized => Some(unit.function.clone()),
+        Baseline::Reoptimized => Some(unit.function.checkpoint()),
     };
-    if let Some(body) = kept.as_mut() {
+    if checkpoint.is_some() {
         reoptimize(&mut Unit {
             context: &mut *unit.context,
             layout: unit.layout,
-            function: body,
+            function: &mut *unit.function,
             id: None,
             metadata: unit.metadata,
             declared: &mut *unit.declared,
@@ -161,7 +163,7 @@ pub fn adopted(
     let size = |state: &Function| occurrence::operations(state).count();
     let count = |state: &Function| cfg::Shape::of(state).loops.len();
     let price = |state: &Function| priced(unit, outer, costs, state, pricing);
-    let body = kept.as_ref().unwrap_or(&*unit.function);
+    let body = &*unit.function;
     let prices = (price(body), price(&candidate));
     llrm_support::debug!(
         "candidate",
@@ -181,6 +183,9 @@ pub fn adopted(
         }
         Gain::CheaperBy(percent) => worse(&|after, before| after * 100 < before * (100 - percent)),
     };
+    if let Some(checkpoint) = checkpoint {
+        unit.function.rollback(checkpoint);
+    }
     if refused {
         return false;
     }

@@ -151,25 +151,3 @@ fn pointers_name_the_pointer_values_an_edit_reached_and_no_integer() {
     let p = module.function_mut("f").expect("@f").1.parameters()[2];
     assert_eq!(pointer.pointers.iter().collect::<Vec<_>>(), [p]);
 }
-
-/// gvn replaced a function by its edited fork and every mark taken before the
-/// fork stopped resolving: `touched_since` was none, and each analysis kept for
-/// update, and each memo holding a body's mark, started from nothing.
-/// Adopting the fork keeps the history of both.
-#[test]
-fn adopting_a_fork_keeps_the_marks_taken_before_it() {
-    let mut module = module();
-    let f = module.function_mut("f").expect("@f").1;
-    let (x, _) = named(f, "x");
-    let (y, _) = named(f, "y");
-    let a = Operand::Value(f.parameters()[0]);
-    let mark = f.mark();
-    f.set_operand(x, 1, a);
-    let mut fork = f.fork();
-    fork.set_operand(y, 1, a);
-    f.adopt(fork);
-    let touched = f.touched_since(mark).expect("the mark resolves after the fork");
-    let mut changed: Vec<_> = touched.operands_changed.iter().collect();
-    changed.sort_by_key(|value| value.0);
-    assert_eq!(changed, [named(f, "x").1, named(f, "y").1]);
-}

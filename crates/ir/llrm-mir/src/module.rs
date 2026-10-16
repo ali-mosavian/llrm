@@ -685,32 +685,6 @@ impl Function {
         Mark { uid: self.lineage.uid, at: self.lineage.logged, cuts: self.lineage.cuts.len() }
     }
 
-    /// A copy to edit and put in this function's place, which carries on its
-    /// history: a mark taken of this one is a point in the copy's, and what
-    /// the copy logs follows it. For a copy that replaces the function, not
-    /// one kept beside it (`clone` is that: its edits are its own).
-    pub fn fork(&self) -> Self {
-        let mut copy = self.clone();
-        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged, cuts: self.lineage.cuts.clone() };
-        copy
-    }
-
-    /// Puts `fork`, a `fork` of this function that was edited, in its place
-    /// with the history both made: a mark taken before the fork still
-    /// resolves, and what an analysis kept past it is brought up to date
-    /// from.
-    pub fn adopt(
-        &mut self,
-        mut fork: Self,
-    ) {
-        debug_assert!(fork.lineage.uid == self.lineage.uid, "a fork of this function");
-        let mut history = std::mem::take(&mut self.changes.0);
-        history.append(&mut fork.changes.0);
-        fork.changes.0 = history;
-        fork.taken = self.taken;
-        *self = fork;
-    }
-
     /// What changed since `mark`, in order; none where `mark` is of another
     /// function or what followed it has been taken.
     pub fn changes_since(

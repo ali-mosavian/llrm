@@ -34,6 +34,9 @@ struct Frame {
     debug: Option<(Vec<DebugRecord>, Vec<MetadataId>)>,
     /// The whole function, for an edit that changes more than the parts.
     whole: Option<Box<Function>>,
+    /// `LLRM_CHECK_ROLLBACK`: the function as it was, which a rollback must
+    /// give back (an edit that bypassed the editor does not).
+    check: Option<Box<Function>>,
 }
 
 /// The edits a rollback undid, to make again.
@@ -103,6 +106,11 @@ impl Function {
             blocks: self.blocks.len(),
             logged: self.lineage.logged,
             taken: self.taken,
+            check: checked().then(|| {
+                let mut copy = self.clone();
+                copy.journal = Journal::default();
+                Box::new(copy)
+            }),
             ..Frame::default()
         };
         self.journal.frames.push(frame);
@@ -205,6 +213,9 @@ impl Function {
         // Names made since are in the index, and names given up are not.
         self.names = Default::default();
         self.cut_log(frame.logged, frame.taken);
+        if let Some(was) = frame.check {
+            assert!(*self == *was, "LLRM_CHECK_ROLLBACK: the rollback did not give the function back as it was");
+        }
         redo
     }
 
@@ -415,8 +426,14 @@ impl PartialEq for CloneWitness {
     }
 }
 
-/// How many times this thread has cloned (or forked) a function, for a test
+/// How many times this thread has cloned a function, for a test
 /// that a pass prices a change without a copy.
 pub fn clones() -> usize {
     CLONES.with(std::cell::Cell::get)
+}
+
+/// `LLRM_CHECK_ROLLBACK` is set.
+fn checked() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_ROLLBACK").is_some())
 }

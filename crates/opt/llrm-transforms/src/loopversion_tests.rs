@@ -285,3 +285,24 @@ fn a_big_body_is_not_tried() {
     let (module, gained) = copied(&text);
     assert_eq!(gained, 0, "{}", printed(&module));
 }
+
+/// The body a copy is judged against (cleaned by the pipeline, then priced) was
+/// a clone of the function made for the judgement, a second copy of the body
+/// for each trial: it is now priced in place and rolled back, so a trial copies
+/// the body once, for the candidate.
+#[test]
+fn a_trial_copies_the_body_once_for_the_candidate_and_not_again_for_the_judgement() {
+    let text = striding(BY_STRIDE);
+    let clones = |judged: bool| {
+        let mut module = parsed(&text);
+        let before = llrm_mir::journal::clones();
+        if judged {
+            managed(&mut module, super::Version { passes: Vec::new() });
+        } else {
+            managed(&mut module, Unjudged);
+        }
+        llrm_mir::journal::clones() - before
+    };
+    let (unjudged, judged) = (clones(false), clones(true));
+    assert_eq!(judged - unjudged, 1, "one candidate, and nothing more copied to judge it by");
+}
