@@ -6,8 +6,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       ca-certificates curl git jq sudo zstd xz-utils unzip openssh-client build-essential python3 python3-venv \
       linux-tools-generic linux-tools-common libicu74 libssl3t64 && rm -rf /var/lib/apt/lists/*
-# /usr/bin/perf is a wrapper wanting tools of the host's exact kernel; the real binary works on any.
-RUN ln -sf "$(ls /usr/lib/linux-tools/*/perf | tail -1)" /usr/local/bin/perf
+# /usr/bin/perf is a wrapper wanting tools of the host's exact kernel; the real binary works on any. Replaced in place: jobs set their own PATH.
+RUN dpkg-divert --local --rename --add /usr/bin/perf && ln -sf "$(ls /usr/lib/linux-tools/*/perf | tail -1)" /usr/bin/perf
 # What .github/actions/setup installs on every hosted job, baked in (its apt step then finds it installed). Refresh: install.sh.
 RUN curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
  && echo "deb https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" > /etc/apt/sources.list.d/llvm20.list \

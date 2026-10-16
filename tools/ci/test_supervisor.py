@@ -34,3 +34,10 @@ def test_the_workspace_is_the_hosted_one():
     """The target cache from a hosted build holds /home/runner/work paths in llrm-c; on tinytim's /home/runner/_work every wccq spawn failed
     "No such file or directory" (30 python-group test files red)."""
     assert supervisor.WORK == "work"
+
+
+def test_the_image_replaces_the_perf_wrapper_in_place():
+    """/usr/bin/perf is a wrapper that wants tools of the host's exact kernel; a job's PATH found it before /usr/local/bin and the scaling
+    tests (12 files) read "perf counted nothing"."""
+    text = (Path(__file__).parent / "selfhosted/Containerfile").read_text()
+    assert "dpkg-divert --local --rename --add /usr/bin/perf" in text
