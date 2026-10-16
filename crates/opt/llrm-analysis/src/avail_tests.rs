@@ -670,3 +670,29 @@ fn test_a_load_blocked_by_its_nearest_load_collects_no_others() {
     assert!(found.len() >= 40, "each second load is served by the first: {}", found.len());
     assert!(collected < 10 * 40, "{collected} candidates collected for 80 loads in 40 stages");
 }
+
+/// Loads of cells of one array, each its own instruction, with other cells of
+/// it overwritten after them. Each load found the cells it reaches for itself:
+/// a set of bits for each cell of the function for each access, the
+/// instructions times the cells, and 27% of `dse` on the scaling `unrolled`
+/// axis (188 against 258 Minstr at 32, a slope of 2.0 a doubling). Loads of
+/// bytes that meet the same cells share one set, and cells their bytes miss are
+/// not in it.
+#[test]
+fn loads_of_one_array_share_the_cells_they_reach() {
+    let loads = 40;
+    let mut body = String::from("define i16 @f(i16 %a) {\nb0:\n");
+    for k in 0..loads {
+        body += &format!("  %v{k} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * (k % 4));
+    }
+    for cell in 0..4 {
+        body += &format!("  store i16 {}, ptr getelementptr (i8, ptr @g, i16 {})\n", cell + 9, 32 + 2 * cell);
+    }
+    body += "  ret i16 %v0\n}\n";
+    let parsed = Parsed::new(&body);
+    let unit = parsed.unit();
+    super::REACH_SETS.with(|built| built.set(0));
+    dead_stores(&unit, &Accesses::plain(&unit, &Calls::default()), None);
+    let built = super::REACH_SETS.with(std::cell::Cell::get);
+    assert!(built > 0 && built * 4 <= loads, "{loads} loads of one array built {built} sets of cells");
+}

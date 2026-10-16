@@ -451,8 +451,12 @@ pub fn _computation(
                 | Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne)
         );
     if unordered {
-        // Any total order will do.
-        let order = |operand: &Operand| format!("{operand:?}");
+        // Any total order will do: what kind of operand, then which.
+        let order = |operand: &Operand| match *operand {
+            Operand::Value(value) => (0u8, value.0, None),
+            Operand::Constant(constant) => (1, 0, Some(constant)),
+            Operand::Block(block) => (2, block.0, None),
+        };
         if order(&named[0]) > order(&named[1]) {
             named.swap(0, 1);
         }

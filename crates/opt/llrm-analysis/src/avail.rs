@@ -132,7 +132,7 @@ use crate::cfg;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
-use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets, overlap_span};
+use crate::regions::{OverlapBucket, OverlapBuckets, displaced_buckets, overlap_bucket, overlap_buckets, overlap_span};
 
 /// The cell `inst` purely loads, and the value it lands in.
 pub fn loaded_into(
@@ -193,6 +193,13 @@ pub fn forwardable_walk(
 
 thread_local! {
     static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The sets of cells a dead-store solve has built for the accesses of its
+    /// instructions, for a test that accesses to one array share one.
+    pub(crate) static REACH_SETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread has walked for every load, for a test that a
@@ -430,11 +437,17 @@ impl Stored {
     }
 }
 
-/// The cells in the buckets an instruction's accesses reach.
+/// The cells in the buckets an instruction's accesses reach, and meeting their
+/// bytes where an access has them.
 struct Reached {
     all: Bits,
-    each: Vec<Bits>,
+    each: Vec<Rc<Bits>>,
 }
+
+/// What decides the cells an access reaches: its buckets and, where it has
+/// them, the bucket frame and bytes that narrow them. Accesses through
+/// different pointers into one array share it.
+type Reach = (Option<Vec<OverlapBucket>>, Option<(Vec<OverlapBucket>, (i128, i128))>);
 
 /// What a dead-store solve reads of the function besides its instructions.
 struct Solve<'a, 'u> {
@@ -447,6 +460,10 @@ struct Solve<'a, 'u> {
     /// reaches, and all of them together. They do not move with the round, so
     /// a round asks the live ones of these and not the buckets again.
     reached: RefCell<HashMap<InstId, Rc<Reached>>>,
+    /// The cells each distinct `Reach` finds, once: an instruction's accesses
+    /// to one array are one set, not a set each (bits for each cell for each
+    /// access was the instructions times the cells).
+    reaches: RefCell<HashMap<Reach, Rc<Bits>>>,
     /// Per instruction, lazily: the cell it purely stores to, as numbered.
     cell_of: RefCell<HashMap<InstId, Option<usize>>>,
 }
@@ -557,20 +574,50 @@ impl Solve<'_, '_> {
             .borrow_mut()
             .entry(inst)
             .or_insert_with(|| {
-                let each: Vec<Bits> = loads
+                let each: Vec<Rc<Bits>> = loads
                     .iter()
                     .chain(stores)
                     .map(|reference| {
-                        let mut cells = stored.none();
-                        let mut take = |at: &usize| cells.insert(*at);
-                        match overlap_buckets(reference, &stored.index.parts) {
-                            None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(&mut take),
-                            Some(buckets) => buckets
-                                .iter()
-                                .filter_map(|bucket| stored.index.buckets.get(bucket))
-                                .flat_map(IndexMap::keys)
-                                .for_each(&mut take),
+                        let reached = overlap_buckets(reference, &stored.index.parts);
+                        let displaced = displaced_buckets(reference, &stored.index.parts);
+                        let key: Reach = (
+                            reached.clone(),
+                            displaced.as_ref().map(|(near, span)| {
+                                let mut near: Vec<OverlapBucket> = near.iter().copied().collect();
+                                near.sort();
+                                (near, *span)
+                            }),
+                        );
+                        if let Some(found) = self.reaches.borrow().get(&key) {
+                            return Rc::clone(found);
                         }
+                        #[cfg(test)]
+                        REACH_SETS.with(|built| built.set(built.get() + 1));
+                        let mut cells = stored.none();
+                        for at in stored.index.asked(reached.clone(), displaced) {
+                            cells.insert(*at);
+                        }
+                        if llrm_support::env_set("LLRM_CHECK_REACHED") {
+                            // A cell the span index leaves out is one the
+                            // access cannot change.
+                            let every: Vec<usize> = match &reached {
+                                None => stored.index.buckets.values().flat_map(IndexMap::keys).copied().collect(),
+                                Some(buckets) => buckets
+                                    .iter()
+                                    .filter_map(|bucket| stored.index.buckets.get(bucket))
+                                    .flat_map(IndexMap::keys)
+                                    .copied()
+                                    .collect(),
+                            };
+                            for at in every {
+                                assert!(
+                                    cells.contains(at) || !may_clobber(self.unit, None, &stored.cells[at], reference),
+                                    "LLRM_CHECK_REACHED: a cell the access can change was left out"
+                                );
+                            }
+                        }
+                        let cells = Rc::new(cells);
+                        self.reaches.borrow_mut().insert(key, Rc::clone(&cells));
                         cells
                     })
                     .collect();
@@ -645,6 +692,7 @@ pub fn dead_stores_escaping(
         escaped,
         stored: Stored::new(unit, accesses, private),
         reached: RefCell::default(),
+        reaches: RefCell::default(),
         cell_of: RefCell::default(),
     };
     let stored = &solve.stored;
