@@ -1,8 +1,8 @@
-reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
+reason = "ssaspill: a value a loop reloads each trip on any edge is not held at its header; jpeg -O2 bas/bq16 -38 B, stft_fixed bq32 -O2 -389,000 instructions; jpeg c -O2 +4 B"
 blessed = "2026-10-16"
 
 [bas.O2]
-code_bytes = 1776
+code_bytes = 1775
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1261.3369
@@ -14,7 +14,7 @@ bss_bytes = 0
 kernel_ms = 1263.1086
 
 [bq16.O2]
-code_bytes = 1758
+code_bytes = 1757
 data_bytes = 4677
 bss_bytes = 0
 kernel_ms = 1526.7033
@@ -26,8 +26,8 @@ bss_bytes = 0
 kernel_ms = 1527.6111
 
 [bq32.O2]
-instructions = 98394530
-code_bytes = 1636
+instructions = 98005658
+code_bytes = 1637
 data_bytes = 4709
 bss_bytes = 0
 
