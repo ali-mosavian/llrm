@@ -1223,6 +1223,14 @@ def test_the_checks_that_build_nothing_run_alone_before_the_build():
     assert "needs: [plan, build]\n    # A skipped ancestor" in workflow and "needs.build.result == 'success' }}" in workflow, "a skipped static job must not skip the gate"
 
 
+def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
+    """Forty drafts running the full gate would swamp the runners: ready_for_review starts it, the merge loop reads only `PASS at`."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
+    assert "!github.event.pull_request.draft && needs.plan.outputs.any" in workflow
+    assert "DRAFT at ${head:0:12}" in workflow
+
+
 def test_the_ci_summary_prints_the_gate_line_with_the_head_it_is_of():
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}" in workflow and "github.event.pull_request.head.sha" in workflow

@@ -27,6 +27,8 @@ name: ci
 
 on:
   pull_request:
+    # A draft runs plan and static only (minutes); marking it ready starts the full gate.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
   workflow_dispatch:
@@ -104,7 +106,7 @@ jobs:
 
   build:
     needs: [plan, static]
-    if: ${{ !cancelled() && needs.plan.outputs.any == 'true' && needs.static.result != 'failure' }}
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.plan.outputs.any == 'true' && needs.static.result != 'failure' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_build) }}
     timeout-minutes: 90
     steps:
@@ -274,6 +276,11 @@ jobs:
       - run: |
           head="${{ github.event.pull_request.head.sha || github.sha }}"
           echo "plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
+          if [ "${{ github.event.pull_request.draft }}" = true ] && [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ]; then
+            line="GATE ${{ needs.plan.outputs.tier }} DRAFT at ${head:0:12}: static=${{ needs.static.result }}, the gate runs when it is ready for review (not a pass)"
+            echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}"
           else
