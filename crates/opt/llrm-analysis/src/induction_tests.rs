@@ -2619,5 +2619,8 @@ out:
     assert!(!still.contains(parsed.value("i")), "the header's phi");
     assert!(!still.contains(parsed.value("j")), "made in the loop");
     assert!(!still.contains(parsed.value("c")), "made in the loop");
-    assert!(invariant(function, &BTreeSet::new()).contains(parsed.value("j")), "no loop defines nothing");
+    assert!(
+        invariant(function, &llrm_mir::forest::Body::from_blocks([])).contains(parsed.value("j")),
+        "no loop defines nothing"
+    );
 }
