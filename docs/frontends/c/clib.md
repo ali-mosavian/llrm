@@ -27,7 +27,7 @@ The build is 386-class real mode: `x86-m16` generates 386 code only ([targets](.
 | compile time | 11.0 s for 959 objects against 1.4 s for 978; worst `streamio/scnf_s` 0.35 s against 0.011 s |
 | `clibtest` | 14 of 18 print the same and exit the same; `direct`, `search`, `string` pass where the reference's 2020 library fails the 2026 tests; `bios` links in neither |
 
-The library the programs link is **mixed**: 969 objects by `llrm-c`, 246 by JWasm, and 7 C objects from the reference for what `llrm-c` still refuses. `-Os` is `-os` on the makefiles' objects that ask for it; the makefiles' general flags (`-oabelr -om`) ask for no size.
+The library the programs link is **mixed**: 969 objects by `llrm-c`, 244 by JWasm, and 7 C objects from the reference for what `llrm-c` still refuses. `-Os` is `-os` on the makefiles' objects that ask for it; the makefiles' general flags (`-oabelr -om`) ask for no size.
 
 ## What `llrm-c` refuses
 
