@@ -162,6 +162,11 @@ pub fn folded_with(
     let (decided, hoisted, predicated, merged) = {
         let shape = cfg::Shape::of(function);
         let unit = memory::Unit::within(context, layout, function, outer).with_shape(&shape);
+        // Found once for the body: each guard the exits ask for climbs the
+        // branches above its loop, and each climb found them again (765 times
+        // at 64 loops, 254 M of `indvars`' 528 M).
+        let assumed = llrm_analysis::assumptions::Assumptions::of(&unit);
+        let unit = unit.with_assumptions(&assumed);
         let facts = standing.of(&unit);
         let unit = unit.with_registers(facts);
         let loops = shape.loops.clone();

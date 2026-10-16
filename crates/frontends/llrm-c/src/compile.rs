@@ -73,7 +73,18 @@ pub fn selected(
     dump: Option<&Path>,
     codegen: &llrm_core::driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    selected_checking(text, module, dump, codegen, None, false)
+    selected_checking(text, module, dump, codegen, None, false, false)
+}
+
+/// [`selected`], a module that defines the entry asking its linker for the
+/// target's start-up (`-fentry-requests`).
+pub fn selected_requesting(
+    text: &str,
+    module: &str,
+    dump: Option<&Path>,
+    codegen: &llrm_core::driver::Options,
+) -> Result<masm::Module, CompileError> {
+    selected_checking(text, module, dump, codegen, None, false, true)
 }
 
 /// What C's runtime says of its stack on `target`: the `stack.toml` its
@@ -99,11 +110,18 @@ pub fn selected_checking(
     codegen: &llrm_core::driver::Options,
     stack_check: Option<llrm_core::hir::model::StackCheck>,
     wrapv: bool,
+    entry_requests: bool,
 ) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
         unit.wrapv = wrapv;
-        let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+        let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+        // Only a program linked against the target's own start-up library asks
+        // for it.
+        if !entry_requests {
+            profile.entry_requests.clear();
+            profile.entry_argument_requests.clear();
+        }
         let calling = codegen.arch.calling();
         let cc_of = |name: &str| {
             calling
@@ -173,6 +191,10 @@ struct Args {
     /// Watcom switches the program opts into, passed to wccq: -oa, -on, and
     /// the preprocessor's -D and -U as its `-d` and `-u`.
     watcom: Vec<String>,
+    /// `-fentry-requests`: the module that defines the entry asks its linker
+    /// for the target's start-up (`entry_requests` of its description), as
+    /// Open Watcom's compiler does for a program linked with its library.
+    entry_requests: bool,
     /// The target, the built-in DOS on a 386 unless `--machine` names
     /// another, and the pipeline.
     codegen: llrm_core::driver::Options,
@@ -212,6 +234,14 @@ pub struct Profile {
     pub interrupt_parameters: Vec<String>,
     /// Open Watcom's registers, for inline code that names them.
     pub hardware: crate::hwreg::Registers,
+    /// Symbols a module that defines the entry asks its linker for, and, where
+    /// the entry takes parameters, more: Open Watcom's `_cstart_` and `__argc`
+    /// (its start-up, and what builds `argv`).
+    pub entry_requests: Vec<String>,
+    pub entry_argument_requests: Vec<String>,
+    /// Segments the target's linker lays out between two markers, as
+    /// `BEGIN:MIDDLE:END` (`XIB:XI:XIE`).
+    pub bracketed_segments: Vec<String>,
 }
 
 impl Profile {
@@ -276,7 +306,23 @@ impl Profile {
                 .map(|one| one.as_str().map(str::to_owned).ok_or("an interrupt parameter is not a string"))
                 .collect::<Result<_, _>>()?,
         };
+        let names = |key: &str| -> Result<Vec<String>, String> {
+            abi.get(key)
+                .map(|list| {
+                    list.as_array()
+                        .ok_or_else(|| format!("frontend.abi.{key} is not a list"))?
+                        .iter()
+                        .map(|one| {
+                            one.as_str().map(str::to_owned).ok_or_else(|| format!("a {key} name is not a string"))
+                        })
+                        .collect()
+                })
+                .unwrap_or(Ok(Vec::new()))
+        };
         Ok(Self {
+            bracketed_segments: names("bracketed_segments")?,
+            entry_requests: names("entry_requests")?,
+            entry_argument_requests: names("entry_argument_requests")?,
             cpu: text(frontend, "watcom_cpu")?,
             convention: text(abi, "convention")?,
             entry: text(frontend, "entry")?,
@@ -381,6 +427,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump) = (None, Flags::default(), None);
     let (mut include, mut watcom) = (Vec::new(), Vec::new());
     let mut os_layer = None;
+    let mut entry_requests = false;
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -396,6 +443,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
+            "-fentry-requests" => entry_requests = true,
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa".to_owned()),
             "-on" => watcom.push("-on".to_owned()),
@@ -436,7 +484,17 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let target = bound.target.clone();
-    Ok(Args { source, os_layer, dump, include, target, watcom, codegen: bound.options(&flags, machine), flags })
+    Ok(Args {
+        source,
+        os_layer,
+        dump,
+        include,
+        target,
+        watcom,
+        entry_requests,
+        codegen: bound.options(&flags, machine),
+        flags,
+    })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -508,6 +566,7 @@ pub fn main(argv: &[String]) -> i32 {
             &spelled,
             args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)),
             args.flags.wrapv,
+            args.entry_requests,
         )?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly
@@ -589,7 +648,7 @@ mod tests {
         });
         let listing = |check| {
             llrm_core::backend::masm::text(
-                &super::selected_checking(&text, "anims", None, &options, check, false).unwrap(),
+                &super::selected_checking(&text, "anims", None, &options, check, false, false).unwrap(),
             )
             .unwrap()
         };
@@ -912,6 +971,75 @@ mod tests {
         };
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "keep", None, &options).unwrap()).unwrap();
         assert!(asm.contains("push si") && asm.contains("pop si"), "{asm}");
+    }
+
+    /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
+    /// and `__argc` where `main` takes arguments: they pull in the start-up
+    /// and the module that builds `argv`. Without them a program linked against
+    /// the library had `argc` 0 and no `argv[0]`, and needed `_cstart_` named
+    /// on the link line.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_module_with_main_asks_its_linker_for_the_start_up_and_for_argv() {
+        let directory = tempfile::tempdir().unwrap();
+        let listing = |name: &str, text: &str| {
+            let source = directory.path().join(format!("{name}.c"));
+            std::fs::write(&source, text).unwrap();
+            let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+            let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records it");
+            let options = llrm_core::driver::Options {
+                abi: Some("watcom".to_owned()),
+                ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+            };
+            llrm_core::backend::masm::text(&super::selected_requesting(&recorded, name, None, &options).unwrap())
+                .unwrap()
+        };
+        let argv = listing("withargs", "int main(int argc, char **argv) { return argc; }\n");
+        assert!(argv.contains("extern _cstart_:near") && argv.contains("extern __argc:near"), "{argv}");
+        let bare = listing("bare", "int main(void) { return 0; }\n");
+        assert!(bare.contains("extern _cstart_:near") && !bare.contains("__argc"), "{bare}");
+        // Not unless asked: a program linked with llrm's own runtime has no
+        // `_cstart_`.
+        let source = directory.path().join("plain.c");
+        std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records it");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let plain =
+            llrm_core::backend::masm::text(&super::selected(&recorded, "plain", None, &options).unwrap()).unwrap();
+        assert!(!plain.contains("_cstart_"), "{plain}");
+        let other = listing("other", "int helper(int a) { return a; }\n");
+        assert!(!other.contains("_cstart_") && !other.contains("__argc"), "{other}");
+    }
+
+    /// A module with initializers in `XI` declared no `XIB` before it or `XIE`
+    /// after, so the linker, meeting `XI` first, laid it out ahead of the
+    /// begin marker: the start-up's range of initializers was empty and
+    /// `argv` was never built.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_segment_between_markers_is_declared_with_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("brackets.c");
+        std::fs::write(
+            &source,
+            "static void init(void) {}\n\
+             static struct { char kind; void (*run)(void); } __based( __segname( \"XI\" ) ) entry = { 1, init };\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brackets.c");
+        let argv: Vec<String> = ["-m16", "-mabi=watcom", "brackets.c"].map(str::to_owned).to_vec();
+        let args = super::parse_args(&argv).unwrap();
+        let asm =
+            llrm_core::backend::masm::text(&super::selected(&text, "brackets", None, &args.codegen).unwrap()).unwrap();
+        let order: Vec<&str> = asm.lines().filter_map(|one| one.strip_suffix(" segment word public 'DATA'")).collect();
+        assert_eq!(order, ["XIB", "XI", "XIE"], "{asm}");
     }
 
     /// Watcom's -oa lets a store through a pointer leave alone every object
@@ -2535,6 +2663,7 @@ mod tests {
             None,
             &args.codegen,
             Some(super::stack_check(&llrm_x86_m32::M32)),
+            false,
             false,
         )
         .unwrap();
