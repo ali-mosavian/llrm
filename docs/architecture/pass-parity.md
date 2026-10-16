@@ -135,6 +135,33 @@ The mid-end is 8.6x clang's optimizer at -O1 (2,009 M against an estimated 233 M
 
 `regions::overlapping` answers the walker's pairwise queries cheapest first already: on d_faces -O1 it is asked 99,086 times (104,866 at -O2); `typed_apart` answers 43,666, canonical references' displacement 2,731, an unescaped object against a pointer 7,378, `foreign_apart` none (111 K calls, 6 M), and 45,311 (46%) reach the precise `may_alias`. Two wastes: `may_alias` runs `typed_apart` and `foreign_apart` again (45 K calls, ~7 M), and it is asked 45,311 times for 6,411 distinct pairs, 73% of them with no interval facts (a pure function of the two references and the target). The whole of `overlapping` costs 54 M (1.8% of the compile); removing both wastes would save about 21 M (0.7%). Measured and not done: a gain under 1% is not worth a change.
 
+## Compile cost against clang and gcc
+
+`tools/compile-gap.py` (needs `QCPORT`) compiles d_faces and the bench programs `-S` with `-fno-inline-functions` at each level and prints user-space instructions of llrm, clang and gcc (`perf stat`, best of three), then llrm's phases for d_faces in **own** instructions (`LLRM_DEBUG=time`'s `[instr]` table: a step's analyses are listed under their own names, so no instruction counts twice) beside clang's `-ftime-report` shares applied to its instruction count. Wall-clock columns of the same report move with the load of the host (a loaded run read `annotated` at 5x); the instruction columns do not. Main 254855801 with #1912 (one allocation per function below -Omax), d_faces, M instructions:
+
+| level | llrm | clang | gcc | llrm own: mir / analysis / regalloc / lir / isel | clang optimizer / codegen |
+|---|---|---|---|---|---|
+| -O1 | 2,705 | 481 | 662 | 913 / 642 / 479 / 379 / 58 | 186 / 232 |
+| -O2 | 3,511 | 556 | 1,162 | 1,491 / 808 / 516 / 409 / 63 | 275 / 225 |
+| -O3 | 3,873 | 559 | 1,445 | 1,730 / 889 / 527 / 429 / 67 | 264 / 228 |
+| -Os | 3,803 | 553 | 968 | 1,542 / 1,034 / 539 / 363 / 59 | 247 / 226 |
+
+llrm compiles d_faces in 5.6x to 6.9x clang's instructions. Per-program gaps are small except where a loop nest is fully unrolled: at -O3 matmul 943/251/708, nbody 257/93/157, quicksort 153/79/108 (llrm/clang/gcc); every other program and level is within 0.9x to 1.9x of clang. matmul -O3's output is the size of clang's (486 against 432 lines); its cost is the 6.4x larger body (894 to 1,422 instructions) the cleanup rounds run over, 39% of the pipeline's work in steps that found nothing.
+
+Levers at -O2, own instructions against the clang counterpart's share of its optimizer or codegen (an upper bound: no pass reaches zero):
+
+| lever | llrm own | clang's | ceiling |
+|---|---|---|---|
+| `gvn` | 357 | ~47 (GVN, EarlyCSE) | 310 (8.8%) |
+| the analyses (`bounded` 111, `annotated` 83, `through-memory` 76, `pointer-values` 74, others) | 808 | inside its passes | up to 808 (23%); `annotated` alone is 83 (2.4%) |
+| loop passes: `lsr` 149, `hoist` 138, `indvars` 72 | 359 | ~53 (LSR, LICM, IndVars) | ~300 (8.5%) |
+| `interprocedural` 121, `jumpthread` 62, `decide` 81 | 264 | ~35 | ~230 (6.5%) |
+| allocation (`regalloc`, `split`, `spill`, `facts`) | 516 | ~60 | ~450 (13%) |
+| `lir` (`peephole` 117, `jumps` 74, ...) | 409 | ~35 | ~370 (10%) |
+| the pipeline's own steps (`mir pipeline`) | 86 | none | 86 (2.4%) |
+
+An earlier version of this table read inclusive times (`annotated` 37 ms is its 8 ms plus the analyses it asks for) as if own; the rows above do not overlap.
+
 ## Not measured
 
 m16 (the Open Watcom rows of `tools/bench`), clang's limits per level (inline threshold, unroll thresholds, `devirt<4>`), and trunk's pipeline against the measured release.
