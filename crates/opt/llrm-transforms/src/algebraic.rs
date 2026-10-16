@@ -33,11 +33,11 @@
 //!   `icmp ne (sext i1 x), 0` is `x`.
 //! - Divisions: `udiv` and `urem` by a power of two are a shift and a mask;
 //!   `sdiv` and `srem` of a dividend proved non-negative (`ranges`, or a clear
-//!   sign bit) are unsigned, by a power of two always, by another constant only
-//!   at 32 bits in a 32-bit-pointer segment and not under `size`, where the
-//!   signed form is a byte shorter; other `sdiv` and `srem` by a power of two
-//!   are an `ashr`, a bias and a shift; a fixed-point product or quotient by a
-//!   whole number cancels its scale.
+//!   sign bit) are unsigned, by a power of two always, by another constant at
+//!   any width and target but under `size`, where the signed form is a byte
+//!   shorter (selection prices the reciprocal, prefixes included); other `sdiv`
+//!   and `srem` by a power of two are an `ashr`, a bias and a shift; a
+//!   fixed-point product or quotient by a whole number cancels its scale.
 //! - Masks and demanded bits: `and x, C` where `C` covers every bit `x` may set
 //!   is `x`; a mask, or an `or`, that touches only bits nothing reads is its
 //!   operand.
@@ -851,7 +851,8 @@ fn _recurrences(
     // rounds before changed, not worked out afresh for each round: 19 ms of 53
     // in this pass on d_faces -O1.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let shape = analyses.get::<Shape>(context, layout, function);
     let registers = analyses.get::<Registers>(context, layout, function);
@@ -1877,7 +1878,8 @@ fn _redundant_masks(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
@@ -1959,7 +1961,8 @@ fn _unread_bits_once(
         return false;
     }
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let read = analyses.get::<DemandedBits>(context, layout, function);
     // Bits read only shrink as the rewrites below go, so the answers stay sound
@@ -1996,11 +1999,12 @@ fn _unread_bits_once(
     changed
 }
 
-/// `sdiv` and `srem` of a dividend proved non-negative, by a power of two, are
-/// `udiv` and `urem` (a shift and a mask): the same value without the bias a
-/// negative dividend needs. Another divisor stays signed: its unsigned division
-/// is a `div` for an `idiv` (three clocks on a 486) and a byte more (`xor
-/// edx,edx` for `cdq`), which is selection's to weigh, not a rewrite's. The
+/// `sdiv` and `srem` of a dividend proved non-negative are `udiv` and `urem`
+/// (by a power of two, a shift and a mask): the same value without the bias a
+/// negative dividend needs. By another constant too, but under `size`: its
+/// unsigned division is a `div` for an `idiv` (three clocks on a 486) and a
+/// byte more (`xor edx,edx` for `cdq`), and its reciprocal has no sign to
+/// correct, which selection prices at every target. The
 /// proof is `ranges`' (a loop's `rest > 0`, a sum of squares) or the dividend's
 /// clear sign bit.
 fn _unsigned_divisions(
@@ -2032,7 +2036,8 @@ fn _unsigned_divisions(
     // brought up to date by what they changed, not worked out afresh for
     // each round.
     if edited {
-        analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
+        analyses
+            .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
@@ -2045,16 +2050,15 @@ fn _unsigned_divisions(
             // A power of two is shifts either way. Any other constant is a
             // multiply by its reciprocal, which has no
             // sign to correct where the dividend is never negative; selection
-            // prices it (a dword's, in a 32-bit segment: a 16-bit
-            // one runs the dword through prefixes and a longer multiply), and
-            // where it declines `div` and `idiv` are alike but a
-            // byte (`xor edx, edx` for `cdq`), which size does
+            // prices it, prefixes included, whatever the target, and
+            // where it declines `div` is cheaper than `idiv` (the audited
+            // bounds, `xor edx, edx` for `cdq`) but a byte, which size does
             // not pay.
             let power = (&divisor & (&divisor - 1u8)) == BigInt::from(0u8);
             let positive = fact.width >= width
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
-                && (power || (!size && width == 32 && layout.pointer(0).bits == 32));
+                && (power || !size);
             let proved = ranges::operand_at(&unit, operands[0], cfg::id(block))
                 .ok()
                 .flatten()

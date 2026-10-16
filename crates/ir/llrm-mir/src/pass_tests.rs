@@ -145,6 +145,48 @@ fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
     assert_eq!(COMPUTED.get(), 1, "a pass that logged no change dropped an analysis");
 }
 
+/// Asks, drops as a rule that edited would, and asks again, the body unedited.
+struct AsksTwice {
+    if_edited: bool,
+}
+
+impl FunctionPass for AsksTwice {
+    fn name(&self) -> &'static str {
+        "asks-twice"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        if self.if_edited {
+            analyses.invalidate_if_edited(unit.function, &PreservedAnalyses::none());
+        } else {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        }
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::all()
+    }
+}
+
+/// `algebraic` dropped the shape and ranges before each rule that asks for
+/// them, edited or not: 9 of its 16 range computations on d_faces -O1 followed
+/// no edit since the one before, 4 of them 1.4 M each. A drop for an edit
+/// nobody made costs nothing now.
+#[test]
+fn a_drop_for_an_edit_nobody_made_keeps_what_is_held() {
+    for (if_edited, computed) in [(false, 2), (true, 1)] {
+        COMPUTED.set(0);
+        let mut passes = PassManager::default();
+        passes.add(Look(PreservedAnalyses::all()));
+        passes.add(AsksTwice { if_edited });
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        assert_eq!(COMPUTED.get(), computed, "if_edited {if_edited}");
+    }
+}
+
 thread_local! {
     static KEPT: Cell<usize> = const { Cell::new(0) };
     static SAME: Cell<bool> = const { Cell::new(true) };

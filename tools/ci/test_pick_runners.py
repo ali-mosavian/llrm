@@ -3,7 +3,7 @@ import json
 from pick_runners import HOSTED, TINYTIM, idle_runners, pick
 
 NOW = 1_000_000.0
-GROUPS = ["unit", "python", "tools", "cost", "reference", "run"]
+GROUPS = ["unit", "python", "tools", "cost", "qcport", "run"]
 
 
 def test_no_heartbeat_sends_every_job_to_hosted():
@@ -23,11 +23,16 @@ def test_an_ineligible_event_never_gets_tinytim():
     assert got["build"] == HOSTED and set(got["groups"].values()) == {HOSTED}
 
 
-def test_heavy_groups_take_the_idle_runners_and_the_rest_stay_hosted():
-    got = pick(GROUPS, f"{NOW} 2", True, NOW)
-    assert got["build"] == TINYTIM
-    assert sum(v == TINYTIM for v in got["groups"].values()) == 2
-    assert got["groups"]["unit"] == got["groups"]["run"] == HOSTED
+def test_only_the_jobs_that_need_perf_counters_take_tinytim_and_the_rest_stay_hosted():
+    """The same build ran 82-103 s hosted and 243-669 s on tinytim (shared with every session's builds): CI does not depend on its load."""
+    got = pick(GROUPS + ["perf", "bench-1"], f"{NOW} 5", True, NOW)
+    assert got["build"] == HOSTED
+    assert {g for g, v in got["groups"].items() if v == TINYTIM} == {"perf", "cost"}
+
+
+def test_a_perf_job_with_no_idle_tinytim_runs_hosted():
+    got = pick(["perf", "cost", "unit"], f"{NOW} 1", True, NOW)
+    assert sorted(g for g, v in got["groups"].items() if v == TINYTIM) == ["cost"] and got["groups"]["perf"] == HOSTED
 
 
 def test_output_is_json_for_fromjson():
@@ -35,11 +40,5 @@ def test_output_is_json_for_fromjson():
 
 
 def test_the_summary_names_the_runner_of_every_job():
-    got = pick(["unit", "python"], f"{NOW} 2", True, NOW)
-    assert got["summary"] == "tinytim: build python; hosted: unit"
-
-
-def test_a_bench_shard_waits_behind_the_long_groups_for_a_runner():
-    """The shards sort before python by name; python is 12 minutes and a shard 4, so it must not be the one left to a hosted runner."""
-    got = pick(["bench-1", "bench-2", "python", "unit"], "1000 2", True, 1000)["groups"]
-    assert got == {"python": TINYTIM, "bench-1": TINYTIM, "bench-2": HOSTED, "unit": HOSTED}
+    got = pick(["unit", "perf"], f"{NOW} 2", True, NOW)
+    assert got["summary"] == "tinytim: perf; hosted: build unit"
