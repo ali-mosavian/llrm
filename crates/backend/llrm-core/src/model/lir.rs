@@ -966,6 +966,10 @@ pub struct LirBody {
     pub spares: Arc<BTreeSet<(i64, i64)>>,
     /// How many floating values the target holds on its register stack at once.
     pub float_stack: usize,
+    /// The bytes (4, 8 or 10) of the float type of the values isel knows it of:
+    /// a spilled one takes a cell that wide, as gcc's reg-stack spills in the
+    /// value's mode. A value not here is 8.
+    pub float_widths: Arc<std::collections::BTreeMap<u32, u32>>,
     /// A phi's value, by number, and the fixed cell the program also holds it
     /// in wherever it is live (`!llrm.home`).
     pub homes: Arc<std::collections::BTreeMap<u32, crate::model::ir::Mem>>,
@@ -1146,6 +1150,7 @@ impl LirBody {
             returns_twice: false,
             spares: Arc::default(),
             float_stack: 0,
+            float_widths: Arc::default(),
             homes: Arc::default(),
             bits: crate::frontends::bc::declen::BITNESS,
             registers: Self::default_registers(),
@@ -1208,6 +1213,7 @@ impl LirBody {
             returns_twice: self.returns_twice,
             spares: Arc::clone(&self.spares),
             float_stack: self.float_stack,
+            float_widths: Arc::clone(&self.float_widths),
             homes: Arc::clone(&self.homes),
             bits: self.bits,
             registers: self.registers,

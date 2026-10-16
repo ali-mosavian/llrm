@@ -61,7 +61,9 @@
 //!
 //! *Assigning x87 stack slots*
 //!
-//! A spilled value takes a ten-byte frame cell in extended format, so no
+//! A spilled value takes a frame cell of its float type's width (4, 8 or 10;
+//! `LirBody::float_widths`, 8 where isel did not type it), as gcc's reg-stack
+//! spills in the value's mode; a ten-byte cell is extended format, so no
 //! precision is lost.
 //!
 //! # Example
@@ -525,6 +527,23 @@ pub(crate) fn _equivalent_loads(
         }
     }
     aliases
+}
+
+/// Cell owner -> the bytes of its cell: the widest float type among the values
+/// sharing it, 8 for a value isel did not type (a double).
+fn _cell_widths(
+    body: &LirBody,
+    floating: &HashSet<u32>,
+    cells: &IndexMap<u32, u32>,
+) -> IndexMap<u32, i64> {
+    let mut widths: IndexMap<u32, i64> = IndexMap::default();
+    for &value in floating {
+        let width = i64::from(body.float_widths.get(&value).copied().unwrap_or(8));
+        let owner = cells.get(&value).copied().unwrap_or(value);
+        let entry = widths.entry(owner).or_insert(width);
+        *entry = (*entry).max(width);
+    }
+    widths
 }
 
 /// Value -> the value whose spill cell it shares.
@@ -1000,6 +1019,9 @@ struct Plan<'b> {
     /// of each block, and the cells values share.
     live_out: Live,
     cells: IndexMap<u32, u32>,
+    /// A spill cell's bytes by the value that owns it: the widest float type
+    /// among the values sharing it.
+    widths: IndexMap<u32, i64>,
     /// Each block's allocno roots: a block is written the same way whenever
     /// the same of them are spilled.
     roots: HashMap<i64, Vec<usize>>,
@@ -1517,7 +1539,7 @@ impl Plan<'_> {
         frame: &mut Option<&mut Frame>,
         cpu: &Profile,
     ) -> Result<LirBody, Raised> {
-        let (live_out, cells) = (&self.live_out, &self.cells);
+        let (live_out, cells, widths) = (&self.live_out, &self.cells, &self.widths);
         let mut homes = self.homes.clone();
         let asked: Rc<RefCell<Vec<u32>>> = Rc::default();
         let mut home = |value: u32, frame: &mut Option<&mut Frame>| -> Result<Arc<Insn>, Raised> {
@@ -1529,7 +1551,8 @@ impl Plan<'_> {
                 return Err(unlowered("floating spill requires an owned frame"));
             };
             let owner = cells.get(&value).copied().unwrap_or(value);
-            let made = _spill_home(value, frame.cell(("floating", i64::from(owner)), 8)?);
+            let width = widths.get(&owner).copied().unwrap_or(8);
+            let made = _spill_home(value, frame.cell(("floating", i64::from(owner)), width)?);
             homes.insert(value, Arc::clone(&made));
             Ok(made)
         };
@@ -2024,6 +2047,7 @@ pub fn assigned(
     for index in 0..allocnos.segments.len() {
         members.entry(allocnos.root(index)).or_default().push(index);
     }
+    let widths = _cell_widths(&body, &floating, &cells);
     let mut plan = Plan {
         body: &body,
         floating,
@@ -2033,6 +2057,7 @@ pub fn assigned(
         costs: IndexMap::default(),
         live_out,
         cells,
+        widths,
         roots,
         order,
         members,

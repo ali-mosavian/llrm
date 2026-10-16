@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/floatassign.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/floatassign.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:c8f6e1e2dd42693ac76cac2250a05ed3a47ecfa048129e7a0bfa9ac98659930e -->
+<!-- src: crates/backend/llrm-core/src/backend/floatassign.rs sha256:e2ab9727b1dee90361225ee3e8babbc304992145f2dc5aed2920ee80ad869e85 -->
 
 # floatassign
 
@@ -66,7 +66,9 @@ flowchart TB
 
 *Assigning x87 stack slots*
 
-A spilled value takes a ten-byte frame cell in extended format, so no
+A spilled value takes a frame cell of its float type's width (4, 8 or 10;
+`LirBody::float_widths`, 8 where isel did not type it), as gcc's reg-stack
+spills in the value's mode; a ten-byte cell is extended format, so no
 precision is lost.
 
 ## Example
