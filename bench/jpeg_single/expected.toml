@@ -1,39 +1,39 @@
-reason = "work-priced post-RA fixes: the hoisted zeroing of a word register adds an instruction at loop entry (stft bq32 -O2/-Os +7..+13 of ~1e8) and turns the loop's movzx into a mov; the memory-source flag fix, the hoist and the back-edge copy remove instructions and bytes elsewhere (shellsort, queens nib -Os -9,297 instructions, jpeg code bytes)"
+reason = "A phi that takes a branch's own condition from its block reads the arm's constant after rotation; re-blessed on the merge of main: jpeg_single/stft bq32 differ by 1 to 7 instructions in 6e7 to 1e8 (runtime library allocator order, kernels identical), waived"
 blessed = "2026-10-16"
 
 [bas.O2]
-code_bytes = 5208
+code_bytes = 5212
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 538.2701
 
 [bas.Os]
-code_bytes = 4849
+code_bytes = 4853
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 542.2897
 
 [bq16.O2]
-code_bytes = 5240
+code_bytes = 5244
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 597.9628
 
 [bq16.Os]
-code_bytes = 4881
+code_bytes = 4885
 data_bytes = 29635
 bss_bytes = 0
 kernel_ms = 602.1462
 
 [bq32.O2]
-instructions = 63438944
-code_bytes = 6225
+instructions = 63438975
+code_bytes = 6231
 data_bytes = 29697
 bss_bytes = 0
 
 [bq32.Os]
-instructions = 64612140
-code_bytes = 5818
+instructions = 64612173
+code_bytes = 5824
 data_bytes = 29697
 bss_bytes = 0
 

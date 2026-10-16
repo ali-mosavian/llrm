@@ -911,10 +911,13 @@ fn _placed(
     let tests = _tests(&natural, body.entry, &by_at);
     // loops() is innermost first.  A block in nested loops follows the nearest
     // loop's trace before an exit from it; the outer trace resumes afterwards.
-    let mut inside: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
+    // Each loop's body held once, shared by its blocks: a copy for each block
+    // was the square of a nest's depth.
+    let mut inside: IndexMap<i64, std::rc::Rc<BTreeSet<i64>>> = IndexMap::default();
     for found in &natural {
+        let body = std::rc::Rc::new(found.body.clone());
         for at in &found.body {
-            inside.entry(*at).or_insert_with(|| found.body.clone());
+            inside.entry(*at).or_insert_with(|| std::rc::Rc::clone(&body));
         }
     }
     let mut predecessors: IndexMap<i64, Vec<i64>> = IndexMap::default();
@@ -1030,7 +1033,15 @@ fn _placed(
             });
         }
         (current, source) = (
-            _onward(body.bits, block, &done, inside.get(&block.at).unwrap_or(&empty), Some(&by_at), odds, ties),
+            _onward(
+                body.bits,
+                block,
+                &done,
+                inside.get(&block.at).map_or(&empty, |one| &**one),
+                Some(&by_at),
+                odds,
+                ties,
+            ),
             Some(at),
         );
     }
