@@ -917,6 +917,7 @@ trait Cached {
     fn current(
         &self,
         function: &Function,
+        attributes: u64,
         outer: &Rc<Outer>,
     ) -> bool;
 }
@@ -990,11 +991,10 @@ impl<A: Analysis> Cached for Entry<A> {
     fn current(
         &self,
         function: &Function,
+        attributes: u64,
         outer: &Rc<Outer>,
     ) -> bool {
-        self.mark == function.mark()
-            && self.stamp == function.attributes_stamp()
-            && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
+        self.mark == function.mark() && self.stamp == attributes && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
     }
 }
 
@@ -1014,6 +1014,11 @@ pub struct Analyses {
     /// Something was kept as sound: what was derived from it since stands as
     /// sound too, and is not what fresh results give (the checks leave it).
     tainted: bool,
+    /// The function's attributes as of the last invalidation: hashing them is
+    /// the size of the function's declaration, and a result derived since is
+    /// stamped with them (an attribute stated after is told at the next
+    /// invalidation, which drops it).
+    attributes: Option<u64>,
     outer: Rc<Outer>,
 }
 
@@ -1193,6 +1198,7 @@ impl Analyses {
             vouched: None,
             soft: HashSet::default(),
             tainted: false,
+            attributes: None,
             outer,
         }
     }
@@ -1224,6 +1230,14 @@ impl Analyses {
             .map(|entry| Rc::clone(&entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type").result))
     }
 
+    /// The stamp of `function`'s attributes, as of the last invalidation.
+    fn attributes_of(
+        &mut self,
+        function: &Function,
+    ) -> u64 {
+        *self.attributes.get_or_insert_with(|| function.attributes_stamp())
+    }
+
     /// `result` as `A`'s, for `function` as it stands: a caller that has worked
     /// out what the analysis would derive (a pass that knows what its own
     /// edit did to it) hands it on, and what is asked next of this cache is
@@ -1233,6 +1247,7 @@ impl Analyses {
         function: &Function,
         result: Rc<A::Result>,
     ) {
+        let stamp = self.attributes_of(function);
         self.cache.insert(
             TypeId::of::<A>(),
             Box::new(Entry::<A> {
@@ -1240,7 +1255,7 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits: if A::READS_OUTER { read::ALL } else { 0 },
-                stamp: function.attributes_stamp(),
+                stamp,
             }),
         );
     }
@@ -1406,6 +1421,7 @@ impl Analyses {
             };
             record("fn", A::NAME, class);
         }
+        let stamp = self.attributes_of(function);
         self.cache.insert(
             key,
             Box::new(Entry::<A> {
@@ -1413,7 +1429,7 @@ impl Analyses {
                 outer: Rc::clone(&self.outer),
                 mark: function.mark(),
                 bits,
-                stamp: function.attributes_stamp(),
+                stamp,
             }),
         );
         result
@@ -1482,6 +1498,8 @@ impl Analyses {
         current: Option<&Function>,
     ) {
         let outer = Rc::clone(&self.outer);
+        let attributes = current.map(Function::attributes_stamp);
+        self.attributes = attributes;
         let gone: Vec<TypeId> = self
             .cache
             .iter()
@@ -1489,7 +1507,9 @@ impl Analyses {
                 // A result a pass names as given up goes whatever the log says.
                 !entry.preserved(preserved)
                     && (preserved.dropped.contains(*key)
-                        || !current.is_some_and(|function| entry.current(function, &outer)))
+                        || !current
+                            .zip(attributes)
+                            .is_some_and(|(function, attributes)| entry.current(function, attributes, &outer)))
             })
             .map(|(key, _)| *key)
             .collect();

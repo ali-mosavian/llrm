@@ -1096,3 +1096,20 @@ fn a_result_that_names_values_is_followed_through_a_substitution() {
     assert_eq!(*analyses.get::<Reads>(context, &layout, function), vec![a_value, a_value], "still named %b");
     assert_eq!(READS_RUN.with(Cell::get), 1, "derived again past a substitution it could follow");
 }
+
+/// Hashing a function's attributes is the size of its declaration, and every
+/// result derived and every result checked at an invalidation did it: 12.9 M
+/// of 316 M instructions on a 64-link call chain, and `gate (cost)` read it as
+/// a 4% rise at 2N. It is done once per invalidation.
+#[test]
+fn the_attributes_are_hashed_once_per_invalidation_not_once_per_result() {
+    let module = module();
+    let layout = DataLayout::default();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    let before = crate::module::attribute_stamps();
+    analyses.get::<Steady>(&module.context, &layout, function);
+    analyses.get::<ReadsOuter>(&module.context, &layout, function);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    assert!(crate::module::attribute_stamps() - before <= 2, "{}", crate::module::attribute_stamps() - before);
+}

@@ -209,6 +209,16 @@ impl PartialEq for ChangeLog {
     }
 }
 
+thread_local! {
+    static STAMPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed a function's attributes, for a test
+/// that the manager does it once per invalidation, not once per result.
+pub fn attribute_stamps() -> usize {
+    STAMPS.with(std::cell::Cell::get)
+}
+
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// Which function a log of changes belongs to, and how many changes it has
@@ -647,6 +657,7 @@ impl Function {
     /// no analysis that reads them has anything new to read.
     pub fn attributes_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
+        STAMPS.with(|count| count.set(count.get() + 1));
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.ty.hash(&mut hasher);
         self.parameter_attrs.hash(&mut hasher);
