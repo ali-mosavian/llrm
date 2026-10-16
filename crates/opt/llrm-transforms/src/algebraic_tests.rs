@@ -1412,8 +1412,14 @@ done:
   ret i16 %q
 }
 ";
+    // The checks (`verify_invalidation`) derive shapes of their own; not
+    // counted.
+    let mut after = parsed(text);
+    after.datalayout = Some(LEGAL.to_owned());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(super::Algebraic { size: false });
     let before = llrm_analysis::cfg::shapes_derived();
-    let (_, after) = simplified(text);
+    passes.run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     let derived = llrm_analysis::cfg::shapes_derived() - before;
     assert!(printed(&after).contains("sdiv") || printed(&after).contains("ashr"), "{}", printed(&after));
     assert!(derived <= 2, "{derived} shapes derived for one pass over one body");
