@@ -43,7 +43,12 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   (`Change::Substituted { from, to }`) leave it naming a value that is then
   erased, so it is brought to what took the place (`remapped`, the way LLVM's
   value handles follow a replace-all-uses), or derived again where it returns
-  none. - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
+  none. `CallEffects` is kept this way (`MemRef::renamed`; none where the
+  replaced value is an object's own address, keys an object of the provenance, or
+  is the scaled index): derived 100 times instead of 127 on `d_faces` -O1, 71.9 -> 56.3
+  Minstr own, the compile 0.5% fewer instructions. `covers` also asserts it names no
+  erased value.
+- `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`, and that a result kept as `SOUND` is `covers`ed by one. Once
   something was kept as sound, what was derived from it is not compared with
   fresh results (it is sound, not the same).

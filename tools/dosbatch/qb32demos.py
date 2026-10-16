@@ -178,7 +178,15 @@ def region_difference(want: Path, got: Path, box: tuple[int, int, int, int]) -> 
     return sum(pixel(left, x, y) != pixel(right, x, y) for y in range(y0, y1) for x in range(x0, x1))
 
 
-def differences(name: str, want: dict[str, Path], got: dict[str, Path]) -> list[str]:
+def keep_screens(name: str, target: str, checkpoint: str, want: Path, got: Path) -> None:
+    """Both screens of a mismatch into the gate's logs (CI uploads them): the pixel count alone cannot say what drew wrong."""
+    if logs := os.environ.get("CARGO_TARGET_DIR"):
+        (kept := Path(logs) / "gate-logs" / "screens").mkdir(parents=True, exist_ok=True)
+        for kind, path in (("want", want), ("got", got)):
+            shutil.copy(path, kept / f"{name}-{target}-{checkpoint}-{kind}.png")
+
+
+def differences(name: str, want: dict[str, Path], got: dict[str, Path], target: str = "") -> list[str]:
     """The checkpoints of `name` whose screens differ by more than a blinking cursor."""
     boxes, bad = PLAYED[name][1], []
     for checkpoint in want:
@@ -186,6 +194,7 @@ def differences(name: str, want: dict[str, Path], got: dict[str, Path]) -> list[
         count = region_difference(want[checkpoint], got[checkpoint], box) if box else qbplay.differing_pixels(want[checkpoint], got[checkpoint])
         if count > CURSOR_PIXELS:
             bad.append(f"{checkpoint}: {count} pixels")
+            keep_screens(name, target, checkpoint, want[checkpoint], got[checkpoint])
     return bad
 
 
@@ -235,7 +244,7 @@ def run(sources: dict[str, Path], work: Path) -> dict[str, dict[str, list[str]] 
             reference = pool.submit(reference_shots, name, sources[name], work / name / "ref")
             candidate = pool.submit(candidate_shots, name, built, work / name / "cand")
             want, got = reference.result(), candidate.result()
-        return {target: differences(name, want, shots) for target, shots in got.items()}
+        return {target: differences(name, want, shots, target) for target, shots in got.items()}
 
     with ThreadPoolExecutor(len(sources)) as pool:
         futures = {name: pool.submit(one, name) for name in sources}
