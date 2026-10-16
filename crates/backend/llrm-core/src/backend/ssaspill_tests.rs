@@ -739,3 +739,17 @@ fn test_what_a_loop_reloads_each_trip_on_any_of_its_edges_is_not_held_at_its_hea
     let done = crate::backend::executed::executed(&spilled).expect("a reducible body");
     assert!(done.instructions < 1_035_000.0, "{} instructions executed", done.instructions);
 }
+
+/// The values a recursive walk keeps across its two calls were more than the
+/// registers a call leaves (it destroys all but SI and DI), and the spiller
+/// stored the wrong ones: it counted the registers the call's own operands take
+/// and not those it destroys. The allocator then spilled what it chose, four
+/// values (bintree `_walk` -O2 at m16: 18.6 instructions executed against
+/// 16.4).
+#[test]
+fn test_what_lives_through_a_call_fits_the_registers_the_call_keeps() {
+    let (body, phases) = crate::backend::regalloc_input::before_regalloc("walkcalls.ll", "_walk@3", "486");
+    let after = crate::backend::regalloc_input::through(body, phases).expect("allocates");
+    let done = crate::backend::executed::executed(&after).expect("a reducible body");
+    assert!(done.instructions < 17.5, "{} instructions executed", done.instructions);
+}

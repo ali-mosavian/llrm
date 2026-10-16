@@ -22,6 +22,10 @@ where it is read.
 A header holds a value only while the loop's reloads that restore it, on any
 of its edges, run less than half as often as the reloads at its first uses.
 
+What lives through an instruction must fit the registers it keeps: not those it
+clobbers, and for a value wider than the registers' low half not those whose
+high half it clobbers (`clobbers_high`) either.
+
 Within a block, Belady's rule decides eviction. Next-use distance is counted
 across blocks, with a large constant for a use beyond a loop exit. When an
 instruction needs more registers than there are, the held value with the
