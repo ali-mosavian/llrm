@@ -1227,6 +1227,34 @@ fn initialized_does_not_solve_a_body_that_writes_no_pointer_parameter() {
     assert!(asked > 0);
 }
 
+/// `initialized` asked `MemRef::of` of every memory instruction for every round
+/// of its fixed point, though what a round does to the state is all it needs of
+/// an instruction: 29,389 asks (17.5 M) over d_faces -O2 for the 20 bodies it
+/// solves. The reads and writes of a block are found once, before the rounds: a
+/// loop that takes three rounds asks no more than a straight line does.
+#[test]
+fn initialized_asks_each_memory_instruction_once_not_once_for_each_round_of_the_fixed_point() {
+    let body: String = (0..12).map(|i| format!("  %l{i} = load i16, ptr %q\n  store i16 %l{i}, ptr %q\n")).collect();
+    let text = |loop_: bool| {
+        let enter = if loop_ { "  br label %head\nhead:\n" } else { "" };
+        let back = if loop_ { "  br i1 %c, label %head, label %out\nout:\n" } else { "" };
+        format!(
+            "define void @f(ptr %p, ptr %q, i1 %c) {{\nb0:\n  store i16 0, ptr %p\n{enter}{body}{back}  ret void\n}}\n"
+        )
+    };
+    let asked = |loop_: bool| {
+        let source = text(loop_);
+        let parsed = Parsed::new(&source);
+        let unit = parsed.unit();
+        let before = crate::memory::MEMREF_ASKS.with(std::cell::Cell::get);
+        initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+        crate::memory::MEMREF_ASKS.with(std::cell::Cell::get) - before
+    };
+    let (straight, looped) = (asked(false), asked(true));
+    assert!(straight > 0, "premise: the body was solved");
+    assert!(looped <= straight + 2, "{straight} asks without a loop, {looped} with one: a round asks again");
+}
+
 /// `initialized` solved where every pointer points three times (plain, with the
 /// call arguments, with arguments and captures), the escape phase being the
 /// only part that differs: 3,908 + 1,954 solves over QCport's front half at
