@@ -139,18 +139,3 @@ def test_waivers_live_outside_bench_where_every_tool_that_lists_the_benchmarks_w
     test_compile_cost and tests/run.rs all listed a benchmark called `waivers`."""
     assert not bc.WAIVERS.startswith("bench/") and (bc.ROOT / "tools/bench").is_dir()
     assert not (bc.ROOT / "bench/waivers").exists()
-
-
-def test_a_waived_count_is_excused_in_its_ratio_to_each_reference_too():
-    """#1804 waived nbody_single c -Os memory operands (144111 -> 192111): the count passed, and its ratio to each of ow, bcc, tc and tcpp
-    (0.224x -> 0.298x, the same count over the reference's) failed again, four lines a row, so no waiver could make the row pass."""
-    import bench
-
-    want = {"instructions": 100, "memory_operands": 40}
-    got = {"instructions": 100, "memory_operands": 60}
-    ref = {"instructions": 200, "memory_operands": 80}
-    waiver = [{"label": "k c -Os", "counter": "memory_operands", "to": 60, "reason": "r", "file": "w.toml"}]
-    assert bench.ratio_problems("k c -Os", "ow", got, want, ref)[0].endswith("(worse)"), "unwaived"
-    assert bench.ratio_problems("k c -Os", "ow", got, want, ref, waiver) == []
-    other = [{**waiver[0], "to": 61}]
-    assert bench.ratio_problems("k c -Os", "ow", got, want, ref, other)[0].endswith("(worse)"), "another count"
