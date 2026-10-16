@@ -855,6 +855,27 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// `Annotated` and the `Held` a unit carries asked `Pointers`, so each body
+/// state paid for the escape phase (a walk of every instruction and a dataflow
+/// over the blocks) of which they read nothing: 88 of d_faces' -O1 compile's
+/// body states, 42 M of 3,337 M. They read the pointer values.
+#[test]
+fn test_annotated_does_not_solve_what_escapes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  %v = load i8, ptr %p\n  call void @g(ptr %p)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::alias::escape_solves();
+    analyses.get::<Annotated>(context, &layout, f);
+    super::Held::of(context, &layout, f, &mut analyses, true);
+    assert_eq!(crate::alias::escape_solves() - before, 0, "Annotated or Held solved what escapes");
+    analyses.get::<Pointers>(context, &layout, f);
+    assert_eq!(crate::alias::escape_solves() - before, 1, "Pointers solves what escapes once");
+}
+
 /// `Summaries` solved where every pointer points for the direct summary, for
 /// the calls' facts and for each summarized call: 4 to 5 value solves a body
 /// state, 11.0% of QCport's -O1 compile with the rest of the family. One a
