@@ -65,7 +65,7 @@ def main():
             inc = includes(a.ow, a.headers, source)
             if kind == "ours":
                 cc = [str(a.llrm_c), "-m16", "-mabi=watcom", "-fobject-format=omf", *a.flags, *inc, "-o", str(obj), str(source)]
-                ln = [str(a.jwlink), "format", "dos", "option", "quiet", "option", "stack=5k", "reference", "_cstart_",
+                ln = [str(a.jwlink), "format", "dos", "option", "quiet", "option", "stack=5k",
                       "file", str(obj), "library", str(a.lib), "name", str(exe)]
             else:
                 cc = [str(a.reference / "bwcc"), "-zq", "-wx", "-oaxt", "-fpc", "-mm", "-bt=dos", *inc, "-fo=" + str(obj), str(source)]

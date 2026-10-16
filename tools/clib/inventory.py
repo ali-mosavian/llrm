@@ -120,7 +120,7 @@ def run(job, args):
     elif src.suffix == ".c":
         # The makefile's -os asks for size, for this object alone.
         size = ["-Os"] if "-os" in resolved(opts) + resolved(post) else []
-        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "-fobject-format=omf", *args.flags, *size,
+        cmd = [str(args.llrm_c), "-m16", "-mabi=watcom", "-mcode-segment=_TEXT", "-fsigned-char", "-fobject-format=omf", *args.flags, *size,
                *includes(args.ow, clib, sub, opts, args.headers), "-o", str(out), str(src)]
         tool = "llrm-c"
     else:
