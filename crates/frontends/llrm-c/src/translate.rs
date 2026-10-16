@@ -2947,8 +2947,12 @@ impl<'a, 't> Body<'a, 't> {
         }
         // Source order: the call lists its last argument first.
         let parms: Vec<(String, String)> = call.parms.iter().rev().cloned().collect();
-        let listed: Vec<&str> =
-            symbol.register_list.trim_matches(|c| c == '[' || c == ']').split(',').filter(|one| !one.is_empty()).collect();
+        let listed: Vec<&str> = symbol
+            .register_list
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .filter(|one| !one.is_empty())
+            .collect();
         let default = symbol.register_list == self.unit.default_registers;
         if default && !parms.is_empty() {
             return self.refuse(format!("{name} is inline code with parameters in the default registers"));
@@ -2983,11 +2987,16 @@ impl<'a, 't> Body<'a, 't> {
             let dword = self.types.int(4, false);
             let whole = (bytes == 4).then(|| self.resized(value, false, dword));
             match (set.as_slice(), bytes) {
-                ([register], 1 | 2) if !matches!(*register, "ds" | "es") && register.len() == 2 && !register.ends_with(['h', 'l']) => {
+                ([register], 1 | 2)
+                    if !matches!(*register, "ds" | "es") && register.len() == 2 && !register.ends_with(['h', 'l']) =>
+                {
                     let wide = self.resized(value, false, word);
                     inputs.push((register, vec![(wide, false)]));
                 }
-                ([register], 1) if matches!(*register, "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh") => {
+                ([register], 1) if matches!(
+                    *register,
+                    "al" | "bl" | "cl" | "dl" | "ah" | "bh" | "ch" | "dh"
+                ) => {
                     let wide = self.resized(value, false, word);
                     let (root, high) = match register.as_bytes() {
                         [r, b'l'] => (*r, false),
@@ -3075,7 +3084,9 @@ impl<'a, 't> Body<'a, 't> {
         // What it changes: whatever it does not keep, and, unless it says
         // exactly, what it takes and answers in.
         let saved = Set::parse(&symbol.saved_registers).unwrap_or_default();
-        let mut changed = Set { low: 0xffff_ffff, high: 0xffff_ffff }.without(saved).without(Set { low: 0xfffc_0000, high: 0xffff_fffc });
+        let mut changed = Set { low: 0xffff_ffff, high: 0xffff_ffff }
+            .without(saved)
+            .without(Set { low: 0xfffc_0000, high: 0xffff_fffc });
         if target & MODIFY_EXACT == 0 {
             for set in listed.iter().filter_map(|one| Set::parse(one)) {
                 changed = changed.with(set);
@@ -3085,7 +3096,9 @@ impl<'a, 't> Body<'a, 't> {
         }
         let changed = changed.whole();
         let mut clobbers: Vec<String> = Vec::new();
-        for (bits, register) in [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x2000, "es")] {
+        for (bits, register) in
+            [(0x3, "ax"), (0xc, "bx"), (0x30, "cx"), (0xc0, "dx"), (0x100, "si"), (0x200, "di"), (0x2000, "es")]
+        {
             if changed.low & bits == bits && !wholes.contains(&register) {
                 clobbers.push(register.to_owned());
             }

@@ -716,19 +716,24 @@ mod tests {
         listing[start..start + listing[start..].find("endp").unwrap()].to_owned()
     }
 
-    /// `-DNAME=value`, `-UNAME` and `-Idir` were refused as unrecognized arguments, so
-    /// no source that selects its code by a macro the build sets (a library's
-    /// `-D__DOS__`) could be compiled. The front end must see them.
+    /// `-DNAME=value`, `-UNAME` and `-Idir` were refused as unrecognized
+    /// arguments, so no source that selects its code by a macro the build
+    /// sets (a library's `-D__DOS__`) could be compiled. The front end must
+    /// see them.
     #[test]
     fn test_defines_and_undefines_reach_the_front_end() {
-        let argv: Vec<String> = ["-DA=3", "-D", "B", "-UC", "-U", "D", "-Idir", "-I", "other", "x.c"].map(str::to_owned).to_vec();
+        let argv: Vec<String> =
+            ["-DA=3", "-D", "B", "-UC", "-U", "D", "-Idir", "-I", "other", "x.c"].map(str::to_owned).to_vec();
         let args = super::parse_args(&argv).unwrap();
         assert_eq!(args.watcom, ["-dA=3", "-dB", "-uC", "-uD"]);
         assert_eq!(args.include, ["dir", "other"]);
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("d.c");
-        std::fs::write(&source, "#ifndef WANTED\n#error WANTED is not defined\n#endif\nint f(void) { return WANTED; }\n")
-            .unwrap();
+        std::fs::write(
+            &source,
+            "#ifndef WANTED\n#error WANTED is not defined\n#endif\nint f(void) { return WANTED; }\n",
+        )
+        .unwrap();
         let profile = super::Profile::of(&llrm_x86_m16::M16).unwrap();
         assert!(super::recorded_for(&source, &[], false, &[], &profile).is_err(), "premise: -error without -D");
         let made = super::recorded_for(&source, &[], false, &["-dWANTED=7"], &profile);
@@ -738,7 +743,8 @@ mod tests {
     /// Open Watcom's own ABI read Borland's header: `__BORLANDC__` was defined,
     /// `__segment` renamed away, `__STDC__` undone. Open Watcom's `malloc.h`
     /// (`__segment __seg`) and every clib source with a `__BORLANDC__` branch
-    /// failed or took the wrong one. `-std=c99` is the front end's `-zastd=c99`.
+    /// failed or took the wrong one. `-std=c99` is the front end's
+    /// `-zastd=c99`.
     #[test]
     fn test_the_watcom_abi_has_no_borland_names_and_takes_a_language_standard() {
         let argv: Vec<String> = ["-std=c99", "x.c"].map(str::to_owned).to_vec();
@@ -755,7 +761,10 @@ mod tests {
         let made = super::recorded_for(&source, &[], false, &["-zastd=c99"], &watcom);
         assert!(made.is_ok(), "{made:?}");
         let borland = super::Profile::for_abi(&llrm_x86_m16::M16, Some("cdecl")).unwrap();
-        assert!(super::recorded_for(&source, &[], false, &["-zastd=c99"], &borland).is_err(), "premise: Borland's keeps its names");
+        assert!(
+            super::recorded_for(&source, &[], false, &["-zastd=c99"], &borland).is_err(),
+            "premise: Borland's keeps its names"
+        );
     }
 
     /// The front end predefined the build host's OS: a real-mode program saw
@@ -765,7 +774,11 @@ mod tests {
     fn test_real_mode_sources_see_dos_and_not_the_build_host() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("os.c");
-        std::fs::write(&source, "#ifndef __DOS__\n#error not DOS\n#endif\n#ifdef __LINUX__\n#error Linux\n#endif\nint x;\n").unwrap();
+        std::fs::write(
+            &source,
+            "#ifndef __DOS__\n#error not DOS\n#endif\n#ifdef __LINUX__\n#error Linux\n#endif\nint x;\n",
+        )
+        .unwrap();
         for family in ["cdecl", "watcom", "ia16", "regparm3"] {
             let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some(family)).unwrap();
             let made = super::recorded_for(&source, &[], false, &[], &profile);
@@ -804,12 +817,15 @@ mod tests {
         let asm = llrm_core::backend::masm::text(&built).unwrap();
         let before = |function: &str, bytes: &str, register: &str| {
             let from = asm.find(&format!("{function} proc")).expect("the function");
-            let body: Vec<&str> =
-                asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
+            let body: Vec<&str> = asm[from..].lines().map(str::trim).take_while(|one| !one.ends_with("endp")).collect();
             let at = body.iter().position(|one| one.starts_with(bytes)).expect("the inline bytes");
-            body[..at].iter().any(|one| {
-                one.strip_prefix("mov ").or_else(|| one.strip_prefix("movzx ")).is_some_and(|rest| rest.starts_with(register))
-            })
+            body[..at]
+                .iter()
+                .any(
+                    |one| one.strip_prefix("mov ")
+                        .or_else(|| one.strip_prefix("movzx "))
+                        .is_some_and(|rest| rest.starts_with(register)),
+                )
         };
         assert!(before("fill_", "db 0b4h,00ah", "dx,"), "{asm}");
         assert!(before("sum_", "db 002h,0c3h", "bx,"), "{asm}");
