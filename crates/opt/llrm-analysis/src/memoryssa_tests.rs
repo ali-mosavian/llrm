@@ -929,3 +929,39 @@ b0:
     structure(&module, &mut analyses);
     assert_eq!(structures_made() - before, 2, "a store given another address is another structure");
 }
+
+/// A walk asked each write of the chain whether it may clobber the cell, and
+/// each answer followed the pointer chain of the cell and of the write again
+/// (`Offsets::stepped`): 28 M instructions, 0.8% of the d_faces -O2 compile,
+/// for chains that are the same on every ask. Each pointer's chain is followed
+/// once.
+#[test]
+fn a_walk_follows_the_chain_of_each_pointer_once() {
+    let arms = 12;
+    let params: String = (0..arms).map(|k| format!(", ptr %r{k}")).collect();
+    let cases: String = (0..arms).map(|k| format!("    i16 {k}, label %a{k}\n")).collect();
+    let bodies: String = (0..arms)
+        .map(|k| {
+            format!(
+                "a{k}:\n  %w{k} = getelementptr i8, ptr %r{k}, i16 4\n  store i8 1, ptr %w{k}\n  br label %join\n\n"
+            )
+        })
+        .collect();
+    let parsed = Parsed::new(&format!(
+        "define i8 @f(i16 %n, ptr %q{params}) {{\nb0:\n  %c = getelementptr i8, ptr %q, i16 %n\n  switch i16 %n, label %join [\n{cases}  ]\n\n{bodies}join:\n  %x = load i8, ptr %c\n  ret i8 %x\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let load = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }))
+        .expect("a load");
+    let cell = cell(&unit, load);
+    crate::pointerfacts::STEPPED.with(|count| count.set(0));
+    let found = graph.nearest_writes(load, &cell);
+    let followed = crate::pointerfacts::STEPPED.with(std::cell::Cell::get);
+    assert!(found.len() >= arms, "premise: the walk met the writes of every arm: {found:?}");
+    assert!(followed <= arms + 2, "{followed} chains followed for {} pointers", arms + 1);
+}
