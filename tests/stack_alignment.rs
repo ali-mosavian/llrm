@@ -67,10 +67,11 @@ fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
     assert!(text.contains("pushd 0"), "{text}");
 }
 
-/// A module that holds no double pays nothing for it: no pad, no rounding.
+/// A module that holds no double and calls nothing it does not show pays
+/// nothing for it: no pad, no rounding.
 #[test]
 fn a_module_of_integers_pays_nothing_for_it() {
-    let text = listing("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n");
+    let text = listing("static int g(int a) { return a * a; }\nint f(int a) { return g(a) + g(a + 1); }\n");
     assert!(!text.contains("pushd 0"), "{text}");
     assert!(!text.contains("sub esp"), "{text}");
 }
@@ -114,4 +115,19 @@ double top(int n) { return decay(100.0, 0.0, n); }",
     );
     assert!(text.contains("ret 24"), "{text}");
     assert!(text.contains("pushd 0"), "{text}");
+}
+
+/// A function that calls code the module does not show (a declaration, a
+/// pointer) may call one that holds a double, so its frame keeps the call
+/// boundary aligned: a frameless `main` calling through a pointer entered the
+/// kernel 4 mod 8 (recfloat -O1: 2,500 misaligned operands, +10% clocks once
+/// its callee-pop pad was right).
+#[test]
+fn a_function_that_calls_unseen_code_keeps_the_call_boundary_aligned() {
+    for source in
+        ["extern void g(void);\nvoid f(void) { g(); g(); }\n", "void (*volatile p)(void);\nvoid f(void) { p(); }\n"]
+    {
+        let text = listing(source);
+        assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
+    }
 }

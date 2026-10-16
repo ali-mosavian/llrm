@@ -93,8 +93,9 @@ pub struct CalleeFacts {
     eligible: BTreeSet<String>,
     written: RefCell<BTreeMap<String, Written>>,
     /// The functions that need the stack aligned at their entry: those holding
-    /// a double or an extended real (their 8-byte slots) and every function
-    /// that calls one of them directly.
+    /// a double or an extended real (their 8-byte slots), those that call code
+    /// the module does not show (an indirect call, a declaration: it may hold
+    /// one), and every function that calls one of them directly.
     aligned: BTreeSet<String>,
     /// The functions only their module's direct calls reach.
     private: BTreeSet<String>,
@@ -133,7 +134,15 @@ impl CalleeFacts {
         let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
         for id in graph.bottom_up() {
             let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
-            if holds_doubles(module, function) || graph.callees_of(id).iter().any(|callee| aligned.contains(callee)) {
+            let unknown = graph.calls_unknown(id)
+                || graph.callees_of(id).iter().any(|&callee| {
+                    module.global(callee).function().is_some_and(|one| one.is_declaration())
+                        && !module.global(callee).name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                });
+            if holds_doubles(module, function)
+                || unknown
+                || graph.callees_of(id).iter().any(|callee| aligned.contains(callee))
+            {
                 aligned.insert(id);
             }
         }
