@@ -342,7 +342,8 @@ pub fn recorded_for(
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());
-    // `-funsigned-char` takes the ABI's `-j` (a signed char) away; `-fsigned-char` is `-j`.
+    // `-funsigned-char` takes the ABI's `-j` (a signed char) away;
+    // `-fsigned-char` is `-j`.
     let unsigned = watcom.contains(&"-funsigned-char");
     let watcom: Vec<&str> = watcom.iter().copied().filter(|one| *one != "-funsigned-char").collect();
     let flags: Vec<&str> = profile
@@ -954,7 +955,8 @@ mod tests {
             let profile = super::Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).unwrap();
             let switches: Vec<&str> = args.watcom.iter().map(String::as_str).collect();
             let text = super::recorded_for(&source, &[], false, &switches, &profile).expect("wccq records sign.c");
-            let asm = llrm_core::backend::masm::text(&super::selected(&text, "sign", None, &args.codegen).unwrap()).unwrap();
+            let asm =
+                llrm_core::backend::masm::text(&super::selected(&text, "sign", None, &args.codegen).unwrap()).unwrap();
             asm.contains("mov ax, 1")
         };
         assert!(!returns(&["-m16", "-mabi=watcom"]), "Open Watcom's char is unsigned");
