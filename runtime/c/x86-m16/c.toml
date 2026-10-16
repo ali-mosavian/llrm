@@ -87,6 +87,10 @@ registers = "watcall16"
 [frontend.abi.watcom]
 convention = "cdecl16"
 header = "crates/frontends/llrm-c/src/watcom.h"
+# Its linker is asked for the start-up (`_cstart_`, the object file's entry), and for `__argc`, which builds argv, where
+# `main` takes arguments: the references Open Watcom's own compiler leaves in a module with a `main`.
+entry_requests = ["_cstart_"]
+entry_argument_requests = ["__argc"]
 flags = ["-mm", "-3", "-fpi87", "-fp3", "-j", "-ei", "-s", "-zl", "-zq", "-bt=dos", "-dLLRM_WATCOM_ABI"]
 cdecl = "cdecl16"
 registers = "watcall16"
