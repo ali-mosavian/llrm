@@ -102,7 +102,7 @@ express (a register convention of a function's own, a parameter on the stack) is
 
 ## The start-up and init segments
 
-Under the Open Watcom ABI a module that defines `main` asks its linker for the start-up (`_cstart_`) and, where `main`
+With `-fentry-requests` (a program linked against Open Watcom's library; llrm's own runtime has no `_cstart_`) a module that defines `main` asks its linker for the start-up (`_cstart_`) and, where `main`
 takes arguments, for `__argc`, which builds `argv`: the references Open Watcom's own compiler leaves there
 (`entry_requests` in the target's `c.toml`). Segments a linker lays out between two markers (`XIB:XI:XIE`, the init and
 final routines the start-up walks) are declared with their markers in every object (`bracketed_segments`): without

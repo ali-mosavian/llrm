@@ -73,7 +73,18 @@ pub fn selected(
     dump: Option<&Path>,
     codegen: &llrm_core::driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    selected_checking(text, module, dump, codegen, None, false)
+    selected_checking(text, module, dump, codegen, None, false, false)
+}
+
+/// [`selected`], a module that defines the entry asking its linker for the
+/// target's start-up (`-fentry-requests`).
+pub fn selected_requesting(
+    text: &str,
+    module: &str,
+    dump: Option<&Path>,
+    codegen: &llrm_core::driver::Options,
+) -> Result<masm::Module, CompileError> {
+    selected_checking(text, module, dump, codegen, None, false, true)
 }
 
 /// What C's runtime says of its stack on `target`: the `stack.toml` its
@@ -99,11 +110,18 @@ pub fn selected_checking(
     codegen: &llrm_core::driver::Options,
     stack_check: Option<llrm_core::hir::model::StackCheck>,
     wrapv: bool,
+    entry_requests: bool,
 ) -> Result<masm::Module, CompileError> {
     let program = llrm_core::support::debug::timed("frontend translate", || -> Result<_, CompileError> {
         let mut unit = hir::unit(&stream::parse(text))?;
         unit.wrapv = wrapv;
-        let profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+        let mut profile = Profile::for_abi(&*codegen.arch, codegen.abi.as_deref()).map_err(hir::Unsupported)?;
+        // Only a program linked against the target's own start-up library asks
+        // for it.
+        if !entry_requests {
+            profile.entry_requests.clear();
+            profile.entry_argument_requests.clear();
+        }
         let calling = codegen.arch.calling();
         let cc_of = |name: &str| {
             calling
@@ -173,6 +191,10 @@ struct Args {
     /// Watcom switches the program opts into, passed to wccq: -oa, -on, and
     /// the preprocessor's -D and -U as its `-d` and `-u`.
     watcom: Vec<String>,
+    /// `-fentry-requests`: the module that defines the entry asks its linker
+    /// for the target's start-up (`entry_requests` of its description), as
+    /// Open Watcom's compiler does for a program linked with its library.
+    entry_requests: bool,
     /// The target, the built-in DOS on a 386 unless `--machine` names
     /// another, and the pipeline.
     codegen: llrm_core::driver::Options,
@@ -405,6 +427,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let (mut source, mut flags, mut dump) = (None, Flags::default(), None);
     let (mut include, mut watcom) = (Vec::new(), Vec::new());
     let mut os_layer = None;
+    let mut entry_requests = false;
     let mut at = 0;
     while at < argv.len() {
         if flags.take(argv, &mut at)? {
@@ -420,6 +443,7 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
             "-I" | "--include" => include.push(value("-I/--include")?),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--os-layer" => os_layer = Some(value("--os-layer")?),
+            "-fentry-requests" => entry_requests = true,
             // Watcom's: relaxed alias checking; relaxed floating point.
             "-oa" => watcom.push("-oa".to_owned()),
             "-on" => watcom.push("-on".to_owned()),
@@ -460,7 +484,17 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
         });
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let target = bound.target.clone();
-    Ok(Args { source, os_layer, dump, include, target, watcom, codegen: bound.options(&flags, machine), flags })
+    Ok(Args {
+        source,
+        os_layer,
+        dump,
+        include,
+        target,
+        watcom,
+        entry_requests,
+        codegen: bound.options(&flags, machine),
+        flags,
+    })
 }
 
 /// `main`: exit status 0 on success, 1 on a refusal, 2 on bad arguments.
@@ -532,6 +566,7 @@ pub fn main(argv: &[String]) -> i32 {
             &spelled,
             args.flags.sanitize.stack.then(|| stack_check(&*args.codegen.arch)),
             args.flags.wrapv,
+            args.entry_requests,
         )?;
         let name = args.source.file_name().and_then(|one| one.to_str()).unwrap_or_default();
         if !args.flags.assembly
@@ -613,7 +648,7 @@ mod tests {
         });
         let listing = |check| {
             llrm_core::backend::masm::text(
-                &super::selected_checking(&text, "anims", None, &options, check, false).unwrap(),
+                &super::selected_checking(&text, "anims", None, &options, check, false, false).unwrap(),
             )
             .unwrap()
         };
@@ -957,12 +992,26 @@ mod tests {
                 abi: Some("watcom".to_owned()),
                 ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
             };
-            llrm_core::backend::masm::text(&super::selected(&recorded, name, None, &options).unwrap()).unwrap()
+            llrm_core::backend::masm::text(&super::selected_requesting(&recorded, name, None, &options).unwrap())
+                .unwrap()
         };
         let argv = listing("withargs", "int main(int argc, char **argv) { return argc; }\n");
         assert!(argv.contains("extern _cstart_:near") && argv.contains("extern __argc:near"), "{argv}");
         let bare = listing("bare", "int main(void) { return 0; }\n");
         assert!(bare.contains("extern _cstart_:near") && !bare.contains("__argc"), "{bare}");
+        // Not unless asked: a program linked with llrm's own runtime has no
+        // `_cstart_`.
+        let source = directory.path().join("plain.c");
+        std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let recorded = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records it");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let plain =
+            llrm_core::backend::masm::text(&super::selected(&recorded, "plain", None, &options).unwrap()).unwrap();
+        assert!(!plain.contains("_cstart_"), "{plain}");
         let other = listing("other", "int helper(int a) { return a; }\n");
         assert!(!other.contains("_cstart_") && !other.contains("__argc"), "{other}");
     }
@@ -2614,6 +2663,7 @@ mod tests {
             None,
             &args.codegen,
             Some(super::stack_check(&llrm_x86_m32::M32)),
+            false,
             false,
         )
         .unwrap();
