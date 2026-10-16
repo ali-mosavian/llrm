@@ -1273,7 +1273,11 @@ impl Analysis for Registers {
                 | Change::Moved { inst, .. }
                 | Change::Rewritten(inst) => inst,
                 Change::Cloned { to, .. } => to,
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Operand { .. } | Change::Operands { .. } => {
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted(_) => {
                     continue;
                 }
                 // An argument's fact is of its position.
@@ -1488,7 +1492,7 @@ fn reached_through(
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
-            Change::Operand { .. } | Change::Operands { .. } => continue,
+            Change::Operand { .. } | Change::Operands { .. } | Change::Substituted(_) => continue,
             Change::Cloned { to, .. } => (to, Vec::new()),
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
@@ -1642,6 +1646,27 @@ pub struct ThroughMemory;
 impl Analysis for ThroughMemory {
     type Result = Result<IndexMap<ValueId, Known>, String>;
     const NAME: &'static str = "through-memory";
+    const SOUND: bool = true;
+    /// What it says of a live value is a number the value has, which edits
+    /// that keep every value's meaning do not change; a fresh derivation may
+    /// know more (a constant folded), never another number.
+    fn covers(
+        old: &Self::Result,
+        fresh: &Self::Result,
+        _context: &Context,
+        function: &Function,
+    ) -> bool {
+        match (old, fresh) {
+            (Ok(old), Ok(fresh)) => old.iter().all(|(value, fact)| {
+                use llrm_mir::module::ValueDef;
+                match function.value(*value).def {
+                    ValueDef::Instruction(inst) if function.is_erased(inst) => true,
+                    _ => fresh.get(value).is_none_or(|now| now == fact),
+                }
+            }),
+            (old, fresh) => old == fresh,
+        }
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
