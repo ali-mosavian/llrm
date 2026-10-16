@@ -315,9 +315,7 @@ impl Scope<'_> {
         write: &MemRef,
     ) {
         let reached: Vec<usize> = match Self::frame(write) {
-            Some(frame) => {
-                self.buckets.get(&frame).into_iter().flatten().chain(self.wild.iter()).copied().collect()
-            }
+            Some(frame) => self.buckets.get(&frame).into_iter().flatten().chain(self.wild.iter()).copied().collect(),
             None => (0..self.entries.len()).collect(),
         };
         for at in reached {
@@ -341,10 +339,12 @@ impl Scope<'_> {
         let at = candidates
             .into_iter()
             .rev()
-            .find(|&at| {
-                let held = &self.entries[at];
-                held.alive && held.ty == ty && same_bytes(self.unit, &held.cell, cell)
-            })?;
+            .find(
+                |&at| {
+                    let held = &self.entries[at];
+                    held.alive && held.ty == ty && same_bytes(self.unit, &held.cell, cell)
+                },
+            )?;
         let held = &self.entries[at];
         if !held.cell.unwritable() && self.changed_since(held) {
             self.kill(at);
