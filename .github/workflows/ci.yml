@@ -55,6 +55,7 @@ jobs:
       parent: ${{ steps.stale.outputs.parent }}
       workflow: ${{ steps.stale.outputs.workflow }}
       perf_hosted: ${{ steps.runners.outputs.perf_hosted }}
+      groups_run: ${{ steps.runners.outputs.groups_run }}
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
@@ -98,11 +99,15 @@ jobs:
           # Only main and this repository's own pull requests: a fork's pull request, a push to another branch and a manual run elsewhere are hosted.
           ELIGIBLE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.ref == 'refs/heads/main' }}
           GROUPS_JSON: ${{ steps.plan.outputs.groups }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$ELIGIBLE")
+          # The hosted jobs waiting for a runner now: a new job queues behind them.
+          backlog=$(python3 tools/ci/hosted_backlog.py)
+          json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$ELIGIBLE" "$backlog")
           echo "$json"
           echo "build=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["build"]))')" >> "$GITHUB_OUTPUT"
           echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["groups"]))')" >> "$GITHUB_OUTPUT"
+          echo "groups_run=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["run"]))')" >> "$GITHUB_OUTPUT"
           echo "perf_hosted=$(echo "$json" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["perf_hosted"]))')" >> "$GITHUB_OUTPUT"
           summary=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])')
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
@@ -176,7 +181,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON(needs.plan.outputs.groups) }}
+        group: ${{ fromJSON(needs.plan.outputs.groups_run) }}
     steps:
       - uses: actions/checkout@v4
         with:
