@@ -100,6 +100,13 @@ the register Open Watcom's compiler picks (a segment register always; otherwise 
 front end's. What it cannot
 express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
 
+## Inline code that lowers SP
+
+`#pragma aux __doalloca = "sub sp,ax" __value [__sp] __modify __exact [__sp]` (Open Watcom's `alloca`) says it changes
+SP. A function that contains such a call keeps a frame register, pushes every register it keeps at its entry (no
+shrink-wrapping) and returns by setting SP from the frame register before popping them; the register allocator and the
+stack addressing see SP as changed by the call. Inline code that does not declare SP is assumed to leave it.
+
 ## The start-up and init segments
 
 With `-fentry-requests` (a program linked against Open Watcom's library; llrm's own runtime has no `_cstart_`) a module that defines `main` asks its linker for the start-up (`_cstart_`) and, where `main`
