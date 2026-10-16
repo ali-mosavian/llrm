@@ -35,32 +35,38 @@
 //! lowered and never put back.
 //!
 //! # Example
-//! The `procedure` fixture, a runtime-framed body (`call` at 0x0001 is
-//! `B$ENRA`, at 0x0002 `B$EXSA`), with one two-byte spill slot:
+//! The `procedure` fixture, a runtime-framed body (`#1` is `B$ENRA`, `#2` is
+//! `B$EXSA`), with one two-byte spill slot:
 //!
 //! ```lir
-//! === before
-//!   f: 4 instructions
-//!     block 0x0000
-//!       0x0000  v1 := mov 0x6
-//!       0x0001  call v1  ; requires v1@CX
-//!       0x0002  call
-//!       0x0003  retf
-//! === after
-//!   f: 6 instructions
-//!     block 0x0000
-//!       0x0000  v1 := mov 0x6
-//!       0x0001  call v1  ; requires v1@CX
-//!       0x0002  SP := sub SP, 0x2  ; inserted; frame adjust
-//!       0x0002  SP := add SP, 0x2  ; inserted; frame adjust
-//!       0x0002  call
-//!       0x0003  retf
+//! fn f()
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #0  t1         = mov.i16     6
+//!      #1               call        far B$ENRA(t1@cx)
+//!      #2               call        far B$EXSA()
+//!      #3               ret
+//! ```
+//!
+//! After:
+//!
+//! ```lir
+//! fn f()
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #0  t1         = mov.i16     6
+//!      #1               call        far B$ENRA(t1@cx)
+//!      #4  sp         = sub.i16     sp, 2                                  ; frame
+//!      #5  sp         = add.i16     sp, 2                                  ; frame
+//!      #2               call        far B$EXSA()
+//!      #3               ret
 //! ```
 //!
 //! `sub sp, 2` follows the entry call and `add sp, 2` precedes the exit call.
 //!
 //! From unit test `test_spill_reservation_is_inside_the_runtime_frame` in
-//! `prologue.rs`.
+//! `prologue.rs`. No dump prints this phase, so the lines are set by hand in
+//! the dump's format.
 //!
 //! # Runs
 //! A machine phase after `parcopy` and before `peephole`, in every machine

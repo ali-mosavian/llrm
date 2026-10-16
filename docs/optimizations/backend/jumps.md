@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:73654aa17d002ce2873f0392d4b7ee10e4e50ecca36a35872515c21f4bd69146 -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:9af634a90ed0676dcb02461367a4ee3f992c6d761e25b00cbf92bfa2487c9d4f -->
 
 # jumps
 
@@ -67,32 +67,37 @@ predecessor edge, where the bytes saved are more than the extra copies
 cost.
 
 ## Example
-The `Scheduler` stage ends with the loop entered by an explicit jump.
-`ControlFlow` places the blocks and drops the jump to the block that
-follows:
+The `Scheduler` stage ends with the loop entered through a block that ends
+in an explicit jump (`#15`). `ControlFlow` places the blocks (renumbering
+them), inverts the entry branch so the loop follows it, and drops the jump
+to the block that follows:
 
 ```lir
-=== Scheduler
-    block 0x0000
-      ; ...
-      0x0003  AX := mov -7  ; inserted
-      0x0003  jmp   ; inserted
-    block 0x0004
-      ; ...
-      0x0008  AX := inc AX  ; inserted
-      0x000a  jne   ; inserted
-=== ControlFlow
-    block 0x0000
-      ; ...
-      0x0003  AX := mov -7  ; inserted
-    block 0x0004
-      ; ...
-      0x0008  AX := inc AX  ; inserted
-      0x000a  jne   ; inserted
+═══ _sum@3 · Scheduler · m16 ═══════════════════════════════════════════════════
+B0  entry  → B3 B5                                                ×1.0
+    #26  t1         = elided      y4.11
+     #3               test.i16    ax, ax
+     #4               jg          B3 else B5                            ; 97% taken
+; ...
+B3  ← B0  → B2                                                    ×1.0
+    #13  bx         = xor.i16     bx, bx
+    #14  cx         = xor.i16     cx, cx
+    #15               jmp         B2
+; ...
+
+═══ _sum@3 · ControlFlow · m16 ═════════════════════════════════════════════════
+B0  entry  → B1 B4
+    #26  t1         = elided      y4.11
+     #3               test.i16    ax, ax
+     #4               jle         B4 else B1                            ; 3% taken
+
+B1  ← B0  → B2
+    #13  bx         = xor.i16     bx, bx
+    #14  cx         = xor.i16     cx, cx
 ```
 
-From `ISEL_DUMP=1` of a nib program (a struct method with a `while` loop,
-called from `main`) at `-m16 -O2`, stages `Scheduler` and `ControlFlow`.
+From `ISEL_DUMP=1 llrm-c -m16 -O2` of a C function `sum` with a `while`
+loop, stages `Scheduler` and `ControlFlow`.
 
 ## Runs
 `ControlFlow` is the last machine phase, because this physical order

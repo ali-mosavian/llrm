@@ -173,3 +173,30 @@ def test_fix_style_rewrites_only_tracked_docs_pages(tmp_path):
     assert tm.INIT in (tmp_path / "docs/a.md").read_text()
     assert (tmp_path / "README.md").read_text() == fig
     assert lint.fix_style_tree(tmp_path) == []
+
+
+OLD_DUMP = "_f@3: 10 instructions\n  block 0x0000\n    0x0000  v2 := mov 0x1  ; inserted\n    0x0003  jmp   ; inserted"
+NEW_DUMP = "\n".join([
+    "\u2550\u2550\u2550 _f@3 \u00b7 RegAlloc \u00b7 m16 \u2550\u2550\u2550", "fn _f@3(y4.1@ax) -> @eax", "frame  slot0 [bp-2] 2 B", "",
+    "B0  entry  \u2192 B1  \u00d71.0", "     #2  bx         = mov.i16     1", "     ; ...", "    B1  \u2190 B0 B3  \u2192 B3 B2  loop",
+    "         #8  ax         = sub.i16     ax, 1",
+])
+
+
+def test_a_lir_fence_in_the_old_dump_format_is_rejected():
+    """The excerpts of ~30 headers kept `0x0003  v2 := mov 0x1  ; inserted` after the printer changed; they read as current."""
+    errors = lint.lir_errors("a.md", 3, OLD_DUMP)
+    assert len(errors) == 4 and "a.md:4" in errors[0]
+
+
+def test_a_lir_fence_in_the_current_format_is_clean():
+    assert lint.lir_errors("a.md", 3, NEW_DUMP) == []
+
+
+def test_tree_check_reads_lir_fences_of_markdown_and_headers(tmp_path):
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("```lir\n" + OLD_DUMP + "\n```\n")
+    (tmp_path / "crates/x/src").mkdir(parents=True)
+    (tmp_path / "crates/x/src/m.rs").write_text("//! S.\n//!\n//! ```lir\n//! " + OLD_DUMP.replace("\n", "\n//! ") + "\n//! ```\n\nfn f() {}\n")
+    errors = lint.check_tree(tmp_path)
+    assert sum("LIR text format" in e for e in errors) == 8

@@ -55,24 +55,28 @@
 //! past a slot's end or one before its start belongs to that slot.
 //!
 //! # Example
-//! `keep(a: f64, b: f64)` on `-m32 -O0` already uses the cells `[bp-0x10]` and
-//! `[bp-0x8]`. When `FloatAssign` has to store `a` across a call, it asks the
-//! frame for a slot and gets `[bp-0x18]`, the next eight bytes below the lowest
-//! in use.
+//! `double keep(double a, double b)` on `-m32 -O2` calls `ext(b)` and adds `a`
+//! to the result. It has no frame cell before `FloatAssign`. To keep `a` across
+//! the call, `FloatAssign` asks the frame for a slot and gets `slot0`, the
+//! eight bytes just below the frame register:
 //!
 //! ```lir
-//! keep: 14 instructions
-//!   block 0x0000
-//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
-//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
-//!     0x0005  [[bp-0x8]] := fstp v4  ; inserted
-//!     ; ...
-//!     0x0007  [[bp-0x18]] := fstp v1  ; inserted
-//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-//!     0x0009  v1 := fld [[bp-0x18]]  ; inserted
+//! ═══ keep_ · FloatFold · m32 ════════════════════════════════════════════════════
+//! fn keep_()   ; calls clobber eax
+//! frame  arg0 [bp+0] 24 B
+//!
+//! ═══ keep_ · FloatAssign · m32 ══════════════════════════════════════════════════
+//! fn keep_()   ; calls clobber eax
+//! frame  slot0 [bp-8] 8 B  arg0 [bp+0] 24 B
+//! ; ...
+//!     #10               fstp.f64    [slot0], t1:i80                       ; spill
+//!      #5               call        ext_()
+//!      #6  t3         = fload.f80
+//!      #7  t4         = fadd.f64    t3:i80, [slot0]
 //! ```
 //!
-//! From `ISEL_DUMP=1` of that function, stage `FloatAssign`.
+//! From `ISEL_DUMP=1 llrm-c -m32 -O2` of that function, stages `FloatFold` and
+//! `FloatAssign`.
 //!
 //! # Runs
 //! `lir frame` in `assemble::staged`, once per function after selection and

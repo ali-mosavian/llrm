@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/spillforward.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/spillforward.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/spillforward.rs sha256:59d966e0addfde9b6d22a227d7bb9a7184d3a9c00209da9a07d93a01217bc979 -->
+<!-- src: crates/backend/llrm-core/src/backend/spillforward.rs sha256:37466edb7e83a0f058bd0cb4df9932e7c3633ad45578516aa696b83304419fa6 -->
 
 # spillforward
 
@@ -35,40 +35,39 @@ top element, so a loop header's back edge does not kill the fact the header
 is there to establish.
 
 ## Example
-`CX` is stored to `[bp-0x8]` in one block and reloaded into `CX` in a later
-one, with no write to `CX` or the cell on any path between. Before, the
-input of `Peephole`:
+`di` is stored to `[slot3]` and reloaded into `di`, with no write to `di` or
+the cell on any path between. Before, the input of `Peephole`:
 
 ```lir
-=== ParallelCopy
-    block 0x0005
-      0x0009  [[bp-0x8]] := mov CX  ; inserted
-      ; ...
-    block 0x0010
-      0x0011  DI := mov 0x168  ; inserted
-      0x0011  CX := mov [[bp-0x8]]  ; inserted; spill reload
-      0x0011  AX := mov CX  ; inserted
+═══ _fivestreams@3 · ParallelCopy · m16 ════════════════════════════════════════
+        B5  ← B3  → B3                                                    ×93.0
+            #63               store.i16   [slot3], di                           ; spill
+            #64  si         = load.i16    [slot6]                               ; reload
+; ...
+            #52               add.i16     [slot9], 10
+            #65  di         = load.i16    [slot3]                               ; reload
+            #53  di         = add.i16     di, 20
 ```
 
 After `Peephole`:
 
 ```lir
-=== Peephole
-    block 0x0005
-      0x0009  [[bp-0x8]] := mov CX  ; inserted
-      ; ...
-    block 0x0010
-      0x0011  DI := mov 0x168  ; inserted
-      0x0011     ; inserted
-      0x0011  AX := mov CX  ; inserted
+═══ _fivestreams@3 · Peephole · m16 ════════════════════════════════════════════
+        B5  ← B3  → B3                                                    ×93.0
+            #63               store.i16   [slot3], di                           ; spill
+            #64  si         = load.i16    [slot6]                               ; reload
+; ...
+            #52               add.i16     [slot9], 10
+            #65  lsr.iv21   = elided
+            #53  di         = add.i16     di, 20
 ```
 
-The reload is gone and leaves an empty anchor at its address. `Peephole`
+The reload is gone and leaves an `elided` anchor under its label. `Peephole`
 runs all its sub-passes, so the dump shows their combined effect; in this
 function nothing else changes these lines.
 
-From `ISEL_DUMP=1 LLRM_CANDIDATES=spiller` of `bench/recgcd/recgcd.c`
-at -O2 -m16.
+From `ISEL_DUMP=1` of `tests/fixtures/c/fivestreams.c` at -O2 -m16 (the last
+`_fivestreams@3` dumped).
 
 ## Runs
 A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after `copysink`

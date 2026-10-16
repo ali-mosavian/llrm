@@ -64,33 +64,38 @@
 //! Before:
 //!
 //! ```lir
-//! block 0x0000
-//!   0x0000  AX := mov 0x1  ; inserted
-//!   0x0000  BX := mov 0x0  ; inserted
-//!   0x0000  jmp   ; inserted
-//! block 0x0001
-//!   0x0004  CX := mov DX  ; inserted
-//!   0x0004  CX := sub CX, 0x1  ; inserted
-//!   0x0006  cmp DX, 0x0  ; inserted
-//!   0x0006  jne   ; inserted
+//!     B2  ← B2 B3  → B2 B4  loop                                        ×31.0
+//!         #10  cx         = add.i16     cx, bx
+//!         #11  ax         = sub.i16     ax, 1
+//!         #12  bx         = add.i16     bx, cx
+//!         #13               cmp.i16     ax, 0
+//!         #14               jne         B2 else B4                            ; 97% taken
+//!
+//! B3  ← B0  → B2                                                    ×1.0
+//!     #15  bx         = mov.i16     1
+//!     #16  cx         = mov.i16     0
+//!     #17               jmp         B2
 //! ```
 //!
 //! After:
 //!
 //! ```lir
-//! block 0x0000
-//!   0x0000  AX := mov 0x1  ; inserted
-//!   0x0000  BX := xor BX, BX  ; inserted
-//!   0x0000  jmp   ; inserted
-//! block 0x0001
-//!   0x0004  CX := mov DX  ; inserted
-//!   0x0004  CX := dec CX  ; inserted
-//!   0x0006  DX := or DX, DX  ; inserted
-//!   0x0006  jne   ; inserted
+//!     B2  ← B2 B3  → B2 B4  loop                                        ×31.0
+//!         #10  cx         = add.i16     cx, bx
+//!         #12  bx         = add.i16     bx, cx
+//!         #11  ax         = dec.i16     ax
+//!         #13               elided
+//!         #14               jne         B2 else B4                            ; 97% taken
+//!
+//! B3  ← B0  → B2                                                    ×1.0
+//!     #15  bx         = mov.i16     1
+//!     #16  cx         = xor.i16     cx, cx
+//!     #17               jmp         B2
 //! ```
 //!
-//! The zero load became `xor`, the subtraction of one `dec`, and the compare
-//! with zero `or`, which sets the flags `jne` reads as `cmp` did.
+//! The zero load `#16` became `xor` and the subtraction of one `#11` became
+//! `dec`, now after `#12`. `dec` sets the flags
+//! `jne` reads, so the compare `#13` is `elided`.
 //!
 //! From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
 //! the `ParallelCopy` and `Peephole` stages.

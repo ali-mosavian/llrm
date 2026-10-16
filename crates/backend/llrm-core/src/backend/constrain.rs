@@ -50,29 +50,29 @@
 //!
 //! # Example
 //! A call that takes `ax` and returns `eax` (`bump`). Before, it names the
-//! values `v6`, `v7`; after allocation it names fresh ones, `v14`, `v15`,
-//! copied in and out. `; inserted` notes are dropped.
+//! values `t6`, `a.1`; after allocation it names fresh ones, `t14`, `t15`,
+//! copied in and out.
 //!
 //! Before (`Coalescer`):
 //!
 //! ```lir
-//! 0x000c  v6 := mov 0x1
-//! 0x000c  call   requires v6@AX; delivers v7@EAX; clobbers EAX
-//! 0x000e  cmp v5, 0x1
+//!     #11  t6         = mov.i16     1
+//!     #12  a.1@eax    = call        bump(t6@ax)                           ; keeps ecx edx ebx es fs gs
+//!     #13               cmp.i16     t5, 1
 //! ```
 //!
 //! After (`RegAlloc`):
 //!
 //! ```lir
-//! 0x000c  AX := mov 0x1
-//! 0x000c  call   requires v14@AX; delivers v15@EAX; clobbers EAX
-//! 0x000c  CX := mov AX
-//! 0x000e  cmp BX, 0x1
+//!     #32  ax         = mov.i16     1
+//!     #12  t15@eax    = call        bump(t14@ax)                          ; keeps ecx edx ebx es fs gs
+//!     #33  cx         = mov.i16     ax
+//!     #13               cmp.i16     bx, 1
 //! ```
 //!
 //! From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
 //! -fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
-//! -march=i386` of the program under `calleefacts`.
+//! -march=i386` of the program under `calleefacts`: `main`, block `B1`.
 //!
 //! # Used by
 //! Register allocation (`allocate.rs`), which calls `distinct_roles`,

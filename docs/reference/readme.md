@@ -5,6 +5,7 @@ What a flag or a level means. For anyone running the compilers.
 | Doc | Holds |
 |---|---|
 | [levels](levels.md) | Each `-O` level, with the gcc and LLVM counterpart of every limit |
+| [lir-text](lir-text.md) | How to read a machine-phase LIR dump: blocks, labels, operands, notes |
 | [semantics](semantics/readme.md) | How a language's semantics are marked and what the user can select |
 
 What a level costs in compile time: [compile-time](../working/measurement/compile-time.md).

@@ -29,20 +29,20 @@
 //! # Example
 //! `world->words[i]` and `rdr->flags[...]` load far pointer fields of near
 //! structs. No dump prints the body before this pass, so this is its result:
-//! each pointer is one `les` defining the offset and the selector (`v11, v12
-//! :=`), followed by the anchor the second word load became. The first stage
+//! each pointer is one `les` defining the offset and the selector (`t11, t12`),
+//! followed by the `elided` line the second word load became. The first stage
 //! dump of `mark`:
 //!
 //! ```lir
-//! _mark@3: 26 instructions
-//!   ; ...
-//!   block 0x0007
-//!     ; ...
-//!     0x0009  v11, v12 := les [None v1@unplaced]  ; inserted
-//!     0x0009     ; inserted
-//!     0x000b  v13 := mov [[es:r0+0x0] v11@unplaced]  ; inserted
-//!     0x000c  v14, v15 := les [None v2@unplaced]  ; inserted
-//!     0x000c     ; inserted
+//! ═══ _mark@3 · FarIndirectCalls · m16 ═══════════════════════════════════════════
+//! ; ...
+//!     B2  ← B2 B3  → B2 B4  loop                                        ×31.0
+//!          ; ...
+//!          #8  t11, t12   = les.i16     [t1+38]:i32
+//!          #9               elided
+//!         #10  t13        = load.i16    [t12:t11+lsr.iv]
+//!         #11  t14, t15   = les.i16     [t2+1014]:i32
+//!         #12               elided
 //! ```
 //!
 //! From `ISEL_DUMP=1` of `tests/fixtures/c/farloadloop.c` with `-m16 -O2`.

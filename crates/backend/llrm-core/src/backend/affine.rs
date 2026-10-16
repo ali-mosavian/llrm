@@ -23,30 +23,30 @@
 //! ```
 //!
 //! # Example
-//! A copy and a shift that make `cx*2`, before and after the peephole's address
-//! chain. `; ...` marks lines left out; the `; inserted` notes are dropped.
+//! A copy and a shift that make `dx*2`, before and after the peephole's address
+//! chain. `; ...` marks lines left out.
 //!
 //! Before (`ParallelCopy`):
 //!
 //! ```lir
-//! 0x0000  CX := mov [None v2@SI]
+//!         #12  dx         = load.i16    [t8:S%.1.lcssa@bx+t24@di+0x2]
 //! ; ...
-//! 0x0007  BX := mov CX
-//! 0x0007  BX := shl BX, 0x1
+//!         #36  bx         = mov.i16     dx
+//!         #13  bx         = shl.i16     bx, 1:i8
 //! ```
 //!
 //! After (`Peephole`):
 //!
 //! ```lir
-//! 0x0000  CX := mov [None v2@SI]
+//!         #12  dx         = load.i16    [t8:S%.1.lcssa@bx+t24@di+0x2]
 //! ; ...
-//! 0x0007  BX := lea Address(addr=None, through=38, index=38, scale=1, offset=0, disp_width=0)
+//!         #36  bx         = lea.i16     &+edx+edx*1
 //! ```
 //!
-//! The chain is one `lea` in the listing: `lea bx, [ecx+ecx]`.
+//! The chain is one `lea` in the listing: `lea bx, [edx+edx]`.
 //!
-//! From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of a BASIC function that sums an
-//! INTEGER array (`Total%`).
+//! From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of a BASIC function `Total%` that
+//! sums `a(i) + a(a(i))` over an INTEGER array.
 //!
 //! # Used by
 //! `exactaddress.rs`, which folds the chain into a memory operand, and the

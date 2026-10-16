@@ -86,7 +86,7 @@ If the MIR is right to the last dump, the fault is in the machine phases:
 
     ISEL_DUMP=1 llrm-c -O2 -I ... module.c -o module.obj
 
-prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...). The first phase whose output is wrong is the one.
+prints the LIR after each machine phase (banners `═══ fn · Stage · m16 ═══`: `PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...); [LIR text](../reference/lir-text.md) explains the lines. The first phase whose output is wrong is the one.
 
 `llrm-mir FILE` reads, verifies and prints a `.ll` back; `llrm-mir --run [--entry NAME] [--fuel N] FILE` interprets its `@main`, so a reduced MIR program can be run before and after a pass.
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:0da883c57a27a83f3a88f8468ac5621c9a8960bf8b15f1b0b25199e03e3f16c3 -->
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:a0a977536fcaa4c52acfad76699801386b38d62d45e20edb156865a969c470c5 -->
 
 # coalesce
 
@@ -51,33 +51,33 @@ end every value is renamed to its web's root and identity moves are
 dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
 
 ## Example
-A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
-`v4`. `v5 := mov v4` stays: `v4` and `v5` are pinned to EAX and EDX. `;
-inserted` notes are dropped.
+A multiply by 5: `t3` joins `t4`, so `t3 = mov t4` (`#8`) goes and the add
+updates `t4`. `t5 = mov t4` stays: `t4` and `t5` are pinned to EAX and EDX
+by the `ret`.
 
 Before (`TwoAddress`):
 
 ```lir
 ; ...
-0x0001  v4 := mov v2
-0x0001  v4 := shl v4, 0x2
-0x0001  v3 := mov v4
-0x0001  v3 := add v3, v2
-0x0002  v5 := mov v3
-0x0002  v5 := shr v5, 0x10
-0x0002     ; requires v3@EAX,v5@EDX
+     #7  t4         = mov.i32     t2
+     #3  t4         = shl.i32     t4, 2:i8
+     #8  t3         = mov.i32     t4
+     #4  t3         = add.i32     t3, t2
+     #9  t5         = mov.i32     t3
+     #5  t5         = shr.i32     t5, 16:i8
+     #6               ret         t3@eax, t5@edx
 ```
 
 After (`Coalescer`):
 
 ```lir
 ; ...
-0x0001  v4 := mov v2
-0x0001  v4 := shl v4, 0x2
-0x0001  v4 := add v4, v2
-0x0002  v5 := mov v4
-0x0002  v5 := shr v5, 0x10
-0x0002     ; requires v4@EAX,v5@EDX
+     #7  t4         = mov.i32     t2
+     #3  t4         = shl.i32     t4, 2:i8
+     #4  t4         = add.i32     t4, t2
+     #9  t5         = mov.i32     t4
+     #5  t5         = shr.i32     t5, 16:i8
+     #6               ret         t4@eax, t5@edx
 ```
 
 From `ISEL_DUMP=1 llrm-qb -O2 -march=i386` of `Times5& = x * 5` (function

@@ -31,9 +31,9 @@
 //! into a fresh value that lives across that one instruction.
 //!
 //! ```text
-//!    v := a + b                 t1 := a + b ; [slot] := t1     store
-//!    x := v + 1                 x := [slot] + 1                folded read
-//!    y := f(v)                  t2 := [slot] ; y := f(t2)      reload
+//!    v = add a, b        t1 = add a, b ; store [slot0], t1      store
+//!    x = add v, 1        x = add [slot0], 1                     folded read
+//!    y = call f(v)       t2 = load [slot0] ; y = call f(t2)     reload
 //! ```
 //!
 //! An instruction that can read the slot directly (a source operand, a tied
@@ -57,48 +57,57 @@
 //! has fewer registers than that. Before, the allocator's input:
 //!
 //! ```lir
-//! === Coalescer
-//!     block 0x0000
-//!       0x0009  v6 := mov [None v1@unplaced]  ; inserted
-//!       0x000b  v7 := mov [None v1@unplaced]  ; inserted
-//!       0x000d  v8 := mov [None v1@unplaced]  ; inserted
-//!       0x000f  v9 := mov [None v1@unplaced]  ; inserted
-//!       0x0010  call   ; inserted; requires v2@EAX; delivers v10@EAX; clobbers EAX
-//!       ; ...
-//!       0x0015  v15 := mov v6  ; inserted
-//!       0x0015  v15 := imul v15, v7  ; inserted
-//!       ; ...
-//!       0x0017  v17 := mov v8  ; inserted
-//!       0x0017  v17 := imul v17, v9  ; inserted
+//! ═══ f_ · Coalescer · m32 ═══════════════════════════════════════════════════════
+//! fn f_(t1@eax, t2@edx) -> @eax   ; calls clobber eax
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #5  t6         = load.i32    [t1+12]
+//!      #6  t7         = load.i32    [t1+16]
+//!      ; ...
+//!      #8  t9         = load.i32    [t1+24]
+//!      #9  t10        = load.i32    [t1+28]
+//!     #10  t11@eax    = call        g_(t2@eax)
+//!      ; ...
+//!     #13  t14        = imul.i32    t14, t6
+//!     #24  t16        = mov.i32     t7
+//!     #15  t16        = imul.i32    t16, t8
+//!     #16  t13        = add.i32     t13, t16
+//!     #26  t18        = mov.i32     t9
 //! ```
 //!
 //! After:
 //!
 //! ```lir
-//! === RegAlloc
-//!     block 0x0000
-//!       0x0009  EBX := mov [None v1@EAX]  ; inserted
-//!       0x0009  [[bp-0xc]] := mov EBX  ; inserted
-//!       0x000b  ESI := mov [None v1@EAX]  ; inserted
-//!       0x000d  EBX := mov [None v1@EAX]  ; inserted
-//!       0x000d  [[bp-0x4]] := mov EBX  ; inserted
-//!       0x000f  EAX := mov [None v1@EAX]  ; inserted
-//!       0x000f  [[bp-0x8]] := mov EAX  ; inserted
-//!       0x0010  EAX := mov ECX  ; inserted
-//!       0x0010  call   ; inserted; requires v19@EAX; delivers v20@EAX; clobbers EAX
-//!       ; ...
-//!       0x0015  EBX := mov [[bp-0xc]]  ; inserted
-//!       0x0015  EBX := imul EBX, ESI  ; inserted
-//!       ; ...
-//!       0x0017  ECX := mov [[bp-0x4]]  ; inserted
-//!       0x0017  ECX := imul ECX, [[bp-0x8]]  ; inserted
+//! ═══ f_ · RegAlloc · m32 ════════════════════════════════════════════════════════
+//! fn f_(t19@eax, t20@edx) -> @eax   ; calls clobber eax
+//! frame  slot0 [bp-4] 4 B  slot1 [bp-8] 4 B  slot2 [bp-12] 4 B  slot3 [bp-16] 4 B
+//!
+//! B0  entry  → exit                                                 ×1.0
+//!      #5  edx        = load.i32    [t1@eax+12]
+//!     #29               store.i32   [slot3], edx                          ; spill
+//!      #6  edx        = load.i32    [t1@eax+16]
+//!     #30               store.i32   [slot2], edx                          ; spill
+//!      ; ...
+//!      #8  edx        = load.i32    [t1@eax+24]
+//!     #31               store.i32   [slot0], edx                          ; spill
+//!      #9  eax        = load.i32    [t1@eax+28]
+//!     #32               store.i32   [slot1], eax                          ; spill
+//!     #33  eax        = mov.i32     esi
+//!     #10  t22@eax    = call        g_(t21@eax)
+//!      ; ...
+//!     #13  ebp        = imul.i32    ebp, [slot3]
+//!     #24  ecx        = load.i32    [slot2]
+//!     #15  ecx        = imul.i32    ecx, edi
+//!     #26  ecx        = load.i32    [slot0]
+//!     #17  ecx        = imul.i32    ecx, [slot1]
 //! ```
 //!
-//! `v6`, `v8` and `v9` got slots and a store after their definitions. `v6` and
-//! `v8` are reloaded before their uses; `v9`'s use reads its slot directly.
+//! `t6`, `t7`, `t9` and `t10` got slots and a store after their definitions
+//! (`; spill`). `t7` and `t9` are reloaded before their uses (`#24`, `#26`);
+//! `t6` and `t10` are read from their slots directly (`#13`, `#17`).
 //!
-//! From `ISEL_DUMP=1` of the function in the `ssaspill` example at -O2 -m32,
-//! allocator route.
+//! From `ISEL_DUMP=1` of a C function that loads eight values from `p` and
+//! calls `g` (`-m32 -O2`), stages `Coalescer` and `RegAlloc` (allocator route).
 //!
 //! # Runs
 //! Inside the register allocator ([`crate::backend::allocate`]): once for the
