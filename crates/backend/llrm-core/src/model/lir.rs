@@ -998,7 +998,38 @@ pub struct LirBody {
 /// Fixed point, in 2^31sts, so a body stays `Eq`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct BlockOdds {
-    pub taken: IndexMap<(i64, i64), u32>,
+    pub taken: Taken,
+}
+
+/// The odds of the edges, shared by every copy of a body that has not changed
+/// them: a copy is a pointer, and two copies compare by it (the odds were
+/// compared edge by edge at each rewrite of the allocator: a third of the time
+/// it took to ask for the block frequencies). A change copies the map first if
+/// another body holds it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Taken(Arc<IndexMap<(i64, i64), u32>>);
+
+impl Taken {
+    /// Whether both are the one map.
+    pub fn shares(
+        &self,
+        other: &Self,
+    ) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl std::ops::Deref for Taken {
+    type Target = IndexMap<(i64, i64), u32>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Taken {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.0)
+    }
 }
 
 // Probabilities read, for a test that a dispatch of N cases reads O(N).
