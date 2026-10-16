@@ -648,6 +648,19 @@ def test_the_bounds_of_a_body_cost_a_linear_work_on_the_branches_axis(tmp_path):
     assert big <= 4.5 * small, f"analysis bounded {small:.0f} -> {big:.0f} Minstr for 1024 -> 4096"
 
 
+def test_a_nest_of_loops_proves_each_loop_from_its_own_blocks_on_the_nest_axis(tmp_path):
+    """`analysis counted` proved a loop again for every change to the CFG and built, for each proof, the set of every value
+    the loop defines (a nest holds the whole nest's): on `nest` at -O2 it read 440 -> 1,834 Minstr at N=64, 128
+    (4.2 per doubling). Proved once, asked of each value's definition: 118 -> 393 (3.3). More than 3.75
+    per doubling at N=64 -> 128 fails."""
+    cost = {}
+    for size in (64, 128):
+        source = tmp_path / f"nest_{size}.c"
+        source.write_text(scaling.AXES["nest"](size))
+        cost[size] = gate.own_work(gate.levels_time.command("llrm", "O2", source))["analysis counted"]
+    assert cost[128] <= 3.75 * cost[64], f"analysis counted {cost[64]:.0f} -> {cost[128]:.0f} Minstr"
+
+
 def test_interference_of_values_live_together_is_kept_as_bits_on_the_live_axis(tmp_path):
     """On `live` at N=512 a function holds 940,000 interference pairs; the graph kept each as a tree-set node,
     walked once per web for every instruction of the block, with three hash lookups per pair to count it: `lir coalesce` read

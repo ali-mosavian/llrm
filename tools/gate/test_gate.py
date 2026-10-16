@@ -1275,7 +1275,9 @@ def test_the_tools_group_restores_a_pull_requests_base_counts_and_a_push_to_main
     """The bench step was 20 of the tools group's 22 minutes: it built and measured the base every run."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
-    assert "LLRM_BENCH_RECORD: ${{ github.event_name == 'push'" in workflow and "key: ${{ steps.basecounts.outputs.head }}" in workflow
+    record, gate_run = workflow.index("bench.py --record"), workflow.index("gate.py run --group ${{ matrix.group }}")
+    saved = workflow.index("key: ${{ steps.basecounts.outputs.head }}")
+    assert record < saved < gate_run, "saved before the gate run, which measures the base"
 
 
 def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
