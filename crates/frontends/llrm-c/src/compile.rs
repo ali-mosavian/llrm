@@ -946,6 +946,31 @@ mod tests {
         let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records inlinecode.c");
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         super::selected(&text, "inlinecode", None, &options).expect("compiles");
+
+    /// Inline code that lowers SP (`alloca`) was refused ("modifies sp"), and
+    /// once let through returned with SP where it ended: the saved registers
+    /// popped from the wrong place. The return sets SP from the frame register.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_that_lowers_sp_returns_with_the_frame_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("grow.c");
+        std::fs::write(
+            &source,
+            "extern void *grow(unsigned n);\n#pragma aux grow = \"sub sp,ax\" __parm __nomemory [__ax] __value [__sp] __modify __exact __nomemory [__sp]\nint use(unsigned n) { char *b = grow(n); b[0] = 1; return b[0]; }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records grow.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "grow", None, &options).unwrap()).unwrap();
+        let (lea, pop) = (asm.find("lea sp").expect(&asm), asm.find("pop bp").expect(&asm));
+        assert!(lea < pop, "{asm}");
+    }
     }
 
     /// Inline code that changes SI (`__modify [__si]`) in a function whose
