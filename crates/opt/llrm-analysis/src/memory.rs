@@ -468,15 +468,7 @@ impl ObjectInterner {
             }
         };
         let one = &objects[id as usize];
-        ObjectRef {
-            id,
-            kind: one.kind,
-            addressed,
-            captured,
-            constant,
-            extent: one.extent,
-            key: Key::of(&one.identity),
-        }
+        ObjectRef { id, kind: one.kind, addressed, captured, constant, extent: one.extent, key: Key::of(&one.identity) }
     }
 
     /// How many times `intern` was asked: a cost counter, for tests that a hot

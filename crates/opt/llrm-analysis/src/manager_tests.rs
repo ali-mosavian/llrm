@@ -1294,6 +1294,7 @@ entry:
     analyses.invalidate(function, &PreservedAnalyses::none());
     let again = analyses.get::<super::PointerValues>(context, &layout, function);
     assert!(!Rc::ptr_eq(&kept, &again), "a pointer made another one kept where it was said to point");
+}
 
 /// A terminator rewritten in one loop was a change to the CFG, and every loop
 /// of the body was proved again (`unrolled` at -O3: 62 of the 91 reruns, 1155
