@@ -1249,7 +1249,7 @@ def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_n
     (tools / "valgrind").chmod(0o755)
     got = gate.missing_capabilities(env)
     assert "perf" in got and "counter" not in got
-    assert "counter" in gate.load()["requires"]["measure"]
+    assert "counter" in gate.load()["capability"]
 def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
