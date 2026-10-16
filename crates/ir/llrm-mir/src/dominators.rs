@@ -283,6 +283,7 @@ impl DominatorTree {
     }
 
     pub fn new(function: &Function) -> Self {
+        crate::counts::bump(crate::counts::Event::Dominators);
         let Some(entry) = function.entry() else {
             return Self { idom: Vec::new(), order: Vec::new(), enter: Vec::new(), last: Vec::new() };
         };

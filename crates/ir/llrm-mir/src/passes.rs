@@ -77,6 +77,7 @@ pub(crate) fn counted(
     what: &'static str,
     hit: bool,
 ) {
+    crate::counts::analysis(what, hit);
     if let Some(observer) = OBSERVER.get() {
         (observer.count)(what, hit);
     }

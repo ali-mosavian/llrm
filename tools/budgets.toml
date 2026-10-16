@@ -1,0 +1,426 @@
+# Budgets of tools/test_budgets.py: ratios of two sizes of one generated program, never an absolute floor.
+#
+# Every [[debt]] row is a budget above the default. It carries its issue and its owner, a measured ratio and the reason, and the
+# file only shrinks: a row goes when its fix lands, and a row's ratio is never raised without a measured reason in the PR.
+
+[default]
+linear = 2.2            # an event count at 2N may be this times its count at N (a linear one reads 2, a quadratic one 4) ...
+slack = 4               # ... plus this many, so a count of a few does not flip on one more
+constant_slack = 2      # copies, selections and allocations of a one-function program do not grow by more than this
+steps = 2.3             # a step's own work at 2N may be this times its work at N
+share = 0.02            # a step is read when it has this share of the compile's work at 2N ...
+floor_minstr = 5.0      # ... and this much, in millions of instructions
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir decide"
+ratio = 2.7
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 202.9 -> 488.0 Minstr (x2.40)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir indvars"
+ratio = 3.3
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 124.4 -> 363.2 Minstr (x2.92)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir twoaddr"
+ratio = 2.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 135.1 -> 316.5 Minstr (x2.34)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "regalloc candidates"
+ratio = 4.3
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 80.3 -> 311.2 Minstr (x3.88)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "isel"
+ratio = 2.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 121.9 -> 283.5 Minstr (x2.33)"
+
+[[debt]]
+kind = "steps"
+axis = "live"
+name = "lir coalesce"
+ratio = 2.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 30.4 -> 79.7 Minstr (x2.62)"
+
+[[debt]]
+kind = "steps"
+axis = "live"
+name = "facts intervals"
+ratio = 3.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 10.7 -> 34.5 Minstr (x3.23)"
+
+[[debt]]
+kind = "steps"
+axis = "live"
+name = "facts widths"
+ratio = 3.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 7.5 -> 26.0 Minstr (x3.48)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "regalloc base"
+ratio = 2.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 4.4 -> 11.4 Minstr (x2.63)"
+
+[[debt]]
+kind = "events"
+axis = "nest"
+name = "analysis loop-products"
+ratio = 13.2
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 1 -> 12 (x12.00)"
+
+[[debt]]
+kind = "events"
+axis = "nest"
+name = "analysis pressure"
+ratio = 13.2
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 1 -> 12 (x12.00)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir lsr"
+ratio = 5.7
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 26.8 -> 138.0 Minstr (x5.15)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "lir jumps"
+ratio = 2.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 41.3 -> 104.4 Minstr (x2.53)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "lir coalesce"
+ratio = 2.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 36.1 -> 83.6 Minstr (x2.32)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "regalloc trial"
+ratio = 6.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 12.5 -> 77.6 Minstr (x6.22)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "split placed"
+ratio = 6.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 14.1 -> 77.4 Minstr (x5.48)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "siblings interference"
+ratio = 74493100000.0
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 0.0 -> 67.7 Minstr (x67721000000.00)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "regalloc candidates"
+ratio = 7.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 9.6 -> 67.6 Minstr (x7.03)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "regalloc base"
+ratio = 3.3
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 19.9 -> 58.6 Minstr (x2.95)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir gvn"
+ratio = 2.7
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 20.5 -> 49.4 Minstr (x2.41)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir indvars"
+ratio = 3.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 15.6 -> 44.1 Minstr (x2.82)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "facts intervals"
+ratio = 5.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 8.3 -> 43.9 Minstr (x5.30)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "lir coalesce"
+ratio = 2.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 37.1 -> 93.4 Minstr (x2.52)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "regalloc base"
+ratio = 3.2
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 24.4 -> 70.5 Minstr (x2.89)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "regalloc spill"
+ratio = 3.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 17.7 -> 48.6 Minstr (x2.74)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "spill cleanup"
+ratio = 4.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 9.5 -> 41.9 Minstr (x4.40)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "regalloc trial"
+ratio = 3.3
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 13.8 -> 40.7 Minstr (x2.95)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir dse"
+ratio = 2.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 11.8 -> 29.1 Minstr (x2.47)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir gvn"
+ratio = 3.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 281.4 -> 791.5 Minstr (x2.81)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "split placed"
+ratio = 4.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 81.7 -> 338.9 Minstr (x4.15)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir coalesce"
+ratio = 2.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 105.9 -> 248.7 Minstr (x2.35)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "analysis through-memory"
+ratio = 3.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 53.8 -> 147.6 Minstr (x2.74)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir floatassign"
+ratio = 4.0
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 196.4 -> 696.7 Minstr (x3.55)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir gvn"
+ratio = 3.2
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 236.1 -> 684.3 Minstr (x2.90)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir jumps"
+ratio = 2.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 59.0 -> 138.2 Minstr (x2.34)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir sroa"
+ratio = 3.0
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 39.5 -> 107.4 Minstr (x2.72)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "ssa flow"
+ratio = 3.3
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 31.3 -> 91.5 Minstr (x2.92)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir gvn"
+ratio = 2.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 66.6 -> 175.3 Minstr (x2.63)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir lsr"
+ratio = 3.5
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 49.9 -> 154.3 Minstr (x3.09)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "split placed"
+ratio = 3.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 29.0 -> 99.6 Minstr (x3.43)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "regalloc base"
+ratio = 3.1
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 32.7 -> 91.9 Minstr (x2.81)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "facts intervals"
+ratio = 3.7
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 25.0 -> 83.2 Minstr (x3.32)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir decide"
+ratio = 2.9
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 28.4 -> 73.5 Minstr (x2.59)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir dse"
+ratio = 3.5
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 23.0 -> 72.9 Minstr (x3.16)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "isel"
+ratio = 2.8
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 27.8 -> 69.1 Minstr (x2.49)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "regalloc base"
+ratio = 3.6
+issue = "UNASSIGNED"
+owner = "UNASSIGNED"
+why = "measured 5.8 -> 18.6 Minstr (x3.19)"
+

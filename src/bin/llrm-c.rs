@@ -13,5 +13,8 @@ fn main() {
         std::process::exit(2);
     }
     let code = llrm_core::support::debug::run_main(|| llrm_c::compile::main(&argv));
+    if llrm_core::support::debug::enabled("counts") {
+        llrm_mir::counts::lines().iter().for_each(|line| eprintln!("{line}"));
+    }
     std::process::exit(code);
 }
