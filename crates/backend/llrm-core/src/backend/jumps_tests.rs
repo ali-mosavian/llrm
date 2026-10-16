@@ -1172,6 +1172,7 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
                         crate::model::lir::Phi {
                             result: 6 + next(2) as u32,
                             incoming: from.iter().map(|f| (*f, next(6) as u32)).collect(),
+                            label: Default::default(),
                         },
                     );
             }

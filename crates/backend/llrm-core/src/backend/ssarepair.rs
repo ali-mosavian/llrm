@@ -199,7 +199,16 @@ pub fn repaired(
             let name = next;
             next += 1;
             made.insert((*at, *value), name);
-            phis_of.get_mut(at).expect("a block").push(Phi { result: name, incoming: Vec::new() });
+            phis_of
+                .get_mut(at)
+                .expect("a block")
+                .push(
+                    Phi {
+                        result: name,
+                        incoming: Vec::new(),
+                        label: Default::default(),
+                    },
+                );
         }
     }
     let mut todo: Vec<(i64, bool)> = vec![(body.entry, false)];
@@ -350,6 +359,7 @@ pub fn simplified(body: &LirBody) -> Option<LirBody> {
                     .filter(|phi| !ends.contains_key(&phi.result))
                     .map(|phi| Phi {
                         result: phi.result,
+                        label: phi.label.clone(),
                         incoming: phi
                             .incoming
                             .iter()

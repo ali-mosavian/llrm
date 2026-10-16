@@ -10,7 +10,7 @@
 //! destination, `=`, the opcode with its width, the operands, then `; notes`.
 //! Blocks are named by position and every target says its block. An
 //! instruction's label is given once, in emit order, and kept by every pass
-//! that keeps the instruction (`Insn::label`; a phi has none), so two dumps of
+//! that keeps the instruction (`Insn::label`, `Phi::label`), so two dumps of
 //! one body differ only where the instructions do.
 //! A block is indented four spaces for each loop around it, so a loop is a
 //! shape on the page; its header says `loop` and, for an innermost loop whose
@@ -373,7 +373,7 @@ fn _header(
 
 /// One printed instruction: its parts, and its notes.
 struct Line {
-    /// `#12`; a phi has none.
+    /// `#12`.
     label: String,
     dest: String,
     op: String,
@@ -404,7 +404,7 @@ fn _block(
                 .collect::<Vec<_>>()
                 .join(", ");
             Line {
-                label: String::new(),
+                label: format!("#{}", phi.label.get()),
                 dest: format!("v{}", phi.result),
                 op: "phi".to_owned(),
                 operands: arms,

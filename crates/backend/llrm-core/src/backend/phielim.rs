@@ -1002,6 +1002,7 @@ fn _renamed_phi(
 ) -> Result<Phi, String> {
     Ok(Phi {
         result: _name(phi.result, rename)?,
+        label: phi.label.clone(),
         incoming: phi
             .incoming
             .iter()
@@ -1252,6 +1253,7 @@ pub fn _split_edges(
                         _renamed_phi(
                             &Phi {
                                 result: phi.result,
+                                label: phi.label.clone(),
                                 incoming: phi
                                     .incoming
                                     .iter()
@@ -1378,6 +1380,7 @@ pub fn unsplit(body: &LirBody) -> LirBody {
             .iter()
             .map(|phi| Phi {
                 result: phi.result,
+                label: phi.label.clone(),
                 incoming: phi.incoming.iter().map(|&(at, value)| (where_(at), value)).collect(),
             })
             .collect();
@@ -1565,8 +1568,8 @@ mod tests {
                     vec![test],
                     vec![20, 30],
                     vec![
-                        Phi { result: 3, incoming: vec![(0, 1), (20, 4)] },
-                        Phi { result: 4, incoming: vec![(0, 2), (20, 5)] },
+                        Phi { result: 3, incoming: vec![(0, 1), (20, 4)], label: Default::default() },
+                        Phi { result: 4, incoming: vec![(0, 2), (20, 5)], label: Default::default() },
                     ],
                 )
                 .into(),
@@ -1607,7 +1610,13 @@ mod tests {
                 vec![
                     block(0, vec![load(0, 1)], if critical { vec![2, 1] } else { vec![2] }, vec![]).into(),
                     block(1, vec![load(1, 2)], vec![2], vec![]).into(),
-                    block(2, vec![read], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (1, 2)] }]).into(),
+                    block(
+                        2,
+                        vec![read],
+                        vec![],
+                        vec![Phi { result: 3, incoming: vec![(0, 1), (1, 2)], label: Default::default() }],
+                    )
+                    .into(),
                 ],
             );
             let done = eliminated(&wide).unwrap();
@@ -1632,7 +1641,13 @@ mod tests {
             vec![
                 block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
                 block(1, vec![], vec![], vec![]).into(),
-                block(2, vec![Arc::new(use_)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1)] }]).into(),
+                block(
+                    2,
+                    vec![Arc::new(use_)],
+                    vec![],
+                    vec![Phi { result: 3, incoming: vec![(0, 1)], label: Default::default() }],
+                )
+                .into(),
             ],
         );
 
@@ -1664,7 +1679,13 @@ mod tests {
             vec![
                 block(0, vec![branch(0, Some((0, 2)), "jz", 2)], vec![1, 2], vec![]).into(),
                 block(1, vec![push(1, 1)], vec![], vec![]).into(),
-                block(2, vec![push(2, 3)], vec![], vec![Phi { result: 3, incoming: vec![(0, 1), (4, 5)] }]).into(),
+                block(
+                    2,
+                    vec![push(2, 3)],
+                    vec![],
+                    vec![Phi { result: 3, incoming: vec![(0, 1), (4, 5)], label: Default::default() }],
+                )
+                .into(),
                 block(4, vec![], vec![2], vec![]).into(),
             ],
         );
@@ -1692,7 +1713,7 @@ mod tests {
                 vec![],
             ))
         };
-        let both = |value: u32| vec![Phi { result: value, incoming: vec![(0, 1), (4, 2)] }];
+        let both = |value: u32| vec![Phi { result: value, incoming: vec![(0, 1), (4, 2)], label: Default::default() }];
         let mut branching = body(
             "both-edges",
             vec![
@@ -1745,7 +1766,7 @@ mod tests {
                     1,
                     vec![branch(1, Some((1, 2)), "jz", 3)],
                     vec![2, 3],
-                    vec![Phi { result: 2, incoming: vec![(0, 1)] }],
+                    vec![Phi { result: 2, incoming: vec![(0, 1)], label: Default::default() }],
                 )
                 .into(),
                 // Reading the source down the other arm requires a real edge
@@ -1755,7 +1776,7 @@ mod tests {
                     3,
                     vec![move_(3, 7, held(6, 4))],
                     vec![],
-                    vec![Phi { result: 6, incoming: vec![(1, 2), (4, 5)] }],
+                    vec![Phi { result: 6, incoming: vec![(1, 2), (4, 5)], label: Default::default() }],
                 )
                 .into(),
                 block(4, vec![move_(4, 5, imm(9, 4))], vec![3], vec![]).into(),
@@ -1781,7 +1802,7 @@ mod tests {
         let tail = 200;
         let mut blocks = vec![
             block(0, vec![], vec![1, 2], vec![]),
-            block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)] }]),
+            block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)], label: Default::default() }]),
         ];
         blocks.extend((2..tail).map(|at| block(at, vec![], vec![at + 1], vec![])));
         blocks.push(block(tail, vec![], vec![], vec![]));
@@ -1900,7 +1921,11 @@ mod tests {
                     let insns = if next(3) == 0 { vec![push(at, 7 + next(3) as u32)] } else { Vec::new() };
                     let preds: Vec<i64> = (0..size).filter(|from| succs[*from as usize].contains(&at)).collect();
                     let phis = match preds.get(next(4) as usize) {
-                        Some(&from) => vec![Phi { result: 20 + at as u32, incoming: vec![(from, 7 + next(3) as u32)] }],
+                        Some(&from) => vec![Phi {
+                            result: 20 + at as u32,
+                            incoming: vec![(from, 7 + next(3) as u32)],
+                            label: Default::default(),
+                        }],
                         None => Vec::new(),
                     };
                     Block::from(block(at, insns, succs[at as usize].clone(), phis))
@@ -1986,7 +2011,11 @@ mod tests {
                     // A phi reads on an edge there is.
                     let preds: Vec<i64> = (0..size).filter(|from| succs[*from as usize].contains(&at)).collect();
                     let phis = match preds.get(next(4) as usize) {
-                        Some(&from) => vec![Phi { result: 20 + at as u32, incoming: vec![(from, 7 + next(3) as u32)] }],
+                        Some(&from) => vec![Phi {
+                            result: 20 + at as u32,
+                            incoming: vec![(from, 7 + next(3) as u32)],
+                            label: Default::default(),
+                        }],
                         None => Vec::new(),
                     };
                     Block::from(block(at, insns, succs[at as usize].clone(), phis))
@@ -2027,7 +2056,8 @@ mod tests {
             "alternate-phi",
             vec![
                 block(0, vec![], vec![1, 2], vec![]).into(),
-                block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)] }]).into(),
+                block(1, vec![], vec![], vec![Phi { result: 3, incoming: vec![(0, 7)], label: Default::default() }])
+                    .into(),
                 block(2, vec![], vec![], vec![]).into(),
             ],
         );

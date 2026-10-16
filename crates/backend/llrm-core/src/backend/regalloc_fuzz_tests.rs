@@ -433,7 +433,11 @@ fn in_ssa(body: &LirBody) -> LirBody {
     blocks[1] = LirBlock {
         phis: headers
             .iter()
-            .map(|(value, result)| Phi { result: *result, incoming: vec![(ENTRY, *value), (LOOP, latch(*value))] })
+            .map(|(value, result)| Phi {
+                result: *result,
+                incoming: vec![(ENTRY, *value), (LOOP, latch(*value))],
+                label: Default::default(),
+            })
             .collect(),
         ..blocks[1].with_insns(inside).into_inner()
     }

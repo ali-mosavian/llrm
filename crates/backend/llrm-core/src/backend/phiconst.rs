@@ -199,6 +199,7 @@ pub fn shared(body: &LirBody) -> LirBody {
             .map(|phi| match incoming.get(&(block.at, phi.result)) {
                 Some(changes) => Phi {
                     result: phi.result,
+                    label: phi.label.clone(),
                     incoming: phi
                         .incoming
                         .iter()

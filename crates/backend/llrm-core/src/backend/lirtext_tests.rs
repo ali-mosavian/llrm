@@ -61,7 +61,7 @@ fn body() -> LirBody {
     };
     let looping = LirBlock {
         succ: vec![BB1, BB2].into(),
-        phis: vec![Phi { result: 5, incoming: vec![(0, 2), (BB1, 4)] }].into(),
+        phis: vec![Phi { result: 5, incoming: vec![(0, 2), (BB1, 4)], label: Default::default() }].into(),
         ..LirBlock::new(
             BB1,
             vec![
@@ -149,17 +149,17 @@ B0  entry  → B1
      #3               jmp         B1
 
     B1  ← B0 B1  → B1 B2  loop
-             v5         = phi         B0: v2, B1: v4
-         #4  v4         = sub.i2      v5, 1
-         #5               cmp.i2      v4, -1
-         #6               jne         B1 else B2
+         #4  v5         = phi         B0: v2, B1: v4
+         #5  v4         = sub.i2      v5, 1
+         #6               cmp.i2      v4, -1
+         #7               jne         B1 else B2
 
 B2  ← B1  → exit
-     #7  v7         = load.i2     [slot0]                               ; reload
-     #8  v10@eax    = call        fib(v7@ax)
-     #9  v11@eax    = call        fib(v7@ax)
-    #10  v12@eax    = call        log(v7@ax)                            ; also clobbers esi
-    #11               ret         v12@eax
+     #8  v7         = load.i2     [slot0]                               ; reload
+     #9  v10@eax    = call        fib(v7@ax)
+    #10  v11@eax    = call        fib(v7@ax)
+    #11  v12@eax    = call        log(v7@ax)                            ; also clobbers esi
+    #12               ret         v12@eax
 
 ";
     let text = dump(Mode::Compact);
@@ -267,7 +267,7 @@ fn an_inserted_instruction_changes_one_line_of_the_diff() {
     let added: Vec<_> = new.iter().filter(|line| !old.contains(line)).collect();
     assert!(removed.is_empty(), "{removed:#?}");
     assert_eq!(added.len(), 1, "{added:#?}");
-    assert!(added[0].contains("#12") && added[0].contains("v9"), "{added:#?}");
+    assert!(added[0].contains("#13") && added[0].contains("v9"), "{added:#?}");
 }
 
 fn dump_of(body: &LirBody) -> String {
@@ -290,7 +290,7 @@ fn a_clone_keeps_its_number_and_a_duplicate_gets_a_new_one() {
     let widened = body.with_blocks(blocks);
     widened.number_insns();
     let labels: Vec<u32> = widened.blocks[0].insns.iter().map(|insn| insn.label.get()).collect();
-    assert_eq!(labels, [1, 2, 3, 12], "the copy of #2 is a new instruction");
+    assert_eq!(labels, [1, 2, 3, 13], "the copy of #2 is a new instruction");
 }
 
 /// Labels are not part of what an instruction is: numbering a body for a dump
@@ -304,4 +304,17 @@ fn numbering_changes_neither_equality_nor_a_list() {
     numbered.number_insns();
     assert!(numbered.blocks[2].insns.same_as(&list), "numbering rebuilt a list");
     assert!(Arc::ptr_eq(&numbered.blocks[2].insns[0], &list[0]));
+}
+
+/// A phi has a number like an instruction, kept when a pass rebuilds it: values
+/// merge there, so it is where a diff of two stages matters most.
+#[test]
+fn a_phi_is_numbered_and_keeps_its_number() {
+    let body = body();
+    body.number_insns();
+    let phi = &body.blocks[1].phis[0];
+    assert_eq!(phi.label.get(), 4);
+    let renamed = Phi { result: 9, ..phi.clone() };
+    assert_eq!(renamed.label.get(), 4);
+    assert!(dump_of(&body).contains("     #4  v5         = phi"), "{}", dump_of(&body));
 }

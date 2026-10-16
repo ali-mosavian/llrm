@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lirtext.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lirtext.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:c51f2bade6a0d17ea5b304c510c15191eab1175ad869ec5350eb16d8d1eab2c8 -->
+<!-- src: crates/backend/llrm-core/src/backend/lirtext.rs sha256:3d73f63fa01ffc6d3f179da9a4cbb990898b25421dba622b036d6bdb329759f7 -->
 
 # lirtext
 
@@ -15,7 +15,7 @@ its instructions, set in fixed columns: its label (`#12`), the
 destination, `=`, the opcode with its width, the operands, then `; notes`.
 Blocks are named by position and every target says its block. An
 instruction's label is given once, in emit order, and kept by every pass
-that keeps the instruction (`Insn::label`; a phi has none), so two dumps of
+that keeps the instruction (`Insn::label`, `Phi::label`), so two dumps of
 one body differ only where the instructions do.
 A block is indented four spaces for each loop around it, so a loop is a
 shape on the page; its header says `loop` and, for an innermost loop whose

@@ -572,6 +572,8 @@ impl Insn {
 pub struct Phi {
     pub result: u32,
     pub incoming: Vec<(i64, u32)>,
+    /// Its number in a dump (`Label`).
+    pub label: Label,
 }
 
 impl Repr for Phi {
@@ -1163,22 +1165,33 @@ impl LirBody {
             .collect()
     }
 
-    /// Gives every instruction without a number the next one, in block then
-    /// instruction order, and a second instruction holding a number already
-    /// seen a new one. Numbers are never reused: the next is past every number
-    /// this body, or the body it came from, has given. Changes no list.
+    /// Gives every instruction and phi without a number the next one, in block
+    /// then instruction order, and a second instruction holding a number
+    /// already seen a new one. Numbers are never reused: the next is past
+    /// every number this body, or the body it came from, has given. Changes
+    /// no list.
     pub fn number_insns(&self) {
-        let all = || self.blocks.iter().flat_map(|block| block.insns.iter());
-        let mut next = all().map(|insn| insn.label.get()).max().unwrap_or(0).max(self.last_label.get());
+        // A block's phis come first, as they print.
+        let labels = || {
+            self.blocks
+                .iter()
+                .flat_map(
+                    |block| {
+                        let phis = block.phis.iter().map(|phi| (&phi.label, None));
+                        phis.chain(block.insns.iter().map(|insn| (&insn.label, Some(Arc::as_ptr(insn)))))
+                    },
+                )
+        };
+        let mut next = labels().map(|(label, _)| label.get()).max().unwrap_or(0).max(self.last_label.get());
         let (mut seen, mut done) = (BTreeSet::new(), BTreeSet::new());
-        for insn in all() {
-            if !done.insert(Arc::as_ptr(insn)) {
+        for (label, shared) in labels() {
+            if shared.is_some_and(|one| !done.insert(one)) {
                 continue;
             }
-            let held = insn.label.get();
+            let held = label.get();
             if held == 0 || !seen.insert(held) {
                 next += 1;
-                insn.label.set(next);
+                label.set(next);
                 seen.insert(next);
             }
         }
@@ -1606,7 +1619,7 @@ mod tests {
         use crate::model::ir::Loc;
         use crate::support::pyrepr::{self, Repr};
 
-        let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming }.repr();
+        let phi = |incoming: Vec<(i64, u32)>| super::Phi { result: 3, incoming, label: Default::default() }.repr();
         assert_eq!(phi(vec![(1, 2), (4, 5)]), "Phi(result=3, incoming=((1, 2), (4, 5)))");
         assert_eq!(phi(vec![(1, 2)]), "Phi(result=3, incoming=((1, 2),))");
         assert_eq!(phi(vec![]), "Phi(result=3, incoming=())");

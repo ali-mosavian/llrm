@@ -348,6 +348,7 @@ pub fn joined(
                         .iter()
                         .map(|phi| Phi {
                             result: swap(phi.result),
+                            label: phi.label.clone(),
                             incoming: phi.incoming.iter().map(|(at, value)| (*at, swap(*value))).collect(),
                         })
                         .collect(),

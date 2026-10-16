@@ -101,7 +101,9 @@ fn test_a_chain_of_phis_is_one_web_whatever_order_its_links_come_in() {
         .map(|k| {
             let value = 100 + links - k;
             let mut block = LirBlock::new(i64::from(k), vec![wide(value, if k == links - 1 { 4 } else { 2 })]);
-            block.phis = vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)] }].into();
+            block.phis =
+                vec![Phi { result: value - 1, incoming: vec![(i64::from(k), value)], label: Default::default() }]
+                    .into();
             block
         })
         .collect();

@@ -1938,7 +1938,7 @@ impl Selector<'_, '_, '_> {
                             let pair = selector.pair_phi_inputs[&(inst, from)];
                             if one == 0 { pair.0 } else { pair.1 }
                         })?;
-                        phis.push(Phi { result: half.value, incoming });
+                        phis.push(Phi { result: half.value, incoming, label: Default::default() });
                     }
                     continue;
                 }
@@ -1946,7 +1946,7 @@ impl Selector<'_, '_, '_> {
                     let result = instruction.result.expect("a phi's value");
                     let incoming = self.incoming(inst)?;
                     self.width(instruction.ty)?;
-                    phis.push(Phi { result: self.value(result), incoming });
+                    phis.push(Phi { result: self.value(result), incoming, label: Default::default() });
                     continue;
                 }
                 if instruction.opcode.is_terminator() {
