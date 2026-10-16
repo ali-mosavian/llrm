@@ -260,8 +260,15 @@ jobs:
         run: |
           echo "LLRM_BENCH_BASE_DIR=$RUNNER_TEMP/bench-base" >> "$GITHUB_ENV"
           echo "head=bench-base-$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"
-      - run: uv run -q --project tools python tools/bench/bench.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards)" ${{ github.event_name == 'push' && '--record' || '' }}
-      - if: github.event_name == 'push' && success()
+      # The counts are saved when they were recorded, whatever the verdict: a regression or a failed later job must not leave the tree with no
+      # base (every pull request on it would measure the base itself and time out). merge records only when all the shards are in.
+      - id: merge
+        run: |
+          rc=0
+          uv run -q --project tools python tools/bench/bench.py --merge "$RUNNER_TEMP/shards" "$(python3 tools/gate/gate.py shards)" ${{ github.event_name == 'push' && '--record' || '' }} || rc=$?
+          ls "$LLRM_BENCH_BASE_DIR"/*-own.json >/dev/null 2>&1 && echo "recorded=true" >> "$GITHUB_OUTPUT"
+          exit $rc
+      - if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/bench-base
