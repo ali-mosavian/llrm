@@ -1,6 +1,6 @@
 """Pick each job's `runs-on`: tinytim only for the jobs that need hardware perf counters (PERF), when its heartbeat is fresh and a runner is idle; every other job, and any PERF job tinytim cannot take, on GitHub's hosted runner.
 
-    pick_runners.py GROUPS_JSON HEARTBEAT ELIGIBLE [BACKLOG [NOW]]    prints {"build": RUNS_ON, "groups": {group: RUNS_ON}, "summary": TEXT}
+    pick_runners.py GROUPS_JSON HEARTBEAT ELIGIBLE [BACKLOG [COMPILER [NOW]]]    prints {"build": RUNS_ON, "groups": {group: RUNS_ON}, "summary": TEXT}
 
 ELIGIBLE is true only for a push to main and a pull request from this repository: every other event (a fork's pull request, a push to
 another branch, a manual run elsewhere) is hosted.
@@ -33,23 +33,32 @@ def idle_runners(heartbeat: str, now: float) -> int:
     return max(idle, 0) if 0 <= now - epoch <= MAX_AGE else 0
 
 
-def pick(groups: list[str], heartbeat: str, eligible: bool, now: float, backlog: int = 0) -> dict:
+def pick(groups: list[str], heartbeat: str, eligible: bool, now: float, backlog: int = 0, compiler: bool = True) -> dict:
+    """The jobs' runners. The perf groups judge the compiler: a change to it runs them on tinytim, always (a job queues there until a runner is
+    idle, which is the retry a hosted fallback never had), and any other change does not make them. `small` is the runner of the tiny
+    serial jobs (bench-merge, ci): each re-queues behind every waiting job, 9 minutes apiece on a busy day."""
     idle = idle_runners(heartbeat, now) if eligible else 0
-    out = {}
-    for group in sorted(groups):
-        if group in PERF and idle:
-            out[group], idle = TINYTIM, idle - 1
-        else:
-            out[group] = HOSTED
+    perf = [g for g in sorted(groups) if g in PERF] if compiler else []
+    out = {g: (TINYTIM if eligible else HOSTED) for g in perf}
+    idle = max(idle - len(perf), 0)
+    for group in sorted(g for g in groups if g not in PERF):
+        out[group] = HOSTED
     if backlog >= OVERFLOW_AT:
         for group in sorted((g for g in groups if g not in PERF), key=lambda g: OVERFLOW_ORDER.index(g) if g in OVERFLOW_ORDER else len(OVERFLOW_ORDER)):
             if idle:
                 out[group], idle = TINYTIM, idle - 1
+    small = TINYTIM if eligible and idle_runners(heartbeat, now) else HOSTED
     jobs = {"build": HOSTED, **out}
     names = {kind: " ".join(j for j, r in jobs.items() if r == where) for kind, where in (("tinytim", TINYTIM), ("hosted", HOSTED))}
-    # A perf job on a hosted runner skips its counter steps: the caller decides whether that passes (a change to the compiler's source must not).
-    # ...and a job that would only skip them is not made (its set-up alone is 70-140 s of a runner out of the 20 the account has).
-    return {"build": HOSTED, "groups": out, "run": [g for g in sorted(groups) if not (g in PERF and out[g] == HOSTED)], "perf_hosted": sorted(g for g in out if g in PERF and out[g] == HOSTED), "summary": "; ".join(f"{kind}: {v}" for kind, v in names.items() if v)}
+    return {
+        "build": HOSTED,
+        "small": small,
+        "groups": out,
+        "run": sorted(out),
+        # Perf groups with no tinytim to run on (a fork's pull request): the caller fails a change to the compiler on this, never passes it.
+        "perf_hosted": sorted(g for g in out if g in PERF and out[g] == HOSTED),
+        "summary": "; ".join(f"{kind}: {v}" for kind, v in names.items() if v),
+    }
 
 
 if __name__ == "__main__":
@@ -57,4 +66,5 @@ if __name__ == "__main__":
 
     groups, heartbeat, eligible = json.loads(sys.argv[1]), sys.argv[2], sys.argv[3] == "true"
     backlog = int(sys.argv[4]) if len(sys.argv) > 4 else 0
-    print(json.dumps(pick(groups, heartbeat, eligible, float(sys.argv[5]) if len(sys.argv) > 5 else time.time(), backlog)))
+    compiler = sys.argv[5] != "false" if len(sys.argv) > 5 else True
+    print(json.dumps(pick(groups, heartbeat, eligible, float(sys.argv[6]) if len(sys.argv) > 6 else time.time(), backlog, compiler)))

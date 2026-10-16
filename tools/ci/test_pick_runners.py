@@ -6,11 +6,11 @@ NOW = 1_000_000.0
 GROUPS = ["unit", "python", "tools", "cost", "qcport", "run"]
 
 
-def test_no_heartbeat_sends_every_job_to_hosted():
-    """A tinytim that never wrote (or lost) its heartbeat must not queue a job on a runner that is not there."""
+def test_no_heartbeat_sends_the_jobs_that_do_not_need_counters_to_hosted():
+    """A tinytim that never wrote (or lost) its heartbeat must not queue an ordinary job on a runner that is not there."""
     for beat in ("", "garbage", "1 x"):
-        got = pick(GROUPS, beat, True, NOW)
-        assert got["build"] == HOSTED and set(got["groups"].values()) == {HOSTED}
+        got = pick(["unit", "python", "tools", "run"], beat, True, NOW)
+        assert got["build"] == HOSTED and set(got["groups"].values()) == {HOSTED} and got["small"] == HOSTED
 
 
 def test_a_stale_heartbeat_is_a_dead_tinytim():
@@ -30,9 +30,23 @@ def test_only_the_jobs_that_need_perf_counters_take_tinytim_and_the_rest_stay_ho
     assert {g for g, v in got["groups"].items() if v == TINYTIM} == {"perf", "cost"}
 
 
-def test_a_perf_job_with_no_idle_tinytim_runs_hosted():
-    got = pick(["perf", "cost", "unit"], f"{NOW} 1", True, NOW)
-    assert sorted(g for g, v in got["groups"].items() if v == TINYTIM) == ["cost"] and got["groups"]["perf"] == HOSTED
+def test_a_compiler_change_always_runs_its_perf_jobs_on_tinytim_even_with_none_idle():
+    """#1892 failed by design ('re-run when tinytim is idle') and a re-run reused the hosted decision. A queued tinytim job is the retry."""
+    for beat in ("", f"{NOW} 0"):
+        got = pick(["perf", "cost", "unit"], beat, True, NOW)
+        assert got["groups"]["perf"] == got["groups"]["cost"] == TINYTIM and got["groups"]["unit"] == HOSTED and got["perf_hosted"] == []
+
+
+def test_a_change_that_leaves_the_compiler_alone_makes_no_perf_job_and_a_fork_gets_none_on_tinytim():
+    assert pick(["perf", "cost", "unit"], f"{NOW} 3", True, NOW, compiler=False)["run"] == ["unit"]
+    fork = pick(["perf", "unit"], f"{NOW} 3", False, NOW)
+    assert fork["groups"]["perf"] == HOSTED and fork["perf_hosted"] == ["perf"], "the ci job fails a compiler change on this"
+
+
+def test_the_tiny_serial_jobs_go_to_tinytim_while_it_is_up_so_they_do_not_requeue_behind_the_hosted_backlog():
+    """bench-merge waited 9 minutes for a hosted slot and ci another 9 (#1915: 2 h 24 min in all)."""
+    assert pick(["unit"], f"{NOW} 2", True, NOW)["small"] == TINYTIM
+    assert pick(["unit"], "", True, NOW)["small"] == HOSTED and pick(["unit"], f"{NOW} 2", False, NOW)["small"] == HOSTED
 
 
 def test_output_is_json_for_fromjson():
@@ -44,15 +58,8 @@ def test_the_summary_names_the_runner_of_every_job():
     assert got["summary"] == "tinytim: perf; hosted: build unit"
 
 
-def test_a_perf_job_that_would_run_hosted_is_not_made():
-    """It only skips its counter steps, and its set-up alone is 70-140 s of one of the account's 20 hosted slots."""
-    got = pick(["perf", "unit"], "", True, NOW)
-    assert got["run"] == ["unit"] and got["perf_hosted"] == ["perf"]
-    assert pick(["perf", "unit"], f"{NOW} 2", True, NOW)["run"] == ["perf", "unit"]
-
-
-def test_when_runs_are_queued_ahead_the_other_jobs_overflow_to_idle_tinytim():
-    """12 runs queued and 20 hosted jobs running: a job waited 36 minutes for a hosted slot."""
+def test_when_hosted_jobs_are_waiting_the_other_jobs_overflow_to_idle_tinytim():
+    """20 hosted jobs running and 80 queued: a job waited 36 minutes for a hosted slot."""
     groups = ["perf", "python", "unit", "bench-1"]
     quiet = pick(groups, f"{NOW} 3", True, NOW, backlog=1)["groups"]
     busy = pick(groups, f"{NOW} 3", True, NOW, backlog=20)["groups"]
