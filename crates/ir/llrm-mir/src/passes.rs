@@ -928,52 +928,6 @@ pub mod read {
     }
 }
 
-/// A result another was derived from: held, so that its address says whether it
-/// is still the one asked for, and able to be asked for again.
-struct Input {
-    key: TypeId,
-    name: &'static str,
-    held: Rc<dyn Any>,
-    ask: fn(&mut Analyses, &Context, &DataLayout, &Function) -> Rc<dyn Any>,
-}
-
-fn ask_as<A: Analysis>(
-    analyses: &mut Analyses,
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-) -> Rc<dyn Any> {
-    analyses.get::<A>(context, layout, function)
-}
-
-/// Whether every analysis `inputs` lists is, asked for now, the result the
-/// entry was derived from, where its declaration says to ask
-/// (`through_inputs`).
-fn inputs_unchanged<A: Analysis>(
-    analyses: &mut Analyses,
-    inputs: &Option<Rc<Vec<Input>>>,
-    context: &Context,
-    layout: &DataLayout,
-    function: &Function,
-) -> bool {
-    if !A::depends().is_some_and(|depends| depends.through_inputs) {
-        return true;
-    }
-    let Some(inputs) = inputs else { return false };
-    inputs
-        .iter()
-        .all(
-            |input| {
-                let now = (input.ask)(analyses, context, layout, function);
-                let same = Rc::ptr_eq(&now, &input.held);
-                if !same {
-                    note_blocked(format!("{} is another result", input.name));
-                }
-                same
-            },
-        )
-}
-
 /// A cached result, able to check itself against a fresh computation.
 trait Cached {
     fn name(&self) -> &'static str;
@@ -990,11 +944,6 @@ trait Cached {
         preserved: &PreservedAnalyses,
     ) -> bool;
     fn incremental(&self) -> bool;
-    /// The result held for `key`, if this one was derived from it.
-    fn derived_from(
-        &self,
-        key: TypeId,
-    ) -> Option<Rc<dyn Any>>;
     /// `still_true`, as `covers` has it, for a result kept as sound.
     fn still_covered(
         &self,
@@ -1025,9 +974,6 @@ struct Entry<A: Analysis> {
     bits: u8,
     /// The function's attributes when the result was derived.
     stamp: u64,
-    /// The analyses it was derived from, as asked while it was; none where it
-    /// was handed on (`seed`).
-    inputs: Option<Rc<Vec<Input>>>,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -1058,13 +1004,6 @@ impl<A: Analysis> Cached for Entry<A> {
 
     fn incremental(&self) -> bool {
         A::INCREMENTAL || A::depends().is_some() || A::SOUND
-    }
-
-    fn derived_from(
-        &self,
-        key: TypeId,
-    ) -> Option<Rc<dyn Any>> {
-        self.inputs.as_ref()?.iter().find(|input| input.key == key).map(|input| Rc::clone(&input.held))
     }
 
     fn still_covered(
@@ -1118,8 +1057,6 @@ pub struct Analyses {
     /// Something was kept as sound: what was derived from it since stands as
     /// sound too, and is not what fresh results give (the checks leave it).
     tainted: bool,
-    /// For each result being derived, the analyses it has asked for so far.
-    reading: Vec<Vec<Input>>,
     outer: Rc<Outer>,
 }
 
@@ -1310,20 +1247,7 @@ impl Analyses {
             vouched: None,
             soft: HashSet::default(),
             tainted: false,
-            reading: Vec::new(),
             outer,
-        }
-    }
-
-    /// `result` of `A` was asked for by whatever is being derived.
-    fn read_by_parent<A: Analysis>(
-        &mut self,
-        result: &Rc<A::Result>,
-    ) {
-        let key = TypeId::of::<A>();
-        let Some(frame) = self.reading.last_mut() else { return };
-        if !frame.iter().any(|input| input.key == key) {
-            frame.push(Input { key, name: A::NAME, held: Rc::clone(result) as Rc<dyn Any>, ask: ask_as::<A> });
         }
     }
 
@@ -1371,7 +1295,6 @@ impl Analyses {
                 mark: function.mark(),
                 bits: if A::READS_OUTER { read::ALL } else { 0 },
                 stamp: function.attributes_stamp(),
-                inputs: None,
             }),
         );
     }
@@ -1390,9 +1313,7 @@ impl Analyses {
                 read::note(entry.bits);
             }
             counted(A::NAME, true);
-            let result = Rc::clone(&entry.result);
-            self.read_by_parent::<A>(&result);
-            return result;
+            return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
         let before_reads = read::swap(0);
@@ -1405,14 +1326,13 @@ impl Analyses {
         } else {
             None
         };
-        self.reading.push(Vec::new());
         let updated = self.kept.remove(&key).and_then(|held| {
             // Taken out of its box, so that `update_owned` is handed the only
             // reference there is.
-            let (result, outer, mark, inputs) = {
+            let (result, outer, mark) = {
                 let old = held.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
                 old_reads = old.bits;
-                (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark, old.inputs.clone())
+                (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
             };
             drop(held);
             let Some(changes) = function.changes_since(mark) else {
@@ -1463,7 +1383,6 @@ impl Analyses {
                     <= 256
                 && (!A::READS_OUTER || outer.same_in(&self.outer, old_reads))
                 && A::unaffected(changes, context, function)
-                && inputs_unchanged::<A>(self, &inputs, context, layout, function)
             {
                 // Derived from what was kept as sound, it is sound, not the
                 // same as from fresh results.
@@ -1559,16 +1478,6 @@ impl Analyses {
             note_blocked(blocked);
             record("fn", A::NAME, class);
         }
-        let inputs = self.reading.pop().expect("pushed above");
-        // A result derived again to what a held one was derived from stays that
-        // result, so that what was derived from it stands.
-        let result = self
-            .kept
-            .values()
-            .filter_map(|entry| entry.derived_from(key))
-            .filter_map(|held| held.downcast::<A::Result>().ok())
-            .find(|held| **held == *result)
-            .unwrap_or(result);
         self.cache.insert(
             key,
             Box::new(Entry::<A> {
@@ -1577,10 +1486,8 @@ impl Analyses {
                 mark: function.mark(),
                 bits,
                 stamp: function.attributes_stamp(),
-                inputs: Some(Rc::new(inputs)),
             }),
         );
-        self.read_by_parent::<A>(&result);
         result
     }
 

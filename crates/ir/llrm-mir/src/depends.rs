@@ -25,12 +25,6 @@ pub struct Depends {
     /// Whether a change to an instruction reaches the users of its value, past
     /// any user this says the value stops at.
     pub flows: Option<fn(&Opcode) -> bool>,
-    /// Whether the declaration is of what the result reads of the instructions
-    /// themselves, the analyses it was derived from being asked after: the
-    /// result then stands only while each of them is the result it was derived
-    /// from (LLVM's `Result::invalidate` asking its dependencies). One that is
-    /// false states everything the result reads.
-    pub through_inputs: bool,
 }
 
 /// An instruction that does something besides make its value: what erasing it

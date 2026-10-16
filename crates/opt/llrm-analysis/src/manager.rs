@@ -15,7 +15,12 @@
 //!   it keys entries by, and the users a change flows through. `ExposedFrames`,
 //!   `PointerValues`, `Pointers`, `CallEffects` and `Writes` model pointers,
 //!   aggregates and calls only, so a change to integer arithmetic leaves them
-//!   standing.
+//!   standing. `LLRM_WHY` says, for each result derived again that was held,
+//!   the change that blocked it (`Depends::blocker`).
+//! - A result that read module facts stands while the parts it read
+//!   (`read::CALLEES`, `DECLARATIONS`, ...) are as they were: the proxy
+//!   versions each part, so a moved declaration drops what read declarations
+//!   only.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
 //!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
 //!   or loops `reached_by` the changes (a change to a terminator or to the CFG
@@ -1033,19 +1038,6 @@ fn stops_at(opcode: &Opcode) -> bool {
     )
 }
 
-/// A reference is kept for each load, store and call.
-fn models_memory(
-    context: &Context,
-    function: &Function,
-    inst: InstId,
-) -> bool {
-    let _ = context;
-    matches!(
-        function.instruction(inst).opcode,
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
-    )
-}
-
 fn calls_only(
     context: &Context,
     function: &Function,
@@ -1076,7 +1068,7 @@ impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at), through_inputs: false })
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -1101,7 +1093,7 @@ impl Analysis for PointerValues {
     type Result = Result<alias::PointValues, String>;
     const NAME: &'static str = "pointer-values";
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), through_inputs: false })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -1121,7 +1113,7 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), through_inputs: false })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
@@ -1148,9 +1140,6 @@ impl Analysis for Pointers {
 pub struct Annotated;
 
 impl Analysis for Annotated {
-    fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_memory, flows: Some(stops_at), through_inputs: true })
-    }
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
     fn run(
@@ -1216,7 +1205,7 @@ impl Analysis for CallEffects {
         }
     }
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), through_inputs: false })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
     }
     /// Each effect with the values it names followed through the substitution:
     /// the same bytes by the value that replaced one found equal.
@@ -1700,7 +1689,7 @@ impl Analysis for Writes {
     type Result = Result<Calls, String>;
     const NAME: &'static str = "writes";
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), through_inputs: false })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
     }
     fn run(
         context: &Context,
