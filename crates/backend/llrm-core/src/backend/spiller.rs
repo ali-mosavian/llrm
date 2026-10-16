@@ -7131,6 +7131,29 @@ mod tests {
         }
     }
 
+    /// The facts of one rewrite ask the postings a dozen times, and each ask
+    /// compared every block with the postings' (d_faces -Os: ~150 M of 5.5 G;
+    /// `unrolled` at N=64 compared 3,500 blocks a time). A body held by
+    /// `verified` is compared once.
+    #[test]
+    fn test_a_body_held_by_verified_is_compared_with_the_postings_once() {
+        let body = _three_blocks();
+        let asked = |count: usize| {
+            crate::backend::postings::COMPARED.with(|compared| compared.set(0));
+            for _ in 0..count {
+                crate::backend::postings::following(&body, |_| ());
+            }
+            crate::backend::postings::COMPARED.with(std::cell::Cell::get)
+        };
+        let _ = asked(1);
+        let (once, twelve) = (asked(1), asked(12));
+        assert_eq!(twelve, 12 * once, "premise: each ask compares the blocks");
+        let held = crate::backend::postings::verified(&body);
+        let held_twelve = asked(12);
+        drop(held);
+        assert_eq!(held_twelve, 0, "{held_twelve} comparisons of the blocks in a body held by verified");
+    }
+
     #[test]
     fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
         let body = _three_blocks();

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postings.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:e733958334c139022356ca8155c935ed36a3adbe2de05a3c605a09748f6a812a -->
+<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:145d046885d70473680b2747c3ad708c65d595ae198efeae5e754cad65f4b64d -->
 
 # postings
 
@@ -19,9 +19,10 @@ operand.
 per thread, with the instruction lists it was made of. Asked of a body, it
 compares each block's list with the held one by `Arc` identity. If the
 blocks are the same (same positions, same instruction pointers) it answers
-at once. If the body has another shape, as a different function does, it
-makes the postings whole (`Postings::of`). Otherwise it redoes only the
-blocks that differ (`replaced`):
+at once. A body held by `verified` (the facts of one rewrite) is compared
+once, not at each ask. If the body has another shape, as a different
+function does, it makes the postings whole (`Postings::of`). Otherwise it
+redoes only the blocks that differ (`replaced`):
 
 ```text
  block before: [a b c d]           block after: [a b' x d]

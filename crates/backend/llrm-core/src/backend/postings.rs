@@ -14,9 +14,10 @@
 //! per thread, with the instruction lists it was made of. Asked of a body, it
 //! compares each block's list with the held one by `Arc` identity. If the
 //! blocks are the same (same positions, same instruction pointers) it answers
-//! at once. If the body has another shape, as a different function does, it
-//! makes the postings whole (`Postings::of`). Otherwise it redoes only the
-//! blocks that differ (`replaced`):
+//! at once. A body held by `verified` (the facts of one rewrite) is compared
+//! once, not at each ask. If the body has another shape, as a different
+//! function does, it makes the postings whole (`Postings::of`). Otherwise it
+//! redoes only the blocks that differ (`replaced`):
 //!
 //! ```text
 //!  block before: [a b c d]           block after: [a b' x d]
@@ -599,6 +600,9 @@ struct Followed {
 
 thread_local! {
     static CURRENT: RefCell<Option<Followed>> = const { RefCell::new(None) };
+    /// The body the postings were found to follow and that is borrowed since:
+    /// asked again, it is not compared block by block (`verified`).
+    static VERIFIED: std::cell::Cell<*const LirBody> = const { std::cell::Cell::new(std::ptr::null()) };
     static REDONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -606,6 +610,13 @@ thread_local! {
 /// that a rewrite redoes only the blocks it changed.
 pub fn redone() -> usize {
     REDONE.with(std::cell::Cell::get)
+}
+
+// How many times the blocks were compared with the postings', for a test that
+// a body held by `verified` is not.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COMPARED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn check() -> bool {
@@ -619,6 +630,8 @@ fn current(
     held: &Followed,
     body: &LirBody,
 ) -> bool {
+    #[cfg(test)]
+    COMPARED.with(|count| count.set(count.get() + 1));
     held.blocks.len() == body.blocks.len()
         && held.blocks.iter().zip(&body.blocks).all(|((at, before), block)| {
             *at == block.at
@@ -628,15 +641,33 @@ fn current(
         })
 }
 
+/// Holds `body` as the one the postings follow for as long as the guard lives:
+/// the body is borrowed all that time, so a `following` of it is not a
+/// comparison of every block with the postings' (the facts of one rewrite ask
+/// a dozen times, each a pass over the blocks).
+pub struct Verified(*const LirBody);
+
+pub fn verified(body: &LirBody) -> Verified {
+    following(body, |_| ());
+    Verified(VERIFIED.with(|one| one.replace(std::ptr::from_ref(body))))
+}
+
+impl Drop for Verified {
+    fn drop(&mut self) {
+        VERIFIED.with(|one| one.set(self.0));
+    }
+}
+
 /// `read` of the postings of `body`, made to follow it first. A read may ask
 /// again of the same body.
 pub fn following<R>(
     body: &LirBody,
     read: impl FnOnce(&Postings) -> R,
 ) -> R {
-    let up_to_date =
-        CURRENT.with(|current_state| current_state.borrow().as_ref().is_some_and(|held| current(held, body)));
+    let up_to_date = VERIFIED.with(std::cell::Cell::get) == std::ptr::from_ref(body)
+        || CURRENT.with(|current_state| current_state.borrow().as_ref().is_some_and(|held| current(held, body)));
     if !up_to_date {
+        VERIFIED.with(|one| one.set(std::ptr::null()));
         CURRENT.with(|state| {
             let mut state = state.borrow_mut();
             let same_shape = state

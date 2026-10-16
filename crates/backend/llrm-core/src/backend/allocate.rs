@@ -1633,6 +1633,7 @@ impl Facts {
             gone_slots = one.gone;
         }
         let same_numbering = |index: &Indexes| old_epoch == Some(index.epoch);
+        let _followed = crate::backend::postings::verified(body);
         let _span = llrm_support::debug::span("regalloc facts");
         let index = llrm_support::debug::timed("facts slots", || {
             let patched = prior
