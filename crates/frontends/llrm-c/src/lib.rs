@@ -7,6 +7,7 @@ pub mod debug;
 #[cfg(test)]
 mod debug_tests;
 pub mod hir;
+pub mod hwreg;
 pub mod libfunc;
 pub mod ow_facts;
 pub mod predefined;

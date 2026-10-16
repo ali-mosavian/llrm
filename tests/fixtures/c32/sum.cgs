@@ -8,7 +8,7 @@ TYPE T25 size=28 align=1
 f1 DBSrcFile "tests/fixtures/c32/sum.c" main=1
 - DBSrcCue f1 1 1
 SYM y1 name="sum" base="sum" pattern="*_" attr=0x7 seg=1
-CALLCONV y1 class=0x0 target=0x0 parms=[f0000ff:0] ret=0:0
+CALLCONV y1 class=0x0 target=0x0 parms=[f0000ff:0] ret=0:0 save=ffffffff:fffffffd
 - CGProcDecl y1 TY_INTEGER
 SYM y2 name="p" base="p" pattern="_*" attr=0x0 seg=2
 - CGParmDecl y2 TY_POINTER
