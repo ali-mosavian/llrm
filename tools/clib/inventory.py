@@ -38,6 +38,10 @@ def objects(clib, tag="d16"):
                 yield sub, name, opts.get(name, ""), post.get(name, "")
 
 
+# The makefiles' ppflags_common: the build's version and copyright year, for the start-up's banner.
+BUILD = ["-D_BLDVER=260", "-D_CYEAR=2026"]
+
+
 def resolved(text):
     """The compiler switches in a makefile's `NAME_opts` value: `$($(processor)_option_X)` is `-X`, a
     `-I"$(clib_dir)/D/h"` is the include directory (`includes`), anything else spelled with a macro is dropped."""
@@ -47,7 +51,8 @@ def resolved(text):
         if m:
             found.append("-" + m[1])
         elif "$" not in word and not word.startswith("-I"):
-            found.append(word)
+            # `-zld-mt` is two switches, as wcc reads it.
+            found.extend(re.findall(r"-[A-Za-z0-9=_.+]+", word) if "/" not in word else [word])
     return found
 
 
@@ -93,7 +98,7 @@ def run(job, args):
                *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
         tool = "bwcc"
     elif args.reference:
-        cmd = [str(args.reference / "bwasm"), "-q", "-we", "-w8", "-cx", "-ee", "-fpc", "-0", "-mm", "-nt=_TEXT", "-bt=dos",
+        cmd = [str(args.reference / "bwasm"), "-q", "-we", "-w8", "-cx", "-ee", "-fpc", "-0", "-mm", "-nt=_TEXT", "-bt=dos", *BUILD,
                *resolved(opts), *resolved(post), *includes(args.ow, clib, sub, opts, args.headers), "-fo=" + str(out), str(src)]
         tool = "bwasm"
     elif src.suffix == ".c":
@@ -103,11 +108,16 @@ def run(job, args):
                *includes(args.ow, clib, sub, opts, args.headers), "-o", str(out), str(src)]
         tool = "llrm-c"
     else:
-        cmd = [str(args.jwasm), "-q", "-omf", "-Cp", "-Zg", "-Zm", "-0", "-D__WASM__", "-D__MEDIUM__",
-               "-D__FPI87__" if "-fpi87" in resolved(opts) + resolved(post) else "-D__FPC__", "-D__DOS__", "-D_M_I86", "-Fo" + str(out),
+        cmd = [str(args.jwasm), "-q", "-omf", "-Cp", "-Zg", "-Zm", "-0", "-mt" if "-mt" in resolved(opts) + resolved(post) else "-mm", "-D__WASM__", "-D__TINY__" if "-mt" in resolved(opts) + resolved(post) else "-D__MEDIUM__",
+               "-D__FPI87__" if "-fpi87" in resolved(opts) + resolved(post) else "-D__FPC__", "-D__DOS__", "-D_M_I86", *BUILD, "-Fo" + str(out),
                *includes(args.ow, clib, sub, opts, args.headers), str(src)]
         tool = "jwasm"
     done = subprocess.run(cmd, capture_output=True, text=True, cwd=args.out, errors="replace")
+    if done.returncode != 0 and tool == "jwasm" and "Segment definition changed" in done.stdout + done.stderr:
+        # d16msels redefines _DATA with its own alignment; wasm takes it, JWasm refuses it after a memory model.
+        cmd = [word for word in cmd if word not in ("-mm", "-mt")]
+        done = subprocess.run(cmd, capture_output=True, text=True, cwd=args.out, errors="replace")
+        record["note"] = "assembled without a memory model switch"
     seconds = time.monotonic() - started
     ok = done.returncode == 0 and out.exists()
     if not ok and out.exists():
