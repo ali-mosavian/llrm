@@ -510,7 +510,7 @@ impl Function {
             // Every use goes: the list is taken, not scanned for each of its
             // uses (a value of U uses read U^2 entries).
             let uses = std::mem::take(&mut self.value_uses[value.0 as usize]);
-            self.log(Change::Substituted(value));
+            self.log(Change::Substituted { from: value, to: with });
             for one in uses {
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
                 self.add_use(with, one);

@@ -298,6 +298,23 @@ pub trait Analysis: 'static {
     /// naming one that is gone, and it is not kept past them.
     const NAMES_VALUES: bool = false;
 
+    /// `old` brought to the function after `changes`, which `sound_edits` found
+    /// keep every live value's meaning, equal to what `run` gives: each value
+    /// `substituted` names replaced by what took its place (LLVM's value
+    /// handles follow a RAUW the same way); none where it cannot be (it is
+    /// then derived again). Asked of a result that `NAMES_VALUES`, which is
+    /// kept only when it returns `Some`.
+    #[allow(unused_variables)]
+    fn remapped(
+        old: &Self::Result,
+        substituted: &dyn Fn(crate::module::ValueId) -> Option<crate::module::Operand>,
+        changes: &[crate::module::Change],
+        context: &Context,
+        function: &Function,
+    ) -> Option<Self::Result> {
+        None
+    }
+
     /// Whether `old`, derived before sound edits, says nothing `fresh`, derived
     /// now, contradicts. `LLRM_CHECK_REPLAY` asserts it for a result kept as
     /// sound.
@@ -944,7 +961,16 @@ impl<A: Analysis> Cached for Entry<A> {
         outer: &Rc<Outer>,
     ) -> bool {
         let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(outer)));
-        A::covers(&self.result, &fresh, context, function)
+        // What `get` would hand out: brought to the function first.
+        let Some(changes) = function.changes_since(self.mark) else { return true };
+        if !A::NAMES_VALUES {
+            return A::covers(&self.result, &fresh, context, function);
+        }
+        let taken = substitutions(changes);
+        match A::remapped(&self.result, &|value| taken.resolve(value), changes, context, function) {
+            Some(now) => A::covers(&now, &fresh, context, function),
+            None => true,
+        }
     }
 
     fn mark(&self) -> crate::module::Mark {
@@ -1036,7 +1062,6 @@ fn check_replay() -> bool {
 pub fn sound_edits(
     function: &Function,
     changes: &[crate::module::Change],
-    names_values: bool,
 ) -> bool {
     use crate::module::Change;
     use crate::module::Operand;
@@ -1056,10 +1081,8 @@ pub fn sound_edits(
     };
     for change in changes {
         match *change {
-            // A result that names values would name the replaced one.
-            Change::Substituted(_) if names_values => return false,
-            Change::Substituted(value) => {
-                replaced.insert(value);
+            Change::Substituted { from, .. } => {
+                replaced.insert(from);
             }
             Change::Operand { inst, was, .. } => match was {
                 Operand::Value(value) if replaced.contains(&value) => {
@@ -1099,6 +1122,36 @@ pub fn sound_edits(
         }
     }
     true
+}
+
+/// What the substitutions in a log came to: a value replaced by one replaced
+/// later is followed to the last.
+struct Substitutions(crate::dense::IdMap<crate::module::ValueId, crate::module::Operand>);
+
+fn substitutions(changes: &[crate::module::Change]) -> Substitutions {
+    let mut taken = crate::dense::IdMap::new();
+    for change in changes {
+        if let crate::module::Change::Substituted { from, to } = *change {
+            taken.insert(from, to);
+        }
+    }
+    Substitutions(taken)
+}
+
+impl Substitutions {
+    fn resolve(
+        &self,
+        value: crate::module::ValueId,
+    ) -> Option<crate::module::Operand> {
+        let mut now = *self.0.get(&value)?;
+        while let crate::module::Operand::Value(next) = now {
+            match self.0.get(&next) {
+                Some(&later) => now = later,
+                None => break,
+            }
+        }
+        Some(now)
+    }
 }
 
 impl Analyses {
@@ -1213,7 +1266,16 @@ impl Analyses {
             if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
                 return None;
             }
-            if A::SOUND && sound_edits(function, changes, A::NAMES_VALUES) {
+            if A::SOUND && sound_edits(function, changes) {
+                // A result that names values names the replaced ones: it is
+                // brought to the values that took their place, or derived
+                // again.
+                let result = if A::NAMES_VALUES {
+                    let taken = substitutions(changes);
+                    Rc::new(A::remapped(&result, &|value| taken.resolve(value), changes, context, function)?)
+                } else {
+                    result
+                };
                 if check_replay() {
                     let fresh = A::run(context, layout, function, &mut Analyses::new(Rc::clone(&self.outer)));
                     assert!(
