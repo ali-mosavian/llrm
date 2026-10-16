@@ -37,3 +37,9 @@ def test_output_is_json_for_fromjson():
 def test_the_summary_names_the_runner_of_every_job():
     got = pick(["unit", "python"], f"{NOW} 2", True, NOW)
     assert got["summary"] == "tinytim: build python; hosted: unit"
+
+
+def test_a_bench_shard_waits_behind_the_long_groups_for_a_runner():
+    """The shards sort before python by name; python is 12 minutes and a shard 4, so it must not be the one left to a hosted runner."""
+    got = pick(["bench-1", "bench-2", "python", "unit"], "1000 2", True, 1000)["groups"]
+    assert got == {"python": TINYTIM, "bench-1": TINYTIM, "bench-2": HOSTED, "unit": HOSTED}

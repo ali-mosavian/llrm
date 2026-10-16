@@ -14,8 +14,12 @@ import sys
 
 HOSTED = "ubuntu-24.04"
 TINYTIM = ["self-hosted", "tinytim"]
-HEAVY = ("python", "tools", "reference", "cost")
+HEAVY = ("python", "tools", "reference", "cost")  # and every bench shard (heavy())
 MAX_AGE = 180
+
+
+def heavy(group: str) -> bool:
+    return group in HEAVY or group.startswith("bench-")
 
 
 def idle_runners(heartbeat: str, now: float) -> int:
@@ -32,8 +36,9 @@ def pick(groups: list[str], heartbeat: str, eligible: bool, now: float) -> dict:
     # The build job runs alone first, so it can take the one runner the gate groups then reuse.
     build = TINYTIM if idle else HOSTED
     out = {}
-    for group in sorted(groups, key=lambda g: g not in HEAVY):
-        if group in HEAVY and idle:
+    # The long groups first: python is 12 minutes, a bench shard 4.
+    for group in sorted(groups, key=lambda g: (not heavy(g), g.startswith("bench-"))):
+        if heavy(group) and idle:
             out[group], idle = TINYTIM, idle - 1
         else:
             out[group] = HOSTED
