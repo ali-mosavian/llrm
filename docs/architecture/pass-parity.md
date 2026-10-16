@@ -123,13 +123,17 @@ Experiments on the 71 vsgcc programs (executed instructions, 486 clocks, code by
 | no `dse` and no `jumpthread`, with `slots` | 2,976 -> 2,812 M | 1.001 / 1.002 / 1.003 | 0 / 0 / 0 |
 | `rounds` = 1 at every level | 3,084 -> 2,682 M at -O1 | 1.511 / 1.402 / 1.467 | 25 / 32 / 51 |
 
-`dse` is load-bearing today because `promote` leaves every store it replaces a load of and `dse` is the pass that removes them; clang's SROA and mem2reg remove the stores and the alloca themselves. d_faces is identical at -O1 with and without `dse` once the slot's stores go with its last read. With `jumpthread` off d_faces runs 0.17% more clocks and 3.5% fewer code bytes. `gvn` stays at -O1 until a cheaper pass does what EarlyCSE does: llrm's costs 172 M, clang's two EarlyCSE an estimated 11 M.
+`dse` is load-bearing today because `promote` leaves every store it replaces a load of and `dse` is the pass that removes them; clang's SROA and mem2reg remove the stores and the alloca themselves. d_faces is identical at -O1 with and without `dse` once the slot's stores go with its last read. With `jumpthread` off d_faces runs 0.17% more clocks and 3.5% fewer code bytes. `gvn` stays at -O1. EarlyCSE's way, one walk down the dominator tree with scoped tables, was built (`avail::forwardable_scoped`, branch `alim/perf/early-cse-gvn`) and does not pay at the walker's quality. d_faces -O1 (main 3,041 M, 424,865 instructions, 191,021 memory operands): tables reset at every join, `gvn` 172 -> 111 M and the compile -39 M, but memory operands +5.1%, instructions +1.7%, clocks +0.38%; the entries of the dominator carried across a join and killed eagerly by what the paths between write, output identical to main and the compile +107 M (120 M in `regions::may_alias`: each indexed write against each indexed entry); the same kills made lazily, when a load hits an entry, output identical, `gvn` 217 M against 172 M. Clang's EarlyCSE is cheap because a write kills everything, which is the first row's quality; llrm's MemorySSA walker is cheaper than the precise pairwise test because it shares its structure with every other client and memoizes its alias answers. The cost to cut is the walker's (`frontier_for` 56 M, `walked_from` 55 M, MemorySSA structure 57 M), not the walk's shape.
 
 At -O2, -O3 and -Os clang runs every pass llrm does (llrm's list is a subset of clang's, including its `jump-threading` x2, `gvn`, `dse`, `correlated-propagation` x2), so no pass leaves a list there; what the table shows at those levels is cost per pass.
 
 ## Where the gap is
 
 The mid-end is 8.6x clang's optimizer at -O1 (2,009 M against an estimated 233 M). The widest rows at -O1: `hoist` + `loopmotion` 23x (LICM), `gvn` 15x (EarlyCSE), `decide` 7x (SimplifyCFG), `sroa` + `promote` 8x, `fold` + `algebraic` 4x (InstCombine, which is also the largest clang row at 31%). `lsr` (193 M) has no IR counterpart: clang's LoopStrengthReduce runs in code generation at 8% of the compile.
+
+## The alias ladder
+
+`regions::overlapping` answers the walker's pairwise queries cheapest first already: on d_faces -O1 it is asked 99,086 times (104,866 at -O2); `typed_apart` answers 43,666, canonical references' displacement 2,731, an unescaped object against a pointer 7,378, `foreign_apart` none (111 K calls, 6 M), and 45,311 (46%) reach the precise `may_alias`. Two wastes: `may_alias` runs `typed_apart` and `foreign_apart` again (45 K calls, ~7 M), and it is asked 45,311 times for 6,411 distinct pairs, 73% of them with no interval facts (a pure function of the two references and the target). The whole of `overlapping` costs 54 M (1.8% of the compile); removing both wastes would save about 21 M (0.7%). Measured and not done: a gain under 1% is not worth a change.
 
 ## Not measured
 
