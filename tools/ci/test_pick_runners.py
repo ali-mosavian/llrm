@@ -42,3 +42,20 @@ def test_output_is_json_for_fromjson():
 def test_the_summary_names_the_runner_of_every_job():
     got = pick(["unit", "perf"], f"{NOW} 2", True, NOW)
     assert got["summary"] == "tinytim: perf; hosted: build unit"
+
+
+def test_a_perf_job_that_would_run_hosted_is_not_made():
+    """It only skips its counter steps, and its set-up alone is 70-140 s of one of the account's 20 hosted slots."""
+    got = pick(["perf", "unit"], "", True, NOW)
+    assert got["run"] == ["unit"] and got["perf_hosted"] == ["perf"]
+    assert pick(["perf", "unit"], f"{NOW} 2", True, NOW)["run"] == ["perf", "unit"]
+
+
+def test_when_runs_are_queued_ahead_the_other_jobs_overflow_to_idle_tinytim():
+    """12 runs queued and 20 hosted jobs running: a job waited 36 minutes for a hosted slot."""
+    groups = ["perf", "python", "unit", "bench-1"]
+    quiet = pick(groups, f"{NOW} 3", True, NOW, backlog=1)["groups"]
+    busy = pick(groups, f"{NOW} 3", True, NOW, backlog=9)["groups"]
+    assert quiet["python"] == quiet["unit"] == HOSTED
+    assert busy["perf"] == busy["python"] == busy["unit"] == TINYTIM and busy["bench-1"] == HOSTED, "perf first, then by length, while runners are idle"
+    assert pick(groups, "", True, NOW, backlog=9)["groups"]["python"] == HOSTED, "no tinytim, no overflow"
