@@ -25,12 +25,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import qb32demos  # noqa: E402
 import qbbuild  # noqa: E402
 import qbplay  # noqa: E402
 import gorilla_aim  # noqa: E402
 import qbruntime  # noqa: E402
 
 pytestmark = pytest.mark.slow_dos
+
+WAITING = 3   # empty keyboard reads in a row, picture unchanged, before a prompt is taken to be asking
 
 # By target: the gorillas (GorillaX, GorillaY) and the wind of the seeded game, then the shots (angle, velocity).
 SCENES = {target: ((141, 223), (449, 147), -1) for target in qbbuild.TARGETS}
@@ -61,24 +64,19 @@ def play(built: qbbuild.Built, work: Path, scene: tuple, shots: list) -> str:
         shutil.copy(beside, work / Path(beside).name)
     session = qbplay.Session(work)
     try:
-        session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
-        session.wait_for("Press any key", 60)
+        session.launch(qb32demos.LONGEST_MS)
+        qb32demos.ready(session, "Press any key", typed=False)
         # the intro, the names (Player 1, Player 2), the points, the gravity, then P to play
-        for keys in (["space"], ["enter"], ["enter"], ["1", "enter"], ["enter"]):
-            session.keys(keys)
-        session.type(["p"], pause=0)
-        session.wait_for_mode(0x10, 60)  # BIOS mode 10h is SCREEN 9
-        session.idle()
-        session.settle()
-        session.shot(work / "skyline.png")
+        for keys in (["space"], ["enter"], ["enter"], ["1", "enter"], ["enter"], ["p"]):
+            session.keys_in_lockstep(keys, qb32demos.LONGEST_MS)
+        session.run_until(lambda: session.video_mode() == 0x10, qb32demos.LONGEST_MS, "BIOS mode 10h (SCREEN 9)")
+        qb32demos.settled(session, "skyline", None)
+        session.snap(work / "skyline.png")
         seen = gorilla_aim.Scene(work / "skyline.png")
         assert (seen.left, seen.right, seen.wind) == scene, "the seeded game is not the one the shots were worked out for: run gorilla_aim.py"
         for angle, velocity in shots:
-            session.keys([*angle, "enter"])  # the prompt for the velocity
-            session.type([*velocity, "enter"], pause=0)
-            if (angle, velocity) != shots[-1]:
-                session.idle()  # the banana, the explosion, the other player's prompt
-        session.wait_for("GAME OVER!", 60)
+            session.keys_in_lockstep([*angle, "enter", *velocity, "enter"], qb32demos.LONGEST_MS, waiting=WAITING)  # the banana, the explosion, the next prompt
+        session.run_until(lambda: "GAME OVER!" in session.screen(), qb32demos.LONGEST_MS, "'GAME OVER!'")
         return session.screen()
     finally:
         session.close()

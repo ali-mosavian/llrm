@@ -15,14 +15,12 @@ REQUIRES = ["qb45"]
 sys.path.insert(0, str(Path(__file__).parent))
 
 import dosbatch  # noqa: E402
+import qb32demos  # noqa: E402
 import qbplay  # noqa: E402
 
 PROBES = sorted(path for path in (dosbatch.ROOT / "tests" / "qbrt").glob("gfx_*.bas") if ".flat" not in path.name)
 pytestmark = pytest.mark.slow_dos
 
-SETTLE_SECONDS = 2
-# Probes that draw for longer than that before they wait.
-SETTLE = {"gfx_paint_sweep": 10, "gfx_paint_rules": 6}
 GRAPHICS_MODE = 0x10   # SCREEN 9: what the probes draw in, unless the name says
 BIOS_MODES = {"gfx_getput1": 4, "gfx_getput2": 6, "gfx_getput7": 0x0D, "gfx_getput13": 0x13, "gfx_screen7": 0x0D, "gfx_screen8": 0x0E, "gfx_screen12": 0x12, "gfx_screen13": 0x13, "gfx_screen1": 4, "gfx_screen1_default": 4, "gfx_text1": 4, "gfx_text2": 6, "gfx_text13": 0x13, "gfx_text12": 0x12, "gfx_text8": 0x0E, "gfx_screen2": 6}
 
@@ -52,23 +50,24 @@ def programs(tmp_path_factory):
 
 # Probes that go back to text before they wait: nothing to see change but the clock.
 ENDS_IN_TEXT = {"gfx_back_to_text"}
-TEXT_SECONDS = 6
 
 
-def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, settle: float = SETTLE_SECONDS, files: tuple = ()) -> Path:
+def screenshot(exe: Path, work: Path, text: bool, mode: int = GRAPHICS_MODE, files: tuple = ()) -> Path:
     work.mkdir(exist_ok=True)
     shutil.copy(exe, work / "P.EXE")
     for beside in files:
         shutil.copy(beside, work / Path(beside).name)
     session = qbplay.Session(work)
     try:
-        session.send({"cmd": "dos_cmd", "command": "P.EXE"}, wait=False)
+        session.launch(qb32demos.LONGEST_MS)
         if text:
-            session.wait_for("red")  # the last thing gfx_back_to_text prints
+            session.run_until(lambda: "red" in session.screen(), qb32demos.LONGEST_MS, "'red'")  # the last thing gfx_back_to_text prints
         else:
-            session.wait_for_mode(mode)
-        session.settle(looks=5, stable_for=0.4)  # the probe has drawn and waits for a key: the picture stops changing
-        session.shot(work / "shot.png")
+            session.run_until(lambda: session.video_mode() == mode, qb32demos.LONGEST_MS, f"BIOS mode {mode:#x}")
+        # The probe has drawn and sleeps (SLEEP asks DOS whether a key is there, which is no keyboard read the emulator can park at):
+        # the picture stops changing.
+        qb32demos.settled(session, "the probe", None, looks=5, look_ms=100)
+        session.snap(work / "shot.png")
     finally:
         session.close()
     return work / "shot.png"
@@ -79,8 +78,7 @@ def test_graphics_probe_has_no_pixel_different_from_bcom45(programs, tmp_path, n
     """BCOM45's picture is the oracle; ours, at m16 and at m32, must have no pixel that differs from it."""
     reference, candidates = programs[name]
     mode = BIOS_MODES.get(name, GRAPHICS_MODE)
-    settle = SETTLE.get(name, SETTLE_SECONDS)
-    want = screenshot(reference, tmp_path / "ref", name in ENDS_IN_TEXT, mode, settle)
+    want = screenshot(reference, tmp_path / "ref", name in ENDS_IN_TEXT, mode)
     for target, built in candidates.items():
-        got = screenshot(built.exe, tmp_path / f"cand{target}", name in ENDS_IN_TEXT, mode, settle, built.files)
+        got = screenshot(built.exe, tmp_path / f"cand{target}", name in ENDS_IN_TEXT, mode, built.files)
         assert qbplay.differing_pixels(want, got) == 0, f"m{target}"

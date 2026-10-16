@@ -131,8 +131,14 @@ The commands the tests use:
 | `text_screen` | the screen's text and `video_mode` |
 | `mem_read_linear` (`addr`, `len`) | memory as hex; `B8000` is the colour text page |
 | `screenshot` (`path`, `timeout_ms`) | a PNG, written whole before the reply |
+| `key_wait_arm` (`stop`) | the next keyboard read that finds nothing sends a `key_wait` event (`key` arms it too); with `stop` the guest is parked there until `continue` |
+| `continue` (`ms`) | runs on; with `ms` the guest parks again after that many emulated milliseconds (`run_limit` event) |
+| `screenshot` (`async`) | replies at once; a `screenshot` event follows the next frame, so a parked guest can be run on to draw it |
+| `virtual_time_status` | `lockstep` is true in a fork that has the three above |
 
 The socket stops the emulator at every INT 3, which debuggers use for their breakpoints; a reader thread must answer each `stopped` event with `continue`, or the program hangs. `tests/common/dosbox.rs` (`Session`) and `tools/dosbatch/qbplay.py` do it.
+
+Lockstep: with `virtual time` on and the guest parked (`stop`, `ms`), the guest runs only between commands, so every key, look and screenshot is at an emulated instant that does not depend on the host. `tools/dosbatch/qbplay.py` (`Session(lockstep=True)`, `resume`, `run_until`, `keys_in_lockstep`, `snap`) drives it, and `qb32demos.py`, `test_qbgorilla.py`, `test_qbgfx.py` and `test_qbkeys.py` play in it. Nothing in them waits for a wall or CPU second: a step that takes too long fails after a stated number of emulated milliseconds, the same at any host load. The pictures, random parts included, are the same every run (`test_qbdemos_hostspeed.py`). A program that reads the keyboard without INT 16h (QB's SLEEP asks DOS) gives no park to stop at: settle on the picture (`qb32demos.settled`). A program that flushes the keyboard before it asks takes a key typed at the flush: `keys_in_lockstep(waiting=N)`.
 
 How they are launched: `toolchain/dosrunbuild.sh` builds the fork at a pinned commit into `~/.cache/llrm` and links `target/<profile>/dosbox-x`; `build.rs` runs it for the `dosrun` feature. Rust tests use `common::dosbox::binary()`; the Python tools read `DOSBOX_BIN`, else that build, else `dosbox-x` on `PATH` (`tools/e2e/dosbox.py`, `tools/dosbatch/dosbatch.py`). Both write a conf with `core=normal`, mount the toolchain and work directories as drives and run with `SDL_VIDEODRIVER=dummy`.
 
