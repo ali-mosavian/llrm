@@ -131,6 +131,10 @@ At -O2, -O3 and -Os clang runs every pass llrm does (llrm's list is a subset of 
 
 The mid-end is 8.6x clang's optimizer at -O1 (2,009 M against an estimated 233 M). The widest rows at -O1: `hoist` + `loopmotion` 23x (LICM), `gvn` 15x (EarlyCSE), `decide` 7x (SimplifyCFG), `sroa` + `promote` 8x, `fold` + `algebraic` 4x (InstCombine, which is also the largest clang row at 31%). `lsr` (193 M) has no IR counterpart: clang's LoopStrengthReduce runs in code generation at 8% of the compile.
 
+## The alias ladder
+
+`regions::overlapping` answers the walker's pairwise queries cheapest first already: on d_faces -O1 it is asked 99,086 times (104,866 at -O2); `typed_apart` answers 43,666, canonical references' displacement 2,731, an unescaped object against a pointer 7,378, `foreign_apart` none (111 K calls, 6 M), and 45,311 (46%) reach the precise `may_alias`. Two wastes: `may_alias` runs `typed_apart` and `foreign_apart` again (45 K calls, ~7 M), and it is asked 45,311 times for 6,411 distinct pairs, 73% of them with no interval facts (a pure function of the two references and the target). The whole of `overlapping` costs 54 M (1.8% of the compile); removing both wastes would save about 21 M (0.7%). Measured and not done: a gain under 1% is not worth a change.
+
 ## Not measured
 
 m16 (the Open Watcom rows of `tools/bench`), clang's limits per level (inline threshold, unroll thresholds, `devirt<4>`), and trunk's pipeline against the measured release.
