@@ -1057,6 +1057,10 @@ pub struct Unit<'a> {
     /// The allocas whose address is exposed, the manager's `ExposedFrames`;
     /// without it each ask scans the alloca's uses.
     pub exposed: Option<&'a BTreeSet<ValueId>>,
+    /// The accesses of the body as `Accesses::plain` makes them under the
+    /// calls' footprints, the manager's `PlainAccesses`: every client of one
+    /// body state shares them, and the graph they make.
+    pub plain: Option<&'a crate::memoryssa::Accesses>,
     /// The pointer value solve of this body, the manager's `PointerValues`;
     /// without it each `points_to` makes its own.
     pub point_values: Option<&'a crate::alias::PointValues>,
@@ -1127,6 +1131,7 @@ impl<'a> Unit<'a> {
             edges: None,
             bounds: None,
             exposed: None,
+            plain: None,
             point_values: None,
             callbacks: None,
             loop_intervals: true,
@@ -1154,6 +1159,13 @@ impl<'a> Unit<'a> {
         point_values: &'a crate::alias::PointValues,
     ) -> Self {
         Self { point_values: Some(point_values), ..self }
+    }
+
+    pub fn with_plain(
+        self,
+        plain: &'a crate::memoryssa::Accesses,
+    ) -> Self {
+        Self { plain: Some(plain), ..self }
     }
 
     pub fn with_exposed(
@@ -1328,6 +1340,16 @@ impl<'a> Unit<'a> {
         self.operand_type(operand).and_then(|ty| self.context.types.int_bits(ty))
     }
 
+    /// The base reference of the load or store `inst`: its pointer decomposed,
+    /// made once and kept across the edits that do not reach it
+    /// (`references`).
+    pub fn base_reference(
+        &self,
+        inst: InstId,
+    ) -> Option<std::rc::Rc<MemRef>> {
+        crate::references::of(self, inst)
+    }
+
     /// An integer constant's bits, if `operand` is one.
     pub fn int_constant(
         &self,
@@ -1491,6 +1513,28 @@ pub fn object_of(
     }
 }
 
+/// Whether `root` is an object's own address: `object_of(unit, root).is_some()`
+/// without making the object (its extent, exposure and interning), which a
+/// reference built for each access had been doing: 1.8% of a d_faces -O1
+/// compile.
+pub fn is_object(
+    unit: &Unit,
+    root: Operand,
+) -> bool {
+    match root {
+        Operand::Value(_) => {
+            unit.defining(root).is_some_and(|(_, instruction)| matches!(instruction.opcode, Opcode::Alloca { .. }))
+        }
+        Operand::Constant(id) => {
+            matches!(
+                unit.context.get(id).kind,
+                ConstantKind::Global(global) if matches!(unit.globals.get(global.0 as usize).map(|one| &one.kind), Some(GlobalKind::Variable(_)))
+            )
+        }
+        Operand::Block(_) => false,
+    }
+}
+
 /// The object a global variable is.
 pub fn global_object(
     unit: &Unit,
@@ -1593,6 +1637,16 @@ impl MemRef {
         pointer: Operand,
         width: u32,
     ) -> Self {
+        Self::at_tracing(unit, pointer, width, None)
+    }
+
+    /// `at`, noting in `chain` each value whose definition it read.
+    fn at_tracing(
+        unit: &Unit,
+        pointer: Operand,
+        width: u32,
+        mut chain: Option<&mut Vec<ValueId>>,
+    ) -> Self {
         let space = unit.space(pointer).unwrap_or(0);
         let index_bits = unit.layout.pointer(space).index_bits;
         let mut made = Self {
@@ -1619,6 +1673,9 @@ impl MemRef {
         let mut disp: i128 = 0;
         let mut root = pointer;
         loop {
+            if let (Some(chain), Operand::Value(value)) = (chain.as_deref_mut(), root) {
+                chain.push(value);
+            }
             let Some(step) = step(unit, root) else { break };
             match step {
                 Step::Through(inner) => root = inner,
@@ -1647,7 +1704,7 @@ impl MemRef {
         } else if let Some(address) = flat_constant(unit, root) {
             (made.origin, made.linear) = (address, true);
         }
-        made.object = object_of(unit, root).is_some();
+        made.object = is_object(unit, root);
         made
     }
 
@@ -1680,7 +1737,7 @@ impl MemRef {
         };
         let found = seen.borrow().get(&inst).cloned();
         let Some(mut found) = found else {
-            let made = Self::derived(unit, inst);
+            let made = crate::references::of(unit, inst).map(|one| (*one).clone());
             seen.borrow_mut().insert(inst, made.clone());
             return made;
         };
@@ -1703,6 +1760,16 @@ impl MemRef {
         unit: &Unit,
         inst: InstId,
     ) -> Option<Self> {
+        Self::decomposed(unit, inst, &mut Vec::new())
+    }
+
+    /// The access `inst` makes, decomposed afresh: what `references` keeps for
+    /// the loads and stores, with the values its pointer chain read.
+    pub(crate) fn decomposed(
+        unit: &Unit,
+        inst: InstId,
+        chain: &mut Vec<ValueId>,
+    ) -> Option<Self> {
         let instruction = unit.function.instruction(inst);
         let (pointer, ty, volatile) = match instruction.opcode {
             Opcode::Load { volatile, .. } => (instruction.operands[0], instruction.ty, volatile),
@@ -1716,7 +1783,7 @@ impl MemRef {
             typed: typed(unit, inst),
             lineage: lineage(unit, inst),
             volatile,
-            ..Self::at(unit, pointer, width)
+            ..Self::at_tracing(unit, pointer, width, Some(chain))
         })
     }
 

@@ -1,65 +1,17 @@
-reason = "merge of main: the x87 forms (#1767) move fpbench, jpeg_*, nbody, stft_single rows against main's counts; stft_single c -O2 code 795 -> 804 B (the fi* operand forms), the rest down"
-blessed = "2026-10-16"
+reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
+blessed = "2026-10-15"
 
 [bas.O2]
-code_bytes = 1242
+code_bytes = 1259
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 872.2605
 
 [bas.Os]
-code_bytes = 1182
+code_bytes = 1198
 data_bytes = 4701
 bss_bytes = 0
 kernel_ms = 871.4082
-
-[bq16.O2]
-code_bytes = 1219
-data_bytes = 4701
-bss_bytes = 0
-kernel_ms = 1132.917
-
-[bq16.Os]
-code_bytes = 1154
-data_bytes = 4701
-bss_bytes = 0
-kernel_ms = 1132.0913
-
-[bq32.O2]
-instructions = 71705104
-code_bytes = 1369
-data_bytes = 4733
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 72564109
-code_bytes = 1336
-data_bytes = 4733
-bss_bytes = 0
-
-[c.O2]
-code_bytes = 804
-data_bytes = 39
-bss_bytes = 5122
-kernel_ms = 325.0158
-
-[c.Os]
-code_bytes = 779
-data_bytes = 39
-bss_bytes = 5122
-kernel_ms = 322.3449
-
-[nib.O2]
-code_bytes = 2329
-data_bytes = 1089
-bss_bytes = 0
-kernel_ms = 646.3399
-
-[nib.Os]
-code_bytes = 2392
-data_bytes = 1089
-bss_bytes = 0
-kernel_ms = 653.1238
 
 [bcc.O2]
 code_bytes = 1115

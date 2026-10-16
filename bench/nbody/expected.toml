@@ -1,72 +1,18 @@
-reason = "merge of main: the x87 forms (#1767) move fpbench, jpeg_*, nbody, stft_single rows against main's counts; stft_single c -O2 code 795 -> 804 B (the fi* operand forms), the rest down"
-blessed = "2026-10-16"
+reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
+blessed = "2026-10-15"
 
 [bas.O2]
-instructions = 55201
+instructions = 55208
 memory_operands = 26031
-code_bytes = 888
+code_bytes = 902
 data_bytes = 31
 bss_bytes = 0
 
 [bas.Os]
-instructions = 55254
+instructions = 55261
 memory_operands = 26065
-code_bytes = 708
+code_bytes = 722
 data_bytes = 31
-bss_bytes = 0
-
-[bq16.O2]
-instructions = 56113
-memory_operands = 26082
-code_bytes = 890
-data_bytes = 31
-bss_bytes = 0
-
-[bq16.Os]
-instructions = 56164
-memory_operands = 26116
-code_bytes = 710
-data_bytes = 31
-bss_bytes = 0
-
-[bq32.O2]
-instructions = 50947
-code_bytes = 831
-data_bytes = 37
-bss_bytes = 0
-
-[bq32.Os]
-instructions = 52559
-code_bytes = 716
-data_bytes = 37
-bss_bytes = 0
-
-[c.O2]
-instructions = 46457
-memory_operands = 20844
-code_bytes = 461
-data_bytes = 16
-bss_bytes = 0
-
-[c.Os]
-instructions = 44861
-memory_operands = 21632
-code_bytes = 341
-data_bytes = 16
-bss_bytes = 0
-
-[nib.O2]
-instructions = 46466
-memory_operands = 20846
-code_bytes = 492
-data_bytes = 28
-bss_bytes = 0
-
-[nib.Os]
-instructions = 46468
-memory_operands = 20834
-code_bytes = 364
-data_bytes = 28
 bss_bytes = 0
 
 [ow.O2]
