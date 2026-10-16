@@ -19,15 +19,15 @@ The build is 386-class real mode: `x86-m16` generates 386 code only ([targets](.
 
 | | |
 |---|---|
-| C sources | 978: `llrm-c` compiles 959, the reference 978 |
+| C sources | 978: `llrm-c` compiles 971, the reference 978 |
 | assembly | 246 (75 files, 171 alias stubs): JWasm assembles all; code and data are byte-identical to `bwasm`'s in all 246 |
 | publics | identical to the reference's in every object both build |
-| code, `-O2` | 142,529 B against 118,370 (1.20x); `-Os` 132,076 B (1.12x); per object `-Os`: 238 smaller, 140 equal, 556 larger |
-| data | 14,011 B (`-Os`) against 13,130 |
+| code, `-O2` | 159,439 B against 131,872 (1.21x); `-Os` 147,997 B (1.12x; 1.14x against `bwcc -os`); per object `-Os`: 238 smaller, 140 equal, 568 larger |
+| data | 17,574 B (`-Os`) against 15,858 |
 | compile time | 11.0 s for 959 objects against 1.4 s for 978; worst `streamio/scnf_s` 0.35 s against 0.011 s |
-| `clibtest` | 13 of 18 print the same and exit the same; `direct`, `search`, `string` pass where the reference's 2020 library fails the 2026 tests; `bios` links in neither; `heap` is refused (below) |
+| `clibtest` | 14 of 18 print the same and exit the same; `direct`, `search`, `string` pass where the reference's 2020 library fails the 2026 tests; `bios` links in neither |
 
-The library the programs link is **mixed**: 957 objects by `llrm-c`, 246 by JWasm, and 19 C objects from the reference for what `llrm-c` still refuses. `-Os` is `-os` on the makefiles' objects that ask for it; the makefiles' general flags (`-oabelr -om`) ask for no size.
+The library the programs link is **mixed**: 969 objects by `llrm-c`, 246 by JWasm, and 7 C objects from the reference for what `llrm-c` still refuses. `-Os` is `-os` on the makefiles' objects that ask for it; the makefiles' general flags (`-oabelr -om`) ask for no size.
 
 ## What `llrm-c` refuses
 
@@ -35,10 +35,7 @@ An inline `#pragma aux` block or a register list it cannot honour is refused, no
 
 | Cause | Objects |
 |---|---|
-| `alloca` (inline code that changes SP) | 8 |
-| a register convention of its own (`_DoINTR`, `byteswap`, `__raise`, `default_handler`, `__do_exit_with_msg`) | 7 |
-| inline code taking a parameter on the stack | 2 |
-| a `long long` in `dx:cx:bx:ax` | 2 |
+| a register convention of its own, defined or called (`_DoINTR`, `byteswap`, `__raise`, `default_handler`, `__do_exit_with_msg`) | 7 |
 
 ## Gaps the run found
 
@@ -54,6 +51,7 @@ Each was a silent wrong program, found by running, and has a fail-first test in 
 | `XI`/`XIE` markers not declared with `XI` | the start-up's range was empty, `argv` never built |
 | code pointer constants 2 bytes in far-code data | the signal table was half size |
 | a plain char signed in the Open Watcom family | `'\x81'` compared unequal to an unsigned char |
+| `alloca`'s inline `sub sp,ax` refused, then built with registers pushed late | the heap test jumped to the stack; a function that lowers SP pushes what it keeps at its entry and returns by setting SP from the frame register |
 | a start-up not asked for (`_cstart_`, `__argc`) | `main` ran without it; `argc` was 0 |
 | near calls between modules with segments of their own | `-mcode-segment=_TEXT` (Open Watcom's `-nt=`) |
 
