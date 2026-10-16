@@ -261,7 +261,8 @@ pub fn assembled_by(
                             }
                             from = symbol.at + 2;
                         }
-                        if from < code.len() {
+                        // No bytes at all (`_SP`'s `__value [__sp]`) is still inline code, not a call.
+                        if from < code.len() || parts.is_empty() {
                             parts.push(masm::InlinePart::Bytes(code[from..].to_vec()));
                         }
                         callees.insert(

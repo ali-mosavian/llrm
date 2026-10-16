@@ -1246,6 +1246,30 @@ mod tests {
         assert!(push < code && code < pop, "{asm}");
     }
 
+    /// Inline code of no bytes (`stacklow.h`'s `_SP`, `__value [__sp]`) was taken
+    /// for a call of a function named by it: the object referred to
+    /// `llrm.ia16.asm..-.sp...`, which nothing defines, and `stackavail` did not build.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_of_no_bytes_is_not_a_call() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sp.c");
+        std::fs::write(
+            &source,
+            "extern unsigned sp(void);\n#pragma aux sp = __value [__sp]\nunsigned t(void) { return sp(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records sp.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let selected = super::selected(&text, "sp", None, &options).unwrap();
+        super::objbuild::written_in(&selected, "sp.c", super::objbuild::CodeLayout::OneSegment, llrm_target::object::Format::Omf).expect("an object");
+    }
+
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
     /// and `__argc` where `main` takes arguments: they pull in the start-up
     /// and the module that builds `argv`. Without them a program linked against
