@@ -763,11 +763,12 @@ fn _bounded_inside(
     let held = bounded.get_or_insert_with(|| bounds());
     // What holds on the edge into the loop, as the preheader's branch narrows
     // it.
-    let scope = held.as_ref().as_ref().ok().and_then(|facts| facts.at(into)).cloned().unwrap_or_default();
-    let Ok(Some(known)) = ranges::on_edge(&memory, cfg::block(into), cfg::block(header), &scope, None) else {
+    let Ok(facts) = held.as_ref().as_ref() else { return false };
+    let scope = facts.scope(&memory, into);
+    let Ok(Some(known)) = ranges::on_edge_over(&memory, cfg::block(into), cfg::block(header), &scope, None) else {
         return false;
     };
-    ranges::inside_object(&memory, &reference, &known.into_iter().collect())
+    ranges::inside_object(&memory, &reference, &known)
 }
 
 /// Whether this divide can be performed where it might not have been: by a

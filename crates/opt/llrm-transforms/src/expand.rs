@@ -43,13 +43,13 @@
 //! [`crate::counting`].
 
 use llrm_analysis::induction::{Monomial, Scev};
+use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::HashMap;
-use num_bigint::BigInt;
 
 use crate::counting;
 

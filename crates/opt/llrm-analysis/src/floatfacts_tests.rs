@@ -2,9 +2,9 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{Module, ValueId};
-use num_bigint::BigInt;
 
 use super::*;
+use crate::num::Num as BigInt;
 use crate::testing::{DOS, function, layout, parsed, value};
 
 struct Parsed {

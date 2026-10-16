@@ -124,6 +124,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop, Reach};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, memory};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -131,7 +132,6 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
-use num_bigint::BigInt;
 
 use crate::counting::Seeds;
 use crate::lcssa::{self, arms, from_arms, operations};

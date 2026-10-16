@@ -1050,7 +1050,7 @@ pub struct Unit<'a> {
     pub followers: Option<&'a crate::induction::LoopFollowers>,
     /// What the unavoidable branch edges bound at each block, under
     /// `registers`: the manager's `DominatedEdges`.
-    pub edges: Option<&'a crate::ranges::EdgeStates>,
+    pub edges: Option<&'a crate::ranger::EdgeFacts>,
     /// What each counted loop bounds at each block, under `registers`: the
     /// manager's `Bounded`.
     pub bounds: Option<&'a crate::ranges::Bounds>,
@@ -1226,7 +1226,7 @@ impl<'a> Unit<'a> {
 
     pub fn with_edges(
         self,
-        edges: &'a crate::ranges::EdgeStates,
+        edges: &'a crate::ranger::EdgeFacts,
     ) -> Self {
         Self { edges: Some(edges), ..self }
     }

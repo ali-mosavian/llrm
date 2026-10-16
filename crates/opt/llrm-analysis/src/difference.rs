@@ -68,10 +68,10 @@
 use std::collections::BTreeMap;
 
 use llrm_mir::opcode::IntPredicate;
-use num_bigint::BigInt;
 
 use crate::guards::Guard;
 use crate::induction::{Monomial, Scev};
+use crate::num::Num as BigInt;
 
 /// The most unknowns a system keeps: the closure is cubic in them.
 const MOST_NODES: usize = 24;

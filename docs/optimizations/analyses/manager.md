@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:8062cebf309c9665d4e22ccc7d0ddcbd12c333c90bfa5e015dcd49e92811a780 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:fc78c284728cb4b46c0a217cdca3ecc0baaf02557287abbaac06ce1f5a07e2a1 -->
 
 # manager
 
@@ -25,6 +25,8 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
   or loops `reached_by` the changes (a change to a terminator or to the CFG
   redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
+- `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
+  fresh `run`.
 - `SOUND` with `covers`: the entry is kept past an invalidation while every
   edit since it was derived keeps every live value's meaning
   (`passes::sound_edits`, read from the change log, not promised by a pass):
@@ -90,7 +92,8 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  Pointers         PointerValues
  CallEffects      PointerValues
  Writes           CallEffects
- Registers        -
+ TableLoads       -
+ Registers        TableLoads (updates)
  Followers        Registers
  Counted          Registers
  DominatedEdges   Registers

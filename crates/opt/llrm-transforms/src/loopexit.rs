@@ -109,6 +109,7 @@ use llrm_analysis::consts::{Known, masked};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, Affine, AffineOperand};
 use llrm_analysis::memory::{Standing, Unit};
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, occurrence, ranges};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -117,7 +118,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::counting::{self, Seeds};
 use crate::edges;
@@ -453,9 +453,10 @@ fn _widened_counters(
         if narrow >= wide {
             continue;
         }
-        let (Some(counter), Some(interval)) =
-            (counters.get(&source), bounds.at(at).and_then(|known| known.get(&source)))
-        else {
+        let (Some(counter), Some(interval)) = (
+            counters.get(&source),
+            ranges::Lookup::lookup(&bounds.scope(unit, at), &source).map(|found| found.into_owned()),
+        ) else {
             continue;
         };
         if interval.width != narrow {

@@ -77,11 +77,11 @@
 use llrm_analysis::cfg;
 use llrm_analysis::consts::{ARITH, masked};
 use llrm_analysis::induction::{self, AffineOperand, ControlReplacement, CountedLoop};
+use llrm_analysis::num::Num as BigInt;
 use llrm_mir::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use num_bigint::BigInt;
 
 /// Where a rewrite's preheader arithmetic goes, and how wide it is.
 ///

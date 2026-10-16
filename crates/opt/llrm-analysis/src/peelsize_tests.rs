@@ -4,7 +4,6 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
-use num_bigint::BigInt;
 
 use super::{ENTRY, Limits, Site, admitted};
 use crate::cfg;
@@ -12,6 +11,7 @@ use crate::consts;
 use crate::graph::loops::{self, Loop};
 use crate::induction;
 use crate::memory::Unit;
+use crate::num::Num as BigInt;
 use crate::testing::{DOS, function, layout, parsed};
 
 struct Parsed {

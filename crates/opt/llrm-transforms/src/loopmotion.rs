@@ -114,6 +114,7 @@ use llrm_analysis::graph::loops::{self, Loop};
 use llrm_analysis::manager::{Annotated, AssumptionCache, Bounded, Counted, DominatedEdges, ExposedFrames, Registers};
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, regions};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -123,7 +124,6 @@ use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_support::hash::{HashMap, IndexMap};
-use num_bigint::BigInt;
 
 use crate::counting;
 use crate::edges;

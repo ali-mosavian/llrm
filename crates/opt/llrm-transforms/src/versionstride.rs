@@ -21,12 +21,12 @@
 
 use llrm_analysis::cfg::{self, Canonical};
 use llrm_analysis::induction;
+use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Declared;
-use num_bigint::BigInt;
 
 use crate::loopclone::LoopCopy;
 use crate::loopversion::{Assumption, Within};
