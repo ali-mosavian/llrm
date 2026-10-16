@@ -307,6 +307,16 @@ Each replacement is priced with the executed-work model where the decision is ma
 | `Addressed`, `Unfolded` | at spill time, fold or unfold per use by local cost (X86 `unfoldMemoryOperand`) |
 | route B (`SsaSpill` first) | SsaSpill's pressure victims become an input: their spill weight is lowered by the pressure excess they relieve, so the queue takes them first where pressure is over the register count |
 
+Route B as the single engine was measured and is closed (m16 bench, spiller route forced, against the default of 2026-10-16; residual = definition sites the allocator still spills after the spiller, 31 bench functions, allocator alone 398):
+
+| | residual | clocks geomean | worst row | compile (d_faces -O2 m16) |
+|---|---|---|---|---|
+| spiller as it was | 175 | 1.0081 (12 programs) | nbody_fixed -Os +17.9% | +7.4% over the allocator alone |
+| + what lives through an instruction fits what it keeps (`clobbers`, `clobbers_high`) | 87 | 1.0006 | nbody_fixed -Os +17.9% | +3.1% |
+| + confined classes always, + a value that crosses a call keeps one register for life | 40 | 1.0117 | quicksort -Os +32.5% | not measured |
+
+What the spiller's own price cannot tell, over 14 functions that changed under one toggle: its traffic estimate agrees in sign with the final cost on 9 (2 of 6 at -Os); adding the phi-argument moves, 4 of 14 (5 of 6 at -Os). Coalescing and the post-allocation peephole decide the rest. The victims it names are 16-29% of what the allocator spills alone, and the allocator spills 2-2.4 times as many sites. The residual left after the spiller is the allocator's missing split: a call result delivered in AX and live across the next call, with the two preserved registers held (fib, frames, bintree `_walk`). Greedy allocation with that split is the engine; the spiller stays a -Omax candidate.
+
 ### 4.3 Recovering the rows, and the gate
 
 One allocation and one route are the default from stage 0b, by the user's decision. Stage 0b records, per row, what dropping best-of-six cost; on the fn it was +1.2% static instructions at -O1 to -O3 and +2.5% instructions with +4.3% memory operands at -Os (review 2.2). The in-run decisions of 4.2 are the follow-up that recovers those rows. Each decision lands on its own, and the gate compiles every corpus object with and without it and reports per row.

@@ -190,6 +190,18 @@ def test_the_counts_a_main_push_records_are_the_next_pull_requests_base_without_
     assert have == {("fib", "c", "O2"): {"instructions": 7}} and "fib" in hashes, "ours only: the reference's row is not recorded"
 
 
+def test_a_shard_measures_the_slice_of_a_missing_base_and_stores_none_of_it(tmp_path):
+    """A stored slice would pass for the whole base: every later run would find its levels present and judge the other rows against nothing."""
+    seen = []
+
+    def measure(directory, opts, names=None):
+        seen.append(names)
+        return {("fib", "c", "O2"): {"instructions": 7}}, {"fib": "h"}
+
+    have, _ = bc.base_counts("sha", ["O2"], lambda sha: "k2", lambda sha: Path("/d"), measure, cache=tmp_path, only=["fib"])
+    assert seen == [["fib"]] and have == {("fib", "c", "O2"): {"instructions": 7}} and list(tmp_path.iterdir()) == []
+
+
 def test_stale_waivers_are_one_line_of_file_names():
     """Twenty-nine BASE-STALE lines sat above the FAIL lines of #1771 and hid them."""
     stale = [f"a.toml: row{i} instructions to {i}" for i in range(29)] + ["b.toml: x instructions to 1"]
