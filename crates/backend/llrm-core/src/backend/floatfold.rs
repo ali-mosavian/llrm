@@ -18,8 +18,15 @@
 //!   not part of a group;
 //! - nothing between the load and the arithmetic is volatile, a call, a barrier
 //!   or an escape, or may write the cell (`storedhomes::may_write`);
-//! - the cell is 4 or 8 bytes. An integer load stays: `fild` then `fadd` is
-//!   faster than `fiadd` on a 486.
+//! - the cell is 4 or 8 bytes, or a 2 or 4 byte integer the target prices below
+//!   the pair it replaces: `fimul word [m]` for `fild word [m]` and `fmul` (23
+//!   clocks against 13 and 16 on a 486; the P5 has no cheaper form, so it keeps
+//!   the pair), per operation by the cost keys `x87_load_i`, `x87_add_i`,
+//!   `x87_mul_i` and `x87_div_i`. Where both operands qualify, the fold that
+//!   saves more clocks is taken: gcc and clang fold the integer load the same
+//!   way (`fimul`, `ficomp`). A compare whose right operand is such a load is
+//!   `ficom [m]` under the same rule, key `x87_cmp_i`; `floatalloc` emits the
+//!   popping `ficomp` where the left dies.
 //!
 //! Where the loaded cell is the left operand the operation is reversed (`fsub`
 //! becomes `fsubr`, `fdiv` becomes `fdivr`). The arithmetic then reads the
@@ -93,9 +100,11 @@ use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, HashSet, IndexSet};
 
-pub struct FloatFold;
+pub struct FloatFold<'a> {
+    pub cpu: &'a crate::backend::cpu::Profile,
+}
 
-impl LIRTransform for FloatFold {
+impl LIRTransform for FloatFold<'_> {
     fn class_name(&self) -> &'static str {
         "FloatFold"
     }
@@ -108,12 +117,15 @@ impl LIRTransform for FloatFold {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(folded(&body))
+        Ok(folded(&body, self.cpu))
     }
 }
 
 /// `body` with each float load its one reader takes from memory read there.
-pub fn folded(body: &LirBody) -> LirBody {
+pub fn folded(
+    body: &LirBody,
+    cpu: &crate::backend::cpu::Profile,
+) -> LirBody {
     let mut uses: HashMap<u32, usize> = HashMap::default();
     let mut floating: HashSet<u32> = HashSet::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
@@ -135,67 +147,50 @@ pub fn folded(body: &LirBody) -> LirBody {
         let mut at = 0;
         while at < insns.len() {
             let one = Arc::clone(&insns[at]);
-            let Some(what) = one.what.as_ref().filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
-            else {
-                at += 1;
-                continue;
-            };
-            let Some((name, left, right)) = _two_values(Some(what)) else {
-                at += 1;
-                continue;
-            };
-            if left.value == right.value {
+            let compared = _compare_with_integer(&insns, at, &uses, cpu);
+            let arithmetic = one
+                .what
+                .as_ref()
+                .filter(|what| what.op == Operation::FloatArith && what.dests.len() == 1)
+                .and_then(|what| _two_values(Some(what)))
+                .filter(|(_, left, right)| left.value != right.value);
+            if compared.is_none() && arithmetic.is_none() {
                 at += 1;
                 continue;
             }
             // The right operand's load first: the left is on the stack top, as
             // `fadd st, [m]` has it.
-            let found = [(right.value, false, left), (left.value, true, right)]
-                .into_iter()
-                .find_map(
-                    |(value, cell_is_left, other)| {
-                        if uses.get(&value) != Some(&1) {
-                            return None;
-                        }
-                        let home = (0..at)
-                            .rev()
-                            .find(
-                                |&back| insns[back].what.as_ref().is_some_and(|made| {
-                                    made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))
-                                }),
-                            )?;
-                        let load = &insns[home];
-                        if !_loads_memory(load.what.as_ref())
-                            || load.volatile
-                            || !load.clobbers.is_empty()
-                            || load.group.is_some()
-                        {
-                            return None;
-                        }
-                        let cell = cell_of(load);
-                        if insns[home + 1..at].iter().any(|between| {
-                            between.volatile
-                                || between.call.is_some()
-                                || may_write(between, cell, false)
-                                || between.what.as_ref().is_none_or(|w| {
-                                    matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)
-                                })
-                        }) {
-                            return None;
-                        }
-                        let operation = memory_form(&name, cell_is_left, load)?;
-                        Some((home, value, operation, other))
-                    },
-                );
-            let Some((home, value, operation, other)) = found else {
+            // Each operand that qualifies, and what folding it saves in clocks;
+            // the dearest to leave unfolded goes, the right operand
+            // first where they tie.
+            let found = arithmetic
+                .iter()
+                .flat_map(|(name, left, right)| {
+                    [(name, right.value, false, *left, *right), (name, left.value, true, *right, *left)]
+                })
+                .filter_map(|(name, value, cell_is_left, other, _)| {
+                    if uses.get(&value) != Some(&1) {
+                        return None;
+                    }
+                    let home = _home_of(&insns, at, value)?;
+                    let load = &insns[home];
+                    let (operation, saved) = memory_form(name, cell_is_left, load, cpu)?;
+                    let what = one.what.as_ref().expect("an arithmetic instruction");
+                    let cell = Loc::Mem(cell_of(load).clone());
+                    let fused =
+                        semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell]);
+                    Some((saved, (home, value, fused)))
+                })
+                .reduce(|best, next| if next.0 > best.0 { next } else { best })
+                .map(|(_, one)| one)
+                .or(compared);
+            let Some((home, value, fused_what)) = found else {
                 at += 1;
                 continue;
             };
             let load = Arc::clone(&insns[home]);
-            let cell = Loc::Mem(cell_of(&load).clone());
             let mut fused = (*one).clone();
-            fused.what =
-                Some(semantics(Operation::FloatArith, &operation, what.dests.clone(), vec![Loc::Held(other), cell]));
+            fused.what = Some(fused_what);
             let foreign =
                 |values: &[u32]| values.iter().copied().filter(|one| !floating.contains(one)).collect::<Vec<u32>>();
             fused.uses = one
@@ -229,6 +224,73 @@ pub fn folded(body: &LirBody) -> LirBody {
     if changed { body.with_blocks(blocks) } else { body.clone() }
 }
 
+/// The load that defines `value`, if it may be read again at `at` as a memory
+/// operand: the nearest definition in the block, a plain load of a cell, not
+/// volatile, with no clobbers and not part of a group, and nothing between it
+/// and `at` volatile, a call, a barrier or an escape, or able to write the
+/// cell.
+fn _home_of(
+    insns: &[Arc<Insn>],
+    at: usize,
+    value: u32,
+) -> Option<usize> {
+    let home = (0..at)
+        .rev()
+        .find(
+            |&back| insns[back]
+                .what
+                .as_ref()
+                .is_some_and(|made| made.dests.iter().any(|d| matches!(d, Loc::Held(held) if held.value == value))),
+        )?;
+    let load = &insns[home];
+    if !_loads_memory(load.what.as_ref()) || load.volatile || !load.clobbers.is_empty() || load.group.is_some() {
+        return None;
+    }
+    let cell = cell_of(load);
+    if insns[home + 1..at].iter().any(|between| {
+        between.volatile
+            || between.call.is_some()
+            || may_write(between, cell, false)
+            || between
+                .what
+                .as_ref()
+                .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape))
+    }) {
+        return None;
+    }
+    Some(home)
+}
+
+/// A compare of a value with an integer load nothing else reads is `ficom [m]`
+/// where the target prices it below the `fild` and the compare it replaces:
+/// gcc's and clang's `ficomp`. The cell is the right operand, as `fcom st, [m]`
+/// has it.
+fn _compare_with_integer(
+    insns: &[Arc<Insn>],
+    at: usize,
+    uses: &HashMap<u32, usize>,
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(usize, u32, crate::model::ir::Semantics)> {
+    let what = insns[at].what.as_ref().filter(|what| what.op == Operation::Compare && what.dests.is_empty())?;
+    let [Loc::Held(left), Loc::Held(right)] = what.sources.as_slice() else { return None };
+    if left.value == right.value || uses.get(&right.value) != Some(&1) {
+        return None;
+    }
+    let home = _home_of(insns, at, right.value)?;
+    let load = &insns[home];
+    if !name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 2 | 4) {
+        return None;
+    }
+    let price = |key: &str| cpu.cost(key).ok();
+    if price("x87_cmp_i")? >= price("x87_load_i")? + price("x87_add")? {
+        return None;
+    }
+    let mut made = what.clone();
+    made.name = Some("ficom".to_owned());
+    made.sources = vec![Loc::Held(*left), Loc::Mem(cell_of(load).clone())];
+    Some((home, right.value, made))
+}
+
 /// The memory form of `name` reading `load`'s cell: `fadd qword ptr [m]`,
 /// `fsubr dword ptr [m]`; none for an integer or a cell that is not a float or
 /// double. Where the cell is the left operand, the operation reversed.
@@ -236,7 +298,8 @@ fn memory_form(
     name: &str,
     cell_is_left: bool,
     load: &Insn,
-) -> Option<String> {
+    cpu: &crate::backend::cpu::Profile,
+) -> Option<(String, i64)> {
     let reversed = |name: &str| -> String {
         match name {
             "fsub" => "fsubr".to_owned(),
@@ -245,10 +308,39 @@ fn memory_form(
         }
     };
     let name = if cell_is_left { reversed(name) } else { name.to_owned() };
-    // An integer load stays: `fild` then `fadd` is faster than `fiadd` on the
-    // 486, and the other operand may take the memory form instead.
-    if name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 4 | 8) {
+    // An integer load folds into the `fi` form where the target prices that
+    // form below the `fild` and the operation it replaces, per operation:
+    // the 486 has `fimul` at 23 clocks against 13 and 16, `fiadd` at 20 against
+    // 13 and 8.
+    if name_is(load.what.as_ref()?, "fild") {
+        let (integer, float) = match name.as_str() {
+            "fadd" => ("x87_add_i", "x87_add"),
+            "fsub" | "fsubr" => ("x87_add_i", "x87_add"),
+            "fmul" => ("x87_mul_i", "x87_mul"),
+            "fdiv" | "fdivr" => ("x87_div_i", "x87_div"),
+            _ => return None,
+        };
+        let price = |key: &str| cpu.cost(key).ok();
+        let replaced = price("x87_load_i")? + price(float)?;
+        if !matches!(cell_of(load).width, 2 | 4) || price(integer)? >= replaced {
+            return None;
+        }
+        return Some((format!("fi{}", &name[1..]), replaced - price(integer)?));
+    }
+    if !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }
-    Some(name)
+    // A float or double cell: the load is saved, and the memory form may cost
+    // more than the register one.
+    let class = match name.as_str() {
+        "fadd" | "fsub" | "fsubr" => "add",
+        "fmul" => "mul",
+        _ => "div",
+    };
+    let price = |key: String| cpu.cost(&key).ok();
+    let saved = match (price("x87_load".to_owned()), price(format!("x87_{class}")), price(format!("x87_{class}_m"))) {
+        (Some(load), Some(register), Some(memory)) => load + register - memory,
+        _ => 1,
+    };
+    Some((name, saved))
 }

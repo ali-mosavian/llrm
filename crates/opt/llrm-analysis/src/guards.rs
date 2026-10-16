@@ -90,12 +90,12 @@ use std::collections::BTreeMap;
 
 use llrm_mir::module::{Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, IntPredicate, Opcode};
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::difference;
 use crate::induction::{Scev, term};
 use crate::memory::Unit;
+use crate::num::Num as BigInt;
 use crate::ranges::declared;
 
 /// `left predicate right`, proven on some edge.

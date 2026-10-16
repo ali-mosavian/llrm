@@ -1,21 +1,6 @@
 reason = "narrow zero written whole (xor eax,eax, -1 byte/prefix), one pop ecx for a dword of arguments at m32 -Os, and sink (a load read only below a branch moves below it): bytes down on most bq32 rows; five bq32 rows +1..5 instructions (<0.03%): a flag-idiom the wider xor no longer feeds"
 blessed = "2026-10-15"
 
-[bas.O2]
-instructions = 339050
-memory_operands = 102510
-code_bytes = 454
-data_bytes = 15
-bss_bytes = 0
-
-[bas.Os]
-instructions = 320166
-memory_operands = 91158
-code_bytes = 403
-data_bytes = 15
-bss_bytes = 0
-kernel_ms = 4.278
-
 [ow.O2]
 instructions = 217955
 memory_operands = 52782

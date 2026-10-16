@@ -13,7 +13,6 @@ use llrm_mir::interpret::{Val, run};
 use llrm_mir::module::{Function, InstId, Module, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, IntPredicate};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use super::*;
 use crate::cfg;
@@ -21,6 +20,7 @@ use crate::consts;
 use crate::consts::Known;
 use crate::graph::loops::{self, Loop};
 use crate::memory::Unit;
+use crate::num::Num as BigInt;
 use crate::testing::{DOS, corpus, function, layout, parsed, value};
 
 pub(crate) struct Parsed {

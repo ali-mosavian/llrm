@@ -112,7 +112,6 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::types::{FloatKind, Type, TypeId, Types};
 use llrm_support::hash::HashSet;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg;
 use crate::consts::{self, _MemoryQueries, Calls, Cells, Known};
@@ -120,6 +119,7 @@ use crate::graph::loops;
 use crate::induction;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::Accesses;
+use crate::num::Num as BigInt;
 use crate::regions;
 
 /// Whether `ty` is, or holds, a floating-point number; an identified struct,
@@ -633,7 +633,7 @@ fn _inputs(
     if let Opcode::Load { .. } = op.opcode {
         let reference = queries.resolve(&MemRef::of(unit, inst)?);
         if let Some(bits) = crate::memory::constant_bits(unit, &reference) {
-            return Some(vec![decoded(&bits, rule.inputs[0])?]);
+            return Some(vec![decoded(&bits.into(), rule.inputs[0])?]);
         }
         let bits = match (here, provided) {
             (Some(here), _) => consts::_cell(here, &reference)?,

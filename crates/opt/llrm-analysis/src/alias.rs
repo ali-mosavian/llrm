@@ -148,7 +148,6 @@ use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
-use num_bigint::BigInt;
 
 use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
@@ -160,7 +159,8 @@ use crate::memory::{
     self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, wrapped,
 };
-use crate::ranges;
+use crate::num::Num as BigInt;
+use crate::ranges::{self, Interval, Lookup};
 use crate::regions::{self, ByteRange};
 use crate::sliceset::{self, Shared, SliceSet};
 
@@ -3563,13 +3563,16 @@ enum Bounded<'a> {
 }
 
 impl Bounded<'_> {
-    fn at(
+    /// What is known of `value` at block `at`.
+    fn of(
         &self,
+        unit: &Unit,
+        value: &ValueId,
         at: i64,
-    ) -> Option<&ranges::Intervals> {
+    ) -> Option<Interval> {
         match self {
-            Bounded::Held(held) => held.at(at),
-            Bounded::Worked(worked) => worked.get(&at),
+            Bounded::Held(held) => held.scope(unit, at).lookup(value).map(std::borrow::Cow::into_owned),
+            Bounded::Worked(worked) => worked.get(&at).and_then(|scope| scope.get(value)).cloned(),
         }
     }
 }
@@ -3586,9 +3589,10 @@ pub fn annotated_with(
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
                 // body's.
-                let facts = held.facts();
+                let facts = held.loops_facts();
                 assert!(
-                    (!unit.loop_intervals && facts.is_empty()) || facts == ranges::bounded_with(unit, known)?,
+                    (!unit.loop_intervals && facts.is_empty())
+                        || facts == ranges::bounded_solved(unit, known, None, false)?.loops_facts(),
                     "the bounds a unit carries are not those of the body it stands over: stale"
                 );
             }
@@ -3601,9 +3605,8 @@ pub fn annotated_with(
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
         let mut got = facts.reference(unit, reference);
-        let interval = reference
-            .base
-            .and_then(|base| bounded.at(at).and_then(|known| known.get(&base)).or_else(|| constants.get(&base)));
+        let interval =
+            reference.base.and_then(|base| bounded.of(unit, &base, at).or_else(|| constants.get(&base).cloned()));
         if let (Some(current), true, Some(base), Some(interval)) = (&got, reference.object, reference.base, interval) {
             if interval.width == reference.base_width && current.slices.len() == 1 && reference.scale > 0 {
                 let source = current.slices.first().expect("one slice");
@@ -3639,11 +3642,7 @@ pub fn annotated_with(
         // names those linear bytes, whatever its pointer's provenance.
         if let (None, Some(Operand::Value(segment))) = (reference.selector, reference.segment) {
             let lookup = |value: ValueId| {
-                bounded
-                    .at(at)
-                    .and_then(|known| known.get(&value))
-                    .or_else(|| constants.get(&value))
-                    .map(|one| (value, one.clone()))
+                bounded.of(unit, &value, at).or_else(|| constants.get(&value).cloned()).map(|one| (value, one))
             };
             let known = [Some(segment), reference.base].into_iter().flatten().filter_map(lookup).collect();
             if let Some(foreign) = regions::foreign_provenance(reference, &known, unit.program) {

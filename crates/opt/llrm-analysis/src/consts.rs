@@ -94,7 +94,6 @@ use llrm_mir::module::{BlockId, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::{HashMap, IndexMap};
-use num_bigint::BigInt;
 
 use crate::avail;
 use crate::cellmap::CellMap;
@@ -102,6 +101,7 @@ use crate::cfg;
 use crate::constant_cycles;
 use crate::memory::{Addr, MemRef, Provenance, Unit, object_of, unmodeled_write};
 use crate::memoryssa::{self, Accesses};
+use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval};
 use crate::regions::{
     ByteRange, OverlapBucket, OverlapBuckets, displaced_buckets, object_bucket, overlap_buckets, overlap_span,
@@ -865,30 +865,33 @@ pub fn holds(
 /// of, those that are known numbers and those that are not), so no change to a
 /// value it is made from leaves one as it was.
 pub fn table_loads(unit: &Unit) -> Vec<InstId> {
+    TABLE_WALKS.with(|count| count.set(count.get() + 1));
+    unit.function.walk().map(|(_, inst)| inst).filter(|&inst| is_table_load(unit, inst)).collect()
+}
+
+/// Whether `inst` is a load from a constant global by an index.
+pub fn is_table_load(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
     let function = unit.function;
-    function
-        .walk()
-        .map(|(_, inst)| inst)
-        .filter(|&inst| {
-            matches!(
-                function.instruction(inst).opcode,
-                Opcode::Load { volatile: false, .. }
-            )
-                && MemRef::of(unit, inst).is_some_and(|reference| {
-                    reference.base.is_some()
-                        && matches!(
-                            reference.root,
-                            Some(Operand::Constant(root)) if matches!(
-                                unit.context.get(root).kind,
-                                ConstantKind::Global(global) if matches!(
-                                    unit.globals.get(global.0 as usize).map(|one| &one.kind),
-                                    Some(llrm_mir::module::GlobalKind::Variable(variable)) if variable.constant
-                                )
-                            )
+    matches!(
+        function.instruction(inst).opcode,
+        Opcode::Load { volatile: false, .. }
+    )
+        && MemRef::of(unit, inst).is_some_and(|reference| {
+            reference.base.is_some()
+                && matches!(
+                    reference.root,
+                    Some(Operand::Constant(root)) if matches!(
+                        unit.context.get(root).kind,
+                        ConstantKind::Global(global) if matches!(
+                            unit.globals.get(global.0 as usize).map(|one| &one.kind),
+                            Some(llrm_mir::module::GlobalKind::Variable(variable)) if variable.constant
                         )
-                })
+                    )
+                )
         })
-        .collect()
 }
 
 /// Every value this function computes that is a number, to a fixed point,
@@ -987,6 +990,13 @@ pub fn known_from(
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TABLE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has walked a whole body for its table loads, for
+/// a test that a change asks only of the loads it reaches.
+pub fn table_walks() -> usize {
+    TABLE_WALKS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body through

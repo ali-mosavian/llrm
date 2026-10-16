@@ -99,6 +99,7 @@ use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
@@ -108,7 +109,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::edges;
 use crate::transform;
@@ -241,12 +241,11 @@ fn _decisions(
             continue;
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
-        if answer.is_none()
-            && let Some(scope) = scoped.at(cfg::id(block))
-        {
+        if answer.is_none() {
+            let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
             for target in function.successors(block) {
-                if ranges::on_edge(unit, block, target, scope, Some(&facts))?.is_some() {
+                if ranges::on_edge_over(unit, block, target, &scope, Some(&facts))?.is_some() {
                     possible.push(target);
                 }
             }
@@ -529,8 +528,13 @@ pub fn _threaded(
     let none = BTreeSet::new();
     let mut loop_edges = BTreeSet::new();
     for loop_ in cfg::Shape::of(function).loops {
-        let outside =
-            predecessors.get(&loop_.header).unwrap_or(&none).difference(&loop_.body).copied().collect::<Vec<_>>();
+        let outside = predecessors
+            .get(&loop_.header)
+            .unwrap_or(&none)
+            .iter()
+            .copied()
+            .filter(|at| !loop_.body.contains(at))
+            .collect::<Vec<_>>();
         if let [parent] = outside[..]
             && *known[&parent] == [loop_.header]
         {
@@ -548,7 +552,7 @@ pub fn _threaded(
                     let parents = predecessors.get(&block.at).unwrap_or(&none);
                     !loop_.body.contains(&block.at)
                         && !parents.is_empty()
-                        && parents.is_subset(&loop_.body)
+                        && parents.iter().all(|at| loop_.body.contains(at))
                         && block.succ.len() == 1
                         && !loop_.body.contains(&block.succ[0])
                 })

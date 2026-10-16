@@ -126,13 +126,13 @@ use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::IndexMap;
-use num_bigint::BigInt;
 
 use crate::cfg::{self, Around};
 use crate::consts::{Known, masked};
 use crate::graph::loops::Loop;
 use crate::memory::{self, MemRef, Unit};
 use crate::noreturn;
+use crate::num::Num as BigInt;
 use crate::occurrence::{operations_in, phis};
 
 /// A recurrence's start or step: a value, or a number.
@@ -2156,7 +2156,7 @@ impl Invariant {
 /// What the blocks `inside` do not define.
 pub fn invariant(
     function: &Function,
-    inside: &BTreeSet<i64>,
+    inside: &llrm_mir::forest::Body,
 ) -> Invariant {
     let defined = inside
         .iter()

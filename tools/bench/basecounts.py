@@ -24,10 +24,33 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 CACHE = Path(os.environ.get("LLRM_BENCH_BASE_DIR") or Path.home() / ".cache/llrm/bench-base")
 # The rows the compiler under test makes: the reference compilers' (bas, ow, bcc, ...) do not move with it.
-OURS = ("c", "nib", "bq16", "bq32")
+OURS = ("bas", "c", "nib", "bq16", "bq32")
 COUNTERS = ("instructions", "memory_operands", "code_bytes", "data_bytes", "bss_bytes")
 # Not under bench/: every tool that lists the benchmarks took a directory there for a program (a "waivers" with no waivers.c).
 WAIVERS = "tools/bench/waivers"
+
+
+# What changes nothing a count is made of: a commit that touches only these has its parent's counts.
+INERT = {"docs", "editors", ".github", ".zed", ".gitignore", "license"}  # and every top-level .md
+
+
+def compiler_key(sha: str, root: Path = ROOT) -> str:
+    """What `sha`'s counts depend on, as one name: the hash of its top-level entries but the inert ones (docs, editor files, workflows). The
+    key of the cache of a base's counts, so a docs-only commit finds its parent's, where its tree is new."""
+    listing = subprocess.run(["git", "ls-tree", sha], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    names = [line.split("\t", 1)[1].lower() for line in listing]
+    kept = [line for line, name in zip(listing, names) if name not in INERT and not name.endswith(".md")]
+    return hashlib.sha256("\n".join(kept).encode()).hexdigest()[:20]
+
+
+def record(rows: dict, cache: Path, key: str, root: Path = ROOT) -> Path:
+    """Store the rows of ours (bench.py's measured rows), with the programs' hashes, as the counts of the tree `key` names: the file
+    `base_counts` reads for a base. A main push does this for its own commit, so the next pull requests find their base measured."""
+    rows = {k: v for k, v in rows.items() if k[1] in OURS}
+    cache.mkdir(parents=True, exist_ok=True)
+    path = cache / f"{key}-own.json"
+    path.write_text(json.dumps({"rows": {"/".join(k): v for k, v in rows.items()}, "programs": programs(root)}))
+    return path
 
 
 def programs(root: Path = ROOT) -> dict[str, str]:
@@ -110,6 +133,12 @@ def judge(measured: dict, base: dict, waived: list[dict], same: set[str] | None 
     return worse, better, stale
 
 
+def stale_summary(stale: list[str]) -> list[str]:
+    """The stale waivers (judge's third value) as one line naming their files: 29 rows of them buried the failures under them."""
+    files = sorted({one.split(":", 1)[0] for one in stale})
+    return [f"BASE-STALE {len(stale)} waivers in {len(files)} files, delete them: {' '.join(files)}"] if stale else []
+
+
 def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: bool = False) -> tuple[dict, dict[str, str]]:
     """(bench.py's rows, programs()) of the tree `directory` (a release directory of measure.py's build tree, `<build>/target/release`) was
     built from, by that tree's own bench.py with its compiler: the harness and the programs as the base had them (the head's harness may
@@ -128,3 +157,12 @@ def measure_in_subprocess(directory: Path, opts: list[str], work: Path, timed: b
     if not out.is_file():
         raise SystemExit("the base did not measure: " + " | ".join(line.strip() for line in (done.stdout + done.stderr).splitlines()[-4:] if line.strip()))
     return rows_of(json.loads(out.read_text())), programs(tree)
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["key"]:
+        print(compiler_key(sys.argv[2] if len(sys.argv) > 2 else "HEAD"))
+    elif sys.argv[1:2] == ["record"]:  # record ROWS.json DIR: the counts of HEAD
+        print(record(rows_of(json.loads(Path(sys.argv[2]).read_text())), Path(sys.argv[3]), compiler_key("HEAD")))
+    else:
+        sys.exit("usage: basecounts.py key [REV] | record ROWS.json DIR")

@@ -60,7 +60,8 @@
 //!  Pointers         PointerValues
 //!  CallEffects      PointerValues
 //!  Writes           CallEffects
-//!  Registers        -
+//!  TableLoads       -
+//!  Registers        TableLoads (updates)
 //!  Followers        Registers
 //!  Counted          Registers
 //!  DominatedEdges   Registers
@@ -1253,6 +1254,83 @@ pub fn call_effects(
 /// Every value known without solving memory: `consts::known` of no calls.
 pub struct Registers;
 
+/// The loads from a constant global by an index (`consts::is_table_load`), in
+/// order of instruction. A change reaches a load by the instruction itself or
+/// by the values its address is made of, so those loads, and only those, are
+/// asked again.
+pub struct TableLoads;
+
+impl Analysis for TableLoads {
+    type Result = Vec<InstId>;
+    const NAME: &'static str = "table-loads";
+    const INCREMENTAL: bool = true;
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let mut found = consts::table_loads(&Unit::within(context, layout, function, analyses.outer()));
+        found.sort_unstable();
+        found
+    }
+
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let unit = Unit::within(context, layout, function, analyses.outer());
+        let mut work: Vec<InstId> = Vec::new();
+        for change in changes {
+            match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => work.push(inst),
+                Change::Cloned { to, .. } => work.push(to),
+                // Each use of a substituted value is rewritten, in an entry of
+                // its own.
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted { .. } => {}
+                Change::Parameters => return None,
+            }
+        }
+        let mut seen: llrm_mir::dense::IdSet<InstId> = work.iter().copied().collect();
+        let mut asked = llrm_mir::dense::IdSet::<InstId>::new();
+        while let Some(inst) = work.pop() {
+            if function.parent(inst).is_none() {
+                continue;
+            }
+            if matches!(function.instruction(inst).opcode, Opcode::Load { .. }) {
+                asked.insert(inst);
+                continue;
+            }
+            if let Some(result) = function.instruction(inst).result {
+                for user in function.users(result) {
+                    if seen.insert(user.user) {
+                        work.push(user.user);
+                    }
+                }
+            }
+        }
+        let mut found: llrm_mir::dense::IdSet<InstId> = previous
+            .iter()
+            .copied()
+            .filter(|&inst| function.parent(inst).is_some() && !asked.contains(&inst))
+            .collect();
+        found.extend(asked.iter().filter(|&inst| consts::is_table_load(&unit, inst)));
+        Some(found.iter().collect())
+    }
+}
+
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
@@ -1282,17 +1360,17 @@ impl Analysis for Registers {
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+        let tables = analyses.get::<TableLoads>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer()).with_exposed(&exposed);
         // A load from a table is known by the bounds of its whole index,
         // whatever it is made of: it is asked again with the values a
         // change touched.
-        let tables = consts::table_loads(&unit);
         let mut kept = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone());
         // The values touched, and the facts that were made from them, which no
         // longer stand.
         let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
         let mut work = Vec::<ValueId>::new();
-        for &inst in &tables {
+        for &inst in tables.iter() {
             if let Some(result) = function.instruction(inst).result
                 && touched.insert(result)
             {
@@ -1493,6 +1571,19 @@ impl Analysis for Counted {
 pub struct Reach {
     pub blocks: BTreeSet<BlockId>,
     pub conditions: BTreeSet<BlockId>,
+    /// A change was to the CFG: a terminator, or a block made or erased. Only
+    /// `reached_with_cfg` finds one.
+    pub cfg: bool,
+}
+
+/// `reached_by`, where a change to the CFG is reported (`Reach::cfg`), its
+/// blocks among those reached, and not a reason to start again: for a fact
+/// that is dropped where it is reached, and all of it when the CFG changed.
+pub fn reached_with_cfg(
+    function: &Function,
+    changes: &[Change],
+) -> Option<Reach> {
+    reached_through(function, changes, false, true)
 }
 
 /// What `changes` reached; none where a change was to the CFG.
@@ -1500,7 +1591,7 @@ pub fn reached_by(
     function: &Function,
     changes: &[Change],
 ) -> Option<Reach> {
-    reached_through(function, changes, false)
+    reached_through(function, changes, false, false)
 }
 
 /// `reached_by` for a caller that has checked the edges are the ones it had:
@@ -1509,19 +1600,29 @@ pub fn reached_keeping_edges(
     function: &Function,
     changes: &[Change],
 ) -> Option<Reach> {
-    reached_through(function, changes, true)
+    reached_through(function, changes, true, false)
 }
 
 fn reached_through(
     function: &Function,
     changes: &[Change],
     edges_kept: bool,
+    cfg_ok: bool,
 ) -> Option<Reach> {
+    let mut cfg = false;
     let mut blocks = BTreeSet::new();
     let mut work: Vec<InstId> = Vec::new();
     for change in changes {
         let (inst, placed) = match *change {
-            Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+            Change::Parameters => return None,
+            Change::BlockCreated(block) | Change::BlockErased(block) => {
+                if !cfg_ok {
+                    return None;
+                }
+                cfg = true;
+                blocks.insert(block);
+                continue;
+            }
             Change::Inserted { inst, block, .. } | Change::Erased { inst, block, .. } => (inst, vec![block]),
             Change::Moved { inst, block, from, .. } => (inst, vec![block, from]),
             Change::Rewritten(inst) => (inst, Vec::new()),
@@ -1530,7 +1631,10 @@ fn reached_through(
         };
         if function.instruction(inst).opcode.is_terminator() && !(edges_kept && matches!(change, Change::Rewritten(_)))
         {
-            return None;
+            if !cfg_ok {
+                return None;
+            }
+            cfg = true;
         }
         blocks.extend(placed);
         work.push(inst);
@@ -1556,7 +1660,7 @@ fn reached_through(
             }
         }
     }
-    Some(Reach { blocks, conditions })
+    Some(Reach { blocks, conditions, cfg })
 }
 
 /// What each call writes, as `CallEffects` says: the `Calls` consts and
@@ -1733,22 +1837,25 @@ impl Analysis for ThroughMemory {
 pub struct DominatedEdges;
 
 impl Analysis for DominatedEdges {
-    type Result = Result<ranges::EdgeStates, String>;
+    type Result = Result<crate::ranger::EdgeFacts, String>;
     const NAME: &'static str = "dominated-edges";
     const INCREMENTAL: bool = true;
 
+    /// Nothing is worked out until a pass asks for a value at a block
+    /// (`ranger`): GCC's `ranger_cache` starts empty too.
     fn run(
-        context: &Context,
-        layout: &DataLayout,
-        function: &Function,
-        analyses: &mut Analyses,
+        _: &Context,
+        _: &DataLayout,
+        _: &Function,
+        _: &mut Analyses,
     ) -> Self::Result {
-        Self::solved(context, layout, function, analyses, None)
+        Ok(crate::ranger::EdgeFacts::default())
     }
 
-    /// A block's state is of its operations, the state it starts from and the
-    /// facts of the values they read; those of the blocks a change reaches,
-    /// and those that start from a state that changed, are worked again.
+    /// An answer is of the block's own operations, the edges and assumes that
+    /// dominate it and the facts of the values they read: a change drops the
+    /// answers of the blocks it reaches and of those they dominate. A change to
+    /// the CFG drops them all.
     fn update(
         previous: &Self::Result,
         changes: &[Change],
@@ -1757,34 +1864,43 @@ impl Analysis for DominatedEdges {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
-        let states = previous.as_ref().ok()?;
-        let reached = reached_by(function, changes)?.blocks;
-        Some(Self::solved(context, layout, function, analyses, Some((states, &reached))))
+        Self::update_owned(Rc::new(previous.clone()), changes, context, layout, function, analyses)
     }
-}
 
-impl DominatedEdges {
-    fn solved(
+    fn update_owned(
+        previous: Rc<Self::Result>,
+        changes: &[Change],
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        before: Option<(&ranges::EdgeStates, &BTreeSet<BlockId>)>,
-    ) -> <Self as Analysis>::Result {
-        let registers = analyses.get::<Registers>(context, layout, function);
+    ) -> Option<Self::Result> {
+        previous.as_ref().as_ref().ok()?;
+        let reach = reached_with_cfg(function, changes)?;
+        if reach.cfg {
+            return Some(Ok(crate::ranger::EdgeFacts::default()));
+        }
         let shape = analyses.get::<Shape>(context, layout, function);
-        let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
-        let exposed = analyses.get::<ExposedFrames>(context, layout, function);
-        ranges::edges_solved(
-            &Unit::within(context, layout, function, analyses.outer())
-                .with_shape(&shape)
-                .with_assumptions(&assumptions)
-                .with_registers(&registers)
-                .with_exposed(&exposed),
-            &registers,
-            before,
-        )
+        let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
+        let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
+        Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
     }
+}
+
+/// Whether `at`, or a block above it, is one of `reached`.
+pub fn dominated_by(
+    shape: &Shape,
+    reached: &BTreeSet<i64>,
+    at: i64,
+) -> bool {
+    let mut above = Some(at);
+    while let Some(one) = above {
+        if reached.contains(&one) {
+            return true;
+        }
+        above = shape.dominance.immediate(one);
+    }
+    false
 }
 
 /// The facts each counted loop gives its blocks, and where there is none the
@@ -1821,14 +1937,13 @@ impl Analysis for Bounded {
         let reach = reached_by(function, changes)?;
         let shape = analyses.get::<Shape>(context, layout, function);
         let edges = analyses.get::<DominatedEdges>(context, layout, function);
-        let dirty = ranges::loops_reached(
-            function,
-            &shape,
-            &reach.blocks,
-            &reach.conditions,
-            bounds,
-            edges.as_ref().as_ref().ok()?,
-        );
+        edges.as_ref().as_ref().ok()?;
+        // A loop starts from the edges' facts of its dominator: those of a
+        // block a change reached or one it dominates may have changed.
+        let reached: BTreeSet<i64> = reach.blocks.iter().map(|block| crate::cfg::id(*block)).collect();
+        let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
+            dominated_by(&shape, &reached, at)
+        });
         Some(Self::solved(context, layout, function, analyses, Some((bounds, &dirty))))
     }
 }
@@ -1884,6 +1999,11 @@ impl Ranges {
         &self.registers
     }
 
+    /// The bounds, where they were asked for.
+    pub fn bounds(&self) -> Option<&<Bounded as Analysis>::Result> {
+        self.bounds.as_deref()
+    }
+
     pub fn unit<'a>(
         &'a self,
         context: &'a Context,
@@ -1916,7 +2036,7 @@ impl Bounded {
         prior: Option<(&ranges::Bounds, &BTreeSet<i64>)>,
     ) -> <Self as Analysis>::Result {
         let held = Ranges::of(context, layout, function, analyses, false);
-        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior)
+        ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)
     }
 }
 

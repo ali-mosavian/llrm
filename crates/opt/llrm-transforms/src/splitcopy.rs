@@ -89,6 +89,7 @@
 //! `visitMemTransferInst`).
 
 use llrm_analysis::memory::Unit;
+use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -98,7 +99,6 @@ use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::TypeId;
 use llrm_mir::valuetracking::underlying;
-use num_bigint::BigInt;
 
 use crate::counting;
 

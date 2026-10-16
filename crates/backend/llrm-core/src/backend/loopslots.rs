@@ -278,6 +278,7 @@ thread_local! {
     static TOUCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static RANKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn touch(
@@ -680,7 +681,7 @@ enum Source {
 fn invariant(
     regs: Regs,
     m: u32,
-    insns: &[(&Arc<Insn>, Lanes)],
+    insns: &[(&Arc<Insn>, &Lanes)],
     touches: &std::cell::OnceCell<Vec<Touch>>,
     entering: &Lanes,
     root: RegId,
@@ -730,14 +731,14 @@ fn invariant(
 /// out once for the loop, where `invariant` asked it again for every register.
 fn writes_of<'a>(
     body: &'a LirBody,
-    may_writes: &[Vec<Option<Lanes>>],
+    may_writes: &'a [Vec<Option<Lanes>>],
     one: &Loop,
     index: &BTreeMap<i64, usize>,
-) -> Option<Vec<(&'a Arc<Insn>, Lanes)>> {
+) -> Option<Vec<(&'a Arc<Insn>, &'a Lanes)>> {
     let mut out = Vec::new();
     for at in &one.body {
         for (insn, may_write) in body.blocks[index[at]].insns.iter().zip(&may_writes[index[at]]) {
-            out.push((insn, may_write.clone()?));
+            out.push((insn, may_write.as_ref()?));
         }
     }
     Some(out)
@@ -827,12 +828,12 @@ pub fn hoisted(
     let mut blocks = body.blocks.clone();
     let mut found = loops::loops(graph, Some(body.entry));
     found.sort_by_key(|one| one.body.len());
-    let mut taken = BTreeSet::<i64>::new();
+    let mut taken = Taken::default();
     let written = may_writes(body);
     let segment_roots: Vec<RegId> =
         regs.segments().filter(|one| !regs.is_code_segment(*one) && !regs.is_stack_segment(*one)).collect();
     for one in &found {
-        if one.body.iter().any(|at| taken.contains(at)) {
+        if taken.overlaps(one.body.forest(), one.body.index()) {
             continue;
         }
         let entries = predecessors[&one.header].iter().copied().filter(|at| !one.body.contains(at)).collect::<Vec<_>>();
@@ -894,9 +895,105 @@ pub fn hoisted(
                 *block = block.with_insns(block.insns.iter().map(|insn| spiller::_renamed(insn, &rename)).collect());
             }
         }
-        taken.extend(one.body.iter().copied());
+        taken.take(one.body.forest(), one.body.index());
     }
     body.with_blocks(blocks)
+}
+
+/// The loops that `promoted` has taken, as the forest has them: a loop
+/// overlaps one taken where it is inside one, holds one, or is one.
+#[derive(Default)]
+struct Taken {
+    /// Loops taken.
+    taken: BTreeSet<usize>,
+    /// Loops with a taken loop inside them.
+    holding: BTreeSet<usize>,
+}
+
+impl Taken {
+    fn overlaps(
+        &self,
+        forest: &llrm_mir::forest::Forest,
+        index: usize,
+    ) -> bool {
+        if self.holding.contains(&index) {
+            return true;
+        }
+        let mut at = Some(index);
+        while let Some(one) = at {
+            if self.taken.contains(&one) {
+                return true;
+            }
+            at = forest.loops[one].parent;
+        }
+        false
+    }
+
+    fn take(
+        &mut self,
+        forest: &llrm_mir::forest::Forest,
+        index: usize,
+    ) {
+        self.taken.insert(index);
+        let mut at = forest.loops[index].parent;
+        while let Some(one) = at {
+            self.holding.insert(one);
+            at = forest.loops[one].parent;
+        }
+    }
+}
+
+/// What a loop reaches of the frame and where it leaves to, from its own
+/// blocks and the loops inside it: the whole loop is not walked for each of the
+/// loops round it.
+struct Summary {
+    /// The word slots read or written in it.
+    slots: BTreeSet<i64>,
+    other: bool,
+    traps: bool,
+    /// Where its edges go out of it.
+    exits: BTreeSet<i64>,
+    /// A block of it goes nowhere.
+    ends: bool,
+}
+
+impl Summary {
+    fn of(
+        forest: &llrm_mir::forest::Forest,
+        touches: &[Vec<Touch>],
+        touching: &[Vec<usize>],
+        index: &BTreeMap<i64, usize>,
+        blocks: &[crate::model::lir::Block],
+    ) -> Vec<Summary> {
+        let mut out: Vec<Option<Summary>> = (0..forest.loops.len()).map(|_| None).collect();
+        let mut order: Vec<usize> = (0..forest.loops.len()).collect();
+        order.sort_by_key(|&one| forest.loops[one].size);
+        for one in order {
+            let mut summary =
+                Summary { slots: BTreeSet::new(), other: false, traps: false, exits: BTreeSet::new(), ends: false };
+            for &at in &forest.loops[one].own {
+                let place = index[&at];
+                for &position in &touching[place] {
+                    let touched = &touches[place][position];
+                    summary.other |= touched.other;
+                    summary.traps |= touched.traps;
+                    summary.slots.extend(touched.reads.iter().chain(&touched.writes).copied());
+                }
+                summary.ends |= blocks[place].succ.is_empty();
+                summary.exits.extend(blocks[place].succ.iter().copied().filter(|to| !forest.contains(one, *to)));
+            }
+            for &child in &forest.loops[one].children {
+                let inner = out[child].as_ref().expect("an inner loop before the loop round it");
+                summary.other |= inner.other;
+                summary.traps |= inner.traps;
+                summary.ends |= inner.ends;
+                summary.slots.extend(inner.slots.iter().copied());
+                summary.exits.extend(inner.exits.iter().copied().filter(|to| !forest.contains(one, *to)));
+            }
+            out[one] = Some(summary);
+        }
+        out.into_iter().map(|one| one.expect("every loop summed")).collect()
+    }
 }
 
 /// `body` with each loop's spill slots in the registers it leaves free.
@@ -919,7 +1016,9 @@ pub fn promoted(
     let (live_into, _, _) = liveness::live_into(body);
     let busy = Frequency::of(body);
     let mut blocks = body.blocks.clone();
-    let mut taken = BTreeSet::<i64>::new();
+    // A loop taken, and the loops round it and inside it: a loop that overlaps
+    // one taken is skipped.
+    let mut taken = Taken::default();
     // How each instruction reaches the frame, worked out once, not once for
     // each loop it is in: a nest of d loops asked every instruction of the
     // innermost d times.
@@ -931,8 +1030,38 @@ pub fn promoted(
     let fits = RefCell::new(BTreeMap::<(usize, usize, i64), bool>::new());
     let touches: Vec<Vec<Touch>> =
         body.blocks.iter().map(|block| block.insns.iter().map(|insn| touch(regs, m, insn)).collect()).collect();
+    // Of each block, the instructions that reach the frame at all, in order:
+    // what a loop asks of its instructions is asked of these alone, the rest
+    // of them being in none of the lists and adding nothing to any answer.
+    let touching: Vec<Vec<usize>> = touches
+        .iter()
+        .map(|block| {
+            block
+                .iter()
+                .enumerate()
+                .filter(|(_, one)| {
+                    !(one.reads.is_empty() && one.writes.is_empty() && one.wide.is_empty() && !one.other && !one.traps)
+                })
+                .map(|(position, _)| position)
+                .collect()
+        })
+        .collect();
+    let summaries = found.first().map(|one| Summary::of(one.body.forest(), &touches, &touching, &index, &body.blocks));
     for one in &found {
-        if one.body.iter().any(|at| taken.contains(at)) {
+        let summary = &summaries.as_ref().expect("a loop was found")[one.body.index()];
+        if taken.overlaps(one.body.forest(), one.body.index()) {
+            continue;
+        }
+        if summary.slots.is_empty() || !summary.slots.iter().all(|at| spills.contains(at)) {
+            continue;
+        }
+        let entries = predecessors[&one.header].iter().copied().filter(|at| !one.body.contains(at)).collect::<Vec<_>>();
+        let exits = summary.exits.clone();
+        if entries.is_empty()
+            || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header])
+            || !exits.iter().all(|to| predecessors[to].iter().all(|from| one.body.contains(from)))
+            || summary.ends
+        {
             continue;
         }
         // How each instruction of the loop reaches the frame, worked out once:
@@ -941,33 +1070,18 @@ pub fn promoted(
         // instructions, d times over).
         let mut seen: Vec<(usize, usize, &Arc<Insn>, &Touch)> = Vec::new();
         for block in &one.body {
-            for (position, insn) in body.blocks[index[block]].insns.iter().enumerate() {
-                seen.push((index[block], position, insn, &touches[index[block]][position]));
+            for &position in &touching[index[block]] {
+                seen.push((
+                    index[block],
+                    position,
+                    &body.blocks[index[block]].insns[position],
+                    &touches[index[block]][position],
+                ));
             }
         }
-        let (mut slots, mut other, mut traps) = (BTreeSet::new(), false, false);
-        for (_, _, _, touched) in &seen {
-            other |= touched.other;
-            traps |= touched.traps;
-            slots.extend(touched.reads.iter().chain(&touched.writes).copied());
-        }
-        if slots.is_empty() || !slots.iter().all(|at| spills.contains(at)) {
-            continue;
-        }
-        let entries = predecessors[&one.header].iter().copied().filter(|at| !one.body.contains(at)).collect::<Vec<_>>();
-        let exits = one
-            .body
-            .iter()
-            .flat_map(|at| body.blocks[index[at]].succ.iter().copied())
-            .filter(|to| !one.body.contains(to))
-            .collect::<BTreeSet<_>>();
-        if entries.is_empty()
-            || !entries.iter().all(|at| body.blocks[index[at]].succ == [one.header])
-            || !exits.iter().all(|to| predecessors[to].iter().all(|from| one.body.contains(from)))
-            || one.body.iter().any(|at| body.blocks[index[at]].succ.is_empty())
-        {
-            continue;
-        }
+        #[cfg(test)]
+        SEEN.with(|count| count.set(count.get() + seen.len()));
+        let (slots, other, traps) = (summary.slots.clone(), summary.other, summary.traps);
         let registers = free(m, available, body, &effects, one, &index, &live_into, &exits);
         let reloads = registers
             .iter()
@@ -1176,7 +1290,7 @@ pub fn promoted(
             }
             blocks[index[to]] = block.with_insns(insns);
         }
-        taken.extend(one.body.iter().copied());
+        taken.take(one.body.forest(), one.body.index());
     }
     body.with_blocks(blocks)
 }
@@ -1522,6 +1636,56 @@ mod tests {
         assert!(
             asked <= 2 * count,
             "{asked} asks of how an instruction reaches the frame for a loop of {count} instructions and 12 slots"
+        );
+    }
+
+    /// Every instruction of a loop was listed for the loop, and for each loop
+    /// round it, and asked whether it reached the frame: the 128-deep nest
+    /// spent 280 M instructions listing. Only the instructions that reach the
+    /// frame are in the list.
+    #[test]
+    fn test_a_loop_lists_the_instructions_that_reach_the_frame_and_no_others() {
+        let slot = |at: i64| Loc::Mem(cell(2, at));
+        let mut loop_body: Vec<Arc<Insn>> = (0..200)
+            .map(|at| {
+                made(0x20 + at, Operation::Binary, "add", vec![reg(RegId::AX)], vec![reg(RegId::AX), reg(RegId::BX)])
+            })
+            .collect();
+        loop_body.extend((0..3).map(|at| {
+            made(0x400 + at, Operation::Binary, "add", vec![reg(RegId::AX)], vec![reg(RegId::AX), slot(-2 * (at + 1))])
+        }));
+        loop_body.push(Arc::new(Insn::new(
+            0x500,
+            Some((0x500, 0x501)),
+            Some(Semantics { name: Some("jne".to_owned()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        )));
+        let body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
+                block(0x10, loop_body, vec![0x10, 0x40]).into(),
+                block(0x40, vec![made(0x40, Operation::Return, "ret", vec![], vec![])], vec![]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let costs = &crate::backend::cpu::profile("486").unwrap().operations;
+        super::SEEN.with(|count| count.set(0));
+        promoted(
+            2,
+            &crate::backend::classes::RegisterClasses::m16().available,
+            &body,
+            &(1..=3).map(|at| -2 * at).collect(),
+            costs,
+            2,
+        );
+        let listed = super::SEEN.with(std::cell::Cell::get);
+        assert!(
+            listed > 0 && listed <= 8,
+            "{listed} instructions listed for a loop of 204, 3 of which reach the frame"
         );
     }
 

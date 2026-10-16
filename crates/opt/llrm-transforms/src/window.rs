@@ -144,6 +144,7 @@
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, CountedLoop, PointerRecurrence};
 use llrm_analysis::manager::Registers;
+use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, memory};
 use llrm_mir::context::{Constant, ConstantKind, Context, GlobalId};
 use llrm_mir::edit::Position;
@@ -152,7 +153,6 @@ use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
-use num_bigint::BigInt;
 use num_traits::ToPrimitive;
 
 use crate::counting::{self, Seeds};

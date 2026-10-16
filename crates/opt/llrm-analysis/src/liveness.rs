@@ -169,7 +169,7 @@ pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
 pub fn pressure(
     function: &Function,
     found: Option<&Liveness>,
-    inside: Option<&BTreeSet<i64>>,
+    inside: Option<&llrm_mir::forest::Body>,
 ) -> usize {
     pressure_of(function, found, inside, &|_| true)
 }
@@ -178,7 +178,7 @@ pub fn pressure(
 pub fn pressure_of(
     function: &Function,
     found: Option<&Liveness>,
-    inside: Option<&BTreeSet<i64>>,
+    inside: Option<&llrm_mir::forest::Body>,
     counted: &dyn Fn(ValueId) -> bool,
 ) -> usize {
     let owned;
@@ -1034,11 +1034,11 @@ join:
     fn pressure_counts_the_most_values_live_at_once_and_can_look_only_inside_a_loop() {
         let (module, found) = facts(LOOP);
         let f = function(&module, "f");
-        let inside = BTreeSet::from([id(block(f, "head")), id(block(f, "body"))]);
+        let inside = llrm_mir::forest::Body::from_blocks([id(block(f, "head")), id(block(f, "body"))]);
         // %n, %across, %i and %done at the header's branch.
         assert_eq!(pressure(f, Some(&found), Some(&inside)), 4);
         assert_eq!(pressure(f, Some(&found), None), 4);
-        assert_eq!(pressure(f, Some(&found), Some(&BTreeSet::from([id(block(f, "out"))]))), 2);
+        assert_eq!(pressure(f, Some(&found), Some(&llrm_mir::forest::Body::from_blocks([id(block(f, "out"))]))), 2);
     }
 
     #[test]

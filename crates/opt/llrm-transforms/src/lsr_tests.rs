@@ -2167,7 +2167,7 @@ fn test_a_value_made_from_the_counter_is_priced_with_its_copy() {
 /// tie (#721). A negation alone, and a scale, are as they were.
 #[test]
 fn test_a_difference_is_one_sub_from_a_copy_of_the_minuend() {
-    use num_bigint::BigInt;
+    use llrm_analysis::num::Num as BigInt;
     // Only the word form: `[bx+si]` is no `lea` of any register.
     let mut machine = Tuned { two_address: true, ..target() };
     machine.address_forms.truncate(1);
