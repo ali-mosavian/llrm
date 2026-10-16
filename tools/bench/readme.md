@@ -1,11 +1,10 @@
 # tools/bench
 
 For contributors measuring a change's effect on code. Executed instructions and memory operands of each benchmark's kernel, per language and optimization
-level, against `bench/NAME/expected.toml`.
+level, against the base's counts (the compiler's own rows) and `bench/NAME/expected.toml` (the references').
 
     uv run --project tools python tools/bench/bench.py                       # the gate
     uv run --project tools python tools/bench/bench.py sieve --opt O2        # one benchmark
-    uv run --project tools python tools/bench/bench.py --bless --reason "why the counts moved"
 
 Each variant is built (BASIC and Nib with `-fno-inline-functions`, so the kernel stays a call; C with its inlining on, the
 kernel called through a volatile pointer as the m32 table does, since the flag also kept a recursive function from inlining itself),
@@ -15,16 +14,15 @@ The kernel is `bench.toml`'s `[region]`: found by name in the linker map (C, BAS
 publishes no function, as the one function `main` calls from its own segment.
 
 The counts are deterministic: no clock, no DOSBox cycle setting. Beside them the run prices the same instruction stream by the 486's clocks (vsgcc's table, `crates/target/llrm-x86-m32/vsgcc/harness.py`, shared with the m32 comparison): `clocks` in `--json`, and a line per benchmark when benchmarks are named on the command line. Reported, not gated or blessed: a change that trades instructions for fewer clocks is judged by it. A count above its baseline fails; one
-below fails too, until it is blessed, so the baseline only ratchets. `--bless` needs `--reason`, which
-lands in the file.
+A count above the base's fails; a count below passes and is the next base: no file holds the compiler's counts, so two PRs that change one program's count never conflict.
 
 ## References
 
-`expected.toml` also holds the reference compilers' counts, as `[bcc.O2]`, `[ow.O2]` and `[bc.O2]` beside
+`expected.toml` holds the reference compilers' counts, as `[bcc.O2]`, `[ow.O2]` and `[bc.O2]` beside
 `[c.O2]`: BCC 3.1 (`-Ox` for O2, `-O1` for Os, medium, `-3 -f87`, linked with its own C0M, CM, FP87 and
 MATHM), Turbo C 2.01 (`tc`: `-G -O -Z -r -1`, `-O -Z -r -1` for Os) and Turbo C++ 3.0 (`tcpp`: `-2 -G -O -Z -r`, no `-3` exists; its FP87.LIB does not link, BCC's is used), Open Watcom (`-ox -oe=0`, `-os -ol`, `-4 -fpi87`, linked with its own CLIBM, MATH87M, NOEMU87 and start-up from `OW_LIB`), and the BASIC compilers of QuickBASIC 4.5 (`bc`), PDS 7.1 (`pds71`) and VBDOS (`vbdos`), each `/O` with its own runtime (one level: both BASIC levels
 meet it). They are deterministic, so a normal run reads them and builds none of them. Every run gates
-llrm/reference per counter against the blessed ratio and prints the geomean per language and level.
+llrm/reference per counter against the base's ratio and prints the geomean per language and level.
 
     bench.py --references --time --bless --reason "why"   # measure the references again and record them
     bench.py --references                                  # they must equal the stored ones: the compiler or harness moved
@@ -36,14 +34,18 @@ BCC runs at `-3`, llrm and Open Watcom at 486.
 
 BASIC is built on `llrm-qb`'s own frames, the default: no `B$ENRA`/`B$EXSA` where the runtime needs no frame. `--runtime-frames` is not benchmarked.
 
-## Against the base (dry run)
+## Against the base
 
-`expected.toml` is going: its counts are derived, and two PRs that touch one program conflict on it. `LLRM_BENCH_BASE=dry` (set in the gate)
-also judges against the base commit's counts, measured with this tree's harness and programs and kept by the base's git tree
-(`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): `BASE n: w worse, b better; d differ from expected.toml`, `BASE-WORSE` and `BASE-DIFF`
-lines. It never fails the gate. A deliberate worse count is a waiver, one file per PR, `tools/bench/waivers/NAME.toml`: `reason`, and
-`[[row]]` entries of `label` (`"fib bq32 -O2"`), `counter` and `to` (the count it may reach); it holds only for that count and goes stale
-(`BASE-STALE`) when it excuses nothing. The committed judge honors waivers too: a count above `expected.toml` passes where a waiver names its row, counter and exactly that count, and `--bless` removes the waiver once the blessed baseline carries it (a batch of clean PRs can move a count together, which a train may not raise on its own). See `basecounts.py`.
+The compiler's rows (`c`, `nib`, `bq16`, `bq32`) are judged against the base commit's: the merge-base with `origin/main`
+(`LLRM_BENCH_BASE_REF`), built and measured by its own tree's `bench.py` and programs (so a flag only the head's harness knows never reaches
+the base's compiler) and kept by its git tree (`~/.cache/llrm/bench-base`, `LLRM_BENCH_BASE_DIR`): a landed tree is measured once. Counts, sizes
+and, with `--time`, a timed-only program's kernel time may not exceed the base's. A row the base lacks (a new program), or of a program whose
+files differ between the base and the head, is not judged. The line `BASE sha: n rows` says which base. A base that cannot be built or measured
+fails the step with the reason (`FAIL BASE: ...`).
+
+A deliberate worse count is a waiver, one file per PR, `tools/bench/waivers/NAME.toml`: `reason`, and `[[row]]` entries of `label`
+(`"fib bq32 -O2"`), `counter` and `to` (the count it may reach); it holds only for that count and is listed `BASE-STALE` when it excuses
+nothing (delete it once its PR has landed).
 
 ## Timed-only: grep
 
