@@ -2975,7 +2975,16 @@ impl<'a, 't> Body<'a, 't> {
             .filter(|one| !one.is_empty())
             .collect();
         let default = symbol.register_list == self.unit.default_registers;
-        if default && !parms.is_empty() {
+        // The default list and a pragma's `[__ax __bx __cx __dx]` are the same
+        // set; a lone 64-bit parameter is the latter.
+        let quad = match parms.as_slice() {
+            [(_, one)] => {
+                let ty = self.ty(one)?;
+                self.types.get(ty).width == 8
+            }
+            _ => false,
+        };
+        if default && !parms.is_empty() && !quad {
             return self.refuse(format!("{name} is inline code with parameters in the default registers"));
         }
         if !default && listed.len() < parms.len() {
@@ -3030,6 +3039,21 @@ impl<'a, 't> Body<'a, 't> {
                     let top = self.resized(top, false, word);
                     let bottom = self.resized(whole, false, word);
                     for (register, part) in [(high, top), (low, bottom)] {
+                        inputs.push((register.clone(), vec![(part, false)]));
+                    }
+                }
+                // Four words, the target's order (the top one first), whichever
+                // order the pragma lists them in.
+                (four, 8)
+                    if four.len() == registers.quad.len() && registers.quad.iter().all(|one| four.contains(one)) =>
+                {
+                    let quad = self.types.int(8, false);
+                    let whole = self.resized(value, false, quad);
+                    for (at, register) in registers.quad.iter().enumerate() {
+                        let shift = 16 * (registers.quad.len() - 1 - at) as i64;
+                        let moved = self.constant(quad, Number::Int(shift.into()));
+                        let moved = self.op(Op::Shr, quad, vec![value_ref(whole), value_ref(moved)]);
+                        let part = self.resized(moved, false, word);
                         inputs.push((register.clone(), vec![(part, false)]));
                     }
                 }
@@ -3165,6 +3189,25 @@ impl<'a, 't> Body<'a, 't> {
                 let low = self.resized(low, false, dword);
                 let joined = self.op(Op::Or, dword, vec![value_ref(high), value_ref(low)]);
                 self.fitted(joined, ty)
+            }
+            four if !self.unit.hardware.quad.is_empty()
+                && four.len() == self.unit.hardware.quad.len()
+                && self.unit.hardware.quad.iter().all(|one| four.contains(one)) =>
+            {
+                let quad = self.types.int(8, false);
+                let order = self.unit.hardware.quad.clone();
+                let mut joined = None;
+                for (at, register) in order.iter().enumerate() {
+                    let word = self.resized(part(register), false, quad);
+                    let shift = 16 * (order.len() - 1 - at) as i64;
+                    let moved = self.constant(quad, Number::Int(shift.into()));
+                    let word = self.op(Op::Shl, quad, vec![value_ref(word), value_ref(moved)]);
+                    joined = Some(match joined {
+                        Some(high) => self.op(Op::Or, quad, vec![value_ref(high), value_ref(word)]),
+                        None => word,
+                    });
+                }
+                self.fitted(joined.expect("four words"), ty)
             }
             _ => return self.refuse(format!("{name} answers in {} registers", answer.len())),
         };
