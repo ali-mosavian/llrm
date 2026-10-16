@@ -1244,6 +1244,157 @@ mod tests {
         assert!(!asm.contains("DGROUP"), "{asm}");
     }
 
+    /// Inline code taking a value in ES (`__parm [__es]`, a far pointer in
+    /// `[__es __di]`) was refused: clib's DOS block calls (`_TinyFreeBlock`)
+    /// and its far string functions (`_fmemmove`) were left to the reference
+    /// compiler.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_takes_and_answers_in_es() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("seg.c");
+        std::fs::write(
+            &source,
+            "extern void setes(unsigned s);\n\
+             #pragma aux setes = \"mov dl,1\" __parm [__es] __modify __exact [__dl]\n\
+             extern void far *same(void far *p);\n\
+             #pragma aux same = \"nop\" __parm [__es __di] __value [__es __di] __modify __exact []\n\
+             void set(unsigned s) { setes(s); }\n\
+             void far *pass(void far *p) { return same(p); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records seg.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "seg", None, &options).unwrap()).unwrap();
+        let body = |function: &str| -> Vec<String> {
+            let from = asm.find(&format!("{function} proc")).expect("the function");
+            asm[from..].lines().map(|one| one.trim().to_owned()).take_while(|one| !one.ends_with("endp")).collect()
+        };
+        let set = body("set_");
+        let at = set.iter().position(|one| one.starts_with("db 0b2h")).expect("the bytes");
+        assert!(set[..at].iter().any(|one| one == "mov es, ax"), "{set:?}");
+        let pass = body("pass_");
+        let at = pass.iter().position(|one| one == "db 090h").expect("the bytes");
+        assert!(pass[..at].iter().any(|one| one.starts_with("mov es, ")), "{pass:?}");
+        assert!(pass[at..].iter().any(|one| one == "mov ax, es"), "{pass:?}");
+    }
+
+    /// `outp( int port, int value )` is `__parm [__dx] [__al]`: an int in a
+    /// byte register, which clib's `outp` could not be built with.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_byte_register_takes_the_low_byte_of_an_int() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("port.c");
+        std::fs::write(
+            &source,
+            "extern void out(int port, int value);\n\
+             #pragma aux out = \"out dx,al\" __parm [__dx] [__al] __modify __exact []\n\
+             void put(int port, int value) { out(port, value); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records port.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "port", None, &options).unwrap()).unwrap();
+        let body: Vec<&str> = asm.lines().map(str::trim).skip_while(|one| *one != "put_ proc far").collect();
+        let at = body.iter().position(|one| *one == "db 0eeh").expect("the out");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov dx, ")), "{body:?}");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov ax, ")), "{body:?}");
+    }
+
+    /// Inline code answering a small struct in registers (`div_t` in
+    /// `[__dx __ax]`) was refused ("a 4-byte aggregate as a value"), and
+    /// clib's `div`, `delay` and `__getctime` with it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_may_answer_a_small_struct() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pair.c");
+        std::fs::write(
+            &source,
+            "typedef struct { int quot; int rem; } pair;\nextern pair split(int a, int b);\n\
+             #pragma aux split = \"cwd\" \"idiv cx\" __parm [__ax] [__cx] __value [__dx __ax] __modify __exact [__ax __dx]\n\
+             pair run(int a, int b) { return split(a, b); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records pair.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "pair", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("db 099h,0f7h,0f9h") && asm.contains("retf"), "{asm}");
+    }
+
+    /// A 64-bit parameter in `[__ax __bx __cx __dx]` (the same set as the
+    /// default list) was refused ("parameters in the default registers",
+    /// "does not fit its registers"), as was the same set for the answer:
+    /// `ulltoa` and `lltoa` did not compile. Open Watcom's compiler puts
+    /// the top word in ax, the bottom in dx.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_quad_word_in_four_registers_has_its_top_word_in_ax() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("quad.c");
+        std::fs::write(
+            &source,
+            "extern void put(unsigned long long);\n#pragma aux put = \"nop\" __parm [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             extern unsigned long long get(void);\n#pragma aux get = \"nop\" __value [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             unsigned long long hold;\nvoid use(void) { put(0x0001000200030004ULL); hold = get(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records quad.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "quad", None, &options).unwrap()).unwrap();
+        let loads = ["mov ax, 1", "mov bx, 2", "mov cx, 3", "mov dx, 4"].map(|one| asm.find(one).expect(&asm));
+        assert!(loads.windows(2).all(|two| two[0] < two[1]), "{asm}");
+    }
+
+    /// `__parm __caller []` inline code (`EnterDebuggerWithMessage`) finds its
+    /// argument on the stack and the caller takes it back. It was refused ("a
+    /// parameter on the stack"): `assert`, `dbgrpt` and `enterdb` did not
+    /// compile.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_finds_its_argument_on_the_stack_and_the_caller_pops_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("brk.c");
+        std::fs::write(
+            &source,
+            "extern void brk(const char __far *);\n#pragma aux brk __parm __caller [] = \"int 3\" \"jmp short L1\" 'W' 'V' \"L1:\"\n\
+             void t(const char __far *m) { brk(m); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brk.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "brk", None, &options).unwrap()).unwrap();
+        let (push, code, pop) =
+            (asm.find("push dx").expect(&asm), asm.find("db 0cch").expect(&asm), asm.find("add sp, 4").expect(&asm));
+        assert!(push < code && code < pop, "{asm}");
+    }
+
     /// A far pointer made from a long in memory had its segment as a word-wide
     /// view of the shifted dword, a second width of one value: the
     /// allocator loaded ES again on every iteration of the loop that stores
