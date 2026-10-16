@@ -1343,3 +1343,9 @@ def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_te
     import pick_runners
     assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == ["perf"]
     assert pick_runners.pick(["perf", "unit"], "1000 2", True, 1000)["perf_hosted"] == []
+
+
+def test_the_ci_line_names_the_parent_and_a_stale_workflow_is_never_a_pass():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "PASS at ${head:0:12}$on" in workflow and "STALE WORKFLOW (not a pass) at ${head:0:12}$on" in workflow
+    assert "python3 tools/ci/stale_workflow.py" in workflow and 'BASE_REF: ${{ github.event.pull_request.base.ref }}' in workflow
