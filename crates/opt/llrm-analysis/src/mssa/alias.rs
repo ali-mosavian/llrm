@@ -40,8 +40,8 @@ pub struct AliasQuery<'a> {
     accesses: &'a Accesses,
     next_id: std::cell::Cell<u32>,
     by_instruction: RefCell<IdMap<InstId, Option<Rc<Location>>>>,
-    /// `AAQueryInfo::AliasCache`: per def, the answer for each location asked.
-    cache: RefCell<IdMap<InstId, Vec<(u32, bool)>>>,
+    /// `AAQueryInfo::AliasCache`: the answer for each (def, location) asked.
+    cache: RefCell<llrm_support::hash::HashMap<u64, bool>>,
     /// Questions asked of `mod_set_loc`, and those it had to work out.
     asked: std::cell::Cell<(usize, usize)>,
 }
@@ -127,9 +127,8 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         let (asked, worked) = self.asked.get();
         self.asked.set((asked + 1, worked));
-        if let Some(&(_, known)) =
-            self.cache.borrow().get(&def).and_then(|asked| asked.iter().find(|(id, _)| *id == loc.id))
-        {
+        let key = (u64::from(def.0) << 32) | u64::from(loc.id);
+        if let Some(&known) = self.cache.borrow().get(&key) {
             return known;
         }
         self.asked.set((asked + 1, worked + 1));
@@ -137,7 +136,7 @@ impl<'a> AliasQuery<'a> {
         let found = memoryssa::changes(&loc.effective, false, writes, |written| {
             memoryssa::may_clobber(self.unit, None, &loc.effective, written)
         });
-        self.cache.borrow_mut().get_or_insert_with(def, Vec::new).push((loc.id, found));
+        self.cache.borrow_mut().insert(key, found);
         found
     }
 

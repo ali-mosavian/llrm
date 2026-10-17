@@ -326,3 +326,25 @@ b0:
     assert_eq!(found[1].1, Some(found[0].0), "the second volatile load: {found:?}");
     assert!(found[2].1.is_none() && found[2].2 == Kind::Def, "the plain load: {found:?}");
 }
+
+/// Moving uses off a crowded defining access keeps every other user's place in
+/// its use list (`Use::removeFromList` is O(1); a scan of the list made a body
+/// of N loads cost N^2 to build: loop 1600, 28 M instructions of 305 M).
+#[test]
+fn test_leaving_a_crowded_defining_access_keeps_the_other_users_in_its_list() {
+    let loads: String =
+        (0..64).map(|n| format!("  %x{n} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * n)).collect();
+    let parsed = Parsed::new(&format!("define i16 @f() {{\nb0:\n{loads}  ret i16 %x0\n}}\n"));
+    let unit = parsed.unit();
+    let (mut mssa, _) = translated(&unit);
+    let live = mssa.live_on_entry_def();
+    // Every other load leaves, to live on entry again, then back.
+    let uses: Vec<_> = (1..mssa.len() as u32).filter(|a| mssa.access(*a).kind == Kind::Use).collect();
+    for &one in uses.iter().step_by(2) {
+        mssa.set_defining_access(one, None);
+    }
+    for &one in uses.iter().step_by(2) {
+        mssa.set_defining_access(one, Some(live));
+    }
+    mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
+}
