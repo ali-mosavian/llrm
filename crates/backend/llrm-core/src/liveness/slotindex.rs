@@ -359,6 +359,9 @@ pub struct SlotIndexes {
     mi2i_map: HashMap<InstrKey, SlotIndex>,
     /// The block each indexed instruction is in (`MI->getParent()`).
     mi2mbb: HashMap<InstrKey, usize>,
+    /// The instructions of a bundle (a parallel copy) after the one the entry
+    /// names: they share its index.
+    bundled: HashMap<EntryId, Vec<InstrKey>>,
     /// `MBBRanges`: block number to (start, stop).
     mbb_ranges: Vec<(SlotIndex, SlotIndex)>,
     /// `idx2MBBMap`: sorted pairs of the index of a block's start and the
@@ -412,6 +415,7 @@ impl SlotIndexes {
     pub fn clear(&mut self) {
         self.mi2i_map.clear();
         self.mi2mbb.clear();
+        self.bundled.clear();
         self.mbb_ranges.clear();
         self.idx2mbb_map.clear();
         if self.live {
@@ -449,6 +453,7 @@ impl SlotIndexes {
                         let at = SlotIndex::at(self.last, Slot::Block);
                         self.mi2i_map.insert(one.id(), at);
                         self.mi2mbb.insert(one.id(), number);
+                        self.bundled.entry(at.list_entry()).or_default().push(one.id());
                         continue;
                     }
                 }
@@ -673,13 +678,23 @@ impl SlotIndexes {
     ) {
         let Some(index) = self.mi2i_map.remove(&instr) else { return };
         self.mi2mbb.remove(&instr);
+        let entry = index.list_entry();
+        let others = self.bundled.get_mut(&entry);
         ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
-            let at = index.list_entry() as usize;
-            assert_eq!(arena.instr[at], Some(instr), "Instruction indexes broken.");
-            // FIXME (LLVM): Eventually we want to actually delete these
-            // indexes.
-            arena.instr[at] = None;
+            let at = entry as usize;
+            if arena.instr[at] == Some(instr) {
+                // The first instruction of a bundle: the entry goes to the next
+                // (removeSingleMachineInstrFromMaps, SlotIndexes.cpp#L127).
+                // FIXME (LLVM): Eventually we want to actually delete these
+                // indexes.
+                arena.instr[at] = match others {
+                    Some(list) if !list.is_empty() => Some(list.remove(0)),
+                    _ => None,
+                };
+            } else if let Some(list) = others {
+                list.retain(|one| *one != instr);
+            }
         });
     }
 
@@ -693,11 +708,18 @@ impl SlotIndexes {
         if let Some(block) = self.mi2mbb.remove(&old) {
             self.mi2mbb.insert(new, block);
         }
+        let entry = base.list_entry();
         ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
-            let at = base.list_entry() as usize;
-            assert_eq!(arena.instr[at], Some(old), "Mismatched instruction in index tables.");
-            arena.instr[at] = Some(new);
+            let at = entry as usize;
+            if arena.instr[at] == Some(old) {
+                arena.instr[at] = Some(new);
+            } else {
+                // A later instruction of a bundle.
+                let list = self.bundled.get_mut(&entry).expect("a bundled instruction");
+                let place = list.iter().position(|one| *one == old).expect("Mismatched instruction in index tables.");
+                list[place] = new;
+            }
         });
         self.mi2i_map.insert(new, base);
         base
@@ -1006,5 +1028,38 @@ mod tests {
             drop(SlotIndexes::new(&body));
         }
         assert_eq!(size(), after_one);
+    }
+
+    /// A rewrite of the second instruction of a parallel copy asked the entry
+    /// for the first ("Mismatched instruction in index tables", d_faces -O2
+    /// under the shadow allocator). Replacing and removing the members of a
+    /// bundle keeps the others' index.
+    #[test]
+    fn test_replacing_and_removing_members_of_a_parallel_copy_keeps_the_index() {
+        let mut insns: Vec<Arc<Insn>> = (0..4).map(|_| insn()).collect();
+        for at in 1..4 {
+            let mut one = (*insns[at]).clone();
+            one.group = Some(7);
+            insns[at] = Arc::new(one);
+        }
+        let body = LirBody::new(
+            "bundle",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let mut indexes = SlotIndexes::new(&body);
+        let (first, second, third) = (insns[1].id(), insns[2].id(), insns[3].id());
+        let at = indexes.get_instruction_index(first);
+        let replaced = indexes.replace_machine_instr_in_maps(second, 9_000_001);
+        assert_eq!(replaced, at, "a later member keeps the shared index");
+        assert_eq!(indexes.get_instruction_from_index(&at), Some(first), "the entry still names the first");
+        indexes.remove_machine_instr_from_maps(first);
+        assert_eq!(indexes.get_instruction_from_index(&at), Some(9_000_001), "the entry goes to the next member");
+        indexes.remove_machine_instr_from_maps(9_000_001);
+        assert_eq!(indexes.get_instruction_from_index(&at), Some(third));
+        indexes.remove_machine_instr_from_maps(third);
+        assert_eq!(indexes.get_instruction_from_index(&at), None);
     }
 }

@@ -65,16 +65,35 @@ impl Spiller for SimpleSpiller {
             let rewritten = lis.instr(instr).renamed(&|value| if value == reg { new_reg } else { value });
             let rewritten_key = rewritten.id();
             lis.rewrite_instr(block, instr, Arc::clone(&rewritten));
+            // A parallel copy is one instruction (a bundle): the reload goes
+            // before the first of its members and the store after
+            // the last.
+            let (first, last) = match rewritten.group {
+                Some(group) => {
+                    let insns = lis.block_insns(block);
+                    let at = insns.iter().position(|one| one.id() == rewritten_key).expect("in its block");
+                    let mut from = at;
+                    while from > 0 && insns[from - 1].group == Some(group) {
+                        from -= 1;
+                    }
+                    let mut to = at;
+                    while to + 1 < insns.len() && insns[to + 1].group == Some(group) {
+                        to += 1;
+                    }
+                    (insns[from].id(), insns[to].id())
+                }
+                None => (rewritten_key, rewritten_key),
+            };
             if reads {
                 // insertReload
                 let reload = Arc::new(Insn::new(0, None, None, vec![new_reg], Vec::new()));
-                lis.insert_instr_before(block, Some(rewritten_key), reload);
+                lis.insert_instr_before(block, Some(first), reload);
                 self.reloads += 1;
             }
             if writes {
                 // insertSpill
                 let store = Arc::new(Insn::new(0, None, None, Vec::new(), vec![new_reg]));
-                lis.insert_instr_after(block, rewritten_key, store);
+                lis.insert_instr_after(block, last, store);
                 self.stores += 1;
             }
             let mut li = lis.compute_virt_reg_interval(new_reg);

@@ -449,7 +449,8 @@ impl<'a> RAGreedy<'a> {
         }
         // Giant live ranges fall back to the global assignment heuristic, which
         // prevents excessive spilling in pathological cases.
-        let force_global = (size / SlotIndex::INSTR_DIST) as usize > 2 * self.env.num_allocatable_regs(reg);
+        let force_global = (size / SlotIndex::INSTR_DIST) as usize
+            > 2 * self.env.num_allocatable_regs(self.matrix.vrm.get_original(reg));
         let mut global_bit = 0u32;
         let mut prio;
         if stage == LiveRangeStage::Assign
@@ -516,6 +517,23 @@ impl<'a> RAGreedy<'a> {
                     // selectOrSplit failed to find a register: no valid
                     // allocation.
                     self.stats.failed += 1;
+                    if llrm_support::env_flag!("LLRM_SHADOW_DEBUG") {
+                        eprintln!("  fail: {} stage {:?}", virt_reg, self.extra.get_stage(virt_reg.reg()));
+                        let order = self.order_of(virt_reg.reg());
+                        for (reg, _) in order.iter() {
+                            let kind = self.matrix.check_interference(&virt_reg, reg);
+                            let mut holders = Vec::new();
+                            for unit in self.matrix.tri().regunits(reg) {
+                                holders.extend(self.matrix.query_vregs(
+                                    virt_reg.reg(),
+                                    &virt_reg.range,
+                                    unit,
+                                    usize::MAX,
+                                ));
+                            }
+                            eprintln!("    {reg:?}: {kind:?} {holders:?}");
+                        }
+                    }
                 }
                 Select::Reg(phys) => {
                     self.matrix.assign(&virt_reg, phys);
@@ -544,7 +562,12 @@ impl<'a> RAGreedy<'a> {
         &self,
         virt: u32,
     ) -> AllocationOrder {
-        AllocationOrder::create(virt, &self.matrix.vrm, self.env.allocation_order(virt), &self.hints)
+        AllocationOrder::create(
+            virt,
+            &self.matrix.vrm,
+            self.env.allocation_order(self.matrix.vrm.get_original(virt)),
+            &self.hints,
+        )
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.
@@ -589,7 +612,8 @@ impl<'a> RAGreedy<'a> {
     ) -> bool {
         !virt.is_spillable()
             && (intf.is_spillable()
-                || self.env.num_allocatable_regs(virt.reg()) < self.env.num_allocatable_regs(intf.reg()))
+                || self.env.num_allocatable_regs(self.matrix.vrm.get_original(virt.reg()))
+                    < self.env.num_allocatable_regs(self.matrix.vrm.get_original(intf.reg())))
     }
 
     /// `DefaultEvictionAdvisor::shouldEvict`
@@ -892,7 +916,10 @@ impl<'a> RAGreedy<'a> {
                 let assigned = self.matrix.vrm.get_phys(intf_reg);
                 let partially_overlaps = assigned.is_some_and(|a| a != phys && self.matrix.tri().overlaps(phys, a));
                 let done_same_class = self.extra.get_stage(intf_reg) == LiveRangeStage::Done
-                    && self.env.same_reg_class(intf_reg, virt.reg())
+                    && self.env.same_reg_class(
+                        self.matrix.vrm.get_original(intf_reg),
+                        self.matrix.vrm.get_original(virt.reg()),
+                    )
                     && !partially_overlaps;
                 let tied_exception = self.env.has_tied_def(virt.reg()) && !self.env.has_tied_def(intf_reg);
                 if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) {

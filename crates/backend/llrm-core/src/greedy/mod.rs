@@ -7,5 +7,6 @@
 
 pub mod greedy;
 pub mod matrix;
+pub mod shadow;
 pub mod spill;
 pub mod virtregmap;

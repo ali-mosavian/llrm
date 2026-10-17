@@ -2004,6 +2004,33 @@ fn _allocated(
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
     }
+    if llrm_support::env_flag!("LLRM_SHADOW_GREEDY") {
+        let none = IndexMap::default();
+        let pins = pinned.unwrap_or(&none);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &body,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspillable,
+        };
+        if let Some(report) = crate::greedy::shadow::run(&inputs) {
+            eprintln!(
+                "shadow-greedy {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} failed {} sig {:x}",
+                body.name,
+                report.values,
+                report.stats.dequeued,
+                report.stats.assigned,
+                report.stats.evicted,
+                report.stats.waited,
+                report.stats.spilled_ranges,
+                report.stats.new_queued,
+                report.stats.last_chance,
+                report.stats.failed,
+                report.signature
+            );
+        }
+    }
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
     let mut fixed: IndexMap<u32, RegId> = pinned.cloned().unwrap_or_default();
