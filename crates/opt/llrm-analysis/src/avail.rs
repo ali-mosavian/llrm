@@ -224,7 +224,7 @@ struct Stored {
     /// place two of them: one displaced frame, or one base pointer.
     groups: HashMap<Group, Members>,
     /// A cell's groups and its bytes in each.
-    group_of: Vec<[Option<(Group, i128, i128)>; 2]>,
+    group_of: Vec<GroupKeys>,
     private: Bits,
     /// The cells that do not certainly name their own bytes.
     selfless: Bits,
@@ -236,7 +236,13 @@ struct Stored {
     /// set.
     alike_cells: RefCell<Vec<Option<Rc<[usize]>>>>,
     pieces: RefCell<Vec<Option<Rc<Bits>>>>,
+    /// The three relations above by what `placed` reads of a cell, which the
+    /// cells of one address share: one set for all of them.
+    twins: RefCell<HashMap<(usize, GroupKeys), Rc<Bits>>>,
 }
+
+/// A cell's groups and its bytes in each.
+type GroupKeys = [Option<(Group, i128, i128)>; 2];
 
 /// What two cells share when `placed` can place one against the other: both at
 /// displacements of one frame, or both at constant offsets from one pointer.
@@ -328,6 +334,7 @@ impl Stored {
             alike: RefCell::new(vec![None; size]),
             alike_cells: RefCell::new(vec![None; size]),
             pieces: RefCell::new(vec![None; size]),
+            twins: RefCell::default(),
         }
     }
 
@@ -338,11 +345,28 @@ impl Stored {
     fn related(
         &self,
         memo: &RefCell<Vec<Option<Rc<Bits>>>>,
+        kind: usize,
         at: usize,
         related: impl Fn(&MemRef, &MemRef) -> bool,
     ) -> Rc<Bits> {
         if let Some(known) = &memo.borrow()[at] {
             return known.clone();
+        }
+        // `placed` reads of a cell only the keys it is found by, so cells with
+        // the same keys are related to the same cells: the N stores to one
+        // address of a block are one set, not N.
+        let key = self.group_of[at].iter().any(Option::is_some).then(|| (kind, self.group_of[at].clone()));
+        if let Some(shared) = key.as_ref().and_then(|key| self.twins.borrow().get(key).cloned()) {
+            if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS") {
+                let all =
+                    (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
+                assert!(
+                    shared.iter().collect::<Vec<_>>() == all,
+                    "LLRM_CHECK_CLOBBERS: cells with the same keys are related to different cells"
+                );
+            }
+            memo.borrow_mut()[at] = Some(shared.clone());
+            return shared;
         }
         let mut found = self.none();
         let mut test = |one: usize| {
@@ -370,6 +394,9 @@ impl Stored {
             );
         }
         let found = Rc::new(found);
+        if let Some(key) = key {
+            self.twins.borrow_mut().insert(key, found.clone());
+        }
         memo.borrow_mut()[at] = Some(found.clone());
         found
     }
@@ -380,7 +407,7 @@ impl Stored {
         unit: &Unit,
         at: usize,
     ) -> Rc<Bits> {
-        self.related(&self.covering, at, |one, other| covers(unit, other, one))
+        self.related(&self.covering, 0, at, |one, other| covers(unit, other, one))
     }
 
     fn alike(
@@ -388,7 +415,7 @@ impl Stored {
         unit: &Unit,
         at: usize,
     ) -> Rc<Bits> {
-        self.related(&self.alike, at, |one, other| same_bytes(unit, one, other))
+        self.related(&self.alike, 1, at, |one, other| same_bytes(unit, one, other))
     }
 
     /// Whether a cell naming the bytes of cell `at` is in `set`.
@@ -416,7 +443,7 @@ impl Stored {
         at: usize,
         overwritten: &Bits,
     ) -> bool {
-        let pieces = self.related(&self.pieces, at, |one, other| {
+        let pieces = self.related(&self.pieces, 2, at, |one, other| {
             placed(unit, other, one)
                 .zip(placed(unit, one, one))
                 .is_some_and(|((low, high), (_, size))| low < size && high > 0)

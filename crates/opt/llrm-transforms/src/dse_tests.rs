@@ -608,3 +608,21 @@ fn test_a_body_with_no_store_asks_nothing() {
         counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
     assert!(asked.is_empty(), "{asked:?}");
 }
+
+/// N stores to one address, each through a pointer of its own: each store was a
+/// cell, and each cell was compared with the other N-1 for what covers it, N^2
+/// pairs. On a ladder of 1,600 statements `dse` took 818 M instructions, 4.0x
+/// for every doubling.
+#[test]
+fn the_stores_to_one_address_are_compared_as_one_cell() {
+    let n = 64;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 8\n  store i32 %v, ptr %s{i}\n");
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::related_pairs();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    let asked = llrm_analysis::avail::related_pairs() - before;
+    assert!(asked <= 4 * n as usize, "{n} stores to one address asked {asked} pairs of cells");
+}
