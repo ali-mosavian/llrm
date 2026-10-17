@@ -41,8 +41,28 @@
 //! x, c2 - c1` where the sum cannot wrap): the compare is a user of the sum, so
 //! the sum ran wherever the compare does, the new compare is made in the old
 //! one's place, and where the sum would have wrapped it is poison and either
-//! answer stands. `ranges`, `guards`, `consts` and value tracking read no flag.
-//! The test below lists the files that name a no-wrap or inbounds flag, so a
+//! answer stands. `ranges`, `guards` and `consts` read no flag. Value tracking
+//! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
+//! `range`, and the matchers in `pattern`) reads a promise of the instruction
+//! it is asked about, or of an operand of it, to conclude about that
+//! instruction's result, as LLVM does: the result is poison where the promise
+//! fails, and poison matters only where it is read. It reads one to conclude
+//! about an operand, or about another point, in four places, each with its
+//! proof that the instruction runs there. A comparison that an assume or a
+//! dominating branch makes true gives bits and ranges of its operand from the
+//! `nuw`/`nsw` of the operation it compares, `trunc nuw` and `samesign`
+//! (`computeKnownBitsFromCmp` L886, `computeKnownBitsFromICmpCond` L992,
+//! `computeKnownBitsFromCond` L1014, `computeKnownBitsFromContext` L1057,
+//! `computeConstantRange` L10755): the assume is valid for the context
+//! (`isValidAssumeForContext`) or the edge dominates it. A recurrence reads the
+//! flags of the binary operator that is the phi's back-edge value (L1847,
+//! L2696, L3162, L4032): it ran on every trip, and it uses the phi, so it is
+//! never hoisted above it. `isKnownNonNullFromDominatingCondition` (L3048)
+//! reads the `nonnull` of a call's argument at a call that dominates the
+//! context. `handleGuaranteedWellDefinedOps` (L8556) reads `noundef` and
+//! `dereferenceable` arguments of a call that `programUndefinedIfUndefOrPoison`
+//! reaches from the value through instructions that transfer execution. The
+//! test below lists the files that name a no-wrap or inbounds flag, so a
 //! new reader is checked before it is added.
 
 use crate::facts::{Bounds, Effect, Fact, Facts};
@@ -185,7 +205,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 8] = [
+        const CHECKED: [&str; 15] = [
             "algebraic.rs",
             "induction.rs",
             "memory.rs",
@@ -194,6 +214,13 @@ mod tests {
             "interpret.rs",
             "mir.rs",
             "pointerfacts.rs",
+            "context.rs",
+            "guarantee.rs",
+            "known.rs",
+            "nonzero.rs",
+            "pattern.rs",
+            "power2.rs",
+            "range.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
