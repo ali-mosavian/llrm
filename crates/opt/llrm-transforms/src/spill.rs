@@ -130,7 +130,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::Type;
-use llrm_support::hash::{HashSet, SparseIdMap};
+use llrm_support::hash::SparseIdMap;
 
 /// How many integer values the target holds in registers, and how many of
 /// them a call leaves; none leaves pressure unpriced.
@@ -1958,18 +1958,22 @@ impl Run {
     /// instruction (block and step by position), for the residents besides the
     /// cells there, and `held` are those besides at each point of the segment
     /// registers, which come after all the others.
+    ///
+    /// `extra` is told each step of each block, in order, and says what comes
+    /// to be among the residents besides (first) and what goes (second) since
+    /// the step before: a caller with N residents that last a block does not
+    /// list them at every step.
     pub fn fit<K: Ord + Copy + std::hash::Hash, S: Spilled<K>>(
         &self,
         room: Room,
         key: &dyn Fn(ValueId) -> K,
         price: &dyn Fn(K) -> i64,
         held: &[K],
-        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>),
+        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>, &mut Vec<K>),
     ) -> i64 {
         let mut sweep = Sweep::<K, S>::new();
         let mut kinds: [Ranked<K>; 3] = Default::default();
-        let mut wanted = Vec::new();
-        let mut now = Vec::<K>::new();
+        let (mut coming, mut going) = (Vec::new(), Vec::new());
         for (at, block) in self.blocks.iter().enumerate() {
             for cell in block.leave.iter().filter(|cell| cell.member[0]) {
                 kinds[0].remove(key(cell.cell));
@@ -1978,21 +1982,19 @@ impl Run {
                 kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
             }
             for (index, step) in block.steps.iter().enumerate() {
-                wanted.clear();
-                extra(at, index, &mut wanted);
-                // Most steps want what the one before did: nothing to add or
-                // take away. Else each is asked of a set, not
-                // of the list.
-                if wanted != now {
-                    let (is_wanted, was): (HashSet<K>, HashSet<K>) =
-                        (wanted.iter().copied().collect(), now.iter().copied().collect());
-                    for gone in now.iter().filter(|one| !is_wanted.contains(one)) {
-                        kinds[0].remove(*gone);
-                    }
-                    for new in wanted.iter().filter(|one| !was.contains(one)) {
-                        kinds[0].add(*new, price(*new), &sweep.spilled);
-                    }
-                    std::mem::swap(&mut now, &mut wanted);
+                coming.clear();
+                going.clear();
+                extra(at, index, &mut coming, &mut going);
+                #[cfg(test)]
+                LISTED.with(|listed| {
+                    let (told, steps) = listed.get();
+                    listed.set((told + coming.len() + going.len(), steps + 1));
+                });
+                for gone in &going {
+                    kinds[0].remove(*gone);
+                }
+                for new in &coming {
+                    kinds[0].add(*new, price(*new), &sweep.spilled);
                 }
                 sweep.fit(&mut kinds, 0, step.registers);
                 for cell in step.read.iter().filter(|cell| cell.member[0]) {
@@ -2029,6 +2031,13 @@ impl Run {
         }
         sweep.cost
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Residents `fit` was told of by its caller, and steps it took, for a test
+    /// that a long block does not list its residents at every step.
+    pub(crate) static LISTED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// What a sweep has spilled so far.
