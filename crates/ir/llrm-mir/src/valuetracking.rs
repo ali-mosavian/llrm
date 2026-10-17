@@ -18,6 +18,11 @@ mod query;
 pub mod range;
 pub mod signbits;
 
+#[cfg(test)]
+mod nonzero_tests;
+#[cfg(test)]
+mod power2_tests;
+
 pub use query::{AssumptionCache, Query};
 
 /// One column of `examples/vtdump.rs`: ` name=answer`.
