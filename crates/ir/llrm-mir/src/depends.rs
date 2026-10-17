@@ -12,7 +12,7 @@
 
 use crate::context::Context;
 use crate::dense::IdSet;
-use crate::module::{Change, Function, InstId};
+use crate::module::{Change, Function, InstId, Operand};
 use crate::opcode::Opcode;
 
 pub struct Depends {
@@ -25,6 +25,9 @@ pub struct Depends {
     /// Whether a change to an instruction reaches the users of its value, past
     /// any user this says the value stops at.
     pub flows: Option<fn(&Opcode) -> bool>,
+    /// Whether the result reads the edges between blocks (what reaches a block
+    /// along them), so that a terminator sent to other blocks changes it.
+    pub edges: bool,
 }
 
 /// An instruction that does something besides make its value: what erasing it
@@ -55,6 +58,12 @@ impl Depends {
                 Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return false,
                 // What the operands were is for readers of the log;
                 // the `Rewritten` after it is the change.
+                Change::Operand { was: Operand::Block(_), .. } if self.edges => return false,
+                Change::Operands { ref was, .. }
+                    if self.edges && was.iter().any(|one| matches!(one, Operand::Block(_))) =>
+                {
+                    return false;
+                }
                 Change::Operand { .. } | Change::Operands { .. } | Change::Substituted { .. } => {}
                 Change::Erased { inst, .. } => {
                     if (self.keyed)(context, function, inst)
