@@ -28,6 +28,8 @@ pub fn column(
 ) -> String {
     match name {
         "kb" => known::column(query, value),
+        "nn" => known::column_non_negative(query, value),
+        "ng" => known::column_negative(query, value),
         "sb" => signbits::column(query, value),
         "nz" => nonzero::column(query, value),
         "p2" => power2::column(query, value, false),
