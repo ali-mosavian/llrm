@@ -10,7 +10,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 |---|---|---|---|
 | 0.1 one baseline | llvm-compare | in progress | none yet |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
-| 0.3 `ObjectRef` identity | objectref-identity | testing (unresolved) | 131 of 1,583 differ with the skip prototype; 0 differ on main under `LLRM_CHECK_INTERN=SEED` |
+| 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] open, ready | -4.2% instructions, -2.9% cycles |
 | 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971] merged; [#2032] open | -1.17%; -0.38% |
@@ -22,7 +22,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 | 1.8 deep nests | greedy-port | [#1977], [#1978] open | queens -O3 -23% |
 | 1.9 exact ThroughMemory | keep-analyses | [#1915] merged | +1.0% (correctness) |
 | 1.10 held PRs | greedy-port, attrs-budgets | [#1958] open, ready; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
-| 2.1 point_values | keep-analyses | stop; 2.1b blocked on 0.3 | asked 87% / 60% / 63% of solved; repeats 13.6 M |
+| 2.1 point_values | keep-analyses | stop; 2.1b fixes the share key | asked 87% / 60% / 63% of solved; repeats 13.6 M |
 | 2.2 Annotated per access | keep-analyses, edit-rollback | to do | pool 42.4 M |
 | 2.3 persistent MemorySSA | hoist-bounded, keep-analyses | to do | `unmeasured` |
 | 2.4 split path | greedy-port | B' killed; A' alone | B' -0.03% |
@@ -57,7 +57,7 @@ The pools overlap, so each product overstates what the steps save together. The 
 
 **What the plan puts on the critical path:**
 
-0. Unresolved: a skipped or shared `points_to` solve changes output (131 of 1,583 objects) because objects are interned by their facts; a context-free `ObjectRef` identity (step 0.3; objectref-identity) is being tested against the skip prototype. It comes before the skipping families of 2.1b and 3.1.
+0. Answered (spike S0): `ObjectRef` interning order is not a cause on main (`LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ); the 131 differing objects of the `point_values` share prototype came from a loose share key (the fingerprint equated bodies whose constants name different globals; `LLRM_CHECK_PVSHARED` fails on cached `Global(1)` against fresh `Global(0)`), which keep-analyses fixes in 2.1b.
 1. Facts updated from the change log, taking analysis computations per pass run from 2.8 toward 0.5 for edit-rollback's family (step 3.1; edit-rollback with keep-analyses). The pointer families are small after the escape PRs; the family that carries the saving is edit-rollback's `Held`, `ThroughMemory` and decide facts (403 M own, 12.8%).
 2. One pipeline pass with a combine worklist instead of rounds (step 3.2; pass-list-parity with hoist-bounded).
 3. The allocator on the LIR core, 444 M against greedy's 39.5 M (step 3.3; greedy-port with ssa-spill-m16).
@@ -168,7 +168,7 @@ The exit method M and the bars it uses are defined once in section 4.
 |---|---|---|---|---|
 | 0.1 one baseline | one table on one SHA: phases, gap, rows, ladder | two instruments differ by more than 1% on one binary | llvm-compare | to do |
 | 0.2 counters as tests | computations per run and spec 6 counters in CI | counter cost above 0.1% | attrs-budgets | draft [#1948] |
-| 0.3 context-free `ObjectRef` identity (unresolved) | a skipped or shared solve changes no output (131 of 1,583 objects differ in the skip prototype; 0 differ on main under `LLRM_CHECK_INTERN=SEED`) | the 131 do not fall to 0 | objectref-identity, keep-analyses | testing, blocks 2.1b and 3.1 |
+| 0.3 `ObjectRef` identity and its oracle (spike S0, answered) | the identity is not a cause; the PR is identity-excludes-facts plus the `LLRM_CHECK_INTERN` oracle (zero cost off) | n/a (answered) | objectref-identity | oracle PR |
 | 1.0 inline storage across the hot `Vec` sites | allocations removed as far as the probe says; instructions and cycles on `d_faces`; peak RSS | a site whose inline fraction does not fit, or whose struct growth is not justified | pass-list-parity | to do ([#1956] first instance) |
 | 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | ready [#2022] |
 | 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971] merged, [#2032] ready |
@@ -181,7 +181,7 @@ The exit method M and the bars it uses are defined once in section 4.
 | 1.9 exact ThroughMemory | fixes [#1909] at +1.0% | none (correctness) | keep-analyses | merged [#1915] |
 | 1.10 held PRs on main | -3% if they reproduce; [#1921] to be closed, [#1962] bundled with 2.6 | each one below 0.5% on main | greedy-port, attrs-budgets | [#1958] ready, [#1965] draft |
 | B1 re-baseline | the phase-1 row of the TL;DR measured | n/a | llvm-compare | after 1.x |
-| 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b repeats at most 0.45% (13.6 M), blocked by 0.3 | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
+| 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b repeats at most 0.45% (13.6 M), killed under 0.5% net | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
 | 2.2 Annotated per access | up to -1.3% (the 57-of-116 held-result figure comes from [#1994] and is unverified; the pool is 42.4 M of edited rebuilds) | recoverable recomputes below 15 M | keep-analyses, edit-rollback | to do |
 | 2.3 persistent MemorySSA | -1.3% to -3.9% | probe below 1% | hoist-bounded, keep-analyses | to do |
 | 2.4 split path tables | B' built and killed (-0.03%); A' alone (`carved_moving` from allocator postings, 29 M, 1.0%, never built) | A' below 30 M | greedy-port | dies as written unless A' is kept alone |
@@ -286,24 +286,22 @@ Checklist: the shared list. Its own metric boxes:
 | no effect (counter cost above 0.1%) | compile the counters out of release; read them in a `counts` build only | 1.1 |
 | worse elsewhere (any object differs) | revert; the coordinator decides | 1.1 |
 
-### 0.3 A context-free identity for `ObjectRef` (unresolved)
+### 0.3 `ObjectRef` identity (spike S0, answered)
 
-- **(a) Effect:** none on instructions. The blocker is this: a skipped or shared `points_to` solve changes output (131 of 1,583 objects differ in keep-analyses' skip prototype), because objects are interned by their facts, including whether they are addressed or captured, and a skipped solve never makes those spellings. It is not the interning id order: `LLRM_CHECK_INTERN=SEED` shows 0 of 1,583 objects differ on main (a positive check was done). objectref-identity (branch `perf/objectref-identity`) is testing the skip prototype against a context-free identity to see whether that fixes it. Until it is resolved, every step that skips or shares a solve (2.1b, the same-result slice of 3.1) is judged by identical output and is blocked.
-- **(b) Early:** run the skip prototype (branch `alim/exp/pv-demand` `4fb50bd931c2`) with the new identity and `LLRM_CHECK_INTERN=SEED`; count the objects that still differ. Kill the identity (record in [spec 8]) if the 131 do not fall to 0.
-- **(c) Gate:** a short design note: what the identity is, and which consumers read the spelling.
-- **(d) Exit:** M; identical.py 0 differ with the skip prototype on and `LLRM_CHECK_INTERN=SEED` at several seeds.
-- **(e) Who:** objectref-identity, with keep-analyses. Depends on nothing. Blocks 2.1b and 3.1's skipping families.
+- **(a) Effect:** none on instructions. Spike S0 asked whether `ObjectRef` ordering by interning id makes skipped or shared solves change output. It does not: `LLRM_CHECK_INTERN` scrambled ids give 0 of 1,583 objects different on main, so invariant A2 holds today. The 131 differing objects of keep-analyses' `point_values` share prototype came from a loose share key: the fingerprint equated bodies whose constants name different globals (`LLRM_CHECK_PVSHARED` fails on cached `Global(1)` against fresh `Global(0)`). A context-free ordering was built and cost +0.7% instructions and removed nothing: reverted.
+- **(b) Early:** done (above).
+- **(c) Gate:** none.
+- **(d) Exit:** objectref-identity's PR is identity-excludes-facts plus the `LLRM_CHECK_INTERN` oracle, at zero cost with the oracle off. Pass: identical output and no instruction change.
+- **(e) Who:** objectref-identity. 2.1b is not blocked on it.
 
 Checklist: the shared list. Its own metric boxes:
 
-- [ ] objects that differ with the skip prototype, before and after the identity
-- [ ] identical at several seeds
+- [ ] oracle at zero cost with it off
+- [ ] identical output
 
 | outcome | decision | next |
 |---|---|---|
-| partial (some objects still differ) | list them with the fact that spells them; each blocks only the step that skips that solve | 2.1b for the rest |
-| no effect | the spelling, not the identity, is the cause: make the skipped solve produce its spellings, or keep the solve and cache its answer by exact key | 2.1b |
-| worse elsewhere (output changes) | the new identity orders differently on some object; fix the consumer, not the oracle | 0.3 again |
+| partial / no effect / worse | n/a (answered; the PR is an oracle) | 1.0 |
 
 ## Phase 1: land what is measured (output identical)
 
@@ -595,12 +593,12 @@ Re-run 0.1 on main after phase 1 merges.
 ### 2.1 point_values as a per-query provenance (stop) and 2.1b repeats
 
 - **(a) Effect:** measured. Callgrind inclusive `alias::point_values` is 123.97 M on main `ff49545a5` (`slotstores::reaching` 37.7, `_direct` 18.9, `MemRef::of` 16.6, `IdMap` 6.3, `learn` 4.9). Step 0's asked-against-solved counts are done: `annotated` asks 87% of what is solved (7,540 of 8,634), `escapes` 60%, `initialized` 63%. By the plan's rule (saving = solve cost less asked values times the walk's per-value cost), the per-query form saves at most the unread 13% to 40% minus its own query cost, and the eager local walk costs +276 M: 2.1 as written meets its "no effect" row. Stop, and record the table in [spec 8]. Moves [synthesis] row 1.
-  - **2.1b, repeats:** 209 solves over 96 body versions (113 repeats; QCport 13,269 equal repeats against 8,048 first). An exact-key cache hits 78 times for a net 13.6 M (0.45%), blocked by step 0.3: a skipped solve never makes the captured and addressed spellings of fact-interned objects. Branch `alim/exp/pv-demand` `4fb50bd931c2`. Owner keep-analyses with objectref-identity; it does not depend on [#2035] and [#2037].
+  - **2.1b, repeats:** 209 solves over 96 body versions (113 repeats; QCport 13,269 equal repeats against 8,048 first). An exact-key cache hits 78 times for a net 13.6 M (0.45%); the prototype's 131 differing objects came from a loose share key, which keep-analyses fixes (the global each constant names, the `globals_aa` view, the exposed set, the shape's back edges); `LLRM_CHECK_PVSHARED` must pass on all 1,583 objects, and the step is killed if the net is under 0.5% of `d_faces` -O2. Branch `alim/exp/pv-demand` `4fb50bd931c2`. Owner keep-analyses; it depends on neither identity nor [#2035] and [#2037].
   - Other families: `Annotated`, accesses and `through-memory` consume objects; only the producers intern (`PointerValues`, the escape phase, `CallEffects` summaries, `ExposedFrames`). Skipping a consumer is exact iff its inputs are. Spelling dependence through results kept as sound is `unmeasured` (`LLRM_CHECK_ORDER` seeds 1 to 3 are clean).
-- **(b) Early:** done for 2.1 (counts above). For 2.1b: step 0.3's probe.
-- **(c) Gate:** none for the stop; a design page only if 2.1b survives 0.3.
+- **(b) Early:** done for 2.1 (counts above). For 2.1b: the corrected key, with `LLRM_CHECK_PVSHARED` on the corpus.
+- **(c) Gate:** none for the stop; a design page only if 2.1b clears 0.5% net.
 - **(d) Exit:** 2.1: the [spec 8] entry. 2.1b: M, identical.py 0 differ with `LLRM_CHECK_INTERN=SEED`, and 60% or more of 13.6 M.
-- **(e) Who:** keep-analyses. 2.1b depends on 0.3.
+- **(e) Who:** keep-analyses. 2.1b depends on nothing open.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -792,7 +790,7 @@ Re-run 0.1 on main after phase 2 merges.
 
   The ablation in [rows-series] is the constraint: keep each fact exact, make it cheap.
 - **(d) Exit:** M; counted test `analysis_computations / pass_runs <= 0.5` on the fixtures; `LLRM_CHECK_REPLAY` and `LLRM_CHECK_ORDER` silent. Pass: the ratio is met at -O1/-O2/-Os, and 60% or more of each landed family's probe.
-- **(e) Who:** edit-rollback (family, record and updater API), keep-analyses (meaning). Depends on 0.2, 2.2 and 2.7; the families that skip a solve also on 0.3. The first question of the design page is which analyses can be updated from the change log and which are per query. Touches `passes.rs`, `manager.rs`, `ranges.rs`, `consts.rs`, `alias.rs`. One family per PR.
+- **(e) Who:** edit-rollback (family, record and updater API), keep-analyses (meaning). Depends on 0.2, 2.2 and 2.7. The first question of the design page is which analyses can be updated from the change log and which are per query. Touches `passes.rs`, `manager.rs`, `ranges.rs`, `consts.rs`, `alias.rs`. One family per PR.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -1040,16 +1038,16 @@ These apply at -O1/-O2/-O3/-Os, m16 and m32. A row is never traded for compile t
 
 ## 5. Parallelism and critical path
 
-**Critical path:** 0.1 → 0.2 → (phase 1 merges; 0.3 resolves in parallel) → B1 → 3.1 (design, then one family per PR) → 3.2 (round drop) → B3 → 4.1.
+**Critical path:** 0.1 → 0.2 → (phase 1 merges) → B1 → 3.1 (design, then one family per PR) → 3.2 (round drop) → B3 → 4.1.
 
 The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.5. Spec 7 notes these touch disjoint crates.
 
 | can run together | blocked by |
 |---|---|
 | all of phase 1 (1.6 and 1.7 serialised on `avail.rs`) | 0.1 |
-| 2.1b, 2.2, 2.4 (A'), 2.6, 2.7, 2.8, 2.9 | B1; 2.1b after 0.3; 2.2 after [#1943]; 2.4 after [#1958] |
+| 2.1b, 2.2, 2.4 (A'), 2.6, 2.7, 2.8, 2.9 | B1; 2.2 after [#1943]; 2.4 after [#1958] |
 | 2.3 | 1.6 merged (`memoryssa.rs`) |
-| 3.1 families; 3.3 | 3.1: 0.3 for the skipping families, the early probe and design review for the rest; 3.3: its early probe and design review (neither waits for B1 or B2) |
+| 3.1 families; 3.3 | 3.1: the early probe and design review; 3.3: its early probe and design review (neither waits for B1 or B2) |
 | 3.2 per-pass ablation, then the round drop | B1 for the ablation; 3.1 for the round drop |
 | 3.4 | 3.3 |
 | 3.5 | 3.3 and 2.7 |
@@ -1066,7 +1064,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 
 | work | owner | recommendation | reason |
 |---|---|---|---|
-| point_values demand counts per consumer | keep-analyses | done | 2.1 stops; 2.1b is blocked on 0.3 |
+| point_values demand counts per consumer | keep-analyses | done | 2.1 stops; 2.1b fixes the share key |
 | lazy call-effects and `captured_before` design | keep-analyses | cancel | dropped after the walk fusion; the escape side left is about 34 M |
 | cheap-many redundancy sizing | edit-rollback | close | answered: 1.4%, largest cause 0.4% ([#1994]) |
 | Annotated update from the record | edit-rollback, keep-analyses | keep | it is 2.2 |
@@ -1084,7 +1082,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 | [#1894] spiller survivors, [#1897] alloc judge | UNOWNED | pause | route B is closed to -Omax ([spec] 4.2) |
 | [#1917] stale waivers | UNOWNED | keep | trivial, unblocks bench noise |
 | [#1982] order check | keep-analyses | keep | the oracle for 1.9 and 3.1 |
-| `ObjectRef` identity | objectref-identity | keep | step 0.3 (unresolved), blocks 2.1b and 3.1 |
+| `ObjectRef` identity oracle | objectref-identity | keep | step 0.3, answered: an oracle PR |
 
 ## 6. Timeline
 
