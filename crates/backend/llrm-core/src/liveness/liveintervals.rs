@@ -33,6 +33,8 @@ pub struct LiveIntervals {
     pub cfg: Cfg,
     pub dom: DomTree,
     operands: HashMap<u32, Vec<Operand>>,
+    /// Every instruction by its key (`MachineInstr*`).
+    insns: HashMap<super::slotindex::InstrKey, std::sync::Arc<crate::model::lir::Insn>>,
     /// The values defined on entry (parameters), which no instruction defines.
     inputs: std::collections::BTreeSet<u32>,
     intervals: HashMap<u32, LiveInterval>,
@@ -46,9 +48,11 @@ impl LiveIntervals {
         let cfg = Cfg::of(body);
         let dom = DomTree::of(&cfg);
         let mut operands: HashMap<u32, Vec<Operand>> = HashMap::new();
+        let mut insns = HashMap::new();
         for block in &body.blocks {
             for one in block.insns.iter() {
                 let instr = one.id();
+                insns.insert(instr, std::sync::Arc::clone(one));
                 for &value in &one.defines {
                     operands
                         .entry(value)
@@ -82,9 +86,38 @@ impl LiveIntervals {
             cfg,
             dom,
             operands,
+            insns,
             inputs: body.inputs.clone(),
             intervals: HashMap::new(),
             calc: LiveIntervalCalc::new(),
+        }
+    }
+
+    /// The operands that name `reg`, in body order (`reg_nodbg_operands`).
+    pub fn operands(
+        &self,
+        reg: u32,
+    ) -> &[Operand] {
+        self.operands.get(&reg).map_or(&[], Vec::as_slice)
+    }
+
+    /// The instruction with this key.
+    pub fn instr(
+        &self,
+        key: super::slotindex::InstrKey,
+    ) -> &std::sync::Arc<crate::model::lir::Insn> {
+        &self.insns[&key]
+    }
+
+    /// Replaces the weight of an interval already computed (the spill weights
+    /// are computed after the intervals).
+    pub fn set_weight(
+        &mut self,
+        reg: u32,
+        weight: f32,
+    ) {
+        if let Some(li) = self.intervals.get_mut(&reg) {
+            li.set_weight(weight);
         }
     }
 
