@@ -192,6 +192,7 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 name = "llrm"
 version = "0.1.0"
 dependencies = [
+ "llrm-alloc",
  "llrm-bcdriver",
  "llrm-c",
  "llrm-core",
@@ -204,11 +205,17 @@ dependencies = [
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
- "mimalloc",
  "regex",
  "serde_json",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-alloc"
+version = "0.1.0"
+dependencies = [
+ "mimalloc",
 ]
 
 [[package]]

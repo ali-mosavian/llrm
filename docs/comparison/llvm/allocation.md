@@ -1,6 +1,6 @@
 # Allocation and instruction layout against LLVM
 
-TL;DR: compiling `d_faces` at `-O2`, llrm makes 3,765,923 allocations (638 MB); clang's `cc1` makes 62,881 (38 MB), 60x fewer. Peak live heap is 23 MB against 5.5 MB; peak resident set is 4 to 12 KB per IR instruction with the system allocator (8 to 18 KB with mimalloc, which keeps freed pages) against 0.3 to 0.9 KB in clang. 24% of llrm's L1d misses are allocation and copying.
+TL;DR: a size-class free list over mimalloc (`llrm-alloc`, landed) took 4.2% of the `d_faces` compile; the count is unchanged. Compiling `d_faces` at `-O2`, llrm makes 3,765,923 allocations (638 MB); clang's `cc1` makes 62,881 (38 MB), 60x fewer. Peak live heap is 23 MB against 5.5 MB; peak resident set is 4 to 12 KB per IR instruction with the system allocator (8 to 18 KB with mimalloc, which keeps freed pages) against 0.3 to 0.9 KB in clang. 24% of llrm's L1d misses are allocation and copying.
 
 ## LLVM
 
@@ -175,6 +175,10 @@ LLVM does not make small allocations. It keeps the few elements inline ([`SmallV
 4. Presize the 4-byte-id vectors: 515,831 allocations are one `RawVec::grow_one` shared by every `Vec` of `BlockId`, `ValueId`, `InstId` and `TypeId`, and `finish_grow` is 49.9 M self instructions. `Vec::with_capacity(known length)` where the length is known (`cfg::graph`, `LoopInfo::new`, `forest::forest`). Saving: unmeasured; bound 49.9 M plus the copies after a `realloc` (2.0 M of 3.9 M D1 misses).
 5. Build the CFG tables once per body version (`cfg::graph` 108,796, `DominatorTree::new` 34,406, `LoopInfo::new` 30,876, `cfg::natural` 30,346; 523,311 in CFG builders, 13.9%): share the successor lists of `cfg::Shape`. Saving: unmeasured.
 6. Memory-SSA and alias tables dense: `memoryssa::structure_of` 36,340 blocks, 28.9 MB; see lazy memory facts in the proposals.
+
+### Landed: the allocator
+
+Each allocation cost about 71 instructions in mimalloc's `malloc` and `free`, and 61% of the blocks are 64 bytes or less, 44% living under 10,000 instructions: the allocator was 7.8% of the compile's instructions (9.4% under callgrind) and `memcpy`/`memmove` another 3.6%. [`llrm-alloc`](../../../crates/support/llrm-alloc/src/lib.rs) is a free list for each 16-byte size class up to 1 KiB, per thread, over 1 MiB chunks of mimalloc, which keeps everything larger; a pop and a push take about 10 instructions. No allocation site changes. Against its parent `1a3e557c1`, `d_faces` compiles in 4.2% fewer instructions at every level (-O2 2,908 to 2,787 M), `lru`, `bintree`, `queens` and `sieve` in 5.5% to 6.8% fewer, and in 2.5% to 2.9% fewer cycles on `d_faces` (min of 11, host load 30); objects are byte-identical (`identical.py`, 1,583 of 1,583) and the cost gate's exponents move by at most 0.012. Peak resident set grows: `d_faces` -O2 85.6 to 91.5 MB, QCport's largest module (`mdl_ai.c`) 104.0 to 122.4 MB, because a block never leaves its class. With an allocation at about a quarter of its former cost, each remaining lever above is worth about a quarter of its count: inline operands (at most 2.7% of the blocks are instructions' or functions' copies) and presized vectors are under 0.5% of the compile each.
 
 ### The same changes in Rust
 
