@@ -334,7 +334,7 @@ pub struct Facts<'a> {
     exits: OnceCell<std::rc::Rc<IndexMap<i64, Lanes>>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
-    zero: OnceCell<HashMap<usize, upperzero::Roots>>,
+    zero: OnceCell<std::rc::Rc<HashMap<usize, upperzero::Roots>>>,
     /// The mode the code runs in: how an instruction encodes, and what it
     /// touches.
     bits: u32,
