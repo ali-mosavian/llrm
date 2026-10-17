@@ -142,6 +142,15 @@ fn size_equals_store_size(
     layout.size_bits(&context.types, ty) == layout.store_size(&context.types, ty) * 8
 }
 
+/// DEVIATE: whether isel selects an integer of `bytes` bytes (LLVM legalizes
+/// any width, so SROA makes i24 where a 3-byte slice is cut).
+fn supported_int_size(
+    layout: &DataLayout,
+    bytes: u64,
+) -> bool {
+    matches!(bytes, 1 | 2 | 4 | 8) || layout.legal_integer((bytes * 8) as u32)
+}
+
 /// `commonAlignment(A, Offset)`: the alignment `offset` bytes into something
 /// aligned by `align`.
 /// `commonAlignment` (Alignment.h).
@@ -164,6 +173,13 @@ fn can_convert_value(
     }
     // Integers of different widths are not converted.
     if int_bits(context, old).is_some() && int_bits(context, new).is_some() {
+        return false;
+    }
+    // DEVIATE: a float is not reinterpreted as an integer or a pointer, nor an
+    // integer as a float: isel selects no such bitcast (x87 has no register
+    // move to a general register).
+    let is_float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
+    if is_float(old) || is_float(new) {
         return false;
     }
     if layout.size_bits(&context.types, new) != layout.size_bits(&context.types, old) {
@@ -992,6 +1008,10 @@ fn is_integer_widening_viable_for_slice(
     if rel_end > size {
         return false;
     }
+    // DEVIATE: an odd-sized slice would be cut as an i24 or the like.
+    if !supported_int_size(layout, rel_end - rel_begin) {
+        return false;
+    }
     match user.opcode {
         Opcode::Load { volatile, .. } => {
             if volatile {
@@ -1587,6 +1607,41 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 if alloca_slices.slices[tail].end > p.end {
                     let base = alloca_slices.slices[offsets.slice].begin;
                     offsets.splits.push(p.end - base);
+                }
+            }
+        }
+        // DEVIATE: a candidate cut into a part isel has no integer for stays.
+        let layout_for_parts = self.unit.layout;
+        let unsupported: Vec<InstId> = split_offsets
+            .iter()
+            .filter(|(_, offsets)| {
+                let slice = alloca_slices.slices[offsets.slice];
+                let mut from = 0_u64;
+                offsets
+                    .splits
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(slice.end - slice.begin))
+                    .any(
+                        |to| {
+                            let bad = !supported_int_size(layout_for_parts, to - from);
+                            from = to;
+                            bad
+                        },
+                    )
+            })
+            .map(|(&inst, _)| inst)
+            .collect();
+        for inst in unsupported {
+            match self.function().instruction(inst).opcode {
+                Opcode::Load { .. } => {
+                    unsplittable_loads.insert(inst);
+                }
+                _ => {
+                    if let Some(load) = value_load(self, inst) {
+                        unsplittable_loads.insert(load);
+                    }
+                    stores.retain(|&one| one != inst);
                 }
             }
         }

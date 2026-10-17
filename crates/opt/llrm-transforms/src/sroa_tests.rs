@@ -278,29 +278,49 @@ j:
     assert!(after.contains("phi i32 [ %a, %t ], [ %b, %e ]"), "{after}");
 }
 
-/// The case SROA.cpp's `presplitLoadsAndStores` documents: an i64 loaded from
-/// two floats and stored over the next two floats. Without pre-splitting the
-/// i64 access straddles the partitions and the alloca stays; split, all three
-/// 4-byte parts are promoted.
+/// `presplitLoadsAndStores`: an i32 loaded from two pointers and stored over
+/// the next two. The pointers are not splittable, so the i32 access
+/// (splittable) straddles their partitions; split into two i16 loads and
+/// stores, all three parts are promoted. Not split, the alloca stays. LLVM's
+/// `sroa<preserve-cfg>` gives the same, a ptrtoint and an inttoptr for each
+/// part (its doc example uses floats, which are not reinterpreted here: isel
+/// selects no such bitcast).
 #[test]
-fn test_an_i64_load_and_store_pair_across_floats_is_presplit() {
+fn test_an_i32_load_and_store_pair_across_pointers_is_presplit() {
     let after = sroa(
-        "define float @f(float %x, float %y) {
+        "define ptr @f(ptr %x, ptr %y) {
 b0:
-  %a = alloca [12 x i8]
-  %g1 = getelementptr i8, ptr %a, i16 0
-  %g2 = getelementptr i8, ptr %a, i16 4
-  %g3 = getelementptr i8, ptr %a, i16 8
-  store float %x, ptr %g1
-  store float %y, ptr %g2
-  %v = load i64, ptr %g1
-  store i64 %v, ptr %g2
-  %f1 = load float, ptr %g2
-  %f2 = load float, ptr %g3
-  %r = fadd float %f1, %f2
-  ret float %r
+  %a = alloca [6 x i8]
+  %g2 = getelementptr i8, ptr %a, i16 2
+  %g4 = getelementptr i8, ptr %a, i16 4
+  store ptr %x, ptr %a
+  store ptr %y, ptr %g2
+  %v = load i32, ptr %a
+  store i32 %v, ptr %g2
+  %f1 = load ptr, ptr %g2
+  %f2 = load ptr, ptr %g4
+  %c = icmp eq ptr %f1, %f2
+  %r = select i1 %c, ptr %f1, ptr %f2
+  ret ptr %r
 }
 ",
     );
     assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
+}
+
+/// A float and an int of one size in one slot are not reinterpreted (isel
+/// selects no such bitcast): the slot stays in memory.
+#[test]
+fn test_a_float_read_as_an_int_is_not_bitcast() {
+    let after = sroa(
+        "define i32 @f(float %x) {
+b0:
+  %a = alloca i32
+  store float %x, ptr %a
+  %v = load i32, ptr %a
+  ret i32 %v
+}
+",
+    );
+    assert!(after.contains("alloca") && !after.contains("bitcast"), "{after}");
 }
