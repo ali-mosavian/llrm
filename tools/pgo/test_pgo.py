@@ -46,6 +46,44 @@ def test_the_training_corpus_leaves_out_what_is_measured():
     assert left == everything - {"lru", "bintree", "queens"}
 
 
+def test_every_tests_run_c_program_is_trained_at_its_own_flags():
+    jobs = [job for job in pgo.corpus() if job[2].parent.name == "c" and job[2].parent.parent.name == "run"]
+    assert len({job[2] for job in jobs}) >= 90 and all(job[1] for job in jobs)
+    header = next(line for line in (pgo.ROOT / "tests/run/c/bitfield_long_long.c").read_text().splitlines()[:3] if line.startswith("// flags:"))
+    assert len([job for job in jobs if job[0] == "bitfield_long_long"]) == len(header.split("|"))
+
+
+def test_a_compile_of_the_corpus_that_fails_fails_the_job_with_what_it_said(tmp_path):
+    """The first CI run counted '63 failed' and went on to merge 3 profiles: QCport's modules need headers the runner lacks."""
+    compiler = tmp_path / "cc"
+    compiler.write_text('#!/bin/bash\n[[ "$*" == *bad.c* ]] && { echo "Error! E1055: Unable to open string.h" >&2; exit 1; }\nexit 0\n')
+    compiler.chmod(0o755)
+    good, bad = tmp_path / "good.c", tmp_path / "bad.c"
+    ok, failed = pgo.train(compiler, [("good", ["-O2"], good, False), ("bad", ["-O2"], bad, False)])
+    assert ok == 1 and len(failed) == 1 and "bad -O2: Error! E1055: Unable to open string.h" in failed[0]
+
+
+def test_the_profile_directory_is_made_before_the_merge_writes_into_it(monkeypatch, tmp_path):
+    """The first CI run: 'llvm-profdata merge failed: target/pgo-profile/profile.profdata: No such file or directory'."""
+    merge = tmp_path / "llvm-profdata"
+    merge.write_text('#!/bin/bash\n[ "$1" = merge ] && [ "$2" = -o ] && [ -d "$(dirname "$3")" ] && echo x > "$3"\n')
+    merge.chmod(0o755)
+    (tmp_path / "repo").mkdir()
+    root, _ = repo(tmp_path / "repo")
+
+    def instrumented(root, target, flags):
+        raw = Path(flags.split("=", 1)[1])
+        (raw / "a.profraw").write_bytes(b"x")
+        return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(pgo, "cargo", instrumented)
+    monkeypatch.setattr(pgo, "train", lambda binary, jobs: (1, []))
+    monkeypatch.setattr(pgo, "profdata", lambda: merge)
+    monkeypatch.setattr(pgo, "corpus", lambda *a, **k: [])
+    pgo.make_profile(root, tmp_path / "out" / "profile", frozenset(), None)
+    assert (tmp_path / "out" / "profile" / "profile.profdata").is_file() and (tmp_path / "out" / "profile" / "profile.json").is_file()
+
+
 def test_each_bench_program_is_compiled_flat_and_in_16_bits_at_every_level():
     jobs = [job for job in pgo.corpus() if job[0] == "fib"]
     levels = len(pgo.tomllib.loads((pgo.HERE / "corpus.toml").read_text())["levels"])
