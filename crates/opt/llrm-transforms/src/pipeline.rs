@@ -1124,6 +1124,7 @@ impl FunctionPass for Fixed {
         let mut run = Run {
             version: 0,
             promotes,
+            inputs: dump.is_some() && llrm_support::env_flag!("LLRM_DUMP_INPUTS"),
             dump,
             rounds: 0,
             steps: 0,
@@ -1180,6 +1181,8 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the body at the input of every pass run is dumped.
+    inputs: bool,
     /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
     /// passes skipped as settled.
     fixed: usize,
@@ -1453,7 +1456,7 @@ impl Run {
         analyses: &Analyses,
     ) {
         let Some(directory) = &self.dump else { return };
-        if !llrm_support::env_flag!("LLRM_DUMP_INPUTS") {
+        if !self.inputs {
             return;
         }
         let file = format!("{:04}-in-{name}.ll", self.steps);
