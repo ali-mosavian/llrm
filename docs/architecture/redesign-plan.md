@@ -8,7 +8,7 @@
 
 ## Status
 
-As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are simplifycfg-poc (after #2046 and #2050 merge). Unchanged: keep-analyses (facts-per-query), gate-dist-build, plan-upkeep-rows.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). Unchanged: keep-analyses (facts-per-query) and plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
@@ -20,11 +20,13 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | S5 block-local dataflow | ssa-spill-m16 | KILLED ([#2043]) | -14.8 M but +0.36% bytes |
 | S6 edit core | edit-rollback | measured; kill not met on `loop` only | `move_to` 925 M of 997.9 M primitives at N=1600 (4.32%) |
 | S7 caps and pricing | hoist-bounded, greedy-port | running | forecast 2.6% / 4.9% |
-| body-size factors per pass | indvars-decide-poc | measured ([#1994 comment](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237686443), [second](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237749851)) | per-pass factors against LLVM, see the comments |
-| fold numbers POC | fold-poc | measured | 19x to 10.1x of LLVM charged |
+| body-size factors per pass | indvars-decide-poc | measured ([#1994 comment](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237686443), [second](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237749851)) | gvn 26.3 K (llrm) against 28.6 K (LLVM) per instruction-run: 4.2x = runs 3.1 x body 1.47 x cost 0.98; regalloc 150 K against 25 K per instruction = body 1.41 x cost 4.3; table in 2.4 |
+| fold numbers POC | fold-poc | measured; waits for the order | 19x to 10.1x of LLVM charged. The register-worklist fold matched 99.5% on `d_faces` and the benches (155 compiles) but missed 21% of 63,821 replacements over the full corpus (35,609 fold runs): front-end allocas are still in memory when fold runs on `tests/run/c`, qcport, nib and textfill. The PR waits for llvm-order-poc's order (promote, SROA, EarlyCSE before fold) and is re-judged by the corpus miss count. Lesson: a 155-compile set generalised wrongly |
 | dse POC | dse-poc | measured | 13x LLVM per IR instruction; fact set plus walk step 3,440 instructions against a target of about 300 |
 | lsr probe | indvars-decide-poc | KILLED | forecast kept; DEVIATE, 425 objects differ |
 | mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
+| valuetracking-port | valuetracking-port | starting; fold-poc writes the API stub first | translation of `ValueTracking.cpp`, `KnownBits`, `ConstantRange`; consumers: InstSimplify gaps, EarlyCSE, InstCombine, SCCP, LVI, CVP, SCEV |
+| oracle triage | facts-per-query | running | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); [#2110] is held by the user (no row trade) |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
@@ -203,6 +205,26 @@ Do not measure these again on the same shape. Reviving one needs a new mechanism
 | `exposed-frames` as its own step | one pass per fact computation; belongs to 3.x | attrs-budgets report |
 | position and row tables for the split path (B') | built: -0.03% (2,744.59 to 2,743.70 M); hash probes are not the cost, the 506 instructions per row visit are the rows' own work | greedy-port report, [#2036] |
 | a one-worklist combine of fold, algebraic, phiopt, dead and decide's branch fold at today's positions and rounds | about 0 compile-time gain (the cost is analyses and idle reruns, not rewriting); branch `notkept/combine-worklist` `fba7c4051..fea9b27f0`, no spec 8 entry yet | pass-list-parity report |
+
+### 2.4 Body size at each pass input, `d_faces` -O2 (llrm against LLVM 24)
+
+From [#1994 part 1](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237686443) and [part 2](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237749851) (body-size-table; llrm on main `7ac662405`, LLVM `opt -print-after-all`; instructions per function at each pass input; cost from `LLRM_DEBUG=time` and callgrind inclusive of `<Pass>::run`; the cost-per-instruction column is an upper bound for the passes that ask analyses first):
+
+| llrm pass | runs | LLVM | runs | llrm M (own / incl.) | LLVM M | runs x | body x | cost per instruction x |
+|---|--:|---|--:|--:|--:|--:|--:|--:|
+| fold | 35 | InstCombine | 73 | 31.0 / 220.2 | 53.2 | 0.5 | 1.48 | 5.82 |
+| gvn | 34 | GVN | 11 | 172.9 / 206.0 | 49.4 | 3.1 | 1.47 | 0.98 |
+| promote | 34 | SROA | 39 | 46.7 / 81.2 | 12.3 | 0.9 | 1.02 | 7.44 |
+| dse | 33 | DSE and MemCpyOpt | 22 | 40.9 / 56.8 | 4.1 | 1.5 | 1.42 | 6.58 |
+| lcssa | 34 | LCSSA | 16 | 23.2 / 23.2 | 0.9 | 2.1 | 0.52 | 22.85 |
+| algebraic | 33 | Reassociate | 11 | 50.1 / 75.1 | 1.1 | 3.0 | | |
+| jumpthread | 11 | JumpThreading and CVP | 22 and 22 | 48.7 / 101.6 | 17.0 | 0.25 | | |
+| hoist | 34 | LICM | 124 loops | 93.2 / 141.9 | 14.0 | | | |
+| indvars | 34 | IndVarSimplify | 41 loops | 57.0 / 64.4 | 23.6 | | | |
+
+gvn: 26.3 K per instruction-run (llrm, 206 M over 7,839) against 28.6 K (LLVM, 49.4 M over 1,725): the same price, 4.5 times the volume. The big function reaches gvn with 2,844 instructions against LLVM's 1,385 (997 after its first SROA, EarlyCSE, InstCombine and SimplifyCFG round) because llrm cleans the memory form inside gvn and promote comes after it: 863 loads, 301 stores, 123 allocas and no phis, against 209, 90, 0 and 149. Memory form is about 840 of the 1,459 extra instructions, the sext, zext, trunc, mul and GEP representation about 714 (priced at 69.8 M, 2.7% of the compile, as a lower bound), and 245 values are dead.
+
+Back end (same sources): regalloc 338.0 M over 2,250 LIR instructions = 150 K per instruction against LLVM's 40.0 M over 1,594 = 25 K: 6.0x = body 1.41 x cost 4.3. isel is at parity (53.6 M against 52.4). Peephole 90.8 M against 12.6 (43.2 K against 7.9 K per instruction), jumps 57.2 against 5.9 (25.7 against 3.7), coalesce 44.3 against 10.1 (24.5 against 6.3), floatassign plus floatalloc 64.5 against 1.6 (#2097). The row mapping is by purpose, not identical work.
 
 ## 3. The plan
 
@@ -1077,6 +1099,8 @@ Checklist: the shared list.
 
 ## 4. Cross-step guards
 
+**Translate, do not paraphrase.** Every LLVM-mirroring pass or file is a translation of LLVM's C++ at `d1106deb71cc`, read from a local checkout and not from memory or docs. The Rust follows the C++ structure: its functions, worklists, caps and thresholds with the `cl::opt` defaults, and the order of the checks. Each function carries a one-line permalink comment. Anything not translated is a `DEVIATE` with the reason and a number in the PR; the PR's `LLVM structure` line names files and lines; review reads the two side by side.
+
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
 | LLVM structure | ours | status |
@@ -1336,10 +1360,14 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2072]: https://github.com/ali-mosavian/llrm/pull/2072
 [#2067]: https://github.com/ali-mosavian/llrm/pull/2067
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2094]: https://github.com/ali-mosavian/llrm/pull/2094
+[#2110]: https://github.com/ali-mosavian/llrm/pull/2110
+[#2111]: https://github.com/ali-mosavian/llrm/pull/2111
+[#2112]: https://github.com/ali-mosavian/llrm/pull/2112
+[#2113]: https://github.com/ali-mosavian/llrm/pull/2113
 [#2076]: https://github.com/ali-mosavian/llrm/pull/2076
 [#2100]: https://github.com/ali-mosavian/llrm/pull/2100
 [#2106]: https://github.com/ali-mosavian/llrm/pull/2106
-[#2110]: https://github.com/ali-mosavian/llrm/pull/2110
 [#2119]: https://github.com/ali-mosavian/llrm/pull/2119
 [#2122]: https://github.com/ali-mosavian/llrm/pull/2122
 [#2068]: https://github.com/ali-mosavian/llrm/pull/2068
