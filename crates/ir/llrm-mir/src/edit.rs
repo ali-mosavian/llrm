@@ -268,7 +268,6 @@ impl Function {
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
         let list = &self.blocks[block.0 as usize].instructions;
-        #[cfg(any(test, feature = "testing"))]
         SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
         let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
         let next = list.get(at + 1).copied();
@@ -686,7 +685,6 @@ impl Function {
         blocks.dedup();
         for block in blocks {
             let list = self.blocks[block.0 as usize].instructions.clone();
-            #[cfg(any(test, feature = "testing"))]
             SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
             let mut next = None;
             for &inst in list.iter().rev() {
@@ -1010,10 +1008,20 @@ impl Function {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
 thread_local! {
     /// Instructions of a block looked over to take instructions out of it: the
     /// cost of erasing, which was a scan of the block per instruction erased.
-    pub static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    pub static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instructions of a block this thread has looked over to take
+/// instructions out of it, for a test that a pass erasing k of a block's n
+/// does not scan k times n.
+pub fn instructions_scanned() -> usize {
+    SCANNED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

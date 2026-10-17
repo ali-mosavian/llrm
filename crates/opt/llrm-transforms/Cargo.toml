@@ -13,6 +13,5 @@ num-bigint = { workspace = true }
 num-traits = { workspace = true }
 
 [dev-dependencies]
-llrm-mir = { workspace = true, features = ["testing"] }
 llrm-x86-m16 = { workspace = true }
 llrm-analysis = { workspace = true, features = ["testing"] }
