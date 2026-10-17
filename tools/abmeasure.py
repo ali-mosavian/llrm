@@ -7,7 +7,8 @@ Each commit gets a worktree and a target directory of its own under $LLRM_AB_DIR
 `CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-c`, the compiler the cost gate measures (tools/measure.py): `release`
 re-partitions its 16 codegen units when one file changes and flips the inlining of unrelated functions (the same PR read +0.46..0.61% on the gate's
 shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier llrm-c with the opposite sign (#2077: +0.24%
-incremental, -0.58% CI mode). `--profile release` measures the old way. Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
+incremental, -0.58% CI mode). `--profile release` measures the old way. A CHECK or EXP switch in the environment that `--allow-env` does not name is refused (tools/envguard.py): both sides run in one environment.
+Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
 median of cycles:u over N alternated runs (a loaded host's cycles are noise: instructions are the claim), with --cache callgrind's
 Ir, D1 and last-level misses. d_faces needs QCPORT (QCport's src) and is left out without it.
 """
@@ -22,6 +23,10 @@ import argparse
 import statistics
 import subprocess
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import envguard  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = Path(os.environ.get("LLRM_AB_DIR") or Path.home() / ".cache/llrm/ab")
@@ -96,11 +101,13 @@ def main() -> int:
     parser.add_argument("parent")
     parser.add_argument("head")
     parser.add_argument("--profile", choices=["dist", "release"], default="dist")
+    parser.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test, set alike for both sides; any other is refused")
     parser.add_argument("--levels", nargs="+", default=["O1", "O2", "Os"])
     parser.add_argument("--programs", nargs="+", default=["d_faces", "lru", "bintree"])
     parser.add_argument("--cycles", type=int, default=0, metavar="N", help="also cycles:u, min and median of N alternated runs")
     parser.add_argument("--cache", action="store_true", help="also callgrind's cache simulation (slow)")
     args = parser.parse_args()
+    envguard.require_clean("abmeasure", allow=args.allow_env)
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
