@@ -1065,7 +1065,7 @@ impl Analysis for ExposedFrames {
     const SKIPS: bool = true;
     const INCREMENTAL: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1140,7 +1140,7 @@ impl Analysis for PointerValues {
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1161,7 +1161,7 @@ impl Analysis for Pointers {
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -1254,7 +1254,7 @@ impl Analysis for CallEffects {
         }
     }
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     /// Each effect with the values it names followed through the substitution:
     /// the same bytes by the value that replaced one found equal.
@@ -1639,7 +1639,7 @@ impl Analysis for Writes {
     const NAME: &'static str = "writes";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,

@@ -1,5 +1,7 @@
 # llrm compile time against gcc 13.4 and clang 20: review and design
 
+> **Reference note.** The clang figures and the "x clang" ratios in this review are from the distro clang 20.1.8; they are void as a cost reference to the pinned 24.0.0git `d1106deb71cc` (`d_faces` -O2 415.5 M) and are re-derived in the plan's scoreboard.
+
 Input `qbq-llrm/src/render/d_faces.c`, `-m32`, flags of `compile_time.sh`. llrm at [0b0770d37](https://github.com/ali-mosavian/llrm/commit/0b0770d37a113eb051460385d7b3bba98306ba8b), release profile. Instructions are `perf stat -e instructions:u`; step costs are `LLRM_DEBUG=time` own work (its total, 8583 M, is 4% above perf's 8280 M from the timer itself). How to reproduce: appendix C.
 
 gcc and LLVM figures come from runs on the same input and flags: dumps (`-fdump-rtl-ira-details`, `-fdump-rtl-reload-details`, `-fdump-statistics`, `-print-after`, `-fdebug-pass-manager`), gdb hit counts on cc1 and on libLLVM with its matching debug-symbol package, and perf call graphs (23.6 k samples gcc, 36.6 k clang). Appendices A and B hold the full traces with a source link per step. "File" figures are for all of d_faces.c; "fn" figures are for `D_DRAW_FACES`/`d_draw_faces` alone. llrm's single allocation is measured with `-fno-allocation-search -fno-allocation-routes`.
