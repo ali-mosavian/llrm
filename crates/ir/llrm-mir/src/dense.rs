@@ -101,6 +101,18 @@ impl<K: Dense> IdSet<K> {
         self.len = 0;
     }
 
+    /// Only the members `keep` says to.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(K) -> bool,
+    ) {
+        for key in self.iter().collect::<Vec<_>>() {
+            if !keep(key) {
+                self.remove(&key);
+            }
+        }
+    }
+
     /// The members, ascending.
     pub fn iter(&self) -> impl Iterator<Item = K> + '_ {
         self.words
