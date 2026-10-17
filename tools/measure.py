@@ -296,8 +296,8 @@ def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, li
 
 def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, tol: dict, system=None) -> tuple[list[str], list[str]]:
     """(lines, bad) with each step rise kept only if it shows under the system allocator too: mimalloc's heap layout moves a step's count
-    (#1755: `analysis through-memory` +27 Minstr under mimalloc, equal under glibc, though the step ran on the same input). The axes and
-    the compile stay judged on the shipped binary. A rise that cannot be checked stands."""
+    (#1755: `analysis through-memory` +27 Minstr under mimalloc, equal under glibc, though the step ran on the same input). The compile stays judged on the shipped binary and an axis less the steps dropped here
+    (`without_layout`). A rise that cannot be checked stands."""
     steps = {b.split(": ")[0] for b in bad} & now["passes"].keys()
     if not steps:
         return [], bad
@@ -318,7 +318,32 @@ def confirmed(bad: list[str], base: dict, now: dict, base_sha: str, head: str, t
             out.append(f"{b}; system allocator {'/'.join(map(str, got[key][:3]))} against {'/'.join(map(str, was[key][:3])) if key in was else 'none'} (mimalloc and system malloc both rose)")
         else:
             lines.append(f"{key}: not confirmed under the system allocator, a heap layout effect: {'/'.join(map(str, got.get(key, [])[:3]))} against {'/'.join(map(str, was.get(key, [])[:3]))}")
+    dropped = sorted(steps - kept)
+    if dropped:
+        more, out = without_layout(out, dropped, base, now, tol)
+        lines += more
     return lines, out
+
+
+def without_layout(bad: list[str], dropped: list[str], base: dict, now: dict, tol: dict) -> tuple[list[str], list[str]]:
+    """`bad` with the axis rises re-judged less the steps dropped as heap layout effects: the step is not a rise, so the part of the axis total that is
+    its rise is not one either (#1991: `unrolled Os mir lsr` 117 -> 169 M under mimalloc, 149 M under both under the system allocator, was dropped as a
+    step and still failed the axis it is part of). What is left of the axis is judged as before, so a real rise next to a dropped one stands."""
+    cells = sorted({" ".join(key.split(" ")[:2]) for key in dropped} & base["axes"].keys() & now["axes"].keys())
+    adjusted = dict(now["axes"])
+    for key in dropped:
+        cell = " ".join(key.split(" ")[:2])
+        if cell in adjusted:
+            was = base["passes"].get(key, [0.0, 0.0, 0.0])
+            adjusted[cell] = [int(round(have - (got - before) * 1e6)) for have, got, before in zip(adjusted[cell], now["passes"][key], was)]
+    _, again = axis_rises({c: base["axes"][c] for c in cells}, {c: adjusted[c] for c in cells}, tol)
+    out = [b for b in bad if b.split(": ")[0] not in cells] + again
+    notes = [
+        f"{cell}: judged without {', '.join(k.split(' ', 2)[2] for k in dropped if k.startswith(cell + ' '))} (heap layout effects)"
+        for cell in cells
+        if any(b.startswith(cell + ": ") for b in bad)
+    ]
+    return notes, out
 
 
 @contextlib.contextmanager

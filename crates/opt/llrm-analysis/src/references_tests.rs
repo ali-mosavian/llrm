@@ -177,3 +177,27 @@ b0:
     assert_eq!(kept, MemRef::decomposed(&unit, load, &mut Vec::new()).unwrap());
     assert_eq!(kept.segment, Some(constant), "the kept reference names the selector it was made from");
 }
+
+/// An access asked of in a body of many instructions was kept in a slot for
+/// each id below its own: the first ask of a version of d_faces -O2 filled 56.6
+/// M instructions of empty slots, 87% of what `MemRef::of` cost.
+#[test]
+fn test_one_access_asked_of_in_a_large_body_takes_one_cell() {
+    let adds: String = (0..400).map(|n| format!("  %v{n} = add i16 %i, {n}\n")).collect();
+    let module = parsed(&format!(
+        "{DOS}define void @f(ptr %p, i16 %i) {{\nb0:\n{adds}  store i16 %v399, ptr %p\n  ret void\n}}\n"
+    ));
+    let (function, layout) = (function(&module, "f"), layout(&module));
+    let unit = Unit::of(&module, &layout, function);
+    let store = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let before = crate::memory::held_cells();
+    MemRef::of(&unit, store).expect("an access");
+    assert_eq!(crate::memory::held_cells() - before, 1);
+}
