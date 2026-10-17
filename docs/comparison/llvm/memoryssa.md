@@ -82,3 +82,10 @@ The cap is the same size and idea, on one of three entry points. The difference 
 | distinct keys | not counted | 1,675 of 4,787 queries |
 
 Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc (total 415.4 M); query counts from llvm-measured. llrm: callgrind on the release `llrm-c` of 21f5c9fc8 (total 3,224 M); query and key counts from the walker-cache entry of compile-time-spec section 8 (dist build).
+
+## Proposed change
+
+- **Files**: `crates/opt/llrm-analysis/src/memoryssa.rs` (`MemorySSA::walked_from`: the candidate loop of the nearest-write index branch, `slot`, `clobbered`); callers `consts::load_providers` and `provider_of`.
+- **What**: take `slot(memory)` out of the loop (it is invariant), memoise `clobbered` per (slot, candidate) so a later load of the same cell restarts at the last clobber, and add a count cap (LLVM's 100) only if a corpus counter shows no query passes it.
+- **Expected saving**: on the mem ladder at N=1600 the candidate loop is 1,257,255 iterations (74,444 at N=400, 16.9x for 4x), `slot` 640.6 M and `clobbered` 111 M of `frontier_for` 1,102 M; after the hoist `frontier_for` is 422 M with 1.28 M iterations left, so the memo is the rest of a slope; its share is unmeasured. A cache keyed on (site, cell, kind) across versions covers at most 1.4% of the `d_faces` compile.
+- **Status**: the `slot` hoist and paged walker tables are #2011 (greedy-port); the memo is unbuilt; the cross-version cache is measured and not kept ([compile-time-spec section 8](../../architecture/compile-time-spec.md), "A cache over the memory walker").

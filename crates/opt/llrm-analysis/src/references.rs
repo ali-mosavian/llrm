@@ -184,7 +184,7 @@ pub(crate) fn of(
         }
     }
     if let Some(kept) = table.made.get(&inst) {
-        if llrm_support::env_set("LLRM_CHECK_REFERENCES") {
+        if llrm_support::env_flag!("LLRM_CHECK_REFERENCES") {
             let fresh = MemRef::decomposed(unit, inst, &mut Vec::new());
             assert!(fresh.as_ref() == Some(&**kept), "LLRM_CHECK_REFERENCES: a kept reference is not the access's");
         }

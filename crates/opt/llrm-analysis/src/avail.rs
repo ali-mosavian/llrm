@@ -515,7 +515,7 @@ impl Stored {
             asked.extend(self.groups[group].meeting(*low, *high));
         }
         asked.into_iter().for_each(&mut test);
-        if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
+        if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS") {
             let all =
                 (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
             assert!(
@@ -1240,7 +1240,7 @@ fn memory_providers(
             available(*source, site) && serves(unit, Operand::Value(*value), result)
         };
         let nearest_usable = walk().filter(|&at| names(load_group[at])).find(|at| usable(at));
-        let checked = llrm_support::env_set("LLRM_CHECK_GROUPS");
+        let checked = llrm_support::env_flag!("LLRM_CHECK_GROUPS");
         let served = nearest_usable.filter(|&at| {
             let (source, (loaded, _)) = &loads[at];
             graph.unchanged(*source, site, loaded)
