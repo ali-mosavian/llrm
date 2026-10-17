@@ -23,14 +23,15 @@ from pathlib import Path
 
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 PASS_SYMBOL = re.compile(r"llvm::(\w+Pass)::run\(")
+LEGACY_SYMBOL = re.compile(r"^llvm::(\w+)::(?:runOnFunction|runOnLoop|runOnMachineFunction)\(")
 DUMP = re.compile(r"^; \*\*\* IR Dump Before (\w+) on .* \*\*\*$")
 INSTRUCTION = re.compile(r"^  [^\s;]")
 
 
-def cc1(level: str, source: str, extra: list[str]) -> list[str]:
+def cc1(clang: str, level: str, source: str, extra: list[str]) -> list[str]:
     """The `-cc1` command clang's driver would run."""
     out = subprocess.run(
-        ["clang", "-###", "-w", "-m32", "-march=i486", f"-{level}", "-fno-inline-functions", *KEYWORDS, *extra, "-c", source, "-o", "/dev/null"],
+        [clang, "-###", "-w", "-m32", "-march=i486", f"-{level}", "-fno-inline-functions", *KEYWORDS, *extra, "-c", source, "-o", "/dev/null"],
         capture_output=True, text=True,
     ).stderr
     line = next(one for one in out.splitlines() if '"-cc1"' in one)
@@ -50,8 +51,9 @@ def dumped(text: str) -> dict[str, tuple[int, int]]:
     return {name: (runs, size) for name, (runs, size) in found.items()}
 
 
-def costs(report: str) -> tuple[dict[str, float], dict[str, float]]:
-    """(inclusive Minstr per pass `run`, inclusive Minstr of the phases) from callgrind_annotate --inclusive=yes."""
+def costs(report: str) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """(inclusive Minstr per pass `run`, of the phases, of the legacy passes by class) from callgrind_annotate --inclusive=yes."""
+    legacy: dict[str, float] = {}
     passes: dict[str, float] = {}
     phases: dict[str, float] = {}
     total = 0.0
@@ -65,13 +67,15 @@ def costs(report: str) -> tuple[dict[str, float], dict[str, float]]:
         cost, symbol = int(row[1].replace(",", "")) / 1e6, row[2]
         if (one := PASS_SYMBOL.search(symbol)) and symbol.startswith("llvm::") and one[1] not in passes:
             passes[one[1]] = cost
+        if (old := LEGACY_SYMBOL.match(symbol)) and "Manager" not in old[1] and old[1] not in legacy:
+            legacy[old[1]] = cost
         if symbol.startswith("llvm::PassManager<llvm::Module, llvm::AnalysisManager<llvm::Module>>::run(") and "'" not in symbol:
             phases.setdefault("optimizer", cost)
         if symbol.startswith("llvm::legacy::PassManager::run("):
             phases.setdefault("codegen", cost)
     phases["total"] = total
     phases["front end"] = total - phases.get("optimizer", 0.0) - phases.get("codegen", 0.0)
-    return passes, phases
+    return passes, phases, legacy
 
 
 def table(passes: dict[str, float], sizes: dict[str, tuple[int, int]], budget: float) -> str:
@@ -87,6 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?")
     parser.add_argument("--levels", default="O1,O2,Os")
+    parser.add_argument("--clang", default="clang", help="the clang to measure (the plan's reference is ~/scratch/llvm-build/bin/clang)")
     parser.add_argument("--budget", type=float, default=220.0, help="LLVM's instructions per IR instruction per run (plan 4.1)")
     args = parser.parse_args()
     if args.source:
@@ -96,7 +101,7 @@ def main() -> None:
         source = str(qc / "render/d_faces.c")
         extra = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     for level in args.levels.split(","):
-        command = cc1(level, source, extra)
+        command = cc1(args.clang, level, source, extra)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "cg.out"
             done = subprocess.run(["valgrind", "--tool=callgrind", f"--callgrind-out-file={out}", *command, "-o", str(Path(tmp) / "o.o")], capture_output=True, text=True)
@@ -104,9 +109,10 @@ def main() -> None:
                 sys.exit(f"callgrind failed: {done.stderr[-400:]}")
             report = subprocess.run(["callgrind_annotate", "--inclusive=yes", "--threshold=100", str(out)], capture_output=True, text=True).stdout
         dump = subprocess.run([*command, "-o", "/dev/null", "-mllvm", "-print-before-all"], capture_output=True, text=True).stderr
-        passes, phases = costs(report)
+        passes, phases, legacy = costs(report)
         print(f"-{level}: " + ", ".join(f"{name} {cost:.0f} M" for name, cost in phases.items()))
-        print(table(passes, dumped(dump), args.budget) + "\n")
+        print(table(passes, dumped(dump), args.budget))
+        print("legacy passes (absolute M): " + ", ".join(f"{name} {cost:.1f}" for name, cost in sorted(legacy.items(), key=lambda one: -one[1])[:14]) + "\n")
 
 
 if __name__ == "__main__":

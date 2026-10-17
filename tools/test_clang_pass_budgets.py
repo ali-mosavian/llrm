@@ -40,6 +40,6 @@ def test_a_pass_is_counted_by_its_dumps_and_the_instructions_in_them():
 
 def test_the_phases_are_the_optimizer_codegen_and_the_front_end_that_is_left():
     """`total` was read as 0 (its row has no `file:` part), which made the front end -474 M."""
-    passes, phases = cpb.costs(REPORT)
-    assert passes == {"InstCombinePass": 47.0}
+    passes, phases, legacy = cpb.costs(REPORT)
+    assert passes == {"InstCombinePass": 47.0} and legacy == {}
     assert (phases["optimizer"], phases["codegen"], phases["total"], phases["front end"]) == (230.0, 244.0, 555.0, 81.0)
