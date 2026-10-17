@@ -902,7 +902,7 @@ fn test_annotated_does_not_solve_what_escapes() {
     assert_eq!(crate::alias::escape_solves() - before, 1, "Pointers solves what escapes once");
 }
 
-/// `Annotated` worked out every value's stride congruence (`congruences_with`,
+/// `Annotated` worked out every value's stride congruence (`congruences_of`,
 /// a pass over the loops' inductions) in every solve, for the accesses with a
 /// variable index alone to ask: 24.0 M of d_faces' 3,218 M at -O1, 123 solves
 /// for 4,185 asks. A body with none asks none.
@@ -1408,4 +1408,94 @@ fn a_terminator_rewritten_in_one_loop_proves_that_loop_again_and_not_the_other()
         *Analyses::new(outer).get::<super::Counted>(context, &layout, function),
         "what was brought up to date is what deriving it afresh gives"
     );
+}
+
+/// Every edit worked out which allocas of the function are exposed from
+/// nothing (229 times, 175 Minstr, in a 63-loop function). The allocas behind
+/// what the edit read are asked again, the others stand.
+#[test]
+fn an_edit_asks_only_the_allocas_behind_what_it_reads_whether_they_are_exposed() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f() {{
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  store i16 1, ptr %a
+  store i16 2, ptr %b
+  store ptr %c, ptr %c
+  ret void
+}}
+"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        let before = analyses.get::<super::ExposedFrames>(context, &layout, function);
+        assert_eq!(before.len(), 1, "%c is stored");
+        // The store of %b's value to %b's address now stores %b's address.
+        let store = function.block(function.layout()[0]).instructions()[4];
+        let b = Operand::Value(value(function, "b"));
+        function.set_operand(store, 0, b);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let (whole, asked) = (crate::frameescape::whole_runs(), crate::frameescape::scans());
+    let after = analyses.get::<super::ExposedFrames>(context, &layout, function);
+    if std::env::var_os("LLRM_CHECK_REPLAY").is_none() {
+        assert_eq!(crate::frameescape::whole_runs() - whole, 0, "the function's allocas were all asked again");
+        assert!(crate::frameescape::scans() - asked <= 1, "only %b is behind what the edit read");
+    }
+    assert_eq!(after.len(), 2, "%b and %c");
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<super::ExposedFrames>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
+
+/// A branch sent to other blocks was judged to leave the pointer analyses as
+/// they were (a branch is no pointer), so `PointsTo` kept the predecessor
+/// lists of the old edges: `LLRM_CHECK_REPLAY` on tests/run static_inline under
+/// the LLVM order found `escaped_before` of block 1 with preds [5, 2] where
+/// deriving it gave [5]. Here the object escapes in `b`, which the branch then
+/// stops reaching `c`.
+#[test]
+fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
+    let mut module = parsed(
+        "declare void @use(ptr)\ndeclare void @peek()\ndefine void @f(i1 %k) {\nentry:\n  %s = alloca i32\n  br i1 %k, label %a, label %b\na:\n  br label %c\nb:\n  call void @use(ptr %s)\n  br label %c\nc:\n  call void @peek()\n  ret void\n}\n",
+    );
+    let id = module.named("f").expect("f");
+    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else {
+        panic!("a function")
+    };
+    let br = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Br) && f.instruction(inst).operands.len() == 3)
+        .expect("the branch");
+    let a = match f.instruction(br).operands[1] {
+        Operand::Block(a) => a,
+        _ => panic!("a block"),
+    };
+    f.take_changes();
+    let before = f.mark();
+    f.set_operand(br, 2, Operand::Block(a));
+    let changes = f.changes_since(before).expect("on the log").to_vec();
+    for (name, unaffected) in [
+        (
+            "points-to",
+            Pointers::unaffected
+                as fn(&[llrm_mir::module::Change], &llrm_mir::context::Context, &llrm_mir::module::Function) -> bool,
+        ),
+        ("call-effects", CallEffects::unaffected),
+        ("writes", super::Writes::unaffected),
+    ] {
+        assert!(
+            !unaffected(&changes, &module.context, function(&module, "f")),
+            "{name} kept past a branch sent elsewhere"
+        );
+    }
 }

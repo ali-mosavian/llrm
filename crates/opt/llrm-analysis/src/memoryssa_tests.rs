@@ -1026,3 +1026,23 @@ fn overlap_asks_the_program_for_its_spaces_not_the_machine() {
     let asked = ASKED.with(std::cell::Cell::get);
     assert_eq!(asked, 0, "the machine was asked for its spaces {asked} times in 10 pairs");
 }
+
+/// A load apart from 3,000 stores stepped over all of them (the walk found the
+/// live state): no bound on one walk. It stops at `MAX_WALK_STEPS` and answers
+/// with the access it stopped at, which the load is taken to be clobbered by.
+#[test]
+fn test_a_walk_stops_at_the_step_limit_with_the_access_it_stopped_at() {
+    let stores: String =
+        (1..=3000).map(|k| format!("  %a{k} = getelementptr i8, ptr %p, i16 {k}\n  store i8 0, ptr %a{k}\n")).collect();
+    let parsed =
+        Parsed::new(&format!("define i8 @f(ptr %p) {{\nb0:\n{stores}  %y = load i8, ptr %p\n  ret i8 %y\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let load = site(&unit, "b0", 6000);
+    let before = STEPS.with(std::cell::Cell::get);
+    let found = graph.clobbers(load, &accesses.references[&load]);
+    let steps = STEPS.with(std::cell::Cell::get) - before;
+    assert!(steps <= MAX_WALK_STEPS + 1, "{steps} steps for one walk");
+    assert!(found.iter().all(|id| graph.access(*id).kind != Kind::Live), "the walk said nothing clobbers the load");
+}

@@ -130,7 +130,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::Type;
-use llrm_support::hash::{HashSet, SparseIdMap};
+use llrm_support::hash::SparseIdMap;
 
 /// How many integer values the target holds in registers, and how many of
 /// them a call leaves; none leaves pressure unpriced.
@@ -1206,6 +1206,9 @@ pub struct Pressure {
     placed: Placed,
     cells: BTreeMap<ValueId, ValueId>,
     counted: IdSet<ValueId>,
+    /// The values the function had when `counted` was made: those after it are
+    /// new.
+    values: Seen,
     addressed: IdSet<ValueId>,
     /// Whether each pointer an access is made through is folded: asked of the
     /// function once.
@@ -1216,6 +1219,21 @@ pub struct Pressure {
     /// What changes in the live set across each instruction of a block, and
     /// what changes from one block's end to another's start: the same.
     stepped: Stepped,
+}
+
+/// The values a function had when a cache was made: not part of what a
+/// `Pressure` says, so two of one function are equal whatever ids it has gone
+/// through.
+#[derive(Clone, Copy, Debug, Default)]
+struct Seen(usize);
+
+impl PartialEq for Seen {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// The blocks each value is live into and out of, made from `found` when a
@@ -1366,7 +1384,7 @@ impl Pressure {
         scales: u8,
         found: Liveness,
     ) -> Self {
-        Self::with(context, function, scales, found, Placed::default())
+        Self::with(context, function, scales, found, Placed::default(), None)
     }
 
     /// `of`, the liveness being `found` and `placed` the blocks each value is
@@ -1377,20 +1395,21 @@ impl Pressure {
         scales: u8,
         found: Liveness,
         placed: Placed,
+        counted: Option<IdSet<ValueId>>,
     ) -> Self {
         let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
+        let counted = counted.unwrap_or_else(|| {
+            (0..function.value_count() as u32)
+                .map(ValueId)
+                .filter(|&value| counts(context, function, value, scales))
+                .collect()
+        });
         Self {
             found,
             placed,
             cells: cells(function),
-            counted: (0..function.value_count() as u32)
-                .map(ValueId)
-                .filter(|&value| match function.value(value).def {
-                    ValueDef::Instruction(inst) => !function.is_erased(inst),
-                    ValueDef::Argument(_) => true,
-                })
-                .filter(|&value| integer_in(context, function, value, scales))
-                .collect(),
+            counted,
+            values: Seen(function.value_count()),
             addressed: addressed.into_iter().collect(),
             folds,
             points: BlockPoints::default(),
@@ -1486,11 +1505,20 @@ impl Pressure {
         // holds it: the caches were dropped and made again for every block at
         // every edit, the size of the function's live sets each time.
         let shared = std::rc::Rc::strong_count(&previous) > 1;
+        let (kept_counted, kept_values) = (previous.counted.clone(), previous.values.0);
         let (mut found, placed, caches) = match std::rc::Rc::try_unwrap(previous) {
             Ok(owned) => (owned.found, owned.placed, Some((owned.points, owned.stepped))),
             Err(kept) => (kept.found.clone(), kept.placed.clone(), None),
         };
         let index = placed.0;
+        // An argument read in many places is live across most of the function,
+        // and every edit that reads it names it: its walk was the function's
+        // size at each update.
+        if let Some(placed) = &index {
+            for value in unmoved(function, &named, &edits.blocks, placed) {
+                named.remove(&value);
+            }
+        }
         // Only a value whose blocks moved is touched: of the values a pass
         // names nearly all are read where they were (quicksort -O3, 13
         // updates: 1,300 named, 91 changed), and taking each out of its
@@ -1507,6 +1535,16 @@ impl Pressure {
             let settled = |phi: ValueId, home: BlockId| {
                 found.live_out.get(&llrm_analysis::cfg::id(home)).is_some_and(|set| set.contains(&phi))
             };
+            #[cfg(test)]
+            RANGES_ASKED.with(|one| {
+                one.set(
+                    one.get()
+                        + named
+                            .iter()
+                            .filter(|&value| matches!(function.value(value).def, ValueDef::Argument(_)))
+                            .count(),
+                )
+            });
             let computed = liveness::ranges_of(function, &named, Some(&settled));
             let mut grew = false;
             for value in named.iter().collect::<Vec<_>>() {
@@ -1566,7 +1604,51 @@ impl Pressure {
                 "LLRM_CHECK_PRESSURE: the updated live sets differ from a fresh solve"
             );
         }
-        let mut made = Pressure::with(context, function, scales, found, Placed((!shared).then_some(placed)));
+        // Which values the model counts changes for those an edit named (their
+        // readers, their flags, whether they are still made) and the values it
+        // made; every other keeps the answer it had.
+        // A pointer is folded where everything that reads it is an access or
+        // a folded pointer, so a value whose answer moved moves its operands'.
+        let mut counted = kept_counted;
+        let mut ahead: Vec<ValueId> =
+            edits.named.iter().chain((kept_values..function.value_count()).map(|at| ValueId(at as u32))).collect();
+        let mut asked = IdSet::<ValueId>::new();
+        while let Some(value) = ahead.pop() {
+            if !asked.insert(value) {
+                continue;
+            }
+            let now = counts(context, function, value, scales);
+            if now == counted.contains(&value) {
+                continue;
+            }
+            if now {
+                counted.insert(value);
+            } else {
+                counted.remove(&value);
+            }
+            if let ValueDef::Instruction(inst) = function.value(value).def
+                && !function.is_erased(inst)
+            {
+                ahead.extend(function.instruction(inst).operands.iter().filter_map(|operand| match operand {
+                    Operand::Value(operand) => Some(*operand),
+                    _ => None,
+                }));
+            }
+        }
+        let mut made =
+            Pressure::with(context, function, scales, found, Placed((!shared).then_some(placed)), Some(counted));
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
+            let fresh = Pressure::of(context, function, scales);
+            let differ: Vec<ValueId> = (0..function.value_count() as u32)
+                .map(ValueId)
+                .filter(|value| fresh.counted.contains(value) != made.counted.contains(value))
+                .collect();
+            assert!(
+                differ.is_empty(),
+                "LLRM_CHECK_PRESSURE: the counted values of the update differ from a fresh pass at {differ:?} (named {:?})",
+                edits.named.iter().collect::<Vec<_>>()
+            );
+        }
         if let Some((points, stepped)) = caches {
             // The blocks the edits were in, with the blocks whose live sets
             // moved.
@@ -1595,6 +1677,81 @@ impl Pressure {
         }
         Some(made)
     }
+}
+
+/// The arguments of `named` that the edit in `blocks` left live where they
+/// were. An argument has no definition to end its range, so it is live into a
+/// block that reads it or from which a read can be reached. A read the edit
+/// made in a block it was live into anyway, and a block it was live into that
+/// can still reach a read, leave the range as it was; a block the argument was
+/// not live into that now reads it, or one that reaches no read, is for
+/// `ranges_of`.
+fn unmoved(
+    function: &Function,
+    named: &IdSet<ValueId>,
+    blocks: &IdSet<BlockId>,
+    placed: &IdMap<ValueId, (IdSet<i64>, IdSet<i64>)>,
+) -> Vec<ValueId> {
+    let Some(&entry) = function.layout().first() else { return Vec::new() };
+    let mut found = Vec::new();
+    'values: for value in named.iter() {
+        let ValueDef::Argument(_) = function.value(value).def else { continue };
+        let Some((into, _)) = placed.get(&value) else { continue };
+        let mut readers = IdSet::<BlockId>::new();
+        for user in function.users(value) {
+            if function.instruction(user.user).opcode == Opcode::Phi {
+                continue 'values;
+            }
+            if let Some(block) = function.parent(user.user)
+                && block != entry
+            {
+                readers.insert(block);
+            }
+        }
+        for block in blocks.iter() {
+            let was = into.contains(&cfg::id(block));
+            match (readers.contains(&block), was) {
+                (true, false) => continue 'values,
+                (false, true) => {
+                    let mut seen = IdSet::<BlockId>::new();
+                    let mut ahead: Vec<BlockId> = function.successors(block).into_iter().collect();
+                    let mut reaches = false;
+                    while let Some(next) = ahead.pop() {
+                        if readers.contains(&next) {
+                            reaches = true;
+                            break;
+                        }
+                        if seen.insert(next) {
+                            ahead.extend(function.successors(next));
+                        }
+                    }
+                    if !reaches {
+                        continue 'values;
+                    }
+                }
+                _ => {}
+            }
+        }
+        found.push(value);
+    }
+    found
+}
+
+/// Whether `value` is one the model counts: made by an instruction still
+/// there, or an argument, and held in a register.
+fn counts(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
+    #[cfg(test)]
+    COUNTS_ASKED.with(|one| one.set(one.get() + 1));
+    let made = match function.value(value).def {
+        ValueDef::Instruction(inst) => !function.is_erased(inst),
+        ValueDef::Argument(_) => true,
+    };
+    made && integer_in(context, function, value, scales)
 }
 
 /// `found` and `placed` with each value of `named` live where `computed` has
@@ -1628,6 +1785,20 @@ fn renewed(
 #[cfg(test)]
 thread_local! {
     pub(crate) static POINTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Values `Pressure` asked whether the model counts, for a test that an update
+// asks of the values an edit named and no others.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COUNTS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Arguments `Pressure::updated` asked `ranges_of` for, for a test that an
+// argument an edit left live where it was is not walked again.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RANGES_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Edits made to a value's live blocks by `Pressure::update_owned`, for a test
@@ -1958,18 +2129,22 @@ impl Run {
     /// instruction (block and step by position), for the residents besides the
     /// cells there, and `held` are those besides at each point of the segment
     /// registers, which come after all the others.
+    ///
+    /// `extra` is told each step of each block, in order, and says what comes
+    /// to be among the residents besides (first) and what goes (second) since
+    /// the step before: a caller with N residents that last a block does not
+    /// list them at every step.
     pub fn fit<K: Ord + Copy + std::hash::Hash, S: Spilled<K>>(
         &self,
         room: Room,
         key: &dyn Fn(ValueId) -> K,
         price: &dyn Fn(K) -> i64,
         held: &[K],
-        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>),
+        extra: &mut dyn FnMut(usize, usize, &mut Vec<K>, &mut Vec<K>),
     ) -> i64 {
         let mut sweep = Sweep::<K, S>::new();
         let mut kinds: [Ranked<K>; 3] = Default::default();
-        let mut wanted = Vec::new();
-        let mut now = Vec::<K>::new();
+        let (mut coming, mut going) = (Vec::new(), Vec::new());
         for (at, block) in self.blocks.iter().enumerate() {
             for cell in block.leave.iter().filter(|cell| cell.member[0]) {
                 kinds[0].remove(key(cell.cell));
@@ -1978,21 +2153,19 @@ impl Run {
                 kinds[0].add(key(cell.cell), price(key(cell.cell)), &sweep.spilled);
             }
             for (index, step) in block.steps.iter().enumerate() {
-                wanted.clear();
-                extra(at, index, &mut wanted);
-                // Most steps want what the one before did: nothing to add or
-                // take away. Else each is asked of a set, not
-                // of the list.
-                if wanted != now {
-                    let (is_wanted, was): (HashSet<K>, HashSet<K>) =
-                        (wanted.iter().copied().collect(), now.iter().copied().collect());
-                    for gone in now.iter().filter(|one| !is_wanted.contains(one)) {
-                        kinds[0].remove(*gone);
-                    }
-                    for new in wanted.iter().filter(|one| !was.contains(one)) {
-                        kinds[0].add(*new, price(*new), &sweep.spilled);
-                    }
-                    std::mem::swap(&mut now, &mut wanted);
+                coming.clear();
+                going.clear();
+                extra(at, index, &mut coming, &mut going);
+                #[cfg(test)]
+                LISTED.with(|listed| {
+                    let (told, steps) = listed.get();
+                    listed.set((told + coming.len() + going.len(), steps + 1));
+                });
+                for gone in &going {
+                    kinds[0].remove(*gone);
+                }
+                for new in &coming {
+                    kinds[0].add(*new, price(*new), &sweep.spilled);
                 }
                 sweep.fit(&mut kinds, 0, step.registers);
                 for cell in step.read.iter().filter(|cell| cell.member[0]) {
@@ -2029,6 +2202,13 @@ impl Run {
         }
         sweep.cost
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Residents `fit` was told of by its caller, and steps it took, for a test
+    /// that a long block does not list its residents at every step.
+    pub(crate) static LISTED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
 /// What a sweep has spilled so far.

@@ -321,24 +321,27 @@ b0:
     );
 }
 
-/// Under the pass manager Decide still reads @peek's `readonly`: without
-/// the module's globals it took the call for a writer and left the branch.
+/// A number kept in a cell across a readonly call is put in the branch's
+/// condition by `fold` (it reads the memory), and `decide` then takes the
+/// branch: the pair decides it, as the pipeline runs them.
 #[test]
-fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided() {
+fn a_branch_on_a_cell_kept_across_a_readonly_call_is_decided_after_fold() {
     let text = ACROSS_READONLY_CALL.replace(
         "  ret i16 %v\n",
         "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
     );
     let mut module = parsed(&format!("{DOS}{text}"));
+    managed(&mut module, crate::fold::Fold);
     let after = managed(&mut module, Decide);
     assert!(!after.contains("br i1"), "{after}");
 }
 
-/// Decide solved memory for the body itself (164 M instructions over 36 runs on
-/// d_faces, 'mir decide'), beside the manager's `ThroughMemory` every other
-/// client reads. What the manager holds of the body is what it decides from.
+/// Decide solved memory for the body (a quarter of the pass, 33 M of d_faces
+/// -O2's 2,856 M) and decided none of 574 branches by it: a number memory gave
+/// is `fold`'s to put in the condition. It asks the manager for the values
+/// alone.
 #[test]
-fn decide_reads_the_managers_facts_through_memory_and_derives_none() {
+fn decide_solves_no_memory() {
     let text = ACROSS_READONLY_CALL.replace(
         "  ret i16 %v\n",
         "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
@@ -347,10 +350,27 @@ fn decide_reads_the_managers_facts_through_memory_and_derives_none() {
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
     let (context, function) = module.function_mut("f").expect("@f");
     let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
-    let _ = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, &layout, function);
-    let before = llrm_analysis::consts::memory_derivations();
-    assert!(super::_decided(context, &layout, function, &mut analyses).expect("decides"));
-    assert_eq!(llrm_analysis::consts::memory_derivations() - before, 0);
+    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    assert!(analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(), "decide solved memory for the body");
+}
+
+/// The facts decide asked of the manager beside the values were the memory
+/// annotations and points-to of the whole body (26.0 M of d_faces -O2); across
+/// the corpus (1,580 compiles, 33,932 runs, 3,002 decisions) a decision made
+/// without them is the same decision, none lost, none new.
+#[test]
+fn decide_asks_no_memory_annotations_or_points_to() {
+    let text = ACROSS_READONLY_CALL.replace(
+        "  ret i16 %v\n",
+        "  %c = icmp eq i16 %v, 7\n  br i1 %c, label %b1, label %b2\n\nb1:\n  ret i16 1\n\nb2:\n  ret i16 2\n",
+    );
+    let mut module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    super::_decided(context, &layout, function, &mut analyses).expect("decides");
+    assert!(analyses.cached::<llrm_analysis::manager::PointerValues>().is_none(), "decide solved points-to");
+    assert!(analyses.cached::<llrm_analysis::manager::Annotated>().is_none(), "decide annotated the body's memory");
 }
 
 /// Whether @f still has a block named `name`.

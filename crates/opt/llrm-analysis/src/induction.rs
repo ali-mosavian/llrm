@@ -672,7 +672,7 @@ pub fn counted_renewed(
     // One body under one set of facts: what is known of its congruences is
     // found once for the loops, not once for each proof (610 times, 585 of
     // 6,449 Minstr, on 32 loops).
-    let congruent = std::cell::OnceCell::new();
+    let congruent = std::cell::RefCell::new(crate::alias::CongruenceMemo::default());
     let unit = &Unit { congruent: Some(&congruent), ..*unit };
     // A proof asks the proofs of the loops around it (`_ranged`), each of which
     // asks those around it: the outer loops first, so that each is asked of
@@ -1659,18 +1659,6 @@ fn _solved(
 /// Whether `bound - start` is a multiple of `2**shift`, by what
 /// `congruences` know of each: a value is its residue modulo a modulus, an
 /// exact constant a modulus of 0.
-/// What `find` makes of the unit's congruences: its cell's, made once, where it
-/// carries one.
-fn _congruences<'a>(
-    unit: &Unit<'a>,
-    find: impl FnOnce() -> crate::alias::Congruences,
-) -> std::borrow::Cow<'a, crate::alias::Congruences> {
-    match unit.congruent {
-        Some(cell) => std::borrow::Cow::Borrowed(cell.get_or_init(find)),
-        None => std::borrow::Cow::Owned(find()),
-    }
-}
-
 fn _low_bits_zero(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
@@ -1678,14 +1666,35 @@ fn _low_bits_zero(
     bound: &AffineOperand,
     shift: u32,
 ) -> bool {
-    let known = _congruences(unit, || crate::alias::congruences_with(unit, facts));
+    // Only the two values' congruences are asked: the body's whole were found
+    // for each version of a body of loops (7.2 M, 255 times at 128 loops).
+    // A unit that carries the body's has them found already.
+    let wanted: Vec<ValueId> = [start, bound]
+        .into_iter()
+        .filter_map(|one| if let AffineOperand::Value(value, _) = one { Some(*value) } else { None })
+        .collect();
+    let known = crate::alias::congruences_of(unit, facts, Some(&wanted), unit.congruent);
+    if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
+        let whole = crate::alias::congruences_of(unit, facts, None, None);
+        for value in &wanted {
+            assert_eq!(
+                known.get(value),
+                whole.get(value),
+                "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
+            );
+        }
+    }
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),
         AffineOperand::Value(value, _) => {
             known.get(value).cloned().or_else(|| facts.get(value).map(|fact| (BigInt::from(0), fact.n.clone())))
         }
     };
-    let (Some((start_modulus, start_residue)), Some((bound_modulus, bound_residue))) = (of(start), of(bound)) else {
+    let (start_fact, bound_fact) = (of(start), of(bound));
+    if let Some(memo) = unit.congruent {
+        memo.borrow_mut().recycle(known);
+    }
+    let (Some((start_modulus, start_residue)), Some((bound_modulus, bound_residue))) = (start_fact, bound_fact) else {
         return false;
     };
     let power = BigInt::from(1) << shift;
@@ -1856,11 +1865,20 @@ fn _unit_maximum(
     ranged.into_iter().chain(bounded).min()
 }
 
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    /// Loops `advances` was asked of: a pass that wants one value should not
+    /// ask every loop of the body.
+    pub static ADVANCES_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How far each integer recurrence of the loop advances per iteration.
 pub fn advances(
     unit: &Unit,
     loop_: &Loop,
 ) -> IndexMap<ValueId, BigInt> {
+    #[cfg(any(test, feature = "testing"))]
+    ADVANCES_ASKED.with(|asked| asked.set(asked.get() + 1));
     let found = basics(unit, loop_);
     recurrences(unit, loop_, &found)
         .values

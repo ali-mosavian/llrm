@@ -211,9 +211,41 @@ pub struct PointsTo {
 /// answer for an instruction is what reaches its block (`entering`), what the
 /// block's publishing instructions up to it publish, and what a call passes
 /// to its callee; found when asked and kept. Most solves never ask.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct EscapedBefore {
     objects: Rc<IndexSet<ObjectRef>>,
+    /// What the answers are worked out from, found with the solve.
+    inputs: Rc<Inputs>,
+    /// What reaches each block, and the instructions asked of, worked out from
+    /// `inputs` when first asked: a solve nothing asks about builds none of it
+    /// (334 solves, 40 asked, over d_faces at -O2).
+    built: Rc<std::cell::OnceCell<Built>>,
+    /// What a call lets its callee reach without keeping it.
+    during: IndexMap<InstId, Vec<usize>>,
+    found: Answers,
+}
+
+/// What `EscapedBefore` is worked out from: each block's successors, and its
+/// instructions that publish or are asked of, in order.
+#[derive(Debug, Default, Eq, PartialEq)]
+struct Inputs {
+    blocks: Vec<(i64, Vec<i64>)>,
+    /// Per block: an instruction that publishes (with what) or is asked of.
+    order: Vec<Vec<Step>>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Step {
+    inst: InstId,
+    /// Sorted, where it publishes something.
+    publishes: Option<Vec<usize>>,
+    /// A call, load or store.
+    asked: bool,
+}
+
+/// `EscapedBefore`'s structure.
+#[derive(Debug, Default)]
+struct Built {
     /// What reaches the start of each block.
     entering: IndexMap<i64, Bits>,
     /// The instructions asked of (calls, loads and stores): their block and
@@ -223,13 +255,17 @@ pub struct EscapedBefore {
     sites: IndexMap<InstId, (i64, usize)>,
     /// What each block's publishing instructions publish, in order.
     published: IndexMap<i64, Vec<Vec<usize>>>,
-    /// What a call lets its callee reach without keeping it.
-    during: IndexMap<InstId, Vec<usize>>,
-    found: Answers,
 }
 
 thread_local! {
     static BEFORE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static STRUCTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `EscapedBefore` structures this thread has built, for a test that a
+/// solve nothing asks about builds none.
+pub fn structures_built() -> usize {
+    STRUCTURES.with(std::cell::Cell::get)
 }
 
 /// How many answers of `EscapedBefore` this thread has worked out, for a test
@@ -253,6 +289,89 @@ impl PartialEq for Answers {
 
 impl Eq for Answers {}
 
+impl PartialEq for EscapedBefore {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.objects == other.objects && self.inputs == other.inputs && self.during == other.during
+    }
+}
+
+impl Eq for EscapedBefore {}
+
+impl Inputs {
+    /// What reaches each block: the publications of every block with a path to
+    /// it, a cycle's included in all of its members. The blocks in components
+    /// that follow their predecessors, so that each is passed once (gcc's
+    /// `ssa_propagation_engine` over reverse post order).
+    fn built(
+        &self,
+        width: usize,
+    ) -> Built {
+        STRUCTURES.with(|built| built.set(built.get() + 1));
+        let graph: Vec<cfg::Block> =
+            self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone().into() }).collect();
+        let predecessors = loops::predecessors(&graph);
+        let none: &[i64] = &[];
+        let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
+        let mut published: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
+        let mut sites = IndexMap::<InstId, (i64, usize)>::default();
+        for (block, steps) in graph.iter().zip(&self.order) {
+            let mut all = Bits::new(width);
+            let mut mine: Vec<Vec<usize>> = Vec::new();
+            for step in steps {
+                if let Some(objects) = &step.publishes {
+                    objects.iter().for_each(|one| all.insert(*one));
+                    mine.push(objects.clone());
+                }
+                if step.asked {
+                    sites.insert(step.inst, (block.at, mine.len()));
+                }
+            }
+            generated.push(all);
+            published.insert(block.at, mine);
+        }
+        let index: IndexMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+        let parents: Vec<Vec<usize>> = graph
+            .iter()
+            .map(|block| {
+                predecessors.get(&block.at).unwrap_or(none).iter().filter_map(|one| index.get(one).copied()).collect()
+            })
+            .collect();
+        let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);
+        let mut members: Vec<Vec<usize>> = vec![Vec::new(); cyclic.len()];
+        for (at, one) in component.iter().enumerate() {
+            members[*one].push(at);
+        }
+        let mut through: Vec<Bits> = Vec::with_capacity(cyclic.len());
+        let mut reaching: Vec<Bits> = Vec::with_capacity(cyclic.len());
+        for (one, blocks) in members.iter().enumerate() {
+            let mut coming = Bits::new(width);
+            let mut own = Bits::new(width);
+            for &at in blocks {
+                own.union_with(&generated[at]);
+                for &parent in &parents[at] {
+                    if component[parent] != one {
+                        coming.union_with(&through[component[parent]]);
+                    }
+                }
+            }
+            let mut leaving = coming.clone();
+            leaving.union_with(&own);
+            // Every member of a cycle reaches every other, itself too.
+            if cyclic[one] {
+                coming = leaving.clone();
+            }
+            reaching.push(coming);
+            through.push(leaving);
+        }
+        let entering: IndexMap<i64, Bits> =
+            graph.iter().enumerate().map(|(at, block)| (block.at, reaching[component[at]].clone())).collect();
+        Built { entering, sites, published }
+    }
+}
+
 impl EscapedBefore {
     fn before(
         &self,
@@ -261,12 +380,13 @@ impl EscapedBefore {
         if let Some(found) = self.found.0.borrow().get(at) {
             return Some(Rc::clone(found));
         }
-        let (block, upto) = *self.sites.get(at)?;
+        let built = self.built.get_or_init(|| self.inputs.built(self.objects.len()));
+        let (block, upto) = *built.sites.get(at)?;
         BEFORE_ANSWERS.with(|answers| answers.set(answers.get() + 1));
         // The state after an instruction holds the state before it: what a
         // call publishes itself reaches it, as its own arguments do.
-        let mut state = self.entering[&block].clone();
-        for objects in self.published[&block].iter().take(upto) {
+        let mut state = built.entering[&block].clone();
+        for objects in built.published[&block].iter().take(upto) {
             objects.iter().for_each(|one| state.insert(*one));
         }
         if let Some(reached) = self.during.get(at) {
@@ -303,20 +423,30 @@ impl EscapedBefore {
         reference: &MemRef,
         cell: &MemRef,
     ) -> bool {
-        let Some(bits) = self.before(&at) else { return false };
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
         let escaping = reference.provenance.as_ref().is_none_or(|one| {
             one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal))
         });
-        let unreached = |object: &ObjectRef| {
-            object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one))
-        };
-        escaping
-            && cell
-                .provenance
-                .as_ref()
-                .is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
+        // What escaped before `at` is asked of only an access that can reach
+        // only what escaped, to a cell in frame objects.
+        let frames = cell
+            .provenance
+            .as_ref()
+            .is_some_and(
+                |one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.kind == MemoryKind::Frame),
+            );
+        if !escaping || !frames {
+            return false;
+        }
+        let Some(bits) = self.before(&at) else { return false };
+        cell.provenance
+            .as_ref()
+            .is_some_and(
+                |one| one.slices
+                    .iter()
+                    .all(|slice| self.objects.get_index_of(&slice.object).is_none_or(|index| !bits.contains(index))),
+            )
     }
 }
 
@@ -2371,8 +2501,7 @@ pub fn initialized(
     if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
         return Ok(vec![Vec::new(); count]);
     }
-    // The three solves below differ in the call arguments and captures they
-    // ask of the escape phase alone: the value solve is made once.
+    // The value solve is made once; the escape phase is not asked.
     let values = match unit.point_values {
         Some(_) => None,
         None => Some(point_values(unit)?),
@@ -2380,9 +2509,11 @@ pub fn initialized(
     let held =
         Procedure { unit: values.as_ref().map_or(*unit, |values| unit.with_point_values(values)), ..procedure.clone() };
     let (procedure, unit) = (&held, &held.unit);
-    let facts = points_to(unit, None, None)?;
+    // What it reads of the solve is each pointer's objects: neither what
+    // escapes nor, for the actuals, anything the arguments add (they enter
+    // only the escape phase), so the value solve is all it asks.
+    let facts = unit.point_values.expect("the value solve was made above or is held");
     let effects = calls_annotated(procedure, known)?;
-    let actuals = points_to(unit, Some(&procedure.arguments), None)?;
     // `None` is every byte: nothing asked yet.
     type State = Vec<Option<Ranges>>;
     let meet = |one: &State, other: &State| -> State {
@@ -2443,7 +2574,7 @@ pub fn initialized(
                             .and_then(|one| one.parameter_attrs.get(argument))
                             .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)),
                     );
-                    let Some(pointer) = _operand(unit, *operand, &actuals.values) else { continue };
+                    let Some(pointer) = _operand(unit, *operand, &facts.values) else { continue };
                     let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
                     let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
                     for (low, high) in ranges {
@@ -3010,8 +3141,6 @@ fn escapes(
     ESCAPE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let graph = cfg::graph(function);
-    let predecessors = loops::predecessors(&graph);
-    let none: &[i64] = &[];
     let values = &solved.values;
     let instructions = |at: i64| function.block(cfg::block(at)).instructions();
     // Escape is flow-sensitive separately from pointer contents. A pointer
@@ -3211,77 +3340,45 @@ fn escapes(
     }
     let objects = objects.into_inner();
     let width = objects.len();
-    let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
-    let mut published: IndexMap<i64, Vec<Vec<usize>>> = IndexMap::default();
-    let mut sites = IndexMap::<InstId, (i64, usize)>::default();
+    // What escapes anywhere is the union of what any instruction publishes. The
+    // flow-sensitive part (what reaches each block, and the instructions asked
+    // of) is found when first asked.
+    let mut every = Bits::new(width);
+    let mut order: Vec<Vec<Step>> = Vec::with_capacity(graph.len());
     for block in &graph {
-        let mut all = Bits::new(width);
-        let mut mine: Vec<Vec<usize>> = Vec::new();
+        let mut steps = Vec::new();
         for inst in instructions(block.at) {
-            if let Some(objects) = publishes[&block.at].get(inst) {
-                objects.iter().for_each(|one| all.insert(*one));
-                let mut sorted = objects.clone();
-                sorted.sort_unstable();
-                mine.push(sorted);
-            }
-            if calls.contains(inst)
+            let publishes = publishes[&block.at]
+                .get(inst)
+                .map(
+                    |objects| {
+                        objects.iter().for_each(|one| every.insert(*one));
+                        let mut sorted = objects.clone();
+                        sorted.sort_unstable();
+                        sorted
+                    },
+                );
+            let asked = calls.contains(inst)
                 || matches!(
                     function.instruction(*inst).opcode,
                     Opcode::Load { .. } | Opcode::Store { .. }
-                )
-            {
-                sites.insert(*inst, (block.at, mine.len()));
+                );
+            if publishes.is_some() || asked {
+                steps.push(Step { inst: *inst, publishes, asked });
             }
         }
-        generated.push(all);
-        published.insert(block.at, mine);
+        order.push(steps);
     }
-    // What reaches each block: the publications of every block with a path to
-    // it, a cycle's included in all of its members. The blocks in components
-    // that follow their predecessors, so that each is passed once (gcc's
-    // `ssa_propagation_engine` over reverse post order).
-    let index: IndexMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let parents: Vec<Vec<usize>> = graph
-        .iter()
-        .map(|block| {
-            predecessors.get(&block.at).unwrap_or(none).iter().filter_map(|one| index.get(one).copied()).collect()
-        })
-        .collect();
-    let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);
-    let mut members: Vec<Vec<usize>> = vec![Vec::new(); cyclic.len()];
-    for (at, one) in component.iter().enumerate() {
-        members[*one].push(at);
-    }
-    let mut through: Vec<Bits> = Vec::with_capacity(cyclic.len());
-    let mut reaching: Vec<Bits> = Vec::with_capacity(cyclic.len());
-    for (one, blocks) in members.iter().enumerate() {
-        let mut coming = Bits::new(width);
-        let mut own = Bits::new(width);
-        for &at in blocks {
-            own.union_with(&generated[at]);
-            for &parent in &parents[at] {
-                if component[parent] != one {
-                    coming.union_with(&through[component[parent]]);
-                }
-            }
-        }
-        let mut leaving = coming.clone();
-        leaving.union_with(&own);
-        // Every member of a cycle reaches every other, itself too.
-        if cyclic[one] {
-            coming = leaving.clone();
-        }
-        reaching.push(coming);
-        through.push(leaving);
-    }
-    let entering: IndexMap<i64, Bits> =
-        graph.iter().enumerate().map(|(at, block)| (block.at, reaching[component[at]].clone())).collect();
-    let mut every = Bits::new(width);
-    generated.iter().for_each(|one| every.union_with(one));
     let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     let escaped = named(&every);
-    let escaped_before =
-        EscapedBefore { objects: Rc::new(objects), entering, sites, published, during, found: Answers::default() };
+    let inputs = Inputs { blocks: graph.iter().map(|block| (block.at, block.succ.to_vec())).collect(), order };
+    let escaped_before = EscapedBefore {
+        objects: Rc::new(objects),
+        inputs: Rc::new(inputs),
+        built: Rc::default(),
+        during,
+        found: Answers::default(),
+    };
     Ok(PointsTo { values: values.clone(), escaped, escaped_before })
 }
 
@@ -3319,12 +3416,8 @@ fn could_publish(
         Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => return true,
         Opcode::Store { .. } => return is_pointer(unit, op.operands[0]) || names_a_global(unit, op),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. }
-        | Opcode::GetElementPtr { .. }
-        | Opcode::Phi
-        | Opcode::Select
-        | Opcode::Call(_)
-        | Opcode::Invoke(_) => true,
+        Opcode::Phi | Opcode::Select => false,
+        Opcode::Load { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) => true,
         _ => false,
     };
     (!carried && op.operands.iter().any(|&operand| is_pointer(unit, operand))) || names_a_global(unit, op)
@@ -3363,12 +3456,17 @@ fn _lost(
     values: &IndexMap<ValueId, Provenance>,
 ) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
+    // A join with an arm no fact follows is itself no fact (`UNKNOWN`): the
+    // objects of its other arms are no longer followed (a load through
+    // `phi [%slot, %b0], [%q, %b1]` reads the slot).
+    let joins_unknown = matches!(op.opcode, Opcode::Phi | Opcode::Select)
+        && joined(op)
+            .is_some_and(|arms| arms.iter().any(|&arm| is_pointer(unit, arm) && _operand(unit, arm, values).is_none()));
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
-            true
-        }
+        Opcode::Phi | Opcode::Select => !joins_unknown,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
     };
@@ -3497,7 +3595,7 @@ fn mod_floor(
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> Congruences {
-    congruences_with(unit, &unit.registers())
+    congruences_of(unit, &unit.registers(), None, None)
 }
 
 /// Each value's (residue, modulus): what it is congruent to.
@@ -3513,32 +3611,184 @@ pub fn congruences_found() -> usize {
     CONGRUENCES.with(std::cell::Cell::get)
 }
 
-/// `congruences`, given what `consts::known` finds without memory.
-pub fn congruences_with(
+/// What the congruences of one body asked of by value have found: the answers,
+/// the body's order and each loop's counters, kept for the asks of one version
+/// of the body under one set of facts (an ask under others starts it again).
+#[derive(Default)]
+pub struct CongruenceMemo {
+    order: Option<llrm_mir::dense::IdMap<InstId, usize>>,
+    counters: Vec<Option<Rc<Vec<induction::Affine>>>>,
+    answers: llrm_mir::dense::IdMap<ValueId, Option<(BigInt, BigInt)>>,
+    scratch: Congruences,
+    inserted: Vec<ValueId>,
+}
+
+impl CongruenceMemo {
+    /// The map `congruences_of` made of the last ask by value, given back: it
+    /// is the size of the body's last value, and one made for each ask costs as
+    /// much as the body.
+    pub fn recycle(
+        &mut self,
+        mut found: Congruences,
+    ) {
+        for value in self.inserted.drain(..) {
+            found.remove(&value);
+        }
+        self.scratch = found;
+    }
+}
+
+/// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
+/// or of every value where none, given what `consts::known` finds without
+/// memory: what they are congruent to is what the additions, subtractions,
+/// products and shifts they are computed from, and the loops' counters among
+/// them, give. The values nothing else reaches are not worked out (the whole
+/// body's, once for each version of a body of 128 loops, was 7.2 M and 3.9% of
+/// the compile).
+///
+/// The answer for each value asked is the one asked of every value gives: the
+/// values a value is computed from are visited in the body's order, as it
+/// does, so that one visited before its operand is given the operand's
+/// weaker answer in both.
+pub fn congruences_of(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
+    wanted: Option<&[ValueId]>,
+    memo: Option<&std::cell::RefCell<CongruenceMemo>>,
 ) -> Congruences {
-    CONGRUENCES.with(|count| count.set(count.get() + 1));
+    let mut inserted: Vec<ValueId> = Vec::new();
+    let mut result = match memo.filter(|_| wanted.is_some()) {
+        Some(memo) => std::mem::take(&mut memo.borrow_mut().scratch),
+        None => Congruences::default(),
+    };
+    if wanted.is_none() {
+        CONGRUENCES.with(|count| count.set(count.get() + 1));
+    }
     let function = unit.function;
-    let mut result = Congruences::default();
+    let qualifies = |value: ValueId, op: &llrm_mir::module::Instruction| {
+        matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+        )
+            && op.operands.len() == 2
+            && unit.int_bits(Operand::Value(value)).is_some()
+    };
+    let memo = memo.filter(|_| wanted.is_some());
+    // Held answers are for the unit's own registers alone: a map made for one
+    // ask and dropped can be followed at its address by another. The body's
+    // order and its loops' counters hold under any facts.
+    let answers = memo.filter(|_| unit.registers.is_some_and(|own| std::ptr::eq(constants, own)));
+    // The values reached by the operations that make a congruence, and the ones
+    // they stop at: for the whole body, every operation, in the body's order.
+    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
+    let mut operations: Vec<InstId> = Vec::new();
+    match wanted {
+        None => {
+            operations.extend(function.walk().map(|(_, inst)| inst).filter(|&inst| {
+                let op = function.instruction(inst);
+                op.result.is_some_and(|value| qualifies(value, op))
+            }));
+        }
+        Some(wanted) => {
+            let mut work: Vec<ValueId> = wanted.to_vec();
+            while let Some(value) = work.pop() {
+                if !reached.insert(value) {
+                    continue;
+                }
+                // What is found of a value is found of what it is made of
+                // alone.
+                if let Some(held) = answers.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
+                    if let Some(fact) = held {
+                        inserted.push(value);
+                        result.insert(value, fact);
+                    }
+                    continue;
+                }
+                let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
+                let op = function.instruction(inst);
+                if qualifies(value, op) {
+                    operations.push(inst);
+                    work.extend(
+                        op.operands
+                            .iter()
+                            .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
+                    );
+                }
+            }
+            // In the body's order, round after round, as the whole body's goes.
+            let position = |inst: &InstId| -> usize {
+                let order = || -> llrm_mir::dense::IdMap<InstId, usize> {
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect()
+                };
+                match memo {
+                    Some(memo) => {
+                        let mut held = memo.borrow_mut();
+                        held.order.get_or_insert_with(order)[inst]
+                    }
+                    None => order()[inst],
+                }
+            };
+            if memo.is_some() {
+                operations.sort_by_key(position);
+            } else {
+                let order: llrm_mir::dense::IdMap<InstId, usize> =
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+                operations.sort_by_key(|inst| order[inst]);
+            }
+        }
+    }
     let zero = BigInt::from(0);
-    for loop_ in &unit.shape().loops {
-        for affine in induction::basics(unit, loop_).values() {
+    // The loops' counters among the values reached.
+    let shape = unit.shape();
+    let block_of = |value: ValueId| match function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
+        _ => None,
+    };
+    for (at, loop_) in shape.loops.iter().enumerate() {
+        if wanted.is_some()
+            && !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block)))
+        {
+            continue;
+        }
+        let counters = match memo {
+            Some(memo) => {
+                let held = memo.borrow().counters.get(at).cloned().flatten();
+                held.unwrap_or_else(|| {
+                    let made = Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>());
+                    let mut held = memo.borrow_mut();
+                    if held.counters.len() <= at {
+                        held.counters.resize(at + 1, None);
+                    }
+                    held.counters[at] = Some(Rc::clone(&made));
+                    made
+                })
+            }
+            None => Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>()),
+        };
+        for affine in counters.iter() {
+            if wanted.is_some() && !reached.contains(&affine.value) {
+                continue;
+            }
+            // A held answer is the last word.
+            if answers.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
+                continue;
+            }
             let width = affine.start.width();
             let (Some(start), Some(step)) = (
-                induction::_signed(&affine.start, &constants, width),
-                induction::_signed(&affine.step, &constants, width),
+                induction::_signed(&affine.start, constants, width),
+                induction::_signed(&affine.step, constants, width),
             ) else {
                 continue;
             };
             if step != zero {
+                inserted.push(affine.value);
                 result.insert(affine.value, reduced(step, start, width));
             }
         }
     }
     loop {
         let mut changed = false;
-        for (_, inst) in function.walk() {
+        for &inst in &operations {
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) =
@@ -3546,8 +3796,6 @@ pub fn congruences_with(
             else {
                 continue;
             };
-            // A value nothing is known of is a multiple of 1: `x << 1` is a
-            // multiple of 2 all the same.
             let fact = |one: Operand| match one {
                 Operand::Value(source) => Some(
                     result
@@ -3582,10 +3830,20 @@ pub fn congruences_with(
             if found.0 == BigInt::from(1) {
                 continue;
             }
+            inserted.push(value);
             result.insert(value, found);
             changed = true;
         }
         if !changed {
+            if let Some(memo) = answers {
+                let mut held = memo.borrow_mut();
+                for value in reached.iter() {
+                    held.answers.insert(value, result.get(&value).cloned());
+                }
+            }
+            if let Some(memo) = memo.filter(|_| wanted.is_some()) {
+                memo.borrow_mut().inserted = inserted;
+            }
             return result;
         }
     }
@@ -3661,7 +3919,7 @@ pub fn annotated_with(
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
+    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {

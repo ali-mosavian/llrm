@@ -1124,6 +1124,7 @@ impl FunctionPass for Fixed {
         let mut run = Run {
             version: 0,
             promotes,
+            inputs: dump.is_some() && llrm_support::env_flag!("LLRM_DUMP_INPUTS"),
             dump,
             rounds: 0,
             steps: 0,
@@ -1180,6 +1181,8 @@ struct Run {
     /// Whether promotion may run: not over an irreducible CFG.
     promotes: bool,
     dump: Option<PathBuf>,
+    /// `LLRM_DUMP_INPUTS`: the body at the input of every pass run is dumped.
+    inputs: bool,
     /// For `LLRM_DEBUG=runs`: fixed points reached, rounds in them, passes run,
     /// passes skipped as settled.
     fixed: usize,
@@ -1321,6 +1324,7 @@ impl Run {
             return false;
         }
         self.steps += 1;
+        self.input(name, unit, analyses);
         // `LLRM_CHECK_ORDER=SEED`: some analyses asked at this pass's entry,
         // which ones by the seed, the step and the body, so that each
         // is first asked earlier than a pass needs it, somewhere else
@@ -1335,8 +1339,10 @@ impl Run {
         let before = unit.function.mark();
         let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
+        let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);
@@ -1423,7 +1429,16 @@ impl Run {
     ) {
         self.version += 1;
         let Some(directory) = &self.dump else { return };
-        // The body beside every global's declaration, which is what it names.
+        let file = directory.join(format!("{:03}-{stage}.ll", self.version));
+        Self::write(&file, unit, analyses);
+    }
+
+    /// The body beside every global's declaration, which is what it names.
+    fn write(
+        file: &std::path::Path,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
         let mut globals = analyses.outer().globals.to_vec();
         globals.push(GlobalValue {
             name: Some("pipeline.body".to_owned()),
@@ -1439,10 +1454,30 @@ impl Run {
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
         };
-        let file = directory.join(format!("{:03}-{stage}.ll", self.version));
-        std::fs::create_dir_all(directory)
-            .and_then(|()| std::fs::write(&file, llrm_mir::print::module(&module)))
+        std::fs::create_dir_all(file.parent().expect("a file in a directory"))
+            .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))
             .unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+    }
+
+    /// `LLRM_DUMP_INPUTS`: the body each pass is about to run over, a run that
+    /// changes nothing included, with a line in `manifest.txt` (pass, run,
+    /// file, instructions) beside the dump.
+    fn input(
+        &self,
+        name: &str,
+        unit: &Unit,
+        analyses: &Analyses,
+    ) {
+        let Some(directory) = &self.dump else { return };
+        if !self.inputs {
+            return;
+        }
+        let file = format!("{:04}-in-{name}.ll", self.steps);
+        Self::write(&directory.join(&file), unit, analyses);
+        let line = format!("{name} {} {file} {}\n", self.steps, unit.function.walk().count());
+        let manifest = directory.join("manifest.txt");
+        let mut out = std::fs::OpenOptions::new().create(true).append(true).open(&manifest).expect("a manifest");
+        std::io::Write::write_all(&mut out, line.as_bytes()).expect("a manifest line");
     }
 }
 
