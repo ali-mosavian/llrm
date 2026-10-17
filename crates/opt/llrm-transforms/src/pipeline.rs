@@ -443,7 +443,7 @@ impl Options {
         &self,
         name: &str,
     ) -> bool {
-        match name {
+        match base(name) {
             "lcssa" => self.lcssa,
             "floatloop" => self.floatloop,
             "fold" => self.fold,
@@ -489,7 +489,6 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fold::Fold),
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
-        Box::new(gvn::EarlyCse),
         Box::new(decide::Decide),
         // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
         // at -Os.
@@ -529,7 +528,196 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fill::Merge { size: applied.options.prefers_size() }),
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
+    let mut every = every;
+    // An order experiment, not a feature:
+    // `LLRM_EXP_ORDER=earlycse,promote,fold` runs those passes first in a
+    // body's rounds, in that order, each moved from where it stood
+    // (`earlycse` is the scoped CSE of `gvn::EarlyCse`, in no list otherwise).
+    if let Some(order) = experiment_order() {
+        let mut front: Vec<Box<dyn FunctionPass>> = Vec::new();
+        for name in order {
+            if name == "earlycse" {
+                front.push(Box::new(gvn::EarlyCse));
+            } else if let Some(at) = every.iter().position(|one| one.name() == name) {
+                front.push(every.remove(at));
+            } else {
+                panic!("LLRM_EXP_ORDER: no pass {name}");
+            }
+        }
+        // `sroa` stays first: it is the boundary pass, taken out of the list by
+        // `Fixed`.
+        let sroa = every.iter().position(|one| one.name() == "sroa").map(|at| every.remove(at));
+        every = sroa.into_iter().chain(front).chain(every).collect();
+    }
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
+/// `LLRM_EXP_ORDER`, read once: the passes an experiment runs first.
+fn experiment_order() -> Option<&'static Vec<String>> {
+    static ORDER: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    ORDER
+        .get_or_init(|| {
+            std::env::var("LLRM_EXP_ORDER")
+                .ok()
+                .map(|text| text.split(',').filter(|one| !one.is_empty()).map(str::to_owned).collect())
+        })
+        .as_ref()
+}
+
+/// `name` without the slot it stands in (`gvn@787` is `gvn`).
+fn base(name: &str) -> &str {
+    name.split_once('@').map_or(name, |split| split.0)
+}
+
+/// A pass in one place of LLVM's function pipeline, named by it so that its
+/// settled record and its line of `LLRM_DEBUG=runs` are its own.
+struct Slot {
+    name: &'static str,
+    inner: Box<dyn FunctionPass>,
+}
+
+impl FunctionPass for Slot {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.inner.adds_memory_operations()
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.inner.reads()
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        self.inner.run(unit, analyses)
+    }
+}
+
+/// `LLRM_EXP_LLVM`, read once: the experiment that runs the passes in LLVM's
+/// order and counts (PassBuilderPipelines.cpp at d1106deb71cc).
+pub fn experiment_llvm() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_EXP_LLVM").is_some())
+}
+
+/// Where a list of LLVM's order stands.
+#[derive(Clone, Copy)]
+enum Phase {
+    /// The early function pipeline (l.1178-1180).
+    Early,
+    /// GlobalCleanup (l.1241-1244).
+    Cleanup,
+    /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
+    Simplify,
+}
+
+/// The passes of `phase`, each once in the place LLVM runs it (the line is the
+/// slot's name).
+fn llvm_order(
+    applied: &Applied,
+    phase: Phase,
+) -> Vec<Box<dyn FunctionPass>> {
+    let size = applied.options.prefers_size();
+    let limits = || applied.options.limits.clone();
+    let slot =
+        |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
+    let decide = |name| slot(name, Box::new(decide::Decide));
+    let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
+    let fold = |name| slot(name, Box::new(fold::Fold));
+    let dead = |name| slot(name, Box::new(dead::Dead));
+    let sroa = |name| slot(name, Box::new(promote::Sroa));
+    let promote = |name| slot(name, Box::new(promote::Promote));
+    let earlycse = |name| -> Box<dyn FunctionPass> {
+        if std::env::var("LLRM_EXP_EARLYCSE").is_ok_and(|one| one == "real") {
+            slot(name, Box::new(crate::earlycse::EarlyCse))
+        } else {
+            slot(name, Box::new(gvn::EarlyCse))
+        }
+    };
+    let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
+    let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
+    let canonical = |a: &'static str, b: &'static str| {
+        [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
+    };
+    let list: Vec<Box<dyn FunctionPass>> = match phase {
+        Phase::Early => vec![
+            decide("decide@1178"),
+            phiopt("phiopt@1178"),
+            sroa("sroa@1179"),
+            promote("promote@1179"),
+            earlycse("earlycse@1180"),
+        ],
+        Phase::Cleanup => vec![
+            promote("promote@1241"),
+            fold("fold@1242"),
+            dead("dead@1242"),
+            decide("decide@1244"),
+            phiopt("phiopt@1244"),
+        ],
+        Phase::Simplify => {
+            let mut list = vec![sroa("sroa@646"), promote("promote@646"), earlycse("earlycse@649")];
+            list.extend([
+                decide("decide@675"),
+                phiopt("phiopt@675"),
+                fold("fold@677"),
+                dead("dead@677"),
+                slot("tailrec@688", Box::new(tailrec::TailRecursion)),
+                decide("decide@690"),
+                phiopt("phiopt@690"),
+                slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
+            ]);
+            list.extend(canonical("loopsimplify@764", "lcssa@764"));
+            list.extend([
+                slot("floatloop@724", Box::new(floatloop::FloatLoop)),
+                hoist("hoist@724"),
+                loopmotion("loopmotion@724"),
+                hoist("hoist@730"),
+                slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
+                decide("decide@766"),
+                phiopt("phiopt@766"),
+                fold("fold@768"),
+                dead("dead@768"),
+            ]);
+            list.extend(canonical("loopsimplify@772", "lcssa@772"));
+            list.extend([
+                slot("fill@737", Box::new(fill::Fill { size })),
+                slot(
+                    "indvars@738",
+                    Box::new(indvars::IndVars {
+                        exit_values: false,
+                        unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+                    }),
+                ),
+                slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
+                sroa("sroa@776"),
+                promote("promote@776"),
+                slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
+                slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
+                fold("fold@801"),
+                dead("dead@801"),
+                decide("decide@809"),
+                slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
+                slot("merge@818", Box::new(fill::Merge { size })),
+                slot("dse@820", Box::new(dse::Dse)),
+            ]);
+            list.extend(canonical("loopsimplify@823", "lcssa@823"));
+            list.extend([
+                hoist("hoist@823"),
+                loopmotion("loopmotion@823"),
+                decide("decide@832"),
+                phiopt("phiopt@832"),
+                fold("fold@837"),
+                dead("dead@837"),
+            ]);
+            list
+        }
+    };
+    list.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
 /// The order, from the pipeline itself rather than beside it.
@@ -597,11 +785,19 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
-    manager.add(Fixed::new(applied));
+    if experiment_llvm() {
+        manager.add(Fixed::linear(applied, Phase::Early));
+        manager.add(Fixed::linear(applied, Phase::Cleanup));
+        manager.add(Fixed::linear(applied, Phase::Simplify));
+    } else {
+        manager.add(Fixed::new(applied));
+    }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
+    let again_applied =
+        Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again =
-        Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
+        if experiment_llvm() { Fixed::linear(&again_applied, Phase::Simplify) } else { Fixed::new(&again_applied) };
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
@@ -891,6 +1087,33 @@ impl Fixed {
             dump: applied.dump.clone(),
             runs: 0,
         }
+    }
+
+    /// `passes` once each in order, no fixed point: LLVM's function pipelines
+    /// run a pass where it stands (`LLRM_EXP_LLVM`).
+    fn linear(
+        applied: &Applied,
+        phase: Phase,
+    ) -> Self {
+        // The passes that make a candidate and judge it stay after the list, as
+        // in the rounds.
+        let mut linear = Self::new(applied);
+        linear.boundary.clear();
+        linear.unrollers.clear();
+        linear.last.clear();
+        linear.passes = llvm_order(applied, phase);
+        linear.rounds = 1;
+        if !matches!(phase, Phase::Simplify) {
+            linear.peelers.clear();
+            linear.unswitch = None;
+            linear.split = None;
+            linear.distribute = None;
+            linear.version = None;
+            linear.fuse = None;
+            linear.interchange = None;
+            linear.jam = None;
+        }
+        linear
     }
 
     fn transacted(
@@ -1306,7 +1529,7 @@ impl Run {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> bool {
-        if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
+        if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
             return false;
         }
         let name = pass.name();
@@ -1373,7 +1596,7 @@ impl Run {
         analyses: &Analyses,
     ) {
         if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
-            || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
+            || (!self.promotes && matches!(base(pass.name()), "sroa" | "promote"))
         {
             return;
         }

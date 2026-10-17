@@ -375,12 +375,67 @@ fn run(
     // A copy of an aggregate is its leaves' loads and stores before they are
     // promoted.
     let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
-    match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
-        Ok(true) => PreservedAnalyses::none(),
-        Ok(false) if split => PreservedAnalyses::none(),
-        Ok(false) => PreservedAnalyses::all(),
+    let promoted = match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
+        Ok(promoted) => promoted,
         Err(error) => panic!("{name}: {error}"),
+    };
+    // An experiment (`LLRM_EXP_DEAD_SLOTS`): LLVM's PromoteMemToReg and SROA
+    // delete an alloca left with no load, with its stores.
+    let emptied = std::env::var_os("LLRM_EXP_DEAD_SLOTS").is_some() && emptied_slots(unit.function);
+    if promoted || split || emptied { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+}
+
+/// Every alloca that nothing loads and whose address goes nowhere (only stores
+/// through it, and addresses derived by `gep` or a bitcast that are the same),
+/// erased with those stores and addresses; whether any was.
+pub fn emptied_slots(function: &mut Function) -> bool {
+    let allocas: Vec<(InstId, ValueId)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let op = function.instruction(inst);
+            matches!(op.opcode, Opcode::Alloca { .. }).then(|| op.result.map(|result| (inst, result))).flatten()
+        })
+        .collect();
+    let mut changed = false;
+    for (alloca, root) in allocas {
+        let mut erase: Vec<InstId> = Vec::new();
+        let mut pending = vec![root];
+        let mut dead = true;
+        'walk: while let Some(value) = pending.pop() {
+            for one in function.users(value) {
+                let user = function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Store { volatile: false, .. }
+                        if one.index == 1 && user.operands[0] != Operand::Value(value) =>
+                    {
+                        erase.push(one.user);
+                    }
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast) | Opcode::Freeze
+                        if one.index == 0 =>
+                    {
+                        erase.push(one.user);
+                        pending.extend(user.result);
+                    }
+                    _ => {
+                        dead = false;
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        if !dead {
+            continue;
+        }
+        // Stores first, then the addresses (a user before what it uses), then
+        // the alloca.
+        for inst in erase.into_iter().rev().chain([alloca]) {
+            if !function.is_erased(inst) {
+                function.erase(inst).expect("nothing reads it");
+            }
+        }
+        changed = true;
     }
+    changed
 }
 
 /// `function` promoted, or with `aggregate_only` only its aggregates'

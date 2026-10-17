@@ -192,7 +192,11 @@ pub fn hoisted(
     let frequency = (pressure || room.priced() && costs.float_release > 0)
         .then(|| _frequency(unit, analyses, &outer, size))
         .flatten();
-    let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
+    let room = if pressure && std::env::var_os("LLRM_EXP_NOFORECAST").is_none() {
+        room
+    } else {
+        crate::spill::Room { registers: 0, ..room }
+    };
     // What is known without memory holds as instructions move: no block, edge
     // or value changes.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
