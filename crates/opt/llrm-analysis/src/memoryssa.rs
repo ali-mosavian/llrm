@@ -880,6 +880,8 @@ struct FrameIndex {
 
 /// The defs of a body that can reach a read, by what they write.
 struct Reachers {
+    /// More wild defs than `sole_writer` asks: none is listed.
+    crowded: bool,
     /// No exact cell: anything may be written.
     wild: Vec<usize>,
     /// An exact cell of an object that may be addressed from elsewhere, by
@@ -1603,7 +1605,7 @@ impl MemorySSA<'_> {
 
     /// The defs that can reach a read of an exact cell or of one object.
     fn listed_writers(&self) -> Reachers {
-        let mut writers = Reachers { wild: Vec::new(), escaping: Vec::new(), own: Default::default() };
+        let mut writers = Reachers { crowded: false, wild: Vec::new(), escaping: Vec::new(), own: Default::default() };
         for access in &self.accesses {
             let Some(site) = access.site.filter(|_| access.kind == Kind::Def) else { continue };
             match self.exacts.get(&site) {
@@ -1616,7 +1618,17 @@ impl MemorySSA<'_> {
                         }
                     }
                 }
-                _ => writers.wild.push(access.id),
+                _ => {
+                    writers.wild.push(access.id);
+                    if writers.wild.len() > SOLE_CANDIDATES {
+                        return Reachers {
+                            crowded: true,
+                            wild: Vec::new(),
+                            escaping: Vec::new(),
+                            own: Default::default(),
+                        };
+                    }
+                }
             }
         }
         writers
@@ -1638,6 +1650,9 @@ impl MemorySSA<'_> {
         let found = (|| {
             let object = exact.map_or_else(|| single_object(memory), |(object, _, _)| Some(object))?;
             let writers = self.reachers.get_or_init(|| self.listed_writers());
+            if writers.crowded {
+                return None;
+            }
             let own = writers.own.get(&object.id()).map_or(&[][..], Vec::as_slice);
             // A write of an addressed object counts where it may alias the
             // cell's object; the object's own writes are `own`.
@@ -1783,7 +1798,30 @@ impl MemorySSA<'_> {
 
     /// `walked` from the memory state `defining`, which a site or the end of a
     /// block is in.
+    ///
+    /// A body of `SOLE_BODY` accesses or more is walked by the instance that
+    /// looks for a cell's sole writer at its joins; a smaller one by the
+    /// instance without it, which is the walk as it was.
+    #[inline(always)]
     fn walked_from(
+        &self,
+        block: Option<i64>,
+        defining: Option<usize>,
+        invariant: bool,
+        memory: &MemRef,
+        boundary: Option<usize>,
+        edge: Option<i64>,
+        edge_memory: Option<&MemRef>,
+        jumping: bool,
+    ) -> BTreeSet<usize> {
+        if self.span.len() >= SOLE_BODY {
+            self.walked_over::<true>(block, defining, invariant, memory, boundary, edge, edge_memory, jumping)
+        } else {
+            self.walked_over::<false>(block, defining, invariant, memory, boundary, edge, edge_memory, jumping)
+        }
+    }
+
+    fn walked_over<const SOLE: bool>(
         &self,
         block: Option<i64>,
         defining: Option<usize>,
@@ -1921,6 +1959,9 @@ impl MemorySSA<'_> {
         stamps.1 += 1;
         let epoch = stamps.1;
         let mut found = BTreeSet::new();
+        // A body large enough for a walk through its joins to be long looks for
+        // the cell's sole writer after a few of them; a smaller one
+        // never does.
         let mut joins = 0usize;
         // Where no edge chooses, the chain of uses and untouching defs back
         // from an access is the same for every load of the cell: its
@@ -2000,9 +2041,9 @@ impl MemorySSA<'_> {
                 Kind::Phi => {
                     ended(table, &mut chain, current);
                     joins += 1;
-                    if joins == JOINS_BEFORE_SOLE
+                    if SOLE
+                        && joins == JOINS_BEFORE_SOLE
                         && indexable
-                        && self.span.len() >= SOLE_BODY
                         && let Some(write) = self.sole_writer(memory, memory_exact, slot)
                         && self.runs_before(write, block, defining)
                     {
