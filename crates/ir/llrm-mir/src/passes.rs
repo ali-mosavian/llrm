@@ -280,12 +280,6 @@ pub trait Analysis: 'static {
     /// the function's history it was true at.
     const INCREMENTAL: bool = false;
 
-    /// Whether `unaffected` can tell a result still true after `changes`: such
-    /// a result is kept past an invalidation, and stands again when
-    /// `changes` leave it as it was (and, if it reads the outer facts, those
-    /// are the ones it read).
-    const SKIPS: bool = false;
-
     /// Whether the result stays a true answer, with entries for fewer values
     /// and facts no more precise than a fresh derivation's, after edits that
     /// `sound_edits` finds only keep every live value's meaning: what it says
@@ -328,8 +322,11 @@ pub trait Analysis: 'static {
         old == fresh
     }
 
-    /// What the result reads of the function: `unaffected` filters the change
-    /// log against it. None, the default, is every change.
+    /// What the result reads of the function, declared once: a result that
+    /// declares it is kept past an invalidation, and stands again when
+    /// `unaffected` finds the changes since leave it as it was (and, if it
+    /// reads the outer facts, those are the ones it read). None, the default,
+    /// derives the result again after any change.
     fn depends() -> Option<crate::depends::Depends> {
         None
     }
@@ -344,6 +341,16 @@ pub trait Analysis: 'static {
         function: &Function,
     ) -> bool {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
+    }
+
+    /// What `unaffected` found in `changes` that leaves the result untrue:
+    /// for `LLRM_WHY`.
+    fn blocker(
+        changes: &[crate::module::Change],
+        context: &Context,
+        function: &Function,
+    ) -> Option<crate::depends::Blocker> {
+        Self::depends()?.blocker(changes, context, function)
     }
 
     /// `previous`, which was true of the function before `changes`, made true
@@ -753,6 +760,10 @@ pub struct Outer {
     pub globals: Rc<Vec<GlobalValue>>,
     program: Rc<ProgramProxy>,
     modules: HashMap<TypeId, Rc<dyn Any>>,
+    /// Which part of the facts (`read`) each of `modules` is.
+    parts: Vec<(TypeId, u8)>,
+    /// One per part of the facts, the same while the part is.
+    versions: [u64; 5],
 }
 
 impl Outer {
@@ -823,6 +834,38 @@ impl Outer {
     pub fn cached_ref<M: ModuleAnalysis>(&self) -> Option<&M::Result> {
         read::note(read::of(M::NAME));
         self.modules.get(&TypeId::of::<M>()).map(|one| one.downcast_ref::<M::Result>().expect("keyed by its type"))
+    }
+
+    /// Whether an analysis that read the parts `bits` of `other` read what this
+    /// holds: the rest of the facts may have moved.
+    fn same_in(
+        &self,
+        other: &Self,
+        bits: u8,
+    ) -> bool {
+        Rc::ptr_eq(&self.program, &other.program)
+            && (0..5).all(|part| bits & (1 << part) == 0 || self.versions[part] == other.versions[part])
+    }
+
+    /// The versions of the parts of the facts `now` holds, those of `self`
+    /// where a part is what it was.
+    fn versioned(
+        &self,
+        now: &mut Self,
+    ) {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        for part in 0..5 {
+            let same = now.modules.len() == self.modules.len()
+                && now.parts.iter().filter(|(_, bit)| bit & (1 << part) != 0).all(|(id, _)| {
+                    match (self.modules.get(id), now.modules.get(id)) {
+                        (Some(one), Some(two)) => Rc::ptr_eq(one, two),
+                        _ => false,
+                    }
+                })
+                && (part != 4 || (self.metadata == now.metadata && self.globals == now.globals));
+            now.versions[part] =
+                if same { self.versions[part] } else { NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) };
+        }
     }
 
     /// Whether an analysis computed under `other` read what this holds.
@@ -961,7 +1004,7 @@ impl<A: Analysis> Cached for Entry<A> {
     }
 
     fn incremental(&self) -> bool {
-        A::INCREMENTAL || A::SKIPS || A::SOUND
+        A::INCREMENTAL || A::depends().is_some() || A::SOUND
     }
 
     fn still_covered(
@@ -994,7 +1037,9 @@ impl<A: Analysis> Cached for Entry<A> {
         attributes: u64,
         outer: &Rc<Outer>,
     ) -> bool {
-        self.mark == function.mark() && self.stamp == attributes && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
+        self.mark == function.mark()
+            && self.stamp == attributes
+            && (!A::READS_OUTER || self.outer.same_in(outer, self.bits))
     }
 }
 
@@ -1043,6 +1088,16 @@ fn why() -> bool {
     TRACE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
 }
 
+thread_local! {
+    static BLOCKED: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// Why the result held was not true past the changes since, for the next line
+/// `LLRM_WHY` says.
+fn note_blocked(why: String) {
+    BLOCKED.with(|blocked| *blocked.borrow_mut() = why);
+}
+
 /// Starts or stops counting recomputations on this thread (the test form of
 /// `LLRM_WHY`).
 pub fn trace_recomputes(on: bool) {
@@ -1068,7 +1123,8 @@ fn record(
     let pass = PASS.with(|p| p.get());
     RECOMPUTED.with(|r| *r.borrow_mut().entry((name, pass, how)).or_default() += 1);
     if std::env::var_os("LLRM_WHY").is_some() {
-        eprintln!("WHY {level} {name} {pass} {how}");
+        let blocked = BLOCKED.with(|blocked| std::mem::take(&mut *blocked.borrow_mut()));
+        eprintln!("WHY {level} {name} {pass} {how} | {blocked}");
     }
 }
 
@@ -1296,10 +1352,14 @@ impl Analyses {
                 (Rc::clone(&old.result), Rc::clone(&old.outer), old.mark)
             };
             drop(held);
-            let changes = function.changes_since(mark)?;
+            let Some(changes) = function.changes_since(mark) else {
+                note_blocked("history not held".to_string());
+                return None;
+            };
             // What it read of the outer facts is not what is there now: the
             // changes of the function are not all that moved.
-            if A::READS_OUTER && !Rc::ptr_eq(&outer, &self.outer) {
+            if A::READS_OUTER && !outer.same_in(&self.outer, old_reads) {
+                note_blocked("outer facts moved".to_string());
                 return None;
             }
             if A::SOUND && sound_edits(function, changes) {
@@ -1327,7 +1387,7 @@ impl Analyses {
             }
             // Asking of a long log again and again is more than the run it
             // saves.
-            if A::SKIPS
+            if A::depends().is_some()
                 // The entries that tell what an operand was are not changes of
                 // their own.
                 && changes
@@ -1338,7 +1398,7 @@ impl Analyses {
                     ))
                     .count()
                     <= 256
-                && (!A::READS_OUTER || Rc::ptr_eq(&outer, &self.outer))
+                && (!A::READS_OUTER || outer.same_in(&self.outer, old_reads))
                 && A::unaffected(changes, context, function)
             {
                 // Derived from what was kept as sound, it is sound, not the
@@ -1366,6 +1426,17 @@ impl Analyses {
                 }
                 return Some(Rc::clone(&result));
             }
+            if why() {
+                match A::depends() {
+                    None => note_blocked("no footprint declared".to_string()),
+                    Some(_) if changes.len() > 256 => note_blocked("more than 256 changes".to_string()),
+                    Some(_) => {
+                        if let Some(one) = A::blocker(changes, context, function) {
+                            note_blocked(one.describe(context, function));
+                        }
+                    }
+                }
+            }
             let made =
                 spanned_as("analysis", A::NAME, || A::update_owned(result, changes, context, layout, function, self))?;
             // Derived from what was kept as sound it is sound, not the same as
@@ -1381,6 +1452,8 @@ impl Analyses {
             Some(Rc::new(made))
         });
         let replayed = updated.is_some();
+        // Said before the analyses it is derived from say theirs.
+        let blocked = BLOCKED.with(|blocked| std::mem::take(&mut *blocked.borrow_mut()));
         if !replayed {
             self.soft.remove(&key);
         }
@@ -1419,6 +1492,7 @@ impl Analyses {
                 },
                 None => "first",
             };
+            note_blocked(blocked);
             record("fn", A::NAME, class);
         }
         let stamp = self.attributes_of(function);
@@ -1921,6 +1995,8 @@ impl ModuleAnalyses {
                     globals: Rc::default(),
                     program: Rc::clone(&self.program),
                     modules: HashMap::default(),
+                    parts: Vec::new(),
+                    versions: [0; 5],
                 }),
             };
             self.functions.insert(id, Analyses::new(outer));
@@ -2014,7 +2090,10 @@ impl ModuleAnalyses {
         ]
         .into_iter()
         .chain(self.required.clone());
-        let modules: HashMap<TypeId, Rc<dyn Any>> = every.map(|kind| (kind.id, self.computed(kind, module))).collect();
+        let every: Vec<Kind> = every.collect();
+        let parts: Vec<(TypeId, u8)> = every.iter().map(|kind| (kind.id, read::of(kind.name))).collect();
+        let modules: HashMap<TypeId, Rc<dyn Any>> =
+            every.into_iter().map(|kind| (kind.id, self.computed(kind, module))).collect();
         // The declarations and the metadata are results among these: where
         // every result is the one the proxy holds, so are they, and
         // neither is read again.
@@ -2028,7 +2107,18 @@ impl ModuleAnalyses {
         let globals = Rc::clone(&modules[&TypeId::of::<Declarations>()])
             .downcast::<Vec<GlobalValue>>()
             .expect("keyed by its type");
-        let now = Outer { metadata: module.metadata.clone(), globals, program: Rc::clone(&self.program), modules };
+        let mut now = Outer {
+            metadata: module.metadata.clone(),
+            globals,
+            program: Rc::clone(&self.program),
+            modules,
+            parts,
+            versions: [0; 5],
+        };
+        match &self.outer {
+            Some(old) => old.versioned(&mut now),
+            None => now.versions = [1; 5],
+        }
         if !self.outer.as_ref().is_some_and(|old| old.same(&now)) {
             self.outer = Some(Rc::new(now));
         }
