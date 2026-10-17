@@ -1,6 +1,8 @@
-//! `llrm-pass [-O1|-O2|-Os|...] PASS FILE`: reads and verifies MIR, runs the one pass PASS once on each function (the pipeline's own `only`
-//! selector, at the options of the level, on the neutral target) and writes the module back. What tools/difftest compares with LLVM's
-//! counterpart: llrm's answer to that input, not the input of the next step.
+//! `llrm-pass [-O1|-O2|-Os|...] PASS FILE`: reads and verifies MIR, runs the
+//! one pass PASS once on each function (the pipeline's own `only` selector, at
+//! the options of the level, on the neutral target) and writes the module back.
+//! What tools/difftest compares with LLVM's counterpart: llrm's answer to that
+//! input, not the input of the next step.
 
 use std::process::ExitCode;
 use std::rc::Rc;
