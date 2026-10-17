@@ -801,6 +801,7 @@ def test_a_cost_run_whose_base_or_head_is_not_the_dist_build_fails_loudly_not_me
 def test_a_build_with_too_little_room_fails_with_the_free_space_and_the_limit(tmp_path, monkeypatch):
     """/home was 100% full on tinytim and every build failed with a linker error nobody could read."""
     monkeypatch.delenv("LLRM_MIN_FREE_GB")
+    monkeypatch.delenv("RUNNER_ENVIRONMENT", raising=False)  # a hosted runner is exempt, and CI is one
     monkeypatch.setattr(measure.shutil, "disk_usage", lambda path: type("U", (), {"free": 5 * 2**30})())
     with pytest.raises(SystemExit, match=r"5 GB free under .*, 100 needed"):
         measure.require_space(tmp_path / "not" / "made" / "yet")
@@ -817,3 +818,16 @@ def test_a_hosted_runner_is_not_refused_for_its_78_gb(monkeypatch, tmp_path):
     monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
     with pytest.raises(SystemExit, match="78 GB free"):
         measure.require_space(tmp_path)
+
+
+def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs():
+    """#2082's bench-1: 'FileNotFoundError: .../snapshots/distc2f125dc7d60/llrm-qb': the dist snapshot is llrm-c alone. Whichever profile the bench's base is
+    built in builds all the binaries (`--bins`), or names every tool the bench runs."""
+    import re
+
+    ran = set(re.findall(r'"(llrm-[a-z]+)"', (HERE / "bench" / "bench.py").read_text()))
+    assert {"llrm-c", "llrm-qb", "llrm-nib"} <= ran, ran
+    recipe = measure.MEASURE_BUILDS[measure.BENCH_BASE_PROFILE]
+    named = set(re.findall(r"--bin (llrm-[a-z]+)", recipe))
+    assert "--bins" in recipe or ran <= named, (measure.BENCH_BASE_PROFILE, recipe, ran)
+    assert "--bins" not in measure.MEASURE_BUILDS["dist"], "the dist build is the compiler's cost alone: the bench does not take its base from it"

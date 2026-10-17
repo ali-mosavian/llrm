@@ -104,6 +104,8 @@ import gate  # noqa: E402
 
 DIST_BUILD = gate.DIST_BUILD
 # What a measurement needs is llrm-c (the compile cost is its own); the other seven binaries would each be a fat-LTO link.
+# The profile the bench's base is built in: its tools are all of the binaries (llrm-qb, llrm-nib ...), which the dist build above does not make.
+BENCH_BASE_PROFILE = "release"
 MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-c", "release": gate.MEASURE_BUILD}
 
 _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
