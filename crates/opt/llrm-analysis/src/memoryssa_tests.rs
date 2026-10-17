@@ -1093,7 +1093,7 @@ fn test_a_read_of_a_parameters_object_steps_over_no_frame_write() {
 /// eighth join.
 #[test]
 fn test_a_cell_stored_once_before_a_run_of_joins_is_read_without_walking_them() {
-    let joins = 100;
+    let joins = 400;
     let mut text = String::from(
         "@gg = global i16 0\n@hh = global i16 0\n\ndefine i16 @f(i1 %c) {\nb0:\n  store i16 7, ptr @gg\n  br i1 %c, label %t0, label %e0\n\n",
     );
