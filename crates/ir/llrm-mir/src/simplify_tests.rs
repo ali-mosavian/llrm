@@ -174,6 +174,17 @@ fn and_of_a_power_of_two() {
     );
 }
 
+/// The `isImpliedCondition` closing of `simplifyICmpOfBools`.
+#[test]
+fn compare_of_implied_bools() {
+    let b = "  %a = icmp ult i16 %x, %y\n  %b = icmp ule i16 %x, %y\n";
+    check(&format!("{b}  %r = icmp uge i1 %b, %a\n"), "r", Some("1"));
+    check(&format!("{b}  %r = icmp ule i1 %a, %b\n"), "r", Some("1"));
+    check(&format!("{b}  %r = icmp sge i1 %a, %b\n"), "r", Some("1"));
+    check(&format!("{b}  %r = icmp sle i1 %b, %a\n"), "r", Some("1"));
+    check(&format!("{b}  %r = icmp uge i1 %a, %b\n"), "r", None);
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a

@@ -41,7 +41,7 @@ use crate::knownbits::KnownBits;
 use crate::module::{Function, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
-use crate::valuetracking::{Query as ValueQuery, known, nonzero, power2, range};
+use crate::valuetracking::{Query as ValueQuery, context as conditions, known, nonzero, power2, range};
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
 const RECURSION_LIMIT: u32 = 3;
@@ -279,6 +279,15 @@ impl Query<'_> {
         operand: Operand,
     ) -> bool {
         nonzero::is_known_non_zero(&self.tracking(), operand, 0)
+    }
+
+    /// `isImpliedCondition(LHS, RHS, DL).value_or(false)`.
+    fn is_implied(
+        &self,
+        lhs: Operand,
+        rhs: Operand,
+    ) -> bool {
+        conditions::is_implied_condition(&self.tracking(), lhs, rhs, true, 0).unwrap_or(false)
     }
 
     /// `isKnownToBeAPowerOfTwo(V, DL, OrZero, ...)`.
@@ -1977,7 +1986,6 @@ fn simplify_icmp_with_constant(
 
 /// `simplifyICmpOfBools`
 /// ([:2905](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L2905)).
-/// DEVIATE: the closing `isImpliedCondition` cases are not translated.
 fn simplify_icmp_of_bools(
     q: &mut Query,
     pred: IntPredicate,
@@ -2018,6 +2026,16 @@ fn simplify_icmp_of_bools(
             // X <=u 1 -> true; X >=s -1 -> true
             IntPredicate::Ule | IntPredicate::Sge => return Some(q.int(i1, 1)),
         }
+    }
+    // For a signed comparison the i1 values are 0 and -1, so SGE is "RHS
+    // implies LHS" and SLE the reverse.
+    let (from, to) = match pred {
+        IntPredicate::Uge | IntPredicate::Sle => (rhs, lhs),
+        IntPredicate::Sge | IntPredicate::Ule => (lhs, rhs),
+        _ => return None,
+    };
+    if q.is_implied(from, to) {
+        return Some(q.int(i1, 1));
     }
     None
 }
