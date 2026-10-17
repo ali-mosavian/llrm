@@ -941,7 +941,7 @@ pub fn dead_stores_escaping(
         stored: Stored::new(unit, accesses, private),
         reached: RefCell::default(),
         cell_of: RefCell::default(),
-        checking: llrm_support::env_set("LLRM_CHECK_REACHED"),
+        checking: llrm_support::env_flag!("LLRM_CHECK_REACHED"),
     };
     let stored = &solve.stored;
     let mut every = stored.none();
