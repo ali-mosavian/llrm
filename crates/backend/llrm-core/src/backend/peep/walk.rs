@@ -332,7 +332,7 @@ pub struct Facts<'a> {
     /// How many times each value is read, where the caller counted.
     counts: Option<&'a Counter>,
     exits: OnceCell<std::rc::Rc<IndexMap<i64, Lanes>>>,
-    flags_out: OnceCell<HashMap<i64, Lanes>>,
+    flags_out: OnceCell<std::rc::Rc<crate::backend::incremental::Solution<peephole::FlagLive>>>,
     users: OnceCell<Counter>,
     zero: OnceCell<std::rc::Rc<HashMap<usize, upperzero::Roots>>>,
     /// The mode the code runs in: how an instruction encodes, and what it
@@ -469,9 +469,12 @@ impl<'a> Cx<'a> {
 
     /// The flag lanes something may read after the block.
     pub fn flags_out(&self) -> Lanes {
-        self.facts.flags_out.get_or_init(|| {
-            crate::support::debug::timed("peep facts flags out", || peephole::_flags_live_out(self.facts.body()))
-        })[&self.block().at]
+        self.facts
+            .flags_out
+            .get_or_init(|| {
+                crate::support::debug::timed("peep facts flags out", || peephole::_flags_live_out(self.facts.body()))
+            })
+            .entering[&self.block().at]
     }
 
     /// The roots whose upper half is zero before `one`.
