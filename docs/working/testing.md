@@ -190,8 +190,11 @@ target directory and measured with this tree's tools. The tolerances are `[measu
 step exits 77. `measure.py compare BASE SHA` compares two stored measurements; `measure.py creep` (run by `gate.py main`) compares
 a main commit with one 50 merges or a week back.
 
-The PR gate builds and measures on `release`; the shipped `llrm-c` and the creep run use `dist` (`[profile.dist]`: one codegen unit,
-fat LTO). Deltas agree in sign and size between the two.
+The cost gate and the counter tests measure `dist` (`[profile.dist]`: one codegen unit, fat LTO), the shipped `llrm-c`: base and head are
+each built with `llrm-c` alone (`tools/measure.py`, `MEASURE_BUILDS`), the base beside the head, and a binary of another profile is
+refused. Under `release` (16 codegen units) an edit to one file re-partitions the units and flips the inlining of unrelated functions: the
+same pair (#1977) read +0.46..0.61% on its gate shapes there and +0.01..0.04% under `dist`. `tools/abmeasure.py PARENT HEAD` is the one
+way to quote a delta of the compiler's own cost. The other gate steps still build `release`.
 
 Work done by a shared engine is timed under the engine's own span, and a step's row is only its own code. Moving a step's work into
 an engine that runs inside another step's span raises that step's row even where the total falls; give the engine its own span rather

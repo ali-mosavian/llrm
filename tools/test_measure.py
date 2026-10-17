@@ -149,6 +149,7 @@ def test_a_base_is_built_the_way_the_gate_builds(tmp_path, monkeypatch):
     """`cargo build --bins` alone makes a different llrm-c from the gate's build (md5 and, for one step, 3.93 against 4.18 at 2N/N): a
     base built the other way would be measured with another compiler than the branch."""
     ran = []
+    monkeypatch.setattr(measure, "PROFILE", "release")
     monkeypatch.setattr(measure, "BUILD", tmp_path)
     monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
@@ -313,7 +314,7 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
         monkeypatch.setattr(measure, "measure_all", lambda jobs, now=now: now)
         monkeypatch.setattr(measure, "git", lambda *a, **k: "f" * 40)
         monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
-        monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs: base)
+        monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs, build=None: base)
         monkeypatch.setattr(measure, "stored", lambda sha, which: {})
         assert measure.check(1, "origin/main") == verdict
         out = capsys.readouterr().out
@@ -324,6 +325,7 @@ def test_check_names_the_binary_it_measured_on_a_pass_as_on_a_failure(monkeypatc
 def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dist_profile(tmp_path, monkeypatch):
     """The creep run on main measures the shipped build (`dist`: one codegen unit, fat LTO, 11-13% fewer instructions than `release`); a
     release measurement is not comparable with it, and its base must be built the same way."""
+    monkeypatch.setattr(measure, "PROFILE", "release")
     release = measure.method()
     monkeypatch.setattr(measure, "PROFILE", "dist")
     assert measure.method() != release
@@ -333,7 +335,7 @@ def test_a_measurement_is_of_one_profile_and_the_dist_base_is_built_with_the_dis
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
     monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
     assert measure.built("0" * 40) == tmp_path / "snapshots" / ("dist" + "0" * 12)
-    assert ran == [["bash", "-c", "cargo build --profile dist -q --bins"]]
+    assert ran == [["bash", "-c", "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-c"]], "llrm-c only: seven more fat-LTO links measure nothing"
 
 
 def test_a_flagged_step_names_the_steps_of_its_axis_that_rose():
@@ -445,7 +447,7 @@ def test_a_gated_head_not_yet_on_the_reference_is_stored_for_the_commit_that_lan
     monkeypatch.setattr(measure, "measure_all", lambda jobs: now)
     monkeypatch.setattr(measure, "git", lambda *a, **k: "" if a[0] == "status" else "f" * 40)
     monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
-    monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs: made(files(a=1000)))
+    monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs, build=None: made(files(a=1000)))
     monkeypatch.setattr(measure, "stored", lambda sha, which: None)
     monkeypatch.setattr(measure, "save", lambda sha, data: saved.append(sha))
     assert measure.check(1, "origin/main") == 0
@@ -635,6 +637,7 @@ def test_a_step_then_linear_row_is_not_a_superlinear_slope_and_a_quadratic_one_i
 def test_a_base_is_measured_from_a_snapshot_that_the_next_build_in_the_shared_tree_does_not_change(tmp_path, monkeypatch):
     """Train 5's measure step died on `stale binaries in .../measure-build/.../release`: another base was checked out in the shared tree
     and built while this one was measured, and the release directory it measured from changed under it."""
+    monkeypatch.setattr(measure, "PROFILE", "release")
     monkeypatch.setattr(measure, "BUILD", tmp_path)
     monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
     monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
@@ -676,3 +679,52 @@ def test_the_build_lock_is_held_for_the_build_and_not_for_the_measurement(tmp_pa
     monkeypatch.setattr(measure, "measure_all", measuring)
     measure.base_measurement("f" * 40, 1, build=lambda sha: tmp_path)
     assert free == [True]
+
+
+def test_the_gate_measures_the_dist_build_and_refuses_a_binary_of_another_profile(tmp_path, monkeypatch):
+    """#1977's pair read +0.46..0.61% on its gate shapes in release (16 codegen units: an edit re-partitions and flips unrelated inlining) and
+    +0.01..0.04% in dist: the compiler under measurement is the dist one, and a release llrm-c in a dist run is an error, not a number."""
+    assert measure.PROFILE == "dist"
+    with pytest.raises(SystemExit, match="not a dist build"):
+        measure.measured_dir({"LLRM_BIN": str(tmp_path / "release")})
+    assert measure.measured_dir({"LLRM_BIN": str(tmp_path / "snapshots" / ("dist" + "a" * 12))}).name.startswith("dist")
+    assert measure.measured_dir({"CARGO_TARGET_DIR": str(tmp_path)}) == tmp_path / "dist"
+
+
+def test_a_base_built_beside_the_head_is_used_as_it_is(monkeypatch, tmp_path):
+    """CI builds the base's llrm-c in a job of its own (hosted, parallel with the head's) and hands it over: measure does not build it again on a runner with six."""
+    monkeypatch.setenv("LLRM_MEASURE_BASE_BIN", str(tmp_path / "dist-base"))
+    monkeypatch.setattr(measure.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("built the base")))
+    assert measure.built("0" * 40) == tmp_path / "dist-base"
+
+
+def test_the_local_dist_binary_is_built_when_it_is_missing_and_left_alone_when_it_is_there(tmp_path, monkeypatch):
+    ran = []
+    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+    assert measure.ensure_dist({"CARGO_TARGET_DIR": str(tmp_path)}) == tmp_path / "dist" and len(ran) == 1
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "llrm-c").write_text("")
+    measure.ensure_dist({"CARGO_TARGET_DIR": str(tmp_path)})
+    assert len(ran) == 1
+
+
+def test_the_base_is_built_beside_the_head_not_after_it(monkeypatch):
+    """Two dist builds are minutes of one thread each (fat LTO): the cost job built them one after the other, +7 minutes."""
+    import threading
+
+    base_started = threading.Event()
+    monkeypatch.setattr(measure, "git", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
+    monkeypatch.setattr(measure, "stored", lambda sha, which: None)
+    monkeypatch.setattr(measure, "measure_all", lambda jobs: made(files(a=1000)) | {"binary": {"path": "/x", "sha": "s"}})
+    monkeypatch.setattr(measure, "base_measurement", lambda sha, jobs, build=None: (build(sha), made(files(a=1000)))[1])
+    monkeypatch.setattr(measure, "judged", lambda now, base, base_sha, head: 0)
+
+    def build(sha):
+        base_started.set()
+        return Path("/b")
+
+    def head():
+        assert base_started.wait(5), "the head was built before the base had started"
+
+    assert measure.check(1, "origin/main", build=build, head_dir=head) == 0

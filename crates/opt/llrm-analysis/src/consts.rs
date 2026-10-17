@@ -932,6 +932,7 @@ pub fn is_table_load(
 /// Every value this function computes that is a number, to a fixed point,
 /// without memory (`known_walked` has it).
 pub fn known(unit: &Unit) -> IndexMap<ValueId, Known> {
+    SCRATCH_DERIVATIONS.with(|count| count.set(count.get() + 1));
     known_from(unit, IndexMap::default(), None, &[])
 }
 
@@ -1023,6 +1024,7 @@ pub fn known_from(
 }
 
 thread_local! {
+    static SCRATCH_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TABLE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1038,6 +1040,12 @@ pub fn table_walks() -> usize {
 /// memory, for a test that two passes that ask of one body share the answer.
 pub fn memory_derivations() -> usize {
     MEMORY_DERIVATIONS.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has derived what is known of a body without
+/// memory from nothing (`known`), not brought up to date from what was held.
+pub fn scratch_derivations() -> usize {
+    SCRATCH_DERIVATIONS.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body without
