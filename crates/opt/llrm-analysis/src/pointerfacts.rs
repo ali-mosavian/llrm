@@ -113,6 +113,8 @@ impl Offsets<'_> {
         pointer: Operand,
         inbounds: bool,
     ) -> Option<(Operand, i64)> {
+        #[cfg(test)]
+        STEPPED.with(|count| count.set(count.get() + 1));
         let (mut value, mut offset) = (pointer, 0_i64);
         let mut seen = Visited::default();
         while seen.insert(value) {
@@ -233,6 +235,12 @@ impl Visited {
         self.more = Some(more);
         true
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Pointer chains followed, for the tests that count them.
+    pub(crate) static STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 pub fn offsets<'a>(

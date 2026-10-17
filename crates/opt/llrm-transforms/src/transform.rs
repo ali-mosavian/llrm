@@ -87,7 +87,7 @@ pub fn live(
     context: &Context,
     callees: &Callees,
     function: &Function,
-) -> BTreeSet<ValueId> {
+) -> IdSet<ValueId> {
     live_except(context, callees, function, |_| false)
 }
 
@@ -97,8 +97,8 @@ pub fn live_except(
     callees: &Callees,
     function: &Function,
     skipped: impl Fn(InstId) -> bool,
-) -> BTreeSet<ValueId> {
-    let mut alive = BTreeSet::new();
+) -> IdSet<ValueId> {
+    let mut alive = IdSet::new();
     let mut pending = function
         .walk()
         .map(|(_, inst)| inst)
@@ -452,8 +452,7 @@ pub fn _computation(
         );
     if unordered {
         // Any total order will do.
-        let order = |operand: &Operand| format!("{operand:?}");
-        if order(&named[0]) > order(&named[1]) {
+        if named[0] > named[1] {
             named.swap(0, 1);
         }
         if named[0] == named[1] {

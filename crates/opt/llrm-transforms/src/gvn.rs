@@ -36,8 +36,8 @@
 //!
 //! What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
 //! `memoryssa::Accesses` says what each instruction reads and writes,
-//! `alias::PointsTo` what each pointer may point to, and a call's footprint is
-//! its `CallEffects` from `Summaries`; without `Summaries` every callee is
+//! `alias::PointValues` what each pointer may point to, and a call's footprint
+//! is its `CallEffects` from `Summaries`; without `Summaries` every callee is
 //! unknown. A call that may write the bytes, or a store that may overlap, ends
 //! the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 //!
@@ -120,7 +120,7 @@
 //!
 //! # Needs
 //! [`crate::transform`], [`crate::loadjoins`], `memoryssa::Accesses`,
-//! `alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+//! `alias::PointValues`, `Summaries`, registers and loop trips for pricing.
 //!
 //! # Keeps
 //! Dominators and loops, unless a join split an edge.
@@ -131,9 +131,9 @@
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::alias::PointsTo;
+use llrm_analysis::alias::PointValues;
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::{Pointers, Registers};
+use llrm_analysis::manager::{PointerValues, Registers};
 use llrm_analysis::memory;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, ssa};
@@ -173,7 +173,7 @@ impl FunctionPass for Gvn {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
-        let pointers = analyses.get::<Pointers>(unit.context, unit.layout, unit.function);
+        let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
         // Only `loadjoins` changes the CFG, and only by splitting an edge.
         let blocks = unit.function.layout().len();
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
@@ -253,7 +253,7 @@ pub fn optimized(
     unit: &mut Unit,
     outer: &Outer,
     accesses: &Accesses,
-    pointers: &PointsTo,
+    pointers: &PointValues,
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
