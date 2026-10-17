@@ -71,9 +71,28 @@ def programs(root: Path, names: list[str], qcport: str | None, work: Path) -> di
     return out
 
 
+# A compile that fails (QCPORT without the game headers: "Unable to open 'world.h'") stops in ~8 M instructions where d_faces takes ~2 G, and perf stat
+# counts it all the same: fold-poc read 8.1 M as a result. A row is a compile that exited 0 and cost at least this much.
+FLOOR = {"d_faces": 500_000_000}
+
+
+def checked(done: subprocess.CompletedProcess, source: Path) -> None:
+    """SystemExit with the compiler's first message when the compile failed."""
+    if done.returncode:
+        lines = (done.stdout + done.stderr).splitlines()
+        first = next((line for line in lines if "Error!" in line or "error:" in line), lines[0] if lines else "no message")
+        raise SystemExit(f"abmeasure: the compile of {source.name} failed (exit {done.returncode}): {first}")
+
+
+def floored(name: str, count: int) -> None:
+    if count < FLOOR.get(name, 0):
+        raise SystemExit(f"abmeasure: {name} counted {count:,} instructions, under its floor {FLOOR[name]:,}: it did not compile")
+
+
 def counted(binary: Path, source: Path, arguments: list[str], level: str, events: str = "instructions:u") -> dict[str, int]:
     """perf stat's counts of one compile, by event name (cycles and instructions)."""
     done = subprocess.run(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True)
+    checked(done, source)
     return {name: int(n) for n, name in re.findall(r"^(\d+),,(\w+)", done.stderr, re.M)}
 
 
@@ -86,6 +105,7 @@ def callgrind(binary: Path, source: Path, arguments: list[str], level: str) -> d
     done = subprocess.run(
         ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True
     )
+    checked(done, source)
     text = done.stderr
     num = lambda pattern: int(re.search(pattern, text).group(1).replace(",", ""))  # noqa: E731
     return {
@@ -115,6 +135,7 @@ def main() -> int:
     for name, (source, flags) in programs(ROOT, args.programs, os.environ.get("QCPORT") or os.environ.get("DFACES_SRC"), work).items():
         for level in args.levels:
             ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]
+            floored(name, min(ia, ib))
             line = f"{name:8} -{level:2} instructions {ia / 1e6:9.1f}M -> {ib / 1e6:9.1f}M ({change(ia, ib)})"
             if args.cycles:
                 ca, cb = [], []
