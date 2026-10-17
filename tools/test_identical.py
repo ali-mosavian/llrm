@@ -60,7 +60,7 @@ def test_every_oracle_in_the_source_is_run_on_the_corpus_but_those_named_not_run
     assert identical.NOT_RUN <= names, sorted(identical.NOT_RUN - names)  # a name left over from a removed oracle
     crate = tmp_path / "crates/x/src"
     crate.mkdir(parents=True)
-    (crate / "lib.rs").write_text('fn a() { env_set("LLRM_CHECK_BRANDNEW"); env_set("LLRM_CHECK_THRASH"); }\n')
+    (crate / "lib.rs").write_text('fn a() { env_set("LLRM_CHECK_BRANDNEW"); env_set("LLRM_CHECK_COLORS"); }\n')
     assert identical.checks(tmp_path) == ("BRANDNEW",), "a new oracle is run, one named NOT_RUN is not"
 
 

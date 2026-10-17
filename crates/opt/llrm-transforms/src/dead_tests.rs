@@ -320,9 +320,9 @@ fn dead_scans_a_block_once_whatever_goes_from_it() {
     let scanned = |n: usize| {
         let body: String = (0..n).map(|i| format!("  %x{i} = add i16 %a, {i}\n")).collect();
         let mut module = parsed(&format!("define i16 @f(i16 %a) {{\nentry:\n{body}  ret i16 %a\n}}\n"));
-        llrm_mir::edit::SCANNED.with(|scanned| scanned.set(0));
+        let before = llrm_mir::edit::instructions_scanned();
         assert!(deadened(&mut module));
-        llrm_mir::edit::SCANNED.with(|scanned| scanned.get())
+        llrm_mir::edit::instructions_scanned() - before
     };
     let (small, large) = (scanned(200), scanned(400));
     assert!(large <= 2 * small + 8, "{small} instructions scanned erasing 200 dead adds, {large} erasing 400");
