@@ -1673,27 +1673,28 @@ fn _low_bits_zero(
         .into_iter()
         .filter_map(|one| if let AffineOperand::Value(value, _) = one { Some(*value) } else { None })
         .collect();
-    let known = {
-        let found = crate::alias::congruences_of(unit, facts, Some(&wanted), unit.congruent);
-        if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
-            let whole = crate::alias::congruences_of(unit, facts, None, None);
-            for value in &wanted {
-                assert_eq!(
-                    found.get(value),
-                    whole.get(value),
-                    "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
-                );
-            }
+    let known = crate::alias::congruences_of(unit, facts, Some(&wanted), unit.congruent);
+    if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
+        let whole = crate::alias::congruences_of(unit, facts, None, None);
+        for value in &wanted {
+            assert_eq!(
+                known.get(value),
+                whole.get(value),
+                "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
+            );
         }
-        found
-    };
+    }
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),
         AffineOperand::Value(value, _) => {
             known.get(value).cloned().or_else(|| facts.get(value).map(|fact| (BigInt::from(0), fact.n.clone())))
         }
     };
-    let (Some((start_modulus, start_residue)), Some((bound_modulus, bound_residue))) = (of(start), of(bound)) else {
+    let (start_fact, bound_fact) = (of(start), of(bound));
+    if let Some(memo) = unit.congruent {
+        memo.borrow_mut().recycle(known);
+    }
+    let (Some((start_modulus, start_residue)), Some((bound_modulus, bound_residue))) = (start_fact, bound_fact) else {
         return false;
     };
     let power = BigInt::from(1) << shift;

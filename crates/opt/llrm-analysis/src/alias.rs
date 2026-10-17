@@ -3615,10 +3615,26 @@ pub fn congruences_found() -> usize {
 /// of the body under one set of facts (an ask under others starts it again).
 #[derive(Default)]
 pub struct CongruenceMemo {
-    facts: usize,
     order: Option<llrm_mir::dense::IdMap<InstId, usize>>,
     counters: Vec<Option<Rc<Vec<induction::Affine>>>>,
     answers: llrm_mir::dense::IdMap<ValueId, Option<(BigInt, BigInt)>>,
+    scratch: Congruences,
+    inserted: Vec<ValueId>,
+}
+
+impl CongruenceMemo {
+    /// The map `congruences_of` made of the last ask by value, given back: it
+    /// is the size of the body's last value, and one made for each ask costs as
+    /// much as the body.
+    pub fn recycle(
+        &mut self,
+        mut found: Congruences,
+    ) {
+        for value in self.inserted.drain(..) {
+            found.remove(&value);
+        }
+        self.scratch = found;
+    }
 }
 
 /// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
@@ -3639,11 +3655,15 @@ pub fn congruences_of(
     wanted: Option<&[ValueId]>,
     memo: Option<&std::cell::RefCell<CongruenceMemo>>,
 ) -> Congruences {
+    let mut inserted: Vec<ValueId> = Vec::new();
+    let mut result = match memo.filter(|_| wanted.is_some()) {
+        Some(memo) => std::mem::take(&mut memo.borrow_mut().scratch),
+        None => Congruences::default(),
+    };
     if wanted.is_none() {
         CONGRUENCES.with(|count| count.set(count.get() + 1));
     }
     let function = unit.function;
-    let mut result = Congruences::default();
     let qualifies = |value: ValueId, op: &llrm_mir::module::Instruction| {
         matches!(
             op.opcode,
@@ -3652,15 +3672,11 @@ pub fn congruences_of(
             && op.operands.len() == 2
             && unit.int_bits(Operand::Value(value)).is_some()
     };
-    // Held answers are for these facts alone.
     let memo = memo.filter(|_| wanted.is_some());
-    if let Some(memo) = memo {
-        let mut held = memo.borrow_mut();
-        let facts = std::ptr::from_ref(constants) as usize;
-        if held.facts != facts {
-            *held = CongruenceMemo { facts, ..CongruenceMemo::default() };
-        }
-    }
+    // Held answers are for the unit's own registers alone: a map made for one
+    // ask and dropped can be followed at its address by another. The body's
+    // order and its loops' counters hold under any facts.
+    let answers = memo.filter(|_| unit.registers.is_some_and(|own| std::ptr::eq(constants, own)));
     // The values reached by the operations that make a congruence, and the ones
     // they stop at: for the whole body, every operation, in the body's order.
     let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
@@ -3680,8 +3696,9 @@ pub fn congruences_of(
                 }
                 // What is found of a value is found of what it is made of
                 // alone.
-                if let Some(held) = memo.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
+                if let Some(held) = answers.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
                     if let Some(fact) = held {
+                        inserted.push(value);
                         result.insert(value, fact);
                     }
                     continue;
@@ -3752,7 +3769,7 @@ pub fn congruences_of(
                 continue;
             }
             // A held answer is the last word.
-            if memo.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
+            if answers.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
                 continue;
             }
             let width = affine.start.width();
@@ -3763,6 +3780,7 @@ pub fn congruences_of(
                 continue;
             };
             if step != zero {
+                inserted.push(affine.value);
                 result.insert(affine.value, reduced(step, start, width));
             }
         }
@@ -3811,15 +3829,19 @@ pub fn congruences_of(
             if found.0 == BigInt::from(1) {
                 continue;
             }
+            inserted.push(value);
             result.insert(value, found);
             changed = true;
         }
         if !changed {
-            if let Some(memo) = memo {
+            if let Some(memo) = answers {
                 let mut held = memo.borrow_mut();
                 for value in reached.iter() {
                     held.answers.insert(value, result.get(&value).cloned());
                 }
+            }
+            if let Some(memo) = memo.filter(|_| wanted.is_some()) {
+                memo.borrow_mut().inserted = inserted;
             }
             return result;
         }
