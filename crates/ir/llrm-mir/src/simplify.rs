@@ -27,10 +27,9 @@
 //!   `llvm.assume` facts of ValueTracking need the entry points to take a
 //!   `FunctionAnalyses`; their callers (`earlycse`, the combine worklist,
 //!   `gvn`, `fold`) would have to pass it.
-//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `simplifyICmpWithMinMax`,
-//!   `threadCmpOverSelect` / `threadCmpOverPHI`, `simplifyAndOrOfCmps` and
-//!   `simplifyAndOrWithICmpEq`: not yet translated; ValueTracking is not what
-//!   stops them.
+//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `threadCmpOverSelect` /
+//!   `threadCmpOverPHI`, `simplifyAndOrOfCmps` and `simplifyAndOrWithICmpEq`:
+//!   not yet translated; ValueTracking is not what stops them.
 //! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! # Used by
