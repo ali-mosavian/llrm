@@ -48,6 +48,15 @@ pub fn match_select_pattern(
     SelectPatternResult { flavor: SelectPatternFlavor::None, lhs: None, rhs: None }
 }
 
+/// `shiftAmountKnownInRange(ShiftAmount)`.
+pub fn shift_amount_known_in_range(
+    q: &Query,
+    shift_amount: Operand,
+) -> bool {
+    let _ = (q, shift_amount);
+    false
+}
+
 /// `computeConstantRange(V, ForSigned, UseInstrInfo, AC, CtxI, DT, Depth)`.
 pub fn compute_constant_range(
     q: &Query,
