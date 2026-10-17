@@ -7,15 +7,11 @@
 # disassemble alike. A file saying "; invalid: REASON" must instead be
 # refused by opt, and by llrm-mir for REASON.
 set -u
-bin=${LLVM20:-}
-for guess in /usr/lib/llvm-20/bin /opt/homebrew/opt/llvm@20/bin; do
-  [ -z "$bin" ] && [ -x "$guess/opt" ] && bin=$guess
-done
-if [ -z "$bin" ] || ! "$bin/opt" --version | grep -q 'version 20\.'; then
-  echo "mir-oracle: LLVM 20 not found; set LLVM20 to its bin directory" >&2
-  exit 2
-fi
 root=$(cd "$(dirname "$0")/.." && pwd)
+# The pinned LLVM (tools/llvmpin.py): llrm-mir's text is read by the opt of the build the plan is judged against, not the distro's.
+bin=$(python3 "$root/tools/llvmpin.py" dir)
+[ -x "$bin/opt" ] || { echo "mir-oracle: the pinned LLVM is not built at $bin" >&2; exit 2; }
+echo "mir-oracle: $("$bin/opt" --version | sed -n 2p) ($bin)" >&2
 llrm_bin=$(python3 "$root/tools/llrmbin.py" bin)
 cargo build -q --release --bin llrm-mir --manifest-path "$root/Cargo.toml" || exit 2
 ours=$(mktemp -d)

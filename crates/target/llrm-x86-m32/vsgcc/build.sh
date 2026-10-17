@@ -15,8 +15,12 @@ EMU=$(python3 "$R/tools/linkrecipe.py" x86-m32 ld-emulation)
 # the 64-bit divides gcc and clang call, from each compiler's own 32-bit runtime
 # VSGCC_ONLY=llrm: llrm's objects alone, for what compares llrm with itself (m16.py), with no gcc or clang installed
 if [ -z "${VSGCC_ONLY:-}" ]; then
-RT_gcc=$(gcc -m32 -print-libgcc-file-name)
-RT_clang=$(clang -m32 --rtlib=compiler-rt -print-libgcc-file-name)
+# The references are the pinned ones (tools/llvmpin.py): clang 24.0.0git d1106deb71cc, gcc 13.4; PATH's clang was the distro's 20.1.8.
+GCC=$(python3 "$R/tools/llvmpin.py" path gcc) || exit 1
+CLANG=$(python3 "$R/tools/llvmpin.py" path clang) || exit 1
+echo "references: $("$GCC" --version | head -1); $("$CLANG" --version | head -1)" >&2
+RT_gcc=$("$GCC" -m32 -print-libgcc-file-name)
+RT_clang=$("$CLANG" -m32 --rtlib=compiler-rt -print-libgcc-file-name)
 fi
 $LLRM -m32 -mabi=$ABI -O2 -march=i486 -o $O/o/$P.llrm.obj $S 2>$O/o/$P.llrm.err || echo "FAIL llrm $P"
 $LLRM -m32 -mabi=$ABI -Os -march=i486 -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.err || echo "FAIL llrmOs $P"
@@ -25,8 +29,8 @@ for o in O1 O3; do $LLRM -m32 -mabi=$ABI -$o -march=i486 -o $O/o/$P.llrm$o.obj $
 cd $O/b
 F="-Dfar= -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 for o in O1 O2 O3 Os; do
-  gcc $F -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
-  clang $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
+  "$GCC" $F -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
+  "$CLANG" $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
   CS="gcc clang"
   if [ $o = O2 ] || [ $o = Os ]; then  # the ELF build of llrm is for loops.py
     $LLRM -m32 -mabi=$ABI -$o -march=i486 -fobject-format=elf -o $P.llrmElf$o.o $S 2>$P.llrmElf$o.err || echo "FAIL llrmElf$o $P"

@@ -14,6 +14,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import llvmpin  # noqa: E402
+
 EVENTS = ["instructions:u", "cycles:u", "branch-misses:u", "L1-dcache-load-misses:u"]
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 
@@ -36,8 +40,12 @@ def main() -> None:
     ap.add_argument("files", nargs="+")
     ap.add_argument("--llrm", default="llrm-c")
     ap.add_argument("--llvm", default=str(Path.home() / "scratch/llvm-build/bin"))
+    ap.add_argument("--allow-other-llvm", action="store_true", help="measure an LLVM that is not the pinned 24.0.0git d1106deb71cc")
     ap.add_argument("--runs", type=int, default=3)
     a = ap.parse_args()
+    for tool in ('clang', 'opt', 'llc'):
+        llvmpin.resolve(tool, f'{a.llvm}/{tool}', a.allow_other_llvm)
+    print(llvmpin.header(f'{a.llvm}/clang'), file=sys.stderr)
     qc = Path(a.qcport).expanduser()
     inc = [x for d in ("", "render", "game", "host", "qgl") for x in ("-I", str(qc / d))]
     flags = ["-m32", "-march=i486", "-O2", "-fno-inline-functions"]

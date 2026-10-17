@@ -32,9 +32,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import clangpin  # noqa: E402
+import llvmpin  # noqa: E402
 
-CLANG_BIN = clangpin.default()  # the pinned clang, else PATH's; the report's header names its version
+CLANG_BIN = str(llvmpin.pinned("clang"))  # never PATH's; the report's header names the version
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -283,7 +283,7 @@ def build_map(args) -> dict:
 def show(result: dict, old: dict | None = None) -> str:
     out = []
     head = result["header"]
-    out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", clangpin.header(CLANG_BIN), ""]
+    out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", llvmpin.header(CLANG_BIN), ""]
     total = result["total_M"]
     inst = result["instrumented_M"]
     gap = inst - result["rows_sum_M"]

@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import clangpin  # noqa: E402
+import llvmpin  # noqa: E402
 
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 PASS_SYMBOL = re.compile(r"llvm::(\w+Pass)::run\(")
@@ -95,12 +95,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?")
     parser.add_argument("--levels", default="O1,O2,Os")
-    parser.add_argument("--clang", default=clangpin.default(), help="the clang to measure (default: the plan's reference, ~/scratch/llvm-build/bin/clang, when built)")
-    parser.add_argument("--allow-other-clang", action="store_true", help="measure a clang that is not the pinned one")
+    parser.add_argument("--clang", default=None, help="a clang other than the pinned 24.0.0git d1106deb71cc (needs --allow-other-llvm)")
+    parser.add_argument("--allow-other-llvm", action="store_true", help="measure a clang that is not the pinned one")
     parser.add_argument("--budget", type=float, default=220.0, help="LLVM's instructions per IR instruction per run (plan 4.1)")
     args = parser.parse_args()
-    clangpin.require_pinned(args.clang, args.allow_other_clang)
-    print(clangpin.header(args.clang))
+    args.clang = llvmpin.resolve("clang", args.clang, args.allow_other_llvm)
+    print(llvmpin.header(args.clang))
     if args.source:
         source, extra = args.source, []
     else:

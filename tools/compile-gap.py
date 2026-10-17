@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import clangpin  # noqa: E402
+import llvmpin  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
@@ -93,17 +93,17 @@ def main() -> None:
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     parser.add_argument(
         "--clang",
-        default=clangpin.default(),
-        help="the clang to compare with: the pinned 24.0.0git d1106deb71cc (~/scratch/llvm-build/bin/clang) when built; the distro's 20.1.8 costs 555 M on d_faces -O2 where the pinned costs 415 M",
+        default=None,
+        help="a clang other than the pinned 24.0.0git d1106deb71cc (needs --allow-other-llvm): the distro's 20.1.8 costs 555 M on d_faces -O2 where the pinned costs 415 M",
     )
-    parser.add_argument("--allow-other-clang", action="store_true", help="compare with a clang that is not the pinned one")
+    parser.add_argument("--allow-other-llvm", action="store_true", help="compare with a clang that is not the pinned one")
     parser.add_argument(
         "--distro-clang",
         help="a second clang column, what users run (the distro's shared-libLLVM clang: +20% of startup and calls into libLLVM)",
     )
     args = parser.parse_args()
-    clangpin.require_pinned(args.clang, args.allow_other_clang)
-    print(clangpin.header(args.clang))
+    args.clang = llvmpin.resolve("clang", args.clang, args.allow_other_llvm)
+    print(llvmpin.header(args.clang))
     args.llrm = args.llrm or dist_build()
     qc = Path(os.environ["QCPORT"]).expanduser()
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]

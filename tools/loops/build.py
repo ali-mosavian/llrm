@@ -22,6 +22,7 @@ HERE = Path(__file__).resolve().parent
 
 OW = Path(os.environ.get("OW_BIN", Path.home() / "work/personal/open-watcom-v2/build/binbuild"))
 IA16 = Path(os.environ.get("IA16_ROOT", Path.home() / "work/other/build-ia16"))
+# The distro's LLVM 20 on purpose: the msp430 target of these builds is not in the pinned (X86-only) build, and they are not compared with d1106deb71cc.
 LLVM = Path(os.environ.get("LLVM20", "/usr/lib/llvm-20/bin"))
 
 def _times() -> dict[str, list[str]]:

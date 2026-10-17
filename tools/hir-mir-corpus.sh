@@ -5,8 +5,9 @@
 # defines; what the emitter refuses is counted by reason.
 export LLRM_VERIFY=${LLRM_VERIFY:-1}  # the gate checks each pass and phase
 set -u
-bin=${LLVM20:-/usr/lib/llvm-20/bin}
 root=$(cd "$(dirname "$0")/.." && pwd)
+bin=$(python3 "$root/tools/llvmpin.py" dir)  # the pinned LLVM, not the distro's 20.1.8
+echo "hir-mir-corpus: $("$bin/opt" --version | sed -n 2p) ($bin)" >&2
 llrm_bin=$(python3 "$root/tools/llrmbin.py" bin)
 out=${1:-$(python3 "$root/tools/llrmbin.py" target)/hir-mir}
 cargo build -q --release -p llrm-qb -p llrm-nib -p llrm-hir --manifest-path "$root/Cargo.toml" 2>/dev/null || { echo "hir-mir-corpus: build fails" >&2; exit 2; }

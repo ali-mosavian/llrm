@@ -17,6 +17,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import llvmpin  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).parent))
 from gen import SHAPES, generate  # noqa: E402
 
@@ -58,11 +62,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("out")
     ap.add_argument("--llvm", default=str(Path.home() / "scratch/llvm-build/bin"))
+    ap.add_argument("--allow-other-llvm", action="store_true", help="measure an LLVM that is not the pinned 24.0.0git d1106deb71cc")
     ap.add_argument("--llrm", default="llrm-c")
     ap.add_argument("--shapes", default=",".join(SHAPES))
     ap.add_argument("--sizes", default="25,50,100,200,400,800,1600")
     ap.add_argument("--runs", type=int, default=3)
     a = ap.parse_args()
+    for tool in ('clang', 'opt', 'llc'):
+        llvmpin.resolve(tool, f'{a.llvm}/{tool}', a.allow_other_llvm)
+    print(llvmpin.header(f'{a.llvm}/clang'), file=sys.stderr)
     clang, opt, llc = (f"{a.llvm}/{t}" for t in ("clang", "opt", "llc"))
     rows = []
     with tempfile.TemporaryDirectory() as d:
