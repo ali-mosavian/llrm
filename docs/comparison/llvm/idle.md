@@ -95,7 +95,7 @@ flowchart TB
   subgraph LV["LLVM: a fixed list, each pass about once"]
     direction LR
     a1["<b>pass</b>"]:::mid
-    a2{"<b>last-run record?</b>"}
+    a2{"<b>last-run record?</b>"}:::mid
     a3["<b>skip</b><br/><small>before any analysis is asked</small>"]:::out
     a4["<b>run</b>"]:::opt
     a1 --> a2
@@ -105,7 +105,7 @@ flowchart TB
   subgraph RK["llrm: rounds until nothing changes"]
     direction LR
     b1["<b>pass, next round</b>"]:::mid
-    b2{"<b>body version seen,<br/>or edits miss reads()?</b>"}
+    b2{"<b>body version seen,<br/>or edits miss reads()?</b>"}:::mid
     b3["<b>skip</b><br/><small>36 of 782</small>"]:::out
     b4["<b>run</b><br/><small>asks its analyses first</small>"]:::opt
     b5["<b>no change</b><br/><small>637 runs, 361 M</small>"]:::warn

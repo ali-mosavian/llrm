@@ -204,6 +204,24 @@ Input `tools/ladder/gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc
 | register coalescing | 76 | 108 |
 | peephole | no single counterpart | 122 |
 
+## Backend step by step on `d_faces`
+
+The same comparison on the whole file, `-O2` (inclusive M instructions: LLVM from callgrind of the driver's `cc1` command, llrm from `LLRM_DEBUG=time`, 11 bodies). Passes are paired by what they do, not one to one; "none" means no pass of that kind in the other compiler's `-O2` path that this measurement could name.
+
+| step | LLVM | llrm | llrm / LLVM |
+|---|---|---:|---:|
+| instruction selection | `X86DAGToDAGISel` 51.3 | `isel` 54.6 | 1.1x |
+| register allocation | `RAGreedy` 39.5 | `regalloc base` 444.1 | 11.2x |
+| register coalescing | `RegisterCoalescer` 6.5 | `lir coalesce` 60.1 | 9.2x |
+| block order and jumps | `MachineBlockPlacement` 3.2 + `BranchFolder` 2.2 | `lir jumps` 64.3 | 12x |
+| copy and peephole clean-up | `MachineCopyPropagation` 3.2, `MachineCSE` 2.7 | `lir peephole` 129.7 | 22x |
+| phi elimination | `PHIElimination` 1.9 | `lir phielim` 14.4 | 7.6x |
+| x87 stack | `X86FPStackifier` 1.4 | `lir floatassign` 46.6 + `lir floatalloc` 23.2 | 50x |
+| scheduling | `MachineScheduler` 9.6 | none | |
+| machine LICM and sinking | `MachineLICM` 8.5 + `MachineSinking` 3.8 | `lir pressuresink` 9.1 | 0.7x |
+
+Selection is the one step at parity. The two largest rows are the allocator and the peephole step; `lir peephole` has no LLVM counterpart of that size on this path, and the x87 rows are the largest ratio (why is not measured here).
+
 ## Proposed change
 
 1. Make the repeated mask test at each branch instead of holding it across blocks. This is [#2010](https://github.com/ali-mosavian/llrm/pull/2010) (ssa-spill-m16, open): `addresssink::masks_sunk` makes again an `and` that only `== 0` and `!= 0` compares read, before the first such compare of each block; LLVM does it in CodeGenPrepare ([`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341), [`sinkCmpExpression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1924)). Reported in the PR on this input: 79 splits gone, 419 stack operands to 0, compile 1,995 M to 1,075 M. Re-measure the table above after it lands; the changes below are for what the allocator still costs per attempt.
