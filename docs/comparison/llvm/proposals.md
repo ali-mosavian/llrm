@@ -38,7 +38,7 @@ flowchart LR
   c6 --> p6
 ```
 
-*Cause, proposed change, status: landed, open PR, design or unowned*
+*Cause (red), proposed change and its status: landed (green), open PR (orange), design or unowned (purple)*
 
 | # | change | bound on `d_faces` -O2 | slope | owner, PR, status |
 |---:|---|---|---|---|
