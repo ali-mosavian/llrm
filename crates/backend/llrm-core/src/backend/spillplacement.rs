@@ -311,14 +311,27 @@ impl<'a> Placement<'a> {
         for one in constraints {
             let frequency = self.frequency[&one.block] * one.weight;
             let (entry, exit) = self.bundles.of[&one.block];
-            if one.entry != Border::DontCare {
-                self.activate(entry);
-                self.nodes[entry].bias(frequency, one.entry);
-            }
-            if one.exit != Border::DontCare {
-                self.activate(exit);
-                self.nodes[exit].bias(frequency, one.exit);
-            }
+            self.constrain(entry, exit, frequency, one.entry, one.exit);
+        }
+    }
+
+    /// What one block wants at its borders, for a caller that has the block's
+    /// bundles and its frequency (times the constraint's weight).
+    pub fn constrain(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+        on_entry: Border,
+        on_exit: Border,
+    ) {
+        if on_entry != Border::DontCare {
+            self.activate(entry);
+            self.nodes[entry].bias(frequency, on_entry);
+        }
+        if on_exit != Border::DontCare {
+            self.activate(exit);
+            self.nodes[exit].bias(frequency, on_exit);
         }
     }
 
@@ -332,10 +345,21 @@ impl<'a> Placement<'a> {
         for block in blocks {
             let frequency = self.frequency[block] * if strong { 2.0 } else { 1.0 };
             let (entry, exit) = self.bundles.of[block];
-            for bundle in [entry, exit] {
-                self.activate(bundle);
-                self.nodes[bundle].bias(frequency, Border::PrefSpill);
-            }
+            self.prefer_stack(entry, exit, frequency);
+        }
+    }
+
+    /// `add_pref_spill` for a block of known bundles, at `frequency` already
+    /// doubled where strong.
+    pub fn prefer_stack(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+    ) {
+        for bundle in [entry, exit] {
+            self.activate(bundle);
+            self.nodes[bundle].bias(frequency, Border::PrefSpill);
         }
     }
 
@@ -346,15 +370,25 @@ impl<'a> Placement<'a> {
     ) {
         for block in blocks {
             let (entry, exit) = self.bundles.of[block];
-            if entry == exit {
-                continue;
-            }
-            self.activate(entry);
-            self.activate(exit);
             let frequency = self.frequency[block];
-            self.nodes[entry].link(exit, frequency);
-            self.nodes[exit].link(entry, frequency);
+            self.link_bundles(entry, exit, frequency);
         }
+    }
+
+    /// `add_links` for a block of known bundles and frequency.
+    pub fn link_bundles(
+        &mut self,
+        entry: usize,
+        exit: usize,
+        frequency: f64,
+    ) {
+        if entry == exit {
+            return;
+        }
+        self.activate(entry);
+        self.activate(exit);
+        self.nodes[entry].link(exit, frequency);
+        self.nodes[exit].link(entry, frequency);
     }
 
     fn update(
@@ -417,6 +451,11 @@ impl<'a> Placement<'a> {
                 self.recent.push(bundle);
             }
         }
+    }
+
+    /// `finish`, ascending, to search.
+    pub fn finished(&self) -> Vec<usize> {
+        self.active.iter().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
     }
 
     /// The bundles that settled in a register.

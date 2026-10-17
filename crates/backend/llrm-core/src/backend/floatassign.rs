@@ -489,7 +489,7 @@ fn _rereadable(
 /// A value read in a later block keeps its own name: the successor reads it.
 pub(crate) fn _equivalent_loads(
     sequence: &[Arc<Insn>],
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> IndexMap<u32, u32> {
     let mut available: IndexMap<(Option<String>, Mem), u32> = IndexMap::default();
     let mut aliases: IndexMap<u32, u32> = IndexMap::default();
@@ -559,8 +559,7 @@ fn _shared_cells(
     // Two members overlap where one is live as the other is defined.
     let mut overlaps: HashSet<(u32, u32)> = HashSet::default();
     for block in &body.blocks {
-        let mut alive: BTreeSet<u32> =
-            live_out[&block.at].iter().copied().filter(|value| root.contains_key(value)).collect();
+        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().filter(|value| root.contains_key(value)).collect();
         for one in block.insns.iter().rev() {
             for defined in one.defines.iter().filter(|value| root.contains_key(*value)) {
                 for other in alive.iter().filter(|other| *other != defined && root[*other] == root[defined]) {
@@ -630,7 +629,8 @@ fn _stacked(
     }
     let mut placement = spillplacement::Placement::new(body, bundles);
     let mut stacked: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
-    let values: BTreeSet<u32> = live_out.values().flatten().copied().filter(|value| floating.contains(value)).collect();
+    let values: BTreeSet<u32> =
+        live_out.values().flat_map(|set| set.iter()).filter(|value| floating.contains(value)).collect();
     for value in values {
         let (mut constraints, mut spilled, mut links) = (Vec::new(), Vec::new(), Vec::new());
         for block in &body.blocks {
@@ -1037,8 +1037,8 @@ fn _allocnos(
     (live_in, live_out): (&Live, &Live),
 ) -> Allocnos {
     let regs = body.regs();
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
-        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    let floats = |set: &llrm_mir::dense::IdSet<u32>| -> BTreeSet<u32> {
+        set.iter().filter(|value| floating.contains(value)).collect()
     };
     let bundles = spillplacement::bundles(body);
     let stacked = _stacked(body, floating, live_in, live_out, &bundles);
@@ -1552,7 +1552,7 @@ impl Plan<'_> {
                 let cut = _terminators(block);
                 let steps = _steps(block, cut);
                 let leaving: BTreeSet<u32> =
-                    live_out[&at].iter().copied().filter(|value| self.floating.contains(value)).collect();
+                    live_out[&at].iter().filter(|value| self.floating.contains(value)).collect();
                 let after = _live_after(block, &steps, &leaving, &self.floating);
                 let touched = steps.iter().map(|&(first, last)| self.step_roots(block, first, last)).collect();
                 Rc::new((cut, steps, after, touched))
@@ -1985,7 +1985,7 @@ pub fn assigned(
         return Ok(body);
     }
     let (live_in, live_out) = live(&body);
-    if live_in[&body.entry].iter().any(|value| floating.contains(value)) {
+    if live_in[&body.entry].iter().any(|value| floating.contains(&value)) {
         return Err(unlowered("floating stack input is unavailable"));
     }
     // One solution for the body the rest reads: the first again where nothing
