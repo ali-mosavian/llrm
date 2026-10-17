@@ -193,6 +193,7 @@ pub fn loops<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> Vec<Loop> {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::LirLoops);
     let found = shaped(
         blocks,
         entry,

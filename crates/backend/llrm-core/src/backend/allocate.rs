@@ -846,6 +846,7 @@ pub fn live_rows_by(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::LiveRows);
     // Each value is followed from where it occurs up the predecessors to where
     // it is written, so the work is the size of the live ranges and not the
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
@@ -3878,6 +3879,7 @@ impl RegAlloc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Error> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::Allocations);
         let regs = body.regs();
         let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {

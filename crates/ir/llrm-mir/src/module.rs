@@ -238,6 +238,7 @@ impl Default for Lineage {
 
 impl Clone for Lineage {
     fn clone(&self) -> Self {
+        crate::counts::bump(crate::counts::Event::FunctionClones);
         Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: self.logged }
     }
 }
@@ -677,6 +678,7 @@ impl Function {
     /// the copy logs follows it. For a copy that replaces the function, not
     /// one kept beside it (`clone` is that: its edits are its own).
     pub fn fork(&self) -> Self {
+        crate::counts::bump(crate::counts::Event::FunctionForks);
         let mut copy = self.clone();
         copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
         copy

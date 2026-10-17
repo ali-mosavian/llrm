@@ -826,7 +826,11 @@ struct Problem<'a> {
     /// `total` of each set asked: the search asks the same set again from the
     /// other start and from each step's neighbours.
     totals: std::cell::RefCell<llrm_support::hash::HashMap<BTreeSet<usize>, Option<i64>>>,
-    /// Where each site's value is live, at the points of `run`.
+    /// Where each site's value is live, at the points of `run`: the half-open
+    /// stretches of each block's points, in order.
+    lives: Vec<BTreeMap<i64, Vec<(usize, usize)>>>,
+    /// The same point by point, for the test that holds the sweep to it.
+    #[cfg(test)]
     alive: Vec<BTreeMap<i64, Vec<bool>>>,
     latch: i64,
     header: i64,
@@ -973,6 +977,8 @@ fn _plan(
     });
     let traffic = base.without(function, &frequencies, &|value| cells.get(&value).copied(), users.web.iter().copied());
     let alive = _alive(function, pressure, loop_, &sites);
+    let lives =
+        alive.iter().map(|site| site.iter().map(|(&block, points)| (block, _stretches(points))).collect()).collect();
     let mut keys = Vec::new();
     let latch_block = cfg::block(latch);
     // The most backedges: the counted exit's, or what an in-bounds access
@@ -1018,6 +1024,8 @@ fn _plan(
         function,
         words: Box::new(|value| spill::words(view.context, view.layout, function, value)),
         totals: Default::default(),
+        lives,
+        #[cfg(test)]
         alive,
         latch: frequency(cfg::block(latch)),
         header: frequency(cfg::block(loop_.header)),
@@ -1486,6 +1494,26 @@ fn _fixed(
     let model = spill::View::over(pressure, view.context, view.layout, function, room, &across);
     let hide = |value: ValueId| web.contains(&value) || (symbols.contains(&value) && !live.contains(&value));
     loop_.body.iter().map(|&at| (at, model.sites(cfg::block(at), &hide))).collect()
+}
+
+/// The half-open stretches of `true` in `points`.
+fn _stretches(points: &[bool]) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut start = None;
+    for (at, &live) in points.iter().enumerate() {
+        match (live, start) {
+            (true, None) => start = Some(at),
+            (false, Some(from)) => {
+                found.push((from, at));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        found.push((from, points.len()));
+    }
+    found
 }
 
 /// Where each site's value is live in the loop, before each instruction.
@@ -2490,20 +2518,92 @@ impl Problem<'_> {
         if self.target.room.priced() {
             let room = self.target.room;
             let price = |one: Resident| self.spill_price(one, &reads);
-            let mut extra = |run: usize, index: usize, out: &mut Vec<Resident>| {
-                let block = self.order[run];
-                out.extend(throughout.iter().copied());
-                out.extend(
-                    last.iter()
-                        .filter(|(product, read)| product.2 == block && **read >= index)
-                        .map(|(&(one, k, block), _)| Resident::Product(one, k, block)),
-                );
-                out.extend(
-                    rebuilt
+            // What the residents besides the cells are at each step, told as
+            // what comes and what goes: a product from the top of
+            // its block to its last reader, a rebuilt value where
+            // it is live.
+            let runs = self.order.len();
+            let mut products: Vec<Vec<(usize, Resident)>> = vec![Vec::new(); runs];
+            for (&(one, k, block), &read) in &last {
+                if let Some(&run) = self.at.get(&block) {
+                    products[run].push((read, Resident::Product(one, k, block)));
+                }
+            }
+            let mut lives: Vec<Vec<(usize, bool, Resident)>> = vec![Vec::new(); runs];
+            for &at in &rebuilt {
+                for (block, stretches) in &self.lives[at] {
+                    if let Some(&run) = self.at.get(block) {
+                        for &(from, to) in stretches {
+                            lives[run].push((from, true, Resident::Rebuilt(at)));
+                            lives[run].push((to, false, Resident::Rebuilt(at)));
+                        }
+                    }
+                }
+            }
+            for list in &mut products {
+                list.sort_unstable();
+            }
+            for list in &mut lives {
+                list.sort_by_key(|&(index, on, _)| (index, on));
+            }
+            let (mut first, mut present, mut reader, mut event) =
+                (true, llrm_support::hash::HashSet::<Resident>::default(), 0usize, 0usize);
+            let mut extra = |run: usize, index: usize, coming: &mut Vec<Resident>, going: &mut Vec<Resident>| {
+                if std::mem::take(&mut first) {
+                    coming.extend(throughout.iter().copied());
+                }
+                let (came, went) = (coming.len(), going.len());
+                if index == 0 {
+                    going.extend(present.drain());
+                    (reader, event) = (0, 0);
+                    coming.extend(products[run].iter().map(|&(_, product)| product));
+                }
+                while let Some(&(_, product)) = products[run].get(reader).filter(|(read, _)| *read < index) {
+                    going.push(product);
+                    reader += 1;
+                }
+                while let Some(&(_, on, one)) = lives[run].get(event).filter(|(at, ..)| *at <= index) {
+                    if on {
+                        coming.push(one);
+                    } else {
+                        going.push(one);
+                    }
+                    event += 1;
+                }
+                if index == 0 {
+                    // A resident that lives on past a block's edge neither
+                    // goes nor comes.
+                    let (was, is): (llrm_support::hash::HashSet<Resident>, llrm_support::hash::HashSet<Resident>) =
+                        (going[went..].iter().copied().collect(), coming[came..].iter().copied().collect());
+                    present.extend(is.iter().copied());
+                    let (mut gone, mut come) = (going.split_off(went), coming.split_off(came));
+                    gone.retain(|one| !is.contains(one));
+                    come.retain(|one| !was.contains(one));
+                    going.extend(gone);
+                    coming.extend(come);
+                }
+                present.extend(coming[came..].iter().copied());
+                for one in &going[went..] {
+                    present.remove(one);
+                }
+                // Held to the lists it replaced: at each step, what the loop
+                // keeps live besides the cells.
+                #[cfg(test)]
+                {
+                    let block = self.order[run];
+                    let mut old: BTreeSet<Resident> = last
                         .iter()
-                        .filter(|&&at| self.alive[at].get(&block).is_some_and(|alive| alive[index]))
-                        .map(|&at| Resident::Rebuilt(at)),
-                );
+                        .filter(|(product, read)| product.2 == block && **read >= index)
+                        .map(|(&(one, k, block), _)| Resident::Product(one, k, block))
+                        .collect();
+                    old.extend(
+                        rebuilt
+                            .iter()
+                            .filter(|&&at| self.alive[at].get(&block).is_some_and(|alive| alive[index]))
+                            .map(|&at| Resident::Rebuilt(at)),
+                    );
+                    assert_eq!(present.iter().copied().collect::<BTreeSet<_>>(), old, "run {run}, step {index}");
+                }
             };
             let swept = self.run.fit::<Resident, Residents>(room, &Resident::Value, &price, &segmented, &mut extra);
             #[cfg(test)]
