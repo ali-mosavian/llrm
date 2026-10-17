@@ -13,13 +13,14 @@ and loop-idiom. Owner: cgscc-poc. Source: LLVM d1106deb71cc, `~/scratch/llvm-src
 | X86 profile | `lib/Target/X86/X86TargetTransformInfo.cpp` | 8,210 |
 | Legal addressing | `X86TargetLowering::isLegalAddressingMode` (`X86ISelLowering.cpp`) | |
 
-Only scalar integer and x87 paths are translated; the vector, masked, gather, interleave and reduction costs
-return `Invalid` until a vector type reaches a reader (DEVIATE T1).
+Only scalar integer and x87 paths are translated, for each supported `-march` (i386, i486, pentium, pentiumpro, k5, k6,
+athlon, core2): the scalar subtarget features of `X86Subtarget` (CMOV from pentiumpro, per-CPU multiply and shift
+costs). The vector, masked, gather, interleave and reduction costs return `Invalid` (DEVIATE T1: no producer).
 
 ## Interface (Rust, `crates/opt/llrm-analysis/src/tti/`)
 
 `Cost { value: i64, valid: bool }` is `InstructionCost`. `CostKind` is `TCK_RecipThroughput | Latency | CodeSize |
-SizeAndLatency`. One trait, `Tti`, with a profile each (`Generic`, `X86 { cpu }`, `cpu` from `-march`):
+SizeAndLatency`. One trait, `Tti`, with a profile each (`Generic`, `X86 { cpu }`, `cpu` from `-march` (its scalar features)):
 
 - `instruction_cost(function, inst, kind)`: `getInstructionCost`, the dispatcher (InlineCost, unroll).
 - `arithmetic_cost(opcode, ty, kind, op1_info, op2_info, args)`, `cast_cost(opcode, dst, src, context, kind)`,
@@ -38,16 +39,17 @@ Readers take `&dyn Tti`; the target decides the profile once per module.
 
 1. `Generic` (`BasicTTIImpl` scalar rules) and the trait; move `free_instruction`, `gep_free`, `case_clusters` out of
    `inlinecost.rs` onto it; no output change (#2140's tests).
-2. `X86`: `getArithmeticInstrCost`, `getCastInstrCost`, `getCmpSelInstrCost`, `getIntImmCost*`,
+2. `X86` per `-march`: `getArithmeticInstrCost`, `getCastInstrCost`, `getCmpSelInstrCost`, `getIntImmCost*`,
    `getMemoryOpCost`, `isLegalAddressingMode`, `getScalingFactorCost`, `isLSRCostLess` for i486 (scalar tables
    with their feature gates).
 3. InlineCost switches to `X86` behind its switch; the SCEV expander and lsr read the same trait.
 
-Each step: permalink per function, numbered DEVIATE, a test per cost against the pinned `opt` (`-mtriple=i486 -mcpu=i486`
-with `print<cost-model>`), pinned version in every output header.
+Each step: permalink per function, numbered DEVIATE, a test per cost against the pinned `opt` (`print<cost-model>`, at least `-mtriple=i486 -mcpu=i486` and
+`-mcpu=pentiumpro`), pinned version in every output header.
 
 ## DEVIATE
 
 - T1 No vector, masked, gather, interleave or reduction costs.
-- T2 `getInlineCallPenalty`, `areInlineCompatible` without target-feature subsets (no function features).
+- T2 `getInlineCallPenalty` and `areInlineCompatible` read no per-function target-feature attributes (llrm sets features
+  per module with `-march`).
 - T3 llrm's `OperationCosts` stay what the allocator and `profit` read; they are not TTI.
