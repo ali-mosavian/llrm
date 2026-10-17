@@ -86,3 +86,13 @@ pub fn is_implied_condition_pred(
     let _ = (q, lhs, pred, op0, op1, lhs_is_true, depth);
     None
 }
+
+/// `AssumptionCache::assumptionsFor(V)`: the `llvm.assume` calls that tell of
+/// `v`.
+pub fn assumptions_for(
+    q: &Query,
+    v: Operand,
+) -> Vec<InstId> {
+    let _ = (q, v);
+    Vec::new()
+}
