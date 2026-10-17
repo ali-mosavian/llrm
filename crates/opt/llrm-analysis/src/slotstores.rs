@@ -274,7 +274,7 @@ fn ssa_reaching(
         }
     }
     // Rename down the dominator tree.
-    let successors: IdMap<i64, &Vec<i64>> = graph.iter().map(|block| (block.at, &block.succ)).collect();
+    let successors: IdMap<i64, &cfg::Successors> = graph.iter().map(|block| (block.at, &block.succ)).collect();
     let mut children: IdMap<i64, Vec<i64>> = IdMap::new();
     for block in &graph {
         if let Some(parent) = dominance.immediate(block.at) {
