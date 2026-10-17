@@ -4,7 +4,7 @@ Each section is one comparison of llrm at two commits of `main`, on the same har
 
 Clocks are the emulator's 486 clocks (unicorn), not wall time. The ratio of a row is llrm over the lower of gcc 13.4.0 and clang 20.1.8 on that row's counter; the geometric mean over the rows is read beside the worst row. gcc and clang objects are built once and shared by both sides, so only llrm differs. QCport has no gcc or clang row (Open Watcom headers): its modules are compared llrm with llrm.
 
-Run: `tools/rows/run.sh main <llrm-c>`, then `tools/rows/run.sh base <llrm-c> main` for the other commit (its gcc and clang objects are the first run's), `vsgcc/dfaces/run.py --json` for each, `tools/rows/qcport.py`, `tools/rows/analyse.py`.
+Run: `tools/rows/run.sh main <llrm-c>`, then `tools/rows/run.sh base <llrm-c> main` for the other commit (its gcc and clang objects are the first run's), `vsgcc/dfaces/run.py --json` for each, `tools/rows/qcport.py`, `tools/rows/analyse.py`. The bench cells of every front end (BASIC, bq16, bq32, Nib, C), which vsgcc does not cover: `CARGO_TARGET_DIR=<dir whose release/ holds one commit's binaries> tools/bench/bench.py --opt O1 O2 O3 Os --no-judge --json X.json` for each side (about 25 minutes), then `tools/rows/bench_table.py BASE.json MAIN.json`.
 
 ## 2026-10-17, `3dc0221a6` against `90bce0774`
 
@@ -31,3 +31,5 @@ Code bytes, llrm over min(gcc, clang):
 Rows newly below or above 1.00: none, at any level. `d_faces` clocks over min(gcc, clang): -O1 1.020, -O2 1.005, -O3 1.023, -Os 1.008. QCport emitted bytes: 274,261 (-O1), 274,366 (-O2), 290,924 (-O3), 260,195 (-Os), unchanged.
 
 The -O3 code geomean of 1.28 is the clone chain of `ipa-cp-clone` (gcc's own -O3 flag): queens -O3 is 8.6x the smaller compiler.
+
+Bench cells, instructions and code bytes of the 848 cells (41 programs of BASIC, bq16, bq32 and Nib and 48 of C, at -O1, -O2, -O3 and -Os): no counter of any cell differs between the two commits, for any front end (bench.py `--no-judge`, the two sides' compilers differ in bytes).
