@@ -25,7 +25,7 @@ $LLRM -m32 -mabi=$ABI -Os -march=i486 -o $O/o/$P.llrmOs.obj $S 2>$O/o/$P.llrmOs.
 for o in O1 O3; do $LLRM -m32 -mabi=$ABI -$o -march=i486 -o $O/o/$P.llrm$o.obj $S 2>$O/o/$P.llrm$o.err || echo "FAIL llrm$o $P"; done
 [ -z "${VSGCC_ONLY:-}" ] || exit 0
 cd $O/b
-F="-Dfar= -fno-builtin -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
+F="-Dfar= -fno-builtin-strlen -m32 -march=i486 -fno-pic -fno-stack-protector -fcf-protection=none -fno-asynchronous-unwind-tables"
 for o in O1 O2 O3 Os; do
   $GCC $F -$o -c -o $P.gcc$o.o $S 2>$P.gcc$o.err || echo "FAIL gcc$o $P"
   $CLANG $F -$o -c -o $P.clang$o.o $S 2>$P.clang$o.err || echo "FAIL clang$o $P"
