@@ -660,35 +660,28 @@ pub fn may_clobber(
         && !(low < other_high && other_low < high)
     {
         assert!(
-            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store),
+            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store, None),
             "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
         );
         return false;
     }
-    may_clobber_slowly(unit, known, cell, store)
+    may_clobber_slowly(unit, known, cell, store, None)
 }
 
+/// The full pair test. `remembered`, where given, answers what a pointer is a
+/// constant byte offset from: a walk asks of one cell against many writes, and
+/// the chain of a pointer is the same each time.
 fn may_clobber_slowly(
     unit: &Unit,
     known: Option<&BTreeMap<ValueId, Interval>>,
     cell: &MemRef,
     store: &MemRef,
+    remembered: Option<&dyn Fn(Operand) -> Option<(Operand, i64)>>,
 ) -> bool {
-    may_clobber_by(unit, known, cell, store, &|pointer| {
-        pointerfacts::offsets(unit.context, unit.layout, unit.function).relative(pointer)
-    })
-}
-
-/// `may_clobber_slowly`, given what a pointer is a constant byte offset from:
-/// a walk asks it of one cell against many writes, and the chain of a pointer
-/// is the same each time.
-fn may_clobber_by(
-    unit: &Unit,
-    known: Option<&BTreeMap<ValueId, Interval>>,
-    cell: &MemRef,
-    store: &MemRef,
-    relative: &dyn Fn(Operand) -> Option<(Operand, i64)>,
-) -> bool {
+    let relative = |pointer| match remembered {
+        Some(remembered) => remembered(pointer),
+        None => pointerfacts::offsets(unit.context, unit.layout, unit.function).relative(pointer),
+    };
     #[cfg(test)]
     SLOW_CLOBBERS.with(|asked| asked.set(asked.get() + 1));
     let apart = match (located(cell), located(store)) {
@@ -1004,7 +997,7 @@ pub struct MemorySSA<'a> {
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
     taken: std::cell::Cell<usize>,
     /// What each pointer asked about is a constant byte offset from.
-    offsets: std::cell::RefCell<llrm_support::hash::HashMap<Operand, Option<(Operand, i64)>>>,
+    offsets: std::cell::RefCell<llrm_mir::dense::IdMap<ValueId, Option<(Operand, i64)>>>,
     /// While a walk is bounded (`nearest_writes`): the most writes it collects
     /// before it stops.
     limit: std::cell::Cell<Option<usize>>,
@@ -1183,14 +1176,15 @@ impl MemorySSA<'_> {
             && !(low < other_high && other_low < high)
         {
             assert!(
-                !check_clobbers() || !may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store),
+                !check_clobbers() || !may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, None),
                 "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
             );
             return false;
         }
-        let found = may_clobber_by(&self.unit, self.known.as_ref(), cell, store, &|pointer| self.relative(pointer));
+        let found =
+            may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, Some(&|pointer| self.relative(pointer)));
         assert!(
-            !check_clobbers() || found == may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store),
+            !check_clobbers() || found == may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, None),
             "LLRM_CHECK_CLOBBERS: the offsets remembered differ from the ones worked out"
         );
         found
@@ -1201,11 +1195,14 @@ impl MemorySSA<'_> {
         &self,
         pointer: Operand,
     ) -> Option<(Operand, i64)> {
-        if let Some(found) = self.offsets.borrow().get(&pointer) {
+        let Operand::Value(value) = pointer else {
+            return pointerfacts::offsets(self.unit.context, self.unit.layout, self.unit.function).relative(pointer);
+        };
+        if let Some(found) = self.offsets.borrow().get(&value) {
             return *found;
         }
         let found = pointerfacts::offsets(self.unit.context, self.unit.layout, self.unit.function).relative(pointer);
-        self.offsets.borrow_mut().insert(pointer, found);
+        self.offsets.borrow_mut().insert(value, found);
         found
     }
 
