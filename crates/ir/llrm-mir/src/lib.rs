@@ -23,6 +23,7 @@ pub mod footprint;
 pub mod forest;
 pub mod hash;
 pub mod interpret;
+mod intrinsic_attrs;
 pub mod intrinsics;
 pub mod lexer;
 pub mod lint;

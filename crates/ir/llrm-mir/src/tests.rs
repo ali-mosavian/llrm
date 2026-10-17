@@ -193,6 +193,77 @@ fn memcpy_pointers_are_noalias_and_memmove_pointers_are_not() {
     assert!(!text("memmove").contains("noalias"));
 }
 
+/// An intrinsic MIR does not enumerate got no attributes, so every pass read
+/// its call as unknown: `ctpop` as able to write memory and not return.
+#[test]
+fn a_declaration_takes_the_attributes_intrinsics_td_gives_its_intrinsic() {
+    let print = |text: &str| print::module(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(
+        print("declare i16 @llvm.ctpop.i16(i16)\n"),
+        "declare i16 @llvm.ctpop.i16(i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // Parameter attributes.
+    assert_eq!(
+        print("declare i16 @llvm.ctlz.i16(i16, i1)\n"),
+        "declare i16 @llvm.ctlz.i16(i16, i1 immarg) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // Memory the table does not state, and a target's own, by its whole name.
+    assert_eq!(
+        print("declare void @llvm.va_start.p0(ptr)\n"),
+        "declare void @llvm.va_start.p0(ptr) nocallback nofree nosync nounwind willreturn\n"
+    );
+    assert_eq!(
+        print("declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64)\n"),
+        "declare i64 @llvm.x86.sse42.crc32.64.64(i64, i64) nocallback nofree nosync nounwind willreturn memory(none)\n"
+    );
+    // A return range, at the declared width.
+    assert_eq!(
+        print("declare i8 @llvm.ucmp.i8.i16(i16, i16)\n"),
+        "declare range(i8 -1, 2) i8 @llvm.ucmp.i8.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n"
+    );
+    // A name that only starts like one is no intrinsic's.
+    assert_eq!(print("declare i16 @llvm.ctpopx(i16)\n"), "declare i16 @llvm.ctpopx(i16)\n");
+    // A type suffix on a name that is not overloaded is not its intrinsic.
+    assert_eq!(
+        print("declare i64 @llvm.x86.sse42.crc32.64.64.i64(i64, i64)\n"),
+        "declare i64 @llvm.x86.sse42.crc32.64.64.i64(i64, i64)\n"
+    );
+}
+
+/// A generated attribute MIR cannot parse back would make a printed module
+/// unreadable; every one is a word the parser knows, and every memory
+/// location a name it reads.
+#[test]
+fn every_generated_attribute_is_one_mir_reads() {
+    use crate::intrinsic_attrs::{Attr, NAMES, SETS};
+    let known = |word: &str| crate::opcode::FLAG_ATTRIBUTES.contains(&word);
+    let mut memory = std::collections::BTreeSet::new();
+    for &(name, set, _) in NAMES.iter() {
+        let set = &SETS[set as usize];
+        assert!(set.function.iter().all(|one| known(one)), "{name}: {:?}", set.function);
+        for (_, attrs) in set.arguments {
+            for attr in attrs.iter() {
+                match attr {
+                    Attr::Flag(word) => assert!(known(word), "{name}: {word}"),
+                    Attr::Int(word, _) => assert!(crate::opcode::INT_ATTRIBUTES.contains(word), "{name}: {word}"),
+                    Attr::Range(..) => {}
+                }
+            }
+        }
+        let parts: Vec<String> = set
+            .memory
+            .iter()
+            .map(|(location, access)| location.map_or(access.to_string(), |one| format!("{one}: {access}")))
+            .collect();
+        memory.insert(parts.join(", "));
+    }
+    memory.remove("");
+    for effects in &memory {
+        let text = format!("declare void @f() memory({effects})\n");
+        assert!(parse::module(&text).is_ok(), "{text}");
+    }
+}
+
 /// Inline assembly's registers are in its callee's name; the declaration
 /// must answer them, and a block that reaches no memory keeps its place
 /// among the ports as their own state does.
