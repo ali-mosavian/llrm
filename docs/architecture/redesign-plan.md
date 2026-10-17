@@ -251,7 +251,7 @@ Eight spikes from the [architecture study](architecture-parity.md) run before th
 | S4 allocator attribution, then in-place spill | is the 415.5 M the representation or the decisions? | greedy-port, ssa-spill-m16 | whole-body work per edit under 1% of the compile, or step 1 cuts the cost per spill by under 3x | step 0 measured: see below |
 | S5 block-local post-RA dataflow | does LLVM's block-local copy propagation fit? | ssa-spill-m16 | under 15 M saved, or a row worse | KILLED ([#2043]): block-local saves 14.8 M but `d_faces` grows 8,068 to 8,097 bytes; a single-predecessor chain gives the same output (68% against an 80% bar) |
 | S6 edit core on the ladders | are the edit primitives a scaling term? | edit-rollback | edit primitives under 3% at N=1600 on every shape and no exponent | measured ([#1994]): the kill is not met on `loop` only (primitives 4.32% at N=1600, `move_to` 925 M, 4.0x per doubling, 8,001 calls from `hoist::hoisted`); the other four shapes are under 1.2% with no exponent. A6 is built beyond rollback only as far as `loop` goes: `Function::move_all(&[InstId], Position)` mirrors LLVM's range splice at the API; the intrusive order only if a slope remains |
-| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming) |
+| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-rollback: `d_faces` -2.4%, `mem` N=1600 -20.7%, rows pending; keep-analyses' [#2073] takes unrolled-128 -6.6% |
 
 **S2 result** (pass-list-parity; llrm main `4f12e5818`, round 1 of `fold`, `algebraic`, `phiopt`, `dead` own work against `opt -passes='sroa,early-cse,instcombine'` minus `sroa,early-cse`; M instructions at N=200, then 1,600): `arith` 6.01 against 20.10 (0.30x) and 62.5 against 159.0 (0.39x); `mem` 6.14 against 8.08 (0.76x) and 80.6 against 65.5 (1.23x); `diamond` 5.06 against 6.35 (0.80x) and 35.6 against 41.7 (0.85x); `mixed` 8.59 against 8.35 (1.03x) and 67.0 against 61.3 (1.09x). The 2x line passes on every shape (worst 1.03x). The exponent from 200 to 1,600, llrm and LLVM: `arith` 1.14 and 1.01, `mem` 1.24 and 1.01, `diamond` 0.94 and 0.91, `mixed` 0.99 and 0.96; it trips on `arith` (`dead` 1.43, `algebraic` 1.12, being re-measured at N=400 and 800) and on `mem` (`fold` 1.41, whose cost is `Analyses::get::<ThroughMemory>`). Verdict: the rewriting is not the gap, the facts are; the superlinear passes are `gvn` (1.32 to 1.56) and `dse` (1.72 to 1.97), not the combine. The exponents come from two points, with analyses excluded from "own".
 
@@ -296,7 +296,7 @@ Checklist: the shared list. Its own metric boxes:
 - [x] phase table ([compile-gap-series], `5e2e995ef`)
 - [x] gap table (clang 24 and 20.1.8, four levels)
 - [x] ladder json (`tools/ladder/ladder-5e2e995ef.json`)
-- [ ] rows (`unmeasured` at this SHA: needs the 71-program run against gcc and clang)
+- [x] rows (71 programs, m32, at `5e2e995ef`: clocks geomean 0.8875 / 0.9044 / 0.9021 / 0.9169 at -O1/-O2/-O3/-Os, worst 2.01 to 2.19; [compile-gap-series])
 - [x] computations per run (3.4 at -O2 by the `LLRM_WHY` count)
 - [x] allocations by DHAT and RSS
 
@@ -1284,6 +1284,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2053]: https://github.com/ali-mosavian/llrm/pull/2053
 [#2054]: https://github.com/ali-mosavian/llrm/pull/2054
 [#2056]: https://github.com/ali-mosavian/llrm/pull/2056
+[#2073]: https://github.com/ali-mosavian/llrm/pull/2073
 [#2046]: https://github.com/ali-mosavian/llrm/pull/2046
 [#2049]: https://github.com/ali-mosavian/llrm/pull/2049
 [#2043]: https://github.com/ali-mosavian/llrm/pull/2043
