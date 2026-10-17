@@ -1290,7 +1290,7 @@ impl MemorySSA<'_> {
                                 for byte in *first..*last {
                                     map.insert(key(object.id(), byte), child);
                                 }
-                                if object.addressed {
+                                if object.addressed() {
                                     escaping = Some(child);
                                     if seen_addressed.insert(object.id()) {
                                         index.addressed.push(*object);
@@ -1423,7 +1423,7 @@ impl MemorySSA<'_> {
                 .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
                 .max_by_key(|found| self.span[*found].0);
             let root = index.root[above];
-            let reaches_others = object.addressed && {
+            let reaches_others = object.addressed() && {
                 let known = index.aliased.borrow().get(&object.id()).copied();
                 known.unwrap_or_else(|| {
                     let found = index
