@@ -855,6 +855,35 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// The pointer values of a body say nothing of an integer: a dead integer
+/// store erased from a function of pointers left them standing no more than any
+/// other edit did, 33 of the 63 times a d_faces -O2 compile solved them again
+/// to the same answer.
+#[test]
+fn test_an_erased_integer_store_leaves_the_pointer_values_standing() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a, ptr %n) {{\nb:\n  store i16 7, ptr %n\n  call void @g(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<super::PointerValues>(context, &layout, f);
+    let store = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            f.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    f.erase(store).unwrap();
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let before = crate::alias::value_solves();
+    analyses.get::<super::PointerValues>(context, &layout, f);
+    assert_eq!(crate::alias::value_solves() - before, 0, "the pointer values were solved again");
+}
+
 /// A pass reports what it did not preserve, and an analysis asked after its
 /// last edit (or with no edit at all) was derived from the body as it stands:
 /// 383 of 2,248 results dropped at an invalidation over d_faces -O2 were that,
