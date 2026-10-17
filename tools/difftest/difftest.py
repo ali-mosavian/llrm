@@ -281,6 +281,28 @@ def level_of(config: str) -> str:
     return "-" + (found[1] if found else "O2")
 
 
+def licm_counts(text: str) -> dict[str, collections.Counter]:
+    """Per function, the LICM events of `opt -passes='loop-mssa(licm)'` on `text` by remark name (Hoisted, Sunk, PromoteLoopAccessesToScalar, ...).
+    The pinned opt is built without LLVM_FORCE_ENABLE_STATS, so `-stats` prints nothing: the remarks are the counters that exist."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "remarks.yaml"
+        done = subprocess.run(
+            [str(LLVM_BIN / "opt"), "-passes=loop-mssa(licm)", "-disable-output", f"-pass-remarks-output={out}", "-"], input=normalise(text), capture_output=True, text=True
+        )
+        if done.returncode:
+            raise RuntimeError("opt licm: " + (done.stderr.strip().splitlines() or ["failed"])[0])
+        found: dict[str, collections.Counter] = collections.defaultdict(collections.Counter)
+        if out.is_file():
+            for block in out.read_text().split("--- "):
+                name = re.search(r"^Name:\s+(\S+)", block, re.M)
+                function = re.search(r"^Function:\s+(\S+)", block, re.M)
+                if name and function and re.search(r"^Pass:\s+licm\b", block, re.M):
+                    found[function[1]][name[1]] += 1
+    return dict(found)
+
+
 def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
     try:
@@ -375,11 +397,18 @@ def main() -> int:
     dumps.add_argument("--json", type=Path)
     dumps.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     dumps.add_argument("--llrm-pass", type=Path, help="the llrm-pass of the tree that made the dumps")
+    licm = sub.add_parser("licm", help="the LICM remarks of opt on FILE, per function")
+    licm.add_argument("input", type=Path)
     pair = sub.add_parser("pair")
     pair.add_argument("input", type=Path)
     pair.add_argument("llrm_out", type=Path)
     pair.add_argument("--pass", dest="pass_name", required=True)
     args = parser.parse_args()
+    if args.command == "licm":
+        print(f"opt: {LLVM_BIN / 'opt'}")
+        for function, events in sorted(licm_counts(args.input.read_text()).items()):
+            print(f"{function}: " + ", ".join(f"{name} {n}" for name, n in sorted(events.items())))
+        return 0
     if args.command != "pair":
         envguard.require_clean("difftest", allow=args.allow_env)
     if args.pass_name not in COUNTERPART:

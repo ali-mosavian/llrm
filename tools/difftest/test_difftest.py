@@ -178,3 +178,32 @@ def test_llvm_bin_defaults_to_the_pinned_build_never_the_distros(monkeypatch):
     finally:
         monkeypatch.undo()
         importlib.reload(difftest)
+
+
+HOIST = """define i32 @f(i32 %a, i32 %b, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i2, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %s2, %loop ]
+  %inv = mul i32 %a, %b
+  %s2 = add i32 %s, %inv
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %s2
+}
+define i32 @g(i32 %x) {
+entry:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+"""
+
+
+@needs_opt
+def test_licm_counts_name_the_function_and_the_event_and_a_loopless_function_has_none():
+    """-stats prints nothing in the pinned opt (no LLVM_FORCE_ENABLE_STATS): the remarks are the counters licm's translation is judged by."""
+    counts = difftest.licm_counts(HOIST)
+    assert counts == {"f": {"Hoisted": 1}}, counts
