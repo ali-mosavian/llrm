@@ -623,7 +623,8 @@ pub fn forwarded(
         .iter()
         .map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value))
         .collect::<BTreeMap<_, _>>();
-    let ends = ssa::providers(replacements.values().copied(), &replacements).map_err(|error| error.to_string())?;
+    let ends = ssa::providers(replacements.values().copied(), |id| replacements.get(&id).copied())
+        .map_err(|error| error.to_string())?;
     for (&value, end) in replacements.keys().zip(ends) {
         function.replace_value(value, end);
     }
