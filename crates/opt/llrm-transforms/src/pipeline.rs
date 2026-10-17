@@ -1079,7 +1079,7 @@ impl Fixed {
         analyses: &Analyses,
         rounds: usize,
     ) {
-        if !llrm_support::env_set("LLRM_CHECK_ROUNDS") {
+        if !llrm_support::env_flag!("LLRM_CHECK_ROUNDS") {
             return;
         }
         let mut context = unit.context.clone();
@@ -1170,7 +1170,7 @@ impl FunctionPass for Fixed {
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
 /// and fails where it changes the body.
 fn settled_checked() -> bool {
-    llrm_support::env_set("LLRM_CHECK_SETTLED")
+    llrm_support::env_flag!("LLRM_CHECK_SETTLED")
 }
 
 /// One body's run through `Fixed`.
@@ -1371,7 +1371,8 @@ impl Run {
         unit: &Unit,
         analyses: &Analyses,
     ) {
-        if !llrm_support::env_set("LLRM_CHECK_SKIPPED") || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
+        if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
+            || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
         {
             return;
         }

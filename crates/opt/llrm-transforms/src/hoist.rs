@@ -173,7 +173,7 @@ pub fn hoisted(
     // none in any loop nothing moves, and the accesses, the invariant runs
     // and the prices are not made. `LLRM_CHECK_HOISTSKIP` makes them anyway
     // and fails if they find a run.
-    let check = llrm_support::env_set("LLRM_CHECK_HOISTSKIP");
+    let check = llrm_support::env_flag!("LLRM_CHECK_HOISTSKIP");
     if !check && !found.iter().any(|one| _seeded(unit, one)) {
         return false;
     }

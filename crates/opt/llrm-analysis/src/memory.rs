@@ -1285,7 +1285,7 @@ impl<'a> Unit<'a> {
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self });
                     assert!(
                         *registers == fresh,
@@ -1319,7 +1319,7 @@ impl<'a> Unit<'a> {
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => {
-                if llrm_support::env_set("LLRM_CHECK_SHAPE") {
+                if llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
                     assert!(
                         *shape == Shape::of(self.function),
                         "the shape a unit carries is not that of the body it stands over: stale"
@@ -1867,7 +1867,7 @@ impl MemRef {
             access.lineage = lineage(unit, inst);
         }
         static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_ACCESSES")) {
+        if *CHECKED.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_ACCESSES")) {
             assert!(
                 found == Self::derived(unit, inst),
                 "the held access of {inst:?} is not what deriving it again gives"

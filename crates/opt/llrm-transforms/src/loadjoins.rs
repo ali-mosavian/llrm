@@ -396,7 +396,7 @@ fn planned(
                 } else {
                     scan()
                 };
-                if llrm_support::env_set("LLRM_CHECK_BYTES") {
+                if llrm_support::env_flag!("LLRM_CHECK_BYTES") {
                     let every = scan();
                     assert_eq!(
                         best.map(|one| one.0),

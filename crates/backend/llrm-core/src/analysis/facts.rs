@@ -38,7 +38,7 @@ pub struct Facts {
 
 fn check() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_FACTS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_FACTS"))
 }
 
 impl Facts {

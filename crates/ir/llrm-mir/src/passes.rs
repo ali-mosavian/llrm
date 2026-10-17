@@ -1067,9 +1067,19 @@ fn record(
 ) {
     let pass = PASS.with(|p| p.get());
     RECOMPUTED.with(|r| *r.borrow_mut().entry((name, pass, how)).or_default() += 1);
-    if std::env::var_os("LLRM_WHY").is_some() {
+    if why_printed() {
         eprintln!("WHY {level} {name} {pass} {how}");
     }
+}
+
+fn why_printed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+}
+
+fn check_modules() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
 }
 
 fn check_replay() -> bool {
@@ -1838,7 +1848,7 @@ impl ModuleAnalyses {
             if (kind.unchanged)(module, self, &*old) {
                 counted(kind.name, true);
                 self.dropped.remove(&kind.id);
-                if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+                if check_modules() {
                     let fresh = (kind.run)(module, self);
                     assert!(
                         (kind.agree)(&*old, &*fresh),
@@ -1852,7 +1862,7 @@ impl ModuleAnalyses {
         }
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
-        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+        if check_modules() {
             self.scratch = true;
             let again = (kind.run)(module, self);
             self.scratch = false;
