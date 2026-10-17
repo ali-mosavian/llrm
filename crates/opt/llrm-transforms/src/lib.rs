@@ -87,6 +87,7 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod constraint_elim;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
@@ -94,7 +95,6 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
-pub mod constraint_elim;
 pub mod decide;
 pub mod dse;
 pub mod earlycse;

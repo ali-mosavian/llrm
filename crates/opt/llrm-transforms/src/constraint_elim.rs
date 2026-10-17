@@ -1,9 +1,9 @@
 //! A translation of LLVM's `ConstraintElimination`
-//! (`llvm/lib/Transforms/Scalar/ConstraintElimination.cpp` at d1106deb71cc), for
-//! the branches of one function: the conditions that hold on entry to a block
-//! are facts of a system of linear constraints (`constraints::ConstraintSystem`),
-//! pushed and popped in dominator-tree order, and each compare feeding a
-//! conditional branch is asked of it.
+//! (`llvm/lib/Transforms/Scalar/ConstraintElimination.cpp` at d1106deb71cc),
+//! for the branches of one function: the conditions that hold on entry to a
+//! block are facts of a system of linear constraints
+//! (`constraints::ConstraintSystem`), pushed and popped in dominator-tree
+//! order, and each compare feeding a conditional branch is asked of it.
 //!
 //! The entry point is [`decisions`]: the branches the system decides, with the
 //! way they go. A spike: nothing calls it but the shadow in `decide`.
@@ -22,18 +22,18 @@
 //! - `::isKnownNonNegative` (ValueTracking) is a small stand-in: constants, a
 //!   zero extension, a mask by a non-negative constant, a division, a remainder
 //!   by anything and a logical right shift by a constant above zero;
-//! - `ConstantRange::makeExactNoWrapRegion` for `mul` and `shl` (the add and sub
-//!   regions are translated).
+//! - `ConstantRange::makeExactNoWrapRegion` for `mul` and `shl` (the add and
+//!   sub regions are translated).
 
 use std::collections::HashMap;
 
 use llrm_analysis::constraints::{ConstraintSystem, Entry, Row};
-use llrm_analysis::{cfg, memory::Unit};
 use llrm_analysis::manager::Held;
+use llrm_analysis::{cfg, memory::Unit};
 use llrm_mir::footprint::Footprint;
-use llrm_mir::module::{BlockId, Instruction, Operand};
-use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
+use llrm_mir::module::{BlockId, InstId, Instruction, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 
 /// `MaxConstraintValue`, `MinSignedConstraintValue`.
 const MAX_CONSTRAINT_VALUE: i64 = i64::MAX;
@@ -232,11 +232,17 @@ struct StackEntry {
 }
 
 fn is_signed(predicate: IntPredicate) -> bool {
-    matches!(predicate, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        predicate,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 fn is_unsigned(predicate: IntPredicate) -> bool {
-    matches!(predicate, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule)
+    matches!(
+        predicate,
+        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+    )
 }
 
 fn is_equality(predicate: IntPredicate) -> bool {
@@ -292,7 +298,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
             signed: ConstraintSystem::with_arguments(&arguments),
             decompose_cache: HashMap::new(),
         };
-        // Add Arg > -1 constraints to unsigned system for all function arguments.
+        // Add Arg > -1 constraints to unsigned system for all function
+        // arguments.
         for argument in &arguments {
             let index = info.unsigned.value2index()[argument];
             let size = info.unsigned.value2index().len();
@@ -370,8 +377,7 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         if let Some(number) = self.constant(value) {
             return !number.is_negative();
         }
-        self.value_tracking_non_negative(value)
-            || self.does_hold(IntPredicate::Sge, value, self.zero(value))
+        self.value_tracking_non_negative(value) || self.does_hold(IntPredicate::Sge, value, self.zero(value))
     }
 
     /// `::isKnownNonNegative(V, DL)`, the stand-in (see the header).
@@ -384,17 +390,21 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         match instruction.opcode {
             Opcode::Cast(CastOp::ZExt) => {
                 // A zero extension is non-negative when it widens.
-                matches!((self.width(operand(0)), self.width(value)), (Some(from), Some(to)) if from < to)
+                matches!(
+                    (self.width(operand(0)), self.width(value)),
+                    (Some(from), Some(to)) if from < to
+                )
             }
             Opcode::Binary(BinaryOp::And) => {
                 (0..2).any(|at| self.constant(operand(at)).is_some_and(|mask| !mask.is_negative()))
             }
             Opcode::Binary(BinaryOp::UDiv) | Opcode::Binary(BinaryOp::URem) => {
-                matches!((self.constant(operand(1)), self.width(value)), (Some(divisor), Some(_)) if !divisor.is_negative())
+                matches!(
+                    (self.constant(operand(1)), self.width(value)),
+                    (Some(divisor), Some(_)) if !divisor.is_negative()
+                )
             }
-            Opcode::Binary(BinaryOp::LShr) => {
-                self.constant(operand(1)).is_some_and(|shift| shift.zext() > 0)
-            }
+            Opcode::Binary(BinaryOp::LShr) => self.constant(operand(1)).is_some_and(|shift| shift.zext() > 0),
             _ => false,
         }
     }
@@ -419,11 +429,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         if low > high {
             return false;
         }
-        let (min_val, max_val) = if signed {
-            (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
-        } else {
-            (0i128, (1i128 << width) - 1)
-        };
+        let (min_val, max_val) =
+            if signed { (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1) } else { (0i128, (1i128 << width) - 1) };
         if low <= min_val && high >= max_val {
             return true;
         }
@@ -433,20 +440,12 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
             high = i128::from(MAX_CONSTRAINT_VALUE) - 1;
         }
         if low != min_val
-            && !self.does_hold(
-                if signed { IntPredicate::Sge } else { IntPredicate::Uge },
-                op,
-                Val::Int(low, width),
-            )
+            && !self.does_hold(if signed { IntPredicate::Sge } else { IntPredicate::Uge }, op, Val::Int(low, width))
         {
             return false;
         }
         if high != max_val
-            && !self.does_hold(
-                if signed { IntPredicate::Sle } else { IntPredicate::Ule },
-                op,
-                Val::Int(high, width),
-            )
+            && !self.does_hold(if signed { IntPredicate::Sle } else { IntPredicate::Ule }, op, Val::Int(high, width))
         {
             return false;
         }
@@ -486,8 +485,9 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
             return true;
         }
 
-        // For a constant Op1, the ranges of Op0 for which the operation does not
-        // wrap are known exactly; check if the systems imply one of them.
+        // For a constant Op1, the ranges of Op0 for which the operation does
+        // not wrap are known exactly; check if the systems imply one of
+        // them.
         let Some(c) = self.constant(op1) else { return false };
         let Some(width) = self.width(op0) else { return false };
         let (min_s, max_s) = (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1);
@@ -529,7 +529,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
                 // A trunc nsw only truncates without unsigned wrap if its
                 // operand is non-negative.
                 instruction.flags.contains(Flags::NUW)
-                    || (instruction.flags.contains(Flags::NSW) && self.is_known_non_negative(Val::Op(instruction.operands[0])))
+                    || (instruction.flags.contains(Flags::NSW)
+                        && self.is_known_non_negative(Val::Op(instruction.operands[0])))
             }
             Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)) => self
                 .is_known_no_wrap_op(
@@ -551,8 +552,9 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         let Some(instruction) = self.defining(value) else { return false };
         matches!(
             instruction.opcode,
-            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or | BinaryOp::Xor)
-                | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
+            Opcode::Binary(
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or | BinaryOp::Xor
+            ) | Opcode::Cast(CastOp::ZExt | CastOp::SExt | CastOp::Trunc)
         )
     }
 
@@ -637,7 +639,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
                 value = Val::Op(instruction.operands[0]);
             }
             Opcode::Cast(CastOp::SExt) => {
-                // In the unsigned system, the SExt operand must be non-negative.
+                // In the unsigned system, the SExt operand must be
+                // non-negative.
                 if !signed && !self.is_known_non_negative(Val::Op(instruction.operands[0])) {
                     return self.itself(value);
                 }
@@ -659,7 +662,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         match instruction.opcode {
             // m_AddLike: an add, or an or of bits that cannot overlap.
             Opcode::Binary(BinaryOp::Add) | Opcode::Binary(BinaryOp::Or)
-                if instruction.opcode == Opcode::Binary(BinaryOp::Add) || instruction.flags.contains(Flags::DISJOINT) =>
+                if instruction.opcode == Opcode::Binary(BinaryOp::Add)
+                    || instruction.flags.contains(Flags::DISJOINT) =>
             {
                 if self.is_known_no_wrap(value, signed) {
                     return match self.merge_results(op(0), op(1), signed, signed) {
@@ -685,9 +689,7 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
                 self.itself(value)
             }
             // `xor %x, -1` is equivalent to `sub nsw -1, %x`.
-            Opcode::Binary(BinaryOp::Xor)
-                if signed && self.constant(op(1)).is_some_and(|c| c.sext() == -1) =>
-            {
+            Opcode::Binary(BinaryOp::Xor) if signed && self.constant(op(1)).is_some_and(|c| c.sext() == -1) => {
                 let mut result = Decomposition::constant(-1);
                 let inner = self.decompose(op(0), signed);
                 if !result.sub(&inner) {
@@ -756,7 +758,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
             row: &mut Row,
             idx: u32,
         ) -> &mut i64 {
-            let at = row.iter().skip(1).position(|entry| u32::from(entry.id) >= idx).map(|at| at + 1).unwrap_or(row.len());
+            let at =
+                row.iter().skip(1).position(|entry| u32::from(entry.id) >= idx).map(|at| at + 1).unwrap_or(row.len());
             if at >= row.len() || u32::from(row[at].id) != idx {
                 row.insert(at, Entry::new(0, idx as u16));
             }
@@ -834,7 +837,10 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
             _ => {}
         }
 
-        if !matches!(predicate, IntPredicate::Ule | IntPredicate::Ult | IntPredicate::Sle | IntPredicate::Slt) {
+        if !matches!(
+            predicate,
+            IntPredicate::Ule | IntPredicate::Ult | IntPredicate::Sle | IntPredicate::Slt
+        ) {
             return ConstraintTy::default();
         }
 
@@ -879,7 +885,9 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
     ) -> ConstraintTy {
         // Handle trivially true compares directly to avoid adding V UGE 0
         // constraints for all variables in the unsigned system.
-        if (predicate == IntPredicate::Ule && self.is_zero(op0)) || (predicate == IntPredicate::Uge && self.is_zero(op1)) {
+        if (predicate == IntPredicate::Ule && self.is_zero(op0))
+            || (predicate == IntPredicate::Uge && self.is_zero(op1))
+        {
             // Return constraint that's trivially true.
             return ConstraintTy { coefficients: vec![Entry::new(0, 0)], ..ConstraintTy::default() };
         }
@@ -888,7 +896,10 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         // predicates to unsigned ones. This increases the reasoning
         // effectiveness in combination with the signed <-> unsigned transfer
         // logic.
-        if is_signed(predicate) && self.value_tracking_non_negative_or_constant(op0) && self.value_tracking_non_negative_or_constant(op1) {
+        if is_signed(predicate)
+            && self.value_tracking_non_negative_or_constant(op0)
+            && self.value_tracking_non_negative_or_constant(op1)
+        {
             predicate = unsigned_predicate(predicate);
         }
 
@@ -900,7 +911,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         result
     }
 
-    /// `::isKnownNonNegative(Op, DL, Depth)`, as `getConstraintForSolving` asks.
+    /// `::isKnownNonNegative(Op, DL, Depth)`, as `getConstraintForSolving`
+    /// asks.
     fn value_tracking_non_negative_or_constant(
         &self,
         value: Val,
@@ -919,7 +931,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         b: Val,
     ) -> bool {
         let constraint = self.get_constraint_for_solving(predicate, a, b);
-        !constraint.empty() && self.system(constraint.signed).is_condition_implied_in_sub_system(&constraint.coefficients)
+        !constraint.empty()
+            && self.system(constraint.signed).is_condition_implied_in_sub_system(&constraint.coefficients)
     }
 
     /// `ConstraintInfo::addFact`.
@@ -964,13 +977,15 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
 
             // Skip if there are any unknown variables.
             let decomposition = self.decompose(a, signed);
-            if decomposition.vars.iter().any(|(_, variable)| !self.system(signed).value2index().contains_key(variable)) {
+            if decomposition.vars.iter().any(|(_, variable)| !self.system(signed).value2index().contains_key(variable))
+            {
                 continue;
             }
 
             // If the system implies `A >= B` then together with `A != B` we get
             // the strict `A > B`; symmetrically `A <= B` becomes `A < B`.
-            let (ge, le) = if signed { (IntPredicate::Sge, IntPredicate::Sle) } else { (IntPredicate::Uge, IntPredicate::Ule) };
+            let (ge, le) =
+                if signed { (IntPredicate::Sge, IntPredicate::Sle) } else { (IntPredicate::Uge, IntPredicate::Ule) };
             for non_strict in [ge, le] {
                 if !self.does_hold(non_strict, a, b) {
                     continue;
@@ -1156,7 +1171,8 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
         if is_unsigned(predicate) && self.width(a).is_some() {
             let mut new_variables = Vec::new();
             let sr = self.get_constraint(signed_predicate(predicate), a, b, &mut new_variables, false);
-            if new_variables.is_empty() && !sr.empty() && self.is_known_non_negative(a) && self.is_known_non_negative(b) {
+            if new_variables.is_empty() && !sr.empty() && self.is_known_non_negative(a) && self.is_known_non_negative(b)
+            {
                 if let Some(implied) = self.try_with_constraint(&sr) {
                     return Some(implied);
                 }
@@ -1234,10 +1250,25 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
 }
 
 /// `FactOrCheck`, the two kinds the spike makes: a condition that holds on
-/// entry to a block, and a compare to ask about, the branch of `block` using it.
+/// entry to a block, and a compare to ask about, the branch of `block` using
+/// it.
 enum Entry_ {
-    Fact { predicate: IntPredicate, a: Val, b: Val },
-    Check { predicate: IntPredicate, a: Val, b: Val, branch_block: BlockId },
+    Fact {
+        predicate: IntPredicate,
+        a: Val,
+        b: Val,
+    },
+    Check {
+        predicate: IntPredicate,
+        a: Val,
+        b: Val,
+        branch_block: BlockId,
+    },
+    /// `FactOrCheck::getCheck(DTN, I, ContextInst)` of an instruction whose
+    /// flags may be strengthened, checked at the point dominating all its uses.
+    Strengthen {
+        inst: llrm_mir::module::InstId,
+    },
 }
 
 struct FactOrCheck {
@@ -1250,14 +1281,12 @@ struct FactOrCheck {
 
 impl FactOrCheck {
     fn is_check(&self) -> bool {
-        matches!(self.entry, Entry_::Check { .. })
+        matches!(self.entry, Entry_::Check { .. } | Entry_::Strengthen { .. })
     }
 }
 
 /// The depth-first numbers of the dominator tree (`DT.updateDFSNumbers()`).
-fn dfs_numbers(
-    unit: &Unit,
-) -> HashMap<i64, (u32, u32)> {
+fn dfs_numbers(unit: &Unit) -> HashMap<i64, (u32, u32)> {
     let function = unit.function;
     let shape = unit.shape();
     let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
@@ -1322,6 +1351,126 @@ fn can_add_successor(
 /// the way each goes (true: the first successor), and the instruction count
 /// the walk took.
 pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
+    eliminate(unit).decisions
+}
+
+/// What the walk found: the branches decided, and the flags to add to
+/// instructions (`tryToStrengthenFlags`).
+#[derive(Default)]
+pub struct Outcome {
+    pub decisions: Vec<(BlockId, bool)>,
+    pub flags: Vec<(InstId, Flags)>,
+}
+
+/// `canStrengthenFlags`.
+fn can_strengthen_flags(
+    unit: &Unit,
+    inst: InstId,
+) -> bool {
+    let instruction = unit.function.instruction(inst);
+    let Some(result) = instruction.result else { return false };
+    let Some(width) = unit.int_bits(Operand::Value(result)) else { return false };
+    let _ = width;
+    let flags = instruction.flags;
+    match instruction.opcode {
+        Opcode::Cast(CastOp::Trunc) => flags.contains(Flags::NSW) && !flags.contains(Flags::NUW),
+        Opcode::Binary(BinaryOp::Sub) => !(flags.contains(Flags::NUW) && flags.contains(Flags::NSW)),
+        Opcode::Binary(BinaryOp::Add | BinaryOp::Mul | BinaryOp::Shl) => {
+            if flags.contains(Flags::NUW) && flags.contains(Flags::NSW) {
+                return false;
+            }
+            // With a constant second operand, we can use bounds on the first
+            // operand to refine no-wrap flags. Independently, nuw can be added
+            // for nsw if the operands are non-negative.
+            unit.int_constant(instruction.operands[1]).is_some() || flags.contains(Flags::NSW)
+        }
+        _ => false,
+    }
+}
+
+/// `findCommonDominatorOfUses`: the closest program point dominating all uses
+/// of `inst`'s result, as a block and the position of the instruction in it.
+fn common_dominator_of_uses(
+    unit: &Unit,
+    inst: InstId,
+    numbers: &HashMap<i64, (u32, u32)>,
+) -> (BlockId, usize) {
+    let function = unit.function;
+    let shape = unit.shape();
+    let own = function.parent(inst).expect("a placed instruction");
+    let place = |at: InstId| -> (BlockId, usize) {
+        let block = function.parent(at).expect("a placed instruction");
+        (block, function.block(block).instructions().iter().position(|one| *one == at).unwrap_or(0))
+    };
+    let own_place = place(inst);
+    let Some(result) = function.instruction(inst).result else { return own_place };
+    let mut common: Option<(BlockId, usize)> = None;
+    let mut uses = 0;
+    for one in function.users(result) {
+        // Conservatively use original instruction, if there are too many uses.
+        uses += 1;
+        if uses == 16 {
+            return own_place;
+        }
+        // `getContextInstForUse`: a phi's use is at the end of the incoming
+        // block.
+        let context = match function.instruction(one.user).opcode {
+            Opcode::Phi => {
+                let Operand::Block(from) = function.instruction(one.user).operands[one.index as usize + 1] else {
+                    continue;
+                };
+                let last = function.terminator(from).expect("a terminator");
+                place(last)
+            }
+            _ => place(one.user),
+        };
+        common = Some(match common {
+            None => context,
+            Some(have) => {
+                // `findNearestCommonDominator(Instruction *, Instruction *)`.
+                if have.0 == context.0 {
+                    if have.1 <= context.1 { have } else { context }
+                } else {
+                    let mut chain = std::collections::HashSet::new();
+                    let mut above = Some(cfg::id(have.0));
+                    while let Some(one) = above {
+                        chain.insert(one);
+                        above = shape.dominance.immediate(one);
+                    }
+                    let mut up = Some(cfg::id(context.0));
+                    let mut nearest = None;
+                    while let Some(one) = up {
+                        if chain.contains(&one) {
+                            nearest = Some(one);
+                            break;
+                        }
+                        up = shape.dominance.immediate(one);
+                    }
+                    match nearest {
+                        Some(at) if at == cfg::id(have.0) => have,
+                        Some(at) if at == cfg::id(context.0) => context,
+                        Some(at) => {
+                            let block = cfg::block(at);
+                            (block, function.block(block).instructions().len().saturating_sub(1))
+                        }
+                        None => have,
+                    }
+                }
+            }
+        });
+    }
+    // Uses in unreachable blocks are not in the dominator tree.
+    match common {
+        Some(found) if numbers.contains_key(&cfg::id(found.0)) => found,
+        _ => {
+            let _ = own;
+            own_place
+        }
+    }
+}
+
+/// The walk of `eliminateConstraints`.
+pub fn eliminate(unit: &Unit) -> Outcome {
     let function = unit.function;
     let numbers = dfs_numbers(unit);
     let mut info = ConstraintInfo::new(unit);
@@ -1375,11 +1524,15 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
                 // If the condition is a chain of ORs/AND and the successor only
                 // has the current block as predecessor, queue conditions for
                 // the successor.
-                let join = unit.defining(condition).and_then(|(_, one)| match one.opcode {
-                    Opcode::Binary(BinaryOp::And) => Some((false, one)),
-                    Opcode::Binary(BinaryOp::Or) => Some((true, one)),
-                    _ => None,
-                });
+                let join = unit
+                    .defining(condition)
+                    .and_then(
+                        |(_, one)| match one.opcode {
+                            Opcode::Binary(BinaryOp::And) => Some((false, one)),
+                            Opcode::Binary(BinaryOp::Or) => Some((true, one)),
+                            _ => None,
+                        },
+                    );
                 if let Some((is_or, join)) = join {
                     let successor = if is_or { no } else { yes };
                     if can_add_successor(unit, block, successor)
@@ -1436,6 +1589,21 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
         }
     }
 
+    // `State::addInfoFor`: instructions whose flags may be strengthened,
+    // checked at the closest point dominating all their uses.
+    for &block in function.layout() {
+        if !numbers.contains_key(&cfg::id(block)) {
+            continue;
+        }
+        for &inst in function.block(block).instructions() {
+            if can_strengthen_flags(unit, inst) {
+                let (at, position) = common_dominator_of_uses(unit, inst, &numbers);
+                let Some(&(num_in, num_out)) = numbers.get(&cfg::id(at)) else { continue };
+                work.push(FactOrCheck { entry: Entry_::Strengthen { inst }, num_in, num_out, position });
+            }
+        }
+    }
+
     // Next, sort worklist by dominance, so that dominating conditions to check
     // and facts come before conditions and facts dominated by them. If a
     // condition to check and a fact have the same numbers, conditional facts
@@ -1445,6 +1613,7 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
         Entry_::Fact { a, b, .. } | Entry_::Check { a, b, .. } => {
             ConstraintInfo::constant_static(unit, *a).is_none() && ConstraintInfo::constant_static(unit, *b).is_none()
         }
+        Entry_::Strengthen { .. } => true,
     };
     work.sort_by(|a, b| {
         if a.num_in == b.num_in {
@@ -1465,9 +1634,10 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
     // Finally, process ordered worklist and eliminate implied conditions.
     let mut stack: Vec<StackEntry> = Vec::new();
     let mut out = Vec::new();
+    let mut flags: Vec<(InstId, Flags)> = Vec::new();
     for cb in &work {
-        // First, pop entries from the stack that are out-of-scope for CB. Remove
-        // the corresponding entry from the constraint system.
+        // First, pop entries from the stack that are out-of-scope for CB.
+        // Remove the corresponding entry from the constraint system.
         while let Some(top) = stack.last() {
             debug_assert!(top.num_in <= cb.num_in);
             if cb.num_out <= top.num_out {
@@ -1478,6 +1648,22 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
         }
 
         match &cb.entry {
+            // `tryToStrengthenFlags`.
+            Entry_::Strengthen { inst } => {
+                let instruction = function.instruction(*inst);
+                let Some(result) = instruction.result else { continue };
+                let value = Val::Op(Operand::Value(result));
+                let mut add = Flags::default();
+                if !instruction.flags.contains(Flags::NSW) && info.is_known_no_wrap(value, true) {
+                    add.insert(Flags::NSW);
+                }
+                if !instruction.flags.contains(Flags::NUW) && info.is_known_no_wrap(value, false) {
+                    add.insert(Flags::NUW);
+                }
+                if !add.is_empty() {
+                    flags.push((*inst, add));
+                }
+            }
             Entry_::Check { predicate, a, b, branch_block } => {
                 if let Some(implied) = info.check_condition(*predicate, *a, *b) {
                     out.push((*branch_block, implied));
@@ -1504,7 +1690,7 @@ pub fn decisions(unit: &Unit) -> Vec<(BlockId, bool)> {
             }
         }
     }
-    out
+    Outcome { decisions: out, flags }
 }
 
 impl<'u, 'a> ConstraintInfo<'u, 'a> {
@@ -1521,10 +1707,10 @@ impl<'u, 'a> ConstraintInfo<'u, 'a> {
 }
 
 /// `ConstraintEliminationPass::run`, at its slot: the branches the constraint
-/// system decides become jumps (the spike's stand-in for replacing the compare's
-/// uses with a constant and letting SimplifyCFG fold the branch). With
-/// `LLRM_POC_SLOT` set, one line a run: instructions, decisions, instructions
-/// the walk took.
+/// system decides become jumps (the spike's stand-in for replacing the
+/// compare's uses with a constant and letting SimplifyCFG fold the branch).
+/// With `LLRM_POC_SLOT` set, one line a run: instructions, decisions,
+/// instructions the walk took.
 pub struct ConstraintElimination;
 
 impl FunctionPass for ConstraintElimination {
@@ -1543,24 +1729,36 @@ impl FunctionPass for ConstraintElimination {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let held = Held::of(unit.context, unit.layout, unit.function, analyses, false);
-        let found = {
+        let outcome = {
             let view = held.unit(unit.context, unit.layout, unit.function, &outer);
             let w0 = llrm_support::debug::work();
-            let found = decisions(&view);
+            let outcome = eliminate(&view);
             if std::env::var_os("LLRM_POC_SLOT").is_some() {
                 eprintln!(
-                    "POCSLOT constraint-elim insts={} decisions={} work={}",
+                    "POCSLOT constraint-elim insts={} decisions={} flags={} nsw={} nuw={} work={}",
                     unit.function.walk().count(),
-                    found.len(),
+                    outcome.decisions.len(),
+                    outcome.flags.len(),
+                    outcome.flags.iter().filter(|(_, add)| add.contains(Flags::NSW)).count(),
+                    outcome.flags.iter().filter(|(_, add)| add.contains(Flags::NUW)).count(),
                     llrm_support::debug::work() - w0
                 );
             }
-            found
+            outcome
         };
-        if found.is_empty() {
+        if outcome.decisions.is_empty() && outcome.flags.is_empty() {
             return PreservedAnalyses::all();
         }
-        for (block, way) in found {
+        for (inst, add) in &outcome.flags {
+            let mut flags = unit.function.instruction(*inst).flags;
+            flags.insert(*add);
+            unit.function.set_flags(*inst, flags);
+        }
+        if outcome.decisions.is_empty() {
+            // Blocks and edges are as they were.
+            return PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>();
+        }
+        for (block, way) in outcome.decisions {
             let last = unit.function.terminator(block).expect("a terminator");
             let operands = unit.function.instruction(last).operands.clone();
             let [_, Operand::Block(yes), Operand::Block(no)] = operands[..] else { continue };

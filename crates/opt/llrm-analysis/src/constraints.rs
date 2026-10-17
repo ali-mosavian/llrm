@@ -1,15 +1,16 @@
 //! A system of linear constraints: a translation of LLVM's `ConstraintSystem`
 //! (`llvm/include/llvm/Analysis/ConstraintSystem.h`, `llvm/lib/Analysis/
-//! ConstraintSystem.cpp` at d1106deb71cc), the engine of `ConstraintElimination`.
+//! ConstraintSystem.cpp` at d1106deb71cc), the engine of
+//! `ConstraintElimination`.
 //!
 //! A row is `c >= v1 * c1 + ... + vn * cn`, stored as `{constant, c1, ..., cn}`
 //! by variable id (id 0 is the constant). A condition is implied when the
 //! system with its negation has no solution, which Fourier-Motzkin elimination
 //! decides, over only the rows connected to the query's variables.
 //!
-//! DEVIATE: none of the logic; `Value *` keys are `Operand`s (a constant too can be a variable), `SmallVector`s are
-//! `Vec`s, and overflow is `checked_*` where LLVM uses `AddOverflow` and its
-//! kin.
+//! DEVIATE: none of the logic; `Value *` keys are `Operand`s (a constant too
+//! can be a variable), `SmallVector`s are `Vec`s, and overflow is `checked_*`
+//! where LLVM uses `AddOverflow` and its kin.
 
 use llrm_mir::module::Operand;
 use llrm_support::hash::IndexMap;
@@ -97,7 +98,10 @@ impl ConstraintSystem {
         if is_constant_only(row) {
             return false;
         }
-        debug_assert!(num_vars >= row.last().map_or(0, |last| last.id as usize), "NumVars must cover all variables in R");
+        debug_assert!(
+            num_vars >= row.last().map_or(0, |last| last.id as usize),
+            "NumVars must cover all variables in R"
+        );
         self.num_variables = num_vars.max(self.num_variables);
         // Only keep non-zero coefficients; in particular drop the entry for the
         // constant part if it is 0.
@@ -302,7 +306,10 @@ impl ConstraintSystem {
         &self,
         query: &[Entry],
     ) -> (ConstraintSystem, Row) {
-        debug_assert!(query.last().is_none_or(|last| last.id as usize <= self.num_variables), "query must only use variables of the system");
+        debug_assert!(
+            query.last().is_none_or(|last| last.id as usize <= self.num_variables),
+            "query must only use variables of the system"
+        );
         // Only constraints that share a variable (transitively) with a query R
         // can affect whether system + !R has a solution. Mark variables in the
         // query and collect the transitive closure over variables that co-occur
@@ -314,7 +321,8 @@ impl ConstraintSystem {
                 in_system[entry.id as usize] = true;
             }
         }
-        let shares = |in_system: &[bool], row: &[Entry]| row.iter().any(|entry| entry.id != 0 && in_system[entry.id as usize]);
+        let shares =
+            |in_system: &[bool], row: &[Entry]| row.iter().any(|entry| entry.id != 0 && in_system[entry.id as usize]);
         let mut changed = true;
         while changed {
             changed = false;
