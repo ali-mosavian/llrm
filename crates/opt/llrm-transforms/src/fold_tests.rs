@@ -591,3 +591,20 @@ b2:
     assert!(!text.contains("phi i1 [ %c"), "{text}");
     assert_eq!(results(&module, inputs), before);
 }
+
+/// `fold` asked for the float solve of every body it ran on, floats or not:
+/// 28 of d_faces -O2's 48 solves were of bodies with none, 12 ms of the 29
+/// `fold` took, for nothing.
+#[test]
+fn a_body_with_no_float_is_not_solved_for_floats_by_fold() {
+    let integer = "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 1\n  ret i16 %a\n}\n";
+    let float = "define float @g(float %x) {\nb0:\n  %a = fadd float %x, 1.000000e+00\n  ret float %a\n}\n";
+    let solves = |text: &str| {
+        let before = llrm_analysis::manager::float_solves();
+        let mut module = parsed(&format!("{DOS}{text}"));
+        crate::testing::managed(&mut module, super::Fold);
+        llrm_analysis::manager::float_solves() - before
+    };
+    assert_eq!(solves(integer), 0);
+    assert!(solves(float) > 0, "a body with floats is solved");
+}
