@@ -44,7 +44,6 @@
 //! `liveunion` read it (through the [`Ranges`] trait where only the intervals
 //! matter).
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::analysis::intervals::{Indexes, Interval};
@@ -99,7 +98,7 @@ pub struct LiveRanges {
     total: Arc<IndexMap<u32, f64>>,
     sibling: Arc<IndexMap<u32, f64>>,
     fold: Arc<IndexMap<u32, f64>>,
-    pinned: Arc<BTreeSet<u32>>,
+    pinned: Arc<llrm_mir::dense::IdSet<u32>>,
     /// Weights a test states, which are then what `weight` says.
     #[cfg(test)]
     forced: Option<IndexMap<u32, f64>>,
@@ -228,11 +227,11 @@ impl LiveRanges {
         mut self,
         sibling: Arc<IndexMap<u32, f64>>,
         fold: Arc<IndexMap<u32, f64>>,
-        pinned: BTreeSet<u32>,
+        pinned: Arc<llrm_mir::dense::IdSet<u32>>,
     ) -> Self {
         self.sibling = sibling;
         self.fold = fold;
-        self.pinned = Arc::new(pinned);
+        self.pinned = pinned;
         self
     }
 
