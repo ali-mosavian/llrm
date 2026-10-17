@@ -608,3 +608,25 @@ fn test_a_body_with_no_store_asks_nothing() {
         counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
     assert!(asked.is_empty(), "{asked:?}");
 }
+
+/// A store at each of N offsets of one array, and a load at another between
+/// them: each access was found to reach every one of the N cells, N^2 in all.
+/// On a ladder of 1,600 such statements `dse` took 1,898 M instructions, 3.9x
+/// for every doubling.
+#[test]
+fn a_pointer_access_reaches_only_the_cells_its_span_covers() {
+    let n = 64;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
+        text += &format!(
+            "  %l{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  %x{i} = load i32, ptr %l{i}\n",
+            4 * ((i * 7 + 3) % n)
+        );
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::reached_cells();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    let reached = llrm_analysis::avail::reached_cells() - before;
+    assert!(reached <= 3 * n as usize, "{n} stores and {n} loads reached {reached} cells in all");
+}

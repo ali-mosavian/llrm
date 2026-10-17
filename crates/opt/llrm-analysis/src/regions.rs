@@ -618,6 +618,27 @@ pub fn object_bucket(
     buckets.interned(OverlapShape { object: one, frame, class })
 }
 
+/// The frame `overlap_buckets` looks a write's frame cells up by.
+pub fn overlap_frame(reference: &MemRef) -> Option<Frame> {
+    _frame(reference)
+}
+
+/// The buckets of `overlap_buckets` that do not depend on the objects a write
+/// names: cells of unknown object, and cells in the write's `_displaced` frame.
+pub fn overlap_frame_buckets(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Vec<OverlapBucket> {
+    let mut reached = Vec::with_capacity(16);
+    reached.extend(parts.objectless.iter().cloned());
+    if let Some(frame) = _frame(reference) {
+        if let Some(buckets) = parts.frames.get(&Some(frame)) {
+            reached.extend(buckets.iter().cloned());
+        }
+    }
+    reached
+}
+
 /// Python `mir.overlap_buckets`: the buckets held (`parts`, of a map keyed
 /// by `object_bucket`) a write through `reference` may reach; None for all
 /// of them.
@@ -635,13 +656,7 @@ pub fn overlap_buckets(
     #[cfg(test)]
     PICKED.with(|picked| picked.set((picked.get().0 + 1, picked.get().1 + parts.classes.len())));
     let provenance = reference.provenance.as_ref()?;
-    let mut reached = Vec::with_capacity(16);
-    reached.extend(parts.objectless.iter().cloned());
-    if let Some(frame) = _frame(reference) {
-        if let Some(buckets) = parts.frames.get(&Some(frame)) {
-            reached.extend(buckets.iter().cloned());
-        }
-    }
+    let mut reached = overlap_frame_buckets(reference, parts);
     // A write names one or two objects, and a set of slices keeps one object's
     // together (it orders by object first): the classes seen sit in a few
     // inline slots, and a spill only past them.
