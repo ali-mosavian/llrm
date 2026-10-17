@@ -154,7 +154,7 @@ fn smin_of_two(
 }
 
 impl ConstantRange {
-    /// @cpp:ConstantRange
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L46>
     pub fn new(
         width: u32,
         lower: u128,
@@ -187,7 +187,7 @@ impl ConstantRange {
         Self { lower: 0, upper: 0, width }
     }
 
-    /// @h:getNonEmpty
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ConstantRange.h#L85>
     pub fn non_empty(
         width: u32,
         lower: u128,
@@ -210,7 +210,7 @@ impl ConstantRange {
         self.width
     }
 
-    /// @cpp:fromKnownBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L61>
     pub fn from_known_bits(
         known: &KnownBits,
         is_signed: bool,
@@ -230,7 +230,7 @@ impl ConstantRange {
         Self::new(width, lower, add(upper, 1, width))
     }
 
-    /// @cpp:toKnownBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L81>
     pub fn to_known_bits(&self) -> KnownBits {
         if self.is_empty_set() {
             return KnownBits::unknown(self.width);
@@ -245,7 +245,7 @@ impl ConstantRange {
         known
     }
 
-    /// @cpp:splitPosNeg
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L99>
     pub fn split_pos_neg(&self) -> (Self, Self) {
         let w = self.width;
         let pos_filter = if w == 1 { Self::empty(w) } else { Self::new(w, 1, smin_val(w)) };
@@ -256,7 +256,7 @@ impl ConstantRange {
         )
     }
 
-    /// @cpp:makeAllowedICmpRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L110>
     pub fn make_allowed_icmp_region(
         pred: IntPredicate,
         cr: &Self,
@@ -308,7 +308,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:makeSatisfyingICmpRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L169>
     pub fn make_satisfying_icmp_region(
         pred: IntPredicate,
         cr: &Self,
@@ -316,7 +316,7 @@ impl ConstantRange {
         Self::make_allowed_icmp_region(pred.inverse(), cr).inverse()
     }
 
-    /// @cpp:makeExactICmpRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L179>
     pub fn make_exact_icmp_region(
         pred: IntPredicate,
         width: u32,
@@ -325,7 +325,7 @@ impl ConstantRange {
         Self::make_allowed_icmp_region(pred, &Self::single(width, value))
     }
 
-    /// @cpp:areInsensitiveToSignednessOfICmpPredicate
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L190>
     pub fn are_insensitive_to_signedness_of_icmp_predicate(
         cr1: &Self,
         cr2: &Self,
@@ -336,7 +336,7 @@ impl ConstantRange {
         (cr1.is_all_non_negative() && cr2.is_all_non_negative()) || (cr1.is_all_negative() && cr2.is_all_negative())
     }
 
-    /// @cpp:areInsensitiveToSignednessOfInvertedICmpPredicate
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L199>
     pub fn are_insensitive_to_signedness_of_inverted_icmp_predicate(
         cr1: &Self,
         cr2: &Self,
@@ -363,7 +363,7 @@ impl ConstantRange {
     }
 
     /// `None` is `BAD_ICMP_PREDICATE`.
-    /// @cpp:getEquivalentPredWithFlippedSignedness
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L208>
     pub fn get_equivalent_pred_with_flipped_signedness(
         pred: IntPredicate,
         cr1: &Self,
@@ -380,7 +380,7 @@ impl ConstantRange {
     }
 
     /// `(Pred, RHS, Offset)` such that `x in this` is `Pred (x + Offset), RHS`.
-    /// @cpp:getEquivalentICmp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L226>
     pub fn get_equivalent_icmp_offset(&self) -> (IntPredicate, u128, u128) {
         let w = self.width;
         let mut offset = 0;
@@ -410,13 +410,13 @@ impl ConstantRange {
     }
 
     /// `Some((Pred, RHS))` where no offset is needed.
-    /// @cpp:getEquivalentICmp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L226>
     pub fn get_equivalent_icmp(&self) -> Option<(IntPredicate, u128)> {
         let (pred, rhs, offset) = self.get_equivalent_icmp_offset();
         (offset == 0).then_some((pred, rhs))
     }
 
-    /// @cpp:icmp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L263>
     pub fn icmp(
         &self,
         pred: IntPredicate,
@@ -443,7 +443,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:makeExactMulNUWRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L298>
     fn make_exact_mul_nuw_region(
         width: u32,
         v: u128,
@@ -454,7 +454,7 @@ impl ConstantRange {
         Self::non_empty(width, rounding_udiv(0, v, true), add(rounding_udiv(mask(width), v, false), 1, width))
     }
 
-    /// @cpp:makeExactMulNSWRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L311>
     fn make_exact_mul_nsw_region(
         width: u32,
         v: u128,
@@ -474,7 +474,7 @@ impl ConstantRange {
         Self::non_empty(width, lower, add(upper, 1, width))
     }
 
-    /// @cpp:makeGuaranteedNoWrapRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L335>
     pub fn make_guaranteed_no_wrap_region(
         bin_op: BinaryOp,
         other: &Self,
@@ -536,7 +536,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:makeExactNoWrapRegion
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L409>
     pub fn make_exact_no_wrap_region(
         bin_op: BinaryOp,
         width: u32,
@@ -546,7 +546,7 @@ impl ConstantRange {
         Self::make_guaranteed_no_wrap_region(bin_op, &Self::single(width, other), no_wrap_kind)
     }
 
-    /// @cpp:makeMaskNotEqualRange
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L417>
     pub fn make_mask_not_equal_range(
         width: u32,
         mask_bits: u128,
@@ -561,27 +561,27 @@ impl ConstantRange {
         Self::non_empty(width, add(1_u128 << countr_zero(mask_bits, width), c, width), c)
     }
 
-    /// @cpp:isWrappedSet
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L442>
     pub fn is_wrapped_set(&self) -> bool {
         self.lower > self.upper && self.upper != 0
     }
 
-    /// @cpp:isUpperWrapped
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L446>
     pub fn is_upper_wrapped(&self) -> bool {
         self.lower > self.upper
     }
 
-    /// @cpp:isSignWrappedSet
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L450>
     pub fn is_sign_wrapped_set(&self) -> bool {
         sgt(self.lower, self.upper, self.w()) && self.upper != smin_val(self.w())
     }
 
-    /// @cpp:isUpperSignWrapped
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L454>
     pub fn is_upper_sign_wrapped(&self) -> bool {
         sgt(self.lower, self.upper, self.w())
     }
 
-    /// @cpp:isSizeStrictlySmallerThan
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L459>
     pub fn is_size_strictly_smaller_than(
         &self,
         other: &Self,
@@ -596,7 +596,7 @@ impl ConstantRange {
         sub(self.upper, self.lower, self.w()) < sub(other.upper, other.lower, self.w())
     }
 
-    /// @cpp:isSizeLargerThan
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L469>
     pub fn is_size_larger_than(
         &self,
         max_size: u64,
@@ -607,7 +607,7 @@ impl ConstantRange {
         sub(self.upper, self.lower, self.w()) > u128::from(max_size)
     }
 
-    /// @cpp:isAllNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L478>
     pub fn is_all_negative(&self) -> bool {
         if self.is_empty_set() {
             return true;
@@ -618,12 +618,12 @@ impl ConstantRange {
         !self.is_upper_sign_wrapped() && !is_strictly_positive(self.upper, self.w())
     }
 
-    /// @cpp:isAllNonNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L488>
     pub fn is_all_non_negative(&self) -> bool {
         !self.is_sign_wrapped_set() && !is_negative(self.lower, self.w())
     }
 
-    /// @cpp:isAllPositive
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L493>
     pub fn is_all_positive(&self) -> bool {
         if self.is_empty_set() {
             return true;
@@ -634,7 +634,7 @@ impl ConstantRange {
         !self.is_sign_wrapped_set() && is_strictly_positive(self.lower, self.w())
     }
 
-    /// @cpp:getUnsignedMax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L503>
     pub fn get_unsigned_max(&self) -> u128 {
         if self.is_full_set() || self.is_upper_wrapped() {
             return mask(self.width);
@@ -642,7 +642,7 @@ impl ConstantRange {
         sub(self.upper, 1, self.w())
     }
 
-    /// @cpp:getUnsignedMin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L509>
     pub fn get_unsigned_min(&self) -> u128 {
         if self.is_full_set() || self.is_wrapped_set() {
             return 0;
@@ -650,7 +650,7 @@ impl ConstantRange {
         self.lower
     }
 
-    /// @cpp:getSignedMax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L515>
     pub fn get_signed_max(&self) -> u128 {
         if self.is_full_set() || self.is_upper_sign_wrapped() {
             return smax_val(self.width);
@@ -658,7 +658,7 @@ impl ConstantRange {
         sub(self.upper, 1, self.w())
     }
 
-    /// @cpp:getSignedMin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L521>
     pub fn get_signed_min(&self) -> u128 {
         if self.is_full_set() || self.is_sign_wrapped_set() {
             return smin_val(self.width);
@@ -666,7 +666,7 @@ impl ConstantRange {
         self.lower
     }
 
-    /// @cpp:contains
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L527>
     pub fn contains(
         &self,
         v: u128,
@@ -680,7 +680,7 @@ impl ConstantRange {
         self.lower <= v || v < self.upper
     }
 
-    /// @cpp:contains
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L527>
     pub fn contains_range(
         &self,
         other: &Self,
@@ -703,22 +703,22 @@ impl ConstantRange {
         other.upper <= self.upper && self.lower <= other.lower
     }
 
-    /// @h:getSingleElement
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ConstantRange.h#L265>
     pub fn get_single_element(&self) -> Option<u128> {
         (self.upper == add(self.lower, 1, self.w())).then_some(self.lower)
     }
 
-    /// @h:getSingleMissingElement
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ConstantRange.h#L273>
     pub fn get_single_missing_element(&self) -> Option<u128> {
         (self.lower == add(self.upper, 1, self.w())).then_some(self.upper)
     }
 
-    /// @h:isSingleElement
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/ConstantRange.h#L280>
     pub fn is_single_element(&self) -> bool {
         self.get_single_element().is_some()
     }
 
-    /// @cpp:getActiveBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L554>
     pub fn get_active_bits(&self) -> u32 {
         if self.is_empty_set() {
             return 0;
@@ -726,7 +726,7 @@ impl ConstantRange {
         active_bits(self.get_unsigned_max())
     }
 
-    /// @cpp:getMinSignedBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L561>
     pub fn get_min_signed_bits(&self) -> u32 {
         if self.is_empty_set() {
             return 0;
@@ -734,7 +734,7 @@ impl ConstantRange {
         max(significant_bits(self.get_signed_min(), self.w()), significant_bits(self.get_signed_max(), self.w()))
     }
 
-    /// @cpp:subtract
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L569>
     pub fn subtract(
         &self,
         val: u128,
@@ -745,7 +745,7 @@ impl ConstantRange {
         Self::new(self.width, sub(self.lower, val, self.w()), sub(self.upper, val, self.w()))
     }
 
-    /// @cpp:difference
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L577>
     pub fn difference(
         &self,
         cr: &Self,
@@ -753,7 +753,7 @@ impl ConstantRange {
         self.intersect_with(&cr.inverse(), PreferredRangeType::Smallest)
     }
 
-    /// @cpp:getPreferredRange
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L581>
     fn preferred_range(
         cr1: &Self,
         cr2: &Self,
@@ -781,7 +781,7 @@ impl ConstantRange {
         if cr1.is_size_strictly_smaller_than(cr2) { *cr1 } else { *cr2 }
     }
 
-    /// @cpp:intersectWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L601>
     pub fn intersect_with(
         &self,
         cr: &Self,
@@ -853,7 +853,7 @@ impl ConstantRange {
         Self::preferred_range(self, cr, kind)
     }
 
-    /// @cpp:unionWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L707>
     pub fn union_with(
         &self,
         cr: &Self,
@@ -909,7 +909,7 @@ impl ConstantRange {
         Self::new(w, l, u)
     }
 
-    /// @cpp:exactIntersectWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L781>
     pub fn exact_intersect_with(
         &self,
         cr: &Self,
@@ -919,7 +919,7 @@ impl ConstantRange {
         (result == check).then_some(result)
     }
 
-    /// @cpp:exactUnionWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L790>
     pub fn exact_union_with(
         &self,
         cr: &Self,
@@ -929,7 +929,7 @@ impl ConstantRange {
         (result == check).then_some(result)
     }
 
-    /// @cpp:castOp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L798>
     pub fn cast_op(
         &self,
         cast: CastOp,
@@ -966,7 +966,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:zeroExtend
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L850>
     pub fn zero_extend(
         &self,
         dst: u32,
@@ -986,7 +986,7 @@ impl ConstantRange {
         Self::new(dst, self.lower, self.upper)
     }
 
-    /// @cpp:signExtend
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L869>
     pub fn sign_extend(
         &self,
         dst: u32,
@@ -1008,7 +1008,7 @@ impl ConstantRange {
         Self::new(dst, sext(self.lower, src, dst), sext(self.upper, src, dst))
     }
 
-    /// @cpp:truncate
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L889>
     pub fn truncate(
         &self,
         dst: u32,
@@ -1071,7 +1071,7 @@ impl ConstantRange {
         Self::full(dst)
     }
 
-    /// @cpp:zextOrTrunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L963>
     pub fn zext_or_trunc(
         &self,
         dst: u32,
@@ -1083,7 +1083,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:sextOrTrunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L972>
     pub fn sext_or_trunc(
         &self,
         dst: u32,
@@ -1095,7 +1095,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:binaryOp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L981>
     pub fn binary_op(
         &self,
         bin_op: BinaryOp,
@@ -1119,7 +1119,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:overflowingBinaryOp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1026>
     pub fn overflowing_binary_op(
         &self,
         bin_op: BinaryOp,
@@ -1136,7 +1136,7 @@ impl ConstantRange {
     }
 
     /// `binaryOp(const BinaryOperator &)`, the flags given as arguments.
-    /// @cpp:binaryOp
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L981>
     pub fn binary_op_with_flags(
         &self,
         bin_op: BinaryOp,
@@ -1159,7 +1159,8 @@ impl ConstantRange {
     }
 
     /// `ops[1]` of `abs`, `ctlz` and `cttz` is the immarg flag as a 1-bit
-    /// range. @cpp:intrinsic
+    /// range.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1078>
     pub fn intrinsic(
         intrinsic: RangeIntrinsic,
         ops: &[Self],
@@ -1185,7 +1186,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:add
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1124>
     pub fn add(
         &self,
         other: &Self,
@@ -1209,7 +1210,7 @@ impl ConstantRange {
         x
     }
 
-    /// @cpp:addWithNoWrap
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1143>
     pub fn add_with_no_wrap(
         &self,
         other: &Self,
@@ -1233,7 +1234,7 @@ impl ConstantRange {
         result
     }
 
-    /// @cpp:sub
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1171>
     pub fn sub(
         &self,
         other: &Self,
@@ -1257,7 +1258,7 @@ impl ConstantRange {
         x
     }
 
-    /// @cpp:subWithNoWrap
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1190>
     pub fn sub_with_no_wrap(
         &self,
         other: &Self,
@@ -1285,7 +1286,8 @@ impl ConstantRange {
     }
 
     /// DEVIATE: above 64 bits the product is the full set (LLVM multiplies at
-    /// twice the width). @cpp:multiply
+    /// twice the width).
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1220>
     pub fn multiply(
         &self,
         other: &Self,
@@ -1365,7 +1367,7 @@ impl ConstantRange {
         result
     }
 
-    /// @cpp:smul_fast
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1318>
     pub fn smul_fast(
         &self,
         other: &Self,
@@ -1391,7 +1393,7 @@ impl ConstantRange {
         Self::non_empty(w, lowest, add(highest, 1, w))
     }
 
-    /// @cpp:smax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1338>
     pub fn smax(
         &self,
         other: &Self,
@@ -1409,7 +1411,7 @@ impl ConstantRange {
         res
     }
 
-    /// @cpp:umax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1352>
     pub fn umax(
         &self,
         other: &Self,
@@ -1428,7 +1430,7 @@ impl ConstantRange {
         res
     }
 
-    /// @cpp:smin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1366>
     pub fn smin(
         &self,
         other: &Self,
@@ -1446,7 +1448,7 @@ impl ConstantRange {
         res
     }
 
-    /// @cpp:umin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1380>
     pub fn umin(
         &self,
         other: &Self,
@@ -1465,7 +1467,7 @@ impl ConstantRange {
         res
     }
 
-    /// @cpp:udiv
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1394>
     pub fn udiv(
         &self,
         rhs: &Self,
@@ -1483,7 +1485,7 @@ impl ConstantRange {
         Self::non_empty(w, lower, upper)
     }
 
-    /// @cpp:sdiv
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1414>
     pub fn sdiv(
         &self,
         rhs: &Self,
@@ -1550,7 +1552,7 @@ impl ConstantRange {
         res
     }
 
-    /// @cpp:urem
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1496>
     pub fn urem(
         &self,
         rhs: &Self,
@@ -1574,7 +1576,7 @@ impl ConstantRange {
         Self::non_empty(w, 0, upper)
     }
 
-    /// @cpp:srem
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1518>
     pub fn srem(
         &self,
         rhs: &Self,
@@ -1620,12 +1622,12 @@ impl ConstantRange {
         Self::new(w, lower, upper)
     }
 
-    /// @cpp:binaryNot
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1569>
     pub fn binary_not(&self) -> Self {
         Self::single(self.width, mask(self.width)).sub(self)
     }
 
-    /// @cpp:estimateBitMaskedAndLowerBound
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1597>
     fn estimate_bit_masked_and_lower_bound(
         lhs: &Self,
         rhs: &Self,
@@ -1646,7 +1648,7 @@ impl ConstantRange {
         max(estimate_bound(l_lo, r_lo, r_hi), estimate_bound(r_lo, l_lo, l_hi))
     }
 
-    /// @cpp:binaryAnd
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1630>
     pub fn binary_and(
         &self,
         other: &Self,
@@ -1662,7 +1664,7 @@ impl ConstantRange {
         known_bits_range.intersect_with(&umin_umax_range, PreferredRangeType::Smallest)
     }
 
-    /// @cpp:binaryOr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1642>
     pub fn binary_or(
         &self,
         other: &Self,
@@ -1684,7 +1686,7 @@ impl ConstantRange {
         result
     }
 
-    /// @cpp:binaryXor
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1672>
     pub fn binary_xor(
         &self,
         other: &Self,
@@ -1717,7 +1719,7 @@ impl ConstantRange {
         cr
     }
 
-    /// @cpp:shl
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1705>
     pub fn shl(
         &self,
         other: &Self,
@@ -1752,7 +1754,7 @@ impl ConstantRange {
         Self::non_empty(w, min_value, add(max_value, 1, w))
     }
 
-    /// @cpp:computeShlNUW
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1745>
     fn compute_shl_nuw(
         lhs: &Self,
         rhs: &Self,
@@ -1779,7 +1781,7 @@ impl ConstantRange {
         Self::non_empty(w, min_shl, add(max_shl, 1, w))
     }
 
-    /// @cpp:computeShlNSWWithNNegLHS
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1768>
     fn compute_shl_nsw_with_nneg_lhs(
         w: u32,
         lhs_min: u128,
@@ -1804,7 +1806,7 @@ impl ConstantRange {
         Self::non_empty(w, min_shl, add(max_shl, 1, w))
     }
 
-    /// @cpp:computeShlNSWWithNegLHS
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1789>
     fn compute_shl_nsw_with_neg_lhs(
         w: u32,
         lhs_min: u128,
@@ -1829,7 +1831,7 @@ impl ConstantRange {
         Self::non_empty(w, min_shl, add(max_shl, 1, w))
     }
 
-    /// @cpp:computeShlNSW
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1808>
     fn compute_shl_nsw(
         lhs: &Self,
         rhs: &Self,
@@ -1849,7 +1851,7 @@ impl ConstantRange {
         )
     }
 
-    /// @cpp:shlWithNoWrap
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1826>
     pub fn shl_with_no_wrap(
         &self,
         other: &Self,
@@ -1868,7 +1870,7 @@ impl ConstantRange {
         }
     }
 
-    /// @cpp:lshr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1849>
     pub fn lshr(
         &self,
         other: &Self,
@@ -1883,7 +1885,7 @@ impl ConstantRange {
         Self::non_empty(w, min_value, max_value)
     }
 
-    /// @cpp:ashr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1859>
     pub fn ashr(
         &self,
         other: &Self,
@@ -1907,7 +1909,7 @@ impl ConstantRange {
         Self::non_empty(w, min_value, max_value)
     }
 
-    /// @cpp:uadd_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1909>
     pub fn uadd_sat(
         &self,
         other: &Self,
@@ -1921,7 +1923,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:sadd_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1918>
     pub fn sadd_sat(
         &self,
         other: &Self,
@@ -1935,7 +1937,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:usub_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1927>
     pub fn usub_sat(
         &self,
         other: &Self,
@@ -1949,7 +1951,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:ssub_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1936>
     pub fn ssub_sat(
         &self,
         other: &Self,
@@ -1963,7 +1965,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:umul_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1945>
     pub fn umul_sat(
         &self,
         other: &Self,
@@ -1977,7 +1979,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:smul_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1954>
     pub fn smul_sat(
         &self,
         other: &Self,
@@ -1999,7 +2001,7 @@ impl ConstantRange {
         Self::non_empty(w, lowest, add(highest, 1, w))
     }
 
-    /// @cpp:ushl_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1975>
     pub fn ushl_sat(
         &self,
         other: &Self,
@@ -2013,7 +2015,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:sshl_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1984>
     pub fn sshl_sat(
         &self,
         other: &Self,
@@ -2034,7 +2036,7 @@ impl ConstantRange {
         Self::non_empty(w, new_l, new_u)
     }
 
-    /// @cpp:inverse
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L1995>
     pub fn inverse(&self) -> Self {
         if self.is_full_set() {
             return Self::empty(self.width);
@@ -2045,7 +2047,7 @@ impl ConstantRange {
         Self::new(self.width, self.upper, self.lower)
     }
 
-    /// @cpp:abs
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2003>
     pub fn abs(
         &self,
         int_min_is_poison: bool,
@@ -2082,7 +2084,7 @@ impl ConstantRange {
         Self::non_empty(w, 0, add(max(neg(smin, w), smax), 1, w))
     }
 
-    /// @cpp:ctlz
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2045>
     pub fn ctlz(
         &self,
         zero_is_poison: bool,
@@ -2113,7 +2115,7 @@ impl ConstantRange {
         )
     }
 
-    /// @cpp:getUnsignedCountTrailingZerosRange
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2083>
     fn unsigned_count_trailing_zeros_range(
         w: u32,
         lower: u128,
@@ -2129,7 +2131,7 @@ impl ConstantRange {
         Self::new(w, 0, add(u128::from(max(w - lcp_length - 1, countr_zero(lower, w))), 1, w))
     }
 
-    /// @cpp:cttz
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2105>
     pub fn cttz(
         &self,
         zero_is_poison: bool,
@@ -2162,7 +2164,7 @@ impl ConstantRange {
         cr1.union_with(&cr2, PreferredRangeType::Smallest)
     }
 
-    /// @cpp:getUnsignedPopCountRange
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2151>
     fn unsigned_pop_count_range(
         w: u32,
         lower: u128,
@@ -2179,7 +2181,7 @@ impl ConstantRange {
         Self::new(w, u128::from(min_bits), add(u128::from(max_bits), 1, w))
     }
 
-    /// @cpp:ctpop
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2177>
     pub fn ctpop(&self) -> Self {
         let w = self.width;
         if self.is_empty_set() {
@@ -2196,7 +2198,7 @@ impl ConstantRange {
         cr1.union_with(&cr2, PreferredRangeType::Smallest)
     }
 
-    /// @cpp:sqrtFloor
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2197>
     pub fn sqrt_floor(&self) -> Self {
         let w = self.width;
         if self.is_empty_set() {
@@ -2205,7 +2207,7 @@ impl ConstantRange {
         Self::non_empty(w, sqrt_floor(self.get_unsigned_min()), add(sqrt_floor(self.get_unsigned_max()), 1, w))
     }
 
-    /// @cpp:unsignedAddMayOverflow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2207>
     pub fn unsigned_add_may_overflow(
         &self,
         other: &Self,
@@ -2225,7 +2227,7 @@ impl ConstantRange {
         OverflowResult::NeverOverflows
     }
 
-    /// @cpp:signedAddMayOverflow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2223>
     pub fn signed_add_may_overflow(
         &self,
         other: &Self,
@@ -2254,7 +2256,7 @@ impl ConstantRange {
         OverflowResult::NeverOverflows
     }
 
-    /// @cpp:unsignedSubMayOverflow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2253>
     pub fn unsigned_sub_may_overflow(
         &self,
         other: &Self,
@@ -2273,7 +2275,7 @@ impl ConstantRange {
         OverflowResult::NeverOverflows
     }
 
-    /// @cpp:signedSubMayOverflow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2269>
     pub fn signed_sub_may_overflow(
         &self,
         other: &Self,
@@ -2300,7 +2302,7 @@ impl ConstantRange {
         OverflowResult::NeverOverflows
     }
 
-    /// @cpp:unsignedMulMayOverflow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2299>
     pub fn unsigned_mul_may_overflow(
         &self,
         other: &Self,
@@ -2320,7 +2322,7 @@ impl ConstantRange {
         OverflowResult::NeverOverflows
     }
 
-    /// @cpp:print
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2319>
     pub fn print(&self) -> String {
         if self.is_full_set() {
             "full-set".to_owned()
@@ -2332,7 +2334,7 @@ impl ConstantRange {
     }
 
     /// `getConstantRangeFromMetadata` on the `(low, high)` pairs of `!range`.
-    /// @cpp:getConstantRangeFromMetadata
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L2334>
     pub fn from_range_pairs(
         width: u32,
         pairs: &[(u128, u128)],
