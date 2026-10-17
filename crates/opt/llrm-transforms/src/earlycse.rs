@@ -1,0 +1,1249 @@
+//! LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the
+//! dominator tree, scoped tables of what is available, and a generation count
+//! that memory operations advance.
+//!
+//! A translation of `llvm/lib/Transforms/Scalar/EarlyCSE.cpp` at d1106deb71cc;
+//! each function carries the permalink of the one it translates. What is not
+//! translated is marked DEVIATE with its reason:
+//!
+//! - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
+//!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
+//!   none (or `fill` makes them later). `llvm.assume` is handled.
+//! - DEVIATE `simplifyInstruction` is the subset llrm has at hand
+//!   (`algebraic::identity`, constants folded, a select on a constant or with
+//!   equal arms, `x cmp x`, a phi of one value).
+//! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
+//!   does it only when poison-generating flags remain); a load's metadata not
+//!   shared by both loads is dropped (`combineMetadataForCSE` merges it).
+//! - DEVIATE a call's attributes are not intersected; calls that touch no
+//!   memory are numbered unless they are `llvm.`/`llrm.` markers.
+//! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
+//! - DEVIATE MemorySSA is the manager's, built once for the function as it was
+//!   and not updated (`MSSAUpdater`); an erased store stays a def in it, which
+//!   is only conservative. Erasures wait for the end of the walk so that what
+//!   it asks about still exists.
+//! - DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
+//!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
+//!   access, where LLVM's walker answers one.
+//!
+//! The pass is named `earlycse`; `LLRM_EXP_EARLYCSE=real` selects it in the
+//! order experiment, in place of `gvn::EarlyCse`.
+
+use std::collections::HashMap;
+
+use llrm_analysis::memory::Unit as View;
+use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
+use llrm_mir::context::Context;
+use llrm_mir::dominators::DominatorTree;
+use llrm_mir::memory;
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::types::TypeId;
+
+/// `EarlyCSEMssaOptCap`, `-earlycse-mssa-optimization-cap`.
+const MSSA_OPT_CAP: usize = 500;
+
+/// ScopedHashTable: `insert` shadows, `lookup` finds the innermost, and
+/// leaving a scope takes back what it inserted.
+struct Scoped<K, V> {
+    map: HashMap<K, Vec<V>>,
+    inserted: Vec<K>,
+    marks: Vec<usize>,
+}
+
+impl<K: std::hash::Hash + Eq + Clone, V: Clone> Scoped<K, V> {
+    fn new() -> Self {
+        Self { map: HashMap::new(), inserted: Vec::new(), marks: Vec::new() }
+    }
+
+    fn enter(&mut self) {
+        self.marks.push(self.inserted.len());
+    }
+
+    fn leave(&mut self) {
+        let mark = self.marks.pop().expect("a scope entered");
+        while self.inserted.len() > mark {
+            let key = self.inserted.pop().expect("a key");
+            if let Some(stack) = self.map.get_mut(&key) {
+                stack.pop();
+                if stack.is_empty() {
+                    self.map.remove(&key);
+                }
+            }
+        }
+    }
+
+    fn insert(
+        &mut self,
+        key: K,
+        value: V,
+    ) {
+        self.map.entry(key.clone()).or_default().push(value);
+        self.inserted.push(key);
+    }
+
+    fn lookup(
+        &self,
+        key: &K,
+    ) -> Option<&V> {
+        self.map.get(key).and_then(|stack| stack.last())
+    }
+}
+
+/// `SelectPatternFlavor` of min/max.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Flavor {
+    UMax,
+    UMin,
+    SMax,
+    SMin,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum Tag {
+    Binary(BinaryOp),
+    ICmp(IntPredicate),
+    FCmp(FloatPredicate),
+    Cast(CastOp),
+    FNeg,
+    Freeze,
+    Select,
+    MinMax(Flavor),
+    SelectCmp(IntPredicate),
+    ExtractValue(Vec<u32>),
+    InsertValue(Vec<u32>),
+    Call(TypeId, u32),
+}
+
+/// What `SimpleValue`'s hash and `isEqual` agree on: two instructions with one
+/// key are the same value. The key is the canonical form `getHashValueImpl`
+/// picks for commuted operands, swapped compares and inverted selects.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SimpleKey {
+    tag: Tag,
+    ty: TypeId,
+    operands: Vec<Operand>,
+}
+
+/// `GEPValue`: the pointer and the constant offset, or the whole GEP.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum GepKey {
+    Offset(TypeId, Operand, i64),
+    Whole(TypeId, TypeId, Vec<Operand>),
+}
+
+/// `EarlyCSE::LoadValue`.
+#[derive(Clone, Copy)]
+struct LoadValue {
+    def: InstId,
+    generation: u32,
+    is_load: bool,
+}
+
+/// LLVM's numbering of `CmpInst::Predicate`, which orders the hash's choices.
+fn rank(predicate: IntPredicate) -> u8 {
+    match predicate {
+        IntPredicate::Eq => 32,
+        IntPredicate::Ne => 33,
+        IntPredicate::Ugt => 34,
+        IntPredicate::Uge => 35,
+        IntPredicate::Ult => 36,
+        IntPredicate::Ule => 37,
+        IntPredicate::Sgt => 38,
+        IntPredicate::Sge => 39,
+        IntPredicate::Slt => 40,
+        IntPredicate::Sle => 41,
+    }
+}
+
+fn commutes(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::FAdd | BinaryOp::FMul
+    )
+}
+
+/// What EarlyCSE asks of MemorySSA (`MemorySSA::getMemoryAccess`,
+/// `getWalker()->getClobberingMemoryAccess`,
+/// `MemoryUseOrDef::getDefiningAccess`, `MemorySSA::dominates`,
+/// `MemorySSAUpdater::removeMemoryAccess`), so that a translation of
+/// MemorySSA.cpp plugs in behind it.
+pub trait MemorySsaView {
+    /// The access number of `inst`; none where it touches no memory.
+    fn memory_access(
+        &self,
+        inst: InstId,
+    ) -> Option<usize>;
+    /// The accesses `getClobberingMemoryAccess(inst)` answers: LLVM's walker
+    /// answers one, the manager's walk a set of nearest defs.
+    fn clobbering_access(
+        &self,
+        inst: InstId,
+    ) -> Vec<usize>;
+    /// `inst`'s access's defining access.
+    fn defining_access(
+        &self,
+        inst: InstId,
+    ) -> Option<usize>;
+    /// Whether access `ahead` dominates access `access`.
+    fn dominates(
+        &self,
+        ahead: usize,
+        access: usize,
+    ) -> bool;
+    /// `removeMemoryAccess(inst)`: the manager's graph is not updated.
+    fn remove_memory_access(
+        &mut self,
+        _inst: InstId,
+    ) {
+    }
+}
+
+/// The manager's MemorySSA (`llrm_analysis::memoryssa`) as that view.
+struct Manager<'a> {
+    mssa: MemorySSA<'a>,
+    accesses: &'a Accesses,
+}
+
+impl MemorySsaView for Manager<'_> {
+    fn memory_access(
+        &self,
+        inst: InstId,
+    ) -> Option<usize> {
+        self.mssa.sites.get(&inst).map(|access| access.id)
+    }
+
+    fn clobbering_access(
+        &self,
+        inst: InstId,
+    ) -> Vec<usize> {
+        match self.accesses.references.get(&inst) {
+            Some(memory) => self.mssa.clobbers(inst, memory).into_iter().collect(),
+            None => self.defining_access(inst).into_iter().collect(),
+        }
+    }
+
+    fn defining_access(
+        &self,
+        inst: InstId,
+    ) -> Option<usize> {
+        self.mssa.sites.get(&inst).and_then(|access| access.defining)
+    }
+
+    fn dominates(
+        &self,
+        ahead: usize,
+        access: usize,
+    ) -> bool {
+        self.mssa.dominates(ahead, access)
+    }
+}
+
+/// One walk of a function.
+struct Walk<'a> {
+    context: &'a mut Context,
+    function: &'a mut Function,
+    /// The function as it was, which `mssa` describes.
+    view: &'a View<'a>,
+    mssa: Box<dyn MemorySsaView + 'a>,
+    callees: &'a memory::Callees,
+    tree: &'a DominatorTree,
+    values: Scoped<SimpleKey, Operand>,
+    loads: Scoped<Operand, LoadValue>,
+    invariants: Scoped<(Operand, TypeId), u32>,
+    calls: Scoped<SimpleKey, (InstId, u32)>,
+    geps: Scoped<GepKey, Operand>,
+    generation: u32,
+    clobber_counter: usize,
+    /// Instructions to erase when the walk is done.
+    gone: Vec<InstId>,
+}
+
+impl Walk<'_> {
+    fn enter(&mut self) {
+        self.values.enter();
+        self.loads.enter();
+        self.invariants.enter();
+        self.calls.enter();
+        self.geps.enter();
+    }
+
+    fn leave(&mut self) {
+        self.values.leave();
+        self.loads.leave();
+        self.invariants.leave();
+        self.calls.leave();
+        self.geps.leave();
+    }
+
+    /// The instruction that defines `operand`, if one does.
+    fn definer(
+        &self,
+        operand: Operand,
+    ) -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function.value(value).def {
+            ValueDef::Instruction(inst) => Some(inst),
+            ValueDef::Argument(_) => None,
+        }
+    }
+
+    fn int_constant(
+        &self,
+        operand: Operand,
+    ) -> Option<u128> {
+        let Operand::Constant(id) = operand else { return None };
+        match self.context.get(id).kind {
+            llrm_mir::context::ConstantKind::Int(bits) => Some(bits),
+            _ => None,
+        }
+    }
+
+    fn width(
+        &self,
+        ty: TypeId,
+    ) -> Option<u32> {
+        self.context.types.int_bits(ty)
+    }
+
+    /// `m_Not(x)`: `xor x, -1`.
+    fn negated(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        let inst = self.definer(operand)?;
+        let op = self.function.instruction(inst);
+        let Opcode::Binary(BinaryOp::Xor) = op.opcode else { return None };
+        let width = self.width(op.ty)?;
+        let ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+        match (op.operands[0], op.operands[1]) {
+            (kept, constant) | (constant, kept) if self.int_constant(constant) == Some(ones) => Some(kept),
+            _ => None,
+        }
+    }
+
+    /// `matchSelectWithOptionalNotCond`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L158):
+    /// the select's condition, true value and false value with a `not` of the
+    /// condition looked through, and the min/max it is.
+    fn select_form(
+        &self,
+        inst: InstId,
+    ) -> Option<(Operand, Operand, Operand, Option<Flavor>)> {
+        let op = self.function.instruction(inst);
+        if op.opcode != Opcode::Select {
+            return None;
+        }
+        let (mut cond, mut a, mut b) = (op.operands[0], op.operands[1], op.operands[2]);
+        if let Some(inner) = self.negated(cond) {
+            cond = inner;
+            std::mem::swap(&mut a, &mut b);
+        }
+        let flavor = (|| {
+            let compare = self.function.instruction(self.definer(cond)?);
+            let Opcode::ICmp(mut predicate) = compare.opcode else { return None };
+            if compare.operands[0] == a && compare.operands[1] == b {
+            } else if compare.operands[0] == b && compare.operands[1] == a {
+                predicate = predicate.swapped();
+            } else {
+                return None;
+            }
+            match predicate {
+                IntPredicate::Ugt | IntPredicate::Uge => Some(Flavor::UMax),
+                IntPredicate::Ult | IntPredicate::Ule => Some(Flavor::UMin),
+                IntPredicate::Sgt | IntPredicate::Sge => Some(Flavor::SMax),
+                IntPredicate::Slt | IntPredicate::Sle => Some(Flavor::SMin),
+                _ => None,
+            }
+        })();
+        Some((cond, a, b, flavor))
+    }
+
+    /// `SimpleValue::canHandle` and the hash/equality of `getHashValueImpl` and
+    /// `isEqualImpl`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L100):
+    /// the key of `inst`, or none where it is not a simple value.
+    fn simple_key(
+        &self,
+        inst: InstId,
+    ) -> Option<SimpleKey> {
+        let op = self.function.instruction(inst);
+        let ty = op.ty;
+        let operands = op.operands.clone();
+        let key = |tag, operands| Some(SimpleKey { tag, ty, operands });
+        match &op.opcode {
+            Opcode::Binary(binary) => {
+                let mut operands = operands;
+                if commutes(*binary) && operands[0] > operands[1] {
+                    operands.swap(0, 1);
+                }
+                key(Tag::Binary(*binary), operands)
+            }
+            Opcode::ICmp(predicate) => {
+                let (mut left, mut right, mut predicate) = (operands[0], operands[1], *predicate);
+                let swapped = predicate.swapped();
+                if (left, rank(predicate)) > (right, rank(swapped)) {
+                    std::mem::swap(&mut left, &mut right);
+                    predicate = swapped;
+                }
+                key(Tag::ICmp(predicate), vec![left, right])
+            }
+            Opcode::FCmp(predicate) => key(Tag::FCmp(*predicate), operands),
+            Opcode::Cast(cast) => key(Tag::Cast(*cast), operands),
+            Opcode::FNeg => key(Tag::FNeg, operands),
+            Opcode::Freeze => key(Tag::Freeze, operands),
+            Opcode::ExtractValue(indices) => key(Tag::ExtractValue(indices.clone()), operands),
+            Opcode::InsertValue(indices) => key(Tag::InsertValue(indices.clone()), operands),
+            Opcode::Select => {
+                let (cond, mut a, mut b, flavor) = self.select_form(inst)?;
+                if let Some(flavor) = flavor {
+                    if a > b {
+                        std::mem::swap(&mut a, &mut b);
+                    }
+                    return key(Tag::MinMax(flavor), vec![a, b]);
+                }
+                let compare = self.definer(cond).map(|one| self.function.instruction(one));
+                match compare {
+                    Some(compare) => match compare.opcode {
+                        Opcode::ICmp(predicate) => {
+                            let inverse = predicate.inverse();
+                            let (x, y) = (compare.operands[0], compare.operands[1]);
+                            if rank(inverse) < rank(predicate) {
+                                std::mem::swap(&mut a, &mut b);
+                                key(Tag::SelectCmp(inverse), vec![x, y, a, b])
+                            } else {
+                                key(Tag::SelectCmp(predicate), vec![x, y, a, b])
+                            }
+                        }
+                        _ => key(Tag::Select, vec![cond, a, b]),
+                    },
+                    None => key(Tag::Select, vec![cond, a, b]),
+                }
+            }
+            Opcode::Call(info) => {
+                if op.result.is_none() || self.marker(inst) {
+                    return None;
+                }
+                let effects = memory::of(self.context, self.callees, self.function, inst);
+                if effects.reads || effects.writes {
+                    return None;
+                }
+                key(Tag::Call(info.function_type, info.calling_convention), operands)
+            }
+            _ => None,
+        }
+    }
+
+    /// A call to an `llvm.` or `llrm.` function: a marker, not a computation.
+    fn marker(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        memory::callee(self.context, self.function, inst)
+            .and_then(|global| self.view.globals.get(global.0 as usize))
+            .and_then(|global| global.name.as_deref())
+            .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+    }
+
+    fn named(
+        &self,
+        inst: InstId,
+        name: &str,
+    ) -> bool {
+        memory::callee(self.context, self.function, inst)
+            .and_then(|global| self.view.globals.get(global.0 as usize))
+            .and_then(|global| global.name.as_deref())
+            .is_some_and(|one| one == name)
+    }
+
+    /// `CallValue::canHandle`: a call that only reads memory or only writes it
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L468).
+    fn call_key(
+        &self,
+        inst: InstId,
+    ) -> Option<SimpleKey> {
+        let op = self.function.instruction(inst);
+        let Opcode::Call(info) = &op.opcode else { return None };
+        if self.marker(inst) {
+            return None;
+        }
+        let effects = memory::of(self.context, self.callees, self.function, inst);
+        if effects.reads == effects.writes {
+            return None;
+        }
+        Some(SimpleKey {
+            tag: Tag::Call(info.function_type, info.calling_convention),
+            ty: op.ty,
+            operands: op.operands.clone(),
+        })
+    }
+
+    /// `GEPValue` with `accumulateConstantOffset`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L521).
+    fn gep_key(
+        &self,
+        inst: InstId,
+    ) -> Option<GepKey> {
+        let op = self.function.instruction(inst);
+        let Opcode::GetElementPtr { source } = op.opcode else { return None };
+        if let ([base, index], Some(8)) = (&op.operands[..], self.width(source)) {
+            if let (Operand::Constant(id), Some(bits)) = (index, self.int_constant(*index)) {
+                let width = self.width(self.context.get(*id).ty)?;
+                let shift = 128 - width;
+                let signed = ((bits << shift) as i128) >> shift;
+                return Some(GepKey::Offset(op.ty, *base, signed as i64));
+            }
+        }
+        Some(GepKey::Whole(source, op.ty, op.operands.clone()))
+    }
+
+    fn is_load(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        matches!(self.function.instruction(inst).opcode, Opcode::Load { .. })
+    }
+
+    fn is_store(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        matches!(self.function.instruction(inst).opcode, Opcode::Store { .. })
+    }
+
+    /// `ParseMemoryInst::getPointerOperand` of a plain load or store.
+    fn pointer(
+        &self,
+        inst: InstId,
+    ) -> Option<Operand> {
+        let op = self.function.instruction(inst);
+        match op.opcode {
+            Opcode::Load { .. } => Some(op.operands[0]),
+            Opcode::Store { .. } => Some(op.operands[1]),
+            _ => None,
+        }
+    }
+
+    fn volatile(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        matches!(
+            self.function.instruction(inst).opcode,
+            Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
+        )
+    }
+
+    /// `ParseMemoryInst::getValueType`.
+    fn value_type(
+        &self,
+        inst: InstId,
+    ) -> Option<TypeId> {
+        let op = self.function.instruction(inst);
+        match op.opcode {
+            Opcode::Load { .. } => Some(op.ty),
+            Opcode::Store { .. } => self.function.operand_type(self.context, op.operands[0]),
+            _ => None,
+        }
+    }
+
+    fn may_read(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        match self.function.instruction(inst).opcode {
+            Opcode::Load { .. } => true,
+            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, self.function, inst).reads,
+            _ => false,
+        }
+    }
+
+    fn may_write(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        match self.function.instruction(inst).opcode {
+            Opcode::Store { .. } => true,
+            Opcode::Load { volatile, .. } => volatile,
+            Opcode::Call(_) | Opcode::Invoke(_) => memory::of(self.context, self.callees, self.function, inst).writes,
+            _ => false,
+        }
+    }
+
+    /// `EarlyCSE::isOperatingOnInvariantMemAt`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1105).
+    fn invariant_at(
+        &self,
+        inst: InstId,
+        generation: u32,
+    ) -> bool {
+        let op = self.function.instruction(inst);
+        if matches!(op.opcode, Opcode::Load { .. }) && op.metadata.iter().any(|(kind, _)| kind == "invariant.load") {
+            return true;
+        }
+        let (Some(pointer), Some(ty)) = (self.pointer(inst), self.value_type(inst)) else { return false };
+        self.invariants.lookup(&(pointer, ty)).is_some_and(|&became| became <= generation)
+    }
+
+    /// `EarlyCSE::isSameMemGeneration`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066).
+    fn same_generation(
+        &mut self,
+        earlier_generation: u32,
+        later_generation: u32,
+        earlier: InstId,
+        later: InstId,
+    ) -> bool {
+        if earlier_generation == later_generation {
+            return true;
+        }
+        let (Some(earlier_access), Some(_)) = (self.mssa.memory_access(earlier), self.mssa.memory_access(later)) else {
+            return true;
+        };
+        let later_defs: Vec<usize> = if self.clobber_counter < MSSA_OPT_CAP {
+            self.clobber_counter += 1;
+            self.mssa.clobbering_access(later)
+        } else {
+            self.mssa.defining_access(later).into_iter().collect()
+        };
+        later_defs.iter().all(|&def| self.mssa.dominates(def, earlier_access))
+    }
+
+    /// `EarlyCSE::getOrCreateResult` without target intrinsics: the load, or
+    /// the store's value, if it has `expected`'s type.
+    fn result_of(
+        &self,
+        inst: InstId,
+        expected: TypeId,
+    ) -> Option<Operand> {
+        let op = self.function.instruction(inst);
+        let value = match op.opcode {
+            Opcode::Load { .. } => Operand::Value(op.result?),
+            Opcode::Store { .. } => op.operands[0],
+            _ => return None,
+        };
+        (self.function.operand_type(self.context, value) == Some(expected)).then_some(value)
+    }
+
+    /// `EarlyCSE::getMatchingValue`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1183).
+    fn matching_value(
+        &mut self,
+        in_val: LoadValue,
+        mem: InstId,
+        generation: u32,
+    ) -> Option<Operand> {
+        // We don't yet handle removing loads with ordering of any kind.
+        if self.volatile(mem) {
+            return None;
+        }
+        let mem_is_load = self.is_load(mem);
+        let (matching, other) = if mem_is_load { (in_val.def, mem) } else { (mem, in_val.def) };
+        // For stores the result is checked before the memory generation.
+        let other_type = match self.function.instruction(other).opcode {
+            Opcode::Load { .. } => self.function.instruction(other).ty,
+            _ => {
+                // A store has no value type: a store is never "matching" a
+                // store.
+                if mem_is_load {
+                    self.function.instruction(other).ty
+                } else {
+                    return None;
+                }
+            }
+        };
+        let result = if !mem_is_load { self.result_of(matching, other_type) } else { None };
+        if !mem_is_load && Some(Operand::Value(self.function.instruction(in_val.def).result?)) != result {
+            return None;
+        }
+        if !self.invariant_at(mem, in_val.generation)
+            && !self.same_generation(in_val.generation, generation, in_val.def, mem)
+        {
+            return None;
+        }
+        result.or_else(|| self.result_of(matching, other_type))
+    }
+
+    /// `EarlyCSE::overridingStores`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1288).
+    fn overriding_stores(
+        &self,
+        earlier: InstId,
+        later: InstId,
+    ) -> bool {
+        self.pointer(earlier) == self.pointer(later)
+            && self.value_type(earlier).is_some()
+            && self.value_type(earlier) == self.value_type(later)
+            && !self.volatile(earlier)
+            && !self.volatile(later)
+    }
+
+    /// `combineIRFlags`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1257):
+    /// what both have stays on `to`.
+    fn combine_flags(
+        &mut self,
+        from: InstId,
+        to: Operand,
+    ) {
+        let Some(to) = self.definer(to) else { return };
+        let flags = self.function.instruction(to).flags.intersect(self.function.instruction(from).flags);
+        if flags != self.function.instruction(to).flags {
+            self.function.set_flags(to, flags);
+        }
+    }
+
+    /// `simplifyInstruction` of the subset above: the operand `inst` equals.
+    fn simplified(
+        &mut self,
+        inst: InstId,
+    ) -> Option<Operand> {
+        if let Some(kept) = crate::algebraic::identity(self.context, self.function, inst) {
+            return Some(kept);
+        }
+        let op = self.function.instruction(inst).clone();
+        let width = self.width(op.ty);
+        let constants: Option<Vec<u128>> = op.operands.iter().map(|one| self.int_constant(*one)).collect();
+        match (&op.opcode, &op.operands[..]) {
+            (Opcode::Select, [cond, yes, no]) => {
+                if let Some(cond) = self.int_constant(*cond) {
+                    return Some(if cond & 1 == 1 { *yes } else { *no });
+                }
+                if yes == no {
+                    return Some(*yes);
+                }
+                None
+            }
+            (Opcode::Phi, operands) => {
+                let result = Operand::Value(op.result?);
+                let mut same = None;
+                for pair in operands.chunks(2) {
+                    let value = pair[0];
+                    if value == result {
+                        continue;
+                    }
+                    match same {
+                        None => same = Some(value),
+                        Some(one) if one == value => {}
+                        Some(_) => return None,
+                    }
+                }
+                same
+            }
+            (Opcode::ICmp(predicate), [left, right]) if left == right => {
+                let holds = matches!(
+                    predicate,
+                    IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
+                );
+                Some(Operand::Constant(self.context.int(op.ty, i128::from(holds))))
+            }
+            (Opcode::Binary(binary), _) => {
+                let (constants, width) = (constants?, width?);
+                if width > 64 || constants.len() != 2 {
+                    return None;
+                }
+                let mask = if width == 64 { u64::MAX as u128 } else { (1u128 << width) - 1 };
+                let (a, b) = (constants[0] & mask, constants[1] & mask);
+                let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
+                let bits = match binary {
+                    BinaryOp::Add => a.wrapping_add(b),
+                    BinaryOp::Sub => a.wrapping_sub(b),
+                    BinaryOp::Mul => a.wrapping_mul(b),
+                    BinaryOp::And => a & b,
+                    BinaryOp::Or => a | b,
+                    BinaryOp::Xor => a ^ b,
+                    BinaryOp::Shl if b < u128::from(width) => a << b,
+                    BinaryOp::LShr if b < u128::from(width) => a >> b,
+                    BinaryOp::AShr if b < u128::from(width) => (signed(a) >> b) as u128,
+                    _ => return None,
+                };
+                Some(Operand::Constant(self.context.int(op.ty, (bits & mask) as i128)))
+            }
+            (Opcode::ICmp(predicate), _) => {
+                let constants = constants?;
+                let width = self.width(self.function.operand_type(self.context, op.operands[0])?)?;
+                if width > 64 || constants.len() != 2 {
+                    return None;
+                }
+                let mask = (1u128 << width) - 1;
+                let (a, b) = (constants[0] & mask, constants[1] & mask);
+                let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
+                let holds = match predicate {
+                    IntPredicate::Eq => a == b,
+                    IntPredicate::Ne => a != b,
+                    IntPredicate::Ugt => a > b,
+                    IntPredicate::Uge => a >= b,
+                    IntPredicate::Ult => a < b,
+                    IntPredicate::Ule => a <= b,
+                    IntPredicate::Sgt => signed(a) > signed(b),
+                    IntPredicate::Sge => signed(a) >= signed(b),
+                    IntPredicate::Slt => signed(a) < signed(b),
+                    IntPredicate::Sle => signed(a) <= signed(b),
+                };
+                Some(Operand::Constant(self.context.int(op.ty, i128::from(holds))))
+            }
+            (Opcode::Cast(cast), [source]) => {
+                let (bits, width) = (self.int_constant(*source)?, width?);
+                let from = self.width(self.function.operand_type(self.context, *source)?)?;
+                if width > 64 || from > 64 {
+                    return None;
+                }
+                let value = match cast {
+                    CastOp::Trunc => bits,
+                    CastOp::ZExt => bits & ((1u128 << from) - 1),
+                    CastOp::SExt => (((bits << (128 - from)) as i128) >> (128 - from)) as u128,
+                    _ => return None,
+                };
+                Some(Operand::Constant(self.context.int(op.ty, (value & ((1u128 << width) - 1)) as i128)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether `inst` is trivially dead: nothing reads its value and nothing
+    /// else would notice it going.
+    fn dead(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let op = self.function.instruction(inst);
+        if op.opcode.is_terminator() || matches!(op.opcode, Opcode::Store { .. }) {
+            return false;
+        }
+        op.result.is_none_or(|result| self.function.users(result).is_empty())
+            && !crate::dead::_kept(self.context, self.callees, self.function, inst)
+    }
+
+    /// `replaceDominatedUsesWith(Curr, TorF, DT, BasicBlockEdge(Pred, BB))`:
+    /// the uses the edge dominates.
+    fn replace_dominated(
+        &mut self,
+        value: ValueId,
+        with: Operand,
+        pred: BlockId,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        for one in self.function.users(value).to_vec() {
+            let user = self.function.instruction(one.user);
+            let dominated = if user.opcode == Opcode::Phi {
+                let Operand::Block(from) = user.operands[one.index as usize + 1] else { continue };
+                (from == pred && self.function.parent(one.user) == Some(block)) || self.tree.dominates(block, from)
+            } else {
+                self.function.parent(one.user).is_some_and(|home| self.tree.dominates(block, home))
+            };
+            if dominated && !self.function.is_erased(one.user) {
+                self.function.set_operand(one.user, one.index as usize, with);
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// `EarlyCSE::handleBranchCondition`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1126).
+    fn branch_condition(
+        &mut self,
+        cond: InstId,
+        branch: InstId,
+        block: BlockId,
+        pred: BlockId,
+    ) -> bool {
+        let taken = self.function.instruction(branch).operands[1] == Operand::Block(block);
+        let ty = self.function.instruction(cond).ty;
+        let known = Operand::Constant(self.context.int(ty, i128::from(taken)));
+        let mut changed = false;
+        let mut work = vec![cond];
+        let mut seen = vec![cond];
+        while let Some(current) = work.pop() {
+            if let Some(key) = self.simple_key(current) {
+                self.values.insert(key, known);
+            }
+            if let Some(result) = self.function.instruction(current).result {
+                changed |= self.replace_dominated(result, known, pred, block);
+            }
+            // If the condition is an AND operation, its operands hold in the
+            // true branch; an OR, in the false branch.
+            let op = self.function.instruction(current);
+            let logical = match (&op.opcode, &op.operands[..]) {
+                (Opcode::Binary(BinaryOp::And), [a, b]) if taken => Some((*a, *b)),
+                (Opcode::Binary(BinaryOp::Or), [a, b]) if !taken => Some((*a, *b)),
+                (Opcode::Select, [a, b, c]) if taken && self.int_constant(*c) == Some(0) => Some((*a, *b)),
+                (Opcode::Select, [a, b, c]) if !taken && self.int_constant(*b) == Some(1) => Some((*a, *c)),
+                _ => None,
+            };
+            if let Some((a, b)) = logical {
+                for operand in [a, b] {
+                    if let Some(inner) = self.definer(operand)
+                        && self.simple_key(inner).is_some()
+                        && !seen.contains(&inner)
+                    {
+                        seen.push(inner);
+                        work.push(inner);
+                    }
+                }
+            }
+        }
+        changed
+    }
+
+    /// The predecessor of `block` where the only edge into it is one.
+    fn single_predecessor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let mut edges = self
+            .function
+            .block_users(block)
+            .iter()
+            .filter(|one| self.function.instruction(one.user).opcode.is_terminator())
+            .map(|one| self.function.parent(one.user));
+        let first = edges.next()??;
+        edges.next().is_none().then_some(first)
+    }
+
+    /// Erase now-unneeded `inst` once the walk is over.
+    fn remove(
+        &mut self,
+        inst: InstId,
+    ) {
+        self.gone.push(inst);
+    }
+
+    /// `EarlyCSE::processNode`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1322).
+    fn process_node(
+        &mut self,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        // Several predecessors could have invalidated the live-out memory
+        // values of the parent.
+        let single = self.single_predecessor(block);
+        if single.is_none() {
+            self.generation += 1;
+        }
+        // The single predecessor's conditional branch tells the condition.
+        if let Some(pred) = single
+            && let Some(branch) = self.function.terminator(pred)
+        {
+            let op = self.function.instruction(branch);
+            if op.opcode == Opcode::Br
+                && op.operands.len() == 3
+                && let Some(cond) = self.definer(op.operands[0])
+                && self.simple_key(cond).is_some()
+            {
+                changed |= self.branch_condition(cond, branch, block, pred);
+            }
+        }
+        // The last non-volatile store seen, for as long as nothing reads
+        // memory.
+        let mut last_store: Option<InstId> = None;
+        for inst in self.function.block(block).instructions().to_vec() {
+            if self.function.is_erased(inst) {
+                continue;
+            }
+            // Dead instructions should just be removed.
+            if self.dead(inst) {
+                self.remove(inst);
+                changed = true;
+                continue;
+            }
+            // An assumption makes its condition true for all dominated blocks.
+            if matches!(self.function.instruction(inst).opcode, Opcode::Call(_)) && self.named(inst, "llvm.assume") {
+                let cond = self.function.instruction(inst).operands[0];
+                if let Some(cond) = self.definer(cond)
+                    && let Some(key) = self.simple_key(cond)
+                {
+                    let ty = self.function.instruction(cond).ty;
+                    let truth = Operand::Constant(self.context.int(ty, 1));
+                    self.values.insert(key, truth);
+                }
+                continue;
+            }
+            // If the instruction can be simplified, replace it with its
+            // simpler value.
+            if let Some(value) = self.simplified(inst) {
+                let result = self.function.instruction(inst).result;
+                if let Some(result) = result
+                    && !self.function.users(result).is_empty()
+                {
+                    self.function.replace_value(result, value);
+                    changed = true;
+                }
+                if self.dead(inst) {
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+            }
+            // Stores before a potential unwind are not removed.
+            if matches!(
+                self.function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            ) {
+                last_store = None;
+            }
+            // A simple instruction that can be value numbered.
+            if let Some(key) = self.simple_key(inst) {
+                if let Some(&found) = self.values.lookup(&key) {
+                    self.combine_flags(inst, found);
+                    if let Some(result) = self.function.instruction(inst).result {
+                        self.function.replace_value(result, found);
+                    }
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+                if let Some(result) = self.function.instruction(inst).result {
+                    self.values.insert(key, Operand::Value(result));
+                }
+                continue;
+            }
+            // A load or a store.
+            let pointer = self.pointer(inst);
+            if self.is_load(inst) {
+                let pointer = pointer.expect("a load has a pointer");
+                // We can't peek past the ordering of a volatile load.
+                if self.volatile(inst) {
+                    last_store = None;
+                    self.generation += 1;
+                }
+                if self.function.instruction(inst).metadata.iter().any(|(kind, _)| kind == "invariant.load") {
+                    let ty = self.function.instruction(inst).ty;
+                    if self.invariants.lookup(&(pointer, ty)).is_none() {
+                        self.invariants.insert((pointer, ty), self.generation);
+                    }
+                }
+                if let Some(in_val) = self.loads.lookup(&pointer).copied()
+                    && let Some(value) = self.matching_value(in_val, inst, self.generation)
+                {
+                    if in_val.is_load {
+                        self.combine_metadata(in_val.def, inst);
+                    }
+                    if let Some(result) = self.function.instruction(inst).result {
+                        self.function.replace_value(result, value);
+                    }
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+                self.loads.insert(pointer, LoadValue { def: inst, generation: self.generation, is_load: true });
+                last_store = None;
+                continue;
+            }
+            // An instruction that may read memory forgets the last store.
+            if self.may_read(inst) {
+                last_store = None;
+            }
+            // A read-only or write-only call.
+            if let Some(key) = self.call_key(inst) {
+                if let Some(&(earlier, generation)) = self.calls.lookup(&key)
+                    && self.same_generation(generation, self.generation, earlier, inst)
+                    && self.may_read(earlier) == self.may_read(inst)
+                {
+                    if let Some(result) = self.function.instruction(inst).result
+                        && let Some(kept) = self.function.instruction(earlier).result
+                    {
+                        self.function.replace_value(result, Operand::Value(kept));
+                    }
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+                // The call has the generation after the write.
+                if self.may_write(inst) {
+                    self.generation += 1;
+                }
+                self.calls.insert(key, (inst, self.generation));
+                continue;
+            }
+            // GEPs by offset.
+            if let Some(key) = self.gep_key(inst) {
+                if let Some(&found) = self.geps.lookup(&key) {
+                    self.combine_flags(inst, found);
+                    if let Some(result) = self.function.instruction(inst).result {
+                        self.function.replace_value(result, found);
+                    }
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+                if let Some(result) = self.function.instruction(inst).result {
+                    self.geps.insert(key, Operand::Value(result));
+                }
+                continue;
+            }
+            // Write back DSE: a store of the value just loaded from there.
+            if self.is_store(inst) {
+                let pointer = pointer.expect("a store has a pointer");
+                if let Some(in_val) = self.loads.lookup(&pointer).copied()
+                    && Some(in_val.def) == self.matching_def(in_val, inst)
+                {
+                    self.remove(inst);
+                    changed = true;
+                    continue;
+                }
+            }
+            // Anything else that writes memory ends what was loaded.
+            if self.may_write(inst) {
+                self.generation += 1;
+                if self.is_store(inst) {
+                    let pointer = pointer.expect("a store has a pointer");
+                    // Two stores to one location with no load between: the
+                    // earlier is dead.
+                    if let Some(earlier) = last_store
+                        && self.overriding_stores(earlier, inst)
+                    {
+                        self.remove(earlier);
+                        changed = true;
+                    }
+                    // The stored value is a live version of the pointer.
+                    self.loads.insert(pointer, LoadValue { def: inst, generation: self.generation, is_load: false });
+                    last_store = (!self.volatile(inst)).then_some(inst);
+                }
+            }
+        }
+        changed
+    }
+
+    /// The instruction `getMatchingValue` finds for the store `mem`, as the
+    /// definition it matches: the load the store writes back.
+    fn matching_def(
+        &mut self,
+        in_val: LoadValue,
+        mem: InstId,
+    ) -> Option<InstId> {
+        let value = self.matching_value(in_val, mem, self.generation)?;
+        let result = self.function.instruction(in_val.def).result?;
+        (value == Operand::Value(result)).then_some(in_val.def)
+    }
+
+    /// `combineMetadataForCSE`: what the loads do not share is dropped from the
+    /// one that stays.
+    fn combine_metadata(
+        &mut self,
+        kept: InstId,
+        removed: InstId,
+    ) {
+        let theirs = self.function.instruction(removed).metadata.clone();
+        let mine = self.function.instruction(kept).metadata.clone();
+        for (kind, node) in mine {
+            if !theirs.iter().any(|(other, same)| *other == kind && *same == node) {
+                self.function.unannotate(kept, &kind);
+            }
+        }
+    }
+
+    /// `EarlyCSE::run`
+    /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1758):
+    /// the dominator tree depth first, a scope for each node.
+    fn run(&mut self) -> bool {
+        let Some(entry) = self.function.entry() else { return false };
+        let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        for &block in self.function.layout() {
+            if let Some(parent) = self.tree.immediate_dominator(block) {
+                children.entry(parent).or_default().push(block);
+            }
+        }
+        struct Frame {
+            block: BlockId,
+            next: usize,
+            current_generation: u32,
+            child_generation: u32,
+            processed: bool,
+        }
+        let mut changed = false;
+        self.enter();
+        let mut stack =
+            vec![Frame { block: entry, next: 0, current_generation: 0, child_generation: 0, processed: false }];
+        while let Some(frame) = stack.last_mut() {
+            self.generation = frame.current_generation;
+            if !frame.processed {
+                let block = frame.block;
+                changed |= self.process_node(block);
+                let frame = stack.last_mut().expect("a frame");
+                frame.child_generation = self.generation;
+                frame.processed = true;
+            } else if frame.next < children.get(&frame.block).map_or(0, Vec::len) {
+                let child = children[&frame.block][frame.next];
+                frame.next += 1;
+                let generation = frame.child_generation;
+                self.enter();
+                stack.push(Frame {
+                    block: child,
+                    next: 0,
+                    current_generation: generation,
+                    child_generation: generation,
+                    processed: false,
+                });
+            } else {
+                self.leave();
+                stack.pop();
+            }
+        }
+        changed
+    }
+}
+
+/// `EarlyCSEPass`
+/// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1809)
+/// with MemorySSA.
+#[derive(Default)]
+pub struct EarlyCse;
+
+impl FunctionPass for EarlyCse {
+    fn name(&self) -> &'static str {
+        "earlycse"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
+            Ok(accesses) => accesses,
+            Err(error) => panic!("earlycse: {error}"),
+        };
+        let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        // MemorySSA describes the function as it is now; the walk changes
+        // `unit.function`, which this copy and the context's copy do not
+        // follow.
+        let before = unit.function.fork();
+        let frozen = unit.context.clone();
+        let view = View::within(&frozen, unit.layout, &before, &outer);
+        let mssa = memoryssa::built(&view, &accesses);
+        let mut walk = Walk {
+            context: unit.context,
+            function: unit.function,
+            view: &view,
+            mssa: Box::new(Manager { mssa, accesses: &accesses }),
+            callees: outer.callees(),
+            tree: &tree,
+            values: Scoped::new(),
+            loads: Scoped::new(),
+            invariants: Scoped::new(),
+            calls: Scoped::new(),
+            geps: Scoped::new(),
+            generation: 0,
+            clobber_counter: 0,
+            gone: Vec::new(),
+        };
+        let changed = walk.run();
+        let gone = std::mem::take(&mut walk.gone);
+        let function = walk.function;
+        for inst in gone.into_iter().rev() {
+            if !function.is_erased(inst) {
+                function.erase(inst).unwrap_or_else(|error| panic!("earlycse: {error}"));
+            }
+        }
+        if changed { PreservedAnalyses::none().preserve::<Dominators>() } else { PreservedAnalyses::all() }
+    }
+}
+
+#[cfg(test)]
+#[path = "earlycse_tests.rs"]
+mod tests;
