@@ -1382,7 +1382,7 @@ pub struct Bounds {
 #[derive(Debug)]
 struct Ground {
     graph: Vec<cfg::Block>,
-    predecessors: BTreeMap<i64, BTreeSet<i64>>,
+    predecessors: llrm_support::graph::Predecessors,
     positions: BTreeMap<i64, usize>,
 }
 

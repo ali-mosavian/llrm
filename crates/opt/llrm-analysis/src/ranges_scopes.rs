@@ -53,7 +53,7 @@ pub(super) struct Solve<'a, 'u> {
     pub unit: &'a Unit<'u>,
     pub facts: &'a IndexMap<ValueId, Known>,
     pub graph: &'a [cfg::Block],
-    pub predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
+    pub predecessors: &'a llrm_support::graph::Predecessors,
     pub positions: &'a BTreeMap<i64, usize>,
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
