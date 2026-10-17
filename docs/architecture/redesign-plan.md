@@ -91,27 +91,30 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 
 `d_faces.c` from the `qbq-llrm` source tree (sha256 over its `.c` and `.h` files `53880fe70961`, `d_faces.c` `1ab72e38cab4`; the same tree for every row), `-m32 -march=i486 -fno-inline-functions`, both compilers; llrm `dist` (fat LTO, one codegen unit) with `CARGO_INCREMENTAL=0`, a fresh target per SHA, one build at a time; `perf stat -e instructions:u,cycles:u`, min of 3, host load about 80 (cycles are soft, instructions are the claim); each run asserts exit 0, an object present and 1 to 3.5 G instructions, because a failed compile is about 8 M. Every row runs with the same environment, `LLRM_EC_COARSE=1` and only the switch under test added. Clang 24.0.0git `d1106deb71cc`: 348.0 / 413.4 / 407.0 M instructions (cycles 451.8 / 440.6 / 366.3 M) at -O1 / -O2 / -Os. Earlier figures from `tools/abmeasure.py` for `d_faces` are suspect: its row could compile nothing. Instructions in M, then x clang:
 
-| row | -O1 | -O2 | -Os | object bytes (-O1 / -O2 / -Os) |
-|---|--:|--:|--:|---|
-| clang 24 | 348.0 | 413.4 | 407.0 | 10,784 / 11,216 / 10,632 |
-| main `9d50a350e` | 1,675.8 (4.8x) | 2,104.1 (5.1x) | 2,191.2 (5.4x) | 7,859 / 8,068 / 7,685 |
-| order branch `acd842c5c` (`alim/spike/sroa-poc`, based on `98921a80e`), no switch | 1,789.3 | 2,254.3 | 2,322.8 | 7,859 / 8,068 / 7,685 |
-| + A (`LLRM_EXP_LLVM=1`, early pass order) | 1,933.3 | 2,084.1 | 2,109.0 | 7,771 / 7,785 / 7,342 |
-| + A + B (`LLRM_EXP_EARLYCSE=real`) | 1,900.6 | 2,043.9 | 2,067.2 | 7,771 / 7,785 / 7,342 |
-| + A + B + C (`LLRM_EXP_DEAD_SLOTS=1`), the landing chain | 1,928.8 | 2,061.8 (5.0x) | 2,173.0 | 7,808 / 7,810 / 7,343 |
-| + A + B + C + `LLRM_EXP_NOFORECAST=1` (experiment, will not land) | 1,747.3 | 1,875.3 (4.5x) | 1,882.6 | 7,783 / 7,785 / 7,326 |
+| row | -O1 | -O2 | -Os | against main at its own base (-O1 / -O2 / -Os) | cycles -O2 (soft, host load ~80) | object bytes |
+|---|--:|--:|--:|---|--:|---|
+| clang 24 | 348.0 | 413.4 | 407.0 | | 440.6 | 10,784 / 11,216 / 10,632 |
+| main `cb2a78038` (identical to `9d50a350e`: no code landed between) | 1,675.8 | 2,104.1 | 2,191.2 |  | 1,448 | 7,859 / 8,068 / 7,685 |
+| order branch `acd842c5c` (based on `98921a80e`), no switch: main at its own base | 1,789.3 | 2,254.3 | 2,322.8 |  | 1,415 | 7,859 / 8,068 / 7,685 |
+| + A (`LLRM_EXP_LLVM=1`, early pass order) | 1,933.3 | 2,084.1 | 2,109.0 | +8.0% / -7.6% / -9.2% | 1,255 | 7,771 / 7,785 / 7,342 |
+| + A + B (`LLRM_EXP_EARLYCSE=real`) | 1,900.6 | 2,043.9 | 2,067.2 | +6.2% / -9.3% / -11.0% | 1,206 | 7,771 / 7,785 / 7,342 |
+| + A + B + C (`LLRM_EXP_DEAD_SLOTS=1`), the landing chain | 1,928.8 | 2,061.8 | 2,173.0 | +7.8% / -8.5% / -6.4% | 1,187 | 7,808 / 7,810 / 7,343 |
+| + A + B + C + `LLRM_EXP_NOFORECAST=1` (experiment, will not land) | 1,747.3 | 1,875.3 | 1,882.6 | -2.3% / -16.8% / -19.0% | 1,395 | 7,783 / 7,785 / 7,326 |
 
-The order branch is based on an older main, so its rows are read against their own no-switch row, not against main. Stacked on the order branch with its switches A + B + C, each PR merged onto a scratch branch (the PRs are untouched), against a control of the order branch merged with main `cb2a78038`, which is the base of the PRs (control, no switch: 1,676.4 / 2,104.9 / 2,192.2; with A + B + C: 1,809.8 / 1,915.1 / 2,058.1):
+Each chain is read against main at its own base (method M: base is the parent). The order branch is based on `98921a80e`; with no switch it is main at that base, and the switches change nothing in it (the object is byte for byte main's). Stacked on `cb2a78038`, the base of the PRs below, with the same switches A + B + C; the first two rows are read against main at `cb2a78038`, the PR rows against the control A + B + C:
 
-| stack | -O1 | -O2 | -Os | against the control (-O2) | objects |
-|---|--:|--:|--:|--:|---|
-| control A + B + C | 1,809.8 | 1,915.1 | 2,058.1 | | 7,808 / 7,810 / 7,343 |
-| + [#2106] (`decide-no-alias`) | 1,802.4 | 1,907.1 | 2,050.2 | -8.0 M (-0.42%) | same |
-| + [#2100] (`indvars-standing`) | 1,871.8 | 2,004.7 | 2,114.6 | not comparable: its base `876fbeb54` is 9 commits older than the control | same |
-| + [#2110] (`coalesce-interval-join`, held) | 1,777.9 | 1,882.8 | 2,015.0 | -32.3 M (-1.69%) | differ: 7,740 / 7,742 / 7,403 |
-| + [#2122] (`instsimplify`, folding Builder) | 1,807.2 | 1,912.5 | 2,055.5 | -2.6 M (-0.14%, inside the noise floor) | same |
+| stack on the control | -O1 | -O2 | -Os | against the control (-O1 / -O2 / -Os) | cycles -O2 (soft) | objects |
+|---|--:|--:|--:|---|--:|---|
+| control: order merged with main `cb2a78038`, no switch | 1,676.4 | 2,104.9 | 2,192.2 | +0.0% / +0.0% / +0.0% | 977 | 7,859 / 8,068 / 7,685 |
+| control, A + B + C: the landing chain on main's base | 1,809.8 | 1,915.1 | 2,058.1 | +8.0% / -9.0% / -6.1% | 844 | 7,808 / 7,810 / 7,343 |
+| + [#2106] (`decide-no-alias`) | 1,802.4 | 1,907.1 | 2,050.2 | -0.4% / -0.4% / -0.4% | 1,750 | 7,808 / 7,810 / 7,343 |
+| + [#2100] (`indvars-standing`): base `876fbeb54` is 9 commits older, not comparable | 1,871.8 | 2,004.7 | 2,114.6 | not comparable | 1,554 | 7,808 / 7,810 / 7,343 |
+| + [#2110] (`coalesce-interval-join`, held) | 1,777.9 | 1,882.8 | 2,015.0 | -1.8% / -1.7% / -2.1% | 1,419 | 7,740 / 7,742 / 7,403 |
+| + [#2122] (`instsimplify`, folding Builder) | 1,807.2 | 1,912.5 | 2,055.5 | -0.1% / -0.1% / -0.1% | 878 | 7,808 / 7,810 / 7,343 |
 
-Reading. A clean main is 5.1x clang at -O2. The landing chain of the order branch is 5.0x at -O2 (-8.5% against its no-switch row) and -6.4% at -Os, but +7.8% at -O1 (1,928.8 against 1,789.3); switch A alone is +8.0% at -O1, -7.6% at -O2 and -9.2% at -Os, and C costs +5.1% at -Os. The experiment without the spill forecast (NOFORECAST) is the largest single drop, -9.0% at -O2 against the landing chain, and is not landing (hoist stays until the LICM translation). The two PRs that change nothing in the object, [#2106] and [#2122], move -O2 by -0.42% and -0.14%. The `unmeasured` cells: m16, `-fexcess-precision=standard` (x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag), the inline-storage stack and [#2119] (an API stub, no effect).
+Reading. Main is 4.8x, 5.1x and 5.4x clang at -O1, -O2 and -Os. The landing chain on main's own base (the control, A + B + C) is 1,915.1 M at -O2, 4.6x clang, which is -9.0% against main at `cb2a78038`, -6.1% at -Os and +8.0% at -O1; on the order branch's older base the same switches give -8.5%, -6.4% and +7.8% against its own no-switch row, so the two bases agree. (An earlier version of this section set 2,061.8 M, the chain on the older base, beside main's 2,104.1 M: a comparison across bases, withdrawn.) Switch A alone is +8.0% at -O1, -7.6% at -O2 and -9.2% at -Os; C costs +5.1% at -Os against A + B. The NOFORECAST experiment is the largest drop, -9.0% at -O2 against the chain, and is not landing (hoist stays until the LICM translation). The PRs that change nothing in the object, [#2106] and [#2122], move -O2 by -0.4% and -0.1%, the second inside the noise floor. Cycles are soft: rows of the same instruction count differ by up to 2x in cycles at this load (the control with A + B + C 844 M, the same plus [#2106] 1,750 M), so no claim rests on them.
+
+The `unmeasured` cells: m16, `-fexcess-precision=standard` (x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag), the inline-storage stack and [#2119] (an API stub, no effect).
 
 ### 2.1 Landed
 
