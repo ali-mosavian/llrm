@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/liveness.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/liveness.rs sha256:8c63cf452ca84a137c1ba0c840a04fe5ff6e3726ae8c4eb5bd7ead490040f5dc -->
+<!-- src: crates/opt/llrm-analysis/src/liveness.rs sha256:503f2f58edd88d11dacb50f75482e1b44c2ed52df704ecfef709ea693b22351e -->
 
 # liveness
 
@@ -17,22 +17,20 @@ the least solution of
  in(B)    = after(B) - phis(B)
 ```
 
-Rather than iterate bit sets over every value, `solved` follows each value
-from where it is read back to where it is made: a worklist of `Out(block,
-value)` and `After(block, value)` facts. A value reaching its defining
-block's ordinary operations stops there; one reaching its defining phi
-continues along each predecessor edge with that edge's arm. The work is the
-size of the live sets, not blocks times values. gcc's
-`calculate_live_on_exit` and LLVM's `LiveVariables` walk from each use too.
-A phi's arm is live out of the predecessor it comes from, not in the phi's
-block.
+`solved` is that fixed point on rows of bits, one row per block and a bit
+for each value a block boundary can carry (a value read in a block it is
+not made in, or taken by a phi): `out` is a union of the successors' rows
+and `after` two word-wise operations, passes over the blocks from the last
+until nothing changes. The work is the blocks times the words of a row times
+the passes; following each value from its reads back to its definition (a
+map lookup and a set insert for each value in each block it is live in, the
+solver that stood here, kept as the oracle `LLRM_CHECK_LIVENESS` holds it
+to) cost ~670 instructions a pair on `joins`. A phi's arm is live out of the
+predecessor it comes from, not in the phi's block.
 
 `live_of` follows only the values it is given (a manager analysis brought up
 to date for what a change named), from their reads, and gives their sets
-alone. `ranges_of` gives the same by value, as sorted lists of blocks; the
-update of the spill model's pressure edits only the values whose blocks moved
-(of the values a pass names nearly all are read where they were).
-A phi's arm is followed through a phi the pass left alone as the model had that phi (live out of its block or not) and the function now reads it, so a touched value names its own arms and not the chain of phis round it (quicksort -O3: 19 values became 108). `LLRM_CHECK_PRESSURE=1` checks each update against a fresh solve.
+alone.
 
 ```text
    B0:  %a = ...                 %a live_out(B0), live_in(B1) (read in B1)
