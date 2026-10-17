@@ -324,3 +324,22 @@ b0:
     );
     assert!(after.contains("alloca") && !after.contains("bitcast"), "{after}");
 }
+
+/// An i32 stored whole and its first byte loaded: the store is cut into a
+/// 1-byte and a 3-byte piece, and the 3-byte piece was an `i24` that isel
+/// refused (tests/run `struct_with_i64`). A store is not cut into a piece
+/// that is not a machine integer.
+#[test]
+fn test_a_store_is_not_cut_into_an_i24() {
+    let after = sroa(
+        "define i8 @f(i32 %x) {
+b0:
+  %a = alloca [4 x i8]
+  store i32 %x, ptr %a
+  %v = load i8, ptr %a
+  ret i8 %v
+}
+",
+    );
+    assert!(!after.contains("i24"), "{after}");
+}

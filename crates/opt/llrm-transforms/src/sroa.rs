@@ -1493,6 +1493,38 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if !sorted {
             slices.slices.sort_by(Slice::order);
         }
+        // DEVIATE: a load or store is not cut into a piece isel has no integer
+        // for (an i24 from a 3-byte piece): it is made unsplittable, which
+        // changes the partitions, until none is.
+        let layout = self.unit.layout;
+        loop {
+            let mut odd: Vec<usize> = Vec::new();
+            for p in partitions(&slices.slices) {
+                for at in (p.first..p.last).chain(p.split_tails.iter().copied()) {
+                    let slice = &slices.slices[at];
+                    if !slice.splittable || (slice.begin >= p.begin && slice.end <= p.end) {
+                        continue;
+                    }
+                    let piece = slice.end.min(p.end) - slice.begin.max(p.begin);
+                    let user = slice.used.expect("a live slice").user;
+                    if !supported_int_size(layout, piece)
+                        && matches!(
+                            self.unit.function.instruction(user).opcode,
+                            Opcode::Load { .. } | Opcode::Store { .. }
+                        )
+                    {
+                        odd.push(at);
+                    }
+                }
+            }
+            if odd.is_empty() {
+                break;
+            }
+            for at in odd {
+                slices.slices[at].splittable = false;
+            }
+            slices.slices.sort_by(Slice::order);
+        }
         // Rewrite each partition.
         for (number, p) in partitions(&slices.slices).iter().enumerate() {
             if self.rewrite_partition(alloca, &slices.slices, &slices.dead_use_if_promotable, p, number).is_some() {
