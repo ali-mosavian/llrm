@@ -1,8 +1,16 @@
 # The profile-guided llrm-c
 
-A build of `llrm-c` guided by a profile of compiling real code takes 15-18% fewer instructions per compile than the `dist` build, with the same
-output bytes. Measured on programs the profile never saw (d_faces, lru, bintree, queens at -O1, -O2 and -Os; the training excluded them):
-instructions -14.6..-18.3%, cycles -6..-18%.
+A build of `llrm-c` guided by a profile of compiling real code takes about 15-18% fewer instructions per compile than the `dist` build, and
+7-13% fewer cycles (user time follows the cycles, not the instructions), with the same output bytes. Measured on programs the profile never
+saw, with the training of this directory's corpus (the repository's own programs, none of these four, no QCport at all); one tree, plain `dist`
+against `dist` with the profile; cycles are the minimum of seven runs alternated with the other binary on a loaded host:
+
+| compile | -O1 instr / cycles | -O2 instr / cycles | -Os instr / cycles |
+|---|---|---|---|
+| d_faces (-m32) | -14.7% / -9.2% | -14.8% / -7.6% | -14.0% / -7.3% |
+| lru | -17.4% / -9.8% | -17.7% / -9.8% | -17.7% / -10.2% |
+| bintree | -16.7% / -11.5% | -17.8% / -11.6% | -18.0% / -13.2% |
+| queens | -16.7% / -11.5% | -18.0% / -11.6% | -18.2% / -12.7% |
 
 The pull request gate and every instruction-count budget stay on the plain build: an algorithmic change is judged the same with or without
 this. The profile-guided build is for the shipped compiler and for the second column of the compile-time scoreboard.
@@ -36,4 +44,4 @@ same bytes (every program and tests/run/c program at each level; the job fails o
 ## Measuring with it
 
 The scoreboard's second column is `DIR/llrm-c` from the command above, run against the plain `dist` llrm-c on the same commit. Report
-instructions (`perf stat -e instructions:u`) as the figure; cycles on a loaded host are noise unless alternated and the minimum of seven.
+instructions (`perf stat -e instructions:u`) as the count and the cycles beside it: the cycles are the smaller gain.
