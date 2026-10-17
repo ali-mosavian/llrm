@@ -484,7 +484,7 @@ pub struct Applied {
 /// `PromoteMemToReg` ([`crate::mem2reg`]). Off by default.
 fn experiment_mem2reg() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_EXP_MEM2REG").is_some())
+    *ON.get_or_init(|| llrm_support::env_set("LLRM_EXP_MEM2REG"))
 }
 
 /// The passes, in order, that `applied` leaves on.

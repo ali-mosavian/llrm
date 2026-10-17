@@ -3,6 +3,7 @@
 //! translation of LLVM's `PromoteMemToReg` and the pass around it
 //! (`PromoteMemoryToRegister.cpp`, `Mem2Reg.cpp` at d1106deb71cc).
 //!
+//! # How it works
 //! Unlike [`crate::promote`], which keeps every store for `dse`, this deletes
 //! what it promotes. The steps of `PromoteMem2Reg::run` are in LLVM's order:
 //! dead allocas, a single store, a single block, then phis at the iterated
@@ -31,9 +32,54 @@
 //! - `simplifyInstruction(PN)` is the phi case of `simplifyPHINode`, local
 //!   until `simplify_phi` of `llrm_mir::simplify` lands.
 //! - `NoSignedZeros` (fast-math flags of the phi): MIR phis carry none.
+//!
+//! # Example
+//! Before (from `test_stores_in_two_arms_make_a_phi_at_the_join`):
+//! ```mir
+//! define i32 @f(i1 %c) {
+//! b0:
+//!   %s = alloca i32
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   store i32 1, ptr %s
+//!   br label %b3
+//!
+//! b2:
+//!   store i32 2, ptr %s
+//!   br label %b3
+//!
+//! b3:
+//!   %x = load i32, ptr %s
+//!   ret i32 %x
+//! }
+//! ```
+//!
+//! After:
+//! ```mir
+//! define i32 @f(i1 %c) {
+//! b0:
+//!   br i1 %c, label %b1, label %b2
+//!
+//! b1:
+//!   br label %b3
+//!
+//! b2:
+//!   br label %b3
+//!
+//! b3:
+//!   %x = phi i32 [ 1, %b1 ], [ 2, %b2 ]
+//!   ret i32 %x
+//! }
+//! ```
+//!
+//! # Used by
+//! [`crate::pipeline`]: the round's `Promote` is swapped for `Mem2Reg` when
+//! `Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
 
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -41,7 +87,6 @@ use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
 use llrm_mir::types::TypeId;
 use llrm_mir::{Constant, ConstantKind, Context};
-use llrm_support::hash::{HashMap, HashSet};
 
 /// The pass: LLVM's `PromotePass` (`Mem2Reg.cpp`).
 pub struct Mem2Reg;
@@ -309,7 +354,7 @@ impl AllocaInfo {
 /// block, numbered once a block. PromoteMemoryToRegister.cpp#L330
 #[derive(Default)]
 struct LargeBlockInfo {
-    numbers: HashMap<InstId, usize>,
+    numbers: IdMap<InstId, usize>,
 }
 
 impl LargeBlockInfo {
@@ -618,12 +663,12 @@ struct PromoteMem2Reg<'a> {
     /// The phis added, by block and alloca (a `BTreeMap`: its order is
     /// deterministic, as the `DenseMap` of LLVM's is).
     new_phi_nodes: std::collections::BTreeMap<(i64, usize), InstId>,
-    phi_to_alloca: HashMap<InstId, usize>,
-    alloca_lookup: HashMap<ValueId, usize>,
+    phi_to_alloca: IdMap<InstId, usize>,
+    alloca_lookup: IdMap<ValueId, usize>,
     alloca_value_types: Vec<Option<TypeId>>,
     /// The variables declared to live in each alloca (`AllocaDPUsers`).
     alloca_variables: Vec<Vec<llrm_mir::MetadataId>>,
-    visited: HashSet<BlockId>,
+    visited: IdSet<BlockId>,
     incoming_vals: VectorWithUndo,
     worklist: Vec<RenamePassData>,
     /// The dominance frontiers, worked out once.
@@ -730,7 +775,7 @@ impl<'a> PromoteMem2Reg<'a> {
             self.alloca_lookup.insert(address, alloca_num);
 
             // The blocks that define the value, and those it is live into.
-            let def_blocks: HashSet<BlockId> = info.defining_blocks.iter().copied().collect();
+            let def_blocks: IdSet<BlockId> = info.defining_blocks.iter().copied().collect();
             let live_in_blocks = self.compute_live_in_blocks(alloca, &info, &def_blocks);
 
             // The blocks that need phis: the iterated dominance frontier of the
@@ -853,8 +898,8 @@ impl<'a> PromoteMem2Reg<'a> {
         &self,
         alloca: InstId,
         info: &AllocaInfo,
-        def_blocks: &HashSet<BlockId>,
-    ) -> HashSet<BlockId> {
+        def_blocks: &IdSet<BlockId>,
+    ) -> IdSet<BlockId> {
         let address = self.function.instruction(alloca).result.expect("an alloca's address");
         let mut worklist: Vec<BlockId> = info.using_blocks.clone();
         // A using block that also defines the value: if the first reference is
@@ -883,7 +928,7 @@ impl<'a> PromoteMem2Reg<'a> {
             at += 1;
         }
         // Their predecessors, until the whole region the value is live in.
-        let mut live_in: HashSet<BlockId> = HashSet::default();
+        let mut live_in: IdSet<BlockId> = IdSet::new();
         while let Some(block) = worklist.pop() {
             if !live_in.insert(block) {
                 continue;
@@ -903,11 +948,11 @@ impl<'a> PromoteMem2Reg<'a> {
     /// and of the phis placed, kept where the value is live.
     fn iterated_frontier(
         &mut self,
-        def_blocks: &HashSet<BlockId>,
-        live_in_blocks: &HashSet<BlockId>,
+        def_blocks: &IdSet<BlockId>,
+        live_in_blocks: &IdSet<BlockId>,
     ) -> Vec<BlockId> {
         let frontiers = self.frontiers.get_or_insert_with(|| self.dominance.frontiers(self.function));
-        let mut work: Vec<i64> = def_blocks.iter().map(|&block| cfg::id(block)).collect();
+        let mut work: Vec<i64> = def_blocks.iter().map(|block| cfg::id(block)).collect();
         let mut placed: std::collections::BTreeSet<i64> = Default::default();
         let mut out = Vec::new();
         while let Some(at) = work.pop() {
