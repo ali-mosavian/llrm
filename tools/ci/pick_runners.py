@@ -36,7 +36,8 @@ def idle_runners(heartbeat: str, now: float) -> int:
 def pick(groups: list[str], heartbeat: str, eligible: bool, now: float, backlog: int = 0, compiler: bool = True) -> dict:
     """The jobs' runners. The perf groups judge the compiler: a change to it runs them on tinytim, always (a job queues there until a runner is
     idle, which is the retry a hosted fallback never had), and any other change does not make them. `small` is the runner of the tiny
-    serial jobs (bench-merge, ci): each re-queues behind every waiting job, 9 minutes apiece on a busy day."""
+    serial jobs (bench-merge, ci): hosted, unless hosted jobs are waiting and a tinytim runner is idle after the perf jobs (they queue behind
+    cost, which takes 12 minutes)."""
     idle = idle_runners(heartbeat, now) if eligible else 0
     perf = [g for g in sorted(groups) if g in PERF] if compiler else []
     out = {g: (TINYTIM if eligible else HOSTED) for g in perf}
@@ -47,7 +48,7 @@ def pick(groups: list[str], heartbeat: str, eligible: bool, now: float, backlog:
         for group in sorted((g for g in groups if g not in PERF), key=lambda g: OVERFLOW_ORDER.index(g) if g in OVERFLOW_ORDER else len(OVERFLOW_ORDER)):
             if idle:
                 out[group], idle = TINYTIM, idle - 1
-    small = TINYTIM if eligible and idle_runners(heartbeat, now) else HOSTED
+    small = TINYTIM if backlog >= OVERFLOW_AT and idle else HOSTED  # behind a 12-minute cost job a 5-second job waited 36 minutes
     jobs = {"build": HOSTED, **out}
     names = {kind: " ".join(j for j, r in jobs.items() if r == where) for kind, where in (("tinytim", TINYTIM), ("hosted", HOSTED))}
     return {

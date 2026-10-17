@@ -799,8 +799,7 @@ pub fn same_bytes(
     // it: the scalar a pass reads and writes through the same address, which
     // every load of N joins asks of every store that reaches it.
     if one.pointer.is_some() && one.pointer == other.pointer && one.width == other.width && one.disp == other.disp {
-        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SAMEBYTES")) {
+        if llrm_support::env_flag!("LLRM_CHECK_SAMEBYTES") {
             assert!(
                 covers(unit, one, other) && covers(unit, other, one),
                 "same_bytes: one pointer, width and displacement are not the same bytes: {one:?} {other:?}"
@@ -1009,6 +1008,8 @@ pub struct MemorySSA<'a> {
     /// over.
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
     taken: std::cell::Cell<usize>,
+    /// Whether a walk stopped at `MAX_WALK_STEPS`.
+    stopped: std::cell::Cell<bool>,
     /// What each pointer asked about is a constant byte offset from.
     offsets: std::cell::RefCell<llrm_mir::dense::IdMap<ValueId, Option<(Operand, i64)>>>,
     /// While a walk is bounded (`nearest_writes`): the most writes it collects
@@ -1023,6 +1024,11 @@ pub struct MemorySSA<'a> {
 /// checks, gcc's value numbering at `sccvn-max-alias-queries-per-access`
 /// (1000).
 pub const MAX_NEAREST_WRITES: usize = 100;
+
+/// Accesses one walk steps over before it answers with the access it stopped
+/// at, as a clobber (LLVM's walker stops at `memssa-check-limit` checks). The
+/// corpus' longest walk is 584 steps; 500 changes no object, 100 changes two.
+pub const MAX_WALK_STEPS: usize = 1000;
 
 impl std::ops::Deref for MemorySSA<'_> {
     type Target = Structure;
@@ -1291,7 +1297,7 @@ impl MemorySSA<'_> {
                                 for byte in *first..*last {
                                     map.insert(key(object.id(), byte), child);
                                 }
-                                if object.addressed {
+                                if object.addressed() {
                                     escaping = Some(child);
                                     if seen_addressed.insert(object.id()) {
                                         index.addressed.push(*object);
@@ -1336,12 +1342,15 @@ impl MemorySSA<'_> {
         edge_memory: Option<&MemRef>,
         honor: bool,
     ) -> BTreeSet<usize> {
+        self.stopped.set(false);
         let found = self.walked(site, memory, boundary, edge, edge_memory, true, honor);
         if check_jumps() {
             let stepped = self.walked(site, memory, boundary, edge, edge_memory, false, honor);
             let cut = self.limit.get().is_some_and(|limit| found.len() > limit && stepped.len() > limit);
+            // A jump skips steps, so the two walks reach the cap at different
+            // places.
             assert!(
-                found == stepped || cut,
+                found == stepped || cut || self.stopped.get(),
                 "LLRM_CHECK_JUMPS: a walk that jumps found other than a walk step by step"
             );
         }
@@ -1424,7 +1433,7 @@ impl MemorySSA<'_> {
                 .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
                 .max_by_key(|found| self.span[*found].0);
             let root = index.root[above];
-            let reaches_others = object.addressed && {
+            let reaches_others = object.addressed() && {
                 let known = index.aliased.borrow().get(&object.id()).copied();
                 known.unwrap_or_else(|| {
                     let found = index
@@ -1528,6 +1537,7 @@ impl MemorySSA<'_> {
             }
             chain.clear();
         };
+        let started = self.taken.get();
         while let Some(current) = pending.pop() {
             if self.limit.get().is_some_and(|limit| found.len() > limit) {
                 break;
@@ -1539,6 +1549,11 @@ impl MemorySSA<'_> {
                 chain.clear();
                 continue;
             };
+            if self.taken.get() - started > MAX_WALK_STEPS {
+                self.stopped.set(true);
+                found.insert(current);
+                break;
+            }
             if jumpable && table[current] != 0 {
                 chain.clear();
                 let end = table[current] as usize - 1;
@@ -1683,6 +1698,7 @@ pub fn built<'a>(
         stamps: Default::default(),
         index: Default::default(),
         taken: Default::default(),
+        stopped: Default::default(),
         offsets: Default::default(),
         limit: Default::default(),
     }

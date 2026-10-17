@@ -378,14 +378,14 @@ impl Scan {
     /// These counts with the instructions in `gone` taken out and those in
     /// `added` put in.
     pub fn after(
-        &self,
+        self,
         gone: &[std::sync::Arc<crate::model::lir::Insn>],
         added: &[std::sync::Arc<crate::model::lir::Insn>],
         registers: &RegisterClasses,
         segments: &Segments,
     ) -> Self {
         let regs = segments.registers;
-        let mut scan = self.clone();
+        let mut scan = self;
         let mut touched = Vec::new();
         for one in gone {
             scan.count(regs, one, false, &mut touched);
@@ -395,6 +395,16 @@ impl Scan {
         }
         scan.classify(touched, registers, segments);
         scan
+    }
+
+    /// Where the counts of `value` are held, for a test that a rewrite's scan
+    /// is edited where it stands and not copied.
+    #[cfg(test)]
+    pub fn counts_address(
+        &self,
+        value: u32,
+    ) -> Option<usize> {
+        self.counts.get(&value).map(|counts| std::ptr::from_ref(counts) as usize)
     }
 
     fn count(

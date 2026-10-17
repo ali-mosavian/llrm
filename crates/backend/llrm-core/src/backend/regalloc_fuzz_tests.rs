@@ -2191,11 +2191,16 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
                             .map(|slot| (crate::analysis::intervals::key(one), *slot))
                     })
                     .collect();
-                Masks::after(&masks, &gone, &patched, segments, &changes)
+                masks.reserve_points(4096);
+                Masks::after(std::mem::take(&mut masks), &gone, &patched, segments, &changes)
             });
             let fresh = _masks(&edited, &patched, segments);
             let found = found.expect("a rewrite of the same shape carries the points");
             assert!(found.same_points(&fresh), "seed {seed}: the points carried differ from a fresh look");
+            // The list is edited where it stands (a copy of it was 5 M
+            // instructions of d_faces -O2 over 195 rewrites): the
+            // room reserved in it is kept.
+            assert!(found.point_capacity() >= 4096, "seed {seed}: the list of points was built again");
             carried += 1;
             masks = found;
             numbering = patched;
@@ -2245,4 +2250,53 @@ fn test_a_trial_that_spills_a_protected_value_stops_there_and_changes_nothing() 
         stopped += cut;
     }
     assert!(stopped > 0, "premise: some trial spilled a value it protects");
+}
+
+/// The set of values that may not be spilled was made again at each of the 206
+/// rebuilds of the allocator's facts in d_faces -O2 (4.1 M instructions),
+/// though it grows only when a spill makes values: a rebuild after a rewrite
+/// that made none keeps it.
+#[test]
+fn test_the_pinned_set_is_kept_by_a_rebuild_that_made_no_unspillable_value() {
+    let shape = Shape { pool: 12, ops: 11 };
+    let (mut facts, mut kept) = (0, 0);
+    for seed in 0..60_u64 {
+        let (body, _) = body(seed, &shape);
+        let cpu = crate::backend::cpu::tuned_exhaustive(&llrm_x86_m16::M16, "386", false, false).expect("a profile");
+        let mut phase = RegAlloc::new(
+            None,
+            None,
+            ProfileOrName::Profile(cpu),
+            &*target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("a phase");
+        let out = phase.transform(body).expect("allocated");
+        facts += out.facts.0.counted("allocator facts built");
+        kept += out.facts.0.counted("pinned set kept");
+    }
+    assert!(facts > 100, "premise: only {facts} rebuilds of the facts");
+    assert!(kept > 0, "none of {facts} rebuilds of the facts kept the pinned set");
+}
+
+/// The counts of what the instructions say of the values were copied whole
+/// at each of the 195 rewrites of d_faces -O2 (6.3 M instructions): a scan made
+/// after a rewrite is the one before it, edited where it stands.
+#[test]
+fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
+    use crate::backend::classes::RegisterClasses;
+    use crate::backend::regclass::Scan;
+    let registers = RegisterClasses::m16();
+    let mut checked = 0;
+    for seed in 0..40_u64 {
+        let (plain, _) = body(seed, &Shape { pool: 10, ops: 14 });
+        let scan = Scan::of(&plain, &registers, &crate::backend::target::BUILT_IN);
+        let values: Vec<u32> = plain.insns().into_iter().flat_map(|one| one.uses.clone()).collect();
+        let Some(&value) = values.first() else { continue };
+        let Some(at) = scan.counts_address(value) else { continue };
+        let moved = scan.after(&[], &[], &registers, &crate::backend::target::BUILT_IN);
+        assert_eq!(moved.counts_address(value), Some(at), "seed {seed}: the counts were copied");
+        checked += 1;
+    }
+    assert!(checked > 10, "premise: only {checked} bodies had counts to compare");
 }

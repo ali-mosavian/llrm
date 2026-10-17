@@ -9,7 +9,7 @@
 use std::process::ExitCode;
 
 #[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() -> ExitCode {
     let mut arguments: Vec<String> = std::env::args().skip(1).collect();
