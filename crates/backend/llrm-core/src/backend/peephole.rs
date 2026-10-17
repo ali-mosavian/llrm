@@ -328,47 +328,79 @@ impl Peephole {
         let body = note("spillforward", &body, spillforward::forwarded(&body));
         let body =
             note("postrasink", &body, crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body)));
-        let body = note("storecombine", &body, storecombine::combined(&body));
-        let body = note("pushed_constants", &body, pushed_constants(self.rules, &body));
+        let body = if skip("storecombine") { body } else { note("storecombine", &body, storecombine::combined(&body)) };
+        let body = if skip("pushed_constants") {
+            body
+        } else {
+            note("pushed_constants", &body, pushed_constants(self.rules, &body))
+        };
         let body = note("pushes", &body, pushes(self.rules, &body, &self.cpu));
         let body = note("constants", &body, constants(&body));
         let body = note("commuted", &body, commuted(self.rules, &body));
         let body = note("transferred", &body, transferred(self.rules, &body));
         let body = note("high_extracts", &body, high_extracts(&body, &self.cpu)?);
-        let body = note("restored_copies", &body, restored_copies(self.rules, &body));
+        let body = if skip("restored_copies") {
+            body
+        } else {
+            note("restored_copies", &body, restored_copies(self.rules, &body))
+        };
         let body = note("shuttles", &body, shuttles(self.rules, &body));
         let body = note("overwritten", &body, overwritten(&body));
         let body = note("fused", &body, fused(self.rules, &body));
-        let body = note("fused_calls", &body, fused_calls(self.rules, &body));
+        let body = if skip("fused_calls") { body } else { note("fused_calls", &body, fused_calls(self.rules, &body)) };
         let body = note("far_loads", &body, far_loads(self.rules, &body));
-        let before = body.clone();
-        let body = note(
-            "exact_addresses",
-            &before,
-            gated(&mut seen, needs::EXACT_CELL, body, |body| {
-                crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
-            })?,
-        );
+        let body = if skip("exact_addresses") {
+            body
+        } else {
+            let before = body.clone();
+            note(
+                "exact_addresses",
+                &before,
+                gated(&mut seen, needs::EXACT_CELL, body, |body| {
+                    crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
+                })?,
+            )
+        };
         let body = note("addresses", &body, addresses(&body, &self.cpu)?);
         let body = note("stepped_after_compare", &body, stepped_after_compare(self.rules, &body));
-        let before = body.clone();
-        let body = note(
-            "secondary_bases",
-            &before,
-            gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?,
-        );
+        let body = if skip("secondary_bases") {
+            body
+        } else {
+            let before = body.clone();
+            note(
+                "secondary_bases",
+                &before,
+                gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?,
+            )
+        };
         let body = note("increments", &body, increments(self.rules, &body));
         let body = note("borrows", &body, borrows(self.rules, &body));
         let body = note("doubled", &body, doubled(self.rules, &body, &self.cpu)?);
-        let body = note("narrowed_arithmetic", &body, narrowed_arithmetic(self.rules, &body));
+        let body = if skip("narrowed_arithmetic") {
+            body
+        } else {
+            note("narrowed_arithmetic", &body, narrowed_arithmetic(self.rules, &body))
+        };
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            let body = note("upperzero_hoisted", &body, crate::backend::upperzero::hoisted(&body));
-            let body = note("widened_moves", &body, widened_moves(self.rules, &body));
+            let body = if skip("upperzero_hoisted") {
+                body
+            } else {
+                note("upperzero_hoisted", &body, crate::backend::upperzero::hoisted(&body))
+            };
+            let body = if skip("widened_moves") {
+                body
+            } else {
+                note("widened_moves", &body, widened_moves(self.rules, &body))
+            };
             let body = note("zero_extensions", &body, zero_extensions(self.rules, &body));
-            let before = body.clone();
-            note("copyprop2", &before, gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?)
+            if skip("copyprop2") {
+                body
+            } else {
+                let before = body.clone();
+                note("copyprop2", &before, gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?)
+            }
         } else {
             body
         };
@@ -380,7 +412,7 @@ impl Peephole {
         let body = note("tested", &body, tested(self.rules, &body));
         let body = note("compares_again", &body, compares_again(&body));
         let body = note("zero_compares", &body, zero_compares(self.rules, &body));
-        let body = note("waits", &body, waits(&body));
+        let body = if skip("waits") { body } else { note("waits", &body, waits(&body)) };
         let body = note("machinedce", &body, machinedce::eliminated(body.clone()));
         let body = note("popped_arguments", &body, popped_arguments(&body, &self.cpu)?);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
@@ -400,16 +432,43 @@ impl Peephole {
     }
 }
 
+/// `LLRM_PEEPHOLE_SKIP=a,b`: sub-passes left out (a spike's ablation).
+fn skip(name: &str) -> bool {
+    static LIST: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    LIST.get_or_init(|| std::env::var("LLRM_PEEPHOLE_SKIP").unwrap_or_default().split(',').map(str::to_owned).collect())
+        .iter()
+        .any(|one| one == name)
+}
+
 /// `LLRM_PEEPHOLE_STEPS`: what each sub-pass did to the body (a spike's
-/// counter).
+/// counter): changed, instructions added, memory operands added, instructions
+/// rewritten in place.
 fn note(
     name: &str,
     before: &LirBody,
     after: LirBody,
 ) -> LirBody {
     if llrm_support::env_flag!("LLRM_PEEPHOLE_STEPS") {
-        let (was, now) = (before.insns().len() as i64, after.insns().len() as i64);
-        eprintln!("[peephole-step] {name} {} {}", u8::from(*before != after), now - was);
+        let memory = |body: &LirBody| {
+            body.insns()
+                .iter()
+                .filter_map(|one| one.what.as_ref())
+                .flat_map(|what| what.dests.iter().chain(&what.sources))
+                .filter(|place| matches!(place, crate::model::ir::Loc::Mem(_)))
+                .count() as i64
+        };
+        let (was, now) = (before.insns(), after.insns());
+        let rewritten = if was.len() == now.len() {
+            was.iter().zip(&now).filter(|(one, other)| one != other).count() as i64
+        } else {
+            -1
+        };
+        eprintln!(
+            "[peephole-step] {name} {} {} {} {rewritten}",
+            u8::from(*before != after),
+            now.len() as i64 - was.len() as i64,
+            memory(&after) - memory(before),
+        );
     }
     after
 }
