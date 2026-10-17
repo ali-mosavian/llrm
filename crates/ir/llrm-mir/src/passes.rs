@@ -77,6 +77,7 @@ pub(crate) fn counted(
     what: &'static str,
     hit: bool,
 ) {
+    crate::counts::analysis(what, hit);
     if let Some(observer) = OBSERVER.get() {
         (observer.count)(what, hit);
     }
@@ -2311,6 +2312,7 @@ impl PassManager {
                     );
                     running
                 }) {
+                    let _running = crate::counts::pass_run(name, 0);
                     spanned(name, || pass.run(program, analyses))?;
                 }
                 for (at, module) in program.modules.iter_mut().enumerate() {
@@ -2391,7 +2393,9 @@ impl PassManager {
                     if !bisected(name, "the module") {
                         continue;
                     }
+                    let running = crate::counts::pass_run(name, 0);
                     let changed = spanned(name, || pass.run(module, analyses));
+                    drop(running);
                     if !changed.is_empty() {
                         let mut preserved = PreservedAnalyses::none();
                         if !pass.adds_memory_operations() {
@@ -2437,6 +2441,7 @@ impl PassManager {
                 }
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
+                let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
                         pass.run(
@@ -2452,6 +2457,7 @@ impl PassManager {
                         )
                     })
                 });
+                drop(running);
                 let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
