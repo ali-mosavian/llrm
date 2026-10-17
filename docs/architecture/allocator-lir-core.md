@@ -26,6 +26,25 @@ LLVM's greedy is 39.5 M for the same bodies. The cost per decision, not the numb
 
 ## 3. My half: the LIR model and the facts
 
+### 3.0 The backend invariants, and what this half moves toward
+
+LLVM's allocator is cheap per decision because of five invariants of the machine function. Where llrm stands, measured or read in the code:
+
+| LLVM invariant | llrm today | this half |
+|---|---|---|
+| `SlotIndexes` edited in place: an inserted instruction takes a slot between its neighbours, nothing renumbers | `Indexes::patch`: kept instructions keep their slots, found by comparing the two bodies (4.6 M); `GAP` spacing exists | moves toward: 3.1 and 3.2 feed it an edit record and per-block versions instead of a comparison |
+| `LiveIntervals` edited in place (`LiveRangeEdit`, `SplitEditor`: extend, shrink, new vregs only) | `LiveRanges::edit` swaps in intervals recomputed from occurrences for the touched values; 52% come out unchanged | works around: the recompute stays (avoidable at most 11 M, and 56% of changed segments are propagated); not in this design (3.4) |
+| instructions with stable handles, use lists maintained by the editor | `Insn::id()` is stable and never reused; occurrences are the thread-local `postings`, brought up to date by comparing blocks (18 M in the facts stages) | moves toward: 3.2 (the editor, not a comparison, says what changed) |
+| passes work on dirty regions | the allocator's tables are updated for touched values; 195 of 206 builds are updates; the LIR clean-up visits every block (96.5% idle, plan 3.4) | moves toward: 3.3, tables O(touched) |
+| preserved sets per machine pass | none: what a body's facts hold is let go at a phase's end ([#2027]) | not addressed; the facts store is per function, not per pass |
+
+### 3.0.1 The vertical slice that proves it
+
+Before 3.1 to 3.3 are built in full, one slice on one function family, `d_faces`' largest function (`D_DRAW_FACES`, 1,980 instructions): thread the spiller's edit record into `Facts::of` for three stages (widths, hints, siblings) and the postings, with per-block versions on the blocks the spiller rewrote. Measure the instructions per facts update on that function (today about 340 K averaged over the file, to be measured on this function alone).
+
+- Pass: the three stages and the postings read cost at most 4 x touched values + 1 K, and the update total falls by 40% or more.
+- Kill: under 20% fall, or the record cannot be made at the edit without a body comparison in the splitter. Then the representation work stops at what [#2038] did, and the allocator's cost is recorded as decisions (plan 3.3, "no effect").
+
 What is left of `Facts::of` is not a missing update. Per update (195, bodies of 1,543 instructions, 10.6 touched values, 13 changed instructions) it still costs 340 K instructions, 220 per body instruction, because several stages read the body or a whole table to find what changed.
 
 ### 3.1 The edit record
