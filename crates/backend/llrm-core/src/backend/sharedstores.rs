@@ -133,7 +133,7 @@ pub fn shared(
         .iter()
         .map(|block| {
             let dead = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
-            let flags_dead_out = flags_out.get(&block.at).is_some_and(|lanes| lanes.is_empty());
+            let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(|lanes| lanes.is_empty());
             let flags_dead = _flags_dead_after(regs, body.bits, block, flags_dead_out);
             let mut insns: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
             let mut at = 0;
