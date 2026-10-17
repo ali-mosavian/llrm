@@ -2,7 +2,7 @@
 
 TL;DR: translate `TargetTransformInfo` with `BasicTTIImpl` (the generic profile `opt` uses without a triple)
 and `X86TTIImpl` (the i486 scalar subset) once, in `llrm-analysis`, for InlineCost, the SCEV expander, lsr, unroll
-and loop-idiom. Owner: cgscc-poc. Source: LLVM d1106deb71cc, `~/scratch/llvm-src`.
+and loop-idiom. Owner: cgscc-poc. Source: llvm-project at d1106deb71cc.
 
 ## Source map (llvm/)
 
