@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:8a33566f3785729dd83c9d83e5561e84b9e4fe650f08a18fc278266da04e15d4 -->
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:2b0600f4723dfb7ba248fed08f47df0f2324a5a3cc4df44fd820b56a48a2d6c3 -->
 
 # coalesce
 
@@ -44,22 +44,23 @@ of graph and 13.9 M of intervals built before the first copy was looked
 at, 55.2 M against 18.5 M for the whole pass.
 
 ## LLVM structure, and what is not translated
-LLVM's `RegisterCoalescer` ([`RegisterCoalescer.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp))
+LLVM's `RegisterCoalescer`
+([`RegisterCoalescer.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp))
 orders the copies by loop depth, then split edges, then CFG degree
-(`copyCoalesceInMBB`, L4058), joins by `joinCopy` (L2054) over `LiveIntervals`
-with `JoinVals` (L3154-L3222) giving values that are copies of each other
-one number, and retries deferred copies until nothing changes (L4286-L4321).
-This follows the order of the worklist (depth, then frequency) and the
-overlap test with its same-value exception. It deviates, each until the
-`liveness` module's `LiveRange` lands (`regalloc-core`'s translation of
-`LiveInterval.cpp`): no `VNInfo`s, so the same-value rule is the one case
-`JoinVals` finds by value number (a width-equal copy starting the only
-shared run); no `CoalescerPair` classification of physical, sub-register and
-virtual joins (pins and palettes stand in); no `ConflictResolution`
-(`CR_Keep/Erase/Replace/Merge/Unresolved`), no lane masks or sub-ranges;
-no deferral and retry (a refused copy is not tried again after later
-joins); no `removeCopyByCommutingDef`, `reMaterializeTrivialDef` or
-`LargeIntervalSizeThreshold`.
+(`copyCoalesceInMBB`, L4058), joins by `joinCopy` (L2054) over
+`LiveIntervals` with `JoinVals` (L3154-L3222) giving values that are copies
+of each other one number, and retries deferred copies until nothing changes
+(L4286-L4321). This follows the order of the worklist (depth, then
+frequency) and the overlap test with its same-value exception. It deviates,
+each until the `liveness` module's `LiveRange` lands (`regalloc-core`'s
+translation of `LiveInterval.cpp`): no `VNInfo`s, so the same-value rule is
+the one case `JoinVals` finds by value number (a width-equal copy starting
+the only shared run); no `CoalescerPair` classification of physical,
+sub-register and virtual joins (pins and palettes stand in); no
+`ConflictResolution` (`CR_Keep/Erase/Replace/Merge/Unresolved`), no lane
+masks or sub-ranges; no deferral and retry (a refused copy is not tried
+again after later joins); no `removeCopyByCommutingDef`,
+`reMaterializeTrivialDef` or `LargeIntervalSizeThreshold`.
 
 ## Example
 A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
