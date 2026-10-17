@@ -33,6 +33,23 @@ pub fn compare(
     let (joined, why, parent) = shadow(body, pinned, segments, classes);
     let mut report: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let (mut copies, mut ours_n, mut theirs_n) = (0, 0, 0);
+    // A copy whose source is one run that ends where the destination's starts:
+    // a temporary that dies in the copy.
+    let trivial: BTreeSet<usize> = {
+        let live = ranges::intervals_afresh(body);
+        body.blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .filter_map(|one| {
+                let (into, out_of) = _copy(one)?;
+                let (a, b) = (live.get(&into)?, live.get(&out_of)?);
+                let temp = |x: &ranges::Interval, y: &ranges::Interval| {
+                    x.segments.len() == 1 && y.segments.iter().any(|s| s.start == x.segments[0].end)
+                };
+                (temp(b, a) || temp(a, b)).then_some(ranges::key(one))
+            })
+            .collect()
+    };
     for (key, mine) in ours {
         copies += 1;
         let theirs = joined.get(key).copied().unwrap_or(false);
@@ -46,8 +63,41 @@ pub fn compare(
             (false, true) => {
                 let reason = refused.iter().find(|(k, _)| k == key).map_or("unknown", |(_, w)| *w);
                 *report.entry(format!("extra:{reason}")).or_default() += 1;
+                if trivial.contains(key) {
+                    *report.entry("extra-temp".to_owned()).or_default() += 1;
+                }
             }
             _ => {}
+        }
+    }
+    if llrm_support::env_flag!("LLRM_COALESCE_SHADOW_DETAIL") {
+        let index = ranges::indexed(body);
+        let live = ranges::intervals_afresh(body);
+        let mut shown = 0;
+        for block in &body.blocks {
+            for (at, one) in block.insns.iter().enumerate() {
+                let key = ranges::key(one);
+                let extra = ours.get(&key) == Some(&false) && joined.get(&key) == Some(&true);
+                if !extra || shown >= 3 || !refused.iter().any(|(k, w)| *k == key && *w == "colourability") {
+                    continue;
+                }
+                shown += 1;
+                let slot = index.at[&key];
+                let pair = _copy(one).expect("a copy");
+                let crowd =
+                    live.values().filter(|i| i.segments.iter().any(|s| s.start <= slot && slot < s.end)).count();
+                let span = |v: u32| {
+                    live[&v].segments.iter().map(|s| format!("[{},{})", s.start, s.end)).collect::<Vec<_>>().join("")
+                };
+                eprintln!(
+                    "[coalesce-shadow-detail] block {:#x} insn {at} slot {slot} copy v{} := v{}; live values at the copy: {crowd}",
+                    block.at, pair.0, pair.1
+                );
+                eprintln!("   v{} {}   v{} {}", pair.0, span(pair.0), pair.1, span(pair.1));
+                for around in block.insns.iter().skip(at.saturating_sub(3)).take(7) {
+                    eprintln!("     {:?} <- {:?}", around.defines, around.uses);
+                }
+            }
         }
     }
     let insns: usize = body.blocks.iter().map(|block| block.insns.len()).sum();
