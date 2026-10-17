@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "crates/target/llrm
 sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "target").glob("*/vsgcc"))))  # wrap.py: the comparison with gcc and clang's
 
 import cpulimit  # noqa: E402
+import precision  # noqa: E402
 import benchlist  # noqa: E402
 import basecounts  # noqa: E402
 import shards  # noqa: E402
@@ -187,8 +188,9 @@ def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | 
 def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     """The flags the harness gives the compiler for `variant` at -`opt`: the kernel stays a call (inlined into main it has no entry to
     count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one (a private SUB called once) by turning
-    called-once inlining off too. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it."""
-    flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    called-once inlining off too. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
+    LLRM_EXCESS_PRECISION=standard adds -fexcess-precision=standard (tools/precision.py: the float rows measured against clang)."""
+    flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split(), *precision.flags()]
     if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
         flags.append("-fno-inline-functions-called-once")
     return flags
