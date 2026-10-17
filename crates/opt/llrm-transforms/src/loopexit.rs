@@ -142,11 +142,13 @@ impl FunctionPass for LoopExit {
             unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
         let bounded =
             widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let renew = llrm_analysis::manager::renewal(analyses);
         let mut standing = match bounded.as_deref() {
-            Some(Ok(bounds)) => Standing::held_with(&registers, bounds),
-            _ => Standing::held(&registers),
+            Some(Ok(bounds)) => Standing::held_with(&registers, bounds, renew),
+            _ => Standing::held(&registers, renew),
         };
-        match evaluated_with(unit.context, unit.layout, unit.function, analyses.outer(), &mut standing) {
+        match evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing) {
             Ok(true) => PreservedAnalyses::none(),
             Ok(false) => PreservedAnalyses::all(),
             Err(error) => panic!("loopexit: {error}"),
@@ -170,9 +172,10 @@ pub fn evaluated(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
-    outer: &Outer,
+    analyses: &mut Analyses,
 ) -> Result<bool, String> {
-    evaluated_with(context, layout, function, outer, &mut Standing::underived())
+    let outer = std::rc::Rc::clone(analyses.outer());
+    evaluated_with(context, layout, function, &outer, &mut Standing::unheld(llrm_analysis::manager::renewal(analyses)))
 }
 
 /// `evaluated`, what is known of the body without memory given as `standing`

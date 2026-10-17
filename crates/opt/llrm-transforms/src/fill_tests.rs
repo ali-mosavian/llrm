@@ -18,10 +18,11 @@ fn fill(
     let before = parsed(&format!("{DOS}{text}"));
     let mut module = before.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
     let callees = llrm_mir::memory::callees(&module);
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = filled(context, &layout, &callees, function, &outer, &mut declared, false);
+    let changed = filled(context, &layout, &callees, function, &mut analyses, &mut declared, false);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     (after, changed)
@@ -826,10 +827,11 @@ fn a_loop_of_two_adjacent_fills_is_one_memset_of_both() {
     let before = parsed(&format!("{DOS}{}", adjacent_fills(7)));
     let mut module = before.clone();
     let (layout, outer) = (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
     let callees = llrm_mir::memory::callees(&module);
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = filled(context, &layout, &callees, function, &outer, &mut declared, false);
+    let changed = filled(context, &layout, &callees, function, &mut analyses, &mut declared, false);
     let after = printed(&module);
     assert!(changed, "{after}");
     assert_eq!(after.matches("call void @llvm.memset").count(), 1, "{after}");

@@ -19,8 +19,9 @@ use crate::testing::{parsed, printed, results};
 /// @f evaluated; whether anything changed.
 fn evaluate(module: &mut Module) -> bool {
     let (layout, outer) = (layout(module), Outer::of(module, None));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
     let (context, function) = module.function_mut("f").expect("@f");
-    evaluated(context, &layout, function, &outer).unwrap()
+    evaluated(context, &layout, function, &mut analyses).unwrap()
 }
 
 /// `text` evaluated: its printed form, whether it changed, and how many
@@ -230,4 +231,33 @@ b3:
         let (after, changed, _) = evaluated_text(&text, PAIRS);
         assert!(changed && !after.contains("ret i16 %s"), "{after}");
     }
+}
+
+/// Each loop evaluated made `Standing` derive what is known of the body from
+/// nothing to look at the next. The manager brings what it holds up to date
+/// from the changes logged: its own first derivation is the one from nothing.
+#[test]
+fn test_loopexit_does_not_derive_the_registers_from_nothing_for_each_loop_it_evaluates() {
+    let loops = 4;
+    let mut text = String::from("define i16 @f() {\nb0:\n  br label %h0\n\n");
+    for k in 0..loops {
+        let (from, next) = (
+            if k == 0 { "b0".to_owned() } else { format!("e{}", k - 1) },
+            if k + 1 == loops { "end".to_owned() } else { format!("h{}", k + 1) },
+        );
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %s{k} = phi i16 [ 0, %{from} ], [ %t{k}, %l{k} ]\n  %c{k} = icmp uge i16 %i{k}, 4\n  br i1 %c{k}, label %e{k}, label %l{k}\n\nl{k}:\n  %t{k} = add i16 %s{k}, %i{k}\n  %n{k} = add i16 %i{k}, 1\n  br label %h{k}\n\ne{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text += &format!("end:\n  ret i16 %s{}\n}}\n", loops - 1);
+    let mut module = parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::LoopExit);
+    let before = llrm_analysis::consts::scratch_derivations();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let derived = llrm_analysis::consts::scratch_derivations() - before;
+    assert_eq!(
+        derived, 1,
+        "what is known of the body was derived from nothing {derived} times for {loops} loops (the manager's, once)"
+    );
 }

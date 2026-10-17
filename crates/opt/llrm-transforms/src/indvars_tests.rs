@@ -25,14 +25,14 @@ use crate::testing::{f, managed, parsed, printed, results};
 fn through(
     text: &str,
     inputs: &[&[i128]],
-    change: impl FnOnce(&mut Context, &DataLayout, &mut Function, &Analyses) -> bool,
+    change: impl FnOnce(&mut Context, &DataLayout, &mut Function, &mut Analyses) -> bool,
 ) -> (bool, Module) {
     let mut module = parsed(text);
     let before = (printed(&module), results(&module, inputs));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let analyses = Analyses::new(Rc::new(outer));
+    let mut analyses = Analyses::new(Rc::new(outer));
     let (context, function) = module.function_mut("f").expect("@f");
-    let changed = change(context, &layout, function, &analyses);
+    let changed = change(context, &layout, function, &mut analyses);
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before.1, "{after}");
     assert_eq!(changed, after != before.0, "{after}");
@@ -172,7 +172,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
         for callee in names {
             let (context, function) = module.function_mut(&callee).expect("a body");
             let before = counts(context, &layout, function, &outer);
-            if !rewound(context, &layout, function, &analyses.fresh(), 1, &later) {
+            if !rewound(context, &layout, function, &mut analyses.fresh(), 1, &later) {
                 continue;
             }
             fired += 1;
@@ -221,7 +221,7 @@ b3:
 
 fn widening(text: &str) -> (bool, String) {
     let (changed, module) = through(text, &[&[0], &[1], &[7], &[64]], |context, layout, function, analyses| {
-        super::widened(context, layout, function, analyses.outer())
+        super::widened(context, layout, function, analyses)
     });
     (changed, printed(&module))
 }
@@ -273,12 +273,13 @@ fn a_signed_counter_extended_to_the_index_width_is_that_wide() {
 fn a_signed_counter_of_a_loop_that_unroll_may_take_is_widened_only_late() {
     let text = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 3");
     let early = through(&text, &[&[0], &[1]], |context, layout, function, analyses| {
+        let outer = Rc::clone(analyses.outer());
         super::widened_with(
             context,
             layout,
             function,
-            analyses.outer(),
-            &mut llrm_analysis::memory::Standing::underived(),
+            &outer,
+            &mut llrm_analysis::memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
             Some(16),
         )
     });
@@ -288,12 +289,13 @@ fn a_signed_counter_of_a_loop_that_unroll_may_take_is_widened_only_late() {
     // A loop of many trips is widened at once.
     let long = clearing_signed("e-p:32:32-n8:16:32").replace("icmp slt i16 %i, %n", "icmp slt i16 %i, 40");
     let first = through(&long, &[&[0], &[1]], |context, layout, function, analyses| {
+        let outer = Rc::clone(analyses.outer());
         super::widened_with(
             context,
             layout,
             function,
-            analyses.outer(),
-            &mut llrm_analysis::memory::Standing::underived(),
+            &outer,
+            &mut llrm_analysis::memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
             Some(16),
         )
     });
@@ -390,9 +392,10 @@ done:
 ";
     let mut module = parsed(text);
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::new(outer));
     let (context, function) = module.function_mut("f").expect("@f");
     let before = llrm_analysis::consts::register_derivations();
-    assert!(!super::widened(context, &layout, function, &outer), "nothing to widen");
+    assert!(!super::widened(context, &layout, function, &mut analyses), "nothing to widen");
     assert!(
         llrm_analysis::consts::register_derivations() - before <= 1,
         "{} derivations for three loops",

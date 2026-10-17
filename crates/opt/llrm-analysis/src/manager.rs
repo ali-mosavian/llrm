@@ -1340,6 +1340,27 @@ impl Analysis for TableLoads {
     }
 }
 
+/// What `memory::Standing` asks to have the registers of a body its caller has
+/// changed: the manager brings what it holds up to date from the changes logged
+/// (keeping the dominators and loops while the blocks and edges stand), where
+/// deriving them from nothing walks the whole body. The pass must return what
+/// it preserved as none (or the dominators and loops alone).
+pub fn renewal(
+    analyses: &mut Analyses
+) -> impl FnMut(&Context, &DataLayout, &Function, bool) -> Rc<crate::memory::Knowns> + '_ {
+    |context, layout, function, reshaped| {
+        let kept = if reshaped {
+            llrm_mir::passes::PreservedAnalyses::none()
+        } else {
+            llrm_mir::passes::PreservedAnalyses::none()
+                .preserve::<llrm_mir::passes::Dominators>()
+                .preserve::<llrm_mir::passes::Loops>()
+        };
+        analyses.invalidate(function, &kept);
+        analyses.get::<Registers>(context, layout, function)
+    }
+}
+
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
