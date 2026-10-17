@@ -20,6 +20,9 @@ pub mod signbits;
 
 pub use query::{AssumptionCache, Query};
 
+#[cfg(test)]
+mod range_tests;
+
 /// One column of `examples/vtdump.rs`: ` name=answer`.
 pub fn column(
     query: &Query,
@@ -34,6 +37,8 @@ pub fn column(
         "p2z" => power2::column(query, value, true),
         "cru" => range::column(query, value, false),
         "crs" => range::column(query, value, true),
+        "sp" => range::pattern_column(query, value),
+        "ov" => range::overflow_column(query, value),
         other => format!(" {other}=?"),
     }
 }
