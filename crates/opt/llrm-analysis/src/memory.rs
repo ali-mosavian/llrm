@@ -1538,6 +1538,7 @@ impl<'h> Standing<'h> {
 /// The allocas of `unit`'s function whose address is exposed, in one pass: what
 /// `object_of` reads of `Unit::exposed` instead of asking each alloca's uses.
 pub fn exposed_frames(unit: &Unit) -> BTreeSet<ValueId> {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ExposedFrames);
     crate::frameescape::exposed_allocas(unit.function, |inst| is_lifetime_marker(unit, inst))
 }
 
