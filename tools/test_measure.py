@@ -1,5 +1,6 @@
 """measure.py: a rise past tolerance against the merge-base's measurement fails, nothing the branch does touches a shared file."""
 import importlib
+import importlib.util
 import os
 import subprocess
 import sys
@@ -14,6 +15,12 @@ sys.path.insert(0, str(HERE))
 measure = importlib.import_module("measure")
 # The general limits: the rows the user accepted a rise on are tested apart.
 TOL = {name: limit for name, limit in measure.tolerances().items() if name != "accepted"}
+
+
+@pytest.fixture(autouse=True)
+def room(monkeypatch):
+    """The tests build into a temporary directory: whatever is free there is not what they are about."""
+    monkeypatch.setenv("LLRM_MIN_FREE_GB", "0")
 
 
 def made(compile=None, axes=None, passes=None):
@@ -728,3 +735,74 @@ def test_the_base_is_built_beside_the_head_not_after_it(monkeypatch):
         assert base_started.wait(5), "the head was built before the base had started"
 
     assert measure.check(1, "origin/main", build=build, head_dir=head) == 0
+
+
+def test_the_bench_base_is_built_the_release_way_whatever_the_measurement_profile_is(tmp_path, monkeypatch):
+    """#2013's bench shards: 'FAIL BASE: the base could not be measured': the bench's base needs every tool of the release build, and `built` gave it llrm-c
+    of the dist profile alone."""
+    ran = []
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    monkeypatch.setattr(measure, "BUILD", tmp_path)
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "checked_out", lambda sha, tree, source=None: tmp_path)
+    monkeypatch.setattr(measure.subprocess, "run", lambda command, **kw: ran.append(command) or subprocess.CompletedProcess(command, 0, "", ""))
+    monkeypatch.setenv("LLRM_MEASURE_BASE_BIN", str(tmp_path / "dist-base"))
+    assert measure.built("0" * 40, "release") == tmp_path / "snapshots" / ("release" + "0" * 12), "the dist base handed over is not the bench's"
+    assert ran == [["bash", "-c", measure.gate.MEASURE_BUILD]]
+
+
+def test_the_bench_asks_for_a_release_base(monkeypatch):
+    spec = importlib.util.spec_from_file_location("bench_tool", HERE / "bench" / "bench.py")
+    bench = importlib.util.module_from_spec(spec)
+    sys.modules["bench_tool"] = bench  # its dataclasses look their module up
+    spec.loader.exec_module(bench)
+
+    seen = []
+    monkeypatch.setattr(measure, "built", lambda sha, profile=None: seen.append(profile) or Path("/b"))
+    monkeypatch.setattr(measure, "git", lambda *a, **k: "f" * 40)
+    monkeypatch.setattr(measure, "base_of", lambda head, ref: "e" * 40)
+    monkeypatch.setattr(bench.basecounts, "base_counts", lambda sha, opts, tree_of, build, measure_with, timed, only=None: (build(sha), {}) and ({}, {}))
+    bench.base_rows(type("A", (), {"opt": ["O2"], "work": Path("/w"), "time": False})())
+    assert seen == ["release"]
+
+
+def test_the_gates_own_links_of_the_release_build_are_not_the_measured_compiler(monkeypatch, tmp_path):
+    """#2013's cost job: 'target/gate-bins is not a dist build': the gate sets LLRM_BIN to its links for every step."""
+    built = []
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    monkeypatch.setattr(measure, "ensure_dist", lambda env=None: built.append(1) or tmp_path / "dist")
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "gate-bins"))
+    measure.use_dist()
+    assert os.environ["LLRM_BIN"] == str(tmp_path / "dist") and built == [1]
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "snapshots" / ("dist" + "a" * 12)))
+    measure.use_dist()
+    assert os.environ["LLRM_BIN"].endswith("a" * 12) and built == [1], "a dist directory is kept"
+
+
+def test_a_cost_run_whose_base_or_head_is_not_the_dist_build_fails_loudly_not_measures_the_wrong_thing(tmp_path, monkeypatch):
+    """#2013: the head was the gate's release links. Either side of a dist measurement in another profile is an error naming it, never a number."""
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    monkeypatch.setattr(measure, "CACHE", tmp_path / "cache")
+    monkeypatch.setattr(measure, "stored", lambda sha, which: None)
+    monkeypatch.delenv("LLRM_BIN", raising=False)
+    # the head: LLRM_BIN is a release directory
+    monkeypatch.setenv("LLRM_BIN", str(tmp_path / "release"))
+    with pytest.raises(SystemExit, match="release is not a dist build"):
+        measure.measure_all(1)
+    # the base: the prebuilt directory CI hands over is a release one
+    monkeypatch.delenv("LLRM_BIN")
+    monkeypatch.setenv("LLRM_MEASURE_BASE_BIN", str(tmp_path / "release-base"))
+    with pytest.raises(SystemExit, match="release-base is not a dist build"):
+        measure.base_measurement("e" * 40, 1)
+    # and the dist ones are accepted as far as the check of the profile goes
+    assert measure.measured_dir({"LLRM_BIN": str(tmp_path / "dist-base")}).name == "dist-base"
+
+
+def test_a_build_with_too_little_room_fails_with_the_free_space_and_the_limit(tmp_path, monkeypatch):
+    """/home was 100% full on tinytim and every build failed with a linker error nobody could read."""
+    monkeypatch.delenv("LLRM_MIN_FREE_GB")
+    monkeypatch.setattr(measure.shutil, "disk_usage", lambda path: type("U", (), {"free": 5 * 2**30})())
+    with pytest.raises(SystemExit, match=r"5 GB free under .*, 100 needed"):
+        measure.require_space(tmp_path / "not" / "made" / "yet")
+    monkeypatch.setenv("LLRM_MIN_FREE_GB", "4")
+    measure.require_space(tmp_path)

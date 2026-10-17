@@ -157,8 +157,27 @@ def ensure_dist(env: dict | None = None) -> Path:
     env = os.environ if env is None else env
     found = llrmbin.target_dir(env) / "dist"
     if not (found / "llrm-c").is_file() or llrmbin.stale_binaries(found):
+        require_space(found)
         subprocess.run(["bash", "-c", MEASURE_BUILDS["dist"]], cwd=ROOT, env={k: v for k, v in env.items() if k != "LLRM_BIN"}, check=True)
     return found
+
+
+def require_space(where: Path, minimum_gb: float | None = None) -> None:
+    """A build here needs room: /home filled up on tinytim (858 MB free) and every session's build failed. LLRM_MIN_FREE_GB (default 100)."""
+    need = float(os.environ.get("LLRM_MIN_FREE_GB") or 100) if minimum_gb is None else minimum_gb
+    probe = where
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free = shutil.disk_usage(probe).free / 2**30
+    if free < need:
+        raise SystemExit(f"measure: {free:.0f} GB free under {probe}, {need:.0f} needed to build (LLRM_MIN_FREE_GB): delete your old build trees and targets")
+
+
+def use_dist() -> None:
+    """LLRM_BIN is the dist directory, whatever it was: the gate sets it to its own links of the release build for every step (target/gate-bins),
+    and a binary of another profile is refused by `measured_dir`, not measured. A dist LLRM_BIN (a snapshot, a stored base) is kept."""
+    if PROFILE == "dist" and not Path(os.environ.get("LLRM_BIN", "")).name.startswith("dist"):
+        os.environ["LLRM_BIN"] = str(ensure_dist())
 
 
 def measure_all(jobs: int) -> dict:
@@ -257,13 +276,16 @@ def snapshot(release: Path, sha: str, kind: str = "") -> Path:
     return into
 
 
-def built(sha: str) -> Path:
+def built(sha: str, profile: str | None = None) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment) while holding the build lock, and
-    its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it."""
-    if prebuilt := os.environ.get("LLRM_MEASURE_BASE_BIN"):  # CI builds the base in a job of its own, beside the head's
+    its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it. `profile` is the
+    measurement's (dist: llrm-c alone); the bench's base needs every tool of the release build."""
+    profile = profile or PROFILE
+    if prebuilt := profile == "dist" and os.environ.get("LLRM_MEASURE_BASE_BIN"):  # CI builds the base in a job of its own, beside the head's
         return Path(prebuilt)
     with locked("build"):
         BUILD.mkdir(parents=True, exist_ok=True)
+        require_space(BUILD)
         (BUILD / ".used").touch()
         if BUILD.parent == BUILDS:
             for tree in pruned(BUILDS, BUILD, BUILD_CAP):
@@ -271,10 +293,10 @@ def built(sha: str) -> Path:
         tree = checked_out(sha, BUILD / "tree")
         env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
         env.pop("LLRM_BIN", None)
-        done = subprocess.run(["bash", "-c", MEASURE_BUILDS[PROFILE]], cwd=tree, env=env, capture_output=True, text=True)
+        done = subprocess.run(["bash", "-c", MEASURE_BUILDS[profile]], cwd=tree, env=env, capture_output=True, text=True)
         if done.returncode:
             raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
-        return snapshot(BUILD / "target" / PROFILE, sha, PROFILE)
+        return snapshot(BUILD / "target" / profile, sha, profile)
 
 
 SYSTEM_BUILD = f"env -u RUSTFLAGS cargo build {'--profile dist' if PROFILE == 'dist' else '--release'} -q --bin llrm-c --features system-alloc"
@@ -652,7 +674,7 @@ def main() -> int:
         print(ensure_dist())
         return 0
     if args.command == "check":
-        return check(args.jobs, args.base, head_dir=lambda: os.environ.setdefault("LLRM_BIN", str(ensure_dist())) if PROFILE == "dist" else None)
+        return check(args.jobs, args.base, head_dir=use_dist)
     if args.command == "compare":
         return compare(*args.rest)
     if args.command == "creep":
