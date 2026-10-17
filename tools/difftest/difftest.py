@@ -32,7 +32,9 @@ sys.path.insert(0, str(HERE.parent))
 import envguard  # noqa: E402
 
 INPUTS = Path(os.environ.get("LLRM_DIFFTEST_INPUTS") or Path.home() / "scratch/replay/inputs")
-LLVM_BIN = Path(os.environ.get("LLVM_BIN") or (Path.home() / "scratch/llvm-build/bin" if (Path.home() / "scratch/llvm-build/bin/opt").is_file() else "/usr/lib/llvm-20/bin"))
+PINNED_BIN = Path.home() / "scratch/llvm-build/bin"  # LLVM 24.0.0git d1106deb71cc, the reference of every comparison
+# A different LLVM only by name: the distro's opt (20.1.8) is not the compiler the plan is judged against.
+LLVM_BIN = Path(os.environ.get("LLVM_BIN") or PINNED_BIN)
 
 # llrm pass -> the opt pipeline that does its work. Many to one where llrm splits what LLVM does in one (instcombine = fold + algebraic + phiopt);
 # a pass with no counterpart is listed, not compared. instcombine runs without its fixpoint check: an input llrm's passes left in a form it takes two

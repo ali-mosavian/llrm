@@ -165,3 +165,16 @@ def test_a_run_with_a_check_switch_nobody_named_is_refused_before_it_replays(mon
     monkeypatch.setattr(difftest, "manifest", lambda *a, **k: [])
     with pytest.raises(AssertionError, match="replayed"):
         difftest.main()
+
+
+def test_llvm_bin_defaults_to_the_pinned_build_never_the_distros(monkeypatch):
+    """difftest fell back to /usr/lib/llvm-20 when the pinned opt was missing: tables from LLVM 20.1.8 under the name of the plan's 24.0.0git."""
+    import importlib
+
+    monkeypatch.delenv("LLVM_BIN", raising=False)
+    fresh = importlib.reload(difftest)
+    try:
+        assert fresh.LLVM_BIN == fresh.PINNED_BIN
+    finally:
+        monkeypatch.undo()
+        importlib.reload(difftest)

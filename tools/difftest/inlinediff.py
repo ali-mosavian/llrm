@@ -98,11 +98,18 @@ def compare(before: str, after: str, pipeline: str = "inline", threshold: int | 
     return {"pipeline": pipeline, "threshold": threshold, "sites": sum(was.values()), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
 
 
+def opt_header() -> str:
+    version = subprocess.run([str(difftest.LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
+    return f"opt: {difftest.LLVM_BIN / 'opt'} ({version})"
+
+
 def table(report: dict, examples: int = 6) -> str:
     totals = collections.Counter()
     for key, n in report["by_class_and_size"].items():
         totals[key.split("|")[0]] += n
     out = [
+        opt_header(),
+        "",
         f"### inlining: llrm against `opt -passes={report['pipeline']}`" + (f" -inline-threshold={report['threshold']}" if report["threshold"] is not None else ""),
         "",
         f"sites {report['sites']}: agree {totals['agree']}, llrm-only {totals['llrm-only']}, llvm-only {totals['llvm-only']}",
