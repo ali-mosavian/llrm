@@ -8,7 +8,7 @@
 
 ## Status
 
-As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions were renamed on 2026-10-17: pass-list-parity is inline-storage-combine, ssa-spill-m16 regalloc-quadratics, hoist-bounded walker-caps, keep-analyses facts-per-query, objectref-identity identity-s0-done, greedy-port lsr-gvn-split, attrs-budgets trace-recorder, edit-rollback edit-contract-replay.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are simplifycfg-poc (after #2046 and #2050 merge). Unchanged: keep-analyses (facts-per-query), gate-dist-build, plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
@@ -20,6 +20,11 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | S5 block-local dataflow | ssa-spill-m16 | KILLED ([#2043]) | -14.8 M but +0.36% bytes |
 | S6 edit core | edit-rollback | measured; kill not met on `loop` only | `move_to` 925 M of 997.9 M primitives at N=1600 (4.32%) |
 | S7 caps and pricing | hoist-bounded, greedy-port | running | forecast 2.6% / 4.9% |
+| body-size factors per pass | indvars-decide-poc | measured ([#1994 comment](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237686443), [second](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237749851)) | per-pass factors against LLVM, see the comments |
+| fold numbers POC | fold-poc | measured | 19x to 10.1x of LLVM charged |
+| dse POC | dse-poc | measured | 13x LLVM per IR instruction; fact set plus walk step 3,440 instructions against a target of about 300 |
+| lsr probe | indvars-decide-poc | KILLED | forecast kept; DEVIATE, 425 objects differ |
+| mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
