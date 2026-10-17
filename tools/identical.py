@@ -27,6 +27,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(VSGCC))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpora  # noqa: E402
 import programs  # noqa: E402
 import wrap  # noqa: E402
 
@@ -152,12 +154,16 @@ def main() -> int:
     parser.add_argument("--no-bench", action="store_true", help="leave out the bench harness's own compiles")
     parser.add_argument("--show", type=int, default=20, help="how many differing objects to name")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
+    parser.add_argument("--allow-other-corpus", action="store_true", help="read a QCport tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     if not args.stale_ok:
         why = stale(args.old, args.old_head, "OLD") or stale(args.new, args.new_head, "NEW")
         if why:
             sys.exit(f"identical: {why}; rebuild it, or say --old-head/--new-head, or --stale-ok")
     qcport, headers = os.environ.get("QCPORT"), os.environ.get("QCPORT_INC")
+    if qcport and not args.programs_only:
+        qcport = str(corpora.resolve("qcport", qcport, args.allow_other_corpus))
+        print(corpora.header("qcport", qcport))
     with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
         work = Path(tmp)
         files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)
