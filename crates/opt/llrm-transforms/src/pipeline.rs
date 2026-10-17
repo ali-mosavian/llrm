@@ -450,7 +450,7 @@ impl Options {
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
-            "gvn" | "equalcalls" => self.forward && self.drop_loads,
+            "gvn" | "equalcalls" | "earlycse" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
@@ -489,6 +489,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(fold::Fold),
         // Before anything asks what a port call does to memory.
         Box::new(ports::Ports),
+        Box::new(gvn::EarlyCse),
         Box::new(decide::Decide),
         // gcc runs phiopt at -O1 and above (opts.cc:609); it is priced in bytes
         // at -Os.

@@ -241,6 +241,65 @@ impl FunctionPass for EqualCalls {
     }
 }
 
+/// LLVM's EarlyCSE: what is the same value on every path, served by one walk
+/// down the dominator tree and no MemorySSA walk, early, so that the numbering
+/// that prices spills runs on the smaller body. It prices nothing and merges
+/// only what is certainly one value.
+#[derive(Default)]
+pub struct EarlyCse;
+
+impl FunctionPass for EarlyCse {
+    fn name(&self) -> &'static str {
+        "earlycse"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let accesses = match Accesses::managed(unit.context, unit.layout, unit.function, analyses) {
+            Ok(accesses) => accesses,
+            Err(error) => panic!("earlycse: {error}"),
+        };
+        let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        let forwarding = transform::Forwarding::new(true);
+        let crossed = std::cell::Cell::new(false);
+        let blocks = unit.function.layout().len();
+        let mut edit = || -> Result<bool, String> {
+            let mut function = unit.function.fork();
+            let forwarded = transform::forwarded(
+                unit.context,
+                unit.layout,
+                &mut function,
+                &outer,
+                &accesses,
+                &registers,
+                &shape,
+                false,
+                &forwarding,
+                &crossed,
+            )?;
+            let subexpressed =
+                transform::subexpressions(&mut function, &accesses, false, Some(outer.program()), &crossed)?;
+            let called = transform::equal_calls(&mut function, &silent(unit.context, &outer))?;
+            let changed = forwarded || subexpressed || called;
+            if changed {
+                unit.function.adopt(function);
+            }
+            Ok(changed)
+        };
+        match edit() {
+            Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
+            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok(false) => PreservedAnalyses::all(),
+            Err(error) => panic!("earlycse: {error}"),
+        }
+    }
+}
+
 /// Number values, reuse dominating providers, and complete join PRE;
 /// whether anything changed. `outer` is what the analyses read of the
 /// module and target, `accesses` what each instruction of `unit` touches,

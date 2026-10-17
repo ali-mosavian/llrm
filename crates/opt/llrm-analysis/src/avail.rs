@@ -314,6 +314,15 @@ impl Scope<'_> {
         &mut self,
         write: &MemRef,
     ) {
+        if std::env::var_os("LLRM_EC_COARSE").is_some() {
+            // A write kills every cell held, as EarlyCSE's generation does.
+            for at in 0..self.entries.len() {
+                if self.entries[at].alive && !self.entries[at].cell.unwritable() {
+                    self.kill(at);
+                }
+            }
+            return;
+        }
         let reached: Vec<usize> = match Self::frame(write) {
             Some(frame) => self.buckets.get(&frame).into_iter().flatten().chain(self.wild.iter()).copied().collect(),
             None => (0..self.entries.len()).collect(),
