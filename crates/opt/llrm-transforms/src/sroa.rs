@@ -34,8 +34,6 @@
 //!   (`ConstantFolder`); `fold` does that after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
-//! - `promoteAllocas` (L6414) runs [`crate::mem2reg::Mem2Reg`], which promotes
-//!   every promotable alloca of the entry block, not only the ones listed.
 
 use std::cmp::Ordering;
 
@@ -64,6 +62,7 @@ impl FunctionPass for Sroa {
         true
     }
 
+    /// SROAPass::run. SROA.cpp#L6490
     fn run(
         &mut self,
         unit: &mut passes::Unit,
@@ -131,6 +130,7 @@ fn size_equals_store_size(
 
 /// `commonAlignment(A, Offset)`: the alignment `offset` bytes into something
 /// aligned by `align`.
+/// `commonAlignment` (Alignment.h).
 fn common_alignment(
     align: u64,
     offset: u64,
@@ -196,6 +196,7 @@ struct Slice {
 impl Slice {
     /// `Slice::operator<` (L564): begin ascending, unsplittable before
     /// splittable, end descending.
+    /// Slice::operator<. SROA.cpp#L564
     fn order(
         &self,
         other: &Slice,
@@ -219,6 +220,8 @@ struct AllocaSlices {
 }
 
 /// The constant value of an index operand, signed.
+/// `GEPOperator::accumulateConstantOffset`, as `adjustOffsetForGEP`
+/// (PtrUseVisitor.cpp) uses it.
 fn constant_index(
     context: &Context,
     operand: Operand,
@@ -405,10 +408,12 @@ struct Partition {
 }
 
 impl Partition {
+    /// Partition::size. SROA.cpp#L767
     fn size(&self) -> u64 {
         self.end - self.begin
     }
 
+    /// Partition::empty. SROA.cpp#L774
     fn is_empty(&self) -> bool {
         self.first == self.last
     }
@@ -416,6 +421,7 @@ impl Partition {
 
 /// `AllocaSlices::partitions()` (L992) with `partition_iterator::advance`
 /// (L837), each partition in turn.
+/// AllocaSlices::partitions. SROA.cpp#L992
 fn partitions(slices: &[Slice]) -> Vec<Partition> {
     let se = slices.len();
     let mut p = Partition::default();
@@ -525,6 +531,7 @@ fn strip_aggregate_type_wrapping(
 }
 
 /// `StructLayout::getElementContainingOffset`.
+/// `StructLayout::getElementContainingOffset` (DataLayout.cpp).
 fn element_containing_offset(
     offsets: &[u64],
     offset: u64,
@@ -789,7 +796,6 @@ struct State<'a, 'b, 'c> {
 
 /// What `AllocaSliceRewriter` carries from slice to slice (L2811).
 struct Rewriter {
-    old_ai: InstId,
     new_ai: InstId,
     new_ai_value: ValueId,
     new_alloca_begin: u64,
@@ -832,6 +838,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// The allocas a debug record names (DEVIATE: left alone).
+    /// DEVIATE: `findDVRDeclares` (SROA.cpp#L6160) is not migrated; the alloca
+    /// stays.
     fn declared_allocas(&self) -> HashSet<InstId> {
         self.function()
             .debug_records()
@@ -898,12 +906,21 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if self.promotable_allocas.is_empty() {
             return false;
         }
-        self.promotable_allocas.clear();
-        crate::mem2reg::Mem2Reg.run(self.unit, self.analyses);
+        let allocas = std::mem::take(&mut self.promotable_allocas);
+        let outer = std::rc::Rc::clone(self.analyses.outer());
+        crate::mem2reg::promote_mem_to_reg(
+            self.unit.context,
+            self.unit.layout,
+            outer.callees(),
+            self.unit.function,
+            &allocas,
+        );
         true
     }
 
     /// `isInstructionTriviallyDead`: nothing uses it and it does nothing else.
+    /// `isInstructionTriviallyDead` (Local.cpp), used as SROA.cpp#L3445
+    /// `deleteIfTriviallyDead` does.
     fn is_trivially_dead(
         &self,
         inst: InstId,
@@ -933,6 +950,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         unused && pure
     }
 
+    /// `PoisonValue::get`.
     fn poison_of(
         &mut self,
         ty: TypeId,
@@ -1208,7 +1226,6 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let int_ty =
             widen.then(|| self.unit.context.types.int(layout.size_bits(&self.context().types, partition_ty) as u32));
         let mut rewriter = Rewriter {
-            old_ai: alloca,
             new_ai,
             new_ai_value: self.function().instruction(new_ai).result.expect("an alloca has a result"),
             new_alloca_begin: p.begin,
@@ -1253,6 +1270,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     // ---- the rewriter ----------------------------------------------------
 
     /// `AllocaSliceRewriter::visit` (L2906).
+    /// AllocaSliceRewriter::visit. SROA.cpp#L2906
     fn visit_slice(
         &mut self,
         rewriter: &mut Rewriter,
@@ -1275,6 +1293,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// A new instruction before `at`, its result as an operand.
+    /// The `IRBuilderTy IRB` (SROA.cpp#L2864) insertion at the user.
     fn build(
         &mut self,
         at: InstId,
@@ -1458,6 +1477,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         common_alignment(self.new_ai_align(rewriter), rewriter.new_begin - rewriter.new_alloca_begin)
     }
 
+    /// `NewAI.getAlign()`, SROA.cpp#L3468.
     fn new_ai_align(
         &self,
         rewriter: &Rewriter,
@@ -1483,6 +1503,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// The metadata of `from` where `to` reads the same bytes.
+    /// `copyMetadataForLoad` / `copyMetadata` (SROA.cpp#L3523, L3556).
     fn copy_metadata(
         &mut self,
         from: InstId,
@@ -1642,6 +1663,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// The instruction after `inst` in its block.
+    /// `std::next(LI.getIterator())`, SROA.cpp#L3573
     fn next_instruction(
         &self,
         inst: InstId,
@@ -1744,6 +1766,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// `Value::stripInBoundsOffsets` to an alloca of the entry block.
+    /// `Value::stripInBoundsOffsets` (Value.cpp), as SROA.cpp#L3679 uses it.
     fn strip_in_bounds_offsets(
         &self,
         operand: Operand,
@@ -1812,6 +1835,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     }
 
     /// The leaves of `ty` as (indices, type) in order.
+    /// `OpSplitter::emitSplitOps` (L4370) walks the same leaves. SROA.cpp#L4370
     fn leaves(
         &self,
         ty: TypeId,
@@ -1836,6 +1860,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
 
     /// The pointer to the leaf at `indices` of `base_ty` through `pointer`, and
     /// its byte offset.
+    /// `OpSplitter` GEPIndices (L4349) and `emitFunc`. SROA.cpp#L4429
     fn leaf_pointer(
         &mut self,
         at: InstId,

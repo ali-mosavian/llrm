@@ -12,7 +12,7 @@ use llrm_mir::passes::PassManager;
 fn histogram(module: &Module) -> BTreeMap<&'static str, usize> {
     let mut found = BTreeMap::new();
     for (_, global, function) in module.functions() {
-        if global.name.as_deref() != Some("pipeline.body") {
+        if global.name.as_deref() != Some("pipeline.body") && std::env::var_os("SROA_POC_ALL").is_none() {
             continue;
         }
         for (_, inst) in function.walk() {
@@ -32,6 +32,18 @@ fn sroa_promote(module: &mut Module) {
 fn mem2reg(module: &mut Module) {
     let mut manager = PassManager::default();
     manager.add(llrm_transforms::mem2reg::Mem2Reg);
+    manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
+}
+
+fn sroa_real(module: &mut Module) {
+    let mut manager = PassManager::default();
+    manager.add(llrm_transforms::sroa::Sroa);
+    manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
+}
+
+fn sroa_only(module: &mut Module) {
+    let mut manager = PassManager::default();
+    manager.add(llrm_transforms::promote::Sroa);
     manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
 }
 
@@ -58,6 +70,8 @@ fn main() {
             "ours" => ours(&mut module),
             "sroa-promote" => sroa_promote(&mut module),
             "mem2reg" => mem2reg(&mut module),
+            "sroa-real" => sroa_real(&mut module),
+            "sroa-leaf" => sroa_only(&mut module),
             other => panic!("mode {other}"),
         }
         work += llrm_support::debug::work() - before;
