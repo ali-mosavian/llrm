@@ -623,7 +623,7 @@ pub fn reduced(
         // found in the whole.
         match unit.function.touched_since(before).filter(|_| clean) {
             Some(touched) => {
-                let checking = llrm_support::env_set("LLRM_CHECK_DEAD_FROM");
+                let checking = llrm_support::env_flag!("LLRM_CHECK_DEAD_FROM");
                 let full = checking.then(|| {
                     let mut copy = unit.function.clone();
                     dead::dead(unit.context, outer.callees(), &mut copy);
