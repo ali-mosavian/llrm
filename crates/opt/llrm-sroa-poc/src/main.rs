@@ -29,6 +29,12 @@ fn sroa_promote(module: &mut Module) {
     manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
 }
 
+fn mem2reg(module: &mut Module) {
+    let mut manager = PassManager::default();
+    manager.add(llrm_transforms::mem2reg::Mem2Reg);
+    manager.run_module(module, Rc::new(llrm_mir::target::Neutral)).expect("the pipeline runs");
+}
+
 fn ours(module: &mut Module) {
     let mut manager = PassManager::default();
     manager.add(llrm_transforms::promote::Sroa);
@@ -51,9 +57,16 @@ fn main() {
             "none" => {}
             "ours" => ours(&mut module),
             "sroa-promote" => sroa_promote(&mut module),
+            "mem2reg" => mem2reg(&mut module),
             other => panic!("mode {other}"),
         }
         work += llrm_support::debug::work() - before;
+        // `SROA_POC_OUT=DIR`: the answer is written beside the others, for a
+        // diff.
+        if let Some(out) = std::env::var_os("SROA_POC_OUT") {
+            let name = std::path::Path::new(&path).file_name().expect("a file name");
+            std::fs::write(std::path::Path::new(&out).join(name), llrm_mir::print::module(&module)).expect("written");
+        }
         for (name, count) in histogram(&module) {
             *total.entry(name).or_default() += count;
         }
