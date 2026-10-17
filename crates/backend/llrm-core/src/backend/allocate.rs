@@ -846,6 +846,7 @@ pub fn live_rows_by(
     body: &LirBody,
     keep: impl Fn(u32) -> bool,
 ) -> LiveRows {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::LiveRows);
     // Each value is followed from where it occurs up the predecessors to where
     // it is written, so the work is the size of the live ranges and not the
     // blocks times the values (gcc's `calculate_live_on_exit`, LLVM's
@@ -1573,6 +1574,89 @@ pub fn rewritten(
     _allocated(body, pinned, unspillable, protected, None, cpu, segments, classes, Some((frame, splitting)))
 }
 
+thread_local! {
+    /// How many allocations the translated greedy allocator made, and in how
+    /// many it fell back to this one (a range it could not place).
+    static GREEDY_RUNS: std::cell::Cell<(usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// `rewritten` by the translated greedy allocator (`crate::greedy`): it decides
+/// which values to spill and where the rest go; the spill code is written by
+/// this module's emitter (`spiller::spilled_from`) and the new, short values
+/// are placed in the next round. Falls back to `rewritten` where the greedy
+/// allocator cannot place a range.
+pub fn greedy_rewritten(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    unspillable: Option<&BTreeSet<u32>>,
+    protected: Option<&BTreeSet<u32>>,
+    cpu: ProfileOrName<'_>,
+    segments: &Segments,
+    classes: &RegisterClasses,
+    frame: &mut Frame,
+    splitting: bool,
+) -> Result<(Assignment, LirBody, BTreeSet<u32>), Error> {
+    const ROUNDS: usize = 24;
+    let profile = targets::profile(cpu.clone()).map_err(Error::Value)?;
+    let none = IndexMap::default();
+    let pins = pinned.unwrap_or(&none);
+    let empty = BTreeSet::new();
+    let mut unspill: BTreeSet<u32> = unspillable.cloned().unwrap_or_default();
+    unspill.extend(protected.unwrap_or(&empty).iter().copied());
+    let mut current = body.clone();
+    let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
+    let mut floor = splitkit::_next_value(&current);
+    for _round in 0..ROUNDS {
+        if current.blocks.iter().any(|block| !block.phis.is_empty()) {
+            break;
+        }
+        let facts =
+            Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &current,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspill,
+        };
+        let Some(decided) = crate::greedy::shadow::decide(&inputs, true) else { break };
+        if decided.report.stats.failed > 0 {
+            break;
+        }
+        let to_spill: BTreeSet<u32> = decided.spilled.iter().copied().collect();
+        if to_spill.is_empty() {
+            GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+            let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
+            return Ok((
+                Assignment {
+                    r#where,
+                    spilled: BTreeSet::new(),
+                    cost: 0.0,
+                    optimal: false,
+                    why: "llvm greedy".to_owned(),
+                },
+                current,
+                spilled_all,
+            ));
+        }
+        let (moved, made) = spiller::spilled_from(&current, &to_spill, Some(frame), floor, classes)?;
+        floor = floor.max(splitkit::_next_value(&moved));
+        unspill.extend(made);
+        spilled_all.extend(to_spill);
+        current = moved;
+    }
+    GREEDY_RUNS.with(|runs| runs.set((runs.get().0, runs.get().1 + 1, runs.get().2)));
+    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+        eprintln!("greedy fallback: {}", body.name);
+    }
+    rewritten(body, pinned, unspillable, protected, cpu, segments, classes, frame, splitting)
+}
+
+/// (allocations the greedy allocator made, allocations it left to this one).
+pub fn greedy_runs() -> (usize, usize) {
+    GREEDY_RUNS.with(|runs| (runs.get().0, runs.get().1))
+}
+
 /// What the allocator knows of a body, recomputed whenever it rewrites it.
 struct Facts {
     index: Arc<Indexes>,
@@ -2002,6 +2086,36 @@ fn _allocated(
         Facts::of(&body, profile, segments, classes, &unspillable, protected, &Frequency::of(&body), None, None);
     if let Some(why) = unallocatable(&facts, pinned.unwrap_or(&IndexMap::default()), &unspillable, segments, classes) {
         return Err(Unplaced(why).into());
+    }
+    if llrm_support::env_flag!("LLRM_SHADOW_GREEDY") {
+        let none = IndexMap::default();
+        let pins = pinned.unwrap_or(&none);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &body,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspillable,
+        };
+        if let Some(report) = crate::greedy::shadow::run(&inputs) {
+            eprintln!(
+                "shadow-greedy {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} failed {} reloads {} stores {} folded {} sig {:x}",
+                body.name,
+                report.values,
+                report.stats.dequeued,
+                report.stats.assigned,
+                report.stats.evicted,
+                report.stats.waited,
+                report.stats.spilled_ranges,
+                report.stats.new_queued,
+                report.stats.last_chance,
+                report.stats.failed,
+                report.reloads,
+                report.stores,
+                report.folded,
+                report.signature
+            );
+        }
     }
     // Every value this allocation has known: a new one is numbered above them.
     let mut floor = splitkit::_next_value(&body);
@@ -3878,6 +3992,7 @@ impl RegAlloc {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, Error> {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::Allocations);
         let regs = body.regs();
         let prepare = llrm_support::debug::span("regalloc prepare");
         if self.frame.is_none() {
@@ -4004,7 +4119,8 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocated = rewritten(
+            let allocate = if llrm_support::env_flag!("LLRM_GREEDY") { greedy_rewritten } else { rewritten };
+            let allocated = allocate(
                 candidate,
                 Some(&pins),
                 Some(unspillable),

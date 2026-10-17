@@ -354,9 +354,9 @@ pub fn subexpressions(
     for (&value, &with) in &swap {
         function.replace_value(value, with);
     }
-    for inst in gone {
-        function.erase(inst)?;
-    }
+    // Each block is rewritten once: erasing k of the n instructions of a block
+    // one at a time is O(kn).
+    function.erase_all(&gone.into_iter().collect::<Vec<_>>())?;
     Ok(true)
 }
 
@@ -1546,6 +1546,26 @@ b4:
                 );
             }
         }
+    }
+
+    /// The equal loads of a block of N went one at a time, each erase taking
+    /// the block's list apart to find it: 351 M of 2.7 G on 800 statements
+    /// (mem), 13% of the compile. They go together.
+    #[test]
+    fn test_equal_loads_are_erased_with_one_scan_of_the_block() {
+        let mut text = String::from(
+            "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
+        );
+        for k in 0..100 {
+            text += &format!("  %l{k} = load i16, ptr %i\n  %m{k} = add i16 %l{k}, %n\n");
+        }
+        text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
+        let mut module = parsed(&text);
+        let before = llrm_mir::edit::instructions_scanned();
+        subexpressions_of(&mut module);
+        let scanned = llrm_mir::edit::instructions_scanned() - before;
+        assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
+        assert!(scanned <= 4 * 210, "{scanned} instructions scanned to erase 99 loads of a block of 210");
     }
 
     /// A block of N loads of one slot with a store to another between each
