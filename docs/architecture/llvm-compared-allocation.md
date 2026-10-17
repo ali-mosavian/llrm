@@ -138,7 +138,70 @@ LLVM does not make small allocations. It keeps the few elements inline ([`SmallV
 5. Build the CFG tables once per body version (`cfg::graph` 108,796, `DominatorTree::new` 34,406, `LoopInfo::new` 30,876, `cfg::natural` 30,346; 523,311 in CFG builders, 13.9%): share the successor lists of `cfg::Shape`. Saving: unmeasured.
 6. Memory-SSA and alias tables dense: `memoryssa::structure_of` 36,340 blocks, 28.9 MB; see lazy memory facts in the proposals.
 
-Dependencies are a decision for the owner; changes 2, 4, 5 and 6 need none.
+### The same changes in Rust
+
+`Cargo.lock` has `indexmap` and `rustc-hash` and none of `smallvec`, `arrayvec`, `bumpalo` or `typed-arena`; llrm's own dense containers are `IdSet`, `IdMap` and `Bits` ([`dense.rs`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/dense.rs#L37)).
+
+**Inline operands** (`smallvec`, `SmallVector`'s counterpart: inline up to N, spills to the heap beyond):
+
+```rust
+// crates/ir/llrm-mir/src/module.rs
+use smallvec::SmallVec;
+
+pub struct Instruction {
+    pub operands: SmallVec<[Operand; 3]>,
+    // ...
+}
+const _: () = assert!(std::mem::size_of::<Instruction>() <= 128); // bound to be set from the measured size
+```
+
+`SmallVec` derefs to a slice, so `.operands.as_slice()`, `iter()` and indexing are unchanged; construction sites change from `vec![..]` to `smallvec![..]`. Three slots because printed MIR has at most 3 comma-separated operands in 98.9% of `d_faces` instructions (counted from the stage dump; type arguments are counted too, so the true share is higher). Without the dependency: a local `Inline<T, const N: usize>` of `[MaybeUninit<T>; N]` and a length, spilling to `Vec`.
+
+**Successors without a block** (std only):
+
+```rust
+pub fn successors(&self, block: BlockId) -> impl Iterator<Item = BlockId> + '_ {
+    let operands = self.terminator(block).map_or(&[][..], |one| self.instruction(one).operands.as_slice());
+    operands.iter().enumerate().filter_map(move |(at, operand)| match operand {
+        Operand::Block(target) if !operands[..at].contains(&Operand::Block(*target)) => Some(*target),
+        _ => None,
+    })
+}
+```
+
+The duplicate scan is quadratic in a switch's operands, as the current `SCAN` guard says; the switch path keeps `listed_once` behind a separate `successors_unique` returning an `IdSet`.
+
+**Scratch that is reused, not allocated** (std only; LLVM's passes keep `SmallVector` members and `clear()` them):
+
+```rust
+// held by Analyses, lent to the builders
+#[derive(Default)]
+pub struct Scratch { pub blocks: Vec<BlockId>, pub order: Vec<u32>, pub stack: Vec<(u32, u32)> }
+
+pub fn forest(nodes: &[Node], scratch: &mut Scratch) -> Forest { scratch.order.clear(); /* push, no new Vec */ }
+```
+
+`Vec::clear` keeps the capacity, so the second call allocates nothing. Targets: `forest::forest` (82,268 allocations), `DominatorTree::new` (70,084), `alias::escapes` (56,507), `alias::point_values` (32,607).
+
+**An arena for tables that die with the pass** (`bumpalo`, `BumpPtrAllocator`'s counterpart: allocate by bumping a pointer, free everything by `reset`):
+
+```rust
+use bumpalo::{Bump, collections::Vec as BumpVec};
+
+// in Fixed::fixed, around each step
+let scratch = Bump::new();                       // or one held by Analyses
+let order: BumpVec<'_, u32> = BumpVec::with_capacity_in(n, &scratch);
+// ... the pass runs; nothing built from `scratch` can outlive it (the borrow checker says so)
+drop(order); scratch.reset();                    // all of it freed at once, no per-block free
+```
+
+`bumpalo::collections::Vec` takes the arena by reference; std's `Vec::new_in` needs the unstable `allocator_api`. A bump arena frees nothing until `reset`, so it fits tables of one pass (`forest`, `DominatorTree`, the alias scratch) and not facts kept across passes. Bound: the 385,324 allocations of the four sites above plus the `Vec<i64>` collects (143,858).
+
+**IR and LIR as indexed arenas.** MIR already is one: instructions and blocks are `InstId` and `BlockId` indices into `Vec`s, so the IR needs no `Arc`. LIR does not: `Arc<Insn>` per instruction (`Semantics::clone` 55,736 allocations; `splitkit` clones `Vec<Block>` of `Vec<Arc<Insn>>`). The Rust form of LLVM's intrusive list is `Vec<Insn>` per body with `u32` positions, or one `Bump` per body handing out `&'bump Insn`; structural sharing of LIR rewrites (ssa-spill-m16) is the other route. Saving: unmeasured.
+
+**Trees that allocate per node become dense sets.** `BTreeSet<BlockId>::insert` is 19.8 M self instructions in the flat profile, `BTreeSet<i64>` 19.6 M, `BTreeSet<usize>` 11.6 M: 51 M (1.8%), and every B-tree node is a heap block. LLVM's counterparts are `SmallPtrSet` and `DenseSet`; here `IdSet<BlockId>` (a bit set over dense ids), `Bits`, or `FxHashSet` with `with_capacity_and_hasher`. Saving: unmeasured; bound 51 M.
+
+Dependencies are a decision for the owner. Everything marked std only needs none.
 
 Ranked list: [proposals](llvm-compared-proposals.md).
 
