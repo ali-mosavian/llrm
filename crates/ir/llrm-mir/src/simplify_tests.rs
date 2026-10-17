@@ -139,6 +139,23 @@ fn compares_answered_from_value_tracking() {
     check("  %r = shl i16 %x, 16\n", "r", Some("poison"));
 }
 
+/// Answers `opt -passes=instsimplify` gives that the zero half of the known
+/// bits could not: a set low bit survives an exact right shift, an exact
+/// division by a divisor with trailing zeros needs a dividend that has them,
+/// and the exact-division multiply is matched on its left operand only.
+#[test]
+fn exact_shifts_and_divisions_read_the_one_bits() {
+    check("  %o = or i16 %x, 1\n  %r = lshr exact i16 %o, %y\n", "r", Some("%o"));
+    check("  %o = or i16 %x, 1\n  %r = ashr exact i16 %o, %y\n", "r", Some("%o"));
+    check("  %o = or i16 %x, 2\n  %r = lshr exact i16 %o, %y\n", "r", None);
+    check("  %o = or i16 %x, 1\n  %r = udiv exact i16 %o, 4\n", "r", Some("poison"));
+    check("  %o = or i16 %x, 1\n  %r = sdiv exact i16 %o, 6\n", "r", Some("poison"));
+    check("  %o = or i16 %x, 2\n  %r = udiv exact i16 %o, 4\n", "r", Some("poison"));
+    check("  %m = mul nsw i16 %x, 3\n  %r = udiv exact i16 %m, 3\n", "r", Some("%x"));
+    check("  %m = mul nsw i16 3, %x\n  %r = udiv exact i16 %m, 3\n", "r", None);
+    check("  %m = mul nuw i16 3, %x\n  %r = sdiv exact i16 %m, 3\n", "r", None);
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a

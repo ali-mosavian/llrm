@@ -858,20 +858,22 @@ fn simplify_div(
     if let Some(v) = simplify_div_rem(q, opcode, op0, op1, max_recurse) {
         return Some(v);
     }
-    if is_exact && let Some((divisor, _)) = q.number(op1) {
-        // The check that the dividend's low bits can be zero where an exact
-        // division needs them needs KnownBits::One
-        // (countMaxTrailingZeros): DEVIATE.
+    if is_exact && let Some((divisor, width)) = q.number(op1) {
+        // The dividend must have at least as many trailing zeros as the
+        // divisor to divide evenly; with fewer the result is poison.
+        let divisor_zeros = if divisor == 0 { width } else { divisor.trailing_zeros() };
+        if divisor_zeros != 0 && q.known(op0).count_max_trailing_zeros() < divisor_zeros {
+            let ty = q.ty(op0);
+            return Some(q.poison(ty));
+        }
+        // udiv exact (mul nsw X, C), C --> X; sdiv exact (mul nuw X, C), C -->
+        // X; where C is not a power of 2.
         if !divisor.is_power_of_two()
-            && let Some((BinaryOp::Mul, a, b, flags)) = q.binary(op0)
+            && let Some((BinaryOp::Mul, x, multiplier, flags)) = q.binary(op0)
+            && multiplier == op1
             && flags.contains(if opcode == BinaryOp::UDiv { Flags::NSW } else { Flags::NUW })
         {
-            if b == op1 {
-                return Some(a);
-            }
-            if a == op1 {
-                return Some(b);
-            }
+            return Some(x);
         }
     }
     None
@@ -1001,9 +1003,8 @@ fn simplify_right_shift(
         let ty = q.ty(op0);
         return Some(q.null(ty));
     }
-    // An exact shift of a value whose low bit is known one is the value
-    // (`Op0Known.One[0]`): a number's, KnownBits::One of a value is DEVIATE.
-    if is_exact && q.number(op0).is_some_and(|(bits, _)| bits & 1 == 1) {
+    // The low bit cannot be shifted out of an exact shift if it is set.
+    if is_exact && q.known(op0).one & 1 == 1 {
         return Some(op0);
     }
     None
