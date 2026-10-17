@@ -1756,7 +1756,7 @@ mod tests {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             ((seed >> 33) as usize) % n
         };
-        let mut random = |next: &mut dyn FnMut(usize) -> usize| {
+        let random = |next: &mut dyn FnMut(usize) -> usize| {
             let mut spec = Vec::new();
             let mut p = next(5) + 1;
             for _ in 0..next(6) + 1 {

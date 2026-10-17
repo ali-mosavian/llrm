@@ -910,7 +910,7 @@ mod tests {
         let (first, second) = (body.blocks[0].insns[0].clone(), body.blocks[0].insns[1].clone());
         let a = indexes.get_instruction_index(first.id());
         let b = indexes.get_instruction_index(second.id());
-        let mut previous = a.clone();
+        let previous = a.clone();
         let mut made = Vec::new();
         for n in 0..40u64 {
             let key = 1_000_000 + n;
