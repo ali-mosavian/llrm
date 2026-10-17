@@ -48,3 +48,22 @@ fn the_edges_above_a_loop_narrow_every_known_of_it() {
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 }
+
+/// A scope no execution reaches (here the add of INT_MAX and a value that is at
+/// least 1, `nsw`, which always overflows) holds any interval as true as any
+/// other, and the incremental way and the sweep leave different ones: the check
+/// that holds them equal failed 5 of tests/run's programs at every level
+/// (div_constants_long: ValueId sweep [2147483642, 2147483647] against
+/// incremental [2147483646, 2147483647]) and called a poison value a defect.
+#[test]
+fn a_scope_that_contradicts_itself_is_not_held_to_the_sweep() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = format!("{}/tests/run/c/div_constants_long.c", env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["-O2", "-fno-inline-functions", "-o", "a.obj", &source])
+        .env("LLRM_CHECK_SCOPES", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
