@@ -78,7 +78,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::TypeId;
-use llrm_support::hash::{HashMap, IndexMap};
+use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
@@ -289,7 +289,7 @@ pub fn subexpressions(
     // What a name is rewritten to, and so what it numbers as.
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut gone: BTreeSet<InstId> = BTreeSet::new();
-    let mut verified: HashMap<InstId, Verified> = HashMap::default();
+    let mut verified: llrm_mir::dense::IdMap<InstId, Verified> = llrm_mir::dense::IdMap::new();
     for block in dominators_first(function, &dominance) {
         let here = order[&block];
         let instructions = function.block(block).instructions();

@@ -88,7 +88,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
