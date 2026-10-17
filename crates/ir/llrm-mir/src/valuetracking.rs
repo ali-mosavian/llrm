@@ -17,6 +17,8 @@ pub mod power2;
 mod query;
 pub mod range;
 pub mod signbits;
+#[cfg(test)]
+mod signbits_tests;
 
 pub use query::{AssumptionCache, Query};
 
