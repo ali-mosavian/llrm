@@ -1,4 +1,4 @@
-reason = "scroll bq32's kernel object is byte-identical and the emulator counts 21,015 instructions in it on both builds; DOSBox's 58,318 -> 58,319 is its REP slicing (a long REP is counted in slices of its cycle budget) moved by the runtime's nhstutil `scan_` before the kernel, where `x & 1` read twice is now two `test`s (fewer instructions, a push/pop pair fewer)"
+reason = "scroll bq32: the kernel object is byte-identical and the emulator counts 21,015 instructions in it on both builds; only a runtime object (nhstutil) differs, so DOSBox's 58,318 -> 58,319 is, by inference, its REP slicing moving (#2010)"
 
 [[row]]
 label = "scroll bq32 -O2"
