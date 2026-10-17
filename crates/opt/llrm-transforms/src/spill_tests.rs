@@ -989,3 +989,82 @@ b3:
     assert_eq!(first, 4, "premise: every block's points worked out the first time");
     assert_eq!(second, 1, "only the block the edit was in");
 }
+
+/// Every edit that read an argument named it, and the argument's live range,
+/// the function's size, was walked again: 1,904 blocks 254 times, 3.6% of an
+/// unrolled compile. A read added in a block the argument was live into anyway
+/// leaves the range as it was.
+#[test]
+fn test_an_argument_read_again_where_it_is_live_is_not_walked_again() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::module::Function;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    struct Probe(std::rc::Rc<std::cell::Cell<usize>>);
+    impl FunctionPass for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            analyses: &mut Analyses,
+        ) -> PreservedAnalyses {
+            analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            // The first update builds where each value is live; the second is
+            // the one asked about.
+            for round in 0..2 {
+                let function: &mut Function = unit.function;
+                let at = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                    .unwrap();
+                let x = function.parameters()[0];
+                let ty = unit.context.types.int(16);
+                let made = function.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    ty,
+                    vec![llrm_mir::module::Operand::Value(x); 2],
+                    Flags::default(),
+                    None,
+                );
+                function.insert(made, Position::Before(at)).expect("a position");
+                let result = function.instruction(made).result.expect("a value");
+                function.set_operands(at, vec![llrm_mir::module::Operand::Value(result)]);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                super::RANGES_ASKED.with(|one| one.set(0));
+                analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+                let _ = round;
+            }
+            self.0.set(super::RANGES_ASKED.with(|one| one.get()));
+            PreservedAnalyses::none()
+        }
+    }
+
+    let mut module = module(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+
+b1:
+  %b = add i16 %a, %x
+  br label %b2
+
+b2:
+  %c = add i16 %b, 3
+  br label %b3
+
+b3:
+  %d = add i16 %c, %x
+  ret i16 %d
+}
+",
+    );
+    let asked = std::rc::Rc::new(std::cell::Cell::new(usize::MAX));
+    crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&asked)));
+    assert_eq!(asked.get(), 0, "arguments asked of ranges_of");
+}

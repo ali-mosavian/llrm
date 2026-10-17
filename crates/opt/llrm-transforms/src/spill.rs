@@ -1491,6 +1491,14 @@ impl Pressure {
             Err(kept) => (kept.found.clone(), kept.placed.clone(), None),
         };
         let index = placed.0;
+        // An argument read in many places is live across most of the function,
+        // and every edit that reads it names it: its walk was the function's
+        // size at each update.
+        if let Some(placed) = &index {
+            for value in unmoved(function, &named, &edits.blocks, placed) {
+                named.remove(&value);
+            }
+        }
         // Only a value whose blocks moved is touched: of the values a pass
         // names nearly all are read where they were (quicksort -O3, 13
         // updates: 1,300 named, 91 changed), and taking each out of its
@@ -1507,6 +1515,16 @@ impl Pressure {
             let settled = |phi: ValueId, home: BlockId| {
                 found.live_out.get(&llrm_analysis::cfg::id(home)).is_some_and(|set| set.contains(&phi))
             };
+            #[cfg(test)]
+            RANGES_ASKED.with(|one| {
+                one.set(
+                    one.get()
+                        + named
+                            .iter()
+                            .filter(|&value| matches!(function.value(value).def, ValueDef::Argument(_)))
+                            .count(),
+                )
+            });
             let computed = liveness::ranges_of(function, &named, Some(&settled));
             let mut grew = false;
             for value in named.iter().collect::<Vec<_>>() {
@@ -1597,6 +1615,64 @@ impl Pressure {
     }
 }
 
+/// The arguments of `named` that the edit in `blocks` left live where they
+/// were. An argument has no definition to end its range, so it is live into a
+/// block that reads it or from which a read can be reached. A read the edit
+/// made in a block it was live into anyway, and a block it was live into that
+/// can still reach a read, leave the range as it was; a block the argument was
+/// not live into that now reads it, or one that reaches no read, is for
+/// `ranges_of`.
+fn unmoved(
+    function: &Function,
+    named: &IdSet<ValueId>,
+    blocks: &IdSet<BlockId>,
+    placed: &IdMap<ValueId, (IdSet<i64>, IdSet<i64>)>,
+) -> Vec<ValueId> {
+    let Some(&entry) = function.layout().first() else { return Vec::new() };
+    let mut found = Vec::new();
+    'values: for value in named.iter() {
+        let ValueDef::Argument(_) = function.value(value).def else { continue };
+        let Some((into, _)) = placed.get(&value) else { continue };
+        let mut readers = IdSet::<BlockId>::new();
+        for user in function.users(value) {
+            if function.instruction(user.user).opcode == Opcode::Phi {
+                continue 'values;
+            }
+            if let Some(block) = function.parent(user.user)
+                && block != entry
+            {
+                readers.insert(block);
+            }
+        }
+        for block in blocks.iter() {
+            let was = into.contains(&cfg::id(block));
+            match (readers.contains(&block), was) {
+                (true, false) => continue 'values,
+                (false, true) => {
+                    let mut seen = IdSet::<BlockId>::new();
+                    let mut ahead: Vec<BlockId> = function.successors(block).into_iter().collect();
+                    let mut reaches = false;
+                    while let Some(next) = ahead.pop() {
+                        if readers.contains(&next) {
+                            reaches = true;
+                            break;
+                        }
+                        if seen.insert(next) {
+                            ahead.extend(function.successors(next));
+                        }
+                    }
+                    if !reaches {
+                        continue 'values;
+                    }
+                }
+                _ => {}
+            }
+        }
+        found.push(value);
+    }
+    found
+}
+
 /// `found` and `placed` with each value of `named` live where `computed` has
 /// it. Only a value whose blocks moved is touched: of the values a pass names
 /// nearly all are read where they were (quicksort -O3, 13 updates: 1,300
@@ -1628,6 +1704,13 @@ fn renewed(
 #[cfg(test)]
 thread_local! {
     pub(crate) static POINTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Arguments `Pressure::updated` asked `ranges_of` for, for a test that an
+// argument an edit left live where it was is not walked again.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RANGES_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Edits made to a value's live blocks by `Pressure::update_owned`, for a test
