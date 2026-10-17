@@ -38,6 +38,10 @@ pub struct SimpleSpiller {
 }
 
 impl Spiller for SimpleSpiller {
+    fn counts(&self) -> (usize, usize, usize) {
+        (self.reloads, self.stores, self.folded)
+    }
+
     fn spill(
         &mut self,
         ctx: SpillContext<'_, '_>,

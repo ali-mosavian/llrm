@@ -2016,7 +2016,7 @@ fn _allocated(
         };
         if let Some(report) = crate::greedy::shadow::run(&inputs) {
             eprintln!(
-                "shadow-greedy {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} failed {} sig {:x}",
+                "shadow-greedy {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} failed {} reloads {} stores {} folded {} sig {:x}",
                 body.name,
                 report.values,
                 report.stats.dequeued,
@@ -2027,6 +2027,9 @@ fn _allocated(
                 report.stats.new_queued,
                 report.stats.last_chance,
                 report.stats.failed,
+                report.reloads,
+                report.stores,
+                report.folded,
                 report.signature
             );
         }

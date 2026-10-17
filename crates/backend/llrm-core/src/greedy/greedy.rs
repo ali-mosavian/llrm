@@ -318,6 +318,11 @@ pub trait Spiller {
         reg: u32,
         new_vregs: &mut Vec<u32>,
     );
+
+    /// Reloads, stores and copy reads/writes folded into the copy, made so far.
+    fn counts(&self) -> (usize, usize, usize) {
+        (0, 0, 0)
+    }
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -378,6 +383,11 @@ impl<'a> RAGreedy<'a> {
     }
 
     /// `calculateSpillWeightsAndHints` (the `VRAI` of `RAGreedy::run`).
+    /// What the spiller has made: reloads, stores, folded.
+    pub fn spill_counts(&self) -> (usize, usize, usize) {
+        self.spiller.counts()
+    }
+
     pub fn calculate_spill_weights_and_hints(&mut self) {
         let mut vrai = VirtRegAuxInfo::new(self.env, &self.original);
         vrai.calculate_spill_weights_and_hints(&mut self.lis);

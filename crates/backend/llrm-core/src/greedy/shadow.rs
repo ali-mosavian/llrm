@@ -57,6 +57,7 @@ pub struct ShadowReport {
     pub stats: Stats,
     pub reloads: usize,
     pub stores: usize,
+    pub folded: usize,
     pub signature: u64,
 }
 
@@ -289,5 +290,6 @@ pub fn run(inputs: &ShadowInputs) -> Option<ShadowReport> {
             signature = signature.wrapping_mul(1_000_003).wrapping_add(u64::from(reg) * 131 + phys.index() as u64);
         }
     }
-    Some(ShadowReport { values, stats: greedy.stats.clone(), reloads: 0, stores: 0, signature })
+    let (reloads, stores, folded) = greedy.spill_counts();
+    Some(ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature })
 }
