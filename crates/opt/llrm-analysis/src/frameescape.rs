@@ -241,13 +241,13 @@ pub fn exposed_allocas(
 /// the rest are as they were.
 pub fn exposed_renewed(
     function: &Function,
-    previous: &BTreeSet<ValueId>,
+    previous: impl IntoIterator<Item = ValueId>,
     touched: &[ValueId],
     marker: impl Fn(InstId) -> bool,
-) -> BTreeSet<ValueId> {
+) -> Vec<ValueId> {
     use llrm_mir::module::ValueDef;
-    let mut affected = BTreeSet::new();
-    let mut seen = BTreeSet::new();
+    let mut affected = llrm_mir::dense::IdSet::<ValueId>::new();
+    let mut seen = llrm_mir::dense::IdSet::<ValueId>::new();
     let mut pending = touched.to_vec();
     while let Some(value) = pending.pop() {
         if !seen.insert(value) {
@@ -273,9 +273,8 @@ pub fn exposed_renewed(
         ValueDef::Instruction(inst) => function.is_erased(inst),
         ValueDef::Argument(_) => false,
     };
-    let mut found: BTreeSet<ValueId> =
-        previous.iter().copied().filter(|one| !affected.contains(one) && !gone(*one)).collect();
-    found.extend(affected.into_iter().filter(|&one| exposes(function, one, &marker)));
+    let mut found: Vec<ValueId> = previous.into_iter().filter(|one| !affected.contains(one) && !gone(*one)).collect();
+    found.extend(affected.iter().filter(|&one| exposes(function, one, &marker)));
     found
 }
 
