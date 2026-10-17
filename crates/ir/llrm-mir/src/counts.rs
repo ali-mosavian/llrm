@@ -203,8 +203,8 @@ thread_local! {
     static EDITS: RefCell<Vec<(&'static str, String, u64)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Whether `fact` is withheld from the pass running now; counted when it is.
-pub fn withhold(fact: &'static str) -> bool {
+/// Whether `fact` is to be withheld from the pass running now.
+pub fn named(fact: &'static str) -> bool {
     let pass = ASKER.with(Cell::get);
     if pass.is_empty() {
         return false;
@@ -216,10 +216,12 @@ pub fn withhold(fact: &'static str) -> bool {
             .iter()
             .any(|(one, facts)| one == pass && (facts.is_empty() || facts.iter().any(|one| one == fact)));
     // The pass's first run over this function (`LLRM_WITHHOLD_FIRST`).
-    let first = !spec.first || FIRST.with(|first| first.0.get());
-    if !(named && first) {
-        return false;
-    }
+    named && (!spec.first || FIRST.with(|first| first.0.get()))
+}
+
+/// `fact` was withheld from the pass running now.
+pub fn withheld(fact: &'static str) {
+    let pass = ASKER.with(Cell::get);
     WITHHELD.with(|rows| {
         let mut rows = rows.borrow_mut();
         match rows.iter_mut().find(|row| row.0 == pass && row.1 == fact) {
@@ -227,7 +229,6 @@ pub fn withhold(fact: &'static str) -> bool {
             None => rows.push((pass, fact, 1)),
         }
     });
-    true
 }
 
 /// The changes a run of `pass` in `stage` logged.

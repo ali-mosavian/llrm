@@ -275,7 +275,7 @@ pub trait Analysis: 'static {
     /// The result that claims nothing (no fact known), conservative and sound,
     /// which the withholding instrument (`LLRM_WITHHOLD`) hands a pass in
     /// place of the real one; none where there is no such result.
-    fn withheld() -> Option<Self::Result> {
+    fn withheld(_function: &Function) -> Option<Self::Result> {
         None
     }
 
@@ -1307,9 +1307,10 @@ impl Analyses {
         function: &Function,
     ) -> Rc<A::Result> {
         if crate::counts::withholding()
-            && let Some(result) = A::withheld()
-            && crate::counts::withhold(A::NAME)
+            && crate::counts::named(A::NAME)
+            && let Some(result) = A::withheld(function)
         {
+            crate::counts::withheld(A::NAME);
             return Rc::new(result);
         }
         let key = TypeId::of::<A>();
