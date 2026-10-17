@@ -44,3 +44,27 @@ def test_a_row_crossing_min_of_gcc_and_clang_is_reported_newly_below(tmp_path, m
     text = "\n".join(module.out)
     assert "newly below (better): ['p 1.200->0.900']" in text
     assert "newly above (worse): none" in text
+
+
+def test_a_counter_that_was_zero_in_the_base_does_not_stop_the_table(tmp_path, monkeypatch):
+    """A program with no memory operands has mem 0 in the base; the table divided by it and crashed on the ablation of `annotated`."""
+    work = load(tmp_path, monkeypatch)
+    import json
+
+    levels = ("O1", "O2", "O3", "Os")
+    for name, mem in (("base", 0), ("main", 7)):
+        lines = ""
+        for level in levels:
+            llrm = "llrm" if level == "O2" else "llrm" + level
+            for variant, memory in ((llrm, mem), ("gcc" + level, 1), ("clang" + level, 1)):
+                lines += json.dumps({"prog": "p", "variant": variant, "ins": 5, "mem": memory, "clocks": 9, "code": 3, "ok": True}) + "\n"
+        (work / name / "results.jsonl").write_text(lines)
+    for name in ("base", "main"):
+        (work / f"df-{name}.json").write_text(
+            "".join(row("dfaces", v, 100) for v in ("llrm", "llrmO1", "llrmO3", "llrmOs", "gccO1", "gccO2", "gccO3", "gccOs", "clangO1", "clangO2", "clangO3", "clangOs"))
+        )
+    (work / "qcport.json").write_text(json.dumps([[n, "m", level, 5] for n in ("base", "main") for level in ("-O1", "-O2", "-O3", "-Os")]))
+    spec = importlib.util.spec_from_file_location("analyse", HERE / "analyse.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert "p 0->7" in "\n".join(module.out)
