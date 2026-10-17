@@ -237,6 +237,8 @@ struct Stored {
     by_object: HashMap<ObjectRef, ObjectCells>,
     /// The objects of `by_object` by alias class.
     classes: HashMap<AliasClass, Vec<ObjectRef>>,
+    /// Whether the index below is built (`SPARSE_REACH`).
+    sparse: bool,
     /// The cells of each frame (`overlap_frame`): those at fixed displacements
     /// by the bytes they name of it, and the rest.
     by_frame: HashMap<Frame, FrameCells>,
@@ -255,11 +257,13 @@ struct Stored {
     twins: RefCell<HashMap<(usize, GroupKeys), Rc<Bits>>>,
 }
 
-/// Past this many cells a dead-store solve finds what an access reaches by the
-/// bytes it names; below, by the buckets of its object, which build nothing
-/// first. Measured on d_faces `-O2` (195 cells at most): the index costs more
-/// than the buckets until a few hundred cells, the ladder's 402 it wins by 4x.
-const SPARSE_CELLS: usize = 256;
+/// A dead-store solve finds what an access reaches by the bytes it names where
+/// some object or frame holds more than this many cells: the buckets pick
+/// visits each cell of an object's buckets for each access to it. Below it the
+/// pick is cheaper than the index, whatever the number of cells (`cases` at
+/// N=128: 259 cells, one bucket each, +7% of `dse` with the index; the
+/// ladder's 400 cells in one object, 3.7x less with it).
+const SPARSE_REACH: usize = 64;
 
 /// The cells in one object: all of them, and by the first byte each names, as
 /// `CellMap`'s spans keep them.
@@ -310,6 +314,16 @@ fn slice_bytes(slice: &crate::memory::Slice) -> (i128, i128) {
 }
 
 thread_local! {
+    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The dead-store solves on this thread that built the index of bytes, for a
+/// test that a body of many small objects does not pay for it.
+pub fn indexed_solves() -> usize {
+    INDEXED.with(std::cell::Cell::get)
+}
+
+thread_local! {
     static REACHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -335,7 +349,7 @@ impl CellSet {
     ) -> usize {
         match self {
             CellSet::All => cells,
-            CellSet::Bits(held) => held.iter().count(),
+            CellSet::Bits(held) => held.len(),
             CellSet::Some(held) => held.len(),
         }
     }
@@ -449,7 +463,20 @@ impl Stored {
         }
         let mut by_object: HashMap<ObjectRef, ObjectCells> = HashMap::default();
         let mut classes: HashMap<AliasClass, Vec<ObjectRef>> = HashMap::default();
-        let sparse = size > SPARSE_CELLS;
+        let widest = index
+            .parts
+            .objects
+            .values()
+            .chain(index.parts.frames.values())
+            .map(|buckets| {
+                buckets.iter().filter_map(|bucket| index.buckets.get(bucket)).map(IndexMap::len).sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0);
+        let sparse = widest > SPARSE_REACH;
+        if sparse {
+            INDEXED.with(|count| count.set(count.get() + 1));
+        }
         for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
             // The cells `overlap_bucket` puts in an object's bucket: those of
             // one slice.
@@ -481,6 +508,7 @@ impl Stored {
             groups,
             group_of,
             private: marked,
+            sparse,
             by_object,
             classes,
             by_frame,
@@ -794,7 +822,7 @@ impl Solve<'_, '_> {
     ) -> CellSet {
         let stored = &self.stored;
         let Some(provenance) = reference.provenance.as_ref() else { return CellSet::All };
-        if stored.cells.len() <= SPARSE_CELLS {
+        if !stored.sparse {
             let mut cells = stored.none();
             match overlap_buckets(reference, &stored.index.parts) {
                 None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(|at| cells.insert(*at)),

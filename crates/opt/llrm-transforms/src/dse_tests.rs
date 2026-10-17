@@ -648,3 +648,20 @@ fn the_stores_to_one_address_are_compared_as_one_cell() {
     let asked = llrm_analysis::avail::related_pairs() - before;
     assert!(asked <= 4 * n as usize, "{n} stores to one address asked {asked} pairs of cells");
 }
+
+/// A store to each of N distinct frame objects: N cells of one bucket each. The
+/// index of bytes built for them cost `dse` 7% on the `cases` shape at N=128
+/// (259 cells), where an access reaches one bucket and the pick finds it at
+/// once; it is for an object or frame of many buckets.
+#[test]
+fn a_body_of_many_small_objects_builds_no_index_of_bytes() {
+    let n = 300;
+    let mut text = String::from("define void @f(i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %p{i} = alloca i32\n  store i32 %v, ptr %p{i}\n");
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::indexed_solves();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} one-bucket cells were indexed");
+}
