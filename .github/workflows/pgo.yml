@@ -11,10 +11,13 @@ on:
   push:
     branches: [main]
     paths: ["crates/**", "src/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/pgo/**", ".github/workflows/pgo.yml"]
+  # A change to this workflow or the tool runs it on the pull request too: it cannot be tried any other way before it is on main.
+  pull_request:
+    paths: ["tools/pgo/**", ".github/workflows/pgo.yml"]
   workflow_dispatch:
 
 concurrency:
-  group: pgo
+  group: pgo-${{ github.event.pull_request.number || 'main' }}
   cancel-in-progress: true
 
 env:
