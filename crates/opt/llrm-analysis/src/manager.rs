@@ -66,7 +66,7 @@
 //!  Counted          Registers
 //!  DominatedEdges   Registers
 //!  Bounded          Registers, Counted, DominatedEdges
-//!  Annotated        Pointers, Registers, Counted, DominatedEdges, Bounded
+//!  Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
 //!  Accesses         Annotated, CallEffects                  (memoryssa)
 //!  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
 //!  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
@@ -458,7 +458,7 @@ impl Summaries {
         calls_found(module, program, globals, refresh.iter().copied(), &mut facts);
         let table = Table::of(module, program, globals, &facts, Some(slots));
         let memo = analyses.memo::<SummariesMemo>();
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             for (id, function) in bodies(module) {
                 assert!(
                     refresh.contains(&id) || facts[&id].mark == function.mark(),
@@ -490,10 +490,10 @@ impl Summaries {
     ) -> Result<IndexMap<String, Summary>, String> {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(procedures, known, memo, dirty);
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             procedures.check_against_scratch();
         }
-        if llrm_support::env_set("LLRM_CHECK_MODULES") {
+        if llrm_support::env_flag!("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(procedures, known);
             if found != fresh {
                 let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
@@ -1146,7 +1146,7 @@ impl Analysis for Annotated {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let pointers = analyses.get::<Pointers>(context, layout, function);
+        let pointers = analyses.get::<PointerValues>(context, layout, function);
         let registers = analyses.get::<Registers>(context, layout, function);
         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
@@ -1159,7 +1159,7 @@ impl Analysis for Annotated {
             .with_shape(&shape)
             .with_assumptions(&assumptions)
             .with_registers(&registers)
-            .with_pointers(pointers)
+            .with_point_values(pointers)
             .with_exposed(&exposed)
             .with_counted(&counted);
         if let Ok(edges) = &*edges {
@@ -1627,20 +1627,48 @@ pub struct PlainAccesses;
 impl Analysis for PlainAccesses {
     type Result = Result<std::rc::Rc<memoryssa::Accesses>, String>;
     const NAME: &'static str = "plain-accesses";
+    const INCREMENTAL: bool = true;
+
+    /// The accesses as they were, with the structure they made, when the
+    /// edits made or moved no memory op, no terminator and no block, and what
+    /// the accesses read is as it was.
+    fn update(
+        previous: &Self::Result,
+        changes: &[llrm_mir::module::Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let held = previous.as_ref().ok()?;
+        let was = held.plain_source()?;
+        let writes = analyses.get::<Writes>(context, layout, function);
+        let annotated = analyses.get::<Annotated>(context, layout, function);
+        let same = std::rc::Rc::ptr_eq(analyses.outer(), &was.outer)
+            && (std::rc::Rc::ptr_eq(&writes, &was.writes) || *writes == *was.writes)
+            && (std::rc::Rc::ptr_eq(&annotated, &was.annotated) || *annotated == *was.annotated);
+        (same && memoryssa::structure_kept(changes, function)).then(|| Ok(std::rc::Rc::new(held.carried(function))))
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
     ) -> Self::Result {
-        let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
-        let references = analyses.get::<Annotated>(context, layout, function);
-        let references = Result::as_ref(&*references).map_err(String::clone)?;
+        let writes_rc = analyses.get::<Writes>(context, layout, function);
+        let calls = Result::as_ref(&*writes_rc).map_err(String::clone)?.clone();
+        let annotated_rc = analyses.get::<Annotated>(context, layout, function);
+        let references = Result::as_ref(&*annotated_rc).map_err(String::clone)?;
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_references(references)
             .with_exposed(&exposed);
-        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls)))
+        let source = memoryssa::PlainSource {
+            annotated: std::rc::Rc::clone(&annotated_rc),
+            writes: std::rc::Rc::clone(&writes_rc),
+            outer: std::rc::Rc::clone(analyses.outer()),
+        };
+        Ok(std::rc::Rc::new(memoryssa::Accesses::plain(&unit, &calls).with_plain_source(source)))
     }
 }
 
@@ -1987,7 +2015,7 @@ pub struct Held {
     exposed: Rc<BTreeSet<ValueId>>,
     registers: Rc<IndexMap<ValueId, Known>>,
     assumptions: Rc<crate::assumptions::Assumptions>,
-    pointers: Option<Rc<<Pointers as Analysis>::Result>>,
+    values: Option<Rc<<PointerValues as Analysis>::Result>>,
     annotated: Option<Rc<<Annotated as Analysis>::Result>>,
     counted: Option<Rc<<Counted as Analysis>::Result>>,
     followers: Option<Rc<<Followers as Analysis>::Result>>,
@@ -2007,7 +2035,7 @@ impl Held {
             exposed: analyses.get::<ExposedFrames>(context, layout, function),
             registers: analyses.get::<Registers>(context, layout, function),
             assumptions: analyses.get::<AssumptionCache>(context, layout, function),
-            pointers: alias.then(|| analyses.get::<Pointers>(context, layout, function)),
+            values: alias.then(|| analyses.get::<PointerValues>(context, layout, function)),
             annotated: alias.then(|| analyses.get::<Annotated>(context, layout, function)),
             // Annotated has proved them already.
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
@@ -2043,8 +2071,8 @@ impl Held {
             .with_registers(&self.registers)
             .with_assumptions(&self.assumptions)
             .with_exposed(&self.exposed);
-        if let Some(Ok(pointers)) = self.pointers.as_deref() {
-            unit = unit.with_pointers(pointers);
+        if let Some(Ok(values)) = self.values.as_deref() {
+            unit = unit.with_point_values(values);
         }
         if let Some(annotated) = self.annotated.as_deref() {
             unit = unit.with_annotated(annotated);

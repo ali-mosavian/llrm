@@ -1297,7 +1297,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert "needs: [plan, static, build, gate, bench-merge]" in workflow
+    assert "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
     assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
@@ -1370,3 +1370,10 @@ def test_the_draft_verdict_comes_from_the_api_at_plan_time_and_is_checked_again_
     assert "python3 tools/ci/pr_state.py" in workflow and "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
     assert "DRAFT RUN OF A READY PR (not a pass)" in workflow
     assert "runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '\"ubuntu-24.04\"') }}" in workflow
+
+
+def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
+    """#1987 fixed the set-up there and its own diff planned no tinytim job: the live proof is a job for any change to the action."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
+    assert "\\.github/actions/setup/" in workflow and "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow

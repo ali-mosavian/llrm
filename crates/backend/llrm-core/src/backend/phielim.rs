@@ -679,7 +679,7 @@ pub fn _observed(
         return false;
     }
     if let Some(answer) = reaches.read_beyond(&pending, into, value) {
-        if llrm_support::env_set("LLRM_CHECK_OBSERVED") {
+        if llrm_support::env_flag!("LLRM_CHECK_OBSERVED") {
             assert_eq!(
                 answer,
                 _observed_walk(at_of, &pending, where_, into, value),

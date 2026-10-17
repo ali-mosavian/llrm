@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/liveness.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liveness.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/liveness.rs sha256:7447f47aa035821138705af6513bcf5b4ead8167f52705c401a1640dbcbab208 -->
+<!-- src: crates/backend/llrm-core/src/backend/liveness.rs sha256:a1ce0a95266f49c0b6b1f33b8bc58febb19348654eba6932e764567286537695 -->
 
 # liveness
 
@@ -32,9 +32,13 @@ set changed. A block with no successor leaves everything live, so a copy
 written as the last instruction of an exit block survives, and so does a
 parallel copy for a phi, which is written exactly at a block end.
 `dead_at_exit` is the complement, per block: the lanes nothing reads again.
-Its last answer is kept and reused while the body is the same instructions,
-because the peephole sub-passes ask in turn and most leave the body as it
-was.
+
+The answer is kept between asks and brought up to date from the blocks that
+changed (see [`crate::backend::incremental`](incremental.md)), because the peephole
+sub-passes ask in turn and each leaves most blocks as they were. A block's
+step is the lanes it reads before writing them and those it writes, kept
+while the block is the same. `LLRM_CHECK_LIVENESS=1` solves the whole body
+from scratch after every answer and asserts they agree.
 
 SI, DI and the frame register are not return inputs: their incoming values
 live in the prologue's saves, so a dead final write to one stays removable.

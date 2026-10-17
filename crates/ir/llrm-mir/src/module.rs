@@ -47,7 +47,7 @@ pub struct MetadataId(pub u32);
 
 /// An instruction's operand: a local value, a constant (a global value is
 /// one), or a block.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Operand {
     Value(ValueId),
     Constant(ConstantId),
@@ -207,6 +207,16 @@ impl PartialEq for ChangeLog {
     ) -> bool {
         true
     }
+}
+
+thread_local! {
+    static STAMPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed a function's attributes, for a test
+/// that the manager does it once per invalidation, not once per result.
+pub fn attribute_stamps() -> usize {
+    STAMPS.with(std::cell::Cell::get)
 }
 
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -642,6 +652,22 @@ impl Function {
     }
 
     /// Where the function stands now.
+    /// A number for the attributes the function carries, which are written
+    /// through the `pub` fields and move no mark: equal before and after means
+    /// no analysis that reads them has anything new to read.
+    pub fn attributes_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        STAMPS.with(|count| count.set(count.get() + 1));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.ty.hash(&mut hasher);
+        self.parameter_attrs.hash(&mut hasher);
+        self.return_attrs.hash(&mut hasher);
+        self.attrs.hash(&mut hasher);
+        self.personality.hash(&mut hasher);
+        self.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
     }

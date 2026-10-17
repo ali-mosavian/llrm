@@ -150,6 +150,11 @@ impl std::ops::Deref for Resolved {
     }
 }
 
+thread_local! {
+    /// Queries built, for the tests that count them.
+    pub static QUERY_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Alias questions for one immutable known-value epoch.
 pub struct _MemoryQueries<'a> {
     pub unit: Unit<'a>,
@@ -200,6 +205,7 @@ impl<'a> _MemoryQueries<'a> {
         unit: Unit<'a>,
         known: &IndexMap<ValueId, Known>,
     ) -> Self {
+        QUERY_BUILDS.with(|built| built.set(built.get() + 1));
         Self {
             unit,
             known: known.clone(),
@@ -210,6 +216,34 @@ impl<'a> _MemoryQueries<'a> {
             places: HashMap::default(),
             buckets: OverlapBuckets::default(),
         }
+    }
+
+    /// These values as `known` now has them, the epoch moved on: what was
+    /// asked is forgotten, and what the queries hold is the `changed` values'
+    /// alone to redo (a store of a simulated unroll asks again after every
+    /// instruction, and copying all `known` each time was its square).
+    pub fn advance(
+        &mut self,
+        known: &IndexMap<ValueId, Known>,
+        changed: impl IntoIterator<Item = ValueId>,
+    ) {
+        for value in changed {
+            match known.get(&value) {
+                Some(fact) => {
+                    self.known.insert(value, fact.clone());
+                    self.facts.insert(value, Interval { low: fact.n.clone(), high: fact.n.clone(), width: fact.width });
+                }
+                None => {
+                    self.known.shift_remove(&value);
+                    self.facts.remove(&value);
+                }
+            }
+        }
+        self.addressed.clear();
+        self.listed.clear();
+        self.overlaps.clear();
+        self.places.clear();
+        self.buckets = OverlapBuckets::default();
     }
 
     /// `resolve` of every reference of a list `calls` shares among its calls.

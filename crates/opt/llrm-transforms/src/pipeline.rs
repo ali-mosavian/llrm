@@ -1006,7 +1006,7 @@ impl Fixed {
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        let mut history = BTreeSet::from([print::fingerprint(unit.function)]);
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
@@ -1061,7 +1061,7 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
-            if !history.insert(print::body(unit.context, unit.function)) {
+            if !history.insert(print::fingerprint(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }
@@ -1079,7 +1079,7 @@ impl Fixed {
         analyses: &Analyses,
         rounds: usize,
     ) {
-        if !llrm_support::env_set("LLRM_CHECK_ROUNDS") {
+        if !llrm_support::env_flag!("LLRM_CHECK_ROUNDS") {
             return;
         }
         let mut context = unit.context.clone();
@@ -1170,7 +1170,7 @@ impl FunctionPass for Fixed {
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
 /// and fails where it changes the body.
 fn settled_checked() -> bool {
-    llrm_support::env_set("LLRM_CHECK_SETTLED")
+    llrm_support::env_flag!("LLRM_CHECK_SETTLED")
 }
 
 /// One body's run through `Fixed`.
@@ -1371,7 +1371,8 @@ impl Run {
         unit: &Unit,
         analyses: &Analyses,
     ) {
-        if !llrm_support::env_set("LLRM_CHECK_SKIPPED") || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
+        if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
+            || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
         {
             return;
         }

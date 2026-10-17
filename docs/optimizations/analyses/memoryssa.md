@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memoryssa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memoryssa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:bd3eb2f2e050d1b8a1b1ac74ee2573531e5aae0ea6e14d820fec12883a5d7614 -->
+<!-- src: crates/opt/llrm-analysis/src/memoryssa.rs sha256:268ed5ea28a6b859d67318d2d51f1fdb96185cfd221dbb86c05e0e5ccab6ba87 -->
 
 # memoryssa
 
@@ -26,6 +26,11 @@ its `Accesses` alone, so it is kept in the accesses, per body state, and
 every graph built from them shares it: the walks' memory of what was
 asked (and the registers they know) is each graph's own. The manager's
 `PlainAccesses` is the one set `ThroughMemory` and `FloatFacts` share.
+
+Edits that make, erase or move no memory op or terminator, rewrite no
+terminator and make or erase no block leave the structure as it was
+(`structure_kept`): the manager's accesses carry it past them, and
+`LLRM_CHECK_CLOBBERS` builds it afresh to compare.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%

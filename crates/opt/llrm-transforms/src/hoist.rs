@@ -168,6 +168,15 @@ pub fn hoisted(
     if found.is_empty() {
         return false;
     }
+    // A run starts from an instruction of a kind that may move whose operands
+    // are all outside the loop (LICM's scan before anything is asked): with
+    // none in any loop nothing moves, and the accesses, the invariant runs
+    // and the prices are not made. `LLRM_CHECK_HOISTSKIP` makes them anyway
+    // and fails if they find a run.
+    let check = llrm_support::env_flag!("LLRM_CHECK_HOISTSKIP");
+    if !check && !found.iter().any(|one| _seeded(unit, one)) {
+        return false;
+    }
     // Asked before anything moves: an instruction keeps its id where it goes.
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
@@ -211,7 +220,12 @@ pub fn hoisted(
             asked_after_moving = moved;
             analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
         };
+        let seeded = _seeded(unit, one);
+        if !seeded && !check {
+            continue;
+        }
         let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, &mut bounds);
+        assert!(seeded || run.is_empty(), "LLRM_CHECK_HOISTSKIP: a loop with no seed has a run of {}", run.len());
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
@@ -912,3 +926,51 @@ pub fn _crossed_values(
 #[cfg(test)]
 #[path = "hoist_tests.rs"]
 mod tests;
+
+/// Whether some instruction of `loop_` could start a run: one of the kinds
+/// `_movable` accepts whose operands are all constants or defined outside the
+/// loop. Every run begins with one, so a loop with none has no run.
+fn _seeded(
+    unit: &passes::Unit,
+    loop_: &Loop,
+) -> bool {
+    let function = &*unit.function;
+    let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
+    let outside = |value: ValueId| match function.value(value).def {
+        ValueDef::Argument(_) => true,
+        ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| !inside(block)),
+    };
+    function
+        .layout()
+        .iter()
+        .filter(|&&block| inside(block))
+        .any(
+            |&block| function
+                .block(block)
+                .instructions()
+                .iter()
+                .any(
+                    |&inst| {
+                        let op = function.instruction(inst);
+                        matches!(
+                            op.opcode,
+                            Opcode::Binary(_)
+                                | Opcode::Cast(_)
+                                | Opcode::ICmp(_)
+                                | Opcode::FCmp(_)
+                                | Opcode::FNeg
+                                | Opcode::GetElementPtr { .. }
+                                | Opcode::Select
+                                | Opcode::Freeze
+                                | Opcode::ExtractValue(_)
+                                | Opcode::InsertValue(_)
+                                | Opcode::Load { volatile: false, .. }
+                        ) && op.operands.iter().all(|operand| match *operand {
+                            Operand::Value(value) => outside(value),
+                            Operand::Constant(_) => true,
+                            Operand::Block(_) => false,
+                        })
+                    },
+                ),
+        )
+}
