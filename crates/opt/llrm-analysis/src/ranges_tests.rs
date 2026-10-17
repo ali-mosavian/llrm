@@ -1605,3 +1605,19 @@ fn the_depth_of_each_loop_is_found_without_asking_every_loop() {
     assert!(small > 0, "premise: the work is above the budget");
     assert!(big <= 2 * small + 64, "{small} -> {big} questions for 150 -> 300 loops");
 }
+
+/// `LLRM_CHECK_SCOPES` compared an interval of every value the width holds with
+/// the entry being absent and called them different (4 of the 10 vsgcc programs
+/// it failed, x_gcd among them): they say the same, nothing.
+#[test]
+fn an_interval_of_every_value_says_what_an_absent_entry_says() {
+    let full = Interval { low: BigInt::from(-2_147_483_648_i64), high: BigInt::from(2_147_483_647_i64), width: 32 };
+    let some = Interval { low: BigInt::from(0), high: BigInt::from(9), width: 32 };
+    let (mut every, mut scoped) = (Intervals::default(), Intervals::default());
+    every.insert(ValueId(24), full);
+    assert!(super::same_narrowing(&every, &scoped), "a full interval against an absent entry");
+    every.insert(ValueId(25), some.clone());
+    assert!(!super::same_narrowing(&every, &scoped), "a narrowing the other state lacks");
+    scoped.insert(ValueId(25), some);
+    assert!(super::same_narrowing(&every, &scoped));
+}
