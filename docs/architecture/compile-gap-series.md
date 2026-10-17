@@ -36,3 +36,36 @@ d_faces is the largest file of the QCport tree this script compiles. The Borland
 d_faces, llrm's own work by phase (Minstr, share): at -O2 `mir` 1,342 (42%), `analysis` 702 (22%), `regalloc` 479 (15%), `lir` 365 (11%), `isel` 56 (2%); clang's optimizer is 272 M (49% of its time) and its codegen 216 M (39%).
 
 Checked: one commit on all sides (the compilers do not change between tables; llrm-c is the dist build of the commit above); each compile writes an object; a failed compile stops the run (the first run stopped on `lru`, whose `far` pointers clang cannot parse: the Borland keywords are now defined away for every program, as for d_faces); `queens` -O3 was run twice more for llrm alone (1,552,975,343 and 1,552,968,042 instructions).
+
+## 2026-10-17, `5344082af` (after the first batch)
+
+Landed since the baseline: the live sets as bit sets (#1926, #1934), the graph's predecessors and splitkit's live blocks (#1953), the crate's hashed collections as Fx (#1927), gvn's forecast skipped past crossing's price (#1957), a result derived from the body as it stands surviving an invalidation (#1922), the dead code after a loop found from what the loop stopped reading (#1936), and "don't ask for what the body cannot use" (#1968). The delta is llrm's instructions against the baseline table.
+
+| program | level | llrm | delta | clang | gcc | ratio |
+|---|---|---:|---:|---:|---:|---:|
+| d_faces | -O1 | 2,263 | -159 (-6.6%) | 478 | 675 | 4.7x |
+| d_faces | -O2 | 2,830 | -313 (-10.0%) | 553 | 1,176 | 5.1x |
+| d_faces | -O3 | 3,133 | -336 (-9.7%) | 555 | 1,460 | 5.6x |
+| d_faces | -Os | 2,896 | -520 (-15.2%) | 550 | 979 | 5.3x |
+| lru | -O1 | 98 | -6 (-5.8%) | 74 | 91 | 1.3x |
+| lru | -O2 | 114 | -8 (-6.6%) | 76 | 123 | 1.5x |
+| lru | -O3 | 117 | -8 (-6.4%) | 76 | 125 | 1.5x |
+| lru | -Os | 111 | -8 (-6.7%) | 76 | 110 | 1.5x |
+| bintree | -O1 | 66 | -5 (-7.0%) | 69 | 86 | 1.0x |
+| bintree | -O2 | 91 | -11 (-10.8%) | 75 | 114 | 1.2x |
+| bintree | -O3 | 97 | -11 (-10.2%) | 75 | 115 | 1.3x |
+| bintree | -Os | 88 | -6 (-6.4%) | 74 | 96 | 1.2x |
+| queens | -O1 | 75 | -4 (-5.1%) | 69 | 73 | 1.1x |
+| queens | -O2 | 94 | -7 (-6.9%) | 71 | 93 | 1.3x |
+| queens | -O3 | 1,419 | -134 (-8.6%) | 71 | 634 | 20.0x |
+| queens | -Os | 86 | -6 (-6.5%) | 71 | 86 | 1.2x |
+| sieve | -O1 | 52 | -3 (-5.5%) | 66 | 71 | 0.8x |
+| sieve | -O2 | 61 | -4 (-6.2%) | 68 | 86 | 0.9x |
+| sieve | -O3 | 86 | -6 (-6.5%) | 68 | 97 | 1.3x |
+| sieve | -Os | 54 | -4 (-6.9%) | 68 | 79 | 0.8x |
+
+Worst ratio: queens -O3, 20.0x (was 21.9x), still `analysis bounded` and the loop passes. Geometric mean of the 20 ratios: 1.8x (was 2.0x); d_faces alone over its four levels: 5.2x (was 5.8x). Every row fell by 5% to 15%; the gap closed by about a tenth and no row is below one but sieve.
+
+d_faces, llrm's own work by phase at -O2: `mir` 1,111 (38%), `analysis` 651 (22%), `regalloc` 456 (16%), `lir` 365 (13%); clang's optimizer is 274 M and its codegen 220 M.
+
+Checked: both sides of each delta are a dist build, user-space instructions, quickest of three by cycles, the compilers unchanged; clang's and gcc's columns moved by at most one in the last digit between the two runs (noise of the best-of-three), so the delta is llrm's.
