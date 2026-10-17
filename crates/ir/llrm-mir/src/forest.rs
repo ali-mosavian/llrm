@@ -297,6 +297,7 @@ pub fn forest(
     reachable: &dyn Fn(i64) -> bool,
     dominates: &dyn Fn(i64, i64) -> bool,
 ) -> Forest {
+    crate::counts::bump(crate::counts::Event::Forests);
     let mut ats: Vec<i64> = nodes.iter().map(|(at, _)| *at).collect();
     ats.sort_unstable();
     ats.dedup();
