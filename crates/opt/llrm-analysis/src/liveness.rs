@@ -593,7 +593,7 @@ fn solved(
 ) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
     let found = solved_dataflow(function, wanted);
-    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             found == solved_by_reach(function, wanted),
             "the word-parallel liveness is not the one followed from the uses"

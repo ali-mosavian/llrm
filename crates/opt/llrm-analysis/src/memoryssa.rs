@@ -445,7 +445,7 @@ impl Accesses {
         function: &Function,
     ) -> Self {
         let carried = Self { graph: self.graph.carried(function.mark()), ..self.clone() };
-        if llrm_support::env_set("LLRM_CHECK_CLOBBERS")
+        if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS")
             && let Some((_, kept)) = &*carried.graph.0.borrow()
         {
             let fresh = structure_of(function, &carried);
@@ -898,12 +898,12 @@ fn spans(accesses: &[Access]) -> Vec<(u32, u32)> {
 
 fn check_jumps() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_JUMPS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_JUMPS"))
 }
 
 fn check_clobbers() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CLOBBERS"))
 }
 
 #[cfg(test)]

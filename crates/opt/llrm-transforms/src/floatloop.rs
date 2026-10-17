@@ -153,7 +153,7 @@ impl FunctionPass for FloatLoop {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        self.run_checking(unit, analyses, llrm_support::env_set("LLRM_CHECK_FLOATSKIP"))
+        self.run_checking(unit, analyses, llrm_support::env_flag!("LLRM_CHECK_FLOATSKIP"))
     }
 }
 

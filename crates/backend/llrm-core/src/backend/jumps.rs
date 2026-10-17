@@ -1287,7 +1287,7 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
                 held.insert(value, entering);
             }
         }
-        if llrm_support::env_set("LLRM_CHECK_JUMPS") {
+        if llrm_support::env_flag!("LLRM_CHECK_JUMPS") {
             if let Some((held, _)) = &live {
                 let fresh = _live_values(&blocks);
                 assert!(

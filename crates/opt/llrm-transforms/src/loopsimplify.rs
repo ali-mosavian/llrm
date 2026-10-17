@@ -393,7 +393,7 @@ fn _simplified(
                 _bridged(loop_, *bridge, *target, sources);
             }
         }
-        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+        if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
             _agrees(&shape, function);
         }
     }

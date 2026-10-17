@@ -737,7 +737,7 @@ fn _available(
                     Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
                     None => available.iter().collect(),
                 };
-                if llrm_support::env_set("LLRM_CHECK_PROMOTED") && near.is_some() {
+                if llrm_support::env_flag!("LLRM_CHECK_PROMOTED") && near.is_some() {
                     let asked: HashSet<usize> = asked.iter().copied().collect();
                     for at in available.iter().filter(|at| !asked.contains(at)) {
                         assert!(

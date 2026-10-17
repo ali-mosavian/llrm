@@ -165,7 +165,7 @@ pub fn effect(
     let (was, answer) = one.effect.get_or_init(|| (bits, worked_out(regs, bits, one)));
     // Asked at another width than the first time: not the answer kept.
     let found = if *was == bits { answer.clone() } else { worked_out(regs, bits, one) };
-    if llrm_support::env_set("LLRM_CHECK_EFFECT") {
+    if llrm_support::env_flag!("LLRM_CHECK_EFFECT") {
         assert!(
             format!("{found:?}") == format!("{:?}", worked_out(regs, bits, one)),
             "an instruction's kept effect is not the one its fields give"

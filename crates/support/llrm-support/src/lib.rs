@@ -26,6 +26,17 @@ pub fn env_set(name: &str) -> bool {
     NAMES.get_or_init(|| std::env::vars_os().map(|(name, _)| name).collect()).contains(std::ffi::OsStr::new(name))
 }
 
+/// `env_set` of a literal name, asked once at the call site that names it:
+/// `env_set` hashes the name at every call, and a check on a step's path is
+/// asked thousands of times.
+#[macro_export]
+macro_rules! env_flag {
+    ($name:literal) => {{
+        static ON: ::std::sync::OnceLock<bool> = ::std::sync::OnceLock::new();
+        *ON.get_or_init(|| $crate::env_set($name))
+    }};
+}
+
 /// `LLRM_CHECK_CACHES=1`: every identity-cache hit is recomputed and must equal
 /// what was cached.
 pub fn checking_caches() -> bool {
