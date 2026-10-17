@@ -41,7 +41,7 @@ use crate::knownbits::KnownBits;
 use crate::module::{Function, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
-use crate::valuetracking::{Query as ValueQuery, context as conditions, known, nonzero, power2, range};
+use crate::valuetracking::{Query as ValueQuery, context as conditions, known, nonzero, power2, range, signbits};
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
 const RECURSION_LIMIT: u32 = 3;
@@ -288,6 +288,32 @@ impl Query<'_> {
         rhs: Operand,
     ) -> bool {
         conditions::is_implied_condition(&self.tracking(), lhs, rhs, true, 0).unwrap_or(false)
+    }
+
+    /// `ComputeNumSignBits(V, DL, ...)`.
+    fn num_sign_bits(
+        &self,
+        operand: Operand,
+    ) -> u32 {
+        signbits::compute_num_sign_bits(&self.tracking(), operand, 0)
+    }
+
+    /// `m_c_Or(m_NUWShl(m_Value(X), m_APInt(Amount)), m_Value(Y))`: X, the
+    /// shifted value, the amount and Y.
+    fn or_of_nuw_shl(
+        &self,
+        operand: Operand,
+    ) -> Option<(Operand, Operand, u128, Operand)> {
+        let (a, b, _) = self.binary_of(operand, BinaryOp::Or)?;
+        [(a, b), (b, a)]
+            .into_iter()
+            .find_map(
+                |(shifted, y)| {
+                    let (x, amount, flags) = self.binary_of(shifted, BinaryOp::Shl)?;
+                    let (amount, _) = self.number(amount)?;
+                    flags.contains(Flags::NUW).then_some((x, shifted, amount, y))
+                },
+            )
     }
 
     /// `isKnownToBeAPowerOfTwo(V, DL, OrZero, ...)`.
@@ -1085,6 +1111,15 @@ fn simplify_lshr(
     {
         return Some(x);
     }
+    // ((X << A) | Y) >> A -> X  if effective width of Y is not larger than A.
+    // We can return X as we do in the above case since OR alters no bits in X.
+    if let Some((shift, _)) = q.number(op1)
+        && let Some((x, _, amount, y)) = q.or_of_nuw_shl(op0)
+        && shift == amount
+        && shift >= u128::from(q.known(y).count_max_active_bits())
+    {
+        return Some(x);
+    }
     None
 }
 
@@ -1117,7 +1152,7 @@ fn simplify_ashr(
         return Some(x);
     }
     // Arithmetic shifting an all-sign-bits value does nothing.
-    if q.width(op0).is_some_and(|width| crate::valuetracking::sign_bits(q.context, q.function, op0) == width) {
+    if q.width(op0).is_some_and(|width| q.num_sign_bits(op0) == width) {
         return Some(op0);
     }
     None
@@ -1297,6 +1332,27 @@ fn simplify_and(
     }
     if let Some(v) = expand_commutative_bin_op(q, BinaryOp::And, op0, op1, BinaryOp::Xor, max_recurse) {
         return Some(v);
+    }
+    // ((X << A) | Y) & Mask -> Y, if Mask = ((1 << effective_width_of(Y)) - 1);
+    // ((X << A) | Y) & Mask -> X << A, if Mask = ((1 << effective_width_of(X))
+    // - 1) << A.
+    if let Some((mask_bits, width)) = q.number(op1)
+        && let Some((x, shifted, amount, y)) = q.or_of_nuw_shl(op0)
+    {
+        let shift_count = amount.min(u128::from(width)) as u32;
+        let width_y = q.known(y).count_max_active_bits();
+        if width_y <= shift_count {
+            let width_x = q.known(x).count_max_active_bits();
+            let low_bits = |count: u32| if count == 0 { 0 } else { mask(count) };
+            let bits_y = low_bits(width_y);
+            let bits_x = if shift_count >= width { 0 } else { (low_bits(width_x) << shift_count) & mask(width) };
+            if bits_y & !mask_bits == 0 && bits_x & mask_bits == 0 {
+                return Some(y);
+            }
+            if bits_x & !mask_bits == 0 && bits_y & mask_bits == 0 {
+                return Some(shifted);
+            }
+        }
     }
     // (A ^ C1) & (A ^ ~C1) -> 0
     if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::Xor)

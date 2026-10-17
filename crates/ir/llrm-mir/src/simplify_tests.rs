@@ -185,6 +185,40 @@ fn compare_of_implied_bools() {
     check(&format!("{b}  %r = icmp uge i1 %a, %b\n"), "r", None);
 }
 
+/// What the known bits of the other operand of an `or` with a shifted value
+/// prove: the shift-out of `((X << A) | Y) >> A` and the mask of `((X << A) |
+/// Y) & M`.
+#[test]
+fn shifted_or_with_a_narrow_operand() {
+    let o = "  %s = shl nuw i16 %x, 8\n  %y8 = and i16 %y, 255\n  %o = or i16 %s, %y8\n";
+    let p = "  %s = shl nuw i16 %x, 8\n  %y8 = and i16 %y, 255\n  %o = or i16 %y8, %s\n";
+    check(&format!("{o}  %r = lshr i16 %o, 8\n"), "r", Some("%x"));
+    check(&format!("{p}  %r = lshr i16 %o, 8\n"), "r", Some("%x"));
+    check(
+        "  %s = shl nuw i16 %x, 8\n  %y9 = and i16 %y, 511\n  %o = or i16 %s, %y9\n  %r = lshr i16 %o, 8\n",
+        "r",
+        None,
+    );
+    check(&format!("{o}  %r = and i16 %o, 255\n"), "r", Some("%y8"));
+    check(&format!("{o}  %r = and i16 %o, 65280\n"), "r", Some("%s"));
+    check(&format!("{p}  %r = and i16 %o, 65280\n"), "r", Some("%s"));
+    check(&format!("{o}  %r = and i16 %o, 15\n"), "r", None);
+}
+
+/// `ComputeNumSignBits` of the real ValueTracking: an arithmetic shift of a
+/// value of all sign bits is the value.
+#[test]
+fn ashr_of_all_sign_bits() {
+    check("  %b = icmp slt i16 %x, 0\n  %s = sext i1 %b to i16\n  %r = ashr i16 %s, %y\n", "r", Some("%s"));
+    check(
+        "  %t = trunc i16 %x to i8\n  %s = sext i8 %t to i16\n  %u = ashr i16 %s, 8\n  %r = ashr i16 %u, %y\n",
+        "r",
+        Some("%u"),
+    );
+    check("  %u = ashr i16 %x, 15\n  %v = or i16 %u, %u\n  %r = ashr i16 %v, %y\n", "r", Some("%v"));
+    check("  %u = ashr i16 %x, 15\n  %v = select i1 %c, i16 %u, i16 0\n  %r = ashr i16 %v, %y\n", "r", Some("%v"));
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
