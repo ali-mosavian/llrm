@@ -643,6 +643,13 @@ pub fn experiment_llvm() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_EXP_LLVM").is_some())
 }
 
+/// `LLRM_EXP_SROA=real`, read once: the slot's mem2reg is the translated
+/// `PromoteMemToReg` ([`crate::mem2reg`]), not the write-through `Promote`.
+fn experiment_mem2reg() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LLRM_EXP_SROA").is_ok_and(|one| one == "real"))
+}
+
 /// Where a list of LLVM's order stands.
 #[derive(Clone, Copy)]
 enum Phase {
@@ -668,9 +675,12 @@ fn llvm_order(
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
-    let promote = |name| slot(name, Box::new(promote::Promote));
+    let promoted = || -> Box<dyn FunctionPass> {
+        if experiment_mem2reg() { Box::new(crate::mem2reg::Mem2Reg) } else { Box::new(promote::Promote) }
+    };
+    let promote = |name| slot(name, promoted());
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together { name, parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote)] })
+        Box::new(Together { name, parts: vec![Box::new(promote::Sroa), promoted()] })
     };
     let earlycse = |name| -> Box<dyn FunctionPass> {
         if std::env::var("LLRM_EXP_EARLYCSE").is_ok_and(|one| one == "real") {
