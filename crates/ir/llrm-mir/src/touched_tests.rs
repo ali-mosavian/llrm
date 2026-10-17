@@ -174,6 +174,43 @@ fn adopting_a_fork_keeps_the_marks_taken_before_it() {
     assert_eq!(changed, [named(f, "x").1, named(f, "y").1]);
 }
 
+/// Two forks of one function, edited apart by one change each, were one point
+/// (the same lineage and the same position): a held access, a table kept for
+/// update and any memo keyed by a mark answered one fork with the other's body
+/// (gvn forks two numberings of a body and prices both). A fork's points are
+/// its own, the function's before the fork are its too, and a sibling's do not
+/// resolve.
+#[test]
+fn two_forks_edited_apart_are_not_one_point() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let a = Operand::Value(f.parameters()[0]);
+    let before = f.mark();
+    let (mut one, mut other) = (f.fork(), f.fork());
+    one.set_operand(x, 1, a);
+    other.set_operand(y, 1, a);
+    assert_ne!(one.mark(), other.mark(), "two forks, one change each, are one point");
+    assert!(one.changes_since(before).is_some() && other.changes_since(before).is_some());
+    assert!(one.changes_since(other.mark()).is_none(), "a sibling's point resolved");
+    f.adopt(one);
+    assert!(f.changes_since(before).is_some(), "the function's point before the fork");
+    assert!(f.changes_since(other.mark()).is_none(), "the discarded sibling's point resolved");
+}
+
+/// A fork that changed nothing is the function: adopting it leaves the points
+/// taken of the function equal to the function's now.
+#[test]
+fn adopting_a_fork_that_changed_nothing_keeps_the_mark() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let before = f.mark();
+    let fork = f.fork();
+    f.adopt(fork);
+    assert_eq!(f.mark(), before);
+}
+
 /// A rewrite reached only the blocks of the uses it feeds: the walk the
 /// analyses each kept for themselves marked every block or none.
 #[test]

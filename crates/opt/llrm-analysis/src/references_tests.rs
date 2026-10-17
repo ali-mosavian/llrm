@@ -201,3 +201,34 @@ fn test_one_access_asked_of_in_a_large_body_takes_one_cell() {
     MemRef::of(&unit, store).expect("an access");
     assert_eq!(crate::memory::held_cells() - before, 1);
 }
+
+/// Two forks of one function, edited apart, meet at one mark (they share the
+/// lineage and log one change each), and the held access of a version was
+/// keyed by the mark alone: the load of the second fork was answered with the
+/// pointer of the first. gvn forks two numberings of a body and prices both.
+#[test]
+fn test_two_forks_edited_apart_do_not_share_their_accesses() {
+    let module = parsed(&format!(
+        "{DOS}define i16 @f(ptr %p, ptr %q, ptr %r) {{\nb0:\n  %x = load i16, ptr %p\n  ret i16 %x\n}}\n"
+    ));
+    let (function, layout) = (function(&module, "f"), layout(&module));
+    let load = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .expect("the load");
+    let pointer_of = |name: &str, base: &llrm_mir::module::Function| {
+        let mut copy = base.fork();
+        copy.set_operands(load, vec![Operand::Value(value(base, name))]);
+        copy
+    };
+    let (to_q, to_r) = (pointer_of("q", function), pointer_of("r", function));
+    let asked = |copy: &llrm_mir::module::Function| {
+        MemRef::of(&Unit::of(&module, &layout, copy), load).expect("an access").pointer
+    };
+    assert_eq!(asked(&to_q), Some(Operand::Value(value(function, "q"))));
+    assert_eq!(asked(&to_r), Some(Operand::Value(value(function, "r"))), "the other fork's access was returned");
+}
