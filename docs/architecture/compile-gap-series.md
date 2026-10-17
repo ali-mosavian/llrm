@@ -69,3 +69,36 @@ Worst ratio: queens -O3, 20.0x (was 21.9x), still `analysis bounded` and the loo
 d_faces, llrm's own work by phase at -O2: `mir` 1,111 (38%), `analysis` 651 (22%), `regalloc` 456 (16%), `lir` 365 (13%); clang's optimizer is 274 M and its codegen 220 M.
 
 Checked: both sides of each delta are a dist build, user-space instructions, quickest of three by cycles, the compilers unchanged; clang's and gcc's columns moved by at most one in the last digit between the two runs (noise of the best-of-three), so the delta is llrm's.
+
+## 2026-10-17, `954bc48fa`: the static clang, and the profile-guided compiler
+
+The clang column changes here: it is a static build of the pinned tag llvmorg-20.1.8 (87f0227c; recipe in [llvm-measured.md](llvm-measured.md)), not the distro's. The distro's links libLLVM as a shared library, which adds about 30 M of dynamic-loader start-up to every compile and calls into the library through the PLT: d_faces -O2 reads 553 M with it and 462 M static, an empty compile 43 M against 13 M. The distro build stays as a column, what users run; gcc is the distro's. `tools/compile-gap.py` takes `--clang PATH` and `--distro-clang PATH`. The ratio is llrm over the cheaper of the static clang and gcc, so the small programs, whose cost the distro's start-up inflated, read higher than in the tables above; no llrm number changed from the table of `5344082af`.
+
+The profile-guided column is `tools/pgo/pgo.py build` of the same commit ([pgo.md](../working/pgo.md)). Its profile was made from 264 compiles of the bench C programs at -m32 and -m16 and -O1, -O2 and -Os, leaving out lru, bintree, queens and sieve (`--exclude`) and QCport's render modules (no `QCPORT`), so no program here trained it and -O3 is a level it never saw. `tools/identical.py` finds the same bytes from it and from the plain build over the whole corpus: 1,583 objects, 0 differ.
+
+| program | level | llrm | llrm PGO | clang | gcc | clang (distro) | ratio | ratio PGO |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| d_faces | -O1 | 2,263 | 1,943 | 397 | 675 | 479 | 5.7x | 4.9x |
+| d_faces | -O2 | 2,830 | 2,412 | 462 | 1,176 | 553 | 6.1x | 5.2x |
+| d_faces | -O3 | 3,133 | 2,666 | 464 | 1,460 | 556 | 6.8x | 5.7x |
+| d_faces | -Os | 2,896 | 2,479 | 459 | 979 | 550 | 6.3x | 5.4x |
+| lru | -O1 | 98 | 82 | 41 | 91 | 74 | 2.4x | 2.0x |
+| lru | -O2 | 114 | 95 | 43 | 123 | 76 | 2.7x | 2.2x |
+| lru | -O3 | 117 | 99 | 43 | 125 | 76 | 2.7x | 2.3x |
+| lru | -Os | 111 | 93 | 44 | 110 | 76 | 2.5x | 2.1x |
+| bintree | -O1 | 66 | 56 | 37 | 86 | 69 | 1.8x | 1.5x |
+| bintree | -O2 | 91 | 77 | 42 | 114 | 74 | 2.2x | 1.8x |
+| bintree | -O3 | 97 | 82 | 42 | 115 | 75 | 2.3x | 2.0x |
+| bintree | -Os | 88 | 74 | 41 | 96 | 74 | 2.1x | 1.8x |
+| queens | -O1 | 75 | 63 | 38 | 73 | 69 | 2.0x | 1.7x |
+| queens | -O2 | 94 | 79 | 39 | 93 | 71 | 2.4x | 2.0x |
+| queens | -O3 | 1,419 | 1,165 | 39 | 634 | 71 | 36.4x | 29.9x |
+| queens | -Os | 86 | 72 | 39 | 86 | 71 | 2.2x | 1.8x |
+| sieve | -O1 | 52 | 45 | 35 | 71 | 66 | 1.5x | 1.3x |
+| sieve | -O2 | 61 | 52 | 37 | 86 | 68 | 1.6x | 1.4x |
+| sieve | -O3 | 86 | 72 | 37 | 97 | 68 | 2.3x | 1.9x |
+| sieve | -Os | 54 | 46 | 36 | 79 | 68 | 1.5x | 1.3x |
+
+Worst ratio: queens -O3, 36.4x (29.9x profile-guided). Geometric mean of the 20 ratios: 3.0x (2.6x profile-guided); d_faces alone over its four levels: 6.2x (5.3x). Profile-guided instructions are 14.1% to 17.9% below the plain build's on every row. Against the distro clang the same mean is 1.8x.
+
+Where the compile goes beside the pass work, d_faces (callgrind, dist build): copying a `Function` (gvn's forks, hoist's clones, interprocedural's, sink's) is about 0.1% of the compile, not the 6% to 10% of the scopes that contain the copies: what those scopes cost is the numbering and the spill forecast. Idle reruns, the passes' own work in a run that changed nothing (`LLRM_DEBUG=runs`, `5344082af`, release build): 637 runs, 247.0 M = 7.8% of the -O2 compile (decide 42.3 M, fill 32.8, hoist 24.8, promote 24.8, algebraic 21.8, indvars 21.5), and 318.9 M = 9.9% at -Os (hoist 96.7 M, 3.0%).

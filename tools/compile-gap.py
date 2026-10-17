@@ -58,12 +58,12 @@ def phases(llrm: str, level: str, args: list[str]) -> dict[str, float]:
     return own
 
 
-def clang_phases(level: str, args: list[str]) -> list[float]:
+def clang_phases(clang: str, level: str, args: list[str]) -> list[float]:
     """Clang's optimizer, codegen and whole-run seconds-times in ms (`-ftime-report`, quickest of three): shares of
     its time, to be applied to its instruction count; a timer, read within about 15%."""
     runs = []
     for _ in range(3):
-        err = run(["clang", "-w", "-m32", "-march=i486", level, *args, "-ftime-report"]).stderr
+        err = run([clang, "-w", "-m32", "-march=i486", level, *args, "-ftime-report"]).stderr
         runs.append([float(one) * 1000 for one in re.findall(r"Total Execution Time: ([\d.]+) seconds", err)])
     return min(runs, key=lambda one: one[5])
 
@@ -87,6 +87,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("llrm", nargs="?", help="an llrm-c to measure; by default the tree's, built with the dist profile")
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
+    parser.add_argument(
+        "--clang",
+        default="clang",
+        help="the clang to compare with (a static build of the pinned tag, docs/architecture/compile-gap-series.md); the distro's by default",
+    )
+    parser.add_argument(
+        "--distro-clang",
+        help="a second clang column, what users run (the distro's shared-libLLVM clang: +20% of startup and calls into libLLVM)",
+    )
     args = parser.parse_args()
     args.llrm = args.llrm or dist_build()
     qc = Path(os.environ["QCPORT"]).expanduser()
@@ -101,20 +110,24 @@ def main() -> None:
     sink_cc = ["-c", *sink]
     flags = ["-m32", "-march=i486", "-fno-inline-functions"]
     for level in LEVELS:
-        print(f"{level}: compile M instructions   llrm / clang / gcc")
+        extra_column = " / distro clang" if args.distro_clang else ""
+        print(f"{level}: compile M instructions   llrm / clang / gcc{extra_column}")
         for name, (source, extra) in inputs.items():
             cost = [
                 instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *(sink if cc == args.llrm else sink_cc), source])
                 / 1e6
-                for cc in (args.llrm, "clang", "gcc")
+                for cc in (args.llrm, args.clang, "gcc")
             ]
-            print(f"  {name:10} {cost[0]:7.0f} / {cost[1]:7.0f} / {cost[2]:7.0f}   ({cost[0] / min(cost[1:]):.1f}x)")
+            users = ""
+            if args.distro_clang:
+                users = f" / {instructions([args.distro_clang, *flags, '-w', level, *extra, *sink_cc, source]) / 1e6:7.0f}"
+            print(f"  {name:10} {cost[0]:7.0f} / {cost[1]:7.0f} / {cost[2]:7.0f}{users}   ({cost[0] / min(cost[1:]):.1f}x)")
         source, extra = inputs["d_faces"]
         ours = phases(args.llrm, level, [*extra, *sink, source])
-        theirs = clang_phases(level, [*extra, *sink_cc, source])
+        theirs = clang_phases(args.clang, level, [*extra, *sink_cc, source])
         whole = sum(ours.values())
         print("  d_faces llrm own Minstr: " + ", ".join(f"{k} {v:.0f} ({100 * v / whole:.0f}%)" for k, v in ours.most_common(6)))
-        clang = instructions(["clang", *flags, level, *KEYWORDS, *extra, *sink_cc, source]) / 1e6
+        clang = instructions([args.clang, *flags, level, *KEYWORDS, *extra, *sink_cc, source]) / 1e6
         print(
             f"  d_faces clang: optimizer {theirs[0] / theirs[5] * clang:.0f} M ({100 * theirs[0] / theirs[5]:.0f}% of "
             f"its time), codegen {theirs[4] / theirs[5] * clang:.0f} M ({100 * theirs[4] / theirs[5]:.0f}%)"
