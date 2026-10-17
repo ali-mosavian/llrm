@@ -88,6 +88,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -220,16 +221,17 @@ pub fn provider(
 /// N^2/2 steps).
 pub fn providers(
     values: impl IntoIterator<Item = Operand>,
-    swap: &BTreeMap<ValueId, Operand>,
+    swap: impl Fn(ValueId) -> Option<Operand>,
 ) -> Result<Vec<Operand>, SubstitutionError> {
-    let mut ended: BTreeMap<ValueId, Operand> = BTreeMap::new();
+    // Where a value's chain ends, and in which walk it was last passed.
+    let mut ended: IdMap<ValueId, Operand> = IdMap::new();
+    let mut passed: IdMap<ValueId, usize> = IdMap::new();
     let mut out = Vec::new();
-    for start in values {
+    for (walk, start) in values.into_iter().enumerate() {
         let mut path = Vec::new();
-        let mut seen = BTreeSet::new();
         let mut value = start;
         while let Operand::Value(id) = value
-            && let Some(&replacement) = swap.get(&id)
+            && let Some(replacement) = swap(id)
         {
             if let Some(&known) = ended.get(&id) {
                 value = known;
@@ -238,7 +240,7 @@ pub fn providers(
             if replacement == value {
                 break;
             }
-            if !seen.insert(id) {
+            if passed.insert(id, walk) == Some(walk) {
                 return Err(SubstitutionError::CyclicValueSubstitution);
             }
             path.push(id);
@@ -867,12 +869,12 @@ b2:
         let starts: Vec<Operand> =
             (0..=n).map(|k| Operand::Value(ValueId(k))).chain([Operand::Value(ValueId(n + 5))]).collect();
         let before = super::provider_steps();
-        let ends = super::providers(starts.iter().copied(), &swap).unwrap();
+        let ends = super::providers(starts.iter().copied(), |id| swap.get(&id).copied()).unwrap();
         let steps = super::provider_steps() - before;
         let alone: Vec<Operand> = starts.iter().map(|&one| provider(one, &swap).unwrap()).collect();
         assert_eq!(ends, alone);
         assert!(steps <= 2 * n as usize, "{steps} steps for a chain of {n}");
         swap.insert(ValueId(n), Operand::Value(ValueId(0)));
-        assert!(super::providers(starts.iter().copied(), &swap).is_err());
+        assert!(super::providers(starts.iter().copied(), |id| swap.get(&id).copied()).is_err());
     }
 }
