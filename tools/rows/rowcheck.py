@@ -10,12 +10,15 @@ from __future__ import annotations
 COUNTERS = ("ins", "mem", "clocks", "code")
 
 
-def failed(row: dict, counters=COUNTERS) -> bool:
-    """A row that did not run to a result: marked not ok, carrying an error, or without a counter."""
+def failed(row: dict, counters=COUNTERS, checked: bool = False) -> bool:
+    """A row that did not run to a result: marked not ok, carrying an error, or without a counter. With `checked` a row with no instruction
+    count must say its output was compared (`checked: true`): sized only, it was never run."""
+    if checked and "instructions" not in row and not row.get("checked") and "error" not in row:
+        return True
     return row.get("ok") is False or "error" in row or any(c not in row for c in counters)
 
 
-def census(sides: dict[str, dict], counters=COUNTERS) -> tuple[str, list[str]]:
+def census(sides: dict[str, dict], counters=COUNTERS, checked: bool = False) -> tuple[str, list[str]]:
     """(the line to print first, the names of failed or missing rows). `sides` maps a side's name to {row name: row}."""
     names = sorted(set().union(*(set(rows) for rows in sides.values())))
     bad = []
@@ -23,8 +26,8 @@ def census(sides: dict[str, dict], counters=COUNTERS) -> tuple[str, list[str]]:
         for side, rows in sides.items():
             if name not in rows:
                 bad.append(f"{name} (missing in {side})")
-            elif failed(rows[name], counters):
-                bad.append(f"{name} (failed in {side}: {rows[name].get('error') or 'no result'})")
+            elif failed(rows[name], counters, checked):
+                bad.append(f"{name} (failed in {side}: {rows[name].get('error') or ('unchecked: ' + rows[name]['unchecked'] if 'unchecked' in rows[name] else 'sized only, never run')})")
     wanted = len(names) * len(sides)
     failures = sum("failed in" in one for one in bad)
     missing = sum("missing in" in one for one in bad)

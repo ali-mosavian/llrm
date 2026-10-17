@@ -567,11 +567,26 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             out[key] = counts
     out |= measure_flat(flat, folder / "flat")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
-    if timing:
-        exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
-        for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
-            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+    exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
+    run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing)
     return out
+
+
+def run_timed(out: dict, exes: dict, needs: dict, work: Path, timing: bool) -> None:
+    """The timed-only programs run in DOSBox and their output is compared with the expected one, always: a program with no instruction count
+    is otherwise sized and never run, and a miscompile there reaches no gate. `timing` also keeps the times (--time); without it a row gets
+    only `checked: true`, or an error row when it prints something else, or `unchecked: why` when its corpus is not here."""
+    if not timing:
+        exes = {key: path for key, path in exes.items() if key in needs}
+    for key, timed in time_programs(exes, work, needs).items():
+        if timing:
+            out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
+        elif "error" in timed and timed["error"].startswith("skipped: "):
+            out[key] = out.get(key, {}) | {"unchecked": timed["error"][len("skipped: "):]}
+        elif "error" in timed:
+            out[key] = {"error": timed["error"]}
+        else:
+            out[key] = out.get(key, {}) | {"checked": True}
 
 
 def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> dict:

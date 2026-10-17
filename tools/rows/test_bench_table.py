@@ -32,9 +32,15 @@ def test_an_error_cell_stops_the_table_and_is_named():
     assert text.startswith("1 rows failed") and "allowed: scroll/c/Os" in text
 
 
-def test_a_size_only_cell_is_not_a_failed_row():
-    """The first version counted the 40 code_bytes-only cells of the bench as failed (113 for 33 real errors)."""
+def test_a_size_only_cell_is_failed_unless_its_output_was_checked():
+    """A timed-only program was sized and never run in the gate: its row had no counters and read as fine. Sized only = unchecked = failed;
+    `checked: true` (run, output compared) is not."""
+    import pytest
+
     size_only = {"code_bytes": 10, "data_bytes": 0, "bss_bytes": 0}
-    text = bench_table.render({"a/c/O2": size_only}, {"a/c/O2": size_only})
+    with pytest.raises(SystemExit, match=r"2 rows failed(.|\n)*a/c/O2 \(failed in base: sized only, never run\)"):
+        bench_table.render({"a/c/O2": size_only}, {"a/c/O2": size_only})
+    ran = size_only | {"checked": True}
+    text = bench_table.render({"a/c/O2": ran}, {"a/c/O2": ran})
     assert text.startswith("rows total 1 / with counters 2 of 2 / failed 0")
-    assert "base: 1 rows with no instructions (sized only): a/c/O2" in text, "the rows without a count are named, not only counted"
+    assert "base: 1 rows with no instructions (run and output-checked): a/c/O2" in text
