@@ -18,13 +18,26 @@ impl Hash {
         }
     }
 
+    /// A value as one word, or two above 64 bits: the C++ side hashes the same
+    /// words.
+    fn word(
+        &mut self,
+        v: u128,
+        width: u32,
+    ) {
+        self.mix(v as u64);
+        if width > 64 {
+            self.mix((v >> 64) as u64);
+        }
+    }
+
     fn out(
         &mut self,
         k: &KnownBits,
     ) {
         self.mix(u64::from(k.width));
-        self.mix(k.zero as u64);
-        self.mix(k.one as u64);
+        self.word(k.zero, k.width);
+        self.word(k.one, k.width);
     }
 
     fn line(
@@ -61,6 +74,30 @@ fn inputs(width: u32) -> Vec<KnownBits> {
             }
             v.push(make(width, zero, one));
         }
+    } else if width > 64 {
+        let mut s = 0x9e3779b97f4a7c15_u64 ^ u64::from(width);
+        let mut next = || {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            s >> 33
+        };
+        let mut word = |bits: u32| -> u128 {
+            if bits < 64 {
+                return u128::from(next() & ((1 << bits) - 1));
+            }
+            let (hi, lo) = (next(), next());
+            u128::from(hi << 32 ^ lo)
+        };
+        let mut make = || {
+            let (lo, hi) = (word(64), word(width - 64));
+            lo | hi << 64
+        };
+        for _ in 0..160 {
+            let (a, b, keep) = (make(), make(), make());
+            v.push(KnownBits::from_masks(width, a & keep & !b, b & keep));
+        }
+        v.push(KnownBits::unknown(width));
+        v.push(KnownBits::constant(width, 0));
+        v.push(KnownBits::constant(width, u128::MAX));
     } else {
         let mut s = 0x9e3779b97f4a7c15_u64;
         let mut next = || {
@@ -164,9 +201,9 @@ fn unaries() -> Vec<(String, Un)> {
     u("blsi", Box::new(KnownBits::blsi));
     u("blsmsk", Box::new(KnownBits::blsmsk));
     u("reverseBits", Box::new(KnownBits::reverse_bits));
-    u("anyext", Box::new(|k| k.anyext(k.width + 3)));
-    u("zext", Box::new(|k| k.zext(k.width + 3)));
-    u("sext", Box::new(|k| k.sext(k.width + 3)));
+    u("anyext", Box::new(|k| if k.width + 3 > 128 { *k } else { k.anyext(k.width + 3) }));
+    u("zext", Box::new(|k| if k.width + 3 > 128 { *k } else { k.zext(k.width + 3) }));
+    u("sext", Box::new(|k| if k.width + 3 > 128 { *k } else { k.sext(k.width + 3) }));
     for d in 1..5_u32 {
         u(&format!("trunc{d}"), Box::new(move |k| if d < k.width { k.trunc(d) } else { *k }));
         u(&format!("truncSSat{d}"), Box::new(move |k| if d < k.width { k.trunc_ssat(d) } else { *k }));
@@ -182,12 +219,9 @@ fn golden_lines() -> Vec<String> {
     let mut h = Hash(0xcbf29ce484222325);
     let mut lines = Vec::new();
     let (bins, cmps, uns) = (binaries(), comparisons(), unaries());
-    for width in [1_u32, 2, 3, 4, 5, 8] {
+    for width in [1_u32, 2, 3, 4, 5, 8, 65, 100, 128] {
         let input = inputs(width);
         for (name, f) in &bins {
-            if (name == "mulhs" || name == "mulhu") && 2 * width > 8 {
-                continue;
-            }
             for l in &input {
                 for r in &input {
                     h.out(&f(l, r));
@@ -209,7 +243,7 @@ fn golden_lines() -> Vec<String> {
             }
             h.line(&mut lines, name, width);
         }
-        for amount in 0..2 * width {
+        for amount in 0..if width > 8 { 2 } else { 2 * width } {
             for l in &input {
                 for r in &input {
                     h.out(&KnownBits::fshl(l, r, u128::from(amount)));
@@ -218,7 +252,7 @@ fn golden_lines() -> Vec<String> {
             }
         }
         h.line(&mut lines, "funnel", width);
-        for v in 0..(1_u128 << width).min(256) {
+        for v in 0..if width >= 9 { 256 } else { 1_u128 << width } {
             for k in &input {
                 h.out(&k.make_ge(v));
             }
@@ -253,7 +287,7 @@ fn golden_lines() -> Vec<String> {
                 h.mix(u64::from(v));
             }
             for v in [k.min_value(), k.max_value(), k.signed_min_value(), k.signed_max_value()] {
-                h.mix(v as u64);
+                h.word(v, width);
             }
             for v in [k.is_non_zero(), k.is_strictly_positive(), k.is_non_positive(), k.is_sign_unknown(), k.is_even()]
             {
@@ -293,4 +327,13 @@ fn test_rotate_keeps_the_sign_bits_it_does_not_rotate_out() {
     assert_eq!(rot_sign_bits(5, 8, None, false), 1);
     assert_eq!(rot_sign_bits(5, 8, Some(2), false), 3);
     assert_eq!(rot_sign_bits(5, 8, Some(2), true), 1);
+}
+
+/// MIR holds no integer wider than 128 bits, which is what lets `KnownBits` and
+/// `ConstantRange` keep theirs in a `u128`. This fails the day a wider type
+/// parses.
+#[test]
+fn mir_holds_no_integer_wider_than_128() {
+    assert!(crate::parse::module("define i129 @f(i129 %a) {\n  ret i129 %a\n}\n").is_err());
+    assert!(crate::parse::module("define i128 @f(i128 %a) {\n  ret i128 %a\n}\n").is_ok());
 }

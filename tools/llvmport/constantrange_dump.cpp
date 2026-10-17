@@ -25,26 +25,64 @@ static void mix(uint64_t v) {
     H *= 0x100000001b3ULL;
   }
 }
+// An APInt as one word, or two above 64 bits: the Rust side hashes the same words.
+static void mixAP(const APInt &v) {
+  unsigned w = v.getBitWidth();
+  mix(v.extractBitsAsZExtValue(w < 64 ? w : 64, 0));
+  if (w > 64) mix(v.extractBitsAsZExtValue(w - 64, 64));
+}
 static void out(const CR &r) {
   mix(r.getBitWidth());
-  mix(r.getLower().getZExtValue());
-  mix(r.getUpper().getZExtValue());
+  mixAP(r.getLower());
+  mixAP(r.getUpper());
 }
 static void outKB(const KnownBits &k) {
   mix(k.getBitWidth());
-  mix(k.Zero.getZExtValue());
-  mix(k.One.getZExtValue());
+  mixAP(k.Zero);
+  mixAP(k.One);
 }
 static void line(const std::string &name, unsigned W) {
   printf("%s %u %016llx\n", name.c_str(), W, (unsigned long long)H);
   H = 0xcbf29ce484222325ULL;
 }
 
-static uint64_t maskOf(unsigned W) { return W == 64 ? ~0ULL : ((1ULL << W) - 1); }
+static uint64_t maskOf(unsigned W) { return W >= 64 ? ~0ULL : ((1ULL << W) - 1); }
 
 static std::vector<CR> ranges(unsigned W) {
   std::vector<CR> v;
   uint64_t m = maskOf(W);
+  if (W > 64) {
+    uint64_t s = 0x9e3779b97f4a7c15ULL ^ W;
+    auto next = [&] { s = s * 6364136223846793005ULL + 1442695040888963407ULL; return s >> 33; };
+    auto word = [&](unsigned bits) -> uint64_t {
+      if (bits < 64) return next() & ((1ULL << bits) - 1);
+      uint64_t hi = next(), lo = next();
+      return hi << 32 ^ lo;
+    };
+    auto mk = [&] {
+      uint64_t lo = word(64), hi = word(W - 64);
+      uint64_t arr[2] = {lo, hi};
+      return APInt(W, ArrayRef<uint64_t>(arr, 2));
+    };
+    APInt mx = APInt::getMaxValue(W), sm = APInt::getSignedMinValue(W);
+    v.push_back(CR::getFull(W));
+    v.push_back(CR::getEmpty(W));
+    APInt specials[] = {APInt(W, 0), APInt(W, 1), APInt(W, 2), APInt(W, 3), mx, mx - 1, mx - 2,
+                        sm, sm - 1, sm + 1, sm + 2, sm - 2};
+    for (const APInt &a : specials)
+      for (const APInt &b : {APInt(W, 0), APInt(W, 1), sm, mx, sm + 1, APInt(W, 5)}) {
+        if (a == b && !a.isZero() && !a.isMaxValue()) continue;
+        v.push_back(CR(a, b));
+      }
+    for (unsigned i = 0; i < 50; ++i) {
+      APInt a = mk();
+      APInt b = mk();
+      if (i % 3 == 0) b = a + APInt(W, next() & 0xf);
+      if (a == b && !a.isZero() && !a.isMaxValue()) continue;
+      v.push_back(CR(a, b));
+    }
+    return v;
+  }
   if (W <= 4) {
     for (uint64_t l = 0; l <= m; ++l)
       for (uint64_t u = 0; u <= m; ++u) {
@@ -145,8 +183,8 @@ int main() {
   U("ctpop", [](const CR &a) { return a.ctpop(); });
   U("sqrtFloor", [](const CR &a) { return a.sqrtFloor(); });
   U("binaryNot", [](const CR &a) { return a.binaryNot(); });
-  U("zext3", [](const CR &a) { return a.getBitWidth() + 3 > 64 ? a : a.zeroExtend(a.getBitWidth() + 3); });
-  U("sext3", [](const CR &a) { return a.getBitWidth() + 3 > 64 ? a : a.signExtend(a.getBitWidth() + 3); });
+  U("zext3", [](const CR &a) { return a.getBitWidth() + 3 > 128 ? a : a.zeroExtend(a.getBitWidth() + 3); });
+  U("sext3", [](const CR &a) { return a.getBitWidth() + 3 > 128 ? a : a.signExtend(a.getBitWidth() + 3); });
   U("splitPos", [](const CR &a) { return a.splitPosNeg().first; });
   U("splitNeg", [](const CR &a) { return a.splitPosNeg().second; });
   for (unsigned d = 1; d < 8; ++d)
@@ -156,13 +194,13 @@ int main() {
     }
   for (unsigned c = 0; c < 4; ++c) {
     U("castF2I" + std::to_string(c), [=](const CR &a) {
-      if (a.getBitWidth() + 2 > 64) return a;
+      if (a.getBitWidth() + 2 > 128) return a;
       return a.castOp(c == 0 ? Instruction::UIToFP : c == 1 ? Instruction::SIToFP : c == 2 ? Instruction::FPToUI : Instruction::BitCast,
                       a.getBitWidth() + (c < 2 ? 2 : 0));
     });
   }
 
-  for (unsigned W : {1u, 2u, 3u, 4u, 6u, 8u, 16u, 64u}) {
+  for (unsigned W : {1u, 2u, 3u, 4u, 6u, 8u, 16u, 64u, 65u, 100u, 128u}) {
     std::vector<CR> in = ranges(W);
     for (auto &[name, f] : bins) {
       for (auto &a : in)
@@ -198,18 +236,19 @@ int main() {
       }
     line("pairQueries", W);
     for (auto &a : in) {
-      mix(a.getUnsignedMin().getZExtValue()); mix(a.getUnsignedMax().getZExtValue());
-      mix(a.getSignedMin().getZExtValue()); mix(a.getSignedMax().getZExtValue());
+      mixAP(a.getUnsignedMin()); mixAP(a.getUnsignedMax());
+      mixAP(a.getSignedMin()); mixAP(a.getSignedMax());
       mix(a.isFullSet()); mix(a.isEmptySet()); mix(a.isWrappedSet()); mix(a.isUpperWrapped());
       mix(a.isSignWrappedSet()); mix(a.isUpperSignWrapped()); mix(a.isAllNegative());
       mix(a.isAllNonNegative()); mix(a.isAllPositive()); mix(a.getActiveBits()); mix(a.getMinSignedBits());
-      mix(a.isSingleElement()); mix(a.getSingleElement() ? a.getSingleElement()->getZExtValue() : 99);
-      mix(a.getSingleMissingElement() ? a.getSingleMissingElement()->getZExtValue() : 99);
+      mix(a.isSingleElement());
+      if (a.getSingleElement()) mixAP(*a.getSingleElement()); else mix(99);
+      if (a.getSingleMissingElement()) mixAP(*a.getSingleMissingElement()); else mix(99);
       for (unsigned k : {1u, 2u, 3u, 4u, 100u}) mix(a.isSizeLargerThan(k));
       mix(a.isSizeLargerThan(0));
       CmpInst::Predicate P; APInt RHS, Off;
       a.getEquivalentICmp(P, RHS, Off);
-      mix((int)P); mix(RHS.getZExtValue()); mix(Off.getZExtValue());
+      mix((int)P); mixAP(RHS); mixAP(Off);
       outKB(a.toKnownBits());
     }
     line("queries", W);

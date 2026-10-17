@@ -3,6 +3,7 @@
 // Build against the LLVM of d1106deb71cc:
 //   tools/llvmport/knownbits_dump.sh > crates/ir/llrm-mir/src/knownbits_golden.txt
 #include "llvm/ADT/APInt.h"
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/KnownBits.h"
 #include <cstdint>
 #include <cstdio>
@@ -22,10 +23,16 @@ static void mix(uint64_t v) {
     H *= 0x100000001b3ULL;
   }
 }
+// An APInt as one word, or two above 64 bits: the Rust side hashes the same words.
+static void mixAP(const APInt &v) {
+  unsigned w = v.getBitWidth();
+  mix(v.extractBitsAsZExtValue(w < 64 ? w : 64, 0));
+  if (w > 64) mix(v.extractBitsAsZExtValue(w - 64, 64));
+}
 static void out(const KnownBits &k) {
   mix(k.getBitWidth());
-  mix(k.Zero.getZExtValue());
-  mix(k.One.getZExtValue());
+  mixAP(k.Zero);
+  mixAP(k.One);
 }
 
 static KnownBits make(unsigned W, uint64_t Z, uint64_t O) {
@@ -49,6 +56,29 @@ static std::vector<KnownBits> inputs(unsigned W) {
       }
       v.push_back(make(W, Z, O));
     }
+  } else if (W > 64) {
+    uint64_t s = 0x9e3779b97f4a7c15ULL ^ W;
+    auto next = [&] { s = s * 6364136223846793005ULL + 1442695040888963407ULL; return s >> 33; };
+    auto word = [&](unsigned bits) -> uint64_t {
+      if (bits < 64) return next() & ((1ULL << bits) - 1);
+      uint64_t hi = next(), lo = next();
+      return hi << 32 ^ lo;
+    };
+    for (int i = 0; i < 160; ++i) {
+      auto mk = [&] {
+        uint64_t lo = word(64), hi = word(W - 64);
+        uint64_t arr[2] = {lo, hi};
+        return APInt(W, ArrayRef<uint64_t>(arr, 2));
+      };
+      APInt a = mk(), b = mk(), keep = mk();
+      KnownBits K(W);
+      K.Zero = a & keep & ~b;
+      K.One = b & keep;
+      v.push_back(K);
+    }
+    v.push_back(KnownBits(W));
+    KnownBits Z(W); Z.setAllZero(); v.push_back(Z);
+    KnownBits O(W); O.setAllOnes(); v.push_back(O);
   } else {
     uint64_t s = 0x9e3779b97f4a7c15ULL;
     auto next = [&] { s = s * 6364136223846793005ULL + 1442695040888963407ULL; return s >> 33; };
@@ -104,7 +134,7 @@ int main() {
 #define U(NAME, EXPR) uns.push_back({NAME, [](const KnownBits &K) { return EXPR; }});
   U("abs", K.abs()) U("absPoison", K.abs(true)) U("reduceAdd3", K.reduceAdd(3)) U("reduceAdd1", K.reduceAdd(1))
   U("blsi", K.blsi()) U("blsmsk", K.blsmsk()) U("reverseBits", K.reverseBits())
-  U("anyext", K.anyext(K.getBitWidth() + 3)) U("zext", K.zext(K.getBitWidth() + 3)) U("sext", K.sext(K.getBitWidth() + 3))
+  U("anyext", K.getBitWidth() + 3 > 128 ? K : K.anyext(K.getBitWidth() + 3)) U("zext", K.getBitWidth() + 3 > 128 ? K : K.zext(K.getBitWidth() + 3)) U("sext", K.getBitWidth() + 3 > 128 ? K : K.sext(K.getBitWidth() + 3))
   for (unsigned d = 1; d < 5; ++d) {
     // Narrowing and in-register ops at each smaller width (skipped where the width is too small).
     uns.push_back({"trunc" + std::to_string(d), [=](const KnownBits &K) { return d < K.getBitWidth() ? K.trunc(d) : K; }});
@@ -114,10 +144,9 @@ int main() {
     uns.push_back({"sextInReg" + std::to_string(d), [=](const KnownBits &K) { return d <= K.getBitWidth() ? K.sextInReg(d) : K; }});
     uns.push_back({"extract" + std::to_string(d), [=](const KnownBits &K) { return d < K.getBitWidth() ? K.extractBits(d, K.getBitWidth() - d) : K; }});
   }
-  for (unsigned W : {1u, 2u, 3u, 4u, 5u, 8u}) {
+  for (unsigned W : {1u, 2u, 3u, 4u, 5u, 8u, 65u, 100u, 128u}) {
     std::vector<KnownBits> in = inputs(W);
     for (auto &[name, f] : bins) {
-      if ((name == "mulhs" || name == "mulhu") && 2 * W > 8) continue;
       for (auto &L : in)
         for (auto &R : in) out(f(L, R));
       line(name.c_str(), W);
@@ -135,7 +164,7 @@ int main() {
       line(name.c_str(), W);
     }
     // Operations with an extra scalar.
-    for (unsigned a = 0; a < 2 * W; ++a) {
+    for (unsigned a = 0; a < (W > 8 ? 2u : 2 * W); ++a) {
       for (auto &L : in)
         for (auto &R : in) {
           out(KnownBits::fshl(L, R, APInt(W, a)));
@@ -143,7 +172,7 @@ int main() {
         }
     }
     line("funnel", W);
-    for (uint64_t v = 0; v < (1ULL << W) && v < 256; ++v) {
+    for (uint64_t v = 0; v < (W >= 9 ? 256ULL : (1ULL << W)); ++v) {
       for (auto &K : in) out(K.makeGE(APInt(W, v)));
     }
     line("makeGE", W);
@@ -162,8 +191,8 @@ int main() {
       mix(K.countMinLeadingOnes()); mix(K.countMinSignBits()); mix(K.countMaxSignificantBits());
       mix(K.countMaxTrailingZeros()); mix(K.countMaxTrailingOnes()); mix(K.countMaxLeadingZeros());
       mix(K.countMaxLeadingOnes()); mix(K.countMinPopulation()); mix(K.countMaxPopulation());
-      mix(K.countMaxActiveBits()); mix(K.getMinValue().getZExtValue()); mix(K.getMaxValue().getZExtValue());
-      mix(K.getSignedMinValue().getZExtValue()); mix(K.getSignedMaxValue().getZExtValue());
+      mix(K.countMaxActiveBits()); mixAP(K.getMinValue()); mixAP(K.getMaxValue());
+      mixAP(K.getSignedMinValue()); mixAP(K.getSignedMaxValue());
       mix(K.isNonZero()); mix(K.isStrictlyPositive()); mix(K.isNonPositive()); mix(K.isSignUnknown()); mix(K.isEven());
     }
     line("queries", W);

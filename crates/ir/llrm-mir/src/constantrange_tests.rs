@@ -4,6 +4,7 @@
 //! same ranges in the same order and hashes the answers; a line of the golden
 //! file is one operation at one width.
 
+use crate::apint::mask;
 use crate::constantrange::{ConstantRange as CR, PreferredRangeType as Pref};
 use crate::knownbits::KnownBits;
 use crate::opcode::{BinaryOp, CastOp, IntPredicate};
@@ -38,13 +39,26 @@ impl Hash {
         }
     }
 
+    /// A value as one word, or two above 64 bits: the C++ side hashes the same
+    /// words.
+    fn word(
+        &mut self,
+        v: u128,
+        width: u32,
+    ) {
+        self.mix(v as u64);
+        if width > 64 {
+            self.mix((v >> 64) as u64);
+        }
+    }
+
     fn out(
         &mut self,
         r: &CR,
     ) {
         self.mix(u64::from(r.width));
-        self.mix(r.lower as u64);
-        self.mix(r.upper as u64);
+        self.word(r.lower, r.width);
+        self.word(r.upper, r.width);
     }
 
     fn out_known(
@@ -52,8 +66,8 @@ impl Hash {
         k: &KnownBits,
     ) {
         self.mix(u64::from(k.width));
-        self.mix(k.zero as u64);
-        self.mix(k.one as u64);
+        self.word(k.zero, k.width);
+        self.word(k.one, k.width);
     }
 
     fn line(
@@ -68,12 +82,70 @@ impl Hash {
 }
 
 fn mask64(width: u32) -> u64 {
-    if width == 64 { !0 } else { (1 << width) - 1 }
+    if width >= 64 { !0 } else { (1 << width) - 1 }
+}
+
+/// The generator of `constantrange_dump.cpp`.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 >> 33
+    }
+
+    /// A `bits`-bit number: one draw below 64 bits, two from it up.
+    fn word(
+        &mut self,
+        bits: u32,
+    ) -> u128 {
+        if bits < 64 {
+            return u128::from(self.next() & ((1 << bits) - 1));
+        }
+        let (hi, lo) = (self.next(), self.next());
+        u128::from(hi << 32 ^ lo)
+    }
+
+    /// A `width`-bit number above 64 bits: low word, then high.
+    fn value(
+        &mut self,
+        width: u32,
+    ) -> u128 {
+        let (lo, hi) = (self.word(64), self.word(width - 64));
+        lo | hi << 64
+    }
 }
 
 fn ranges(width: u32) -> Vec<CR> {
     let mut v = Vec::new();
     let m = mask64(width);
+    if width > 64 {
+        let mut rng = Lcg(0x9e3779b97f4a7c15_u64 ^ u64::from(width));
+        let (mx, sm) = (mask::<u128>(width), 1_u128 << (width - 1));
+        v.push(CR::full(width));
+        v.push(CR::empty(width));
+        let specials = [0, 1, 2, 3, mx, mx - 1, mx - 2, sm, sm - 1, sm + 1, sm + 2, sm - 2];
+        for a in specials {
+            for b in [0, 1, sm, mx, sm + 1, 5_u128] {
+                if a == b && a != 0 && a != mx {
+                    continue;
+                }
+                v.push(CR::new(width, a, b));
+            }
+        }
+        for i in 0..50 {
+            let a = rng.value(width);
+            let mut b = rng.value(width);
+            if i % 3 == 0 {
+                b = a.wrapping_add(u128::from(rng.next() & 0xf)) & mx;
+            }
+            if a == b && a != 0 && a != mx {
+                continue;
+            }
+            v.push(CR::new(width, a, b));
+        }
+        return v;
+    }
     if width <= 4 {
         for l in 0..=m {
             for u in 0..=m {
@@ -211,8 +283,8 @@ fn unaries() -> Vec<(String, Un)> {
     u("ctpop", Box::new(|a| a.ctpop()));
     u("sqrtFloor", Box::new(|a| a.sqrt_floor()));
     u("binaryNot", Box::new(|a| a.binary_not()));
-    u("zext3", Box::new(|a| if a.width + 3 > 64 { *a } else { a.zero_extend(a.width + 3) }));
-    u("sext3", Box::new(|a| if a.width + 3 > 64 { *a } else { a.sign_extend(a.width + 3) }));
+    u("zext3", Box::new(|a| if a.width + 3 > 128 { *a } else { a.zero_extend(a.width + 3) }));
+    u("sext3", Box::new(|a| if a.width + 3 > 128 { *a } else { a.sign_extend(a.width + 3) }));
     u("splitPos", Box::new(|a| a.split_pos_neg().0));
     u("splitNeg", Box::new(|a| a.split_pos_neg().1));
     for d in 1..8_u32 {
@@ -224,7 +296,7 @@ fn unaries() -> Vec<(String, Un)> {
         u(
             &format!("castF2I{c}"),
             Box::new(move |a| {
-                if a.width + 2 > 64 {
+                if a.width + 2 > 128 {
                     return *a;
                 }
                 let (op, width) = match c {
@@ -244,7 +316,7 @@ fn golden_lines() -> Vec<String> {
     let mut h = Hash(0xcbf29ce484222325);
     let mut lines = Vec::new();
     let (bins, uns) = (binaries(), unaries());
-    for width in [1_u32, 2, 3, 4, 6, 8, 16, 64] {
+    for width in [1_u32, 2, 3, 4, 6, 8, 16, 64, 65, 100, 128] {
         let input = ranges(width);
         let m = mask64(width);
         for (name, f) in &bins {
@@ -299,7 +371,7 @@ fn golden_lines() -> Vec<String> {
         h.line(&mut lines, "pairQueries", width);
         for a in &input {
             for v in [a.get_unsigned_min(), a.get_unsigned_max(), a.get_signed_min(), a.get_signed_max()] {
-                h.mix(v as u64);
+                h.word(v, width);
             }
             for v in [
                 a.is_full_set(),
@@ -317,15 +389,21 @@ fn golden_lines() -> Vec<String> {
             h.mix(u64::from(a.get_active_bits()));
             h.mix(u64::from(a.get_min_signed_bits()));
             h.mix(u64::from(a.is_single_element()));
-            h.mix(a.get_single_element().map_or(99, |v| v as u64));
-            h.mix(a.get_single_missing_element().map_or(99, |v| v as u64));
+            match a.get_single_element() {
+                Some(v) => h.word(v, width),
+                None => h.mix(99),
+            }
+            match a.get_single_missing_element() {
+                Some(v) => h.word(v, width),
+                None => h.mix(99),
+            }
             for k in [1_u64, 2, 3, 4, 100, 0] {
                 h.mix(u64::from(a.is_size_larger_than(k)));
             }
             let (p, rhs, offset) = a.get_equivalent_icmp_offset();
             h.mix(predicate_number(p));
-            h.mix(rhs as u64);
-            h.mix(offset as u64);
+            h.word(rhs, width);
+            h.word(offset, width);
             h.out_known(&a.to_known_bits());
         }
         h.line(&mut lines, "queries", width);

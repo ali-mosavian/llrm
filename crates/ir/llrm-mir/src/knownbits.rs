@@ -23,51 +23,58 @@
 use std::cmp::{max, min};
 
 use crate::apint::*;
-use crate::context::mask;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct KnownBits {
-    pub zero: u128,
-    pub one: u128,
+pub struct Bits<W: Word = u128> {
+    pub zero: W,
+    pub one: W,
     pub width: u32,
 }
 
-impl KnownBits {
+/// LLVM's `KnownBits`, of a MIR integer (`i1` to `i128`).
+pub type KnownBits = Bits<u128>;
+
+impl<W: Word> Bits<W> {
     fn raw(
         width: u32,
-        zero: u128,
-        one: u128,
+        zero: W,
+        one: W,
     ) -> Self {
         Self { zero: zero & mask(width), one: one & mask(width), width }
     }
 
+    /// The same bits in another word; they fit it by construction.
+    pub fn to_word<V: Word>(&self) -> Bits<V> {
+        Bits { zero: V::from_u128(self.zero.low_u128()), one: V::from_u128(self.one.low_u128()), width: self.width }
+    }
+
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L41>
     pub fn unknown(width: u32) -> Self {
-        assert!((1..=128).contains(&width), "KnownBits: width {width} is outside 1..=128");
-        Self { zero: 0, one: 0, width }
+        assert!((1..=W::BITS).contains(&width), "KnownBits: width {width} is outside 1..={}", W::BITS);
+        Self { zero: W::ZERO, one: W::ZERO, width }
     }
 
     /// Both masks at a width, as LLVM's private `KnownBits(Zero, One)`.
     pub fn from_masks(
         width: u32,
-        zero: u128,
-        one: u128,
+        zero: W,
+        one: W,
     ) -> Self {
-        assert!((1..=128).contains(&width), "KnownBits: width {width} is outside 1..=128");
+        assert!((1..=W::BITS).contains(&width), "KnownBits: width {width} is outside 1..={}", W::BITS);
         Self::raw(width, zero, one)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L369>
     pub fn constant(
         width: u32,
-        value: u128,
+        value: W,
     ) -> Self {
         Self::from_masks(width, !value, value)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L51>
     pub fn has_conflict(&self) -> bool {
-        self.zero & self.one != 0
+        self.zero & self.one != W::ZERO
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L54>
@@ -76,14 +83,14 @@ impl KnownBits {
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L58>
-    pub fn constant_value(&self) -> u128 {
+    pub fn constant_value(&self) -> W {
         assert!(self.is_constant(), "Can only get value when all bits are known");
         self.one
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L64>
     pub fn is_unknown(&self) -> bool {
-        self.zero == 0 && self.one == 0
+        self.zero == W::ZERO && self.one == W::ZERO
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L67>
@@ -93,8 +100,8 @@ impl KnownBits {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L72>
     pub fn reset_all(&mut self) {
-        self.zero = 0;
-        self.one = 0;
+        self.zero = W::ZERO;
+        self.one = W::ZERO;
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L64>
@@ -110,12 +117,12 @@ impl KnownBits {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L84>
     pub fn set_all_zero(&mut self) {
         self.zero = mask(self.width);
-        self.one = 0;
+        self.one = W::ZERO;
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L90>
     pub fn set_all_ones(&mut self) {
-        self.zero = 0;
+        self.zero = W::ZERO;
         self.one = mask(self.width);
     }
 
@@ -137,7 +144,7 @@ impl KnownBits {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L109>
     pub fn is_non_zero(&self) -> bool {
-        self.one != 0
+        self.one != W::ZERO
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L112>
@@ -147,39 +154,39 @@ impl KnownBits {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L117>
     pub fn is_non_positive(&self) -> bool {
-        signed(self.signed_max_value(), self.width) <= 0
+        !sgt(self.signed_max_value(), W::ZERO, self.width)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L120>
     pub fn make_negative(&mut self) {
-        self.one |= sign_bit(self.width);
+        self.one |= sign_bit::<W>(self.width);
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L125>
     pub fn make_non_negative(&mut self) {
-        self.zero |= sign_bit(self.width);
+        self.zero |= sign_bit::<W>(self.width);
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L130>
-    pub fn min_value(&self) -> u128 {
+    pub fn min_value(&self) -> W {
         self.one
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L136>
-    pub fn signed_min_value(&self) -> u128 {
+    pub fn signed_min_value(&self) -> W {
         let min = self.one;
-        if bit(self.zero, self.width - 1) { min } else { min | sign_bit(self.width) }
+        if bit(self.zero, self.width - 1) { min } else { min | sign_bit::<W>(self.width) }
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L146>
-    pub fn max_value(&self) -> u128 {
+    pub fn max_value(&self) -> W {
         !self.zero & mask(self.width)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L117>
-    pub fn signed_max_value(&self) -> u128 {
+    pub fn signed_max_value(&self) -> W {
         let max = self.max_value();
-        if bit(self.one, self.width - 1) { max } else { max & !sign_bit(self.width) }
+        if bit(self.one, self.width - 1) { max } else { max & !sign_bit::<W>(self.width) }
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L162>
@@ -261,32 +268,32 @@ impl KnownBits {
         width: u32,
     ) -> Self {
         let input = self.width;
-        let min_in_range = sext(sign_bit(width), width, input);
-        let max_in_range = sext(mask(width) >> 1, width, input);
-        let (input_min, input_max) = (signed(self.signed_min_value(), input), signed(self.signed_max_value(), input));
-        let (min_in_range, max_in_range) = (signed(min_in_range, input), signed(max_in_range, input));
+        let min_in_range = sext(sign_bit::<W>(width), width, input);
+        let max_in_range = sext(mask::<W>(width) >> 1, width, input);
+        let (input_min, input_max) = (self.signed_min_value(), self.signed_max_value());
+        let (sge, sle) = (|a: W, b: W| !slt(a, b, input), |a: W, b: W| !sgt(a, b, input));
         let mut known = Self::unknown(width);
         let top = width - 1;
-        if input_min >= min_in_range && input_max <= max_in_range {
+        if sge(input_min, min_in_range) && sle(input_max, max_in_range) {
             known = self.trunc(width);
-        } else if input_max < min_in_range {
-            known = Self::constant(width, sign_bit(width));
-        } else if input_min > max_in_range {
-            known = Self::constant(width, mask(width) >> 1);
-        } else if input_min >= 0 {
-            known.zero = sign_bit(width);
+        } else if slt(input_max, min_in_range, input) {
+            known = Self::constant(width, sign_bit::<W>(width));
+        } else if sgt(input_min, max_in_range, input) {
+            known = Self::constant(width, mask::<W>(width) >> 1);
+        } else if !is_negative(input_min, input) {
+            known.zero = sign_bit::<W>(width);
             known.one = with_bit(self.one & mask(width), top, false);
-        } else if input_max < 0 {
+        } else if is_negative(input_max, input) {
             known.zero = with_bit(self.zero & mask(width), top, false);
-            known.one = sign_bit(width);
+            known.one = sign_bit::<W>(width);
         } else {
             let (zero_lower, one_lower) = (self.zero & mask(width), self.one & mask(width));
-            let min_sat = Self::constant(width, sign_bit(width));
-            let max_sat = Self::constant(width, mask(width) >> 1);
-            if input_max <= max_in_range {
+            let min_sat = Self::constant(width, sign_bit::<W>(width));
+            let max_sat = Self::constant(width, mask::<W>(width) >> 1);
+            if sle(input_max, max_in_range) {
                 known.zero = zero_lower & min_sat.zero;
                 known.one = one_lower & min_sat.one;
-            } else if input_min >= min_in_range {
+            } else if sge(input_min, min_in_range) {
                 known.zero = zero_lower & max_sat.zero;
                 known.one = one_lower & max_sat.one;
             } else {
@@ -313,14 +320,14 @@ impl KnownBits {
         } else if !bit(input_min, input - 1) && input_min > max_in_range {
             known.set_all_ones();
         } else if !bit(input_min, input - 1) {
-            known.zero = 0;
+            known.zero = W::ZERO;
             known.one = self.one & mask(width);
         } else if input_max <= max_in_range {
             known.zero = self.zero & mask(width);
-            known.one = 0;
+            known.one = W::ZERO;
         } else {
-            known.zero = 0;
-            known.one = 0;
+            known.zero = W::ZERO;
+            known.one = W::ZERO;
         }
         known
     }
@@ -363,7 +370,7 @@ impl KnownBits {
         sub: &Self,
         position: u32,
     ) {
-        let hole = mask(sub.width) << position;
+        let hole = mask::<W>(sub.width) << position;
         self.zero = (self.zero & !hole) | (sub.zero << position);
         self.one = (self.one & !hole) | (sub.one << position);
     }
@@ -389,10 +396,10 @@ impl KnownBits {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L297>
     pub fn make_ge(
         &self,
-        value: u128,
+        value: W,
     ) -> Self {
         let n = countl_one(self.zero | value, self.width);
-        let masked = value & !mask(self.width - n);
+        let masked = value & !mask::<W>(self.width - n);
         Self { zero: self.zero, one: self.one | masked, width: self.width }
     }
 
@@ -511,8 +518,10 @@ impl KnownBits {
     ) -> Self {
         let width = lhs.width;
         let m = mask(width);
-        let possible_sum_zero = lhs.max_value().wrapping_add(rhs.max_value()).wrapping_add(u128::from(!carry_zero)) & m;
-        let possible_sum_one = lhs.min_value().wrapping_add(rhs.min_value()).wrapping_add(u128::from(carry_one)) & m;
+        let possible_sum_zero =
+            lhs.max_value().wrapping_add(rhs.max_value()).wrapping_add(W::from_u32(u32::from(!carry_zero))) & m;
+        let possible_sum_one =
+            lhs.min_value().wrapping_add(rhs.min_value()).wrapping_add(W::from_u32(u32::from(carry_one))) & m;
         let carry_known_zero = !(possible_sum_zero ^ lhs.zero ^ rhs.zero) & m;
         let carry_known_one = (possible_sum_one ^ lhs.one ^ rhs.one) & m;
         let known = (lhs.zero | lhs.one) & (rhs.zero | rhs.one) & (carry_known_zero | carry_known_one);
@@ -526,7 +535,7 @@ impl KnownBits {
         carry: &Self,
     ) -> Self {
         assert_eq!(carry.width, 1, "Carry must be 1-bit");
-        Self::compute_for_add_carry_bits(lhs, rhs, carry.zero != 0, carry.one != 0)
+        Self::compute_for_add_carry_bits(lhs, rhs, carry.zero != W::ZERO, carry.one != W::ZERO)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L61>
@@ -582,12 +591,12 @@ impl KnownBits {
             if !bit(min_val, width - 1) {
                 let num = countl_one(min_val & mask(width - 1), width - 1);
                 out.one = set_range(out.one, width - 1 - num, width - 1);
-                out.zero |= sign_bit(width);
+                out.zero |= sign_bit::<W>(width);
             }
             if bit(max_val, width - 1) {
                 let num = countl_zero(max_val & mask(width - 1), width - 1);
                 out.zero = set_range(out.zero, width - 1 - num, width - 1);
-                out.one |= sign_bit(width);
+                out.one |= sign_bit::<W>(width);
             }
         }
         if out.has_conflict() {
@@ -604,7 +613,7 @@ impl KnownBits {
     ) -> Self {
         assert_eq!(borrow.width, 1, "Borrow must be 1-bit");
         let swapped = Self { zero: rhs.one, one: rhs.zero, width: rhs.width };
-        Self::compute_for_add_carry_bits(lhs, &swapped, borrow.one != 0, borrow.zero != 0)
+        Self::compute_for_add_carry_bits(lhs, &swapped, borrow.one != W::ZERO, borrow.zero != W::ZERO)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L361>
@@ -617,7 +626,7 @@ impl KnownBits {
     ) -> Self {
         if self_add {
             assert_eq!(lhs, rhs, "Expected matching knownbits");
-            return Self::shl(lhs, &Self::constant(8, 1), nuw, nsw, true);
+            return Self::shl(lhs, &Self::constant(8, W::ONE), nuw, nsw, true);
         }
         Self::compute_for_add_sub(true, nsw, nuw, lhs, rhs)
     }
@@ -653,10 +662,10 @@ impl KnownBits {
             } else {
                 let mut unsigned_lhs = *lhs;
                 let mut unsigned_rhs = *rhs;
-                unsigned_lhs.one &= !sign_bit(width);
-                unsigned_lhs.zero |= sign_bit(width);
-                unsigned_rhs.one &= !sign_bit(width);
-                unsigned_rhs.zero |= sign_bit(width);
+                unsigned_lhs.one &= !sign_bit::<W>(width);
+                unsigned_lhs.zero |= sign_bit::<W>(width);
+                unsigned_rhs.one &= !sign_bit::<W>(width);
+                unsigned_rhs.zero |= sign_bit::<W>(width);
                 let res = Self::compute_for_add_sub(add, false, false, &unsigned_lhs, &unsigned_rhs);
                 if add {
                     if res.is_negative() {
@@ -718,11 +727,11 @@ impl KnownBits {
             }
             let c = if is_signed {
                 assert!(!lhs.is_sign_unknown(), "We somehow know overflow without knowing input sign");
-                if lhs.is_negative() { sign_bit(width) } else { mask(width) >> 1 }
+                if lhs.is_negative() { sign_bit::<W>(width) } else { mask::<W>(width) >> 1 }
             } else if add {
-                mask(width)
+                mask::<W>(width)
             } else {
-                0
+                W::ZERO
             };
             res.one = c;
             res.zero = !c & mask(width);
@@ -730,15 +739,15 @@ impl KnownBits {
         }
         if is_signed {
             if may_pos_clamp {
-                res.zero &= !mask(width - 1);
+                res.zero &= !mask::<W>(width - 1);
             }
             if may_neg_clamp {
-                res.one &= !mask(width - 1);
+                res.one &= !mask::<W>(width - 1);
             }
         } else if add {
-            res.zero = 0;
+            res.zero = W::ZERO;
         } else {
-            res.one = 0;
+            res.one = W::ZERO;
         }
         res
     }
@@ -775,49 +784,6 @@ impl KnownBits {
         Self::compute_for_sat_add_sub(false, false, lhs, rhs)
     }
 
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1046>
-    fn avg_compute_u(
-        lhs: &Self,
-        rhs: &Self,
-        ceil: bool,
-    ) -> Self {
-        let width = lhs.width;
-        let sum = Self::compute_for_add_carry_bits(&lhs.zext(width + 1), &rhs.zext(width + 1), !ceil, ceil);
-        sum.extract_bits(width, 1)
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1056>
-    pub fn avg_floor_s(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        Self::flip_sign_bit(&Self::avg_floor_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1060>
-    pub fn avg_floor_u(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        Self::avg_compute_u(lhs, rhs, false)
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1064>
-    pub fn avg_ceil_s(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        Self::flip_sign_bit(&Self::avg_ceil_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1068>
-    pub fn avg_ceil_u(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        Self::avg_compute_u(lhs, rhs, true)
-    }
-
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1072>
     pub fn mul(
         lhs: &Self,
@@ -840,45 +806,23 @@ impl KnownBits {
 
         let bottom_known = lhs.one.wrapping_mul(rhs.one) & mask(width);
         let mut res = Self::unknown(width);
-        res.zero = set_high(0, width, lead_z);
+        res.zero = set_high(W::ZERO, width, lead_z);
         res.zero |= !bottom_known & mask(result_bits_known);
         res.one = bottom_known & mask(result_bits_known);
 
         if no_undef_self_multiply {
             let two_tz_p1 = 2 * trail_zero_lhs + 1;
             if two_tz_p1 < width {
-                res.zero |= 1 << two_tz_p1;
+                res.zero |= W::ONE << two_tz_p1;
             }
             if trail_zero_lhs < width && bit(lhs.one, trail_zero_lhs) {
                 let two_tz_p2 = two_tz_p1 + 1;
                 if two_tz_p2 < width {
-                    res.zero |= 1 << two_tz_p2;
+                    res.zero |= W::ONE << two_tz_p2;
                 }
             }
         }
         res
-    }
-
-    /// DEVIATE: at most 64 bits (the wide product is a `u128`).
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1175>
-    pub fn mulhs(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        let width = lhs.width;
-        assert!(width <= 64 && width == rhs.width, "Operand mismatch");
-        Self::mul(&lhs.sext(2 * width), &rhs.sext(2 * width), false).extract_bits(width, width)
-    }
-
-    /// DEVIATE: at most 64 bits (the wide product is a `u128`).
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1183>
-    pub fn mulhu(
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        let width = lhs.width;
-        assert!(width <= 64 && width == rhs.width, "Operand mismatch");
-        Self::mul(&lhs.zext(2 * width), &rhs.zext(2 * width), false).extract_bits(width, width)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1191>
@@ -892,14 +836,14 @@ impl KnownBits {
             return known;
         }
         if bit(lhs.one, 0) {
-            known.one |= 1;
+            known.one |= W::ONE;
         }
         let min_tz = lhs.count_min_trailing_zeros() as i64 - rhs.count_max_trailing_zeros() as i64;
         let max_tz = lhs.count_max_trailing_zeros() as i64 - rhs.count_min_trailing_zeros() as i64;
         if min_tz >= 0 {
-            known.zero |= mask(min_tz as u32);
+            known.zero |= mask::<W>(min_tz as u32);
             if min_tz == max_tz {
-                known.one |= 1_u128 << min_tz;
+                known.one |= W::ONE << (min_tz as u32);
             }
         } else if max_tz < 0 {
             known.set_all_zero();
@@ -908,79 +852,6 @@ impl KnownBits {
             known.set_all_zero();
         }
         known
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1227>
-    pub fn sdiv(
-        lhs: &Self,
-        rhs: &Self,
-        exact: bool,
-    ) -> Self {
-        if lhs.is_non_negative() && rhs.is_non_negative() {
-            return Self::udiv(lhs, rhs, exact);
-        }
-        let width = lhs.width;
-        let mut known = Self::unknown(width);
-        if lhs.is_zero() || rhs.is_zero() {
-            known.set_all_zero();
-            return known;
-        }
-        let sdiv =
-            |num: u128, denom: u128| (signed(num, width).wrapping_div(signed(denom, width)) as u128) & mask(width);
-        let mut res: Option<u128> = None;
-        if lhs.is_negative() && rhs.is_negative() {
-            let denom = rhs.signed_max_value();
-            let num = lhs.signed_min_value();
-            res =
-                Some(if num == sign_bit(width) && denom == mask(width) { mask(width) >> 1 } else { sdiv(num, denom) });
-        } else if lhs.is_negative() && rhs.is_non_negative() {
-            let neg_max = lhs.signed_max_value().wrapping_neg() & mask(width);
-            if exact || neg_max >= rhs.signed_max_value() {
-                let denom = rhs.signed_min_value();
-                let num = lhs.signed_min_value();
-                res = Some(if denom == 0 { num } else { sdiv(num, denom) });
-            }
-        } else if lhs.is_strictly_positive() && rhs.is_negative() {
-            let neg_min = rhs.signed_min_value().wrapping_neg() & mask(width);
-            if exact || lhs.signed_min_value() >= neg_min {
-                res = Some(sdiv(lhs.signed_max_value(), rhs.signed_max_value()));
-            }
-        }
-        if let Some(res) = res {
-            if !bit(res, width - 1) {
-                known.zero = set_high(known.zero, width, countl_zero(res, width));
-            } else {
-                known.one = set_high(known.one, width, countl_one(res, width));
-            }
-        }
-        Self::div_compute_low_bit(known, lhs, rhs, exact)
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1283>
-    pub fn udiv(
-        lhs: &Self,
-        rhs: &Self,
-        exact: bool,
-    ) -> Self {
-        let width = lhs.width;
-        let mut known = Self::unknown(width);
-        if lhs.is_zero() || rhs.is_zero() {
-            known.set_all_zero();
-            return known;
-        }
-        let mut min_denom = rhs.min_value();
-        if min_denom == 0 {
-            min_denom |= 1_u128 << rhs.count_min_trailing_zeros();
-        }
-        let max_res = lhs.max_value() / min_denom;
-        let min_res = lhs.min_value() / rhs.max_value();
-        known = Self::constant(width, min_res);
-        if min_res != max_res {
-            let different = width - 1 - countl_zero(min_res ^ max_res, width);
-            known.zero &= !mask(different + 1);
-            known.one &= !mask(different + 1);
-        }
-        Self::div_compute_low_bit(known, lhs, rhs, exact)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1321>
@@ -1005,7 +876,7 @@ impl KnownBits {
             return *lhs;
         }
         let mut known = Self::rem_get_low_bits(lhs, rhs);
-        let max_res = min(lhs.max_value(), rhs.max_value().wrapping_sub(1) & mask(lhs.width));
+        let max_res = min(lhs.max_value(), rhs.max_value().wrapping_sub(W::ONE) & mask(lhs.width));
         known.zero = set_high(known.zero, lhs.width, countl_zero(max_res, lhs.width));
         known
     }
@@ -1017,12 +888,12 @@ impl KnownBits {
     ) -> Self {
         let width = lhs.width;
         let mut known = Self::rem_get_low_bits(lhs, rhs);
-        if rhs.is_constant() && rhs.constant_value().is_power_of_two() {
-            let low_bits = rhs.constant_value() - 1;
-            if lhs.is_non_negative() || low_bits & !lhs.zero == 0 {
+        if rhs.is_constant() && is_power_of_two(rhs.constant_value()) {
+            let low_bits = rhs.constant_value().wrapping_sub(W::ONE);
+            if lhs.is_non_negative() || low_bits & !lhs.zero == W::ZERO {
                 known.zero |= !low_bits & mask(width);
             }
-            if lhs.is_negative() && low_bits & lhs.one != 0 {
+            if lhs.is_negative() && low_bits & lhs.one != W::ZERO {
                 known.one |= !low_bits & mask(width);
             }
             return known;
@@ -1105,10 +976,10 @@ impl KnownBits {
         mut lhs: Self,
         mut rhs: Self,
     ) -> Self {
-        if signed(lhs.signed_min_value(), lhs.width) >= signed(rhs.signed_max_value(), rhs.width) {
+        if !slt(lhs.signed_min_value(), rhs.signed_max_value(), lhs.width) {
             return Self::compute_for_add_sub(false, false, false, &lhs, &rhs);
         }
-        if signed(rhs.signed_min_value(), rhs.width) >= signed(lhs.signed_max_value(), lhs.width) {
+        if !slt(rhs.signed_min_value(), lhs.signed_max_value(), lhs.width) {
             return Self::compute_for_add_sub(false, false, false, &rhs, &lhs);
         }
         let top = lhs.width - 1;
@@ -1124,15 +995,15 @@ impl KnownBits {
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L400>
     fn max_shift_amount(
-        max_value: u128,
+        max_value: W,
         value_width: u32,
         width: u32,
     ) -> u32 {
         if width.is_power_of_two() {
             let bits = min(width.ilog2(), value_width);
-            (max_value & mask(bits)) as u32
+            (max_value & mask::<W>(bits)).low_u128() as u32
         } else {
-            min(max_value, u128::from(width - 1)) as u32
+            min(max_value, W::from_u32(width - 1)).low_u128() as u32
         }
     }
 
@@ -1141,8 +1012,8 @@ impl KnownBits {
         rhs: &Self,
         amount: u32,
     ) -> bool {
-        let zero_mask = rhs.zero as u32;
-        let one_mask = rhs.one as u32;
+        let zero_mask = rhs.zero.low_u128() as u32;
+        let one_mask = rhs.one.low_u128() as u32;
         zero_mask & amount == 0 && (one_mask | amount) == amount
     }
 
@@ -1174,7 +1045,7 @@ impl KnownBits {
             known
         };
         let mut known = Self::unknown(width);
-        let mut min_shift = min(rhs.min_value(), u128::from(width)) as u32;
+        let mut min_shift = min(rhs.min_value(), W::from_u32(width)).low_u128() as u32;
         if min_shift == 0 && shamt_non_zero {
             min_shift = 1;
         }
@@ -1199,7 +1070,7 @@ impl KnownBits {
         if min_shift == 0 && max_shift == width - 1 && width.is_power_of_two() {
             known.zero = mask(lhs.count_min_trailing_zeros());
             if lhs.is_all_ones() {
-                known.one |= sign_bit(width);
+                known.one |= sign_bit::<W>(width);
             }
             if nsw {
                 if lhs.is_non_negative() {
@@ -1241,12 +1112,12 @@ impl KnownBits {
             known
         };
         let mut known = Self::unknown(width);
-        let mut min_shift = min(rhs.min_value(), u128::from(width)) as u32;
+        let mut min_shift = min(rhs.min_value(), W::from_u32(width)).low_u128() as u32;
         if min_shift == 0 && shamt_non_zero {
             min_shift = 1;
         }
         if lhs.is_unknown() {
-            known.zero = set_high(0, width, min_shift);
+            known.zero = set_high(W::ZERO, width, min_shift);
             return known;
         }
         let mut max_shift = Self::max_shift_amount(rhs.max_value(), rhs.width, width);
@@ -1288,7 +1159,7 @@ impl KnownBits {
             width,
         };
         let mut known = Self::unknown(width);
-        let mut min_shift = min(rhs.min_value(), u128::from(width)) as u32;
+        let mut min_shift = min(rhs.min_value(), W::from_u32(width)).low_u128() as u32;
         if min_shift == 0 && shamt_non_zero {
             min_shift = 1;
         }
@@ -1323,26 +1194,6 @@ impl KnownBits {
         known
     }
 
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L609>
-    pub fn fshl(
-        lhs: &Self,
-        rhs: &Self,
-        amt: u128,
-    ) -> Self {
-        let w = lhs.width;
-        Self::raw(w, fshl(lhs.zero, rhs.zero, amt, w), fshl(lhs.one, rhs.one, amt, w))
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L615>
-    pub fn fshr(
-        lhs: &Self,
-        rhs: &Self,
-        amt: u128,
-    ) -> Self {
-        let w = lhs.width;
-        Self::raw(w, fshr(lhs.zero, rhs.zero, amt, w), fshr(lhs.one, rhs.one, amt, w))
-    }
-
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L621>
     pub fn clmul(
         lhs: &Self,
@@ -1350,8 +1201,8 @@ impl KnownBits {
     ) -> Self {
         let width = lhs.width;
         let mut res = Self::constant(width, clmul(lhs.min_value(), rhs.min_value(), width));
-        let clmul_or = |a: u128, b: u128| {
-            let mut result = 0_u128;
+        let clmul_or = |a: W, b: W| {
+            let mut result = W::ZERO;
             let active = width - countl_zero(b, width);
             for i in 0..min(active, width - countr_zero(a, width)) {
                 if bit(b, i) {
@@ -1411,11 +1262,11 @@ impl KnownBits {
                 res.one = with_bit(res.one, i, false);
             }
             if !bit(mask_bits.zero, i) {
-                let range = set_range(0, m0, m1 + 1) & mask(width);
-                if range & !val.one != 0 {
+                let range = set_range(W::ZERO, m0, m1 + 1) & mask::<W>(width);
+                if range & !val.one != W::ZERO {
                     res.one = with_bit(res.one, i, false);
                 }
-                if range & !val.zero != 0 {
+                if range & !val.zero != W::ZERO {
                     res.zero = with_bit(res.zero, i, false);
                 }
             }
@@ -1437,7 +1288,7 @@ impl KnownBits {
         if lhs.is_constant() && rhs.is_constant() {
             return Some(lhs.constant_value() == rhs.constant_value());
         }
-        if lhs.one & rhs.zero != 0 || rhs.one & lhs.zero != 0 {
+        if lhs.one & rhs.zero != W::ZERO || rhs.one & lhs.zero != W::ZERO {
             return Some(false);
         }
         None
@@ -1495,10 +1346,10 @@ impl KnownBits {
         rhs: &Self,
     ) -> Option<bool> {
         let w = lhs.width;
-        if signed(lhs.signed_max_value(), w) <= signed(rhs.signed_min_value(), w) {
+        if !sgt(lhs.signed_max_value(), rhs.signed_min_value(), w) {
             return Some(false);
         }
-        if signed(lhs.signed_min_value(), w) > signed(rhs.signed_max_value(), w) {
+        if sgt(lhs.signed_min_value(), rhs.signed_max_value(), w) {
             return Some(true);
         }
         None
@@ -1561,7 +1412,7 @@ impl KnownBits {
         &self,
         amount: u32,
     ) -> Self {
-        Self::raw(self.width, lshr_or_zero_shl(self.zero, amount), lshr_or_zero_shl(self.one, amount))
+        Self::raw(self.width, shl_or_zero(self.zero, amount), shl_or_zero(self.one, amount))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L545>
@@ -1585,12 +1436,12 @@ impl KnownBits {
         if self.is_negative() {
             let mut tmp = *self;
             if int_min_is_poison && popcount(self.zero) + 2 == width {
-                tmp.one |= 1_u128 << self.count_min_trailing_zeros();
+                tmp.one |= W::ONE << self.count_min_trailing_zeros();
             }
-            abs = Self::compute_for_add_sub(false, int_min_is_poison, false, &Self::constant(width, 0), &tmp);
+            abs = Self::compute_for_add_sub(false, int_min_is_poison, false, &Self::constant(width, W::ZERO), &tmp);
             if int_min_is_poison && tmp.count_min_population() == 1 && tmp.count_max_population() != 1 {
-                tmp.one &= !sign_bit(width);
-                tmp.zero |= sign_bit(width);
+                tmp.one &= !sign_bit::<W>(width);
+                tmp.zero |= sign_bit::<W>(width);
                 abs.one = set_range(abs.one, width - tmp.count_min_leading_zeros(), width - 1);
             }
         } else {
@@ -1598,11 +1449,11 @@ impl KnownBits {
             let min_tz = self.count_min_trailing_zeros();
             abs.zero = mask(min_tz);
             if max_tz == min_tz && max_tz < width {
-                abs.one |= 1_u128 << max_tz;
+                abs.one |= W::ONE << max_tz;
             }
-            if int_min_is_poison || (self.one != 0 && self.one != sign_bit(width)) {
-                abs.one &= !sign_bit(width);
-                abs.zero |= sign_bit(width);
+            if int_min_is_poison || (self.one != W::ZERO && self.one != sign_bit::<W>(width)) {
+                abs.one &= !sign_bit::<W>(width);
+                abs.zero |= sign_bit::<W>(width);
             }
         }
         abs
@@ -1618,43 +1469,31 @@ impl KnownBits {
             return Self::unknown(width);
         }
         if self.is_constant() {
-            return Self::constant(width, u128::from(num_elts).wrapping_mul(self.constant_value()) & mask(width));
+            return Self::constant(width, W::from_u32(num_elts).wrapping_mul(self.constant_value()) & mask(width));
         }
         let mut result = Self::unknown(width);
         let lost_bits = if num_elts <= 1 { 0 } else { 32 - (num_elts - 1).leading_zeros() };
         if self.is_non_negative() {
             let leading_zeros = self.count_min_leading_zeros();
             let leading_zeros = if leading_zeros > lost_bits { leading_zeros - lost_bits } else { 0 };
-            result.zero = set_high(0, width, leading_zeros);
+            result.zero = set_high(W::ZERO, width, leading_zeros);
         } else if self.is_negative() {
             let leading_ones = self.count_min_leading_ones();
             let leading_ones = if leading_ones > lost_bits { leading_ones - lost_bits } else { 0 };
-            result.one = set_high(0, width, leading_ones);
+            result.one = set_high(W::ZERO, width, leading_ones);
         }
         result
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L559>
-    pub fn byte_swap(&self) -> Self {
-        let swap = |v: u128| v.swap_bytes() >> (128 - self.width);
-        Self::raw(self.width, swap(self.zero), swap(self.one))
-    }
-
-    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L563>
-    pub fn reverse_bits(&self) -> Self {
-        let reverse = |v: u128| v.reverse_bits() >> (128 - self.width);
-        Self::raw(self.width, reverse(self.zero), reverse(self.one))
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1407>
     pub fn blsi(&self) -> Self {
         let width = self.width;
-        let mut known = Self { zero: self.zero, one: 0, width };
+        let mut known = Self { zero: self.zero, one: W::ZERO, width };
         let max = self.count_max_trailing_zeros();
         known.zero = set_range(known.zero, min(max + 1, width), width);
         let min_tz = self.count_min_trailing_zeros();
         if max == min_tz && max < width {
-            known.one |= 1_u128 << max;
+            known.one |= W::ONE << max;
         }
         known
     }
@@ -1684,11 +1523,189 @@ impl KnownBits {
     }
 }
 
-fn lshr_or_zero_shl(
-    v: u128,
+impl Bits<u128> {
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1227>
+    pub fn sdiv(
+        lhs: &Self,
+        rhs: &Self,
+        exact: bool,
+    ) -> Self {
+        if lhs.is_non_negative() && rhs.is_non_negative() {
+            return Self::udiv(lhs, rhs, exact);
+        }
+        let width = lhs.width;
+        let mut known = Self::unknown(width);
+        if lhs.is_zero() || rhs.is_zero() {
+            known.set_all_zero();
+            return known;
+        }
+        let sdiv = |num: u128, denom: u128| {
+            (signed(num, width).wrapping_div(signed(denom, width)) as u128) & mask::<u128>(width)
+        };
+        let mut res: Option<u128> = None;
+        if lhs.is_negative() && rhs.is_negative() {
+            let denom = rhs.signed_max_value();
+            let num = lhs.signed_min_value();
+            res = Some(if num == sign_bit::<u128>(width) && denom == mask::<u128>(width) {
+                mask::<u128>(width) >> 1
+            } else {
+                sdiv(num, denom)
+            });
+        } else if lhs.is_negative() && rhs.is_non_negative() {
+            let neg_max = lhs.signed_max_value().wrapping_neg() & mask::<u128>(width);
+            if exact || neg_max >= rhs.signed_max_value() {
+                let denom = rhs.signed_min_value();
+                let num = lhs.signed_min_value();
+                res = Some(if denom == 0 { num } else { sdiv(num, denom) });
+            }
+        } else if lhs.is_strictly_positive() && rhs.is_negative() {
+            let neg_min = rhs.signed_min_value().wrapping_neg() & mask::<u128>(width);
+            if exact || lhs.signed_min_value() >= neg_min {
+                res = Some(sdiv(lhs.signed_max_value(), rhs.signed_max_value()));
+            }
+        }
+        if let Some(res) = res {
+            if !bit(res, width - 1) {
+                known.zero = set_high(known.zero, width, countl_zero(res, width));
+            } else {
+                known.one = set_high(known.one, width, countl_one(res, width));
+            }
+        }
+        Self::div_compute_low_bit(known, lhs, rhs, exact)
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1283>
+    pub fn udiv(
+        lhs: &Self,
+        rhs: &Self,
+        exact: bool,
+    ) -> Self {
+        let width = lhs.width;
+        let mut known = Self::unknown(width);
+        if lhs.is_zero() || rhs.is_zero() {
+            known.set_all_zero();
+            return known;
+        }
+        let mut min_denom = rhs.min_value();
+        if min_denom == 0 {
+            min_denom |= 1_u128 << rhs.count_min_trailing_zeros();
+        }
+        let max_res = lhs.max_value() / min_denom;
+        let min_res = lhs.min_value() / rhs.max_value();
+        known = Self::constant(width, min_res);
+        if min_res != max_res {
+            let different = width - 1 - countl_zero(min_res ^ max_res, width);
+            known.zero &= !mask::<u128>(different + 1);
+            known.one &= !mask::<u128>(different + 1);
+        }
+        Self::div_compute_low_bit(known, lhs, rhs, exact)
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L609>
+    pub fn fshl(
+        lhs: &Self,
+        rhs: &Self,
+        amt: u128,
+    ) -> Self {
+        let w = lhs.width;
+        Self::raw(w, fshl(lhs.zero, rhs.zero, amt, w), fshl(lhs.one, rhs.one, amt, w))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L615>
+    pub fn fshr(
+        lhs: &Self,
+        rhs: &Self,
+        amt: u128,
+    ) -> Self {
+        let w = lhs.width;
+        Self::raw(w, fshr(lhs.zero, rhs.zero, amt, w), fshr(lhs.one, rhs.one, amt, w))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L559>
+    pub fn byte_swap(&self) -> Self {
+        let swap = |v: u128| v.swap_bytes() >> (128 - self.width);
+        Self::raw(self.width, swap(self.zero), swap(self.one))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L563>
+    pub fn reverse_bits(&self) -> Self {
+        let reverse = |v: u128| v.reverse_bits() >> (128 - self.width);
+        Self::raw(self.width, reverse(self.zero), reverse(self.one))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1175>
+    pub fn mulhs(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        let width = lhs.width;
+        assert_eq!(width, rhs.width, "Operand mismatch");
+        let wide_lhs = lhs.to_word::<U256>().sext(2 * width);
+        let wide_rhs = rhs.to_word::<U256>().sext(2 * width);
+        Bits::<U256>::mul(&wide_lhs, &wide_rhs, false).extract_bits(width, width).to_word()
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1183>
+    pub fn mulhu(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        let width = lhs.width;
+        assert_eq!(width, rhs.width, "Operand mismatch");
+        let wide_lhs = lhs.to_word::<U256>().zext(2 * width);
+        let wide_rhs = rhs.to_word::<U256>().zext(2 * width);
+        Bits::<U256>::mul(&wide_lhs, &wide_rhs, false).extract_bits(width, width).to_word()
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1046>
+    fn avg_compute_u(
+        lhs: &Self,
+        rhs: &Self,
+        ceil: bool,
+    ) -> Self {
+        let width = lhs.width;
+        let (wide_lhs, wide_rhs) = (lhs.to_word::<U256>().zext(width + 1), rhs.to_word::<U256>().zext(width + 1));
+        Bits::<U256>::compute_for_add_carry_bits(&wide_lhs, &wide_rhs, !ceil, ceil).extract_bits(width, 1).to_word()
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1056>
+    pub fn avg_floor_s(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        Self::flip_sign_bit(&Self::avg_floor_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1060>
+    pub fn avg_floor_u(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        Self::avg_compute_u(lhs, rhs, false)
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1064>
+    pub fn avg_ceil_s(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        Self::flip_sign_bit(&Self::avg_ceil_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1068>
+    pub fn avg_ceil_u(
+        lhs: &Self,
+        rhs: &Self,
+    ) -> Self {
+        Self::avg_compute_u(lhs, rhs, true)
+    }
+}
+
+fn shl_or_zero<W: Word>(
+    v: W,
     by: u32,
-) -> u128 {
-    if by >= 128 { 0 } else { v << by }
+) -> W {
+    if by >= W::BITS { W::ZERO } else { v << by }
 }
 
 /// `SignBitsOps::rot`: the sign bits left in a rotated value.
