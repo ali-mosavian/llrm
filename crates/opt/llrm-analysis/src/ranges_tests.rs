@@ -1574,3 +1574,31 @@ fn a_deep_nest_makes_a_scope_for_a_block_in_at_most_two_loops() {
     assert!(known.get(&cfg::id(parsed.block("h12"))).is_some(), "premise: the innermost loop was solved");
     assert!(made <= 2 * blocks, "{made} scopes for {blocks} blocks in {depth} loops");
 }
+
+/// The depth of each loop in its nest was found by asking every loop whether it
+/// holds the header: N loops in a row asked N^2 times once the work is above
+/// the budget (`branches` at N=4096: 4,600 loops, `Body::contains` 2.7 M
+/// calls, 5.0x for 4x where 4.5 fails the gate). Found once from the bodies.
+#[test]
+fn the_depth_of_each_loop_is_found_without_asking_every_loop() {
+    let asked = |loops: usize| {
+        let padding: String = (0..40).map(|at| format!("  %p{at} = add i16 %n, {at}\n")).collect();
+        let mut text = String::from("define i16 @f(i16 %n) {\nb0:\n  br label %h1\n\n");
+        for k in 1..=loops {
+            let next = if k < loops { format!("h{}", k + 1) } else { "out".into() };
+            text += &format!(
+                "h{k}:\n  %i{k} = phi i16 [ 0, %{} ], [ %j{k}, %h{k} ]\n{}  %j{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %j{k}, %n\n  br i1 %c{k}, label %h{k}, label %{next}\n\n",
+                if k == 1 { "b0".into() } else { format!("h{}", k - 1) },
+                padding.replace("%p", &format!("%p{k}_"))
+            );
+        }
+        text += "out:\n  ret i16 %n\n}\n";
+        let parsed = Parsed::new(&text);
+        let before = super::depths_asked();
+        let _ = bounded(&parsed.unit()).unwrap();
+        super::depths_asked() - before
+    };
+    let (small, big) = (asked(150), asked(300));
+    assert!(small > 0, "premise: the work is above the budget");
+    assert!(big <= 2 * small + 64, "{small} -> {big} questions for 150 -> 300 loops");
+}

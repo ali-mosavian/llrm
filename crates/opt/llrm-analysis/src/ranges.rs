@@ -1733,12 +1733,28 @@ fn capped_from(
     (work > CAP_WORK).then_some(CAP_DEPTH)
 }
 
-/// How many loops hold `loop_`.
-fn depth_in(
-    all: &[loops::Loop],
-    loop_: &loops::Loop,
-) -> usize {
-    all.iter().filter(|one| one.header != loop_.header && one.body.contains(&loop_.header)).count()
+/// How many loops hold each block, for the depth of a loop in its nest: found
+/// once from the loops' bodies, not by asking every loop of each (a function of
+/// 4,600 loops asked 21 M times).
+fn depths_of(all: &[loops::Loop]) -> IndexMap<i64, usize> {
+    let mut held: IndexMap<i64, usize> = IndexMap::default();
+    for one in all {
+        for &at in one.body.iter() {
+            DEPTHS_ASKED.with(|asked| asked.set(asked.get() + 1));
+            *held.entry(at).or_default() += 1;
+        }
+    }
+    held
+}
+
+thread_local! {
+    static DEPTHS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many (loop, block) pairs this thread has gone through to find how deep
+/// the loops lie, for a test that the work is not the loops squared.
+pub fn depths_asked() -> usize {
+    DEPTHS_ASKED.with(std::cell::Cell::get)
 }
 
 #[path = "ranges_scopes.rs"]
@@ -1885,6 +1901,7 @@ fn bounded_solved_under(
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
     let capped = if cap { capped_from(function, &nest) } else { None };
     let rank: HashMap<i64, usize> = nest.iter().enumerate().map(|(at, one)| (one.header, at)).collect();
+    let depths = capped.map(|_| depths_of(&shape.loops));
     let prior = prior.filter(|(held, _)| held.headers == headers && held.capped == capped);
     // The loops to be worked again start from nothing: what their loops narrow
     // is put in anew. The others keep what they had, the scopes made and the
@@ -1938,7 +1955,8 @@ fn bounded_solved_under(
             continue;
         }
         LOOPS_SOLVED.with(|count| count.set(count.get() + 1));
-        let beyond = capped.is_some_and(|from| depth_in(&shape.loops, loop_) >= from);
+        // A block the loop holds is held by it too: its depth is one less.
+        let beyond = capped.is_some_and(|from| depths.as_ref().is_some_and(|held| held[&loop_.header] - 1 >= from));
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.

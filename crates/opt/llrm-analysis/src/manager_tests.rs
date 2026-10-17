@@ -856,6 +856,49 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// `Annotated` and the `Held` a unit carries asked `Pointers`, so each body
+/// state paid for the escape phase (a walk of every instruction and a dataflow
+/// over the blocks) of which they read nothing: 88 of d_faces' -O1 compile's
+/// body states, 42 M of 3,337 M. They read the pointer values.
+#[test]
+fn test_annotated_does_not_solve_what_escapes() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  %v = load i8, ptr %p\n  call void @g(ptr %p)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::alias::escape_solves();
+    analyses.get::<Annotated>(context, &layout, f);
+    super::Held::of(context, &layout, f, &mut analyses, true);
+    assert_eq!(crate::alias::escape_solves() - before, 0, "Annotated or Held solved what escapes");
+    analyses.get::<Pointers>(context, &layout, f);
+    assert_eq!(crate::alias::escape_solves() - before, 1, "Pointers solves what escapes once");
+}
+
+/// `Annotated` worked out every value's stride congruence (`congruences_with`,
+/// a pass over the loops' inductions) in every solve, for the accesses with a
+/// variable index alone to ask: 24.0 M of d_faces' 3,218 M at -O1, 123 solves
+/// for 4,185 asks. A body with none asks none.
+#[test]
+fn test_annotated_asks_no_strides_of_accesses_without_a_variable_index() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %i) {{\nb:\n  %a = alloca [8 x i16]\n  %m = and i16 %i, 7\n  %q = getelementptr i16, ptr %a, i16 %m\n  %w = load i16, ptr %q\n  ret i16 %w\n}}\n\ndefine i16 @g(ptr %a) {{\nb:\n  %p = getelementptr i8, ptr %a, i16 2\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let before = crate::alias::congruences_found();
+    let (context, g) = module.function_mut("g").expect("@g");
+    analyses.get::<Annotated>(context, &layout, g);
+    assert_eq!(crate::alias::congruences_found() - before, 0, "strides worked out for no access that asks");
+    let mut analyses = Analyses::new(outer);
+    let (context, f) = module.function_mut("f").expect("@f");
+    analyses.get::<Annotated>(context, &layout, f);
+    assert_eq!(crate::alias::congruences_found() - before, 1, "a variable index asks once");
+}
+
 /// A pass reports what it did not preserve, and an analysis asked after its
 /// last edit (or with no edit at all) was derived from the body as it stands:
 /// 383 of 2,248 results dropped at an invalidation over d_faces -O2 were that,

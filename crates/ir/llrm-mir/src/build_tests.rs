@@ -74,3 +74,19 @@ fn a_built_module_is_the_one_its_text_describes() {
     let answer = |n: u128| run(&module, "f", vec![Val::Int { bits: n, width: 16 }], 100);
     assert_eq!((answer(15), answer(3)), (Ok(Val::Int { bits: 20, width: 16 }), Ok(Val::Int { bits: 3, width: 16 })));
 }
+
+/// A body that passes wrote the name of its blocks and places once for each
+/// instruction it checked (d_faces -Os: 15k strings of the 3.7 M allocations):
+/// a name is text a message needs, and a body that passes has no message.
+#[test]
+fn a_body_that_passes_writes_no_name() {
+    let module = parse::module(TEXT).unwrap();
+    let before = verify::names_written();
+    assert_eq!(verify::verify(&module), Vec::<String>::new());
+    assert_eq!(verify::names_written() - before, 0, "names were written for a body with nothing to say");
+    let wrong = parse::module("define i16 @g(i16 %a) {\nentry:\n  ret void\n}\n").unwrap();
+    let before = verify::names_written();
+    let said = verify::verify(&wrong);
+    assert!(said.iter().any(|one| one.contains("ret in %entry")), "{said:?}");
+    assert!(verify::names_written() - before >= 1, "a message with a place wrote none");
+}
