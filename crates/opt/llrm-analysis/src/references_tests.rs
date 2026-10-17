@@ -124,3 +124,80 @@ fn test_a_value_replaced_by_another_drops_the_accesses_that_read_it() {
         }
     }
 }
+
+/// The spaces of the layout `DOS` names: 1 far, 2 selector alone.
+fn dos_spaces() -> llrm_mir::spaces::Spaces {
+    llrm_mir::spaces::Spaces { far: 1, segment: Some(2), ..llrm_mir::spaces::Spaces::FLAT }
+}
+
+/// An access through a far pointer made of a selector (`inttoptr` to the
+/// segment space, `addrspacecast` to the far space) reads the selector's
+/// definition, two instructions off its pointer: the chain held only %far. The
+/// selector replaced by a constant left the kept reference naming it (`segment`
+/// a value, no `selector`) while a fresh one has the constant: bench/textfill
+/// panicked `LLRM_CHECK_REFERENCES` at every level, and a stale reference
+/// drives any transform that asks.
+#[test]
+fn test_a_selector_replaced_by_a_constant_drops_the_far_access_that_read_it() {
+    let mut module = parsed(&format!(
+        "{DOS}define i8 @f(i16 %sel) {{
+b0:
+  %s = inttoptr i16 %sel to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  ret i8 %v
+}}
+"
+    ));
+    {
+        let (function, layout) = (function(&module, "f"), layout(&module));
+        let unit = Unit { spaces: dos_spaces(), ..Unit::of(&module, &layout, function) };
+        for (_, inst) in function.walk() {
+            let _ = MemRef::of(&unit, inst);
+        }
+    }
+    let constant = {
+        let (context, function) = module.function_mut("f").unwrap();
+        let sel = value(function, "sel");
+        let constant = Operand::Constant(context.int(function.value(sel).ty, 0xB800));
+        function.replace_value(sel, constant);
+        constant
+    };
+    let (function, layout) = (function(&module, "f"), layout(&module));
+    let unit = Unit { spaces: dos_spaces(), ..Unit::of(&module, &layout, function) };
+    let load = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .unwrap();
+    let kept = MemRef::of(&unit, load).unwrap();
+    assert_eq!(kept, MemRef::decomposed(&unit, load, &mut Vec::new()).unwrap());
+    assert_eq!(kept.segment, Some(constant), "the kept reference names the selector it was made from");
+}
+
+/// An access asked of in a body of many instructions was kept in a slot for
+/// each id below its own: the first ask of a version of d_faces -O2 filled 56.6
+/// M instructions of empty slots, 87% of what `MemRef::of` cost.
+#[test]
+fn test_one_access_asked_of_in_a_large_body_takes_one_cell() {
+    let adds: String = (0..400).map(|n| format!("  %v{n} = add i16 %i, {n}\n")).collect();
+    let module = parsed(&format!(
+        "{DOS}define void @f(ptr %p, i16 %i) {{\nb0:\n{adds}  store i16 %v399, ptr %p\n  ret void\n}}\n"
+    ));
+    let (function, layout) = (function(&module, "f"), layout(&module));
+    let unit = Unit::of(&module, &layout, function);
+    let store = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ))
+        .expect("the store");
+    let before = crate::memory::held_cells();
+    MemRef::of(&unit, store).expect("an access");
+    assert_eq!(crate::memory::held_cells() - before, 1);
+}

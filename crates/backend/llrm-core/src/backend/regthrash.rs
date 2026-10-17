@@ -217,7 +217,7 @@ fn _thrash_block(
                 effect.map_or_else(Lanes::new, |effect| effect.dead_before(&dead))
             });
         }
-        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_THRASH") {
+        if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_THRASH") {
             assert!(
                 after == _dead_after_by(regs, bits, &insns, exit),
                 "a rename changed what is dead beyond what was worked out again"

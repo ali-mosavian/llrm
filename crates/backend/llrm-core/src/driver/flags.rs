@@ -53,7 +53,11 @@ impl Level {
             Self::O0 => pipeline::Options::none(),
             Self::O1 => pipeline::Options::basic(),
             // -O1 less what rewrites a loop a debugger steps through.
-            Self::Og => pipeline::Options { fill: false, ..pipeline::Options::basic() },
+            Self::Og => pipeline::Options {
+                fill: false,
+                rounds: pipeline::Options::default().rounds,
+                ..pipeline::Options::basic()
+            },
             Self::O2 => pipeline::Options::standard(),
             Self::O3 => pipeline::Options::speed(),
             Self::Omax => pipeline::Options::aggressive(),
@@ -295,6 +299,7 @@ impl Flags {
             _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
             _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
+            "-fverify-ir" => llrm_support::debug::require_verification(),
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
                 self.stack_limit =

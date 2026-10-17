@@ -26,7 +26,7 @@ runs:
       run: rustup toolchain install
     # tools/fmt.sh, the gate's fmt step, runs nightly rustfmt.
     - shell: bash
-      run: rustup toolchain install nightly --profile minimal --component rustfmt
+      run: tools/ci/ensure_nightly.sh
     - uses: actions/cache/restore@v4
       if: inputs.save != 'true'
       with:

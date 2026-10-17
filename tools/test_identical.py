@@ -43,10 +43,10 @@ def test_levels_given_on_the_command_line_are_not_read_as_options(tmp_path, monk
     times where it meant to say 'identical'."""
     import subprocess
     import sys
-    fake = tmp_path / "cc"
+    fake = tmp_path / "llrm-c"
     fake.write_text('#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho x > "$2"\n')
     fake.chmod(0o755)
-    done = subprocess.run([sys.executable, str(HERE / "identical.py"), str(fake), str(fake), "--levels=-O2,-Os", "--programs-only"], capture_output=True, text=True, env={**__import__("os").environ, "CARGO_TARGET_DIR": str(tmp_path)})
+    done = subprocess.run([sys.executable, str(HERE / "identical.py"), str(fake), str(fake), "--levels=-O2,-Os", "--programs-only", "--no-bench"], capture_output=True, text=True, env={**__import__("os").environ, "CARGO_TARGET_DIR": str(tmp_path)})
     assert "usage:" not in done.stderr and "objects compared" in done.stdout, done.stderr[-300:] + done.stdout[-300:]
 
 
@@ -62,3 +62,82 @@ def test_every_oracle_in_the_source_is_run_on_the_corpus_but_those_named_not_run
     crate.mkdir(parents=True)
     (crate / "lib.rs").write_text('fn a() { env_set("LLRM_CHECK_BRANDNEW"); env_set("LLRM_CHECK_THRASH"); }\n')
     assert identical.checks(tmp_path) == ("BRANDNEW",), "a new oracle is run, one named NOT_RUN is not"
+
+
+def test_the_run_programs_are_in_the_corpus_with_their_own_flags(tmp_path):
+    """tests/run/c/i64_param_home.c -O2 was miscompiled by a kept result and passed identical.py with REPLAY (544 objects): the corpus did not
+    hold the programs the gate's run tests do."""
+    files = identical.corpus(tmp_path, None, None, programs_only=True)
+    source, flags = files["run/i64_param_home#0"]
+    assert source.name == "i64_param_home.c" and flags == ["-O2", "-march=i486", "-m32"]
+    assert "run/i64_param_home#1" in files
+
+
+def _repo(tmp_path):
+    import subprocess
+
+    for args in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True)
+
+
+def test_a_binary_older_than_its_head_is_stale(tmp_path):
+    """A baseline whose build failed silently was the previous main's binary: identical.py compared against it and said 'identical' of 544."""
+    import os
+    import time
+
+    _repo(tmp_path)
+    binary = tmp_path / "llrm-c"
+    binary.write_text("x")
+    assert identical.stale(str(binary), "HEAD", "OLD", tmp_path) is None
+    os.utime(binary, (time.time() - 3600, time.time() - 3600))
+    assert "stale build" in identical.stale(str(binary), "HEAD", "OLD", tmp_path)
+    assert "does not exist" in identical.stale(str(tmp_path / "none"), "HEAD", "OLD", tmp_path)
+    assert "no such revision" in identical.stale(str(binary), "nosuchrev", "OLD", tmp_path)
+
+
+def _bench_or_skip(tmp_path):
+    import os
+
+    if not os.environ.get("LLRM_BIN") and not os.environ.get("CARGO_TARGET_DIR") and not (HERE.parent / "target/release/llrm-c").exists():
+        pytest.skip("no built binaries")
+    try:
+        return identical.bench_compiles(tmp_path)
+    except (ImportError, FileNotFoundError) as error:
+        pytest.skip(f"bench harness unavailable: {error}")
+    except SystemExit as error:  # only the binaries: a corpus smaller than known is the failure this test is for
+        if "binaries" not in str(error):
+            raise
+        pytest.skip(str(error))
+
+
+def test_the_bench_programs_are_compiled_with_the_harnesss_flags(tmp_path):
+    """The corpus compiled bench programs with default flags while the harness gives -fno-inline-functions (and builds the C rows through a
+    volatile pointer): #1883 said 'identical objects' of rows it never compiled."""
+    found = _bench_or_skip(tmp_path)
+    tool, arguments = found["bench/frames/bq16/O2#0"]
+    assert tool == "llrm-qb" and "-fno-inline-functions" in arguments and "-O2" in arguments
+    assert any(name.startswith("bench/frames/c/O2#1") for name in found), "the C kernel's counted twin"
+    assert {name.split("/")[2] for name in found} >= {"bas", "bq16", "bq32", "c", "nib"}, "every language"
+
+
+def test_a_change_to_one_bench_row_alone_fails_the_check(tmp_path):
+    """A compiler that differs only for frames.bas at -O2 -fno-inline-functions (the shape of #1883's change) is 'different' on the bench row
+    and was 'identical' on the same program compiled with default flags, which is all the corpus held."""
+    def compiler(directory, marker):
+        directory.mkdir()
+        for tool in ("llrm-c", "llrm-qb"):
+            script = directory / tool
+            script.write_text(
+                '#!/bin/sh\nout=""; hit=0; case "$*" in *frames.bas*-O2*-fno-inline-functions*) hit=1;; esac\n'
+                'while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done\n'
+                f'if [ $hit = 1 ]; then echo {marker} > "$out"; else echo same > "$out"; fi\n'
+            )
+            script.chmod(0o755)
+        return str(directory / "llrm-c")
+
+    old, new = compiler(tmp_path / "old", "a"), compiler(tmp_path / "new", "b")
+    flags = ["-O2", "-fno-inline-functions"]
+    bench = ("bench/frames/bq16/O2#0", "", "llrm-qb", ["frames.bas", *flags, "-o", "OBJ"])
+    default = ("vsgcc/frames", "-O2", "llrm-qb", ["-O2", "frames.bas", "-o", "OBJ"])
+    assert identical.same(bench, old, new, tmp_path)[2] == "different"
+    assert identical.same(default, old, new, tmp_path)[2] is None

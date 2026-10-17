@@ -737,7 +737,7 @@ fn _available(
                     Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
                     None => available.iter().collect(),
                 };
-                if llrm_support::env_set("LLRM_CHECK_PROMOTED") && near.is_some() {
+                if llrm_support::env_flag!("LLRM_CHECK_PROMOTED") && near.is_some() {
                     let asked: HashSet<usize> = asked.iter().copied().collect();
                     for at in available.iter().filter(|at| !asked.contains(at)) {
                         assert!(
@@ -808,47 +808,81 @@ fn edges(
         .collect()
 }
 
-/// For each cell, the blocks it is live on entering: where a load of it is
-/// reached before any store of it, along the paths that have none. Found
-/// backwards from the loads that read before they write, stopping at the blocks
-/// that write.
+#[cfg(test)]
+thread_local! {
+    /// Blocks `live_in` has worked out, for a test that the work is not a
+    /// block's visit for each cell.
+    pub(crate) static LIVE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// For each block, the cells live on entering it: where a load of a cell is
+/// reached before any store of it, along the paths that have none.
+struct Live {
+    place: HashMap<i64, usize>,
+    on_entry: Vec<llrm_support::bits::Bits>,
+}
+
+impl Live {
+    fn contains(
+        &self,
+        cell: usize,
+        block: i64,
+    ) -> bool {
+        self.place.get(&block).is_some_and(|&at| self.on_entry[at].contains(cell))
+    }
+}
+
+/// Where each cell is live: a backward dataflow of cells over the blocks (a
+/// block reads the cells it loads before storing, kills the cells it stores,
+/// and is entered with what its successors are entered with), one bit set a
+/// block and not one set of blocks a cell.
 fn live_in(
     function: &Function,
     plan: &Plan,
-) -> Vec<BTreeSet<i64>> {
+) -> Live {
     let cells = plan.types.len();
-    let mut writes = vec![BTreeSet::<i64>::new(); cells];
-    let mut reading = vec![Vec::<BlockId>::new(); cells];
-    let mut written = HashSet::<usize>::default();
-    for &block in function.layout() {
-        written.clear();
+    let blocks = function.layout().to_vec();
+    let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(at, &block)| (cfg::id(block), at)).collect();
+    let mut reads = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
+    let mut kills = vec![llrm_support::bits::Bits::new(cells); blocks.len()];
+    for (at, &block) in blocks.iter().enumerate() {
         for &inst in function.block(block).instructions() {
             if let Some(&slot) = plan.loads.get(&inst) {
-                if !written.contains(&slot) {
-                    reading[slot].push(block);
+                if !kills[at].contains(slot) {
+                    reads[at].insert(slot);
                 }
             } else if let Some(&slot) = plan.stores.get(&inst) {
-                written.insert(slot);
-                writes[slot].insert(cfg::id(block));
+                kills[at].insert(slot);
             }
         }
     }
-    reading
-        .into_iter()
-        .zip(&writes)
-        .map(|(mut work, writes)| {
-            let mut live = BTreeSet::new();
-            while let Some(block) = work.pop() {
-                if !live.insert(cfg::id(block)) {
-                    continue;
-                }
-                work.extend(
-                    function.predecessors(block).into_iter().filter(|before| !writes.contains(&cfg::id(*before))),
-                );
+    let mut on_entry = reads.clone();
+    let mut work: Vec<usize> = (0..blocks.len()).collect();
+    let mut queued = vec![true; blocks.len()];
+    while let Some(at) = work.pop() {
+        queued[at] = false;
+        #[cfg(test)]
+        LIVE_VISITS.with(|visits| visits.set(visits.get() + 1));
+        let mut now = llrm_support::bits::Bits::new(cells);
+        for after in function.successors(blocks[at]) {
+            if let Some(&next) = place.get(&cfg::id(after)) {
+                now.union_with(&on_entry[next]);
             }
-            live
-        })
-        .collect()
+        }
+        now.subtract(&kills[at]);
+        now.union_with(&reads[at]);
+        if now != on_entry[at] {
+            on_entry[at] = now;
+            for before in function.predecessors(blocks[at]) {
+                if let Some(&previous) = place.get(&cfg::id(before))
+                    && !std::mem::replace(&mut queued[previous], true)
+                {
+                    work.push(previous);
+                }
+            }
+        }
+    }
+    Live { place, on_entry }
 }
 
 /// `function` with each planned load its cell's stored value: phis where
@@ -867,7 +901,7 @@ fn rewrite(
         .map(|(_, inst)| function.instruction(inst))
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
-        .collect::<BTreeSet<_>>();
+        .collect::<llrm_mir::dense::IdSet<ValueId>>();
     let poison = plan
         .types
         .iter()
@@ -897,7 +931,7 @@ fn rewrite(
                 // A cell `-g` names keeps its phis, live or not: the debugger
                 // is told where the variable is by the phi, and
                 // by the record it leaves when it goes.
-                let pruned = plan.variables.get(slot).copied().flatten().is_none() && !live[slot].contains(&frontier);
+                let pruned = plan.variables.get(slot).copied().flatten().is_none() && !live.contains(slot, frontier);
                 if pruned || !placed.insert(frontier) {
                     continue;
                 }

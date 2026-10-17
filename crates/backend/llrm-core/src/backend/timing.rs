@@ -12,7 +12,8 @@
 //! 3)`) is priced by linear interpolation from the minimum at 3 bits to the
 //! maximum at the full width. A negative multiplier takes the profile's
 //! `smul_negative_bits` as the floor. An unknown multiplier is priced at the
-//! middle of the range.
+//! middle of the range here; a division by a constant prices its unknown
+//! dividend at the minimum, as gcc does (`division`).
 //!
 //! # Example
 //! The bounds `signed_multiply` returns for a full product, in core clocks:
@@ -27,11 +28,12 @@
 //! P5    4       10        10
 //! ```
 //!
-//! A 486 dword multiply may take 42 clocks, so a reciprocal sequence is
-//! compared against 42, not the midpoint.
+//! A 486 dword multiply may take 42 clocks, so a reciprocal sequence for a
+//! dividend known to need 32 bits is compared against 42.
 //!
 //! From unit tests `test_full_product_bounds_follow_operand_width` and
-//! `test_486_reciprocal_does_not_win_using_midpoint_multiply` in `timing.rs`.
+//! `test_486_reciprocal_is_priced_by_the_dividend_s_length_and_by_the_minimum_where_unknown`
+//! in `timing.rs`.
 //!
 //! # Used by
 //! [`crate::backend::division`] (multiply by reciprocal against a divide) and
@@ -150,15 +152,18 @@ mod tests {
         }
     }
 
-    /// LNGMXX was selected on 486 using 26 clocks for a product that may take
-    /// 42.
+    /// A dividend known to need 32 bits takes the 486's 42 clocks to multiply
+    /// and keeps its division; one nothing is known of is priced at the
+    /// early-out minimum, as gcc does (the midpoint, 26, once kept it too: it
+    /// is a guess either way, and gcc's is the one the comparison is against).
     #[test]
-    fn test_486_reciprocal_does_not_win_using_midpoint_multiply() {
+    fn test_486_reciprocal_is_priced_by_the_dividend_s_length_and_by_the_minimum_where_unknown() {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
         let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
         let held = ir::Held { value: 1, width: 4 };
-        assert_eq!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, None), Ok(None));
+        assert_eq!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, Some(32)), Ok(None));
+        assert!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, None).unwrap().is_some());
     }
 
     #[test]

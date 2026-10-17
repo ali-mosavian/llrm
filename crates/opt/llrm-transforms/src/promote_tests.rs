@@ -885,7 +885,7 @@ j:
         function
             .layout()
             .iter()
-            .filter(|&&block| live[cell].contains(&cfg::id(block)))
+            .filter(|&&block| live.contains(cell, cfg::id(block)))
             .map(|&block| function.block(block).name.clone().expect("a name"))
             .collect()
     };
@@ -893,4 +893,69 @@ j:
     // way there too.
     assert_eq!(names(0), ["entry", "j"], "t is read at j, past the arms that write it and the edge that does not");
     assert!(names(1).is_empty(), "u is written before it is read, in its arm: {:?}", names(1));
+}
+
+/// `n` cells, each stored in the entry, then `n` if/else joins that store to
+/// one cell in the arm taken and read another in the arm not taken: the shape
+/// of `scaling.py`'s `joins` axis, where `sroa` of the cells took a block's
+/// visit for each cell it was live in: 336 Minstr at 256 joins, 4.5% of a
+/// compile of 7.4 G, a slope of 1.65 a doubling.
+fn diamonds(n: usize) -> llrm_mir::module::Module {
+    let mut text = String::from("define i16 @f(i16 %a) {\nentry:\n");
+    for cell in 0..n {
+        text += &format!("  %p{cell} = alloca i16\n  store i16 {}, ptr %p{cell}\n", cell + 1);
+    }
+    text += "  br label %d0\n";
+    for k in 0..n {
+        let (stored, read) = ((k * 3) % n, (k * 5 + 1) % n);
+        text += &format!(
+            "\nd{k}:\n  %s{k} = lshr i16 %a, {}\n  %b{k} = trunc i16 %s{k} to i1\n  br i1 %b{k}, label %t{k}, label %e{k}\n\nt{k}:\n  store i16 {}, ptr %p{stored}\n  br label %j{k}\n\ne{k}:\n  %v{k} = load i16, ptr %p{read}\n  br label %j{k}\n\nj{k}:\n  br label %{}\n",
+            k % 7,
+            k + 5,
+            if k + 1 == n { "end".to_string() } else { format!("d{}", k + 1) }
+        );
+    }
+    text += &format!("\nend:\n  %last = load i16, ptr %p{}\n  ret i16 %last\n}}\n", n - 1);
+    llrm_analysis::testing::parsed(&text)
+}
+
+#[test]
+fn liveness_visits_a_block_a_few_times_whatever_the_cells() {
+    let n = 64;
+    let module = diamonds(n);
+    let function = llrm_analysis::testing::function(&module, "f");
+    let slot_of: llrm_support::hash::HashMap<_, usize> = function
+        .walk()
+        .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
+        .enumerate()
+        .map(|(slot, (_, inst))| (function.instruction(inst).result.expect("a slot"), slot))
+        .collect();
+    let (mut stores, mut loads, mut types): (
+        llrm_support::hash::HashMap<_, usize>,
+        llrm_support::hash::HashMap<_, usize>,
+        Vec<_>,
+    ) = Default::default();
+    for (_, inst) in function.walk() {
+        let one = function.instruction(inst);
+        let slot = |at: usize| match one.operands[at] {
+            Operand::Value(value) => slot_of.get(&value).copied(),
+            _ => None,
+        };
+        match one.opcode {
+            Opcode::Store { .. } => {
+                stores.insert(inst, slot(1).expect("a store to a cell"));
+            }
+            Opcode::Load { .. } => {
+                loads.insert(inst, slot(0).expect("a load of a cell"));
+            }
+            _ => {}
+        }
+    }
+    types.resize(n, function.instruction(*loads.keys().next().expect("a load")).ty);
+    let plan = super::Plan { variables: vec![None; n], types, stores, loads };
+    super::LIVE_VISITS.with(|count| count.set(0));
+    let live = super::live_in(function, &plan);
+    assert!(function.layout().iter().any(|&block| live.contains(0, cfg::id(block))), "some cell is live");
+    let (spent, blocks) = (super::LIVE_VISITS.with(std::cell::Cell::get), function.layout().len());
+    assert!(spent <= 3 * blocks, "{blocks} blocks took {spent} visits");
 }

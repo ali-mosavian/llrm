@@ -70,7 +70,10 @@ writes assembly. The object format is `-fobject-format=omf|elf|macho|coff`.
 
 | Option | Does |
 |---|---|
-| `-I DIR`, `--include DIR` | Add an include directory |
+| `-I DIR`, `-IDIR`, `--include DIR` | Add an include directory |
+| `-DNAME[=VALUE]`, `-UNAME` | Define or undefine a macro (`-D NAME` too) |
+| `-fsigned-char`, `-funsigned-char` | Whether a plain char is signed; each ABI family has its default (Borland's and gcc's signed, Open Watcom's unsigned) |
+| `-std=c99` | The language standard, the front end's `-zastd=` |
 | `-oa` | Open Watcom's relaxed alias checking: an object whose address is never taken is unaliased |
 | `-on` | Open Watcom's relaxed floating point |
 | `--dump DIR` | Write every stage to `DIR` |
@@ -99,6 +102,18 @@ saved by a function that keeps that register for its caller. Where a register pa
 the register Open Watcom's compiler picks (a segment register always; otherwise the offset is the first of ax, bx, si, di, dx, cx). The registers, their bits and ranks are the target's description (`[frontend.registers]` of its `c.toml`), not the
 front end's. What it cannot
 express (a register convention of a function's own, a parameter on the stack) is refused, not guessed at.
+
+Beyond plain registers: a parameter may be in `es`, a byte register takes the low byte of a byte or a word, a struct
+of 1, 2 or 4 bytes is answered as the integer of its size, a 64-bit value in four registers has the target's top word
+first (`quad` in `[frontend.registers]`), and `__parm __caller []` code finds its arguments on the stack, pushed in
+order and popped by the caller.
+
+## Inline code that lowers SP
+
+`#pragma aux __doalloca = "sub sp,ax" __value [__sp] __modify __exact [__sp]` (Open Watcom's `alloca`) says it changes
+SP. A function that contains such a call keeps a frame register, pushes every register it keeps at its entry (no
+shrink-wrapping) and returns by setting SP from the frame register before popping them; the register allocator and the
+stack addressing see SP as changed by the call. Inline code that does not declare SP is assumed to leave it.
 
 ## The start-up and init segments
 

@@ -497,12 +497,14 @@ pub struct LoopContext<'a, 'u> {
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
     pub graph: &'a [cfg::Block],
-    pub predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
+    pub predecessors: &'a llrm_support::graph::Predecessors,
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
     /// The blocks of the loop.
     pub body: &'a llrm_mir::forest::Body,
+    /// What the edges above the loop say of a value made outside it.
+    pub above: &'a dyn Fn(ValueId) -> Option<Interval>,
     made: std::cell::OnceCell<SparseIdMap<ValueId, InstId>>,
 }
 
@@ -514,12 +516,25 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         shape: &'a cfg::Shape,
         assumed: &'a crate::assumptions::Assumptions,
         graph: &'a [cfg::Block],
-        predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
+        predecessors: &'a llrm_support::graph::Predecessors,
         positions: &'a std::collections::BTreeMap<i64, usize>,
         operations: &'a [InstId],
         body: &'a llrm_mir::forest::Body,
+        above: &'a dyn Fn(ValueId) -> Option<Interval>,
     ) -> Self {
-        Self { unit, facts, shape, assumed, graph, predecessors, positions, operations, body, made: Default::default() }
+        Self {
+            unit,
+            facts,
+            shape,
+            assumed,
+            graph,
+            predecessors,
+            positions,
+            operations,
+            body,
+            above,
+            made: Default::default(),
+        }
     }
 
     /// The value each operation makes, found when first asked.
@@ -724,8 +739,19 @@ impl<'r, 'a, 'u> LoopView<'r, 'a, 'u> {
             self.note(&[value]);
             return Some(Rc::new(found.clone()));
         }
+        let outside = self.ctx.makers().get(&value).is_none().then(|| (self.ctx.above)(value)).flatten();
         if let Some(found) = self.known.get(&value) {
-            return Some(Rc::new(found.clone()));
+            // Narrowed by what the edges above the loop say of it.
+            return Some(Rc::new(match outside.filter(|one| one.width == found.width) {
+                Some(above) => {
+                    let (low, high) = (found.low.clone().max(above.low), found.high.clone().min(above.high));
+                    if low > high { found.clone() } else { Interval { low, high, width: found.width } }
+                }
+                None => found.clone(),
+            }));
+        }
+        if let Some(above) = outside {
+            return Some(Rc::new(above));
         }
         let kept = self
             .closed

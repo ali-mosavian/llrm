@@ -47,7 +47,7 @@ pub struct MetadataId(pub u32);
 
 /// An instruction's operand: a local value, a constant (a global value is
 /// one), or a block.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Operand {
     Value(ValueId),
     Constant(ConstantId),
@@ -207,6 +207,16 @@ impl PartialEq for ChangeLog {
     ) -> bool {
         true
     }
+}
+
+thread_local! {
+    static STAMPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has hashed a function's attributes, for a test
+/// that the manager does it once per invalidation, not once per result.
+pub fn attribute_stamps() -> usize {
+    STAMPS.with(std::cell::Cell::get)
 }
 
 static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -538,12 +548,12 @@ impl Function {
     pub fn successors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
-        let mut out = Vec::new();
+        let mut out = crate::blocklist::BlockList::new();
         for operand in operands {
             if let Operand::Block(target) = operand
                 && !out.contains(target)
@@ -557,7 +567,7 @@ impl Function {
     /// The blocks `operands` name, once each, by a set: a switch of N cases
     /// named N blocks, and a scan of what was listed for each was N^2.
     #[cold]
-    fn listed_once(operands: &[Operand]) -> Vec<BlockId> {
+    fn listed_once(operands: &[Operand]) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         operands
             .iter()
@@ -570,12 +580,12 @@ impl Function {
     pub fn predecessors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let users = self.block_users(block);
         if users.len() > SCAN {
             return self.parents_once(users);
         }
-        let mut out = Vec::new();
+        let mut out = crate::blocklist::BlockList::new();
         for one in users {
             let user = one.user;
             if self.instruction(user).opcode.is_terminator()
@@ -593,7 +603,7 @@ impl Function {
     fn parents_once(
         &self,
         users: &[Use],
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let mut seen = crate::dense::IdSet::<u32>::new();
         users
             .iter()
@@ -642,6 +652,22 @@ impl Function {
     }
 
     /// Where the function stands now.
+    /// A number for the attributes the function carries, which are written
+    /// through the `pub` fields and move no mark: equal before and after means
+    /// no analysis that reads them has anything new to read.
+    pub fn attributes_stamp(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        STAMPS.with(|count| count.set(count.get() + 1));
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.ty.hash(&mut hasher);
+        self.parameter_attrs.hash(&mut hasher);
+        self.return_attrs.hash(&mut hasher);
+        self.attrs.hash(&mut hasher);
+        self.personality.hash(&mut hasher);
+        self.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    }
+
     pub fn mark(&self) -> Mark {
         Mark { uid: self.lineage.uid, at: self.lineage.logged }
     }

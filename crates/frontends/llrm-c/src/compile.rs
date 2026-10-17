@@ -388,7 +388,17 @@ pub fn recorded_for(
     );
     fs::write(&forced, text).map_err(|error| failed(error.to_string()))?;
     let header = format!("-fi={}", forced.display());
-    let flags: Vec<&str> = profile.flags.iter().map(String::as_str).chain([header.as_str()]).collect();
+    // `-funsigned-char` takes the ABI's `-j` (a signed char) away;
+    // `-fsigned-char` is `-j`.
+    let unsigned = watcom.contains(&"-funsigned-char");
+    let watcom: Vec<&str> = watcom.iter().copied().filter(|one| *one != "-funsigned-char").collect();
+    let flags: Vec<&str> = profile
+        .flags
+        .iter()
+        .map(String::as_str)
+        .filter(|one| !(unsigned && *one == "-j"))
+        .chain([header.as_str()])
+        .collect();
     let out = scratch.path().join("unit.cgs");
     let absolute = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let searched = includes.iter().map(|one| format!("-I{}", absolute(Path::new(one)).display()));
@@ -430,6 +440,20 @@ fn parse_args(argv: &[String]) -> Result<Args, String> {
     let mut entry_requests = false;
     let mut at = 0;
     while at < argv.len() {
+        // The language's, not the driver's: whether a plain char is signed.
+        match argv[at].as_str() {
+            "-fsigned-char" => {
+                watcom.push("-j".to_owned());
+                at += 1;
+                continue;
+            }
+            "-funsigned-char" => {
+                watcom.push("-funsigned-char".to_owned());
+                at += 1;
+                continue;
+            }
+            _ => {}
+        }
         if flags.take(argv, &mut at)? {
             at += 1;
             continue;
@@ -948,6 +972,58 @@ mod tests {
         super::selected(&text, "inlinecode", None, &options).expect("compiles");
     }
 
+    /// Inline code that lowers SP (`alloca`) was refused ("modifies sp"),
+    /// and once let through returned with SP where it ended: the
+    /// saved registers popped from the wrong place. The return sets
+    /// SP from the frame register.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_that_lowers_sp_returns_with_the_frame_restored() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("grow.c");
+        std::fs::write(
+            &source,
+            "extern void *grow(unsigned n);\n#pragma aux grow = \"sub sp,ax\" __parm __nomemory [__ax] __value [__sp] __modify __exact __nomemory [__sp]\nint use(unsigned n) { char *b = grow(n); b[0] = 1; return b[0]; }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records grow.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "grow", None, &options).unwrap()).unwrap();
+        let (lea, pop) = (asm.find("lea sp").expect(&asm), asm.find("pop bp").expect(&asm));
+        assert!(lea < pop, "{asm}");
+    }
+
+    /// A function with `alloca` returns by setting SP from the frame
+    /// register and popping every register it kept, so all are
+    /// pushed at the entry. The heap test's
+    /// `Test_alloca_stackavail__memavl__memmax` pushed SI after the
+    /// first allocation (shrink-wrapping) and popped it on every return:
+    /// the program jumped to the stack.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_function_with_alloca_pushes_what_it_keeps_at_its_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("shrink.c");
+        std::fs::write(&source, include_str!("../../../../tests/fixtures/c/alloca_shrink.c")).unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records shrink.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "shrink", None, &options).unwrap()).unwrap();
+        let (entry, body) = asm.split_once("L0_0:").expect(&asm);
+        let kept =
+            |text: &str, op: &str| text.lines().filter(|one| one.trim().starts_with(op) && !one.contains("bp")).count();
+        assert_eq!(kept(entry, "push"), kept(body.split("retf").next().unwrap(), "pop"), "{asm}");
+    }
+
     /// Inline code that changes SI (`__modify [__si]`) in a function whose
     /// convention keeps SI for its caller: the function did not save it, so
     /// `_fstrrev` handed its caller back a corrupted SI.
@@ -971,6 +1047,33 @@ mod tests {
         };
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "keep", None, &options).unwrap()).unwrap();
         assert!(asm.contains("push si") && asm.contains("pop si"), "{asm}");
+    }
+
+    /// Open Watcom's plain char is unsigned (its library is built with `-j`),
+    /// Borland's signed: the Open Watcom family took Borland's, and clib's own
+    /// tests compare `'\x81'` with an unsigned char and failed.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_plain_char_is_signed_or_not_as_the_abi_and_the_switch_say() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("sign.c");
+        std::fs::write(&source, "int negative(void) { char c = '\\x81'; return c < 0; }\n").unwrap();
+        let returns = |flags: &[&str]| {
+            let mut argv: Vec<String> = flags.iter().map(|one| (*one).to_owned()).collect();
+            argv.push("sign.c".to_owned());
+            let args = super::parse_args(&argv).unwrap();
+            let profile = super::Profile::for_abi(&*args.codegen.arch, args.codegen.abi.as_deref()).unwrap();
+            let switches: Vec<&str> = args.watcom.iter().map(String::as_str).collect();
+            let text = super::recorded_for(&source, &[], false, &switches, &profile).expect("wccq records sign.c");
+            let asm =
+                llrm_core::backend::masm::text(&super::selected(&text, "sign", None, &args.codegen).unwrap()).unwrap();
+            asm.contains("mov ax, 1")
+        };
+        assert!(!returns(&["-m16", "-mabi=watcom"]), "Open Watcom's char is unsigned");
+        assert!(returns(&["-m16", "-mabi=watcom", "-fsigned-char"]));
+        assert!(returns(&["-m16", "-mabi=cdecl"]), "Borland's char is signed");
+        assert!(!returns(&["-m16", "-mabi=cdecl", "-funsigned-char"]));
     }
 
     /// Open Watcom's compiler leaves `_cstart_` in a module that defines `main`
@@ -1139,6 +1242,157 @@ mod tests {
         let options = llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone());
         let asm = llrm_core::backend::masm::text(&super::selected(&text, "null", None, &options).unwrap()).unwrap();
         assert!(!asm.contains("DGROUP"), "{asm}");
+    }
+
+    /// Inline code taking a value in ES (`__parm [__es]`, a far pointer in
+    /// `[__es __di]`) was refused: clib's DOS block calls (`_TinyFreeBlock`)
+    /// and its far string functions (`_fmemmove`) were left to the reference
+    /// compiler.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_takes_and_answers_in_es() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("seg.c");
+        std::fs::write(
+            &source,
+            "extern void setes(unsigned s);\n\
+             #pragma aux setes = \"mov dl,1\" __parm [__es] __modify __exact [__dl]\n\
+             extern void far *same(void far *p);\n\
+             #pragma aux same = \"nop\" __parm [__es __di] __value [__es __di] __modify __exact []\n\
+             void set(unsigned s) { setes(s); }\n\
+             void far *pass(void far *p) { return same(p); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records seg.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "seg", None, &options).unwrap()).unwrap();
+        let body = |function: &str| -> Vec<String> {
+            let from = asm.find(&format!("{function} proc")).expect("the function");
+            asm[from..].lines().map(|one| one.trim().to_owned()).take_while(|one| !one.ends_with("endp")).collect()
+        };
+        let set = body("set_");
+        let at = set.iter().position(|one| one.starts_with("db 0b2h")).expect("the bytes");
+        assert!(set[..at].iter().any(|one| one == "mov es, ax"), "{set:?}");
+        let pass = body("pass_");
+        let at = pass.iter().position(|one| one == "db 090h").expect("the bytes");
+        assert!(pass[..at].iter().any(|one| one.starts_with("mov es, ")), "{pass:?}");
+        assert!(pass[at..].iter().any(|one| one == "mov ax, es"), "{pass:?}");
+    }
+
+    /// `outp( int port, int value )` is `__parm [__dx] [__al]`: an int in a
+    /// byte register, which clib's `outp` could not be built with.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_byte_register_takes_the_low_byte_of_an_int() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("port.c");
+        std::fs::write(
+            &source,
+            "extern void out(int port, int value);\n\
+             #pragma aux out = \"out dx,al\" __parm [__dx] [__al] __modify __exact []\n\
+             void put(int port, int value) { out(port, value); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records port.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "port", None, &options).unwrap()).unwrap();
+        let body: Vec<&str> = asm.lines().map(str::trim).skip_while(|one| *one != "put_ proc far").collect();
+        let at = body.iter().position(|one| *one == "db 0eeh").expect("the out");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov dx, ")), "{body:?}");
+        assert!(body[..at].iter().any(|one| one.starts_with("mov ax, ")), "{body:?}");
+    }
+
+    /// Inline code answering a small struct in registers (`div_t` in
+    /// `[__dx __ax]`) was refused ("a 4-byte aggregate as a value"), and
+    /// clib's `div`, `delay` and `__getctime` with it.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_may_answer_a_small_struct() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("pair.c");
+        std::fs::write(
+            &source,
+            "typedef struct { int quot; int rem; } pair;\nextern pair split(int a, int b);\n\
+             #pragma aux split = \"cwd\" \"idiv cx\" __parm [__ax] [__cx] __value [__dx __ax] __modify __exact [__ax __dx]\n\
+             pair run(int a, int b) { return split(a, b); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records pair.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "pair", None, &options).unwrap()).unwrap();
+        assert!(asm.contains("db 099h,0f7h,0f9h") && asm.contains("retf"), "{asm}");
+    }
+
+    /// A 64-bit parameter in `[__ax __bx __cx __dx]` (the same set as the
+    /// default list) was refused ("parameters in the default registers",
+    /// "does not fit its registers"), as was the same set for the answer:
+    /// `ulltoa` and `lltoa` did not compile. Open Watcom's compiler puts
+    /// the top word in ax, the bottom in dx.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_quad_word_in_four_registers_has_its_top_word_in_ax() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("quad.c");
+        std::fs::write(
+            &source,
+            "extern void put(unsigned long long);\n#pragma aux put = \"nop\" __parm [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             extern unsigned long long get(void);\n#pragma aux get = \"nop\" __value [__ax __bx __cx __dx] __modify [__ax __bx __cx __dx]\n\
+             unsigned long long hold;\nvoid use(void) { put(0x0001000200030004ULL); hold = get(); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records quad.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "quad", None, &options).unwrap()).unwrap();
+        let loads = ["mov ax, 1", "mov bx, 2", "mov cx, 3", "mov dx, 4"].map(|one| asm.find(one).expect(&asm));
+        assert!(loads.windows(2).all(|two| two[0] < two[1]), "{asm}");
+    }
+
+    /// `__parm __caller []` inline code (`EnterDebuggerWithMessage`) finds its
+    /// argument on the stack and the caller takes it back. It was refused ("a
+    /// parameter on the stack"): `assert`, `dbgrpt` and `enterdb` did not
+    /// compile.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_inline_code_finds_its_argument_on_the_stack_and_the_caller_pops_it() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("brk.c");
+        std::fs::write(
+            &source,
+            "extern void brk(const char __far *);\n#pragma aux brk __parm __caller [] = \"int 3\" \"jmp short L1\" 'W' 'V' \"L1:\"\n\
+             void t(const char __far *m) { brk(m); }\n",
+        )
+        .unwrap();
+        let profile = super::Profile::for_abi(&llrm_x86_m16::M16, Some("watcom")).unwrap();
+        let text = super::recorded_for(&source, &[], false, &[], &profile).expect("wccq records brk.c");
+        let options = llrm_core::driver::Options {
+            abi: Some("watcom".to_owned()),
+            ..llrm_driver::m16_options(llrm_x86_m16::machine::BUILT_IN.clone())
+        };
+        let asm = llrm_core::backend::masm::text(&super::selected(&text, "brk", None, &options).unwrap()).unwrap();
+        let (push, code, pop) =
+            (asm.find("push dx").expect(&asm), asm.find("db 0cch").expect(&asm), asm.find("add sp, 4").expect(&asm));
+        assert!(push < code && code < pop, "{asm}");
     }
 
     /// A far pointer made from a long in memory had its segment as a word-wide
@@ -1350,8 +1604,15 @@ mod tests {
             llrm_core::abi::machine::Machine { cpu: "486".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
         // At -O2: a loop is copied out only where the code does not grow, so
         // the loop the test reads stays a loop.
+        // With the allocation search and the spiller's route, which -Omax
+        // alone makes: one allocation keeps a pointer of `strides` in the
+        // frame (#1886).
         let options = llrm_core::driver::Options {
-            pipeline: llrm_transforms::pipeline::Options::standard(),
+            pipeline: llrm_transforms::pipeline::Options {
+                search: true,
+                routes: true,
+                ..llrm_transforms::pipeline::Options::standard()
+            },
             ..llrm_driver::m16_options(machine)
         };
         let built = super::selected(&std::fs::read_to_string(path).unwrap(), fixture, None, &options).unwrap();

@@ -230,7 +230,7 @@ impl Occurrences {
             return None;
         }
         let rows = allocate::live_rows_among(body, &self.values(), &self.occurrences());
-        if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
             let wanted: BTreeSet<u32> = self.values().into_iter().collect();
             let walk = allocate::live_rows_dense(body, |value| wanted.contains(&value));
             for block in &body.blocks {
@@ -257,7 +257,7 @@ impl Occurrences {
         let named: Vec<&Arc<Insn>> =
             self.places().into_iter().map(|(block, position)| &body.blocks[block].insns[position]).collect();
         let widths = widths_of(named.into_iter(), wanted);
-        if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
             assert!(
                 widths == widths_of(body.blocks.iter().flat_map(|block| &block.insns), wanted),
                 "{}: the widths found from the occurrences differ from the walk's",
@@ -308,7 +308,7 @@ pub fn live_among(
     // Where they occur is read from the postings the body is followed with, not
     // found by a pass over every instruction.
     let found = crate::backend::postings::following(body, |postings| Occurrences::of(postings, values));
-    if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+    if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
         found.check_against_scan(body, &|value| values.contains(&value));
     }
     match found.rows(body) {

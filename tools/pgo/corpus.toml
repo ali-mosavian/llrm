@@ -1,0 +1,6 @@
+# What the instrumented compiler compiles to make the profile: the paths a compile takes in real use. A program measured against the profile
+# must be left out (`pgo.py ... --exclude lru bintree`), or the gain is the training set's.
+levels = ["-O1", "-O2", "-Os"]
+
+[bench]
+globs = ["bench/*/*.c", "bench/parity/*/*.c"]

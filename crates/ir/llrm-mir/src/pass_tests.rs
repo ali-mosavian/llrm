@@ -145,6 +145,49 @@ fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
     assert_eq!(COMPUTED.get(), 1, "a pass that logged no change dropped an analysis");
 }
 
+/// Asks, drops as a rule that edited would, and asks again, the body unedited.
+struct AsksTwice {
+    if_edited: bool,
+}
+
+impl FunctionPass for AsksTwice {
+    fn name(&self) -> &'static str {
+        "asks-twice"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        if self.if_edited {
+            analyses.invalidate_if_edited(unit.function, &PreservedAnalyses::none());
+        } else {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        }
+        analyses.get::<Counted>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::all()
+    }
+}
+
+/// `algebraic` dropped the shape and ranges before each rule that asks for
+/// them, edited or not: 9 of its 16 range computations on d_faces -O1 followed
+/// no edit since the one before, 4 of them 1.4 M each. A drop for an edit
+/// nobody made costs nothing now, whichever way it is asked: `invalidate`
+/// itself keeps a result derived from the body as it stands.
+#[test]
+fn a_drop_for_an_edit_nobody_made_keeps_what_is_held() {
+    for (if_edited, computed) in [(false, 1), (true, 1)] {
+        COMPUTED.set(0);
+        let mut passes = PassManager::default();
+        passes.add(Look(PreservedAnalyses::all()));
+        passes.add(AsksTwice { if_edited });
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        assert_eq!(COMPUTED.get(), computed, "if_edited {if_edited}");
+    }
+}
+
 thread_local! {
     static KEPT: Cell<usize> = const { Cell::new(0) };
     static SAME: Cell<bool> = const { Cell::new(true) };
@@ -548,11 +591,12 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
-/// `LLRM_WHY`'s test form: an analysis a pass invalidated and that came to what
-/// it was is counted as `same`. 4209 of call-effects' 7009 runs over QCport at
-/// -O1 were so, and nothing said it until this did.
+/// A pass that invalidated and changed nothing since the result was derived
+/// left it true: it is kept, not worked out again to what it was (383 of the
+/// 2,248 results dropped at one d_faces -O2 compile were derived from the body
+/// as it stood; `LLRM_WHY` called their reruns `same-untouched`).
 #[test]
-fn a_recomputation_that_comes_to_the_same_result_is_counted() {
+fn a_result_the_body_has_not_moved_from_is_not_worked_out_again() {
     let module = module();
     let function = module.global(module.named("f").unwrap()).function().unwrap();
     let layout = DataLayout::default();
@@ -564,7 +608,7 @@ fn a_recomputation_that_comes_to_the_same_result_is_counted() {
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
     crate::passes::trace_recomputes(false);
-    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same-untouched", 1)]);
+    assert_eq!(counts, vec![("counted", "", "first", 1)]);
 }
 
 /// Told apart: a rerun on a body no pass touched since the result was made
@@ -1051,4 +1095,21 @@ fn a_result_that_names_values_is_followed_through_a_substitution() {
     analyses.invalidate(function, &PreservedAnalyses::none());
     assert_eq!(*analyses.get::<Reads>(context, &layout, function), vec![a_value, a_value], "still named %b");
     assert_eq!(READS_RUN.with(Cell::get), 1, "derived again past a substitution it could follow");
+}
+
+/// Hashing a function's attributes is the size of its declaration, and every
+/// result derived and every result checked at an invalidation did it: 12.9 M
+/// of 316 M instructions on a 64-link call chain, and `gate (cost)` read it as
+/// a 4% rise at 2N. It is done once per invalidation.
+#[test]
+fn the_attributes_are_hashed_once_per_invalidation_not_once_per_result() {
+    let module = module();
+    let layout = DataLayout::default();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    let before = crate::module::attribute_stamps();
+    analyses.get::<Steady>(&module.context, &layout, function);
+    analyses.get::<ReadsOuter>(&module.context, &layout, function);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    assert!(crate::module::attribute_stamps() - before <= 2, "{}", crate::module::attribute_stamps() - before);
 }

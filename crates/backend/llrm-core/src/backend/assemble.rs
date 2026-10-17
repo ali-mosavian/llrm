@@ -521,7 +521,7 @@ fn machined_once(
     // must be the same function. A frame that cannot be moved keeps its first
     // layout.
     let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if llrm_support::env_set("LLRM_CHECK_FRAME") {
+    if llrm_support::env_flag!("LLRM_CHECK_FRAME") {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
@@ -1112,7 +1112,7 @@ fn phased_to(
         if phase.class_name() == "PhiElimination" {
             body = body.with_phi_copies_noted();
         }
-        if llrm_support::env_set("ISEL_DUMP") {
+        if llrm_support::env_flag!("ISEL_DUMP") {
             println!(
                 "{}",
                 crate::backend::lirtext::lir_stage(phase.class_name(), &[(body.name.clone(), body.clone())])

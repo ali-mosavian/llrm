@@ -1,0 +1,104 @@
+# Compile-cost gap against clang and gcc, by date
+
+Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-c`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. Instructions are the claim: the host is loaded, so cycles are not compared.
+
+A table is read against the one before it: the delta column is the change in llrm's instructions and in the ratio since the previous date. The worst ratio is named beside the geometric mean of the ratios.
+
+## 2026-10-17, `758067eba` (main with #1964, the baseline)
+
+| program | level | llrm | clang | gcc | ratio |
+|---|---|---:|---:|---:|---:|
+| d_faces | -O1 | 2,422 | 478 | 675 | 5.1x |
+| d_faces | -O2 | 3,143 | 554 | 1,176 | 5.7x |
+| d_faces | -O3 | 3,469 | 555 | 1,460 | 6.2x |
+| d_faces | -Os | 3,416 | 550 | 979 | 6.2x |
+| lru | -O1 | 104 | 74 | 91 | 1.4x |
+| lru | -O2 | 122 | 76 | 123 | 1.6x |
+| lru | -O3 | 125 | 76 | 125 | 1.7x |
+| lru | -Os | 119 | 76 | 110 | 1.6x |
+| bintree | -O1 | 71 | 69 | 86 | 1.0x |
+| bintree | -O2 | 102 | 74 | 114 | 1.4x |
+| bintree | -O3 | 108 | 75 | 115 | 1.5x |
+| bintree | -Os | 94 | 74 | 96 | 1.3x |
+| queens | -O1 | 79 | 69 | 73 | 1.1x |
+| queens | -O2 | 101 | 71 | 93 | 1.4x |
+| queens | -O3 | 1,553 | 71 | 634 | 21.8x |
+| queens | -Os | 92 | 71 | 86 | 1.3x |
+| sieve | -O1 | 55 | 66 | 71 | 0.8x |
+| sieve | -O2 | 65 | 68 | 86 | 1.0x |
+| sieve | -O3 | 92 | 68 | 97 | 1.4x |
+| sieve | -Os | 58 | 68 | 79 | 0.9x |
+
+Worst ratio: queens -O3, 21.8x. `analysis bounded` is 451 M of its 1,553 M (216 runs), with `mir decide` 114 M and `mir hoist` 111 M; the object is 1,519 bytes against clang's 1,420. The next worst: d_faces -O3 and -Os, 6.2x. Geometric mean of the 20 ratios: 2.0x (d_faces alone, over its four levels: 5.8x).
+
+d_faces is the largest file of the QCport tree this script compiles. The Borland-header QCport (`dos.h`) is not a three-way row: gcc and clang cannot parse its headers.
+
+d_faces, llrm's own work by phase (Minstr, share): at -O2 `mir` 1,342 (42%), `analysis` 702 (22%), `regalloc` 479 (15%), `lir` 365 (11%), `isel` 56 (2%); clang's optimizer is 272 M (49% of its time) and its codegen 216 M (39%).
+
+Checked: one commit on all sides (the compilers do not change between tables; llrm-c is the dist build of the commit above); each compile writes an object; a failed compile stops the run (the first run stopped on `lru`, whose `far` pointers clang cannot parse: the Borland keywords are now defined away for every program, as for d_faces); `queens` -O3 was run twice more for llrm alone (1,552,975,343 and 1,552,968,042 instructions).
+
+## 2026-10-17, `5344082af` (after the first batch)
+
+Landed since the baseline: the live sets as bit sets (#1926, #1934), the graph's predecessors and splitkit's live blocks (#1953), the crate's hashed collections as Fx (#1927), gvn's forecast skipped past crossing's price (#1957), a result derived from the body as it stands surviving an invalidation (#1922), the dead code after a loop found from what the loop stopped reading (#1936), and "don't ask for what the body cannot use" (#1968). The delta is llrm's instructions against the baseline table.
+
+| program | level | llrm | delta | clang | gcc | ratio |
+|---|---|---:|---:|---:|---:|---:|
+| d_faces | -O1 | 2,263 | -159 (-6.6%) | 478 | 675 | 4.7x |
+| d_faces | -O2 | 2,830 | -313 (-10.0%) | 553 | 1,176 | 5.1x |
+| d_faces | -O3 | 3,133 | -336 (-9.7%) | 555 | 1,460 | 5.6x |
+| d_faces | -Os | 2,896 | -520 (-15.2%) | 550 | 979 | 5.3x |
+| lru | -O1 | 98 | -6 (-5.8%) | 74 | 91 | 1.3x |
+| lru | -O2 | 114 | -8 (-6.6%) | 76 | 123 | 1.5x |
+| lru | -O3 | 117 | -8 (-6.4%) | 76 | 125 | 1.5x |
+| lru | -Os | 111 | -8 (-6.7%) | 76 | 110 | 1.5x |
+| bintree | -O1 | 66 | -5 (-7.0%) | 69 | 86 | 1.0x |
+| bintree | -O2 | 91 | -11 (-10.8%) | 75 | 114 | 1.2x |
+| bintree | -O3 | 97 | -11 (-10.2%) | 75 | 115 | 1.3x |
+| bintree | -Os | 88 | -6 (-6.4%) | 74 | 96 | 1.2x |
+| queens | -O1 | 75 | -4 (-5.1%) | 69 | 73 | 1.1x |
+| queens | -O2 | 94 | -7 (-6.9%) | 71 | 93 | 1.3x |
+| queens | -O3 | 1,419 | -134 (-8.6%) | 71 | 634 | 20.0x |
+| queens | -Os | 86 | -6 (-6.5%) | 71 | 86 | 1.2x |
+| sieve | -O1 | 52 | -3 (-5.5%) | 66 | 71 | 0.8x |
+| sieve | -O2 | 61 | -4 (-6.2%) | 68 | 86 | 0.9x |
+| sieve | -O3 | 86 | -6 (-6.5%) | 68 | 97 | 1.3x |
+| sieve | -Os | 54 | -4 (-6.9%) | 68 | 79 | 0.8x |
+
+Worst ratio: queens -O3, 20.0x (was 21.9x), still `analysis bounded` and the loop passes. Geometric mean of the 20 ratios: 1.8x (was 2.0x); d_faces alone over its four levels: 5.2x (was 5.8x). Every row fell by 5% to 15%; the gap closed by about a tenth and no row is below one but sieve.
+
+d_faces, llrm's own work by phase at -O2: `mir` 1,111 (38%), `analysis` 651 (22%), `regalloc` 456 (16%), `lir` 365 (13%); clang's optimizer is 274 M and its codegen 220 M.
+
+Checked: both sides of each delta are a dist build, user-space instructions, quickest of three by cycles, the compilers unchanged; clang's and gcc's columns moved by at most one in the last digit between the two runs (noise of the best-of-three), so the delta is llrm's.
+
+## 2026-10-17, `954bc48fa`: the static clang, and the profile-guided compiler
+
+The clang column changes here: it is a static build of the pinned tag llvmorg-20.1.8 (87f0227c; recipe in [measured.md](../comparison/llvm/measured.md)), not the distro's. The distro's links libLLVM as a shared library, which adds about 30 M of dynamic-loader start-up to every compile and calls into the library through the PLT: d_faces -O2 reads 553 M with it and 462 M static, an empty compile 43 M against 13 M. The distro build stays as a column, what users run; gcc is the distro's. `tools/compile-gap.py` takes `--clang PATH` and `--distro-clang PATH`. The ratio is llrm over the cheaper of the static clang and gcc, so the small programs, whose cost the distro's start-up inflated, read higher than in the tables above; no llrm number changed from the table of `5344082af`.
+
+The profile-guided column is `tools/pgo/pgo.py build` of the same commit ([pgo.md](../working/pgo.md)). Its profile was made from 264 compiles of the bench C programs at -m32 and -m16 and -O1, -O2 and -Os, leaving out lru, bintree, queens and sieve (`--exclude`) and QCport's render modules (no `QCPORT`), so no program here trained it and -O3 is a level it never saw. `tools/identical.py` finds the same bytes from it and from the plain build over the whole corpus: 1,583 objects, 0 differ.
+
+| program | level | llrm | llrm PGO | clang | gcc | clang (distro) | ratio | ratio PGO |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| d_faces | -O1 | 2,263 | 1,943 | 397 | 675 | 479 | 5.7x | 4.9x |
+| d_faces | -O2 | 2,830 | 2,412 | 462 | 1,176 | 553 | 6.1x | 5.2x |
+| d_faces | -O3 | 3,133 | 2,666 | 464 | 1,460 | 556 | 6.8x | 5.7x |
+| d_faces | -Os | 2,896 | 2,479 | 459 | 979 | 550 | 6.3x | 5.4x |
+| lru | -O1 | 98 | 82 | 41 | 91 | 74 | 2.4x | 2.0x |
+| lru | -O2 | 114 | 95 | 43 | 123 | 76 | 2.7x | 2.2x |
+| lru | -O3 | 117 | 99 | 43 | 125 | 76 | 2.7x | 2.3x |
+| lru | -Os | 111 | 93 | 44 | 110 | 76 | 2.5x | 2.1x |
+| bintree | -O1 | 66 | 56 | 37 | 86 | 69 | 1.8x | 1.5x |
+| bintree | -O2 | 91 | 77 | 42 | 114 | 74 | 2.2x | 1.8x |
+| bintree | -O3 | 97 | 82 | 42 | 115 | 75 | 2.3x | 2.0x |
+| bintree | -Os | 88 | 74 | 41 | 96 | 74 | 2.1x | 1.8x |
+| queens | -O1 | 75 | 63 | 38 | 73 | 69 | 2.0x | 1.7x |
+| queens | -O2 | 94 | 79 | 39 | 93 | 71 | 2.4x | 2.0x |
+| queens | -O3 | 1,419 | 1,165 | 39 | 634 | 71 | 36.4x | 29.9x |
+| queens | -Os | 86 | 72 | 39 | 86 | 71 | 2.2x | 1.8x |
+| sieve | -O1 | 52 | 45 | 35 | 71 | 66 | 1.5x | 1.3x |
+| sieve | -O2 | 61 | 52 | 37 | 86 | 68 | 1.6x | 1.4x |
+| sieve | -O3 | 86 | 72 | 37 | 97 | 68 | 2.3x | 1.9x |
+| sieve | -Os | 54 | 46 | 36 | 79 | 68 | 1.5x | 1.3x |
+
+Worst ratio: queens -O3, 36.4x (29.9x profile-guided). Geometric mean of the 20 ratios: 3.0x (2.6x profile-guided); d_faces alone over its four levels: 6.2x (5.3x). Profile-guided instructions are 14.1% to 17.9% below the plain build's on every row. Against the distro clang the same mean is 1.8x.
+
+Where the compile goes beside the pass work, d_faces (callgrind, dist build): copying a `Function` (gvn's forks, hoist's clones, interprocedural's, sink's) is about 0.1% of the compile, not the 6% to 10% of the scopes that contain the copies: what those scopes cost is the numbering and the spill forecast. Idle reruns, the passes' own work in a run that changed nothing (`LLRM_DEBUG=runs`, `5344082af`, release build): 637 runs, 247.0 M = 7.8% of the -O2 compile (decide 42.3 M, fill 32.8, hoist 24.8, promote 24.8, algebraic 21.8, indvars 21.5), and 318.9 M = 9.9% at -Os (hoist 96.7 M, 3.0%).
