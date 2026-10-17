@@ -402,8 +402,14 @@ fn _numbered(
         Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
     };
     let crossing = numbered(unit.function, false)?;
-    let price = |one: &Function| {
+    // What `one` costs: its work, and the spills it forecasts. The work alone
+    // is the lower bound of the price, and is the cheap half.
+    let price = |one: &Function, under: i64| {
         let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
+        let work = profit::weighted(unit.context, unit.layout, one, outer.callees(), costs, &frequency)?;
+        if work >= under {
+            return Some(work);
+        }
         profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
     };
     // Where no load crossed a store, the second numbering is the first: it is
@@ -418,7 +424,7 @@ fn _numbered(
             Some((_, true)) | None => crossing,
             Some((crossed, false)) => {
                 let careful = numbered(unit.function, true)?;
-                if price(&careful.0).is_some_and(|kept| kept < crossed) { careful } else { crossing }
+                if price(&careful.0, crossed).is_some_and(|kept| kept < crossed) { careful } else { crossing }
             }
         }
     };

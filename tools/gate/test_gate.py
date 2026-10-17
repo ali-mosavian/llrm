@@ -1229,7 +1229,7 @@ def test_a_draft_runs_plan_and_static_only_and_is_never_reported_as_a_pass():
     """Forty drafts running the full gate would swamp the runners: ready_for_review starts it, the merge loop reads only `PASS at`."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "types: [opened, synchronize, reopened, ready_for_review]" in workflow
-    assert "!github.event.pull_request.draft && needs.plan.outputs.any" in workflow
+    assert "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
     assert "DRAFT at ${head:0:12}" in workflow
 
 
@@ -1297,7 +1297,7 @@ def test_the_bench_step_runs_as_shards_and_a_merge_judges_the_whole_and_records_
     assert "actions/cache/restore@v4" in workflow and "bench-base-$(python3 tools/bench/basecounts.py key HEAD^1" in workflow
     merge = workflow[workflow.index("  bench-merge:") : workflow.index("\n  ci:")]
     assert "bench.py --merge" in merge and "'--record'" in merge and "key: ${{ steps.basecounts.outputs.head }}" in merge
-    assert "needs: [plan, static, build, gate, bench-merge]" in workflow
+    assert "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
     assert "if: always() && github.event_name == 'push' && steps.merge.outputs.recorded == 'true'" in merge, "saved even when the verdict is a failure"
 
 
@@ -1341,8 +1341,8 @@ def test_a_pull_request_that_changes_the_compiler_is_not_a_pass_when_the_perf_te
     assert 'PERF SKIPPED at ${head:0:12}' in workflow and 'needs.plan.outputs.compiler }}" = true' in workflow
     sys.path.insert(0, str(gate.ROOT / "tools" / "ci"))
     import pick_runners
-    assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == ["perf"]
-    assert pick_runners.pick(["perf", "unit"], "1000 2", True, 1000)["perf_hosted"] == []
+    assert pick_runners.pick(["perf", "unit"], "", False, 0)["perf_hosted"] == ["perf"], "a fork's pull request: no tinytim"
+    assert pick_runners.pick(["perf", "unit"], "", True, 0)["perf_hosted"] == [], "queued on tinytim instead"
 
 
 def test_the_ci_line_names_the_parent_and_a_stale_workflow_is_never_a_pass():
@@ -1363,3 +1363,17 @@ def test_the_bench_shards_and_regroupings_keep_the_job_count_down():
     """The account runs 20 hosted jobs at once; each job costs 70-140 s of set-up. A group under ~2 minutes of work is not its own job."""
     cfg = gate.load()
     assert cfg["bench"]["shards"] == 3 and "identity" in cfg["groups"]["unit"] and cfg["groups"]["reference"] == ["turbo", "cv4", "qcport"]
+
+
+def test_the_draft_verdict_comes_from_the_api_at_plan_time_and_is_checked_again_at_the_end():
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "python3 tools/ci/pr_state.py" in workflow and "needs.plan.outputs.draft != 'true' && needs.plan.outputs.any" in workflow
+    assert "DRAFT RUN OF A READY PR (not a pass)" in workflow
+    assert "runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '\"ubuntu-24.04\"') }}" in workflow
+
+
+def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
+    """#1987 fixed the set-up there and its own diff planned no tinytim job: the live proof is a job for any change to the action."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
+    assert "\\.github/actions/setup/" in workflow and "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow

@@ -52,10 +52,13 @@ jobs:
       groups: ${{ steps.plan.outputs.groups }}
       static: ${{ steps.plan.outputs.static }}
       compiler: ${{ steps.plan.outputs.compiler }}
+      setup_changed: ${{ steps.plan.outputs.setup_changed }}
       parent: ${{ steps.stale.outputs.parent }}
       workflow: ${{ steps.stale.outputs.workflow }}
       perf_hosted: ${{ steps.runners.outputs.perf_hosted }}
       groups_run: ${{ steps.runners.outputs.groups_run }}
+      runner_small: ${{ steps.runners.outputs.small }}
+      draft: ${{ steps.draft.outputs.draft }}
       any: ${{ steps.plan.outputs.any }}
       private: ${{ steps.plan.outputs.private }}
       tier: ${{ steps.plan.outputs.tier }}
@@ -76,6 +79,17 @@ jobs:
           read parent workflow < <(python3 tools/ci/stale_workflow.py)
           echo "parent=$parent" >> "$GITHUB_OUTPUT"
           echo "workflow=$workflow" >> "$GITHUB_OUTPUT"
+      # Whether the pull request is a draft NOW, from the API: the event's payload is the state when it was sent, and a ready_for_review run
+      # cancelled by a draft one that was queued after it left the PR with a "draft" verdict and no gate (#1918).
+      - id: draft
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PAYLOAD: ${{ github.event.pull_request.draft }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          now=$(python3 tools/ci/pr_state.py "$GITHUB_REPOSITORY" "$PR" "$PAYLOAD")
+          echo "draft=$now" >> "$GITHUB_OUTPUT"
       - id: plan
         run: |
           # A pull request is checked out as its merge with the base: the first parent is the base's tip.
@@ -90,6 +104,8 @@ jobs:
           echo "private=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["private"]))')" >> "$GITHUB_OUTPUT"
           echo "any=$(echo "$json" | python3 -c 'import json,sys; print(str(bool(json.load(sys.stdin)["steps"])).lower())')" >> "$GITHUB_OUTPUT"
           echo "tier=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tier"])')" >> "$GITHUB_OUTPUT"
+          # The set-up action is every job's first step on both kinds of runner: a change to it is run on tinytim too (job setup-check).
+          if [ "${{ github.event_name }}" = pull_request ] && git diff --name-only HEAD^1 HEAD | grep -qE '^(\.github/actions/setup/|tools/ci/ensure_nightly)'; then echo "setup_changed=true" >> "$GITHUB_OUTPUT"; fi
           echo "compiler=$(echo "$json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["compiler"]).lower())')" >> "$GITHUB_OUTPUT"
           python3 tools/gate/gate.py plan --base "$base" | tee -a "$GITHUB_STEP_SUMMARY"
       # tinytim when its heartbeat is fresh and a runner idle, else hosted (tools/ci/pick_runners.py). A fork's pull request is always hosted.
@@ -100,13 +116,15 @@ jobs:
           ELIGIBLE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.ref == 'refs/heads/main' }}
           GROUPS_JSON: ${{ steps.plan.outputs.groups }}
           GH_TOKEN: ${{ github.token }}
+          COMPILER: ${{ steps.plan.outputs.compiler }}
         run: |
           # The hosted jobs waiting for a runner now: a new job queues behind them.
           backlog=$(python3 tools/ci/hosted_backlog.py)
-          json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$ELIGIBLE" "$backlog")
+          json=$(python3 tools/ci/pick_runners.py "$GROUPS_JSON" "${HEARTBEAT:-}" "$ELIGIBLE" "$backlog" "$COMPILER")
           echo "$json"
           echo "build=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["build"]))')" >> "$GITHUB_OUTPUT"
           echo "groups=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["groups"]))')" >> "$GITHUB_OUTPUT"
+          echo "small=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["small"]))')" >> "$GITHUB_OUTPUT"
           echo "groups_run=$(echo "$json" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["run"]))')" >> "$GITHUB_OUTPUT"
           echo "perf_hosted=$(echo "$json" | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["perf_hosted"]))')" >> "$GITHUB_OUTPUT"
           summary=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["summary"])')
@@ -115,6 +133,17 @@ jobs:
 
   # The checks that read the tree and build nothing (tiers.toml [groups] static: format, generated docs, tracked products) run alone before
   # the build: a mistake in them fails in minutes and the long jobs never start. What fails there hides the later jobs' failures until it is fixed.
+  # The set-up step on a tinytim runner, where the image's own toolchains make it differ from a hosted one (#1987): only when the action changed.
+  setup-check:
+    needs: plan
+    if: needs.plan.outputs.setup_changed == 'true' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, tinytim]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: rustup toolchain list && rustfmt +nightly --version
+
   static:
     needs: plan
     if: needs.plan.outputs.static == 'true'
@@ -129,7 +158,7 @@ jobs:
 
   build:
     needs: [plan, static]
-    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.plan.outputs.any == 'true' && needs.static.result != 'failure' }}
+    if: ${{ !cancelled() && needs.plan.outputs.draft != 'true' && needs.plan.outputs.any == 'true' && needs.static.result != 'failure' }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_build) }}
     timeout-minutes: 90
     steps:
@@ -259,7 +288,7 @@ jobs:
   bench-merge:
     needs: [plan, build, gate]
     if: always() && needs.build.result == 'success' && contains(needs.plan.outputs.groups, '"bench-1"')
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -298,15 +327,24 @@ jobs:
           key: ${{ steps.basecounts.outputs.head }}
 
   ci:
-    needs: [plan, static, build, gate, bench-merge]
+    needs: [plan, static, build, gate, bench-merge, setup-check]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       # The line `gate.py run` prints, naming the head the run is of (a pull request's head, not the merge commit CI checks out).
       - run: |
           head="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
-          if [ "${{ github.event.pull_request.draft }}" = true ] && [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ]; then
+          echo "plan=${{ needs.plan.result }} setup-check=${{ needs.setup-check.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
+          if [ "${{ needs.plan.outputs.draft }}" = true ] && [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ]; then
+            # The verdict was taken at plan time: a pull request marked ready since has had no gate, and a draft line is not its answer.
+            now=$(python3 -c 'import json,os,urllib.request as u; r=u.Request("https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}", headers={"Authorization":"Bearer "+os.environ["GH_TOKEN"]}); print(str(json.load(u.urlopen(r))["draft"]).lower())' || echo unknown)
+            if [ "$now" = false ]; then
+              line="GATE ${{ needs.plan.outputs.tier }} DRAFT RUN OF A READY PR (not a pass) at ${head:0:12}: it was marked ready while this run was going; push or re-run for the gate"
+              echo "$line" | tee -a "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
             line="GATE ${{ needs.plan.outputs.tier }} DRAFT at ${head:0:12}: static=${{ needs.static.result }}, the gate runs when it is ready for review (not a pass)"
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -324,7 +362,7 @@ jobs:
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
           else
             line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
