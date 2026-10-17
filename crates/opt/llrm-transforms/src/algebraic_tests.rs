@@ -1385,3 +1385,38 @@ fn test_the_recurrences_of_a_body_are_asked_of_the_manager_not_derived_again() {
     let derived = llrm_analysis::consts::register_derivations() - before;
     assert!(derived <= 1, "{derived} derivations of the registers for one body");
 }
+
+/// The values that advance with a loop were asked of every loop of the body to
+/// learn about the one or two a mask's source names: on d_faces -O2, 8 asks
+/// of 3.6 M each (28.7 M, 1.05% of the compile, the output the same without
+/// them). Only the loops that hold the source are asked.
+#[test]
+fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
+    let asked = |extra_loops: usize| {
+        let mut text = masked_sum("%i").replace("b3:\n  ret i16 %s\n", "b3:\n  br label %e0\n");
+        for at in 0..extra_loops {
+            let next = if at + 1 == extra_loops { "x".to_owned() } else { format!("e{}", at + 1) };
+            text = text.replace("\n}\n", &format!(
+                "\ne{at}:\n  %j{at} = phi i16 [ 0, %b3 ], [ %j{at}n, %e{at} ]\n  %j{at}n = add i16 %j{at}, 1\n  %d{at} = icmp slt i16 %j{at}n, %n\n  br i1 %d{at}, label %e{at}, label %{next}\n}}\n"
+            ).replacen("}}\n", "}\n", 1));
+        }
+        if extra_loops == 0 {
+            text = text.replace("b3:\n  br label %e0\n", "b3:\n  br label %x\n");
+        }
+        text = text.replace("\n}\n", "\nx:\n  ret i16 %s\n}\n");
+        let mut module = parsed(&text);
+        module.datalayout = Some(LEGAL.to_owned());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(crate::fold::Fold);
+        passes.add(super::Algebraic { size: false });
+        llrm_analysis::induction::ADVANCES_ASKED.with(|one| one.set(0));
+        passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+        llrm_analysis::induction::ADVANCES_ASKED.with(std::cell::Cell::get)
+    };
+    let (alone, with_two_more) = (asked(0), asked(2));
+    assert!(alone > 0, "the masked scale asks nothing");
+    assert_eq!(
+        with_two_more, alone,
+        "{with_two_more} loops asked with two loops that hold no masked source, {alone} without"
+    );
+}
