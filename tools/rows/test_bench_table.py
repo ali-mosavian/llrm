@@ -37,3 +37,4 @@ def test_a_size_only_cell_is_not_a_failed_row():
     size_only = {"code_bytes": 10, "data_bytes": 0, "bss_bytes": 0}
     text = bench_table.render({"a/c/O2": size_only}, {"a/c/O2": size_only})
     assert text.startswith("rows total 1 / with counters 2 of 2 / failed 0")
+    assert "base: 1 rows with no instructions (sized only): a/c/O2" in text, "the rows without a count are named, not only counted"

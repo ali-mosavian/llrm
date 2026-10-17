@@ -36,6 +36,10 @@ def compare(base, main):
 def render(base, main, allow_failed=False):
     line, bad = rowcheck.census({"base": base, "main": main}, counters=())  # a size-only cell has no instructions: only an error cell failed
     lines = rowcheck.require(line, bad, allow_failed) + [""]
+    for side, cells_ in (("base", base), ("main", main)):
+        bare = sorted(key for key, cell_ in cells_.items() if "error" not in cell_ and "instructions" not in cell_)
+        if bare:
+            lines.append(f"{side}: {len(bare)} rows with no instructions (sized only): " + ", ".join(bare))
     groups, changed = compare(base, main)
     lines += ["| language | level | cells | counters changed |", "|---|---|--:|--:|"]
     lines += [f"| {language} | {level} | {n} | {c} |" for (language, level), (n, c) in sorted(groups.items())]
