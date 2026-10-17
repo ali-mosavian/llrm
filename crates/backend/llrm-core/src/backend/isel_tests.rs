@@ -5409,3 +5409,18 @@ fn test_a_wide_result_is_in_the_conventions_register_pair() {
     let required = insns.iter().flat_map(|one| one.requires.iter().map(|(_, register)| *register)).collect::<Vec<_>>();
     assert_eq!((delivered, required), (pair.clone(), pair));
 }
+
+/// `mem2reg` leaves a poison where a local is read before it is written, and
+/// isel refused it as "a float constant of no bits" and "an address of no
+/// global: Poison" (QCport's `d_faces`, `sc`; tests/run
+/// `float_in_place_update`). Poison is any value: +0.0 for a float and null for
+/// an address.
+#[test]
+fn test_a_poison_float_or_address_is_zero() {
+    let float = "define float @f(float %a) {\n  %v = fadd float poison, %a\n  ret float %v\n}\n";
+    let address = "define i16 @g() addrspace(1) {\n  %v = load i16, ptr poison\n  ret i16 %v\n}\n";
+    // As LLVM's X86FloatingPoint.cpp L1580: an IMPLICIT_DEF x87 register is
+    // loaded with `fldz`.
+    assert!(listing(float, "f").iter().any(|one| one == "fldz"), "{:?}", listing(float, "f"));
+    assert!(!listing(address, "g").is_empty());
+}

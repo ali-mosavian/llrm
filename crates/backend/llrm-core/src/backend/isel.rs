@@ -6732,8 +6732,11 @@ impl Selector<'_, '_, '_> {
         };
         // As LLVM's x87 lowering: +0 and +1 are `fldz` and `fld1`, and any
         // other constant loads from the pool.
-        let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
-            return refuse("a float constant of no bits");
+        // Poison is any value: +0.0.
+        let bits = match self.module.context.get(id).kind {
+            ConstantKind::Float(bits) => bits,
+            ConstantKind::Poison => 0,
+            _ => return refuse("a float constant of no bits"),
         };
         let size = self.size(self.module.context.get(id).ty)?;
         let held = self.fresh_held(FLOAT);
