@@ -1460,12 +1460,41 @@ pub struct Standing<'h> {
     /// The blocks, edges and loops of the body, as `held` has them or derived
     /// once: they stand while the body's blocks and edges do (`reshaped`).
     shape: Option<std::rc::Rc<crate::cfg::Shape>>,
+    /// Brings the facts the manager holds up to date with the body, asked once
+    /// the body changed and with whether its blocks and edges did: the
+    /// manager updates them from the changes logged, where deriving them again
+    /// walks the whole body.
+    renew: Option<Box<Renew<'h>>>,
+    renewed: Option<std::rc::Rc<Knowns>>,
+    reshaped: bool,
 }
 
+/// What `Standing::renewing` is given: the context, layout and function, and
+/// whether the blocks and edges changed.
+pub type Renew<'h> = dyn FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h;
+
 impl<'h> Standing<'h> {
+    /// `self`, asking `renew` for the facts of the body once it has changed,
+    /// where it would derive them.
+    pub fn renewing(
+        mut self,
+        renew: impl FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h,
+    ) -> Self {
+        self.renew = Some(Box::new(renew));
+        self
+    }
+
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: None,
+            derived: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1473,12 +1502,20 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: Some(bounds),
+            derived: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None, shape: None }
+        Self { held: None, bounds: None, derived: None, shape: None, renew: None, renewed: None, reshaped: false }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1503,6 +1540,7 @@ impl<'h> Standing<'h> {
     pub fn reshaped(&mut self) {
         self.shape = None;
         self.changed();
+        self.reshaped = true;
     }
 
     /// The body changed: what was found of it no longer holds.
@@ -1510,6 +1548,7 @@ impl<'h> Standing<'h> {
         self.held = None;
         self.bounds = None;
         self.derived = None;
+        self.renewed = None;
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they
@@ -1530,6 +1569,14 @@ impl<'h> Standing<'h> {
     ) -> &Knowns {
         if let Some(held) = self.held {
             return held;
+        }
+        if self.renewed.is_none()
+            && let Some(renew) = self.renew.as_mut()
+        {
+            self.renewed = Some(renew(unit.context, unit.layout, unit.function, self.reshaped));
+        }
+        if let Some(renewed) = &self.renewed {
+            return renewed;
         }
         self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }

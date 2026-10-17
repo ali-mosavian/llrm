@@ -460,6 +460,37 @@ end:
     );
 }
 
+/// Each loop indvars widened made it derive what is known of the body again,
+/// from nothing, to look at the next: 13 times at d_faces -O2,
+/// 25 M. The manager brings what it holds up to date from the changes logged:
+/// the manager's own first derivation is the only one from nothing (this body
+/// took two).
+#[test]
+fn test_indvars_brings_the_registers_up_to_date_and_does_not_derive_them_again_for_each_loop_it_widens() {
+    let loops = 4;
+    let mut text = String::from("define i32 @f(i32 %n) {\nb0:\n  br label %h0\n\n");
+    for k in 0..loops {
+        let (from, next) = (
+            if k == 0 { "b0".to_owned() } else { format!("e{}", k - 1) },
+            if k + 1 == loops { "end".to_owned() } else { format!("h{}", k + 1) },
+        );
+        text += &format!(
+            "h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %in{k}, %l{k} ]\n  %s{k} = phi i32 [ 0, %{from} ], [ %sn{k}, %l{k} ]\n  %c{k} = icmp slt i16 %i{k}, 10\n  br i1 %c{k}, label %l{k}, label %e{k}\n\nl{k}:\n  %w{k} = sext i16 %i{k} to i32\n  %sn{k} = add i32 %s{k}, %w{k}\n  %in{k} = add nsw i16 %i{k}, 1\n  br label %h{k}\n\ne{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    let mut module = parsed(&text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::IndVars { exit_values: false, unrolls: None });
+    let before = llrm_analysis::consts::scratch_derivations();
+    manager.run_module(&mut module, Rc::new(crate::testing::Tuned::default())).unwrap();
+    let derived = llrm_analysis::consts::scratch_derivations() - before;
+    assert_eq!(
+        derived, 1,
+        "what is known of the body was derived from nothing {derived} times for {loops} loops (the manager's, once)"
+    );
+}
+
 /// The same loop entered behind a copy of its test (`-ftree-ch`): the counter
 /// is tested stepped, after its trip, and the phi lists its latch first. It
 /// stayed 16 bits (a `movzx` and a 5-instruction trip where the pre-tested loop
