@@ -10,6 +10,8 @@ use crate::types::TypeId;
 
 pub mod context;
 pub mod guarantee;
+#[cfg(test)]
+mod guarantee_tests;
 pub mod known;
 pub mod nonzero;
 pub mod pattern;
