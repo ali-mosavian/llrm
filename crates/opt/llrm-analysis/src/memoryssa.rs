@@ -1400,6 +1400,7 @@ impl MemorySSA<'_> {
         edge_memory: Option<&MemRef>,
         jumping: bool,
     ) -> BTreeSet<usize> {
+        QSTEPS.with(|steps| steps.set(0));
         let memory_span = displaced_span(memory);
         let edge_span = edge_memory.and_then(displaced_span);
         let memory_exact = exact_object(memory);
@@ -1531,6 +1532,16 @@ impl MemorySSA<'_> {
         while let Some(current) = pending.pop() {
             if self.limit.get().is_some_and(|limit| found.len() > limit) {
                 break;
+            }
+            if let Some(cap) = WALK_CAP.with(Cell::get) {
+                let steps = QSTEPS.with(|steps| {
+                    steps.set(steps.get() + 1);
+                    steps.get()
+                });
+                if steps > cap {
+                    CAPPED.with(|capped| capped.set(true));
+                    break;
+                }
             }
             self.taken.set(self.taken.get() + 1);
             #[cfg(test)]
@@ -1848,4 +1859,20 @@ impl<'a> Writers<'a> {
         read.unwritable()
             || (!self.anywhere && self.index.all_near(read, |writer, _| spares(accesses, program, read, writer)))
     }
+}
+
+
+use std::cell::Cell;
+
+thread_local! {
+    /// The most steps one query's walk takes while a cap is on (a throwaway
+    /// prototype of LLVM's `MaxInstrsToScan` / `memdep-block-scan-limit`).
+    pub static WALK_CAP: Cell<Option<usize>> = const { Cell::new(None) };
+    static QSTEPS: Cell<usize> = const { Cell::new(0) };
+    static CAPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether a walk was cut by the cap since the last call; clears it.
+pub fn take_capped() -> bool {
+    CAPPED.with(|capped| capped.replace(false))
 }

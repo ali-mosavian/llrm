@@ -1331,6 +1331,10 @@ pub fn load_providers(
 ) -> llrm_mir::dense::IdMap<ValueId, Provider> {
     let Some(placed) = unit.registers else { return Default::default() };
     let function = unit.function;
+    // A throwaway prototype: each load's walk takes at most LLRM_LOAD_CAP steps.
+    static CAP: std::sync::OnceLock<Option<usize>> = std::sync::OnceLock::new();
+    memoryssa::WALK_CAP
+        .with(|cap| cap.set(*CAP.get_or_init(|| std::env::var("LLRM_LOAD_CAP").ok().and_then(|v| v.parse().ok()))));
     let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
     let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
     let stores = Stores::default();
@@ -1345,11 +1349,21 @@ pub fn load_providers(
         if crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let ask = |one: &MemRef| graph.nearest_writes(inst, one);
-        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask, &stores) {
+        let cut = std::cell::Cell::new(false);
+        let ask = |one: &MemRef| {
+            let found = graph.nearest_writes(inst, one);
+            if memoryssa::take_capped() {
+                cut.set(true);
+            }
+            found
+        };
+        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask, &stores)
+            && !cut.get()
+        {
             providers.insert(result, provider);
         }
     }
+    memoryssa::WALK_CAP.with(|cap| cap.set(None));
     providers
 }
 
