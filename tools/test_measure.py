@@ -81,6 +81,16 @@ def test_a_saving_of_fixed_or_linear_cost_does_not_fail_an_axis():
     assert ratio(cost(0, 400, 1)) > ratio(cost(20000, 1000, 1)) * 1.01  # the ratio rose: what the old gate failed
 
 
+def test_an_axis_whose_every_point_got_cheaper_does_not_fail_for_a_rise_of_its_second_difference():
+    """#1955 (a memo that filled a slot per id below the one asked of) made `cases O1` cheaper at 64, 128 and 256 cases, by more at 128
+    than at 256, so the second difference rose by 0.0129 of the base's cost at 2N and the gate read a rise: 'a step is superlinear
+    where it was not'. The claim is that no step became worse at scale; a row where each point fell has nothing worse in it."""
+    base = made(axes={"cases O1": [542.4, 1079.1, 2214.1]})
+    assert measure.rises(base, made(axes={"cases O1": [538.9, 1063.4, 2202.5]}), TOL)[1] == []
+    gone_quadratic = made(axes={"cases O1": [538.9, 1063.4, 2260.0]})
+    assert any("cases O1" in line for line in measure.rises(base, gone_quadratic, TOL)[1]), "a rise with the cost at 2N higher still fails"
+
+
 def test_a_linear_addition_fails_an_axis_by_its_cost_at_2n_alone():
     base = made(axes={"straight O2": cost(0, 1000)})
     assert any("cost at 2N" in line for line in measure.rises(base, made(axes={"straight O2": cost(0, 1100)}), TOL)[1])
