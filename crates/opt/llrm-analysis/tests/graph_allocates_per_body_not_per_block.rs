@@ -1,6 +1,6 @@
 //! `cfg::graph` made one `Vec<i64>` for the successors of every block: 117,763
-//! of the 2.9 M allocations of the d_faces -O2 compile (the graph is built
-//! 103,330 times in it). A block names one or two successors, held in the
+//! of the 2.9 M allocations of the d_faces -O2 compile (about 65 for each of
+//! its 1,811 graphs). A block names one or two successors, held in the
 //! block; only the vector of blocks is allocated.
 
 use llrm_support::alloc_count::{Counting, counted};
