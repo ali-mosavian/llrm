@@ -732,7 +732,13 @@ pub fn recorded(
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
-    manager.run(program)
+    let done = manager.run(program);
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    done
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,

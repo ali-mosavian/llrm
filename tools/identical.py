@@ -42,7 +42,7 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 # the corpus on main today, and leaves with the fix named.
 #   COLORS, FRAME, SCOPES: fail on the corpus (634, 21 and 102 of 1,323 programs and modules; 0 with the oracle off).
 #   STALE: a pass that says it adds no memory operation outlives a frozen globals-aa (#2094).
-NOT_RUN = frozenset("COLORS FRAME SCOPES STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT".split())
+NOT_RUN = frozenset("COLORS FRAME SCOPES STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT CAPTURES_MODULE".split())
 
 
 def checks(root: Path = ROOT) -> tuple[str, ...]:

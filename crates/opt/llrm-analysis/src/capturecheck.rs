@@ -14,6 +14,121 @@ use llrm_mir::opcode::Opcode;
 use crate::alias::PointsTo;
 use crate::memory::{MemoryKind, Unit, is_lifetime_marker};
 
+/// Why a callee's parameter is not shown uncaptured.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unproven {
+    /// No body in the module.
+    Undefined,
+    Recursive,
+    TooDeep,
+    /// The body captures it, or keeps it in a local.
+    Captured,
+}
+
+/// The module whose bodies answer "is parameter `i` of `f` captured".
+pub struct Verify<'a> {
+    pub module: &'a llrm_mir::module::Module,
+    pub layout: &'a llrm_mir::datalayout::DataLayout,
+    depth: u32,
+    stack: std::cell::RefCell<Vec<(llrm_mir::context::GlobalId, usize)>>,
+    /// Parameters shown uncaptured, by callee name, for the report.
+    pub verified: std::cell::RefCell<Vec<String>>,
+    pub unproven: std::cell::RefCell<Vec<(String, Unproven)>>,
+}
+
+impl<'a> Verify<'a> {
+    pub fn new(
+        module: &'a llrm_mir::module::Module,
+        layout: &'a llrm_mir::datalayout::DataLayout,
+        depth: u32,
+    ) -> Self {
+        Self {
+            module,
+            layout,
+            depth,
+            stack: Default::default(),
+            verified: Default::default(),
+            unproven: Default::default(),
+        }
+    }
+
+    /// `Ok` when parameter `index` of `callee` is shown uncaptured by its body,
+    /// recursively through the module's other bodies.
+    pub fn parameter(
+        &self,
+        callee: llrm_mir::context::GlobalId,
+        index: usize,
+    ) -> Result<(), Unproven> {
+        let global = self.module.globals.get(callee.0 as usize).ok_or(Unproven::Undefined)?;
+        let name = global.name.clone().unwrap_or_default();
+        let top = self.stack.borrow().is_empty();
+        let found = (|| {
+            let function = global.function().filter(|one| !one.is_declaration()).ok_or(Unproven::Undefined)?;
+            // The parameter is assumed uncaptured while its own body is read
+            // (LLVM's SCC step): a cycle that passes it on only is no capture.
+            if self.stack.borrow().contains(&(callee, index)) {
+                return Ok(());
+            }
+            if self.stack.borrow().iter().any(|one| one.0 == callee) {
+                return Err(Unproven::Recursive);
+            }
+            if self.stack.borrow().len() as u32 >= self.depth {
+                return Err(Unproven::TooDeep);
+            }
+            let root = *function.parameters().get(index).ok_or(Unproven::Undefined)?;
+            self.stack.borrow_mut().push((callee, index));
+            let unit = Unit::of(self.module, self.layout, function);
+            let mut kept = Vec::new();
+            let captured = captured_by(&unit, root, &mut kept, Some(self));
+            self.stack.borrow_mut().pop();
+            if captured.is_some() || !kept.is_empty() { Err(Unproven::Captured) } else { Ok(()) }
+        })();
+        if top {
+            match found {
+                Ok(()) => self.verified.borrow_mut().push(name),
+                Err(why) => self.unproven.borrow_mut().push((name, why)),
+            }
+        }
+        found
+    }
+}
+
+/// `check_with` over every body of `module`, on facts derived again from a
+/// plain unit of each: the split of what the facts leave unescaped into
+/// verified and not, printed (`LLRM_CHECK_CAPTURES_MODULE`).
+pub fn check_module(
+    module: &llrm_mir::module::Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+) {
+    let verify = Verify::new(module, layout, 8);
+    let mut misses = 0usize;
+    for global in &module.globals {
+        let Some(function) = global.function().filter(|one| !one.is_declaration()) else { continue };
+        let plain = Unit::of(module, layout, function);
+        let known = crate::consts::known(&Unit { registers: None, ..plain });
+        let shape = crate::cfg::Shape::of(function);
+        let unit = plain.with_registers(&known).with_shape(&shape);
+        let Ok(facts) = crate::alias::points_to(&unit, None, None) else { continue };
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_with(&unit, &facts, Some(&verify))));
+        if let Err(why) = result {
+            misses += 1;
+            let text = why.downcast_ref::<String>().cloned().unwrap_or_default();
+            eprintln!("CAPTURES-MODULE-MISS {}: {}", global.name.clone().unwrap_or_default(), text);
+        }
+    }
+    let mut reasons: std::collections::BTreeMap<String, usize> = Default::default();
+    for (_, why) in verify.unproven.borrow().iter() {
+        *reasons.entry(format!("{why:?}")).or_default() += 1;
+    }
+    eprintln!(
+        "CAPTURES-MODULE verified {} unproven {:?} under-escape functions {}",
+        verify.verified.borrow().len(),
+        reasons,
+        misses
+    );
+}
+
 /// The alloca an address is made of by geps and casts.
 fn frame_base(
     unit: &Unit,
@@ -38,11 +153,17 @@ fn frame_base(
 fn unknown_arm(
     unit: &Unit,
     arm: llrm_mir::module::Operand,
+    followed: &IdSet<ValueId>,
 ) -> bool {
     let function = unit.function;
     let mut at = arm;
     loop {
         let llrm_mir::module::Operand::Value(value) = at else { return false };
+        // An arm already followed is no unknown: it is the pointer being
+        // tracked.
+        if followed.contains(&value) {
+            return false;
+        }
         let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { return true };
         let op = function.instruction(inst);
         match &op.opcode {
@@ -58,6 +179,7 @@ fn captured_by(
     unit: &Unit,
     root: ValueId,
     held_in: &mut Vec<ValueId>,
+    verify: Option<&Verify>,
 ) -> Option<InstId> {
     let function = unit.function;
     let mut seen: IdSet<ValueId> = IdSet::new();
@@ -77,7 +199,9 @@ fn captured_by(
                 // it reads them).
                 Opcode::Phi | Opcode::Select if at != 0 || matches!(op.opcode, Opcode::Phi) => {
                     if op.operands.iter().enumerate().any(|(index, one)| {
-                        (matches!(op.opcode, Opcode::Phi) || index != 0) && index != at && unknown_arm(unit, *one)
+                        (matches!(op.opcode, Opcode::Phi) || index != 0)
+                            && index != at
+                            && unknown_arm(unit, *one, &seen)
                     }) {
                         return Some(used.user);
                     }
@@ -94,24 +218,33 @@ fn captured_by(
                         Opcode::Call(_) => op.operands.len() - 1,
                         _ => op.operands.len() - 3,
                     };
-                    // Captured unless the callee's parameter says `nocapture`
-                    // (the attribute is llrm's own where
-                    // FunctionAttrs stamped it, so a second
-                    // mode trusts none).
-                    // A unit holds the other bodies as declarations and the
-                    // facts follow the summaries of those
-                    // the module defines, so a direct
-                    // call is read only in the mode that reports them (they
-                    // wait for the callee's own capture
-                    // proof).
-                    let direct = llrm_mir::memory::callee(unit.context, function, used.user).is_some();
-                    if at < args
-                        && (!direct || llrm_support::env_flag!("LLRM_CHECK_CAPTURES_CALLS"))
-                        && !is_lifetime_marker(unit, used.user)
-                        && (llrm_support::env_flag!("LLRM_CHECK_CAPTURES_BLIND")
-                            || !crate::alias::borrowed(unit, used.user, at))
-                    {
-                        return Some(used.user);
+                    if at >= args || is_lifetime_marker(unit, used.user) {
+                        continue;
+                    }
+                    let callee = llrm_mir::memory::callee(unit.context, function, used.user);
+                    // The module defines the callee: its own body says (no
+                    // attribute is trusted); one it does
+                    // not define, or recursion, or a chain too
+                    // long, keeps the pointer unless the declaration says
+                    // nocapture.
+                    match (callee, verify) {
+                        (Some(callee), Some(verify)) => match verify.parameter(callee, at) {
+                            Ok(()) => {}
+                            Err(Unproven::Undefined) if crate::alias::borrowed(unit, used.user, at) => {}
+                            Err(_) => return Some(used.user),
+                        },
+                        // A unit holds the other bodies as declarations and the
+                        // facts follow the summaries of those the module
+                        // defines, so a direct call is read only in the mode
+                        // that reports them.
+                        (Some(_), None) if !llrm_support::env_flag!("LLRM_CHECK_CAPTURES_CALLS") => {}
+                        _ => {
+                            if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_BLIND")
+                                || !crate::alias::borrowed(unit, used.user, at)
+                            {
+                                return Some(used.user);
+                            }
+                        }
                     }
                 }
                 _ => return Some(used.user),
@@ -126,13 +259,23 @@ pub fn check(
     unit: &Unit,
     facts: &PointsTo,
 ) {
+    check_with(unit, facts, None)
+}
+
+/// The frame objects a use captures that `facts.escaped` lacks, as text; with a
+/// `Verify` a direct call's callee is read in its own body.
+pub fn check_with(
+    unit: &Unit,
+    facts: &PointsTo,
+    verify: Option<&Verify>,
+) {
     let function = unit.function;
     let mut direct: Vec<(ValueId, Option<InstId>, Vec<ValueId>)> = Vec::new();
     for (_, inst) in function.walk() {
         let op = function.instruction(inst);
         let (Opcode::Alloca { .. }, Some(value)) = (&op.opcode, op.result) else { continue };
         let mut held_in = Vec::new();
-        let by = captured_by(unit, value, &mut held_in);
+        let by = captured_by(unit, value, &mut held_in, verify);
         direct.push((value, by, held_in));
     }
     // Held in a captured object is captured, to a fixed point.
@@ -242,17 +385,39 @@ mod tests {
     /// facts that forgot it were accepted (the review of #2146).
     #[test]
     fn a_frame_object_passed_to_an_opaque_direct_call_must_be_in_the_escaped_set() {
-        // SAFETY: the tests of this crate set no other thread's environment.
-        unsafe { std::env::set_var("LLRM_CHECK_CAPTURES_CALLS", "1") };
         let module = parsed(&format!(
             "{DOS}declare void @keep(ptr)\ndefine void @f() {{\nentry:\n  %s = alloca i32\n  call void @keep(ptr %s)\n  ret void\n}}\n"
         ));
         let layout = layout(&module);
         let unit = crate::testing::with_registers(Unit::of(&module, &layout, function(&module, "f")));
         let mut facts = points_to(&unit, None, None).unwrap();
-        check(&unit, &facts);
+        let verify = super::Verify::new(&module, &layout, 4);
+        super::check_with(&unit, &facts, Some(&verify));
         facts.escaped.clear();
-        let forgotten = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&unit, &facts)));
+        let forgotten =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| super::check_with(&unit, &facts, Some(&verify))));
         assert!(forgotten.is_err(), "facts that forgot the escape to an opaque call were accepted");
+    }
+
+    /// A pointer passed to a function the module defines is read in that body:
+    /// kept in a global it is captured, only loaded through it is not (the 285
+    /// calls the facts rested on the stamp's summaries for).
+    #[test]
+    fn a_pointer_passed_to_a_defined_callee_is_read_in_the_callee_body() {
+        let module = parsed(&format!(
+            "{DOS}@g = global ptr null\ndefine void @keeps(ptr %p) {{\nentry:\n  store ptr %p, ptr @g\n  ret void\n}}\ndefine i32 @reads(ptr %p) {{\nentry:\n  %v = load i32, ptr %p\n  ret i32 %v\n}}\ndefine i32 @f() {{\nentry:\n  %s = alloca i32\n  %t = alloca i32\n  call void @keeps(ptr %s)\n  %r = call i32 @reads(ptr %t)\n  ret i32 %r\n}}\n"
+        ));
+        let layout = layout(&module);
+        let unit = crate::testing::with_registers(Unit::of(&module, &layout, function(&module, "f")));
+        let mut facts = points_to(&unit, None, None).unwrap();
+        facts.escaped.clear();
+        let verify = super::Verify::new(&module, &layout, 4);
+        let forgotten = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::check_with(&unit, &facts, Some(&verify));
+        }));
+        let text = forgotten.err().and_then(|why| why.downcast_ref::<String>().cloned()).expect("%s is captured");
+        assert!(text.contains("ValueId(0)"), "{text}");
+        assert!(!text.contains("ValueId(1)"), "the read-only callee kept %t: {text}");
+        assert_eq!(verify.verified.borrow().as_slice(), ["reads"]);
     }
 }
