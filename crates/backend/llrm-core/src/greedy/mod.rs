@@ -5,5 +5,7 @@
 //! allocator in `backend::allocate` and is compared with it; nothing selects it
 //! yet.
 
+pub mod greedy;
 pub mod matrix;
+pub mod spill;
 pub mod virtregmap;
