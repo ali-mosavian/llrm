@@ -301,7 +301,7 @@ impl KnownBits {
         Self::raw(width, zero, one)
     }
 
-    /// @h:makeConstant
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L369>
     pub fn constant(
         width: u32,
         value: u128,
@@ -309,129 +309,129 @@ impl KnownBits {
         Self::from_masks(width, !value, value)
     }
 
-    /// @h:hasConflict
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L51>
     pub fn has_conflict(&self) -> bool {
         self.zero & self.one != 0
     }
 
-    /// @h:isConstant
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L54>
     pub fn is_constant(&self) -> bool {
         self.zero ^ self.one == mask(self.width) && !self.has_conflict()
     }
 
-    /// @h:getConstant
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L58>
     pub fn constant_value(&self) -> u128 {
         assert!(self.is_constant(), "Can only get value when all bits are known");
         self.one
     }
 
-    /// @h:isUnknown
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L64>
     pub fn is_unknown(&self) -> bool {
         self.zero == 0 && self.one == 0
     }
 
-    /// @h:isSignUnknown
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L67>
     pub fn is_sign_unknown(&self) -> bool {
         !bit(self.zero, self.width - 1) && !bit(self.one, self.width - 1)
     }
 
-    /// @h:resetAll
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L72>
     pub fn reset_all(&mut self) {
         self.zero = 0;
         self.one = 0;
     }
 
-    /// @h:isZero
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L64>
     pub fn is_zero(&self) -> bool {
         self.zero == mask(self.width)
     }
 
-    /// @h:isAllOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L78>
     pub fn is_all_ones(&self) -> bool {
         self.one == mask(self.width)
     }
 
-    /// @h:setAllZero
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L84>
     pub fn set_all_zero(&mut self) {
         self.zero = mask(self.width);
         self.one = 0;
     }
 
-    /// @h:setAllOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L90>
     pub fn set_all_ones(&mut self) {
         self.zero = 0;
         self.one = mask(self.width);
     }
 
-    /// @h:setAllConflict
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L97>
     pub fn set_all_conflict(&mut self) {
         self.zero = mask(self.width);
         self.one = mask(self.width);
     }
 
-    /// @h:isNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L103>
     pub fn is_negative(&self) -> bool {
         bit(self.one, self.width - 1)
     }
 
-    /// @h:isNonNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L106>
     pub fn is_non_negative(&self) -> bool {
         bit(self.zero, self.width - 1)
     }
 
-    /// @h:isNonZero
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L109>
     pub fn is_non_zero(&self) -> bool {
         self.one != 0
     }
 
-    /// @h:isStrictlyPositive
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L112>
     pub fn is_strictly_positive(&self) -> bool {
         self.is_non_negative() && self.is_non_zero()
     }
 
-    /// @h:isNonPositive
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L117>
     pub fn is_non_positive(&self) -> bool {
         signed(self.signed_max_value(), self.width) <= 0
     }
 
-    /// @h:makeNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L120>
     pub fn make_negative(&mut self) {
         self.one |= sign_bit(self.width);
     }
 
-    /// @h:makeNonNegative
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L125>
     pub fn make_non_negative(&mut self) {
         self.zero |= sign_bit(self.width);
     }
 
-    /// @h:getMinValue
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L130>
     pub fn min_value(&self) -> u128 {
         self.one
     }
 
-    /// @h:getSignedMinValue
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L136>
     pub fn signed_min_value(&self) -> u128 {
         let min = self.one;
         if bit(self.zero, self.width - 1) { min } else { min | sign_bit(self.width) }
     }
 
-    /// @h:getMaxValue
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L146>
     pub fn max_value(&self) -> u128 {
         !self.zero & mask(self.width)
     }
 
-    /// @h:getSignedMaxValue
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L117>
     pub fn signed_max_value(&self) -> u128 {
         let max = self.max_value();
         if bit(self.one, self.width - 1) { max } else { max & !sign_bit(self.width) }
     }
 
-    /// @h:isEven
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L162>
     pub fn is_even(&self) -> bool {
         bit(self.zero, 0)
     }
 
-    /// @h:trunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L165>
     pub fn trunc(
         &self,
         width: u32,
@@ -439,7 +439,7 @@ impl KnownBits {
         Self::from_masks(width, self.zero, self.one)
     }
 
-    /// @h:anyext
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L171>
     pub fn anyext(
         &self,
         width: u32,
@@ -447,7 +447,7 @@ impl KnownBits {
         Self::from_masks(width, self.zero, self.one)
     }
 
-    /// @h:zext
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L172>
     pub fn zext(
         &self,
         width: u32,
@@ -455,7 +455,7 @@ impl KnownBits {
         Self::from_masks(width, set_range(self.zero, self.width, width), self.one)
     }
 
-    /// @h:sext
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L184>
     pub fn sext(
         &self,
         width: u32,
@@ -463,7 +463,7 @@ impl KnownBits {
         Self::from_masks(width, sext(self.zero, self.width, width), sext(self.one, self.width, width))
     }
 
-    /// @h:anyextOrTrunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L190>
     pub fn anyext_or_trunc(
         &self,
         width: u32,
@@ -475,7 +475,7 @@ impl KnownBits {
         }
     }
 
-    /// @h:zextOrTrunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L200>
     pub fn zext_or_trunc(
         &self,
         width: u32,
@@ -487,7 +487,7 @@ impl KnownBits {
         }
     }
 
-    /// @h:sextOrTrunc
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L210>
     pub fn sext_or_trunc(
         &self,
         width: u32,
@@ -499,7 +499,7 @@ impl KnownBits {
         }
     }
 
-    /// @cpp:truncSSat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L159>
     pub fn trunc_ssat(
         &self,
         width: u32,
@@ -541,7 +541,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:truncSSatU
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L225>
     pub fn trunc_ssat_u(
         &self,
         width: u32,
@@ -569,7 +569,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:truncUSat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L262>
     pub fn trunc_usat(
         &self,
         width: u32,
@@ -586,7 +586,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:sextInReg
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L280>
     pub fn sext_in_reg(
         &self,
         src_width: u32,
@@ -601,7 +601,7 @@ impl KnownBits {
         Self::raw(self.width, ashr(zero, self.width, ext), ashr(one, self.width, ext))
     }
 
-    /// @h:insertBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L233>
     pub fn insert_bits(
         &mut self,
         sub: &Self,
@@ -612,7 +612,7 @@ impl KnownBits {
         self.one = (self.one & !hole) | (sub.one << position);
     }
 
-    /// @h:extractBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L239>
     pub fn extract_bits(
         &self,
         count: u32,
@@ -621,7 +621,7 @@ impl KnownBits {
         Self::from_masks(count, lshr(self.zero, position), lshr(self.one, position))
     }
 
-    /// @h:concat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L247>
     pub fn concat(
         &self,
         low: &Self,
@@ -630,7 +630,7 @@ impl KnownBits {
         Self::from_masks(width, self.zero << low.width | low.zero, self.one << low.width | low.one)
     }
 
-    /// @cpp:makeGE
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L297>
     pub fn make_ge(
         &self,
         value: u128,
@@ -640,27 +640,27 @@ impl KnownBits {
         Self { zero: self.zero, one: self.one | masked, width: self.width }
     }
 
-    /// @h:countMinTrailingZeros
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L256>
     pub fn count_min_trailing_zeros(&self) -> u32 {
         countr_one(self.zero, self.width)
     }
 
-    /// @h:countMinTrailingOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L259>
     pub fn count_min_trailing_ones(&self) -> u32 {
         countr_one(self.one, self.width)
     }
 
-    /// @h:countMinLeadingZeros
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L262>
     pub fn count_min_leading_zeros(&self) -> u32 {
         countl_one(self.zero, self.width)
     }
 
-    /// @h:countMinLeadingOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L265>
     pub fn count_min_leading_ones(&self) -> u32 {
         countl_one(self.one, self.width)
     }
 
-    /// @h:countMinSignBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L269>
     pub fn count_min_sign_bits(&self) -> u32 {
         if self.is_non_negative() {
             self.count_min_leading_zeros()
@@ -671,47 +671,47 @@ impl KnownBits {
         }
     }
 
-    /// @h:countMaxSignificantBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L283>
     pub fn count_max_significant_bits(&self) -> u32 {
         self.width - self.count_min_sign_bits() + 1
     }
 
-    /// @h:countMaxTrailingZeros
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L288>
     pub fn count_max_trailing_zeros(&self) -> u32 {
         countr_zero(self.one, self.width)
     }
 
-    /// @h:countMaxTrailingOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L291>
     pub fn count_max_trailing_ones(&self) -> u32 {
         countr_zero(self.zero, self.width)
     }
 
-    /// @h:countMaxLeadingZeros
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L294>
     pub fn count_max_leading_zeros(&self) -> u32 {
         countl_zero(self.one, self.width)
     }
 
-    /// @h:countMaxLeadingOnes
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L297>
     pub fn count_max_leading_ones(&self) -> u32 {
         countl_zero(self.zero, self.width)
     }
 
-    /// @h:countMinPopulation
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L300>
     pub fn count_min_population(&self) -> u32 {
         popcount(self.one)
     }
 
-    /// @h:countMaxPopulation
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L303>
     pub fn count_max_population(&self) -> u32 {
         self.width - popcount(self.zero)
     }
 
-    /// @h:countMaxActiveBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L310>
     pub fn count_max_active_bits(&self) -> u32 {
         self.width - self.count_min_leading_zeros()
     }
 
-    /// @h:intersectWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L325>
     pub fn intersect_with(
         &self,
         rhs: &Self,
@@ -719,7 +719,7 @@ impl KnownBits {
         Self { zero: self.zero & rhs.zero, one: self.one & rhs.one, width: self.width }
     }
 
-    /// @h:unionWith
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L335>
     pub fn union_with(
         &self,
         rhs: &Self,
@@ -727,7 +727,7 @@ impl KnownBits {
         Self { zero: self.zero | rhs.zero, one: self.one | rhs.one, width: self.width }
     }
 
-    /// @h:haveNoCommonBitsSet
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L340>
     pub fn have_no_common_bits_set(
         lhs: &Self,
         rhs: &Self,
@@ -736,7 +736,8 @@ impl KnownBits {
     }
 
     /// Flip the range of values: `[-0x80000000, 0x7FFFFFFF]` <-> `[0,
-    /// 0xFFFFFFFF]`. @cpp:flipSignBit
+    /// 0xFFFFFFFF]`.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L22>
     fn flip_sign_bit(val: &Self) -> Self {
         let top = val.width - 1;
         Self {
@@ -762,7 +763,7 @@ impl KnownBits {
         Self { zero: !possible_sum_zero & known, one: possible_sum_one & known, width }
     }
 
-    /// @cpp:computeForAddCarry
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L54>
     pub fn compute_for_add_carry(
         lhs: &Self,
         rhs: &Self,
@@ -772,7 +773,7 @@ impl KnownBits {
         Self::compute_for_add_carry_bits(lhs, rhs, carry.zero != 0, carry.one != 0)
     }
 
-    /// @cpp:computeForAddSub
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L61>
     pub fn compute_for_add_sub(
         add: bool,
         nsw: bool,
@@ -839,7 +840,7 @@ impl KnownBits {
         out
     }
 
-    /// @cpp:computeForSubBorrow
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L147>
     pub fn compute_for_sub_borrow(
         lhs: &Self,
         rhs: Self,
@@ -850,7 +851,7 @@ impl KnownBits {
         Self::compute_for_add_carry_bits(lhs, &swapped, borrow.one != 0, borrow.zero != 0)
     }
 
-    /// @h:add
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L361>
     pub fn add(
         lhs: &Self,
         rhs: &Self,
@@ -865,7 +866,7 @@ impl KnownBits {
         Self::compute_for_add_sub(true, nsw, nuw, lhs, rhs)
     }
 
-    /// @h:sub
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L376>
     pub fn sub(
         lhs: &Self,
         rhs: &Self,
@@ -875,7 +876,7 @@ impl KnownBits {
         Self::compute_for_add_sub(false, nsw, nuw, lhs, rhs)
     }
 
-    /// @cpp:computeForSatAddSub
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L876>
     fn compute_for_sat_add_sub(
         add: bool,
         is_signed: bool,
@@ -986,7 +987,7 @@ impl KnownBits {
         res
     }
 
-    /// @cpp:sadd_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1033>
     pub fn sadd_sat(
         lhs: &Self,
         rhs: &Self,
@@ -994,7 +995,7 @@ impl KnownBits {
         Self::compute_for_sat_add_sub(true, true, lhs, rhs)
     }
 
-    /// @cpp:ssub_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1036>
     pub fn ssub_sat(
         lhs: &Self,
         rhs: &Self,
@@ -1002,7 +1003,7 @@ impl KnownBits {
         Self::compute_for_sat_add_sub(false, true, lhs, rhs)
     }
 
-    /// @cpp:uadd_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1039>
     pub fn uadd_sat(
         lhs: &Self,
         rhs: &Self,
@@ -1010,7 +1011,7 @@ impl KnownBits {
         Self::compute_for_sat_add_sub(true, false, lhs, rhs)
     }
 
-    /// @cpp:usub_sat
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1042>
     pub fn usub_sat(
         lhs: &Self,
         rhs: &Self,
@@ -1018,7 +1019,7 @@ impl KnownBits {
         Self::compute_for_sat_add_sub(false, false, lhs, rhs)
     }
 
-    /// @cpp:avgComputeU
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1046>
     fn avg_compute_u(
         lhs: &Self,
         rhs: &Self,
@@ -1029,7 +1030,7 @@ impl KnownBits {
         sum.extract_bits(width, 1)
     }
 
-    /// @cpp:avgFloorS
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1056>
     pub fn avg_floor_s(
         lhs: &Self,
         rhs: &Self,
@@ -1037,7 +1038,7 @@ impl KnownBits {
         Self::flip_sign_bit(&Self::avg_floor_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
     }
 
-    /// @cpp:avgFloorU
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1060>
     pub fn avg_floor_u(
         lhs: &Self,
         rhs: &Self,
@@ -1045,7 +1046,7 @@ impl KnownBits {
         Self::avg_compute_u(lhs, rhs, false)
     }
 
-    /// @cpp:avgCeilS
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1064>
     pub fn avg_ceil_s(
         lhs: &Self,
         rhs: &Self,
@@ -1053,7 +1054,7 @@ impl KnownBits {
         Self::flip_sign_bit(&Self::avg_ceil_u(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
     }
 
-    /// @cpp:avgCeilU
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1068>
     pub fn avg_ceil_u(
         lhs: &Self,
         rhs: &Self,
@@ -1061,7 +1062,7 @@ impl KnownBits {
         Self::avg_compute_u(lhs, rhs, true)
     }
 
-    /// @cpp:mul
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1072>
     pub fn mul(
         lhs: &Self,
         rhs: &Self,
@@ -1103,7 +1104,7 @@ impl KnownBits {
     }
 
     /// DEVIATE: at most 64 bits (the wide product is a `u128`).
-    /// @cpp:mulhs
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1175>
     pub fn mulhs(
         lhs: &Self,
         rhs: &Self,
@@ -1114,7 +1115,7 @@ impl KnownBits {
     }
 
     /// DEVIATE: at most 64 bits (the wide product is a `u128`).
-    /// @cpp:mulhu
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1183>
     pub fn mulhu(
         lhs: &Self,
         rhs: &Self,
@@ -1124,7 +1125,7 @@ impl KnownBits {
         Self::mul(&lhs.zext(2 * width), &rhs.zext(2 * width), false).extract_bits(width, width)
     }
 
-    /// @cpp:divComputeLowBit
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1191>
     fn div_compute_low_bit(
         mut known: Self,
         lhs: &Self,
@@ -1153,7 +1154,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:sdiv
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1227>
     pub fn sdiv(
         lhs: &Self,
         rhs: &Self,
@@ -1199,7 +1200,7 @@ impl KnownBits {
         Self::div_compute_low_bit(known, lhs, rhs, exact)
     }
 
-    /// @cpp:udiv
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1283>
     pub fn udiv(
         lhs: &Self,
         rhs: &Self,
@@ -1226,7 +1227,7 @@ impl KnownBits {
         Self::div_compute_low_bit(known, lhs, rhs, exact)
     }
 
-    /// @cpp:remGetLowBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1321>
     fn rem_get_low_bits(
         lhs: &Self,
         rhs: &Self,
@@ -1239,7 +1240,7 @@ impl KnownBits {
         Self::unknown(width)
     }
 
-    /// @cpp:urem
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1334>
     pub fn urem(
         lhs: &Self,
         rhs: &Self,
@@ -1253,7 +1254,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:srem
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1353>
     pub fn srem(
         lhs: &Self,
         rhs: &Self,
@@ -1278,7 +1279,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:umax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L309>
     pub fn umax(
         lhs: &Self,
         rhs: &Self,
@@ -1294,7 +1295,7 @@ impl KnownBits {
         l.intersect_with(&r)
     }
 
-    /// @cpp:umin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L327>
     pub fn umin(
         lhs: &Self,
         rhs: &Self,
@@ -1303,7 +1304,7 @@ impl KnownBits {
         flip(&Self::umax(&flip(lhs), &flip(rhs)))
     }
 
-    /// @cpp:smax
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L333>
     pub fn smax(
         lhs: &Self,
         rhs: &Self,
@@ -1311,7 +1312,7 @@ impl KnownBits {
         Self::flip_sign_bit(&Self::umax(&Self::flip_sign_bit(lhs), &Self::flip_sign_bit(rhs)))
     }
 
-    /// @cpp:smin
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L337>
     pub fn smin(
         lhs: &Self,
         rhs: &Self,
@@ -1327,7 +1328,7 @@ impl KnownBits {
         flip(&Self::umax(&flip(lhs), &flip(rhs)))
     }
 
-    /// @cpp:abdu
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L350>
     pub fn abdu(
         lhs: &Self,
         rhs: &Self,
@@ -1343,7 +1344,7 @@ impl KnownBits {
         diff0.intersect_with(&diff1)
     }
 
-    /// @cpp:abds
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L369>
     pub fn abds(
         mut lhs: Self,
         mut rhs: Self,
@@ -1365,7 +1366,7 @@ impl KnownBits {
         diff0.intersect_with(&diff1)
     }
 
-    /// @cpp:getMaxShiftAmount
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L400>
     fn max_shift_amount(
         max_value: u128,
         value_width: u32,
@@ -1389,7 +1390,7 @@ impl KnownBits {
         zero_mask & amount == 0 && (one_mask | amount) == amount
     }
 
-    /// @cpp:shl
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L410>
     pub fn shl(
         lhs: &Self,
         rhs: &Self,
@@ -1470,7 +1471,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:lshr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L494>
     pub fn lshr(
         lhs: &Self,
         rhs: &Self,
@@ -1517,7 +1518,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:ashr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L550>
     pub fn ashr(
         lhs: &Self,
         rhs: &Self,
@@ -1566,7 +1567,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:fshl
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L609>
     pub fn fshl(
         lhs: &Self,
         rhs: &Self,
@@ -1576,7 +1577,7 @@ impl KnownBits {
         Self::raw(w, fshl(lhs.zero, rhs.zero, amt, w), fshl(lhs.one, rhs.one, amt, w))
     }
 
-    /// @cpp:fshr
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L615>
     pub fn fshr(
         lhs: &Self,
         rhs: &Self,
@@ -1586,7 +1587,7 @@ impl KnownBits {
         Self::raw(w, fshr(lhs.zero, rhs.zero, amt, w), fshr(lhs.one, rhs.one, amt, w))
     }
 
-    /// @cpp:clmul
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L621>
     pub fn clmul(
         lhs: &Self,
         rhs: &Self,
@@ -1611,7 +1612,7 @@ impl KnownBits {
         res
     }
 
-    /// @cpp:pext
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L648>
     pub fn pext(
         val: &Self,
         mask_bits: &Self,
@@ -1640,7 +1641,7 @@ impl KnownBits {
         res
     }
 
-    /// @cpp:pdep
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L682>
     pub fn pdep(
         val: &Self,
         mask_bits: &Self,
@@ -1672,7 +1673,7 @@ impl KnownBits {
         res
     }
 
-    /// @cpp:eq
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L716>
     pub fn eq(
         lhs: &Self,
         rhs: &Self,
@@ -1686,7 +1687,7 @@ impl KnownBits {
         None
     }
 
-    /// @cpp:ne
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L724>
     pub fn ne(
         lhs: &Self,
         rhs: &Self,
@@ -1694,7 +1695,7 @@ impl KnownBits {
         Self::eq(lhs, rhs).map(|equal| !equal)
     }
 
-    /// @cpp:ugt
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L730>
     pub fn ugt(
         lhs: &Self,
         rhs: &Self,
@@ -1708,7 +1709,7 @@ impl KnownBits {
         None
     }
 
-    /// @cpp:uge
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L740>
     pub fn uge(
         lhs: &Self,
         rhs: &Self,
@@ -1716,7 +1717,7 @@ impl KnownBits {
         Self::ugt(rhs, lhs).map(|greater| !greater)
     }
 
-    /// @cpp:ult
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L746>
     pub fn ult(
         lhs: &Self,
         rhs: &Self,
@@ -1724,7 +1725,7 @@ impl KnownBits {
         Self::ugt(rhs, lhs)
     }
 
-    /// @cpp:ule
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L750>
     pub fn ule(
         lhs: &Self,
         rhs: &Self,
@@ -1732,7 +1733,7 @@ impl KnownBits {
         Self::uge(rhs, lhs)
     }
 
-    /// @cpp:sgt
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L754>
     pub fn sgt(
         lhs: &Self,
         rhs: &Self,
@@ -1747,7 +1748,7 @@ impl KnownBits {
         None
     }
 
-    /// @cpp:sge
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L764>
     pub fn sge(
         lhs: &Self,
         rhs: &Self,
@@ -1755,7 +1756,7 @@ impl KnownBits {
         Self::sgt(rhs, lhs).map(|greater| !greater)
     }
 
-    /// @cpp:slt
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L770>
     pub fn slt(
         lhs: &Self,
         rhs: &Self,
@@ -1763,7 +1764,7 @@ impl KnownBits {
         Self::sgt(rhs, lhs)
     }
 
-    /// @cpp:sle
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L774>
     pub fn sle(
         lhs: &Self,
         rhs: &Self,
@@ -1771,7 +1772,7 @@ impl KnownBits {
         Self::sge(rhs, lhs)
     }
 
-    /// @cpp:operator&=
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1382>
     pub fn and(
         &self,
         rhs: &Self,
@@ -1779,7 +1780,7 @@ impl KnownBits {
         Self { zero: self.zero | rhs.zero, one: self.one & rhs.one, width: self.width }
     }
 
-    /// @cpp:operator|=
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1390>
     pub fn or(
         &self,
         rhs: &Self,
@@ -1787,7 +1788,7 @@ impl KnownBits {
         Self { zero: self.zero & rhs.zero, one: self.one | rhs.one, width: self.width }
     }
 
-    /// @cpp:operator^=
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1398>
     pub fn xor(
         &self,
         rhs: &Self,
@@ -1799,7 +1800,7 @@ impl KnownBits {
         }
     }
 
-    /// @h:operator<<=
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L538>
     pub fn shl_by(
         &self,
         amount: u32,
@@ -1807,7 +1808,7 @@ impl KnownBits {
         Self::raw(self.width, lshr_or_zero_shl(self.zero, amount), lshr_or_zero_shl(self.one, amount))
     }
 
-    /// @h:operator>>=
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L545>
     pub fn lshr_by(
         &self,
         amount: u32,
@@ -1815,7 +1816,7 @@ impl KnownBits {
         Self::raw(self.width, lshr(self.zero, amount), lshr(self.one, amount))
     }
 
-    /// @cpp:abs
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L778>
     pub fn abs(
         &self,
         int_min_is_poison: bool,
@@ -1851,7 +1852,7 @@ impl KnownBits {
         abs
     }
 
-    /// @cpp:reduceAdd
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L836>
     pub fn reduce_add(
         &self,
         num_elts: u32,
@@ -1877,19 +1878,19 @@ impl KnownBits {
         result
     }
 
-    /// @h:byteSwap
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L559>
     pub fn byte_swap(&self) -> Self {
         let swap = |v: u128| v.swap_bytes() >> (128 - self.width);
         Self::raw(self.width, swap(self.zero), swap(self.one))
     }
 
-    /// @h:reverseBits
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/KnownBits.h#L563>
     pub fn reverse_bits(&self) -> Self {
         let reverse = |v: u128| v.reverse_bits() >> (128 - self.width);
         Self::raw(self.width, reverse(self.zero), reverse(self.one))
     }
 
-    /// @cpp:blsi
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1407>
     pub fn blsi(&self) -> Self {
         let width = self.width;
         let mut known = Self { zero: self.zero, one: 0, width };
@@ -1902,7 +1903,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:blsmsk
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1418>
     pub fn blsmsk(&self) -> Self {
         let width = self.width;
         let mut known = Self::unknown(width);
@@ -1913,7 +1914,7 @@ impl KnownBits {
         known
     }
 
-    /// @cpp:print
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1428>
     pub fn print(&self) -> String {
         (0..self.width)
             .rev()
@@ -1935,7 +1936,7 @@ fn lshr_or_zero_shl(
 }
 
 /// `SignBitsOps::rot`: the sign bits left in a rotated value.
-/// @cpp:rot
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/KnownBits.cpp#L1450>
 pub fn rot_sign_bits(
     src_sign_bits: u32,
     width: u32,
