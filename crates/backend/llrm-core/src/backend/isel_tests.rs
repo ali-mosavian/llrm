@@ -5424,3 +5424,11 @@ fn test_a_poison_float_or_address_is_zero() {
     assert!(listing(float, "f").iter().any(|one| one == "fldz"), "{:?}", listing(float, "f"));
     assert!(!listing(address, "g").is_empty());
 }
+
+/// The same for an `i64`: `mem2reg` left a poison i64 in QCport's `digits_for`
+/// and isel refused "an i64 constant of no bits".
+#[test]
+fn test_a_poison_i64_is_two_zero_dwords() {
+    let text = "define i64 @f(i64 %a) {\n  %v = add i64 poison, %a\n  ret i64 %v\n}\n";
+    assert!(!listing(text, "f").is_empty());
+}
