@@ -299,6 +299,7 @@ impl Flags {
             _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
             _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
+            "-fverify-ir" => llrm_support::debug::require_verification(),
             _ if flag.starts_with("-Wstack-usage=") => {
                 let limit = &flag["-Wstack-usage=".len()..];
                 self.stack_limit =

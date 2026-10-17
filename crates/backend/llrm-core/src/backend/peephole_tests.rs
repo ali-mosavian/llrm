@@ -4669,6 +4669,96 @@ fn test_the_dead_lanes_of_a_body_no_pass_changed_are_worked_out_once() {
     assert_eq!(liveness::exits_computed() - before, 2, "a changed body was given the last answer");
 }
 
+/// The sub-passes of the peephole ask for the lanes live out of each block in
+/// turn, and each that changes the body made the next solve the whole function
+/// again (39 solves for 11 functions of d_faces -O2). A body brought up to date
+/// is solved from scratch once.
+#[test]
+fn test_the_peephole_solves_a_functions_lanes_from_scratch_once() {
+    let mov = |at: i64, to: RegId, from: RegId| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let add = |at: i64, to: RegId| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Binary, "add", vec![rl(to, 2)], vec![rl(to, 2), im(1, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    // A copy chain in the first block, which copy propagation and the dead-move
+    // pass change, and a chain of blocks that nothing changes after it.
+    let mut blocks: Vec<crate::model::lir::Block> = vec![
+        LirBlock {
+            succ: vec![10].into(),
+            ..block(0, vec![mov(0, RegId::CX, RegId::BX), mov(2, RegId::AX, RegId::CX)], vec![])
+        }
+        .into(),
+    ];
+    for at in 10..16 {
+        let more = if at == 15 { vec![0] } else { vec![at + 1, 99] };
+        blocks.push(
+            LirBlock {
+                succ: more.into(),
+                ..block(at, vec![add(at * 4, RegId::AX), add(at * 4 + 2, RegId::DX)], vec![])
+            }
+            .into(),
+        );
+    }
+    blocks.push(block(99, vec![mov(400, RegId::BX, RegId::AX)], vec![]).into());
+    let input = body("f", 0, blocks);
+    let [whole, partly, _] = liveness::asks();
+    let output = transform(input.clone());
+    let [whole_now, partly_now, _] = liveness::asks();
+    assert_eq!(whole_now - whole, 1, "solved from scratch more than once");
+    assert!(output != input, "premise: the peephole changed the body");
+    assert!(partly_now > partly, "premise: a changed body was asked about again");
+}
+
+/// A loop's header branched on the flags each trip, which kept them live round
+/// the loop; the branch goes. Solved again from the answer that was held, the
+/// flags stayed live round the loop on their own and a flag-setting `cmp` that
+/// nothing reads was kept.
+#[test]
+fn test_a_flag_kept_live_round_a_loop_by_a_branch_that_is_gone_is_not_live() {
+    let mov = |at: i64, to: RegId, from: RegId| {
+        Arc::new(insn(
+            at,
+            Some((at, at + 2)),
+            Some(sem(Operation::Move, "mov", vec![rl(to, 2)], vec![rl(from, 2)])),
+            vec![],
+            vec![],
+        ))
+    };
+    let branch =
+        Arc::new(insn(1, Some((1, 2)), Some(semt(Operation::Branch, "jne", vec![], vec![], Some(2))), vec![], vec![]));
+    let compare = Arc::new(insn(
+        5,
+        Some((5, 7)),
+        Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::AX, 2), rl(RegId::BX, 2)])),
+        vec![],
+        vec![],
+    ));
+    let trip: crate::model::lir::Block = block(2, vec![mov(3, RegId::DX, RegId::BX)], vec![1]).into();
+    let leave: crate::model::lir::Block = block(3, vec![compare], vec![]).into();
+    let header = |insns| -> crate::model::lir::Block { block(1, insns, vec![2, 3]).into() };
+    let body_of = |header| body("f", 1, vec![header, trip.clone(), leave.clone()]);
+    let zero = _flag_lanes(RflagsBits::ZF);
+    let before = _flags_live_out(&body_of(header(vec![branch])));
+    assert!(!zero.is_disjoint(&before.entering[&2]), "premise: ZF is live round the loop");
+    let changed = body_of(header(vec![mov(1, RegId::CX, RegId::BX)]));
+    let after = _flags_live_out(&changed);
+    assert!(zero.is_disjoint(&after.entering[&2]), "ZF is live out of the loop's body");
+    assert!(after.entering == flags_from_scratch(&changed));
+}
+
 /// The flag liveness, upper-half zeroes and post-RA sink liveness each iterated
 /// every block to a fixed point: a backward chain of 30 blocks took 30 rounds
 /// of 30. All go through `dataflow::solve`, which works a block again only when
