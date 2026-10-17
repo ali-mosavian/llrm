@@ -1682,6 +1682,11 @@ pub fn _fold_converged(block: LirBlock) -> LirBlock {
     block
 }
 
+/// Static machine-instruction count.
+fn _static_work(body: &LirBody) -> i64 {
+    body.blocks.iter().map(|block| _real(block).len() as i64).sum()
+}
+
 /// Static and profile-free dynamic machine-instruction counts.
 pub fn _work(body: &LirBody) -> (i64, f64) {
     let busy = Frequency::of(body);
@@ -1689,14 +1694,20 @@ pub fn _work(body: &LirBody) -> (i64, f64) {
     (counts.values().sum(), counts.iter().map(|(at, count)| *count as f64 * busy.block(*at)).sum())
 }
 
-/// Take tail sharing only when size falls without adding executed work.
+/// Take tail sharing only when size falls without adding executed work. The
+/// work is weighed only when the size falls: two frequency solves of whole
+/// bodies (0.43 M each on d_faces' largest) for a body that merged nothing
+/// answered `before` either way.
 pub fn preferred<'a>(
     before: &'a LirBody,
     after: &'a LirBody,
 ) -> &'a LirBody {
-    let (before_static, before_dynamic) = _work(before);
-    let (after_static, after_dynamic) = _work(after);
-    if after_static < before_static && after_dynamic <= before_dynamic { after } else { before }
+    if _static_work(after) >= _static_work(before) {
+        return before;
+    }
+    let (_, before_dynamic) = _work(before);
+    let (_, after_dynamic) = _work(after);
+    if after_dynamic <= before_dynamic { after } else { before }
 }
 
 /// Duplicate a terminal tail when doing so costs no bytes and removes a jump.
