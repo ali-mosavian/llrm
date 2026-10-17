@@ -277,7 +277,10 @@ def level_of(config: str) -> str:
 
 def isolated(replay: Path, row: dict, source: Path) -> str:
     """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
-    done = subprocess.run([str(replay), level_of(row["config"]), row["pass"], str(source)], capture_output=True, text=True)
+    try:
+        done = subprocess.run([str(replay), level_of(row["config"]), row["pass"], str(source)], capture_output=True, text=True)
+    except OSError as error:
+        raise RuntimeError(f"{replay}: {error}") from error
     if done.returncode:
         raise RuntimeError("llrm-pass " + row["pass"] + ": " + (done.stderr.strip().splitlines() or ["failed"])[0])
     return done.stdout
