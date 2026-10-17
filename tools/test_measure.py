@@ -546,6 +546,41 @@ def test_a_step_rise_that_shows_under_both_allocators_fails_and_prints_both():
     assert len(bad) == 1 and "254.6" in bad[0] and "282.0" in bad[0] and "system allocator" in bad[0], bad
 
 
+# #1958 and #1984 (runs 39012195202, 39012197043): `unrolled Os mir lsr` 14.587/39.482/116.837 -> 16.503/50.241/168.967 Minstr under mimalloc, 149.1 under
+# the system allocator on both sides; the axis total (instructions) carried that step's rise and failed "superlinear work grew by 0.0115 (> 0.01)".
+LSR = "unrolled Os mir lsr"
+LSR_BASE, LSR_NOW = [14.587, 39.482, 116.837, 2050.0], [16.503, 50.241, 168.967, 2050.0]
+AXIS_BASE = [200_000_000, 560_000_000, 2_050_000_000]
+
+
+def lsr_case(extra=(0, 0, 0)):
+    rise = [(now - was) * 1e6 for now, was in zip(LSR_NOW, LSR_BASE)]
+    axis_now = [round(a + r + e) for a, r, e in zip(AXIS_BASE, rise, extra)]
+    return made(axes={"unrolled Os": AXIS_BASE}, passes={LSR: LSR_BASE}), made(axes={"unrolled Os": axis_now}, passes={LSR: LSR_NOW})
+
+
+def equal_under_system(sha, cells):
+    return {LSR: [17.337, 48.459, 149.115, 2050.0] if sha == "b" else [17.337, 48.611, 149.065, 2050.0]}
+
+
+def test_an_axis_is_judged_without_the_steps_dropped_as_heap_layout_effects():
+    """#1991: the step line was dropped as 'not confirmed under the system allocator' and the axis total, which holds that step, still failed PRs that never touched it."""
+    base, now = lsr_case()
+    found = measure.rises(base, now, TOL)[1]
+    assert any(b.startswith("unrolled Os: superlinear") for b in found) and any(b.startswith(LSR) for b in found), found
+    lines, bad = measure.confirmed(found, base, now, "b", "h", TOL, equal_under_system)
+    assert bad == [], bad
+    assert any("heap layout effect" in line and line.startswith(LSR) for line in lines) and any(line.startswith("unrolled Os: judged without mir lsr") for line in lines), lines
+
+
+def test_a_real_axis_rise_beside_a_dropped_step_still_fails():
+    """Only the dropped step's rise comes out of the axis: 40 Minstr of other work at 2N stays judged."""
+    base, now = lsr_case(extra=(0, 0, 40_000_000))
+    found = measure.rises(base, now, TOL)[1]
+    lines, bad = measure.confirmed(found, base, now, "b", "h", TOL, equal_under_system)
+    assert bad and {b.split(": ")[0] for b in bad} == {"unrolled Os"} and any("superlinear work grew" in b for b in bad), bad
+
+
 def test_a_rise_the_system_allocator_cannot_check_stands_and_a_clean_run_builds_nothing():
     base, now = rise_under_mimalloc()
     found = measure.rises(base, now, TOL)[1]
