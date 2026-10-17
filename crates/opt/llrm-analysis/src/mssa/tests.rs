@@ -160,3 +160,116 @@ b5:
 ",
     );
 }
+
+/// The clobbering access of each memory instruction of `body`'s `@f` that has a location, by the
+/// translated walker at its default caps, each checked with `check_clobber_sanity`.
+fn clobbers_of(body: &str) -> Vec<(llrm_mir::module::InstId, Option<llrm_mir::module::InstId>, Kind)> {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(body);
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let (mut mssa, _) = {
+        let mssa = Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses));
+        (mssa, ())
+    };
+    let aa = AliasQuery::new(&unit, &accesses);
+    let mut out = Vec::new();
+    for (_, inst) in unit.function.walk() {
+        let Some(access) = mssa.get_memory_access(inst) else { continue };
+        let Some(loc) = aa.location_of(inst) else { continue };
+        let clobber = mssa.get_clobbering_memory_access(&aa, access);
+        let start = mssa.get_defining_access(access).expect("a defining access");
+        // A use's optimized access is its defining access now; the walk started from the one it had.
+        let _ = start;
+        mssa.check_clobber_sanity(&aa, mssa.access(access).defining.expect("defining"), clobber, Some(&loc), Some(inst))
+            .unwrap_or_else(|why| panic!("{inst:?}: {why}"));
+        out.push((inst, mssa.access(clobber).inst, mssa.access(clobber).kind));
+    }
+    out
+}
+
+const SAME_CELL_AFTER_OTHER_STORE: &str = "define i16 @f() {
+b0:
+  store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 48)
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+";
+
+/// The walk skips the store to another cell and stops at the store to the load's own.
+#[test]
+fn test_a_load_is_clobbered_by_the_store_of_its_cell_not_by_another_cells() {
+    let found = clobbers_of(SAME_CELL_AFTER_OTHER_STORE);
+    let load = found.last().expect("the load");
+    let first_store = found[0].0;
+    assert_eq!(load.1, Some(first_store), "{found:?}");
+}
+
+/// Nothing writes the cell: live on entry clobbers it.
+#[test]
+fn test_a_load_nothing_writes_is_clobbered_by_live_on_entry() {
+    let found = clobbers_of(
+        "define i16 @f() {
+b0:
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 48)
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+",
+    );
+    let load = found.last().expect("the load");
+    assert!(load.1.is_none() && load.2 == Kind::Def, "{found:?}");
+}
+
+const DIAMOND_OF_OTHER_CELL: &str = "define i16 @f(i1 %c) {
+b0:
+  store i16 1, ptr getelementptr (i8, ptr @g, i16 32)
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 48)
+  br label %b3
+
+b2:
+  store i16 3, ptr getelementptr (i8, ptr @g, i16 48)
+  br label %b3
+
+b3:
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+";
+
+/// Both arms store to another cell: the phi at the join is optimized away and the store above the
+/// diamond clobbers the load.
+#[test]
+fn test_a_phi_is_optimized_away_when_no_arm_writes_the_cell() {
+    let found = clobbers_of(DIAMOND_OF_OTHER_CELL);
+    assert_eq!(found.last().expect("the load").1, Some(found[0].0), "{found:?}");
+}
+
+/// Both arms store to the load's cell: the phi stays the clobber (no instruction).
+#[test]
+fn test_a_join_of_two_stores_to_the_cell_is_clobbered_by_its_phi() {
+    let found = clobbers_of(
+        "define i16 @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 2, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b2:
+  store i16 3, ptr getelementptr (i8, ptr @g, i16 32)
+  br label %b3
+
+b3:
+  %x = load i16, ptr getelementptr (i8, ptr @g, i16 32)
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(found.last().expect("the load").2, Kind::Phi, "{found:?}");
+}

@@ -58,6 +58,7 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             id,
         });
@@ -132,6 +133,7 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             id,
         });
@@ -155,6 +157,7 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             id,
         });
