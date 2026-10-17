@@ -33,3 +33,21 @@ Rows newly below or above 1.00: none, at any level. `d_faces` clocks over min(gc
 The -O3 code geomean of 1.28 is the clone chain of `ipa-cp-clone` (gcc's own -O3 flag): queens -O3 is 8.6x the smaller compiler.
 
 Bench cells, instructions and code bytes of the 848 cells (41 programs of BASIC, bq16, bq32 and Nib and 48 of C, at -O1, -O2, -O3 and -Os): no counter of any cell differs between the two commits, for any front end (bench.py `--no-judge`, the two sides' compilers differ in bytes).
+
+## 2026-10-17, what the costly analyses buy
+
+An ablation, not a landing: each analysis answers a coarse default (`LLRM_ABLATE=name`, [`ablate-analyses.patch`](ablate-analyses.patch), applies to `21f5c9fc8`, local only) and the same binary without the switch is the base. The defaults: pointer-values and bounded `Err`; float-facts empty; through-memory and annotated empty maps; exposed-frames every alloca exposed. A bare `Err` is not a coarse answer for the others (sroa and promote `expect` it), and full `points-to` has none that is sound (an empty answer says nothing escaped), so it is not ablated.
+
+Compile cost in M instructions, none: `d_faces` -O2 3,271, -Os 3,335, queens -O3 1,670.
+
+| family | d_faces -O2 | d_faces -Os | queens -O3 | output |
+|---|--:|--:|--:|---|
+| pointer-values | +1.4% | +1.3% | +0.2% | 0 of 1,323 objects differ; every row and `d_faces` counter equal |
+| bounded | +7.8% | +6.4% | +11% | rows within 0.2%; no row crosses 1.00 |
+| float-facts | -1.3% | +2.9% | 0 | code +0.2% at -O2; fpbench -O3 crosses above 1.00 |
+| exposed-frames | -12.8% | -14.9% | -94% | clocks geomean -O2 0.9044 to 0.9239; queens -O3 0.999 to 1.988 |
+| through-memory | -1.0% | +0.1% | -88% | -O3 geomean 0.9021 to 0.9800; matmul -O3 8.2x, scroll 3x |
+| annotated | -50% | -51% | -96% | geomean 1.81; 69 rows above 1.00 (31 before); scroll 11x |
+
+No family is idle precision. Those whose removal costs no output save nothing; those that save compile time lose output, and the saving is optimizations that no longer happen, not cost removed. Keep them exact and make computing them cheap. `identical.py --programs-only` lists only the first 20 differences, so ">=20" objects differing is a floor; QCport was not run.
+
