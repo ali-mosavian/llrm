@@ -2214,6 +2214,25 @@ pub struct Effect {
     pub fills: Vec<MemRef>,
 }
 
+impl Effect {
+    /// Whether `self`, held past edits that keep every value's meaning, still
+    /// states what `fresh` finds. `loads` and `stores` are may-sets: `self`
+    /// covers `fresh` where every reference of `fresh` is one of `self` (a
+    /// value replaced by another found equal leaves a reference the pointer
+    /// analysis had of the first: a global beside the unknown that a fresh run
+    /// of the one value states alone). The unknown object reaches only what
+    /// escaped: a kept `{global}` does not cover a fresh `{unknown}`. `fills`
+    /// are must-writes, a kept one that `fresh` lacks claims bytes the body
+    /// no longer shows: equal.
+    pub fn covers(
+        &self,
+        fresh: &Effect,
+    ) -> bool {
+        let within = |old: &[MemRef], new: &[MemRef]| new.iter().all(|one| old.contains(one));
+        within(&self.loads, &fresh.loads) && within(&self.stores, &fresh.stores) && self.fills == fresh.fills
+    }
+}
+
 /// `effects` with each value `to` gives another operand named by it, the
 /// effects of the same calls on the same bytes after a value is replaced by
 /// one found equal. The lists the calls share stay shared. None where a
