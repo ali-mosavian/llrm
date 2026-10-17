@@ -192,9 +192,7 @@ pub fn sunk_stores(
             }
         }
         let [(source, destination)] = exits[..] else { continue };
-        if predecessors.get(&destination) != Some(&BTreeSet::from([source]))
-            || loop_.body.iter().any(|at| successors[at].is_empty())
-        {
+        if !predecessors.are(&destination, &[source]) || loop_.body.iter().any(|at| successors[at].is_empty()) {
             continue;
         }
         let inside = loop_
@@ -260,7 +258,7 @@ fn _moved(
     accesses: &Accesses,
     loop_: &Loop,
     operations: &[InstId],
-    predecessors: &BTreeMap<i64, BTreeSet<i64>>,
+    predecessors: &llrm_support::graph::Predecessors,
     successors: &BTreeMap<i64, Vec<i64>>,
     dominators: &llrm_analysis::cfg::Dominance,
     source: i64,
@@ -359,7 +357,7 @@ fn _invariant_value(
 struct _Exit<'a> {
     unit: &'a Unit<'a>,
     accesses: &'a Accesses,
-    predecessors: &'a BTreeMap<i64, BTreeSet<i64>>,
+    predecessors: &'a llrm_support::graph::Predecessors,
     entry: i64,
 }
 
@@ -468,7 +466,7 @@ impl _Exit<'_> {
             }
             return (_same_cell(reference, written) && op.operands[0] == expected, usize::MAX);
         }
-        let parents = self.predecessors.get(&at).cloned().unwrap_or_default();
+        let parents = self.predecessors.get(&at).unwrap_or_default();
         if at == self.entry || parents.is_empty() {
             return (false, usize::MAX);
         }
@@ -479,17 +477,20 @@ impl _Exit<'_> {
             _ => None,
         };
         let incoming = phi.map(|phi| arms(function, phi));
-        if incoming
-            .as_ref()
-            .is_some_and(|incoming| incoming.iter().map(|(_, from)| cfg::id(*from)).collect::<BTreeSet<_>>() != parents)
-        {
+        if incoming.as_ref().is_some_and(|incoming| {
+            let mut arms: Vec<i64> = incoming.iter().map(|(_, from)| cfg::id(*from)).collect();
+            arms.sort_unstable();
+            arms.dedup();
+            arms != parents
+        }) {
             return (false, usize::MAX);
         }
         let mut active = active.to_vec();
         active.push(key);
         let mut lowest = usize::MAX;
         let answer = parents
-            .into_iter()
+            .iter()
+            .copied()
             .all(
                 |parent| {
                     let next = incoming.as_ref().map_or(expected, |incoming| {

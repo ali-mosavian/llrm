@@ -262,3 +262,47 @@ fn test_what_touches_floats_is_every_float_value_operand_and_aggregate() {
         "@m = global [2 x float] zeroinitializer\ndefine i16 @f(i16 %n) {\nb0:\n  store float 1.0, ptr @m\n  ret i16 %n\n}\n"
     ));
 }
+
+/// `LLRM_CHECK_FLOATSKIP` runs the pass on a body it skips, to say if it would
+/// have changed it. The run asked the manager for `FloatFacts`, so for the
+/// integers under it (`ThroughMemory`), computed early and kept, and every pass
+/// after read the kept result, which knows less than one asked later: the
+/// check changed the object (matmul bq32 -O3 came out 18 KB against 34 KB).
+/// A check asks nothing of the manager.
+#[test]
+fn the_skip_check_leaves_the_manager_as_it_was() {
+    let integer = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}
+";
+    let mut module = parsed(&format!("{DOS}{integer}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut unit = llrm_mir::passes::Unit {
+        context,
+        layout: &layout,
+        function,
+        id: None,
+        metadata: &metadata,
+        declared: &mut declared,
+    };
+    super::FloatLoop.run_checking(&mut unit, &mut analyses, true);
+    assert!(
+        analyses.cached::<llrm_analysis::manager::FloatFacts>().is_none()
+            && analyses.cached::<llrm_analysis::manager::ThroughMemory>().is_none(),
+        "the check left a result in the manager for the passes after it"
+    );
+}

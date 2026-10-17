@@ -525,12 +525,12 @@ pub fn _threaded(
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
-    let none = BTreeSet::new();
+    let none: &[i64] = &[];
     let mut loop_edges = BTreeSet::new();
     for loop_ in cfg::Shape::of(function).loops {
         let outside = predecessors
             .get(&loop_.header)
-            .unwrap_or(&none)
+            .unwrap_or(none)
             .iter()
             .copied()
             .filter(|at| !loop_.body.contains(at))
@@ -549,7 +549,7 @@ pub fn _threaded(
             graph
                 .iter()
                 .filter(|block| {
-                    let parents = predecessors.get(&block.at).unwrap_or(&none);
+                    let parents = predecessors.get(&block.at).unwrap_or(none);
                     !loop_.body.contains(&block.at)
                         && !parents.is_empty()
                         && parents.iter().all(|at| loop_.body.contains(at))
