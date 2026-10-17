@@ -17,17 +17,18 @@
 //!
 //! DEVIATE, with the reason:
 //! - `undef` (MIR has none), vectors, floating point, pointers, intrinsics
-//!   (`fshl`, `fshr`, `llvm.umin`...), `llvm.assume`: not in the integer
-//!   subset.
-//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `expandBinOp` /
-//!   `expandCommutativeBinOp`, `simplifyByDomEq`, `isImpliedCondition`,
-//!   `isImpliedByDomCondition`: each needs a dominator tree or the condition
-//!   machinery; MIR's `Dominators` is an analysis, not in `llrm-mir`'s query.
-//!   Their cases are not found; a rule that needs one asks the analysis.
-//! - `computeKnownBits` is [`crate::valuetracking::known_zero`], the zero half
-//!   only: a check on `Known.One` is not made; `ComputeNumSignBits` is
-//!   [`crate::valuetracking::sign_bits`]. `isKnownToBeAPowerOfTwo`,
-//!   `isKnownNonZero` and `ConstantRange` are not translated.
+//!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset.
+//! - The ValueTracking query is `Query::bare` over the body: no module (so no
+//!   intrinsic is known), no dominator tree, no assumptions. `simplifyByDomEq`,
+//!   `isImpliedByDomCondition`, `valueDominatesPHI`,
+//!   `simplifyICmpWithDominatingAssume` and the `llvm.assume` facts of
+//!   ValueTracking need the entry points to take a `FunctionAnalyses`; their
+//!   callers (`earlycse`, the combine worklist, `gvn`, `fold`) would have to
+//!   pass it.
+//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `simplifyICmpWithBinOp`,
+//!   `simplifyICmpWithMinMax`, the `trunc` compares, `simplifyAndOrOfCmps` and
+//!   `simplifyAndOrWithICmpEq`: not yet translated; ValueTracking is not what
+//!   stops them.
 //! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! # Used by
@@ -1814,9 +1815,8 @@ fn simplify_select(
 /// ([:3883](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3883)):
 /// the constant fold, poison, the compare of a value with itself, the bool and
 /// zero forms, and the compares of an extension against an extension or a
-/// constant. DEVIATE: `simplifyICmpWithConstant`, `ConstantRange` (`getRange`),
-/// `simplifyICmpWithBinOp`, min/max, assume, monotonic-value and the `trunc`
-/// forms are not translated (they need `ConstantRange` and `isKnownNonZero`).
+/// constant, and the monotonic values. DEVIATE: `simplifyICmpWithBinOp`,
+/// min/max, assume and the `trunc` forms are not yet translated.
 fn simplify_icmp(
     q: &mut Query,
     mut pred: IntPredicate,
