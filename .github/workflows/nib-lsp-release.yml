@@ -26,6 +26,7 @@ on:
       - "crates/ir/llrm-mir/**"
       - "crates/opt/llrm-analysis/**"
       - "crates/opt/llrm-transforms/**"
+      - "crates/support/llrm-alloc/**"
       - "crates/support/llrm-support/**"
       - "crates/target/llrm-coff/**"
       - "crates/target/llrm-coff32/**"
