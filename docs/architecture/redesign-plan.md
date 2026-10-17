@@ -368,7 +368,7 @@ All phase-1 steps run in parallel. Each is re-measured on main by M before merge
 3. Edit in place instead of copying: the allocator on the LIR core (3.3), rollback instead of 144 clones (2.7).
 4. Dense flat tables (1.2 and 2.6).
 5. Reuse scratch buffers across calls through the analysis manager.
-6. A per-pass-run arena: `unmeasured`, it fits the lifetime profile; size it as a probe after 1.0.
+6. A per-pass-run arena: measured, not built ([spec 8]): 30.7% of allocations are born and die in one pass step, 65.5% are born outside any step (inline storage's share), the bound is about 1.0% of instructions (about 0.7% with the slab).
 
 **What it buys in instructions.** After the slab, allocator work is about 15 instructions times 3.1 M, about 47 M (1.6%). Matching LLVM's count directly saves at most 2% to 3%; the rest of the 518 M bucket is filling and copying data, which (2) to (4) remove. The cache effect may be larger: allocation is 24% of L1d misses and the working set is 25x to 50x LLVM's ([allocation]).
 
