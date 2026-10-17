@@ -214,9 +214,26 @@ impl PhysInterference for CallMasks {
     }
 }
 
+/// What `decide` decided: the register of each value that has one, and the
+/// values to spill.
+pub struct Decided {
+    pub report: ShadowReport,
+    pub placed: Vec<(u32, RegId)>,
+    pub spilled: Vec<u32>,
+}
+
 /// Runs the translated greedy allocator over `inputs`; None when the body has
 /// phis (they are eliminated before allocation).
 pub fn run(inputs: &ShadowInputs) -> Option<ShadowReport> {
+    decide(inputs, false).map(|decided| decided.report)
+}
+
+/// `run`, and the decisions. With `recording` a spilled range is only noted and
+/// leaves the problem; otherwise a spiller makes its reload and store ranges.
+pub fn decide(
+    inputs: &ShadowInputs,
+    recording: bool,
+) -> Option<Decided> {
     let body = inputs.body;
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
@@ -264,7 +281,12 @@ pub fn run(inputs: &ShadowInputs) -> Option<ShadowReport> {
         }
     }
     let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls }));
-    let mut greedy = RAGreedy::new(lis, matrix, &env, Box::new(SimpleSpiller::default()));
+    let spiller: Box<dyn super::greedy::Spiller> = if recording {
+        Box::new(super::spill::RecordingSpiller::default())
+    } else {
+        Box::new(SimpleSpiller::default())
+    };
+    let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
     greedy.calculate_spill_weights_and_hints();
     let values = greedy.lis.virt_regs().len();
     // Values that may not be spilled, and the pinned ones in the registers that
@@ -291,5 +313,13 @@ pub fn run(inputs: &ShadowInputs) -> Option<ShadowReport> {
         }
     }
     let (reloads, stores, folded) = greedy.spill_counts();
-    Some(ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature })
+    let mut placed: Vec<(u32, RegId)> = Vec::new();
+    for reg in greedy.lis.virt_regs() {
+        if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
+            placed.push((reg, phys));
+        }
+    }
+    let spilled = greedy.recorded_spills();
+    let report = ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature };
+    Some(Decided { report, placed, spilled })
 }

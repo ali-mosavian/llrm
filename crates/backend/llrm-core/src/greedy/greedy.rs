@@ -323,6 +323,11 @@ pub trait Spiller {
     fn counts(&self) -> (usize, usize, usize) {
         (0, 0, 0)
     }
+
+    /// The registers spilled, for a spiller that only records the decision.
+    fn recorded(&self) -> Vec<u32> {
+        Vec::new()
+    }
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -383,6 +388,11 @@ impl<'a> RAGreedy<'a> {
     }
 
     /// `calculateSpillWeightsAndHints` (the `VRAI` of `RAGreedy::run`).
+    /// The registers a recording spiller was asked to spill.
+    pub fn recorded_spills(&self) -> Vec<u32> {
+        self.spiller.recorded()
+    }
+
     /// What the spiller has made: reloads, stores, folded.
     pub fn spill_counts(&self) -> (usize, usize, usize) {
         self.spiller.counts()

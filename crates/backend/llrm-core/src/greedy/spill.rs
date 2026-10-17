@@ -131,3 +131,27 @@ impl Spiller for SimpleSpiller {
         lis.remove_interval(reg);
     }
 }
+
+/// A spiller that only records the decision: the spilled range leaves the
+/// allocation problem (its reloads and stores are made later, by the caller's
+/// emitter, and allocated in the next round).
+#[derive(Default)]
+pub struct RecordingSpiller {
+    pub spilled: Vec<u32>,
+}
+
+impl Spiller for RecordingSpiller {
+    fn spill(
+        &mut self,
+        ctx: SpillContext<'_, '_>,
+        reg: u32,
+        _new_vregs: &mut Vec<u32>,
+    ) {
+        ctx.lis.remove_interval(reg);
+        self.spilled.push(reg);
+    }
+
+    fn recorded(&self) -> Vec<u32> {
+        self.spilled.clone()
+    }
+}
