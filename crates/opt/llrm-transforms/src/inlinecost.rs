@@ -1679,19 +1679,14 @@ impl<'a> Analyzer<'a> {
                 other => Simple::Caller(other),
             };
             self.simplified.insert(parameter, known);
-            if let Some((base, offset)) = self.strip_offsets(argument) {
-                if matches!(
-                    self.context.types.get(
-                        self.site
-                            .caller
-                            .value(match argument {
-                                Operand::Value(v) => v,
-                                _ => parameter,
-                            })
-                            .ty
-                    ),
-                    Type::Pointer(_)
-                ) || matches!(argument, Operand::Constant(_))
+            // `stripAndComputeInBoundsConstantOffsets` (:2786) is of a pointer.
+            let argument_type = match argument {
+                Operand::Value(v) => Some(self.site.caller.value(v).ty),
+                Operand::Constant(id) => Some(self.context.get(id).ty),
+                Operand::Block(_) => None,
+            };
+            let pointer = argument_type.is_some_and(|ty| matches!(self.context.types.get(ty), Type::Pointer(_)));
+            if pointer && let Some((base, offset)) = self.strip_offsets(argument) {
                 {
                     self.offsets.insert(parameter, (base, offset));
                     if let Operand::Value(root) = base
@@ -2287,4 +2282,67 @@ fn converted_float(
     to: FloatKind,
 ) -> u64 {
     from_f64(to, as_f64(from, bits))
+}
+
+/// The call sites of `caller` that LLVM would inline (`shouldInline`,
+/// InlineAdvisor.cpp:412 with `getInlineCost` as the cost), each with the copy
+/// to splice: the decision of `LLRM_EXP_INLINEDECIDE`, replacing the per-callee
+/// budget. A site `inline::cloneable` refuses stays out whatever its cost.
+///
+/// D4: no `shouldBeDeferred` yet (D7).
+pub fn sites(
+    module: &Module,
+    layout: &DataLayout,
+    caller_id: GlobalId,
+    counts: &crate::inline::Counter,
+    addressed: &BTreeSet<GlobalId>,
+    recursive: &BTreeSet<GlobalId>,
+    params: InlineParams,
+    size: CallerSize,
+) -> llrm_support::hash::IndexMap<InstId, crate::inline::Candidate> {
+    let mut out = llrm_support::hash::IndexMap::default();
+    let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
+    let caller_recursive = recursive.contains(&caller_id);
+    let frequencies =
+        crate::profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
+    let entry_frequency = caller.layout().first().and_then(|&entry| frequencies.get(&llrm_analysis::cfg::id(entry)).copied());
+    for (block, inst) in caller.walk() {
+        let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
+        let callee_global = module.global(callee_id);
+        let GlobalKind::Function(callee) = &callee_global.kind else { continue };
+        if callee.layout().is_empty() || !crate::inline::cloneable(module, recursive, callee_id, callee) {
+            continue;
+        }
+        let site = Site {
+            module,
+            layout,
+            caller,
+            caller_id,
+            call: inst,
+            callee,
+            callee_id,
+            sole_call_to_local: local_linkage(callee_global.linkage)
+                && counts.get(&callee_id).copied() == Some(1)
+                && !addressed.contains(&callee_id),
+            caller_recursive,
+            caller_size: size,
+            relative_frequency: frequencies
+                .get(&llrm_analysis::cfg::id(block))
+                .copied()
+                .zip(entry_frequency)
+                .filter(|(_, entry)| *entry > 0)
+                .map(|(here, entry)| here as f64 / entry as f64),
+        };
+        if inline_cost(&site, params).is_ok() {
+            out.insert(
+                inst,
+                crate::inline::Candidate {
+                    body: std::rc::Rc::new((**callee).clone()),
+                    frame: crate::inline::grown(&module.context, layout, callee),
+                    moved: false,
+                },
+            );
+        }
+    }
+    out
 }

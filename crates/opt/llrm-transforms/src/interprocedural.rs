@@ -1162,22 +1162,30 @@ pub fn optimized_with<E: From<String>>(
                     },
                 );
             }
-            let (available, more) = candidates(
-                module,
-                &callees(&mut modules[at], module),
-                &program.layout,
-                &counts,
-                &private[at],
-                costs,
-                loose,
-                reach,
-                threshold,
-                &recursive,
-                &addressed,
-            );
+            // `LLRM_EXP_INLINEDECIDE`: LLVM's decision per call site, in place
+            // of the per-callee budget (inlinecost.rs).
+            let llvm = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE");
+            let (available, more) = if llvm {
+                Default::default()
+            } else {
+                candidates(
+                    module,
+                    &callees(&mut modules[at], module),
+                    &program.layout,
+                    &counts,
+                    &private[at],
+                    costs,
+                    loose,
+                    reach,
+                    threshold,
+                    &recursive,
+                    &addressed,
+                )
+            };
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
-            if loose.is_some()
+            if !llvm
+                && loose.is_some()
                 && estimated_callees(
                     module,
                     &mut modules[at],
@@ -1224,18 +1232,31 @@ pub fn optimized_with<E: From<String>>(
                 }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
-                let (constant, constant_more) = constant_sites(
-                    module,
-                    &callees(&mut modules[at], module),
-                    &program.layout,
-                    &recursive,
-                    caller,
-                    &constants,
-                    costs,
-                    loose,
-                    reach,
-                    threshold,
-                );
+                let (constant, constant_more) = if llvm {
+                    let params = crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 });
+                    let size = if rate == 0 {
+                        crate::inlinecost::CallerSize::OptSize
+                    } else {
+                        crate::inlinecost::CallerSize::Speed
+                    };
+                    (
+                        crate::inlinecost::sites(module, &program.layout, id, &counts, &addressed, &recursive, params, size),
+                        Default::default(),
+                    )
+                } else {
+                    constant_sites(
+                        module,
+                        &callees(&mut modules[at], module),
+                        &program.layout,
+                        &recursive,
+                        caller,
+                        &constants,
+                        costs,
+                        loose,
+                        reach,
+                        threshold,
+                    )
+                };
                 let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller {
@@ -1267,7 +1288,7 @@ pub fn optimized_with<E: From<String>>(
                 // constants its site passes, comes to no more;
                 // and what that refuses is tried with its
                 // neighbours, together, once.
-                if loose.is_some() {
+                if !llvm && loose.is_some() {
                     let (stayed, mut together) = estimated_sites(
                         module,
                         &mut modules[at],
