@@ -40,6 +40,12 @@ impl RegId {
         Register::values().map(RegId)
     }
 
+    /// The register of iced's number `index`.
+    #[inline]
+    pub fn from_index(index: usize) -> RegId {
+        RegId(Register::values().nth(index).expect("an iced register number"))
+    }
+
     /// iced's number of the register: the index into the tables.
     #[inline]
     pub const fn index(self) -> usize {
@@ -576,6 +582,97 @@ impl PartialEq for Regs {
 }
 
 impl Eq for Regs {}
+
+/// A set of registers, a bit each: the register file is 256 ids, so the set is
+/// four words held in place, where a `BTreeSet<RegId>` allocated a node and
+/// walked a tree for each of the 85,000 registers `masm::_roots` inserted in a
+/// d_faces -O2 compile. Iteration is ascending, `BTreeSet`'s order.
+#[derive(Clone, Copy, Default, Eq, PartialEq, Hash)]
+pub struct RegSet([u64; 4]);
+
+impl RegSet {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self([0; 4])
+    }
+
+    /// Whether `register` was not in the set.
+    pub fn insert(
+        &mut self,
+        register: RegId,
+    ) -> bool {
+        let at = register.index();
+        let fresh = self.0[at / 64] & (1 << (at % 64)) == 0;
+        self.0[at / 64] |= 1 << (at % 64);
+        fresh
+    }
+
+    #[must_use]
+    pub fn contains(
+        &self,
+        register: &RegId,
+    ) -> bool {
+        let at = register.index();
+        self.0[at / 64] & (1 << (at % 64)) != 0
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.iter().map(|word| word.count_ones() as usize).sum()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0 == [0; 4]
+    }
+
+    /// The members, ascending.
+    pub fn iter(&self) -> impl Iterator<Item = RegId> + '_ {
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(
+                |(at, word)| {
+                    let mut left = *word;
+                    std::iter::from_fn(move || {
+                        (left != 0).then(|| {
+                            let bit = left.trailing_zeros() as usize;
+                            left &= left - 1;
+                            RegId::from_index(at * 64 + bit)
+                        })
+                    })
+                },
+            )
+    }
+}
+
+impl FromIterator<RegId> for RegSet {
+    fn from_iter<I: IntoIterator<Item = RegId>>(registers: I) -> Self {
+        let mut set = Self::new();
+        set.extend(registers);
+        set
+    }
+}
+
+impl Extend<RegId> for RegSet {
+    fn extend<I: IntoIterator<Item = RegId>>(
+        &mut self,
+        registers: I,
+    ) {
+        for register in registers {
+            self.insert(register);
+        }
+    }
+}
+
+impl std::fmt::Debug for RegSet {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter.debug_set().entries(self.iter()).finish()
+    }
+}
 
 /// A register as its number, which is how every dump names it.
 impl llrm_support::pyrepr::Repr for RegId {

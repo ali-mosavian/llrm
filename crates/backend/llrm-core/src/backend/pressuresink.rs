@@ -189,7 +189,7 @@ fn _reader(
     insns: &[Arc<Insn>],
     at: usize,
     body: &LirBody,
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
     defined: &IndexMap<u32, usize>,
     class_of: &dyn Fn(u32, bool) -> Class,
     stack: &dyn Fn(u32) -> bool,

@@ -484,7 +484,7 @@ fn fold(
     first: usize,
     root: RegId,
     dead_after: &DeadAfter,
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
     form: &AddressForm,
     cpu: &Profile,
 ) -> Option<Fold> {
