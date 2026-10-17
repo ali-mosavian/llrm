@@ -86,7 +86,7 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
@@ -725,7 +725,7 @@ fn a_string_comparison_compares_its_callees_sign() {
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("%2 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
+    assert!(text.contains("%2 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
 }
 
 /// A string comparison's callee is stated a three-way compare: its sign
@@ -1450,7 +1450,7 @@ fn a_range_of_a_routines_parameter_and_result_is_its_attribute() {
         (Subject::Callable(1), Fact::NoAlias),
     ]);
     assert!(text.contains("(i16 range(i16 0, 2) %0,"), "{text}");
-    assert!(text.contains("declare cc1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
+    assert!(text.contains("declare cc 1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
 }
 
 /// A range stated of a load's result is `!range` on that load; a byte
