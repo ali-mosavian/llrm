@@ -1,6 +1,6 @@
 # Compile time at clang's level: the plan
 
-**Scoreboard.** `d_faces` -O2 is 2,253 M instructions at main `5e2e995ef`, 5.5x clang 24's 413 M (it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
+**Scoreboard.** `d_faces` -O2 is 2,104 M instructions at main `9d50a350e` in a clean dist build, 5.1x clang 24's 413 M (section 2.0; the 2,253 M at `5e2e995ef` was not taken in the clean-build mode and is superseded; it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
 
 **Target.** Parity is clang 24 at `d1106deb71cc` (415 M instructions on `d_faces` -O2) with rows held against min(gcc, clang); the static clang 20.1.8 (462 M) is the secondary column. Phase 3 (structural) starts now, in parallel with phases 1 and 2: each step is gated by its early probe and its design review, not by B1 or B2.
 
@@ -79,6 +79,32 @@ The pools overlap, so each product overstates what the steps save together. The 
 ## 2. Baseline snapshot
 
 Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR states below were checked with `gh` on that day. `d_faces` flags are `-m32 -march=i486 -fno-inline-functions`, as in [synthesis]. Percentages are of `d_faces` -O2 instructions, measured on the PR's own parent unless stated.
+
+### 2.0 Scoreboard re-taken (clean dist build)
+
+`d_faces.c` from the `qbq-llrm` source tree (sha256 over its `.c` and `.h` files `53880fe70961`, `d_faces.c` `1ab72e38cab4`; the same tree for every row), `-m32 -march=i486 -fno-inline-functions`, both compilers; llrm `dist` (fat LTO, one codegen unit) with `CARGO_INCREMENTAL=0`, a fresh target per SHA, one build at a time; `perf stat -e instructions:u,cycles:u`, min of 3, host load about 80 (cycles are soft, instructions are the claim); each run asserts exit 0, an object present and 1 to 3.5 G instructions, because a failed compile is about 8 M. Every row runs with the same environment, `LLRM_EC_COARSE=1` and only the switch under test added. Clang 24.0.0git `d1106deb71cc`: 348.0 / 413.4 / 407.0 M instructions (cycles 451.8 / 440.6 / 366.3 M) at -O1 / -O2 / -Os. Earlier figures from `tools/abmeasure.py` for `d_faces` are suspect: its row could compile nothing. Instructions in M, then x clang:
+
+| row | -O1 | -O2 | -Os | object bytes (-O1 / -O2 / -Os) |
+|---|--:|--:|--:|---|
+| clang 24 | 348.0 | 413.4 | 407.0 | 10,784 / 11,216 / 10,632 |
+| main `9d50a350e` | 1,675.8 (4.8x) | 2,104.1 (5.1x) | 2,191.2 (5.4x) | 7,859 / 8,068 / 7,685 |
+| order branch `acd842c5c` (`alim/spike/sroa-poc`, based on `98921a80e`), no switch | 1,789.3 | 2,254.3 | 2,322.8 | 7,859 / 8,068 / 7,685 |
+| + A (`LLRM_EXP_LLVM=1`, early pass order) | 1,933.3 | 2,084.1 | 2,109.0 | 7,771 / 7,785 / 7,342 |
+| + A + B (`LLRM_EXP_EARLYCSE=real`) | 1,900.6 | 2,043.9 | 2,067.2 | 7,771 / 7,785 / 7,342 |
+| + A + B + C (`LLRM_EXP_DEAD_SLOTS=1`), the landing chain | 1,928.8 | 2,061.8 (5.0x) | 2,173.0 | 7,808 / 7,810 / 7,343 |
+| + A + B + C + `LLRM_EXP_NOFORECAST=1` (experiment, will not land) | 1,747.3 | 1,875.3 (4.5x) | 1,882.6 | 7,783 / 7,785 / 7,326 |
+
+The order branch is based on an older main, so its rows are read against their own no-switch row, not against main. Stacked on the order branch with its switches A + B + C, each PR merged onto a scratch branch (the PRs are untouched), against a control of the order branch merged with main `cb2a78038`, which is the base of the PRs (control, no switch: 1,676.4 / 2,104.9 / 2,192.2; with A + B + C: 1,809.8 / 1,915.1 / 2,058.1):
+
+| stack | -O1 | -O2 | -Os | against the control (-O2) | objects |
+|---|--:|--:|--:|--:|---|
+| control A + B + C | 1,809.8 | 1,915.1 | 2,058.1 | | 7,808 / 7,810 / 7,343 |
+| + [#2106] (`decide-no-alias`) | 1,802.4 | 1,907.1 | 2,050.2 | -8.0 M (-0.42%) | same |
+| + [#2100] (`indvars-standing`) | 1,871.8 | 2,004.7 | 2,114.6 | not comparable: its base `876fbeb54` is 9 commits older than the control | same |
+| + [#2110] (`coalesce-interval-join`, held) | 1,777.9 | 1,882.8 | 2,015.0 | -32.3 M (-1.69%) | differ: 7,740 / 7,742 / 7,403 |
+| + [#2122] (`instsimplify`, folding Builder) | 1,807.2 | 1,912.5 | 2,055.5 | -2.6 M (-0.14%, inside the noise floor) | same |
+
+Reading. A clean main is 5.1x clang at -O2. The landing chain of the order branch is 5.0x at -O2 (-8.5% against its no-switch row) and -6.4% at -Os, but +7.8% at -O1 (1,928.8 against 1,789.3); switch A alone is +8.0% at -O1, -7.6% at -O2 and -9.2% at -Os, and C costs +5.1% at -Os. The experiment without the spill forecast (NOFORECAST) is the largest single drop, -9.0% at -O2 against the landing chain, and is not landing (hoist stays until the LICM translation). The two PRs that change nothing in the object, [#2106] and [#2122], move -O2 by -0.42% and -0.14%. The `unmeasured` cells: m16, `-fexcess-precision=standard` (x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag), the inline-storage stack and [#2119] (an API stub, no effect).
 
 ### 2.1 Landed
 
@@ -1075,6 +1101,10 @@ Checklist: the shared list.
    - `tools/bench/bench.py --opt O1 O2 O3 Os --no-judge --json` on both sides, then `bench_table.py`.
 6. **Memory.** `/usr/bin/time -v` max RSS on `d_faces` -O2 and `mdl_ai` -O2; DHAT peak where the step claims memory.
 7. **Gate.** The CI line `GATE <tier> PASS at <head12>` must name the PR's head; premerge OK on main.
+8. **Environment.** An A/B where any `LLRM_CHECK_*` or `LLRM_EXP_*` variable differs between the two runs is invalid; only the switch under test is added, with the same value on every row. `tools/envguard.py` (#2109) refuses such a run, and A/B deltas are quoted from `tools/abmeasure.py` only after it can no longer count a failed compile (until then, run the dist binaries by hand and assert the object exists and the count is in range).
+9. **Input.** The `d_faces` source is a measurement input: record its tree and checksum in every figure, the same tree for every row of a table; keep the floor check (a count near 8 M is a failed compile). A dist binary embeds the path of its own `wccq`, so its target directory stays until it has been measured.
+10. **Floats.** x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag.
+11. **Pushes.** Never rewrite a pushed commit of a PR that is open; kill only the processes a session started.
 
 **Pass rules shared by every step:**
 
@@ -1295,6 +1325,11 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2067]: https://github.com/ali-mosavian/llrm/pull/2067
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
 [#2076]: https://github.com/ali-mosavian/llrm/pull/2076
+[#2100]: https://github.com/ali-mosavian/llrm/pull/2100
+[#2106]: https://github.com/ali-mosavian/llrm/pull/2106
+[#2110]: https://github.com/ali-mosavian/llrm/pull/2110
+[#2119]: https://github.com/ali-mosavian/llrm/pull/2119
+[#2122]: https://github.com/ali-mosavian/llrm/pull/2122
 [#2068]: https://github.com/ali-mosavian/llrm/pull/2068
 [#2077]: https://github.com/ali-mosavian/llrm/pull/2077
 [#2083]: https://github.com/ali-mosavian/llrm/pull/2083
