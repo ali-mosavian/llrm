@@ -19,6 +19,7 @@ parent the same way.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import fcntl
 import hashlib
@@ -39,9 +40,10 @@ ROOT = HERE.parent
 CACHE = Path(os.environ.get("LLRM_MEASURE_DIR") or Path.home() / ".cache/llrm/measure")
 
 
-# The profile the measured compiler is built with: `release` (the PR gate: two commits built the same way), or `dist` (the shipped build, which
-# the creep run on main measures). A measurement is of one profile, so the profile is part of the method.
-PROFILE = os.environ.get("LLRM_MEASURE_PROFILE") or "release"
+# The profile the measured compiler is built with: `dist` (codegen-units 1, fat LTO: the shipped build), or `release` (16 units). An edit to one
+# file re-partitions the release build's units and flips the inlining of unrelated functions: the same #1977 pair read +0.46..0.61% on its gate
+# shapes under release, +0.01..0.04% under dist. A measurement is of one profile, so the profile is part of the method.
+PROFILE = os.environ.get("LLRM_MEASURE_PROFILE") or "dist"
 
 
 def repository_of(root: Path) -> Path:
@@ -101,6 +103,8 @@ sys.path.insert(0, str(HERE / "gate"))
 import gate  # noqa: E402
 
 DIST_BUILD = gate.DIST_BUILD
+# What a measurement needs is llrm-c (the compile cost is its own); the other seven binaries would each be a fat-LTO link.
+MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-c", "release": gate.MEASURE_BUILD}
 
 _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
 compile_cost = importlib.util.module_from_spec(_spec)
@@ -138,9 +142,28 @@ def method() -> str:
     return digest.hexdigest()[:12]
 
 
+def measured_dir(env: dict | None = None) -> Path:
+    """The directory of the compiler under measurement: LLRM_BIN, else the target's `PROFILE` directory. A binary of another profile is refused: a
+    release llrm-c measured against a dist base reads every shape wrong by the difference of their inlining (8% of the compile)."""
+    env = os.environ if env is None else env
+    found = Path(env["LLRM_BIN"]) if env.get("LLRM_BIN") else llrmbin.target_dir(env) / PROFILE
+    if not found.name.startswith(PROFILE):
+        raise SystemExit(f"measure: {found} is not a {PROFILE} build (LLRM_MEASURE_PROFILE={PROFILE}); `tools/measure.py dist` builds and prints it")
+    return found
+
+
+def ensure_dist(env: dict | None = None) -> Path:
+    """target/dist with an llrm-c at least as new as the sources, built if not: what a local gate run measures (CI downloads it)."""
+    env = os.environ if env is None else env
+    found = llrmbin.target_dir(env) / "dist"
+    if not (found / "llrm-c").is_file() or llrmbin.stale_binaries(found):
+        subprocess.run(["bash", "-c", MEASURE_BUILDS["dist"]], cwd=ROOT, env={k: v for k, v in env.items() if k != "LLRM_BIN"}, check=True)
+    return found
+
+
 def measure_all(jobs: int) -> dict:
     """This process's compiler (LLRM_BIN, else the tree's target): compile cost, and the cost at N/2, N and 2N of each axis and step."""
-    compiler = llrmbin.bin_dir() / "llrm-c"
+    compiler = measured_dir() / "llrm-c"
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
@@ -237,6 +260,8 @@ def snapshot(release: Path, sha: str, kind: str = "") -> Path:
 def built(sha: str) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment) while holding the build lock, and
     its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it."""
+    if prebuilt := os.environ.get("LLRM_MEASURE_BASE_BIN"):  # CI builds the base in a job of its own, beside the head's
+        return Path(prebuilt)
     with locked("build"):
         BUILD.mkdir(parents=True, exist_ok=True)
         (BUILD / ".used").touch()
@@ -246,13 +271,13 @@ def built(sha: str) -> Path:
         tree = checked_out(sha, BUILD / "tree")
         env = {**os.environ, "CARGO_TARGET_DIR": str(BUILD / "target")}
         env.pop("LLRM_BIN", None)
-        done = subprocess.run(["bash", "-c", DIST_BUILD if PROFILE == "dist" else gate.MEASURE_BUILD], cwd=tree, env=env, capture_output=True, text=True)
+        done = subprocess.run(["bash", "-c", MEASURE_BUILDS[PROFILE]], cwd=tree, env=env, capture_output=True, text=True)
         if done.returncode:
             raise SystemExit(f"measure: the base {sha[:9]} does not build:\n{done.stderr[-2000:]}")
         return snapshot(BUILD / "target" / PROFILE, sha, PROFILE)
 
 
-SYSTEM_BUILD = "env -u RUSTFLAGS cargo build --release -q --bin llrm-c --features system-alloc"
+SYSTEM_BUILD = f"env -u RUSTFLAGS cargo build {'--profile dist' if PROFILE == 'dist' else '--release'} -q --bin llrm-c --features system-alloc"
 
 
 def built_system(sha: str) -> Path | None:
@@ -268,7 +293,7 @@ def built_system(sha: str) -> Path | None:
         done = subprocess.run(["bash", "-c", SYSTEM_BUILD], cwd=tree, env=env, capture_output=True, text=True)
         if done.returncode:
             raise SystemExit(f"measure: {sha[:9]} does not build with the system allocator:\n{done.stderr[-2000:]}")
-        return snapshot(BUILD / "target-system" / "release", sha, "system-")
+        return snapshot(BUILD / "target-system" / PROFILE, sha, "system-")
 
 
 def system_passes(sha: str, cells: set[str], build=built_system) -> dict[str, list[float]] | None:
@@ -569,15 +594,23 @@ def creep(jobs: int, ref: str) -> int:
 # --- commands --------------------------------------------------------------------------------------------------------
 
 
-def check(jobs: int, ref: str) -> int:
-    try:
-        now = measure_all(jobs)
-        head = git("rev-parse", "HEAD")
-        base_sha = base_of(head, ref)
-        base = base_measurement(base_sha, jobs)
-    except NoCounter as why:
-        print(f"SKIPPED: instruction counter unavailable ({why})")
-        return 77
+def check(jobs: int, ref: str, build=built, head_dir=lambda: None) -> int:
+    head = git("rev-parse", "HEAD")
+    base_sha = base_of(head, ref)
+    # Both compilers are dist builds (fat LTO: minutes of one thread each): the base is built beside the head, not after it.
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        future = pool.submit(build, base_sha) if stored(base_sha, method()) is None else None
+        head_dir()
+        try:
+            now = measure_all(jobs)
+            base = base_measurement(base_sha, jobs, build=(lambda sha: future.result()) if future else build)
+        except NoCounter as why:
+            print(f"SKIPPED: instruction counter unavailable ({why})")
+            return 77
+    return judged(now, base, base_sha, head)
+
+
+def judged(now: dict, base: dict, base_sha: str, head: str) -> int:
     lines, bad = rises(base, now)
     if bad:
         more, bad = confirmed(bad, base, now, base_sha, head, tolerances())
@@ -610,13 +643,16 @@ def compare(base_sha: str, sha: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["check", "record", "show", "creep", "compare"])
+    parser.add_argument("command", choices=["check", "record", "show", "creep", "compare", "dist"])
     parser.add_argument("rest", nargs="*", help="record: SHA [BIN]; compare: BASE_SHA SHA, two stored measurements, nothing measured")
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
     parser.add_argument("--jobs", type=int, default=gate.default_jobs(os.environ))
     args = parser.parse_args()
+    if args.command == "dist":  # the directory the measured llrm-c is in, built if need be
+        print(ensure_dist())
+        return 0
     if args.command == "check":
-        return check(args.jobs, args.base)
+        return check(args.jobs, args.base, head_dir=lambda: os.environ.setdefault("LLRM_BIN", str(ensure_dist())) if PROFILE == "dist" else None)
     if args.command == "compare":
         return compare(*args.rest)
     if args.command == "creep":
