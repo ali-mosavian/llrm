@@ -1321,6 +1321,10 @@ struct Prefix {
     /// `state` swept: found from the parent's, and the values this edge
     /// changed.
     settled: Option<Rc<Intervals>>,
+    /// Working `settled` out, or its parent's, met an operation whose interval
+    /// and the one its result held had nothing in common: a scope no execution
+    /// reaches (`apply`).
+    contradicted: bool,
 }
 
 /// The states after every prefix of the edge chains met so far, for the `known`
@@ -1892,6 +1896,13 @@ fn bounded_solved_under(
                 }
             }
         };
+        // How many times an operation's interval met the one its result held
+        // and the two had nothing in common: the scope is then one no
+        // execution reaches (an `add nsw` of INT_MAX and a value that is at
+        // least 1 always overflows), where every interval is as true as every
+        // other and the order the operations were worked in decides which is
+        // left. `LLRM_CHECK_SCOPES` holds a scope to the sweep only below none.
+        let contradictions = std::cell::Cell::new(0usize);
         // Each operation of the loop in `scoped`'s terms, once: it narrows its
         // result by what its operands give, until none changes.
         let apply = |scoped: &mut Intervals, inst: InstId| -> Option<(ValueId, Option<Rc<Interval>>)> {
@@ -1900,8 +1911,21 @@ fn bounded_solved_under(
             let mut interval = _computed(unit, inst, scoped, facts)?;
             let result = function.instruction(inst).result.expect("_computed answers a result");
             if let Some(previous) = scoped.get(&result).filter(|previous| previous.width == interval.width) {
-                let (low, high) = (previous.low.clone().max(interval.low), previous.high.clone().min(interval.high));
+                let (low, high) =
+                    (previous.low.clone().max(interval.low.clone()), previous.high.clone().min(interval.high.clone()));
                 if low > high {
+                    contradictions.set(contradictions.get() + 1);
+                    if check_scopes() && llrm_support::env_flag!("LLRM_DBG_SCOPES") {
+                        eprintln!(
+                            "SCOPES contradiction {result:?}: held [{},{}] computed [{},{}] by {:?} {:?}",
+                            previous.low,
+                            previous.high,
+                            interval.low,
+                            interval.high,
+                            function.instruction(inst).opcode,
+                            function.instruction(inst).operands
+                        );
+                    }
                     return None;
                 }
                 interval = Interval { low, high, width: interval.width };
@@ -2001,10 +2025,12 @@ fn bounded_solved_under(
             scoped
         };
         let prefixes: RefCell<Prefixes> = RefCell::new(Prefixes::default());
-        // What the edges above the loop narrow, found once: they read only
-        // values made outside it, which every `known` of this loop
-        // holds alike.
-        let outer_delta: RefCell<Option<Rc<Intervals>>> = RefCell::new(None);
+        // What the edges above the loop narrow of a `known`, found once for it
+        // (by its id): they read only values made outside the loop, but the
+        // `known`s of one loop do not hold those alike (the one with the
+        // assumes narrows an argument the plain one leaves alone), and a delta
+        // found against one left out what the other lacks.
+        let outer_delta: RefCell<Option<(u64, Rc<Intervals>)>> = RefCell::new(None);
         // How many blocks of the loop each block dominates (itself too): the
         // blocks a prefix ending at it is shared by.
         let led = std::cell::OnceCell::<HashMap<i64, usize>>::new();
@@ -2101,7 +2127,9 @@ fn bounded_solved_under(
                 Ok(())
             };
             let outer_narrowing = |edges: &[(usize, usize, i64)], known: &Intervals| -> Result<Rc<Intervals>, String> {
-                if let Some(found) = outer_delta.borrow().as_ref() {
+                if let Some((of, found)) = outer_delta.borrow().as_ref()
+                    && *of == id
+                {
                     return Ok(Rc::clone(found));
                 }
                 let mut narrowed = known.clone();
@@ -2113,7 +2141,7 @@ fn bounded_solved_under(
                     }
                 }
                 let delta = Rc::new(delta);
-                *outer_delta.borrow_mut() = Some(Rc::clone(&delta));
+                *outer_delta.borrow_mut() = Some((id, Rc::clone(&delta)));
                 Ok(delta)
             };
             // A prefix of the edges inside the loop is kept where the blocks it
@@ -2142,6 +2170,7 @@ fn bounded_solved_under(
                             parent: None,
                             delta: Vec::new(),
                             settled: None,
+                            contradicted: false,
                         });
                         let root = held.nodes.len() - 1;
                         held.roots.insert(Vec::new(), root);
@@ -2170,6 +2199,7 @@ fn bounded_solved_under(
                                 parent: Some(node),
                                 delta,
                                 settled: None,
+                                contradicted: false,
                             });
                             let next = held.nodes.len() - 1;
                             held.nodes[node].next.insert(*edge, next);
@@ -2198,6 +2228,7 @@ fn bounded_solved_under(
                         at_node = held.nodes[one].parent;
                     }
                     for one in path.into_iter().rev() {
+                        let met = contradictions.get();
                         let settled = match held.nodes[one].parent {
                             None => settle(held.nodes[one].state.as_ref().clone(), known, id),
                             Some(parent) => {
@@ -2218,12 +2249,19 @@ fn bounded_solved_under(
                                 y
                             }
                         };
+                        let below = held.nodes[one].parent.is_some_and(|parent| held.nodes[parent].contradicted);
+                        held.nodes[one].contradicted = below || contradictions.get() != met;
                         held.nodes[one].settled = Some(Rc::new(settled));
                     }
                     let settled = Rc::clone(held.nodes[node].settled.as_ref().expect("settled"));
                     if check_scopes() {
+                        let met = contradictions.get();
                         let whole = sweep(scoped.clone());
-                        if whole != *settled {
+                        let unreached = held.nodes[node].contradicted || contradictions.get() != met;
+                        if unreached && whole != *settled && llrm_support::env_flag!("LLRM_DBG_SCOPES") {
+                            eprintln!("SCOPES skipped: a scope no execution reaches");
+                        }
+                        if whole != *settled && !unreached {
                             let diff: Vec<String> = whole
                                 .iter()
                                 .filter(|(v, i)| settled.get(&*v) != Some(*i))
