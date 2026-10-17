@@ -7,6 +7,10 @@
 //! inherits its odds, `BlockOdds::redirected`); a loop's proven
 //! trips, which induction left in `loop_trip_counts`, replace the heuristic's
 //! 31 in 32; and `branchprob::propagated` turns them into frequencies.
+//!
+//! `over`, the frequencies of an arrangement of the blocks, remembers the last
+//! eight by what it reads of them (where each goes and whether it only jumps
+//! on), the odds and the trips: a jump's rounds alternate between few.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -115,6 +119,33 @@ fn tick() {
     #[cfg(test)]
     SCANNED.with(|one| one.set(one.get() + 1));
 }
+
+/// Whether a block only jumps on: nothing in it prints but a jump.
+fn idle(block: &Block) -> bool {
+    block
+        .insns
+        .iter()
+        .all(
+            |one| !crate::backend::masm::prints(one)
+                || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
+        )
+}
+
+/// What `over` read when it was last asked, and what it made.
+struct Over {
+    entry: i64,
+    shape: Vec<(i64, Vec<i64>, bool)>,
+    odds: BlockOdds,
+    trips: Vec<(i64, i64)>,
+    result: Frequency,
+}
+
+/// The arrangements `over` has answered, the last asked at the end.
+#[derive(Default)]
+struct Remembered(Vec<Over>);
+
+/// Arrangements remembered: a jump's rounds alternate between few.
+const REMEMBERED: usize = 8;
 
 impl Frequency {
     /// `body`'s blocks' frequencies. They depend on the blocks' shape, the odds
@@ -251,10 +282,75 @@ impl Frequency {
     }
 
     /// `blocks`, a later arrangement of `body`'s, on `body`'s odds and trips.
+    /// What it reads of a block is where it goes and whether it only jumps on,
+    /// so the last few arrangements are remembered by that: a trace chosen in
+    /// two orders, or a candidate rewrite that changes nothing, asks the same
+    /// question again.
     pub fn over(
         body: &LirBody,
         blocks: &[Block],
     ) -> Self {
+        let shape: Vec<(i64, Vec<i64>, bool)> =
+            blocks.iter().map(|block| (block.at, block.succ.to_vec(), idle(block))).collect();
+        let held = body
+            .facts
+            .0
+            .stash(
+                |remembered: &mut Remembered| {
+                    let at = remembered
+                        .0
+                        .iter()
+                        .position(
+                            |one| one.entry == body.entry
+                                && one.shape == shape
+                                && one.odds == body.odds
+                                && one.trips == body.loop_trip_counts,
+                        )?;
+                    let one = remembered.0.remove(at);
+                    let found = one.result.clone();
+                    remembered.0.push(one);
+                    Some(found)
+                },
+            );
+        if let Some(found) = held {
+            if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                assert!(
+                    found == Self::worked_over(body, blocks),
+                    "{}: the remembered frequency differs from working it out",
+                    body.name
+                );
+            }
+            return found;
+        }
+        let result = Self::worked_over(body, blocks);
+        body.facts
+            .0
+            .stash(
+                |remembered: &mut Remembered| {
+                    remembered
+                        .0
+                        .push(
+                            Over {
+                                entry: body.entry,
+                                shape,
+                                odds: body.odds.clone(),
+                                trips: body.loop_trip_counts.clone(),
+                                result: result.clone(),
+                            },
+                        );
+                    if remembered.0.len() > REMEMBERED {
+                        remembered.0.remove(0);
+                    }
+                },
+            );
+        result
+    }
+
+    fn worked_over(
+        body: &LirBody,
+        blocks: &[Block],
+    ) -> Self {
+        body.facts.0.bump("frequency over");
         let mut taken = IndexMap::default();
         for block in blocks {
             for (to, chance) in body.odds.chances(block.at, &block.succ) {
@@ -270,14 +366,7 @@ impl Frequency {
         let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
-            let idle = one
-                .insns
-                .iter()
-                .all(
-                    |one| !crate::backend::masm::prints(one)
-                        || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
-                );
-            (at != entry && idle && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
+            (at != entry && idle(one) && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
         };
         // Past the bridges, and the share of the edge that reaches there.
         let beyond = |mut at: i64| -> i64 {
@@ -460,6 +549,27 @@ mod tests {
         moved.odds.taken.insert((2, 2), 1);
         Frequency::of(&moved);
         assert_eq!(runs(&moved) - before, 2, "other odds were answered from the old frequencies");
+    }
+
+    /// A jump's rounds ask for the frequencies of the arrangement they made
+    /// and of the one before it, again and again (35 asks for 22 different
+    /// ones in d_faces -O2): each arrangement is worked out once while it is
+    /// among the last few.
+    #[test]
+    fn test_an_arrangement_asked_again_is_not_worked_out_twice() {
+        let body = counted(Some(5), 124.0 / 128.0);
+        let reversed: Vec<crate::model::lir::Block> = body.blocks.iter().rev().cloned().collect();
+        let worked = |body: &LirBody| body.facts.0.counted("frequency over");
+        let before = worked(&body);
+        let first = Frequency::over(&body, &body.blocks);
+        Frequency::over(&body, &reversed);
+        let again = Frequency::over(&body, &body.blocks);
+        assert_eq!(worked(&body) - before, 2, "the first arrangement was worked out again");
+        assert_eq!(first.block(2), again.block(2));
+        let mut moved = body.clone();
+        moved.odds.taken.insert((2, 2), 1);
+        Frequency::over(&moved, &moved.blocks);
+        assert_eq!(worked(&moved) - before, 3, "other odds were answered from the old frequencies");
     }
 
     /// A body that carries its frequencies is asked for them by every fact of

@@ -301,3 +301,20 @@ fn test_the_forest_is_the_loops_a_flood_names_on_any_graph() {
         }
     }
 }
+
+#[test]
+fn test_the_irreducible_blocks_of_a_shape_are_worked_out_once_while_it_is_remembered() {
+    // jumps asked 47 times of 16 shapes in d_faces -O2 and worked each out.
+    let reducible = [block(0, &[1]), block(1, &[1, 2]), block(2, &[])];
+    // Two entries into a cycle: 1 and 2 reach each other and neither dominates
+    // the other.
+    let knotted = [block(0, &[1, 2]), block(1, &[2]), block(2, &[1])];
+    let worked = || IRREDUCIBLE_WORKED.with(std::cell::Cell::get);
+    let before = worked();
+    let knot = irreducible(&knotted, None);
+    assert!(!knot.is_empty(), "premise: the cycle has two entries");
+    assert_eq!(irreducible(&reducible, None), set(&[]));
+    assert_eq!(irreducible(&knotted, None), knot);
+    assert_eq!(irreducible(&reducible, None), set(&[]));
+    assert_eq!(worked() - before, 2, "a shape asked again was worked out again");
+}

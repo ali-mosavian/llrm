@@ -70,6 +70,13 @@ struct Shaped {
     dominance: Option<Rc<Dominance>>,
     loops: Option<Rc<Vec<Loop>>>,
     forest: Option<Rc<Forest>>,
+    irreducible: Option<Rc<BTreeSet<i64>>>,
+}
+
+// Irreducible sets worked out, for a test that a shape is asked once.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static IRREDUCIBLE_WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Shapes remembered: a transaction alternates between few of them.
@@ -119,6 +126,7 @@ fn shaped<N: Node, T: Clone>(
                     dominance: None,
                     loops: None,
                     forest: None,
+                    irreducible: None,
                 },
             );
             shapes.truncate(REMEMBERED);
@@ -293,6 +301,22 @@ pub fn irreducible<N: Node>(
     blocks: &[N],
     entry: Option<i64>,
 ) -> BTreeSet<i64> {
+    let found = shaped(
+        blocks,
+        entry,
+        |one| one.irreducible.clone(),
+        |one, found| one.irreducible = Some(found),
+        || Rc::new(irreducible_of(blocks, entry)),
+    );
+    BTreeSet::clone(&found)
+}
+
+fn irreducible_of<N: Node>(
+    blocks: &[N],
+    entry: Option<i64>,
+) -> BTreeSet<i64> {
+    #[cfg(test)]
+    IRREDUCIBLE_WORKED.with(|worked| worked.set(worked.get() + 1));
     let doms = dominance(blocks, entry);
     let known = blocks.iter().filter(|block| doms.reachable(block.at())).map(Node::at).collect::<BTreeSet<_>>();
     let cut = back_edges(blocks, &doms).into_iter().collect::<BTreeSet<_>>();
