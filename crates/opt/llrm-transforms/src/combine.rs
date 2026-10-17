@@ -60,16 +60,6 @@ impl Worklist {
         }
     }
 
-    fn add_value(
-        &mut self,
-        function: &Function,
-        operand: Operand,
-    ) {
-        if let Some(inst) = defining(function, operand) {
-            self.add(inst);
-        }
-    }
-
     /// `push`.
     fn push(
         &mut self,
@@ -110,18 +100,6 @@ impl Worklist {
             }
         }
         None
-    }
-
-    /// `pushUsersToWorkList`.
-    fn push_users(
-        &mut self,
-        function: &Function,
-        inst: InstId,
-    ) {
-        let Some(result) = function.instruction(inst).result else { return };
-        for one in function.users(result).to_vec() {
-            self.push(one.user);
-        }
     }
 
     /// `handleUseCountDecrement`: an operand that lost a user, and the one user
