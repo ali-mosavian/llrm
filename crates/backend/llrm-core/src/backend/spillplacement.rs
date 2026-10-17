@@ -64,6 +64,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_mir::dense::IdSet;
+
 use crate::analysis::facts::Fact;
 use crate::analysis::graph::Shape;
 use crate::analysis::intervals as ranges;
@@ -255,8 +257,8 @@ pub struct Placement<'a> {
     pub bundles: &'a Bundles,
     pub frequency: Arc<IndexMap<i64, f64>>,
     nodes: Vec<Node>,
-    active: BTreeSet<usize>,
-    todo: BTreeSet<usize>,
+    active: IdSet<usize>,
+    todo: IdSet<usize>,
     /// Bundles that turned positive since the last scan or iteration.
     pub recent: Vec<usize>,
     threshold: f64,
@@ -274,8 +276,8 @@ impl<'a> Placement<'a> {
             bundles,
             frequency,
             nodes: vec![Node::default(); bundles.blocks.len()],
-            active: BTreeSet::new(),
-            todo: BTreeSet::new(),
+            active: IdSet::new(),
+            todo: IdSet::new(),
             recent: Vec::new(),
             threshold: 2.0 / 16384.0,
         }
@@ -393,7 +395,7 @@ impl<'a> Placement<'a> {
     /// Whether any bundle wants a register once the constraints are in.
     pub fn scan(&mut self) -> bool {
         self.recent.clear();
-        for bundle in self.active.clone() {
+        for bundle in self.active.clone().iter() {
             self.update(bundle);
             if self.nodes[bundle].must_spill() {
                 continue;
@@ -418,7 +420,7 @@ impl<'a> Placement<'a> {
     }
 
     /// The bundles that settled in a register.
-    pub fn finish(&self) -> BTreeSet<usize> {
-        self.active.iter().copied().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
+    pub fn finish(&self) -> IdSet<usize> {
+        self.active.iter().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
     }
 }

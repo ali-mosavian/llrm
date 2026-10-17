@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod alias;
+pub mod blocklist;
 pub mod build;
 pub mod callgraph;
 pub mod context;

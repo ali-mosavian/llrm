@@ -72,10 +72,11 @@
 
 use llrm_analysis::avail;
 use llrm_analysis::manager::Pointers;
-use llrm_analysis::memory::Unit;
+use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::observers;
 use llrm_mir::footprint::Footprint;
+use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 
 pub struct Dse;
@@ -110,6 +111,22 @@ fn dropped(
     analyses: &mut Analyses,
 ) -> Result<bool, String> {
     let (context, layout) = (&*unit.context, unit.layout);
+    // Only a store, or a call that fills bytes, can be dead: a body with
+    // neither asks nothing (the memory graph, the escape phase and what is
+    // published were 3 of every 4 instructions of the step on the
+    // call-chain axis).
+    let writes = {
+        let probe = Unit::within(context, layout, unit.function, analyses.outer());
+        unit.function
+            .walk()
+            .any(
+                |(_, inst)| matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
+                    || MemRef::filled(&probe, inst).is_some(),
+            )
+    };
+    if !writes {
+        return Ok(false);
+    }
     let accesses = Accesses::managed(context, layout, unit.function, analyses)?;
     let pointers = analyses.get::<Pointers>(context, layout, unit.function);
     let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
