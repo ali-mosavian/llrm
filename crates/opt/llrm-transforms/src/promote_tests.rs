@@ -959,3 +959,38 @@ fn liveness_visits_a_block_a_few_times_whatever_the_cells() {
     let (spent, blocks) = (super::LIVE_VISITS.with(std::cell::Cell::get), function.layout().len());
     assert!(spent <= 3 * blocks, "{blocks} blocks took {spent} visits");
 }
+
+/// `sroa` split a copy into an array nothing reads (the copy goes) and then
+/// asked the manager for facts of the body, which held what had been asked of
+/// it before the split: `Pointers` made from the exposed frames of the body
+/// before. A result derived at the pass's last edit is held past its
+/// invalidation, so the facts stood stale: `LLRM_CHECK_ORDER` asking them early
+/// found it as `sroa left points-to held but stale` on four bench programs.
+#[test]
+fn test_what_sroa_asks_after_it_split_a_copy_is_derived_from_the_body_it_left() {
+    use llrm_mir::passes::FunctionPass;
+    let mut module = module(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n\ndeclare void @g(ptr)\n\ndefine void @f() {\nb:\n  %a = alloca [16 x i8]\n  %s = alloca [16 x i8]\n  call void @llvm.memcpy.p0.p0.i16(ptr %a, ptr %s, i16 16, i1 false)\n  call void @g(ptr %s)\n  ret void\n}\n",
+    );
+    let (layout, outer) = (llrm_analysis::testing::layout(&module), Outer::of(&module, None));
+    let mut analyses = llrm_mir::passes::Analyses::new(std::rc::Rc::new(outer));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    // Asked before the pass, as a pass ahead of it would.
+    analyses.get::<llrm_analysis::manager::ExposedFrames>(context, &layout, function);
+    let preserved = Sroa.run(
+        &mut llrm_mir::passes::Unit {
+            context,
+            layout: &layout,
+            function,
+            id: None,
+            metadata: &metadata,
+            declared: &mut declared,
+        },
+        &mut analyses,
+    );
+    analyses.invalidate(function, &preserved);
+    let stale = analyses.held_stale(context, &layout, function);
+    assert!(stale.is_empty(), "held but stale: {stale:?}");
+}

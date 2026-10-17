@@ -1610,6 +1610,17 @@ impl Analyses {
         }
     }
 
+    /// The held results a fresh computation disagrees with, for a test of what
+    /// a pass leaves in the manager.
+    pub fn held_stale(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Vec<&'static str> {
+        self.stale(context, layout, function)
+    }
+
     /// The cached analyses a fresh computation disagrees with.
     fn stale(
         &self,
