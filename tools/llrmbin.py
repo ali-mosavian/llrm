@@ -5,7 +5,9 @@ The one resolver every Python tool and test uses; a tree built elsewhere (the ga
 import atexit
 import hashlib
 import os
+import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -24,6 +26,38 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     if stale:
         raise SystemExit(f"stale binaries in {found}: {', '.join(stale)} older than the source they are built from; run `cargo build --release --bins` (`cargo build -p X` builds only the library)")
     return found
+
+
+BUILD_MARK = re.compile(rb"llrm-build:profile=([A-Za-z0-9_-]+);incremental=([01])")
+
+
+def build_info(binary: Path) -> dict | None:
+    """`{"profile": "dist", "incremental": False}` as the binary says it was built (llrm-mir's `buildinfo::MARK`, which
+    `llrm-c --build-info` prints), None for one that does not say."""
+    found = BUILD_MARK.search(Path(binary).read_bytes())
+    return {"profile": found[1].decode(), "incremental": found[2] == b"1"} if found else None
+
+
+def require_clean(binary: Path, env: dict | None = None, strict: bool = True, allow_dev: bool = False) -> dict | None:
+    """Refuses a binary that is not the `dist` profile built without incremental compilation: a count from an incremental build
+    moves by +-0.5% an edit (inlining of unrelated code), from a release build with 256 units by more than the changes measured.
+    Build it with `CARGO_INCREMENTAL=0 cargo build --profile dist --bins` in a fresh target directory. `allow_dev` (the tools'
+    `--allow-dev`) or LLRM_ALLOW_DEV=1 measures anyway, with the warning; `strict=False` is the gate's, which records what it measured
+    with and warns. Returns what the binary says."""
+    env = os.environ if env is None else env
+    info = build_info(binary)
+    if info and info["profile"] == "dist" and not info["incremental"]:
+        return info
+    got = (
+        "does not say how it was built (an older build)"
+        if info is None
+        else f"is the {info['profile']} profile, " + ("incremental" if info["incremental"] else "not incremental")
+    )
+    why = f"{binary} {got}: build it with `CARGO_INCREMENTAL=0 cargo build --profile dist --bins` in a fresh target directory"
+    if allow_dev or env.get("LLRM_ALLOW_DEV") == "1" or not strict:
+        print(f"WARNING: {why}", file=sys.stderr)
+        return info
+    raise SystemExit(f"refusing to measure: {why} (--allow-dev measures anyway)")
 
 
 def declared(repo: Path) -> set[str]:

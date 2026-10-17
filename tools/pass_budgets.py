@@ -17,6 +17,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llrmbin  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 # Steps that run other passes; their total is the passes' too.
 CONTAINERS = {"pipeline"}
@@ -56,7 +59,9 @@ def main() -> None:
     parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-c"))
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--budget", type=float, default=300.0, help="instructions per IR instruction per run (plan step 4.1)")
+    parser.add_argument("--allow-dev", action="store_true", help="measure a binary that is not the dist profile built without incremental compilation")
     args = parser.parse_args()
+    llrmbin.require_clean(Path(args.llrm), allow_dev=args.allow_dev)
     if args.source:
         source, extra = args.source, []
     else:

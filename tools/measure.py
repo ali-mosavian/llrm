@@ -141,10 +141,12 @@ def method() -> str:
 def measure_all(jobs: int) -> dict:
     """This process's compiler (LLRM_BIN, else the tree's target): compile cost, and the cost at N/2, N and 2N of each axis and step."""
     compiler = llrmbin.bin_dir() / "llrm-c"
+    # An incremental build moves a count by half a point an edit: the gate warns and records what it measured with.
+    build = llrmbin.require_clean(compiler, strict=False)
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
-        "binary": {"path": str(compiler), "sha": hashlib.sha256(compiler.read_bytes()).hexdigest()[:12]},
+        "binary": {"path": str(compiler), "sha": hashlib.sha256(compiler.read_bytes()).hexdigest()[:12], "build": build},
         "compile": compile_cost.measure(compiler, jobs),
         "axes": {k: list(v) for k, v in scaling_gate.measure(jobs).items()},
         "passes": {k: [round(v, 3) for v in got] for k, got in passes.items()},

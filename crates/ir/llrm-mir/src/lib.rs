@@ -5,6 +5,7 @@
 pub mod alias;
 pub mod blocklist;
 pub mod build;
+pub mod buildinfo;
 pub mod callgraph;
 pub mod context;
 pub mod counts;
@@ -40,6 +41,7 @@ pub mod splice;
 pub mod target;
 pub mod tbaa;
 pub mod touched;
+pub mod trace;
 pub mod types;
 pub mod valuetracking;
 pub mod verify;
