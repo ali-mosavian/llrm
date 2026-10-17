@@ -1452,13 +1452,13 @@ fn test_dense_liveness_is_what_the_sorted_sets_gave() {
             for block in &body.blocks {
                 assert_eq!(
                     rows.entering(block.at).collect::<Vec<_>>(),
-                    entering[&block.at].iter().copied().collect::<Vec<_>>(),
+                    entering[&block.at].iter().collect::<Vec<_>>(),
                     "seed {seed} entering {}",
                     block.at
                 );
                 assert_eq!(
                     rows.leaving(block.at).collect::<Vec<_>>(),
-                    leaving[&block.at].iter().copied().collect::<Vec<_>>(),
+                    leaving[&block.at].iter().collect::<Vec<_>>(),
                     "seed {seed} leaving {}",
                     block.at
                 );
@@ -1710,7 +1710,7 @@ fn test_the_last_reads_are_what_the_sets_of_every_block_gave() {
             let (_, live_out) = crate::backend::allocate::live_reference(&body);
             let mut expected: BTreeSet<(usize, u32)> = BTreeSet::new();
             for block in &body.blocks {
-                let mut alive: BTreeSet<u32> = live_out[&block.at].clone();
+                let mut alive: BTreeSet<u32> = live_out[&block.at].iter().collect();
                 let mut index = block.insns.len() as i64 - 1;
                 while index >= 0 {
                     let one = &block.insns[index as usize];

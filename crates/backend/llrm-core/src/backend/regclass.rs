@@ -870,8 +870,7 @@ pub fn violations(
     };
     let mut out = Vec::new();
     for block in &body.blocks {
-        let mut live: BTreeSet<u32> =
-            live_out[&block.at].iter().copied().filter(|value| !skip.contains(value)).collect();
+        let mut live: BTreeSet<u32> = live_out[&block.at].iter().filter(|value| !skip.contains(value)).collect();
         for (position, one) in block.insns.iter().enumerate().rev() {
             // Two states per instruction: after it (what is live, its results
             // among them) and before it (what it reads is live, its
