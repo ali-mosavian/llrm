@@ -221,6 +221,7 @@ The checklist every step carries, in order. A step is done only when every box i
 - [ ] each exit metric of the step, one box each
 - [ ] intended effect reached (rule in (d))
 - [ ] docs updated in the same PR: the [docs/comparison/llvm][readme] page of its row, [proposals], [synthesis]; [spec 8] when closing as not kept
+- [ ] `LLVM structure` line in the design page or PR: LLVM's structure with a permalink, ours, `MIRROR` or `DEVIATE` with the reason and a number
 - [ ] baseline table re-run at the phase's re-baseline step
 
 ## Phase 0: instruments
@@ -978,6 +979,26 @@ Checklist: the shared list.
 | partial / no effect / worse | n/a while parked | |
 
 ## 4. Cross-step guards
+
+**Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
+
+| LLVM structure | ours | status |
+|---|---|---|
+| [`SmallVector`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/ADT/SmallVector.h#L1251) (inline storage) | `BlockList` ([#1956]); an inline vector across the hot `Vec` sites (step 1.0) | mirrored for successors and predecessors; in flight |
+| [`BumpPtrAllocator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/Allocator.h#L68) | slab allocator ([#2022]) | in flight; DEVIATES in form (a global slab, not a per-compile arena): it cuts the cost of an allocation, not the count |
+| [`DenseMap`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/ADT/DenseMap.h#L878) and dense id tables | `llrm_mir::dense` `IdSet`, `IdMap`, `Bits` ([#1971], [#2026], [#2032]) | mirrored; the rest of the B-trees are 2.6 and 1.2's remainder |
+| [`User` co-allocated operands](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137) | `Instruction.operands: Vec<Operand>` | DEVIATES: at most 2.7% of the blocks and 0.2% of instructions (measured, [#2022]) |
+| [`SlotIndexes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/SlotIndexes.h) and [`LiveRangeEdit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveRangeEdit.h) (in-place spill) | in-place `Vec<Insn>` arena spill (S4 step 1, 3.3) | in flight (design: [allocator on the LIR core](allocator-lir-core.md)) |
+| [`AnalysisManager` and `PreservedAnalyses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/PassManagerImpl.h#L80) (preserved sets, invalidate) | `Analyses` with keep and invalidate ([analysis-manager]) | partly mirrored ([#1922]); S1 decides how much more |
+| [InstCombine worklist](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L5780) | `fold`, `algebraic`, `phiopt`, `dead` in rounds | DEVIATES: a combine at today's positions measured about 0 (S2: the rewriting is 0.30x to 1.03x of InstCombine; the facts are the gap) |
+| [`RAGreedy` stage queue](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975) | `allocate.rs` queue stages | DEVIATES: llrm adds a `recolor` stage greedy lacks (3.32 M per 1x); the decision-procedure page ([#2049]) decides |
+| [`CalcSpillWeights`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CalcSpillWeights.cpp#L221) (weight stored in the interval) | `LiveRanges::weight`, about 1 K instructions per call | not mirrored; a candidate of S4's fixed part |
+| [`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341) | `addresssink::masks_sunk` ([#2010]) | mirrored (merged) |
+| [LICM caps and MemorySSA walker caps](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L149) | structural gates of work (chain of 64 accesses, 1,024-instruction body, 8 joins; [#1999] and the stack) | mirrored in effect: counts of work, not a tuned cap |
+| [`LastRunTrackingAnalysis`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30) | the settled mark of `Fixed::fixed` | DEVIATES: an idle skip nets +0.6% ([spec 8]) |
+| [`MachineCopyPropagation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp) (block-local) | cross-block `copyprop` and `spillforward` | DEVIATES: block-local saves 14.8 M but grows `d_faces` by 0.36% in bytes (S5, [#2043]) |
+| [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066) (generation counters) | none | DEVIATES: measured, not kept (-3.1% to -3.4% kill-all, four rows worse; [spec 8]) |
+| [`X86FPStackifier`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L81) | `floatassign` plus `floatalloc` | DEVIATES: llrm allocates the x87 registers as allocnos (IRA-like); the hand-off is 0.9%, ranks last |
 
 **Method M (every exit measurement).**
 
