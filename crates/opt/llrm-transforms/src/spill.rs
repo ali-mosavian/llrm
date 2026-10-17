@@ -1206,6 +1206,9 @@ pub struct Pressure {
     placed: Placed,
     cells: BTreeMap<ValueId, ValueId>,
     counted: IdSet<ValueId>,
+    /// The values the function had when `counted` was made: those after it are
+    /// new.
+    values: Seen,
     addressed: IdSet<ValueId>,
     /// Whether each pointer an access is made through is folded: asked of the
     /// function once.
@@ -1216,6 +1219,21 @@ pub struct Pressure {
     /// What changes in the live set across each instruction of a block, and
     /// what changes from one block's end to another's start: the same.
     stepped: Stepped,
+}
+
+/// The values a function had when a cache was made: not part of what a
+/// `Pressure` says, so two of one function are equal whatever ids it has gone
+/// through.
+#[derive(Clone, Copy, Debug, Default)]
+struct Seen(usize);
+
+impl PartialEq for Seen {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// The blocks each value is live into and out of, made from `found` when a
@@ -1366,7 +1384,7 @@ impl Pressure {
         scales: u8,
         found: Liveness,
     ) -> Self {
-        Self::with(context, function, scales, found, Placed::default())
+        Self::with(context, function, scales, found, Placed::default(), None)
     }
 
     /// `of`, the liveness being `found` and `placed` the blocks each value is
@@ -1377,20 +1395,21 @@ impl Pressure {
         scales: u8,
         found: Liveness,
         placed: Placed,
+        counted: Option<IdSet<ValueId>>,
     ) -> Self {
         let (addressed, folds) = addressed_by(function, &mut |value| folded_in(context, function, value, scales));
+        let counted = counted.unwrap_or_else(|| {
+            (0..function.value_count() as u32)
+                .map(ValueId)
+                .filter(|&value| counts(context, function, value, scales))
+                .collect()
+        });
         Self {
             found,
             placed,
             cells: cells(function),
-            counted: (0..function.value_count() as u32)
-                .map(ValueId)
-                .filter(|&value| match function.value(value).def {
-                    ValueDef::Instruction(inst) => !function.is_erased(inst),
-                    ValueDef::Argument(_) => true,
-                })
-                .filter(|&value| integer_in(context, function, value, scales))
-                .collect(),
+            counted,
+            values: Seen(function.value_count()),
             addressed: addressed.into_iter().collect(),
             folds,
             points: BlockPoints::default(),
@@ -1486,6 +1505,7 @@ impl Pressure {
         // holds it: the caches were dropped and made again for every block at
         // every edit, the size of the function's live sets each time.
         let shared = std::rc::Rc::strong_count(&previous) > 1;
+        let (kept_counted, kept_values) = (previous.counted.clone(), previous.values.0);
         let (mut found, placed, caches) = match std::rc::Rc::try_unwrap(previous) {
             Ok(owned) => (owned.found, owned.placed, Some((owned.points, owned.stepped))),
             Err(kept) => (kept.found.clone(), kept.placed.clone(), None),
@@ -1584,7 +1604,51 @@ impl Pressure {
                 "LLRM_CHECK_PRESSURE: the updated live sets differ from a fresh solve"
             );
         }
-        let mut made = Pressure::with(context, function, scales, found, Placed((!shared).then_some(placed)));
+        // Which values the model counts changes for those an edit named (their
+        // readers, their flags, whether they are still made) and the values it
+        // made; every other keeps the answer it had.
+        // A pointer is folded where everything that reads it is an access or
+        // a folded pointer, so a value whose answer moved moves its operands'.
+        let mut counted = kept_counted;
+        let mut ahead: Vec<ValueId> =
+            edits.named.iter().chain((kept_values..function.value_count()).map(|at| ValueId(at as u32))).collect();
+        let mut asked = IdSet::<ValueId>::new();
+        while let Some(value) = ahead.pop() {
+            if !asked.insert(value) {
+                continue;
+            }
+            let now = counts(context, function, value, scales);
+            if now == counted.contains(&value) {
+                continue;
+            }
+            if now {
+                counted.insert(value);
+            } else {
+                counted.remove(&value);
+            }
+            if let ValueDef::Instruction(inst) = function.value(value).def
+                && !function.is_erased(inst)
+            {
+                ahead.extend(function.instruction(inst).operands.iter().filter_map(|operand| match operand {
+                    Operand::Value(operand) => Some(*operand),
+                    _ => None,
+                }));
+            }
+        }
+        let mut made =
+            Pressure::with(context, function, scales, found, Placed((!shared).then_some(placed)), Some(counted));
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
+            let fresh = Pressure::of(context, function, scales);
+            let differ: Vec<ValueId> = (0..function.value_count() as u32)
+                .map(ValueId)
+                .filter(|value| fresh.counted.contains(value) != made.counted.contains(value))
+                .collect();
+            assert!(
+                differ.is_empty(),
+                "LLRM_CHECK_PRESSURE: the counted values of the update differ from a fresh pass at {differ:?} (named {:?})",
+                edits.named.iter().collect::<Vec<_>>()
+            );
+        }
         if let Some((points, stepped)) = caches {
             // The blocks the edits were in, with the blocks whose live sets
             // moved.
@@ -1673,6 +1737,23 @@ fn unmoved(
     found
 }
 
+/// Whether `value` is one the model counts: made by an instruction still
+/// there, or an argument, and held in a register.
+fn counts(
+    context: &Context,
+    function: &Function,
+    value: ValueId,
+    scales: u8,
+) -> bool {
+    #[cfg(test)]
+    COUNTS_ASKED.with(|one| one.set(one.get() + 1));
+    let made = match function.value(value).def {
+        ValueDef::Instruction(inst) => !function.is_erased(inst),
+        ValueDef::Argument(_) => true,
+    };
+    made && integer_in(context, function, value, scales)
+}
+
 /// `found` and `placed` with each value of `named` live where `computed` has
 /// it. Only a value whose blocks moved is touched: of the values a pass names
 /// nearly all are read where they were (quicksort -O3, 13 updates: 1,300
@@ -1704,6 +1785,13 @@ fn renewed(
 #[cfg(test)]
 thread_local! {
     pub(crate) static POINTS_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// Values `Pressure` asked whether the model counts, for a test that an update
+// asks of the values an edit named and no others.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COUNTS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Arguments `Pressure::updated` asked `ranges_of` for, for a test that an
