@@ -16,9 +16,12 @@
 //! `sext i16 %x to i32` has at least 17 sign bits.
 
 use super::known::compute_known_bits;
-use super::pattern::{IntrinsicId, intrinsic_id};
+use super::pattern::{IntrinsicId, apint, intrinsic_id};
 use super::query::Query;
-use super::range::{SelectPatternFlavor, match_select_pattern};
+use super::range::{
+    SelectPatternFlavor, get_inverse_min_max_flavor, get_inverse_min_max_intrinsic, m_apint as select_apint,
+    match_select_pattern, match_select_pattern_cast,
+};
 use crate::apint::{countl_one, countl_zero, signed};
 use crate::context::mask;
 use crate::module::{Instruction, Operand};
@@ -30,14 +33,6 @@ fn num_sign_bits(
     width: u32,
 ) -> u32 {
     if signed(value, width) < 0 { countl_one(value, width) } else { countl_zero(value, width) }
-}
-
-/// `m_APInt`: the constant and its width.
-fn m_apint(
-    q: &Query,
-    v: Operand,
-) -> Option<(u128, u32)> {
-    q.int_constant(v)
 }
 
 /// `APInt::isStrictlyPositive`.
@@ -64,29 +59,6 @@ fn ceil_log_base2(
     width - countl_zero(value.wrapping_sub(1) & mask(width), width)
 }
 
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L9615>
-fn get_inverse_min_max_flavor(spf: SelectPatternFlavor) -> SelectPatternFlavor {
-    match spf {
-        SelectPatternFlavor::SMin => SelectPatternFlavor::SMax,
-        SelectPatternFlavor::UMin => SelectPatternFlavor::UMax,
-        SelectPatternFlavor::SMax => SelectPatternFlavor::SMin,
-        SelectPatternFlavor::UMax => SelectPatternFlavor::UMin,
-        _ => unreachable!("unhandled!"),
-    }
-}
-
-/// `getInverseMinMaxIntrinsic` for the integer min/max.
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L9623>
-fn get_inverse_min_max_intrinsic(id: IntrinsicId) -> IntrinsicId {
-    match id {
-        IntrinsicId::Smax => IntrinsicId::Smin,
-        IntrinsicId::Smin => IntrinsicId::Smax,
-        IntrinsicId::Umax => IntrinsicId::Umin,
-        IntrinsicId::Umin => IntrinsicId::Umax,
-        _ => unreachable!("Unexpected intrinsic"),
-    }
-}
-
 /// The input, the lower and the upper bound of a clamp, bounds as `(bits,
 /// width)`.
 pub(super) type Clamp = (Operand, (u128, u32), (u128, u32));
@@ -102,19 +74,19 @@ pub(super) fn is_signed_min_max_clamp(
         return None;
     }
     let (lhs, rhs) = (result.lhs?, result.rhs?);
-    let mut clow = m_apint(q, rhs)?;
+    let mut clow = select_apint(q, rhs)?;
 
-    let result2 = match_select_pattern(q, lhs);
+    let result2 = match_select_pattern_cast(q, lhs, false, 0);
     if get_inverse_min_max_flavor(spf) != result2.flavor {
         return None;
     }
     let (lhs2, rhs2) = (result2.lhs?, result2.rhs?);
-    let mut chigh = m_apint(q, rhs2)?;
+    let mut chigh = select_apint(q, rhs2)?;
 
     if spf == SelectPatternFlavor::SMin {
         std::mem::swap(&mut clow, &mut chigh);
     }
-    (signed(clow.0, clow.1) <= signed(chigh.0, chigh.1)).then_some((lhs2, clow, chigh))
+    (signed(clow.0, clow.1) <= signed(chigh.0, chigh.1)).then_some((lhs2.operand()?, clow, chigh))
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1417>
@@ -128,8 +100,8 @@ pub(super) fn is_signed_min_max_intrinsic_clamp(
     if intrinsic_id(q, inner_inst) != Some(inverse_id) {
         return None;
     }
-    let mut clow = m_apint(q, call.operands[1])?;
-    let mut chigh = m_apint(q, inner.operands[1])?;
+    let mut clow = apint(q, call.operands[1])?;
+    let mut chigh = apint(q, inner.operands[1])?;
 
     if id == IntrinsicId::Smin {
         std::mem::swap(&mut clow, &mut chigh);
@@ -180,7 +152,7 @@ fn compute_num_sign_bits_impl(
                 return signbits(op(0)) + tmp;
             }
             Opcode::Binary(BinaryOp::SDiv) => {
-                if let Some((denominator, _)) = m_apint(q, op(1)) {
+                if let Some((denominator, _)) = apint(q, op(1)) {
                     if !is_strictly_positive(denominator, ty_bits) {
                         return fall_through(q, v, first_answer, depth);
                     }
@@ -190,7 +162,7 @@ fn compute_num_sign_bits_impl(
             }
             Opcode::Binary(BinaryOp::SRem) => {
                 let mut tmp = signbits(op(0));
-                if let Some((denominator, _)) = m_apint(q, op(1))
+                if let Some((denominator, _)) = apint(q, op(1))
                     && is_strictly_positive(denominator, ty_bits)
                 {
                     let res_bits = ty_bits - ceil_log_base2(denominator, ty_bits);
@@ -200,7 +172,7 @@ fn compute_num_sign_bits_impl(
             }
             Opcode::Binary(BinaryOp::AShr) => {
                 let mut tmp = signbits(op(0));
-                if let Some((sh_amt, _)) = m_apint(q, op(1)) {
+                if let Some((sh_amt, _)) = apint(q, op(1)) {
                     if sh_amt >= u128::from(ty_bits) {
                         return fall_through(q, v, first_answer, depth);
                     }
@@ -212,7 +184,7 @@ fn compute_num_sign_bits_impl(
                 return tmp;
             }
             Opcode::Binary(BinaryOp::Shl) => {
-                if let Some((sh_amt, _)) = m_apint(q, op(1)) {
+                if let Some((sh_amt, _)) = apint(q, op(1)) {
                     if sh_amt >= u128::from(ty_bits) {
                         return fall_through(q, v, first_answer, depth);
                     }

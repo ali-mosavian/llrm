@@ -31,6 +31,9 @@ mod power2_tests;
 
 pub use query::{AssumptionCache, DomConditionCache, Query};
 
+#[cfg(test)]
+mod range_tests;
+
 /// One column of `examples/vtdump.rs`: ` name=answer`.
 pub fn column(
     query: &Query,
@@ -46,6 +49,8 @@ pub fn column(
         "cru" => range::column(query, value, false),
         "crs" => range::column(query, value, true),
         "gp" => guarantee::column(query, value),
+        "sp" => range::pattern_column(query, value),
+        "ov" => range::overflow_column(query, value),
         other => format!(" {other}=?"),
     }
 }
