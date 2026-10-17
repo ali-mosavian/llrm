@@ -2,6 +2,8 @@
 
 **Scoreboard.** `d_faces` -O2 is 2,253 M instructions at main `5e2e995ef`, 5.5x clang 24's 413 M (it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
 
+**Honest status.** The measured ceilings so far (keeps about 2%, updaters 0.5% to 3.5%, `ThroughMemory` cap 2.3%, `FloatFacts` 2% to 4%, algebraic 1% to 2%, allocator lanes about 8%) plus the queued PRs are well under half of the gap to 415 M. The rest is the architecture of 3.1/3.2 and the allocator rewrite, not constant factors.
+
 **Target.** Parity is clang 24 at `d1106deb71cc` (415 M instructions on `d_faces` -O2) with rows held against min(gcc, clang); the static clang 20.1.8 (462 M) is the secondary column. Phase 3 (structural) starts now, in parallel with phases 1 and 2: each step is gated by its early probe and its design review, not by B1 or B2.
 
 ## Status
@@ -1054,15 +1056,20 @@ Checklist: the shared list.
 | [`User` co-allocated operands](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137) | `Instruction.operands: Vec<Operand>` | DEVIATES: at most 2.7% of the blocks and 0.2% of instructions (measured, [#2022]) |
 | [`SlotIndexes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/SlotIndexes.h) and [`LiveRangeEdit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveRangeEdit.h) (in-place spill) | in-place `Vec<Insn>` arena spill (S4 step 1, 3.3) | in flight (design: [allocator on the LIR core](allocator-lir-core.md)) |
 | [`AnalysisManager` and `PreservedAnalyses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/PassManagerImpl.h#L80) (preserved sets, invalidate) | `Analyses` with keep and invalidate ([analysis-manager]) | partly mirrored ([#1922]); S1 decides how much more |
-| [InstCombine worklist](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L5780) | `fold`, `algebraic`, `phiopt`, `dead` in rounds | DEVIATES: a combine at today's positions measured about 0 (S2: the rewriting is 0.30x to 1.03x of InstCombine; the facts are the gap) |
+| [InstCombine worklist](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L5780) | `fold`, `algebraic`, `phiopt`, `dead` in rounds | DEVIATES, re-test after 3.1/3.2: a combine at today's positions measured about 0 (S2: the rewriting is 0.30x to 1.03x of InstCombine; the facts are the gap) |
 | [`RAGreedy` stage queue](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975) | `allocate.rs` queue stages | DEVIATES: llrm adds a `recolor` stage greedy lacks (3.32 M per 1x); the decision-procedure page ([#2049]) decides |
 | [`CalcSpillWeights`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CalcSpillWeights.cpp#L221) (weight stored in the interval) | `LiveRanges::weight`, about 1 K instructions per call | not mirrored; a candidate of S4's fixed part |
 | [`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341) | `addresssink::masks_sunk` ([#2010]) | mirrored (merged) |
 | [LICM caps and MemorySSA walker caps](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L149) | structural gates of work (chain of 64 accesses, 1,024-instruction body, 8 joins; [#1999] and the stack) | mirrored in effect: counts of work, not a tuned cap |
-| [`LastRunTrackingAnalysis`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30) | the settled mark of `Fixed::fixed` | DEVIATES: an idle skip nets +0.6% ([spec 8]) |
-| [`MachineCopyPropagation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp) (block-local) | cross-block `copyprop` and `spillforward` | DEVIATES: block-local saves 14.8 M but grows `d_faces` by 0.36% in bytes (S5, [#2043]) |
-| [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066) (generation counters) | none | DEVIATES: measured, not kept (-3.1% to -3.4% kill-all, four rows worse; [spec 8]) |
+| [`LastRunTrackingAnalysis`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30) | the settled mark of `Fixed::fixed` | DEVIATES, re-test after 3.1/3.2: an idle skip nets +0.6% ([spec 8]) |
+| [`MachineCopyPropagation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp) (block-local) | cross-block `copyprop` and `spillforward` | DEVIATES, re-test after 3.1/3.2: block-local saves 14.8 M but grows `d_faces` by 0.36% in bytes (S5, [#2043]) |
+| [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066) (generation counters) | none | DEVIATES, re-test after 3.1/3.2: measured, not kept (-3.1% to -3.4% kill-all, four rows worse; [spec 8]) |
+| preserved analyses across `fold`'s `_numbers` | none | DEVIATES, re-test after 3.1/3.2: the premise failed in today's pipeline (a `MemRef` is made of operands, [#2031]) |
 | [`X86FPStackifier`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L81) | `floatassign` plus `floatalloc` | DEVIATES: llrm allocates the x87 registers as allocnos (IRA-like); the hand-off is 0.9%, ranks last |
+
+The "re-test after 3.1/3.2" rows were measured as pieces inside today's pipeline, which is not LLVM-shaped; their numbers show they do not pay today and are kept, but the rows are open until the pipeline is one pass with lazy facts.
+
+**Bundling.** Constant-factor PRs under 0.5% are bundled per area; slopes, soundness and architecture items are separate PRs.
 
 **Method M (every exit measurement).**
 
