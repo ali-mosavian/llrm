@@ -1213,9 +1213,17 @@ impl Analysis for CallEffects {
         substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
         _changes: &[llrm_mir::module::Change],
         _context: &Context,
-        _function: &Function,
+        function: &Function,
     ) -> Option<Self::Result> {
-        Some(Ok(alias::effects_renamed(old.as_ref().ok()?, substituted)?))
+        let old = old.as_ref().ok()?;
+        // A reference holds its pointer's decomposition (root, base, scale),
+        // read down the chain of instructions below it. Renaming a value to one
+        // that decomposes otherwise (a load forwarded to the GEP it loaded)
+        // gives a reference that knows less than a fresh one: derived again.
+        if renamed_into_a_chain(function, substituted, old) {
+            return None;
+        }
+        Some(Ok(alias::effects_renamed(old, substituted)?))
     }
     fn run(
         context: &Context,
@@ -1233,6 +1241,54 @@ impl Analysis for CallEffects {
         }
         call_effects(&unit, outer)
     }
+}
+
+/// Whether a value some reference of `effects` names is replaced by one that a
+/// fresh decomposition reads differently: the reference would name the new
+/// value as its root, where a decomposition goes on through the definition of a
+/// GEP, a cast, an add, and stops at a parameter, a constant, a load, a call,
+/// an allocation, a phi. A load forwarded to the pointer it loaded (a GEP) is
+/// the case; a value replaced by an equal instruction (the same opcode and
+/// operands) decomposes alike.
+fn renamed_into_a_chain(
+    function: &Function,
+    substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
+    effects: &IndexMap<InstId, alias::Effect>,
+) -> bool {
+    use llrm_mir::module::{Operand, ValueDef};
+    let ends = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
+        ),
+        _ => true,
+    };
+    let alike = |was: ValueId, now: ValueId| match (function.value(was).def, function.value(now).def) {
+        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
+            let (a, b) = (function.instruction(a), function.instruction(b));
+            (ends(was) && ends(now)) || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands)
+        }
+        _ => ends(was) && ends(now),
+    };
+    effects
+        .values()
+        .any(
+            |effect| effect
+                .loads
+                .iter()
+                .chain(effect.stores.iter())
+                .chain(&effect.fills)
+                .any(
+                    |one| [one.pointer, one.root, one.base.map(Operand::Value), one.segment]
+                        .into_iter()
+                        .any(
+                            |named| matches!(
+                                named,
+                                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
+                            ),
+                        ),
+                ),
+        )
 }
 
 /// What each call of `unit` reads and writes, its callee as `Summaries`
