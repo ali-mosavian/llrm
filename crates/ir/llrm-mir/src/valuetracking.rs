@@ -8,6 +8,8 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+#[cfg(test)]
+mod boundary_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;

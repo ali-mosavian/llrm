@@ -1,5 +1,6 @@
-//! The constructs of ValueTracking.cpp that MIR cannot say, each as the fact it rests on: a test fails the
-//! day MIR gains the construct, so its translation is owed then and is not forgotten.
+//! The constructs of ValueTracking.cpp that MIR cannot say, each as the fact it
+//! rests on: a test fails the day MIR gains the construct, so its translation
+//! is owed then and is not forgotten.
 
 use crate::parse;
 
@@ -7,12 +8,19 @@ fn rejects(text: &str) -> bool {
     parse::module(text).is_err()
 }
 
+/// MIR types vectors and verifies element-wise operations on them, but has no
+/// lane operation, and no front end or lowering of llrm produces or selects a
+/// vector value. ValueTracking's `DemandedElts` is therefore not translated:
+/// a vector value claims nothing (see `known::compute_known_bits`).
 #[test]
-fn mir_has_no_vectors() {
-    assert!(rejects("define <4 x i32> @f(<4 x i32> %a) {\n  ret <4 x i32> %a\n}\n"));
-    assert!(rejects(
-        "define i32 @f(<4 x i32> %a) {\n  %x = extractelement <4 x i32> %a, i32 0\n  ret i32 %x\n}\n"
-    ));
+fn mir_has_no_lane_operations() {
+    for lane in [
+        "%x = extractelement <4 x i32> %a, i32 0",
+        "%x = insertelement <4 x i32> %a, i32 1, i32 0",
+        "%x = shufflevector <4 x i32> %a, <4 x i32> %a, <4 x i32> zeroinitializer",
+    ] {
+        assert!(rejects(&format!("define void @f(<4 x i32> %a) {{\n  {lane}\n  ret void\n}}\n")), "{lane}");
+    }
 }
 
 #[test]
@@ -28,9 +36,7 @@ fn mir_has_no_undef() {
 
 #[test]
 fn mir_has_no_operand_bundles() {
-    assert!(rejects(
-        "declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"
-    ));
+    assert!(rejects("declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"));
 }
 
 #[test]
@@ -48,7 +54,8 @@ fn mir_has_no_half() {
     assert!(rejects("define half @f(half %a) {\n  ret half %a\n}\n"));
 }
 
-/// `DataLayout` has no preferred alignment (`getPrefTypeAlign`), which `getPointerAlignment` uses for a global.
+/// `DataLayout` has no preferred alignment (`getPrefTypeAlign`), which
+/// `getPointerAlignment` uses for a global.
 #[test]
 fn the_data_layout_has_no_preferred_alignment() {
     let source = include_str!("../datalayout.rs");
