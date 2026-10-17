@@ -5,6 +5,7 @@
 pub mod alias;
 pub mod blocklist;
 pub mod build;
+pub mod buildinfo;
 pub mod callgraph;
 pub mod context;
 pub mod counts;

@@ -14,6 +14,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llrmbin  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 
@@ -41,7 +44,9 @@ def main() -> None:
     parser.add_argument("--llrm", default=str(ROOT / "target/release/llrm-c"))
     parser.add_argument("--levels", default="O1,O2,Os")
     parser.add_argument("--jobs", type=int, default=8)
+    parser.add_argument("--allow-dev", action="store_true", help="measure a binary that is not the dist profile built without incremental compilation")
     args = parser.parse_args()
+    llrmbin.require_clean(Path(args.llrm), allow_dev=args.allow_dev)
     trace = Path(args.trace)
     trace.unlink(missing_ok=True)
     jobs = [(level, source, extra) for level in args.levels.split(",") for source, extra in corpus()]
