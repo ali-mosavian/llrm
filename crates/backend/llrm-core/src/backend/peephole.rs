@@ -1737,7 +1737,7 @@ pub fn _loses_live_definition(
     parts: &[Arc<Insn>],
     combined: &Insn,
     after: &[Arc<Insn>],
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> bool {
     let eliminated: BTreeSet<u32> = parts
         .iter()
@@ -1752,7 +1752,7 @@ pub fn _loses_live_definition(
 pub fn _read_before_redefined(
     eliminated: &BTreeSet<u32>,
     after: &[Arc<Insn>],
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> bool {
     let reads =
         |one: &Insn, value: u32| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value);
