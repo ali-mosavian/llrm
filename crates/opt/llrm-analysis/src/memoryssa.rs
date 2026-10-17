@@ -823,6 +823,11 @@ pub fn clobber_runs() -> usize {
 /// the index.
 const STEPS_PER_ACCESS: usize = 2;
 /// The bytes of an object the index keeps.
+/// The accesses between a walk's start and the phi or entry its chain ends in
+/// from which the index serves a cell of an unfixed offset, or a walk that
+/// has gone up through a join.
+const LONG_CHAIN: u32 = 64;
+
 const OBJECT_BYTES: i128 = 1 << 24;
 /// The widest write or read an index of bytes holds.
 const WIDEST: i128 = 64;
@@ -851,6 +856,9 @@ struct FrameIndex {
     /// Per access, the same strictly above it.
     up_wild: Vec<Option<usize>>,
     up_escaping: Vec<Option<usize>>,
+    /// Per def that writes an exact cell, the nearest def above it that writes
+    /// a cell of the same object.
+    up_object: Vec<Option<usize>>,
     /// Per access, the phi or entry its chain ends in.
     root: Vec<usize>,
     /// The addressed objects some def writes a cell of, and for an object read
@@ -859,12 +867,37 @@ struct FrameIndex {
     aliased: std::cell::RefCell<llrm_support::hash::HashMap<u32, bool>>,
 }
 
+/// The cell of a walk the index serves, with what it asks of it once.
+#[derive(Clone, Copy)]
+struct Probe<'m> {
+    memory: &'m MemRef,
+    exact: Option<(ObjectRef, i128, i128)>,
+    object: ObjectRef,
+    /// Whether another addressed object may alias its object.
+    reaches_others: bool,
+    slot: usize,
+}
+
+/// What the index says of a walk back from an access.
+enum Indexed {
+    /// The def that clobbers the cell.
+    Hit(usize),
+    /// No def does before the phi or entry the chain ends in.
+    Root(usize),
+}
+
 /// The key of a byte of an object in the index.
 fn key(
     object: u32,
     byte: i128,
 ) -> usize {
-    ((object as usize) << 24) | byte as usize
+    ((object as usize) << 25) | byte as usize
+}
+
+/// The key of an object as a whole in the index: the nearest def writing any
+/// exact cell of it.
+fn whole(object: u32) -> usize {
+    ((object as usize) << 25) | (1 << 24)
 }
 
 /// The one object a reference certainly points into, and the bytes it covers
@@ -877,6 +910,15 @@ fn exact_object(reference: &MemRef) -> Option<(ObjectRef, i128, i128)> {
     let (Some(slice), None) = (slices.next(), slices.next()) else { return None };
     (slice.high == slice.low + 1 && reference.width > 0)
         .then(|| (slice.object, i128::from(slice.low), i128::from(slice.low) + i128::from(reference.width)))
+}
+
+/// The one object a reference points into, at whatever offset: where its
+/// provenance names a single slice.
+fn single_object(reference: &MemRef) -> Option<ObjectRef> {
+    let provenance = reference.provenance.as_ref()?;
+    let mut slices = provenance.slices.iter();
+    let (Some(slice), None) = (slices.next(), slices.next()) else { return None };
+    Some(slice.object)
 }
 
 /// `MemorySSA::span`.
@@ -1318,6 +1360,7 @@ impl MemorySSA<'_> {
             escaping: vec![None; top],
             up_wild: vec![None; top],
             up_escaping: vec![None; top],
+            up_object: vec![None; top],
             root: vec![0; top],
             addressed: Vec::new(),
             aliased: Default::default(),
@@ -1341,6 +1384,8 @@ impl MemorySSA<'_> {
                                 if last - first <= WIDEST && *first >= 0 && *last <= OBJECT_BYTES =>
                             {
                                 let map = version.as_mut().expect("a version");
+                                index.up_object[child] = map.get(&whole(object.id())).copied();
+                                map.insert(whole(object.id()), child);
                                 for byte in *first..*last {
                                     map.insert(key(object.id(), byte), child);
                                 }
@@ -1440,6 +1485,132 @@ impl MemorySSA<'_> {
         )
     }
 
+    /// What the index asks of `memory`, if it can serve a walk for it: an exact
+    /// cell of one object within `WIDEST` bytes, or any cell of a single
+    /// object.
+    fn probe<'m>(
+        &self,
+        memory: &'m MemRef,
+        exact: Option<(ObjectRef, i128, i128)>,
+        slot: usize,
+        index: &FrameIndex,
+    ) -> Option<Probe<'m>> {
+        let object = match exact {
+            Some((object, low, high)) => {
+                (high - low <= WIDEST && low >= 0 && high <= OBJECT_BYTES).then_some(object)?
+            }
+            None => single_object(memory)?,
+        };
+        let reaches_others = object.addressed && {
+            let known = index.aliased.borrow().get(&object.id()).copied();
+            known.unwrap_or_else(|| {
+                let found = index
+                    .addressed
+                    .iter()
+                    .any(|other| other.id() != object.id() && crate::memory::objects_may_alias(other, &object));
+                index.aliased.borrow_mut().insert(object.id(), found);
+                found
+            })
+        };
+        Some(Probe { memory, exact, object, reaches_others, slot })
+    }
+
+    /// The nearer of two accesses of a chain, if any.
+    fn nearer(
+        &self,
+        one: Option<usize>,
+        other: Option<usize>,
+    ) -> Option<usize> {
+        match (one, other) {
+            (Some(one), Some(other)) => Some(if self.behind(one, other) { one } else { other }),
+            (one, None) => one,
+            (None, other) => other,
+        }
+    }
+
+    /// The walk back from the access `above`, for a cell `indexable` has: the
+    /// first def that may clobber it, or the phi or entry its chain ends in
+    /// where none does. None where the walk must step: the nearest write of
+    /// an exact cell is no clobber of it.
+    fn indexed(
+        &self,
+        above: usize,
+        probe: &Probe,
+        index: &FrameIndex,
+        up_through_join: bool,
+    ) -> Option<Indexed> {
+        let Probe { memory, exact, object, reaches_others, slot } = *probe;
+        let version = index.at[above].as_ref()?;
+        let root = index.root[above];
+        // A cell of one object at an unfixed offset, or a walk up through a
+        // join, is served from the index where the chain above is long enough
+        // to pay for it: the stepped walk
+        // asks each def once, the index asks only those that may reach.
+        if (exact.is_none() || up_through_join) && self.span[above].0 - self.span[root].0 < LONG_CHAIN {
+            return None;
+        }
+        // The exact write of those bytes, past which nothing can reach the
+        // cell; for any other cell of the object, its writes in order.
+        let nearest = exact.and_then(|(object, low, high)| {
+            (low..high)
+                .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
+                .max_by_key(|found| self.span[*found].0)
+        });
+        let (mut wild, mut escaping) = (index.wild[above], if reaches_others { index.escaping[above] } else { None });
+        let mut own = if exact.is_none() { version.get(&whole(object.id())).copied() } else { None };
+        let mut hit = None;
+        // The writes nearer than the exact one that may reach the cell, nearest
+        // first: the walk asks each, as it asks any def.
+        loop {
+            let Some(candidate) = self.nearer(self.nearer(wild, escaping), own) else { break };
+            if nearest.is_some_and(|nearest| !self.behind(candidate, nearest)) {
+                break;
+            }
+            let (was_wild, was_escaping, was_own) =
+                (wild == Some(candidate), escaping == Some(candidate), own == Some(candidate));
+            if was_wild {
+                wild = index.up_wild[candidate];
+            }
+            if was_escaping {
+                escaping = index.up_escaping[candidate];
+            }
+            if was_own {
+                own = index.up_object[candidate];
+            }
+            let at = self.access(candidate).site.expect("a def has a site");
+            // A write of an addressed object counts where it may alias the
+            // cell's object; the object's own writes are `nearest` or `own`.
+            if !was_wild
+                && !was_own
+                && self.exacts.get(&at).is_none_or(|(written, _, _)| {
+                    written.id() == object.id() || !crate::memory::objects_may_alias(written, &object)
+                })
+            {
+                continue;
+            }
+            let written = &self.written[&at];
+            if changes(memory, false, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                hit = Some(candidate);
+                break;
+            }
+        }
+        // The exact one is a write of those bytes; whether it clobbers the read
+        // is the alias rules' (a type may apart them): where it does not, the
+        // walk goes on.
+        let confirmed = hit.is_some()
+            || nearest.is_none_or(|found| {
+                let at = self.access(found).site.expect("a def has a site");
+                changes(memory, false, self.written[&at].as_deref(), |_| self.clobbered(slot, memory, found, at))
+            });
+        if !confirmed {
+            return None;
+        }
+        Some(match hit.or(nearest) {
+            Some(found) => Indexed::Hit(found),
+            None => Indexed::Root(root),
+        })
+    }
+
     /// `walked` from the memory state `defining`, which a site or the end of a
     /// block is in.
     fn walked_from(
@@ -1458,96 +1629,6 @@ impl MemorySSA<'_> {
         let memory_exact = exact_object(memory);
         let edge_exact = edge_memory.and_then(exact_object);
         let mut pending = vec![defining];
-        // A fixed cell of a frame with many fixed writes: the nearest write of
-        // it is the index's, past the writes `fixed` rules apart.
-        if jumping
-            && boundary.is_none()
-            && edge.is_none()
-            && edge_memory.is_none()
-            && !invariant
-            && let Some((object, low, high)) = memory_exact
-            && high - low <= WIDEST
-            && low >= 0
-            && high <= OBJECT_BYTES
-            && let Some(index) = self.index_ready()
-            && let Some(above) = defining
-            && let Some(version) = index.at[above].as_ref()
-        {
-            let nearest = (low..high)
-                .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
-                .max_by_key(|found| self.span[*found].0);
-            let root = index.root[above];
-            let reaches_others = object.addressed && {
-                let known = index.aliased.borrow().get(&object.id()).copied();
-                known.unwrap_or_else(|| {
-                    let found = index
-                        .addressed
-                        .iter()
-                        .any(|other| other.id() != object.id() && crate::memory::objects_may_alias(other, &object));
-                    index.aliased.borrow_mut().insert(object.id(), found);
-                    found
-                })
-            };
-            let (mut wild, mut escaping) =
-                (index.wild[above], if reaches_others { index.escaping[above] } else { None });
-            let cell_slot = self.slot(memory);
-            let mut hit = None;
-            // The writes nearer than the exact one that may reach the cell,
-            // nearest first: the walk asks each, as it asks any def.
-            loop {
-                let (candidate, is_wild) = match (wild, escaping) {
-                    (Some(w), Some(e)) => {
-                        if self.behind(w, e) {
-                            (w, true)
-                        } else {
-                            (e, false)
-                        }
-                    }
-                    (Some(w), None) => (w, true),
-                    (None, Some(e)) => (e, false),
-                    (None, None) => break,
-                };
-                if nearest.is_some_and(|nearest| !self.behind(candidate, nearest)) {
-                    break;
-                }
-                if is_wild {
-                    wild = index.up_wild[candidate];
-                } else {
-                    escaping = index.up_escaping[candidate];
-                }
-                let at = self.access(candidate).site.expect("a def has a site");
-                if !is_wild
-                    && self.exacts.get(&at).is_none_or(|(written, _, _)| {
-                        written.id() == object.id() || !crate::memory::objects_may_alias(written, &object)
-                    })
-                {
-                    continue;
-                }
-                let written = &self.written[&at];
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(cell_slot, memory, candidate, at))
-                {
-                    hit = Some(candidate);
-                    break;
-                }
-            }
-            // The exact one is a write of those bytes; whether it clobbers the
-            // read is the alias rules' (a type may apart them):
-            // where it does not, the walk goes on.
-            let confirmed = hit.is_some()
-                || nearest.is_none_or(|found| {
-                    let at = self.access(found).site.expect("a def has a site");
-                    let slot = self.slot(memory);
-                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
-                        self.clobbered(slot, memory, found, at)
-                    })
-                });
-            if confirmed {
-                if let Some(found) = hit.or(nearest) {
-                    return BTreeSet::from([found]);
-                }
-                pending = vec![Some(root)];
-            }
-        }
         // Visited accesses by stamp: a set built per walk was most of its cost.
         let mut stamps = self.stamps.borrow_mut();
         if stamps.0.len() < self.span.len() {
@@ -1573,6 +1654,26 @@ impl MemorySSA<'_> {
         } else {
             none
         };
+        // A cell the index serves (`indexed`): the nearest write of it is the
+        // index's, past the writes that cannot reach it. The walk takes it at
+        // its start and at each join it goes up through, where no jump is
+        // remembered.
+        let indexable = jumping && boundary.is_none() && edge.is_none() && edge_memory.is_none() && !invariant;
+        let fast = if indexable { self.index_ready() } else { None };
+        let probe = std::cell::OnceCell::new();
+        let probed = || {
+            probe.get_or_init(|| fast.as_ref().and_then(|index| self.probe(memory, memory_exact, slot, index))).as_ref()
+        };
+        if let (Some(index), Some(above)) = (&fast, defining)
+            && table.get(above) == 0
+            && let Some(probe) = probed()
+        {
+            match self.indexed(above, probe, index, false) {
+                Some(Indexed::Hit(found)) => return BTreeSet::from([found]),
+                Some(Indexed::Root(root)) => pending = vec![Some(root)],
+                None => {}
+            }
+        }
         // Accesses passed that nothing on them touches the cell; a jump to `end
         // + 1` says the ones before `end` are clean.
         let mut chain: Vec<usize> = Vec::new();
@@ -1623,13 +1724,24 @@ impl MemorySSA<'_> {
                 }
                 Kind::Phi => {
                     ended(table, &mut chain, current);
-                    pending.extend(
-                        access
-                            .incoming
-                            .iter()
-                            .filter(|(parent, _)| edge.is_none() || access.block != block || *parent == edge)
-                            .map(|(_, value)| Some(*value)),
-                    )
+                    for (_, value) in access
+                        .incoming
+                        .iter()
+                        .filter(|(parent, _)| edge.is_none() || access.block != block || *parent == edge)
+                    {
+                        match fast
+                            .as_ref()
+                            .filter(|_| table.get(*value) == 0)
+                            .zip(probed())
+                            .and_then(|(index, probe)| self.indexed(*value, probe, index, true))
+                        {
+                            Some(Indexed::Hit(found_at)) => {
+                                found.insert(found_at);
+                            }
+                            Some(Indexed::Root(root)) => pending.push(Some(root)),
+                            None => pending.push(Some(*value)),
+                        }
+                    }
                 }
                 Kind::Def => {
                     let (queried, queried_slot) = match (edge_memory, edge_slot) {

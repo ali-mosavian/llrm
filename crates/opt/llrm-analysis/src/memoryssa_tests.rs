@@ -1051,3 +1051,36 @@ fn test_a_cell_asked_about_holds_entries_for_the_accesses_its_walk_passed() {
 
     assert!(held <= 100_000, "{held} table entries for 700 loads of 7 cells over 1,400 accesses");
 }
+
+/// A read of `p[i]`, a parameter's object at an offset the code does not fix,
+/// stepped over every write to the frame between it and the entry, and again
+/// over the loop's whole body through the header's phi: 12,000 walks of 105 k
+/// instructions on 800 statements of a loop (`gvn` 15% of the compile). Only
+/// the writes that may reach the object are asked of.
+#[test]
+fn test_a_read_of_a_parameters_object_steps_over_no_frame_write() {
+    let stores: String = (0..300).map(|at| format!("  store i16 {at}, ptr %s\n")).collect();
+    let loads: String = (0..20)
+        .map(|at| format!("  %a{at} = getelementptr i16, ptr %p, i16 %i\n  %v{at} = load i16, ptr %a{at}\n"))
+        .collect();
+    let parsed = Parsed::new(&format!(
+        "define void @f(ptr nocapture readonly %p, i16 %n) {{\nb0:\n  %s = alloca i16\n  br label %h\n\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %h ]\n{stores}{loads}  %j = add i16 %i, 1\n  %c = icmp slt i16 %j, %n\n  br i1 %c, label %h, label %out\n\nout:\n  ret void\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    // The index is made once walks have stepped over enough: the first reads
+    // walk.
+    for at in 0..10 {
+        let load = site(&unit, "h", 302 + 2 * at);
+        let _ = graph.clobbers(load, &accesses.references[&load]);
+    }
+    let before = STEPS.with(std::cell::Cell::get);
+    for at in 10..20 {
+        let load = site(&unit, "h", 302 + 2 * at);
+        let found = graph.clobbers(load, &accesses.references[&load]);
+        assert_eq!(found.len(), 1, "only the live-on-entry memory reaches the read of p[i]: {found:?}");
+    }
+    let steps = STEPS.with(std::cell::Cell::get) - before;
+    assert!(steps <= 50, "{steps} accesses stepped over for 10 reads of p[i] past 300 frame stores");
+}
