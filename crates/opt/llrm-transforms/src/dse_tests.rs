@@ -589,3 +589,22 @@ fn a_cell_at_a_variable_index_is_compared_with_no_cell_that_cannot_be_placed_aga
     assert_eq!(after.matches("store").count(), cells, "the first of each pair of stores is dead: {after}");
     assert!(asked <= 4 * cells, "{asked} pairs asked for {cells} cells of one base at variable indices");
 }
+
+/// Only a store, or a call that fills bytes, can be dead: a body with neither
+/// built the memory graph, solved what escapes and what is published anyway,
+/// 3 of every 4 instructions of the step on the call-chain axis.
+#[test]
+fn test_a_body_with_no_store_asks_nothing() {
+    let mut module =
+        parsed("declare i16 @g(i16)\n\ndefine i16 @f(i16 %x) {\nb0:\n  %y = call i16 @g(i16 %x)\n  ret i16 %y\n}\n");
+    let mut manager = PassManager::default();
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    llrm_mir::passes::trace_recomputes(true);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let asked: Vec<_> =
+        counts.iter().filter(|(name, ..)| matches!(*name, "points-to" | "published" | "accesses")).collect();
+    assert!(asked.is_empty(), "{asked:?}");
+}
