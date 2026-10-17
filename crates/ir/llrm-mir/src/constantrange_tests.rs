@@ -193,6 +193,7 @@ fn binaries() -> Vec<(String, Bin)> {
         let n = predicate_number(p);
         b(&format!("allowed{n}"), Box::new(move |_, c| CR::make_allowed_icmp_region(p, c)));
         b(&format!("satisfying{n}"), Box::new(move |_, c| CR::make_satisfying_icmp_region(p, c)));
+        b(&format!("allowedSameSign{n}"), Box::new(move |_, c| CR::make_allowed_icmp_region_samesign(p, true, c)));
     }
     v
 }

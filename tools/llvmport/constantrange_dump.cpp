@@ -130,6 +130,7 @@ int main() {
     auto P = (CmpInst::Predicate)p;
     B("allowed" + std::to_string(p), [=](const CR &, const CR &b) { return CR::makeAllowedICmpRegion(P, b); });
     B("satisfying" + std::to_string(p), [=](const CR &, const CR &b) { return CR::makeSatisfyingICmpRegion(P, b); });
+    B("allowedSameSign" + std::to_string(p), [=](const CR &, const CR &b) { return CR::makeAllowedICmpRegion(CmpPredicate(P, true), b); });
   }
 
   std::vector<std::pair<std::string, Un>> uns;

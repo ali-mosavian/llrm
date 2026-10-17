@@ -8,12 +8,14 @@
 //! the full set when it is the maximum value and the empty set when it is zero.
 //! An `APInt` is a `u128` and its width ([`crate::apint`]).
 //!
-//! DEVIATE, each approved by oversight: widths above 128 are refused;
-//! `multiply` returns the full set above 64 bits (LLVM multiplies at twice the
-//! width, which a `u128` cannot hold); `makeAllowedICmpRegion` has no
-//! `samesign` form; `getConstantRangeFromMetadata` takes the `(low, high)`
-//! pairs and not an `MDNode`; `binaryOp(BinaryOperator)` takes the flags as
-//! arguments.
+//! DEVIATE, approved by oversight: widths above 128 are refused (MIR parses
+//! `i1` to `i128`, `parse.rs`). `multiply` returns the full set above 64 bits
+//! (LLVM multiplies at twice the width, which a `u128` cannot hold): MIR has
+//! `i65` to `i128`, so this one is to be translated, not kept.
+//! Translated, not deviated: the `samesign` form of `makeAllowedICmpRegion`
+//! (MIR has the `samesign` icmp flag), and `getConstantRangeFromMetadata` on
+//! the `(low, high)` pairs of `!range` (MIR carries several; the `MDNode` is
+//! not needed). `binaryOp(BinaryOperator)` takes the flags as arguments.
 //!
 //! # Example
 //! `[250, 5)` at 8 bits holds 250..=255 and 0..=4; `is_wrapped_set` is true and
@@ -306,6 +308,28 @@ impl ConstantRange {
             IntPredicate::Uge => Self::non_empty(w, cr.get_unsigned_min(), 0),
             IntPredicate::Sge => Self::non_empty(w, cr.get_signed_min(), smin_val(w)),
         }
+    }
+
+    /// The `CmpPredicate` form: with `samesign` the operands have one sign, so
+    /// the region is also the one the signed predicate allows.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L162>
+    pub fn make_allowed_icmp_region_samesign(
+        pred: IntPredicate,
+        samesign: bool,
+        cr: &Self,
+    ) -> Self {
+        let result = Self::make_allowed_icmp_region(pred, cr);
+        if !samesign {
+            return result;
+        }
+        let signed_pred = match pred {
+            IntPredicate::Ugt => IntPredicate::Sgt,
+            IntPredicate::Uge => IntPredicate::Sge,
+            IntPredicate::Ult => IntPredicate::Slt,
+            IntPredicate::Ule => IntPredicate::Sle,
+            other => other,
+        };
+        result.intersect_with(&Self::make_allowed_icmp_region(signed_pred, cr), PreferredRangeType::Smallest)
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantRange.cpp#L169>
