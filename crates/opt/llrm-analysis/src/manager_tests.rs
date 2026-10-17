@@ -1455,3 +1455,47 @@ b0:
         "what was brought up to date is what deriving it afresh gives"
     );
 }
+
+/// A branch sent to other blocks was judged to leave the pointer analyses as
+/// they were (a branch is no pointer), so `PointsTo` kept the predecessor
+/// lists of the old edges: `LLRM_CHECK_REPLAY` on tests/run static_inline under
+/// the LLVM order found `escaped_before` of block 1 with preds [5, 2] where
+/// deriving it gave [5]. Here the object escapes in `b`, which the branch then
+/// stops reaching `c`.
+#[test]
+fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
+    let mut module = parsed(
+        "declare void @use(ptr)\ndeclare void @peek()\ndefine void @f(i1 %k) {\nentry:\n  %s = alloca i32\n  br i1 %k, label %a, label %b\na:\n  br label %c\nb:\n  call void @use(ptr %s)\n  br label %c\nc:\n  call void @peek()\n  ret void\n}\n",
+    );
+    let id = module.named("f").expect("f");
+    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else {
+        panic!("a function")
+    };
+    let br = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Br) && f.instruction(inst).operands.len() == 3)
+        .expect("the branch");
+    let a = match f.instruction(br).operands[1] {
+        Operand::Block(a) => a,
+        _ => panic!("a block"),
+    };
+    f.take_changes();
+    let before = f.mark();
+    f.set_operand(br, 2, Operand::Block(a));
+    let changes = f.changes_since(before).expect("on the log").to_vec();
+    for (name, unaffected) in [
+        (
+            "points-to",
+            Pointers::unaffected
+                as fn(&[llrm_mir::module::Change], &llrm_mir::context::Context, &llrm_mir::module::Function) -> bool,
+        ),
+        ("call-effects", CallEffects::unaffected),
+        ("writes", super::Writes::unaffected),
+    ] {
+        assert!(
+            !unaffected(&changes, &module.context, function(&module, "f")),
+            "{name} kept past a branch sent elsewhere"
+        );
+    }
+}

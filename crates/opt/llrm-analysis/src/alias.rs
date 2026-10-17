@@ -3416,12 +3416,8 @@ fn could_publish(
         Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => return true,
         Opcode::Store { .. } => return is_pointer(unit, op.operands[0]) || names_a_global(unit, op),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. }
-        | Opcode::GetElementPtr { .. }
-        | Opcode::Phi
-        | Opcode::Select
-        | Opcode::Call(_)
-        | Opcode::Invoke(_) => true,
+        Opcode::Phi | Opcode::Select => false,
+        Opcode::Load { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) => true,
         _ => false,
     };
     (!carried && op.operands.iter().any(|&operand| is_pointer(unit, operand))) || names_a_global(unit, op)
@@ -3460,12 +3456,17 @@ fn _lost(
     values: &IndexMap<ValueId, Provenance>,
 ) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
+    // A join with an arm no fact follows is itself no fact (`UNKNOWN`): the
+    // objects of its other arms are no longer followed (a load through
+    // `phi [%slot, %b0], [%q, %b1]` reads the slot).
+    let joins_unknown = matches!(op.opcode, Opcode::Phi | Opcode::Select)
+        && joined(op)
+            .is_some_and(|arms| arms.iter().any(|&arm| is_pointer(unit, arm) && _operand(unit, arm, values).is_none()));
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
-            true
-        }
+        Opcode::Phi | Opcode::Select => !joins_unknown,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
     };
