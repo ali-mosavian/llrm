@@ -106,7 +106,7 @@
 //! | `optimize` | all; off, only `available-externally` runs |
 //! | `lcssa`, `floatloop`, `fold`, `decide`, `dead` | the pass of that name |
 //! | `hoist` | `hoist`, `loopmotion` |
-//! | `forward` and `drop_loads` | `gvn`, `equalcalls` |
+//! | `forward` and `drop_loads` | `gvn`, `equalcalls`, `looploads` |
 //! | `drop_stores` | `dse` |
 //! | `sink` | `sink` |
 //! | `promote` | `sroa`, `promote` |
@@ -155,8 +155,8 @@ use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel, phiopt, ports,
-    promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopinterchange, looploads, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel,
+    phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -445,7 +445,7 @@ impl Options {
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
-            "gvn" | "equalcalls" => self.forward && self.drop_loads,
+            "gvn" | "equalcalls" | "looploads" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
@@ -654,6 +654,12 @@ pub fn recorded(
     let guarded = applied.options.copy_headers && !applied.options.prefers_size();
     for pass in header_copied(applied) {
         manager.add_boxed(pass);
+    }
+    // On the loops the copy rotated, before LSR chooses their pointers: a value
+    // the last trip left in memory is carried to the next (gcc's PRE across the
+    // back edge, LLVM's LoopLoadElimination), as `-ftree-pre` does.
+    if applied.options.pre && applied.options.wanted("looploads") {
+        manager.add(looploads::LoopLoads);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.

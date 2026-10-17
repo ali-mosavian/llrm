@@ -116,7 +116,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{
     Function, GlobalKind, GlobalValue, InstId, MetadataNode, MetadataOperand, Module, Operand, ValueDef, ValueId,
 };
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
@@ -1738,7 +1738,12 @@ impl MemRef {
             let Some(step) = step(unit, root) else { break };
             match step {
                 Step::Through(inner) => root = inner,
-                Step::Offset { pointer: inner, constant, variable, inbounds } => {
+                Step::Offset { pointer: inner, mut constant, variable, inbounds } => {
+                    let variable = variable.map(|(index, scale)| {
+                        let (index, scale, moved) = linear(unit, index, scale, index_bits, chain.as_deref_mut());
+                        constant += moved;
+                        (index, scale)
+                    });
                     match (variable, made.base) {
                         (None, _) => {}
                         (Some((index, scale)), None) => {
@@ -2137,6 +2142,55 @@ fn step(
     }
 }
 
+/// How far an index is followed through constant sums and products.
+const LINEAR_DEPTH: usize = 6;
+
+/// `index * scale` as `unknown * scale + constant`, the unknown found through
+/// the constant sums, differences, products and shifts that make `index`
+/// (LLVM's `GetLinearExpression`), so that `a[j]` and `a[j + 1]` name one
+/// unknown. Arithmetic narrower than the pointer's index is left alone: it may
+/// wrap where the address does not.
+fn linear(
+    unit: &Unit,
+    index: ValueId,
+    scale: i64,
+    index_bits: u32,
+    mut chain: Option<&mut Vec<ValueId>>,
+) -> (ValueId, i64, i128) {
+    let (mut index, mut scale, mut constant) = (index, scale, 0_i128);
+    for _ in 0..LINEAR_DEPTH {
+        if unit.int_bits(Operand::Value(index)).is_none_or(|width| width < index_bits) {
+            break;
+        }
+        let Some((_, made)) = unit.defining(Operand::Value(index)) else { break };
+        // The access is of this definition too: an edit of it must drop it.
+        if let Some(chain) = chain.as_deref_mut() {
+            chain.push(index);
+        }
+        let (Opcode::Binary(op), [left, right]) = (&made.opcode, &made.operands[..]) else { break };
+        let number = |one: Operand| unit.int_constant(one).map(|bits| bits_signed(unit, one, bits));
+        let (inner, next) = match (op, number(*left), number(*right)) {
+            (BinaryOp::Add, _, Some(by)) => (*left, Some((scale, by * i128::from(scale)))),
+            (BinaryOp::Add, Some(by), _) => (*right, Some((scale, by * i128::from(scale)))),
+            (BinaryOp::Sub, _, Some(by)) => (*left, Some((scale, -by * i128::from(scale)))),
+            (BinaryOp::Mul, _, Some(by)) => {
+                (*left, i64::try_from(by).ok().and_then(|by| scale.checked_mul(by)).map(|s| (s, 0)))
+            }
+            (BinaryOp::Mul, Some(by), _) => {
+                (*right, i64::try_from(by).ok().and_then(|by| scale.checked_mul(by)).map(|s| (s, 0)))
+            }
+            (BinaryOp::Shl, _, Some(by)) => (
+                *left,
+                u32::try_from(by).ok().filter(|&by| by < 32).and_then(|by| scale.checked_mul(1 << by)).map(|s| (s, 0)),
+            ),
+            _ => break,
+        };
+        let (Some((next_scale, moved)), Operand::Value(inner)) = (next, inner) else { break };
+        (index, scale, constant) = (inner, next_scale, constant + moved);
+    }
+    (index, scale, constant)
+}
+
 fn bits_signed(
     unit: &Unit,
     operand: Operand,
@@ -2351,6 +2405,26 @@ mod tests {
         assert_eq!(Unit::of(&module, &layout, f).spaces(), llrm_mir::spaces::Spaces::FLAT);
         assert_eq!(Unit::of(&module, &layout, f).with_spaces(dos).spaces(), dos);
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
+    }
+
+    /// `a[j]` and `a[j + 1]` were addressed by two unrelated indices, `j * 4`
+    /// and `(j + 1) * 4`, so a store to the first could never be proved apart
+    /// from the second: x_bubble loaded `a[j + 1]` again as the next `a[j]`.
+    /// An index is the unknown it is a constant sum and product of.
+    #[test]
+    fn a_scaled_sum_index_is_its_unknown_and_a_displacement() {
+        let module = parsed(&format!(
+            "{DOS}@a = global [64 x i32] zeroinitializer\n\
+             define void @f(i16 %j) {{\nb0:\n  %n = add i16 %j, 1\n  %m = mul i16 %n, 4\n  %k = mul i16 %j, 4\n  \
+             %p = getelementptr inbounds i8, ptr @a, i16 %k\n  %q = getelementptr inbounds i8, ptr @a, i16 %m\n  ret void\n}}\n"
+        ));
+        let layout = layout(&module);
+        let (_, _, f) = module.functions().next().unwrap();
+        let unit = Unit::of(&module, &layout, f);
+        let (p, q) =
+            (MemRef::at(&unit, Operand::Value(value(f, "p")), 4), MemRef::at(&unit, Operand::Value(value(f, "q")), 4));
+        assert_eq!((p.base, p.scale, p.disp), (q.base, q.scale, q.disp - 4), "{p:?} {q:?}");
+        assert!(p.base.is_some());
     }
 
     /// A set of slices compared the objects' identities (strings, tuples) tree

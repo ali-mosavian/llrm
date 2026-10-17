@@ -129,6 +129,7 @@ pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
 pub mod loopinterchange;
+pub mod looploads;
 pub mod loopmotion;
 pub mod loopnest;
 pub mod loopshape;
