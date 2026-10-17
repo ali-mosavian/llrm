@@ -20,18 +20,35 @@ use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::support::hash::IndexMap;
 
 /// The body's blocks as a frequency reads them: the flow between them, the odds
-/// on its edges and the proven trips, and, of a block with one successor,
-/// whether it only jumps on (`idle`: a bridge is left out of the loops). No
-/// other instruction is read, so a spill or a reload leaves a frequency as it
-/// was, unless it lands in a bridge.
+/// on its edges and the proven trips. No instruction is read, so a spill or a
+/// reload leaves a frequency as it was.
 pub struct Cfg {
     entry: i64,
     shape: Vec<(i64, Vec<i64>)>,
     odds: BlockOdds,
     trips: Vec<(i64, i64)>,
-    /// The instructions of each block of one successor, and whether they are
-    /// idle.
-    idle: Vec<Option<(Insns, bool)>>,
+}
+
+impl Cfg {
+    fn of(body: &LirBody) -> Self {
+        Self {
+            entry: body.entry,
+            shape: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
+            odds: body.odds.clone(),
+            trips: body.loop_trip_counts.clone(),
+        }
+    }
+
+    fn is_of(
+        &self,
+        body: &LirBody,
+    ) -> bool {
+        self.entry == body.entry
+            && self.shape.len() == body.blocks.len()
+            && self.shape.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
+            && self.odds == body.odds
+            && self.trips == body.loop_trip_counts
+    }
 }
 
 /// Whether a block does nothing but jump on: no instruction that prints, but
@@ -46,36 +63,47 @@ fn idle(block: &LirBlock) -> bool {
         )
 }
 
-impl Cfg {
+/// What `Frequency::over` reads of the instructions: whether each block that
+/// can be a bridge (one successor, not the entry, not its own) only jumps on.
+/// A frequency worked out from the blocks alone (`Worked`) is good while these
+/// are as they were; one carried from a table (`Carried`) reads the blocks
+/// made since as bridges whatever is in them.
+pub struct Bridges(Vec<Option<std::sync::Mutex<(Insns, bool)>>>);
+
+impl Bridges {
     fn of(body: &LirBody) -> Self {
-        Self {
-            entry: body.entry,
-            shape: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
-            odds: body.odds.clone(),
-            trips: body.loop_trip_counts.clone(),
-            idle: body
-                .blocks
+        Self(
+            body.blocks
                 .iter()
                 .map(|block| {
                     (block.at != body.entry && block.succ.len() == 1 && block.succ[0] != block.at)
-                        .then(|| (block.insns.clone(), idle(block)))
+                        .then(|| std::sync::Mutex::new((block.insns.clone(), idle(block))))
                 })
                 .collect(),
-        }
+        )
     }
 
     fn is_of(
         &self,
         body: &LirBody,
     ) -> bool {
-        self.entry == body.entry
-            && self.shape.len() == body.blocks.len()
-            && self.shape.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
-            && self.odds == body.odds
-            && self.trips == body.loop_trip_counts
-            && self.idle.iter().zip(&body.blocks).all(|(kept, block)| {
-                kept.as_ref().is_none_or(|(insns, was)| insns.same_as(&block.insns) || *was == idle(block))
-            })
+        self.0
+            .iter()
+            .zip(&body.blocks)
+            .all(
+                |(kept, block)| {
+                    // Changed instructions that are idle as they were are
+                    // noted, so that the next ask looks at what changed since.
+                    kept.as_ref().is_none_or(|held| {
+                        let mut held = held.lock().expect("idle");
+                        held.0.same_as(&block.insns)
+                            || (held.1 == idle(block) && {
+                                held.0 = block.insns.clone();
+                                true
+                            })
+                    })
+                },
+            )
     }
 }
 
@@ -84,19 +112,19 @@ pub struct Worked;
 
 impl Fact for Worked {
     type Result = Frequency;
-    type Inputs = Cfg;
+    type Inputs = (Cfg, Bridges);
     const NAME: &'static str = "frequency";
     fn run(body: &LirBody) -> Frequency {
         Frequency::over(body, &body.blocks)
     }
-    fn inputs(body: &LirBody) -> Cfg {
-        Cfg::of(body)
+    fn inputs(body: &LirBody) -> (Cfg, Bridges) {
+        (Cfg::of(body), Bridges::of(body))
     }
     fn held_by(
-        kept: &Cfg,
+        (cfg, bridges): &(Cfg, Bridges),
         body: &LirBody,
     ) -> bool {
-        kept.is_of(body)
+        cfg.is_of(body) && bridges.is_of(body)
     }
 }
 
