@@ -51,3 +51,14 @@ Compile cost in M instructions, none: `d_faces` -O2 3,271, -Os 3,335, queens -O3
 
 No family is idle precision. Those whose removal costs no output save nothing; those that save compile time lose output, and the saving is optimizations that no longer happen, not cost removed. Keep them exact and make computing them cheap. `identical.py --programs-only` lists only the first 20 differences, so ">=20" objects differing is a floor; QCport was not run.
 
+## 2026-10-17, `9bce914f38ed` against `3dc0221a6` (the first baseline)
+
+21 commits since `5344082af` (#1961, #1956, #1959, #1970, #1975 and their neighbours) change no output. Same harness commit, shared gcc and clang objects; the head and the baseline compilers differ (`d_faces` -O2 compile 2,965 M against 3,541 M).
+
+| instrument | result |
+|---|---|
+| vsgcc, 71 programs x 4 levels | all 284 llrm objects byte-identical to the baseline; clocks geomean over min(gcc, clang) 0.8875 / 0.9044 / 0.9021 / 0.9169 at -O1 / -O2 / -O3 / -Os, worst rows as before (recfloat 2.01, x_dct 1.80, tile 1.91, lru 2.19); no row crosses 1.00 |
+| `d_faces` executed | every counter equal; clocks over min(gcc, clang) 1.020 / 1.005 / 1.023 / 1.008 |
+| QCport, 65 modules | emitted bytes equal (274,261 / 274,366 / 290,924 / 260,195) |
+| bench cells, all front ends | 848 cells, no counter differs |
+
