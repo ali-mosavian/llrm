@@ -92,7 +92,7 @@ impl LoopInfo {
         function: &Function,
         tree: &DominatorTree,
     ) -> Self {
-        let nodes: Vec<(i64, Vec<i64>)> = function
+        let nodes: Vec<(i64, crate::inline::InlineVec<i64, 2>)> = function
             .layout()
             .iter()
             .map(|&block| (i64::from(block.0), function.successors(block).iter().map(|one| i64::from(one.0)).collect()))

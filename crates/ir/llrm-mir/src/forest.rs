@@ -286,6 +286,10 @@ impl<'a> IntoIterator for &'a Body {
     }
 }
 
+/// A block's successors or predecessors by slot: three held in the vector
+/// (24 bytes, a `Vec`'s own size), a `Vec` past them.
+type Slots = crate::inline::InlineVec<u32, 3>;
+
 /// The [`Forest`] of the blocks `nodes` name, each an address and its
 /// successors, from `entry` (the first block where none is given). `reachable`
 /// says whether the entry reaches a block and `dominates` whether one block
@@ -302,13 +306,13 @@ pub fn forest(
     ats.dedup();
     let count = ats.len();
     let slot = |at: i64| ats.binary_search(&at).ok();
-    let mut succs: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut succs: Vec<Slots> = vec![Slots::new(); count];
     for (at, succ) in nodes {
         let from = slot(*at).expect("a block address");
         succs[from] = succ.iter().filter_map(|to| slot(*to)).map(|to| to as u32).collect();
     }
     let up: Vec<bool> = ats.iter().map(|&at| reachable(at)).collect();
-    let mut preds: Vec<Vec<u32>> = vec![Vec::new(); count];
+    let mut preds: Vec<Slots> = vec![Slots::new(); count];
     for from in 0..count {
         if up[from] {
             for &to in &succs[from] {
