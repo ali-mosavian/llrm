@@ -87,6 +87,7 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod combine;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
