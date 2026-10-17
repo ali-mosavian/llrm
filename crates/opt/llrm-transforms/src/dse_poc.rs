@@ -1,25 +1,42 @@
-//! POC: LLVM's DSE shape on llrm's memory SSA, for measurement. Not wired into the pipeline.
+//! POC: LLVM's DSE shape on llrm's memory SSA, for measurement. Not wired into
+//! the pipeline.
 //!
-//! Killing stores are taken bottom-up; for each, the defs above it are walked (scan limit 150, step
-//! limit 90, partial limit 5) to the first def it overwrites completely or partly; that def is dead
-//! when no read can reach it before a killing def on any path (a forward search over its users), and
-//! the paths to the function's exits are covered by killing blocks where the object is visible
-//! after return. A second sweep removes stores to private objects nothing reads afterwards.
-use std::collections::{HashMap, HashSet};
+//! Killing stores are taken bottom-up; for each, the defs above it are walked
+//! (scan limit 150, step limit 90, partial limit 5) to the first def it
+//! overwrites completely or partly; that def is dead when no read can reach it
+//! before a killing def on any path (a forward search over its users), and
+//! the paths to the function's exits are covered by killing blocks where the
+//! object is visible after return. A second sweep removes stores to private
+//! objects nothing reads afterwards.
+use std::collections::HashMap;
 
 use llrm_analysis::cfg;
 use llrm_analysis::manager::Pointers;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, Kind, MemorySSA};
 use llrm_analysis::observers;
+use llrm_mir::dense::IdSet;
 use llrm_mir::footprint::Footprint;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 
-const SCAN_LIMIT: usize = 150;
-const STEP_LIMIT: usize = 90;
-const PARTIAL_LIMIT: usize = 5;
+fn mult() -> usize {
+    static MULT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MULT.get_or_init(|| std::env::var("POC_MULT").ok().and_then(|v| v.parse().ok()).unwrap_or(1))
+}
+#[allow(non_snake_case)]
+fn SCAN_LIMIT() -> usize {
+    150 * mult()
+}
+#[allow(non_snake_case)]
+fn STEP_LIMIT() -> usize {
+    90 * mult()
+}
+#[allow(non_snake_case)]
+fn PARTIAL_LIMIT() -> usize {
+    5 * mult()
+}
 const SAME_BLOCK_COST: usize = 1;
 const OTHER_BLOCK_COST: usize = 5;
 
@@ -61,6 +78,8 @@ pub struct Counts {
     pub bail_exit: usize,
     pub bail_phi: usize,
     pub up_steps: usize,
+    pub pair_calls: usize,
+    pub pair_distinct: usize,
     pub forward_scans: usize,
 }
 
@@ -79,7 +98,8 @@ fn dropped(
     let dead = {
         let (context, layout) = (&*unit.context, unit.layout);
         let function = &*unit.function;
-        let has_store = function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Store { .. }));
+        let has_store =
+            function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Store { .. }));
         if !has_store {
             return Ok(false);
         }
@@ -90,9 +110,8 @@ fn dropped(
         let published_held = (!nopriv).then(|| analyses.get::<observers::Published>(context, layout, function));
         let shape = analyses.get::<cfg::Shape>(context, layout, function);
         let memory = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape);
-        let accesses = managed.unwrap_or_else(|| {
-            std::rc::Rc::new(Accesses::plain(&memory, &llrm_analysis::consts::Calls::default()))
-        });
+        let accesses = managed
+            .unwrap_or_else(|| std::rc::Rc::new(Accesses::plain(&memory, &llrm_analysis::consts::Calls::default())));
         let private_fn: Box<dyn Fn(&MemRef) -> bool> = match (&pointers_held, &published_held) {
             (Some(pointers), Some(published)) => {
                 let pointers = Result::as_ref(&**pointers).map_err(String::clone)?;
@@ -119,9 +138,13 @@ struct State<'a> {
     graph: &'a MemorySSA<'a>,
     private: &'a dyn Fn(&MemRef) -> bool,
     shape: &'a cfg::Shape,
-    users: HashMap<usize, Vec<usize>>,
+    users: Vec<Vec<usize>>,
     blocks: HashMap<i64, Vec<i64>>,
-    deleted: HashSet<InstId>,
+    deleted: IdSet<InstId>,
+    nocache: bool,
+    pairs: std::cell::RefCell<llrm_support::hash::HashMap<(u32, u32), bool>>,
+    by_address: std::cell::RefCell<llrm_support::hash::HashMap<usize, u32>>,
+    by_value: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, u32>>,
 }
 
 enum Overwrite {
@@ -138,17 +161,46 @@ impl<'a> State<'a> {
         private: &'a dyn Fn(&MemRef) -> bool,
         shape: &'a cfg::Shape,
     ) -> Self {
-        let mut users: HashMap<usize, Vec<usize>> = HashMap::new();
-        for access in graph.accesses.iter().chain(std::iter::once(&graph.live)).chain(graph.phis.values()) {
+        let top = graph
+            .accesses
+            .iter()
+            .chain(graph.sites.values())
+            .chain(std::iter::once(&graph.live))
+            .chain(graph.phis.values())
+            .map(|a| a.id)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let mut users: Vec<Vec<usize>> = vec![Vec::new(); top];
+        for access in graph
+            .accesses
+            .iter()
+            .chain(graph.sites.values())
+            .chain(std::iter::once(&graph.live))
+            .chain(graph.phis.values())
+        {
             if let Some(above) = access.defining {
-                users.entry(above).or_default().push(access.id);
+                users[above].push(access.id);
             }
             for (_, above) in &access.incoming {
-                users.entry(*above).or_default().push(access.id);
+                users[*above].push(access.id);
             }
         }
         let blocks = cfg::graph(unit.function).iter().map(|block| (block.at, block.succ.to_vec())).collect();
-        Self { unit, accesses, graph, private, shape, users, blocks, deleted: HashSet::new() }
+        Self {
+            unit,
+            accesses,
+            graph,
+            private,
+            shape,
+            users,
+            blocks,
+            deleted: IdSet::new(),
+            nocache: std::env::var_os("POC_NOCACHE").is_some(),
+            pairs: Default::default(),
+            by_address: Default::default(),
+            by_value: Default::default(),
+        }
     }
 
     fn function(&self) -> &llrm_mir::module::Function {
@@ -158,9 +210,10 @@ impl<'a> State<'a> {
     fn store_loc(
         &self,
         inst: InstId,
-    ) -> Option<&MemRef> {
+    ) -> Option<&'a MemRef> {
+        let accesses: &'a Accesses = self.accesses;
         let Opcode::Store { volatile: false, .. } = self.function().instruction(inst).opcode else { return None };
-        match self.accesses.writes(inst)? {
+        match accesses.writes(inst)? {
             [one] => Some(one),
             _ => None,
         }
@@ -173,12 +226,41 @@ impl<'a> State<'a> {
         self.function().parent(inst).map(cfg::id)
     }
 
+    /// The number of the cell `reference` is, by value: its address is stable,
+    /// its hash is not cheap.
+    fn slot(
+        &self,
+        reference: &MemRef,
+    ) -> u32 {
+        let address = reference as *const MemRef as usize;
+        if let Some(&known) = self.by_address.borrow().get(&address) {
+            return known;
+        }
+        let mut by_value = self.by_value.borrow_mut();
+        let next = by_value.len() as u32;
+        let id = *by_value.entry(reference.clone()).or_insert(next);
+        self.by_address.borrow_mut().insert(address, id);
+        id
+    }
+
     fn overlaps(
         &self,
         one: &MemRef,
         other: &MemRef,
     ) -> bool {
-        memoryssa::may_clobber(self.unit, None, one, other)
+        count(|c| c.pair_calls += 1);
+        if self.nocache {
+            return memoryssa::may_clobber(self.unit, None, one, other);
+        }
+        let (a, b) = (self.slot(one), self.slot(other));
+        let key = (a.min(b), a.max(b));
+        if let Some(&known) = self.pairs.borrow().get(&key) {
+            return known;
+        }
+        count(|c| c.pair_distinct += 1);
+        let found = memoryssa::may_clobber(self.unit, None, one, other);
+        self.pairs.borrow_mut().insert(key, found);
+        found
     }
 
     fn overwrite(
@@ -214,13 +296,13 @@ impl<'a> State<'a> {
             if self.deleted.contains(&killing) {
                 continue;
             }
-            let Some(loc) = self.store_loc(killing).cloned() else { continue };
+            let Some(loc) = self.store_loc(killing) else { continue };
             count(|c| c.killing += 1);
-            let mut scan = SCAN_LIMIT;
-            let mut steps = STEP_LIMIT;
-            let mut partial = PARTIAL_LIMIT;
+            let mut scan = SCAN_LIMIT();
+            let mut steps = STEP_LIMIT();
+            let mut partial = PARTIAL_LIMIT();
             let mut start = self.graph.at(killing).defining;
-            let mut seen_phis: HashSet<usize> = HashSet::new();
+            let mut seen_phis: IdSet<usize> = IdSet::new();
             let mut pending: Vec<Option<usize>> = vec![start.take()];
             while let Some(from) = pending.pop() {
                 let mut at = from;
@@ -231,13 +313,15 @@ impl<'a> State<'a> {
                         break;
                     }
                     let Some(id) = at else { break };
-                    let access = self.graph.access(id).clone();
+                    let graph = self.graph;
+                    let access = graph.access(id);
                     count(|c| c.up_steps += 1);
                     match access.kind {
                         Kind::Live => break,
                         Kind::Phi => {
                             if seen_phis.insert(id) {
-                                // LLVM leaves the phi to the caller, which walks every incoming access.
+                                // LLVM leaves the phi to the caller, which
+                                // walks every incoming access.
                                 for (_, above) in &access.incoming {
                                     pending.push(Some(*above));
                                 }
@@ -250,18 +334,23 @@ impl<'a> State<'a> {
                         }
                         Kind::Def => {
                             let site = access.site.expect("a def has a site");
-                            let cost = if self.block_of(site) == self.block_of(killing) { SAME_BLOCK_COST } else { OTHER_BLOCK_COST };
+                            let cost = if self.block_of(site) == self.block_of(killing) {
+                                SAME_BLOCK_COST
+                            } else {
+                                OTHER_BLOCK_COST
+                            };
                             if steps <= cost {
                                 count(|c| c.bail_limit += 1);
                                 pending.clear();
                                 break;
                             }
                             steps -= cost;
-                            if self.deleted.contains(&site) {
+                            if self.deleted.contains(&site) || site == killing {
                                 at = access.defining;
                                 continue;
                             }
-                            // A def that may read the killing store's bytes ends the walk.
+                            // A def that may read the killing store's bytes
+                            // ends the walk.
                             if self.store_loc(site).is_none() {
                                 if self.reads(site, &loc) {
                                     count(|c| c.bail_read += 1);
@@ -271,7 +360,8 @@ impl<'a> State<'a> {
                                 at = access.defining;
                                 continue;
                             }
-                            let dead_loc = self.store_loc(site).expect("a store").clone();
+                            let dead_loc = self.store_loc(site).expect("a store");
+                            let mut complete = false;
                             match self.overwrite(&loc, &dead_loc) {
                                 Overwrite::None => {
                                     at = access.defining;
@@ -286,10 +376,13 @@ impl<'a> State<'a> {
                                     partial -= 1;
                                     count(|c| c.partial += 1);
                                 }
-                                Overwrite::Complete => count(|c| c.complete += 1),
+                                Overwrite::Complete => {
+                                    complete = true;
+                                    count(|c| c.complete += 1)
+                                }
                             }
                             count(|c| c.candidates += 1);
-                            if self.dead_by(killing, &loc, site, &dead_loc, &mut scan) {
+                            if self.dead_by(killing, complete, site, dead_loc, &mut scan) {
                                 count(|c| c.dead_by_kill += 1);
                                 self.deleted.insert(site);
                             }
@@ -304,11 +397,11 @@ impl<'a> State<'a> {
             if self.deleted.contains(&inst) {
                 continue;
             }
-            let Some(loc) = self.store_loc(inst).cloned() else { continue };
+            let Some(loc) = self.store_loc(inst) else { continue };
             if !(self.private)(&loc) {
                 continue;
             }
-            let mut scan = SCAN_LIMIT;
+            let mut scan = SCAN_LIMIT();
             if self.unread_after(inst, &loc, &mut scan) {
                 count(|c| c.dead_at_end += 1);
                 self.deleted.insert(inst);
@@ -317,19 +410,20 @@ impl<'a> State<'a> {
         order.into_iter().filter(|inst| self.deleted.contains(inst)).collect()
     }
 
-    /// Whether the store `dead` is overwritten by `killing` (and the other killing stores found) on
-    /// every path before anything reads it.
+    /// Whether the store `dead` is overwritten by `killing` (and the other
+    /// killing stores found) on every path before anything reads it.
     fn dead_by(
         &mut self,
         killing: InstId,
-        _killing_loc: &MemRef,
+        complete: bool,
         dead: InstId,
         dead_loc: &MemRef,
         scan: &mut usize,
     ) -> bool {
-        let mut killers: Vec<InstId> = vec![killing];
-        let mut work: Vec<usize> = self.users.get(&self.graph.at(dead).id).cloned().unwrap_or_default();
-        let mut seen: HashSet<usize> = work.iter().copied().collect();
+        // A store that overwrites only some of the bytes ends no path.
+        let mut killers: Vec<InstId> = if complete { vec![killing] } else { Vec::new() };
+        let mut work: Vec<usize> = self.users[self.graph.at(dead).id].clone();
+        let mut seen: IdSet<usize> = work.iter().copied().collect();
         let mut i = 0;
         while i < work.len() {
             if *scan < work.len() - i {
@@ -340,15 +434,12 @@ impl<'a> State<'a> {
             count(|c| c.forward_scans += 1);
             let id = work[i];
             i += 1;
-            let access = self.graph.access(id).clone();
+            let graph = self.graph;
+            let access = graph.access(id);
             if access.kind == Kind::Phi {
-                let phi_block = access.block;
-                let covered = killers.iter().any(|k| {
-                    matches!((self.block_of(*k), phi_block), (Some(kb), Some(pb)) if kb != pb && self.shape.dominance.dominates(kb, pb))
-                });
-                if covered {
-                    continue;
-                }
+                // A phi carries the dead store's value on along the edge it
+                // came by; no killer is assumed to lie on that
+                // edge.
                 self.push_users(id, &mut work, &mut seen);
                 continue;
             }
@@ -360,7 +451,8 @@ impl<'a> State<'a> {
             if killers.contains(&site) {
                 continue;
             }
-            // Another store that overwrites the dead bytes completely, or partly together.
+            // Another store that overwrites the dead bytes completely, or
+            // partly together.
             if let Some(other) = self.store_loc(site) {
                 if site != dead && memoryssa::covers(self.unit, other, dead_loc) {
                     killers.push(site);
@@ -375,7 +467,8 @@ impl<'a> State<'a> {
                 self.push_users(id, &mut work, &mut seen);
             }
         }
-        // Paths to an exit that no killing block covers keep the store, unless the object is private.
+        // Paths to an exit that no killing block covers keep the store, unless
+        // the object is private.
         if !(self.private)(dead_loc) && !self.exits_covered(dead, &killers) {
             count(|c| c.bail_exit += 1);
             return false;
@@ -387,9 +480,9 @@ impl<'a> State<'a> {
         &self,
         id: usize,
         work: &mut Vec<usize>,
-        seen: &mut HashSet<usize>,
+        seen: &mut IdSet<usize>,
     ) {
-        for &user in self.users.get(&id).into_iter().flatten() {
+        for &user in &self.users[id] {
             if seen.insert(user) {
                 work.push(user);
             }
@@ -402,12 +495,12 @@ impl<'a> State<'a> {
         killers: &[InstId],
     ) -> bool {
         let Some(home) = self.block_of(dead) else { return false };
-        let blocking: HashSet<i64> = killers.iter().filter_map(|k| self.block_of(*k)).collect();
+        let blocking: IdSet<i64> = killers.iter().filter_map(|k| self.block_of(*k)).collect();
         // A killer after the dead store in its own block covers every path.
         if killers.iter().any(|k| self.block_of(*k) == Some(home) && self.after(*k, dead)) {
             return true;
         }
-        let mut seen: HashSet<i64> = HashSet::new();
+        let mut seen: IdSet<i64> = IdSet::new();
         let mut stack: Vec<i64> = self.blocks.get(&home).cloned().unwrap_or_default();
         let exit = self.blocks.get(&home).is_none_or(Vec::is_empty);
         if exit {
@@ -445,8 +538,8 @@ impl<'a> State<'a> {
         scan: &mut usize,
     ) -> bool {
         let id = self.graph.at(store).id;
-        let mut work: Vec<usize> = self.users.get(&id).cloned().unwrap_or_default();
-        let mut seen: HashSet<usize> = work.iter().copied().collect();
+        let mut work: Vec<usize> = self.users[id].clone();
+        let mut seen: IdSet<usize> = work.iter().copied().collect();
         let mut i = 0;
         while i < work.len() {
             if *scan < work.len() - i {
@@ -455,7 +548,8 @@ impl<'a> State<'a> {
             *scan -= 1;
             let user = work[i];
             i += 1;
-            let access = self.graph.access(user).clone();
+            let graph = self.graph;
+            let access = graph.access(user);
             if let Some(site) = access.site {
                 if !self.deleted.contains(&site) && self.reads(site, loc) {
                     return false;
@@ -468,3 +562,7 @@ impl<'a> State<'a> {
         true
     }
 }
+
+#[cfg(test)]
+#[path = "dse_poc_tests.rs"]
+mod tests;

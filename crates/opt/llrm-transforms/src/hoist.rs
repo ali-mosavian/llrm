@@ -125,6 +125,12 @@ use llrm_mir::types::Type;
 use crate::profit::{self, OperationCosts};
 
 /// `size`: price a run in bytes, every block once (-Os), not in executed work.
+thread_local! {
+    pub static OFF: [bool; 3] = [std::env::var_os("HOIST_NOBOUNDS").is_some(), std::env::var_os("HOIST_NOGUARD").is_some(), std::env::var_os("HOIST_PLAIN").is_some()];
+    /// Instructions hoisted (probe).
+    pub static HOISTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub struct Hoist {
     pub size: bool,
 }
@@ -178,7 +184,13 @@ pub fn hoisted(
         return false;
     }
     // Asked before anything moves: an instruction keeps its id where it goes.
-    let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
+    let accesses = if OFF.with(|o| o[2]) {
+        let probe = Unit::within(unit.context, unit.layout, unit.function, analyses.outer());
+        std::rc::Rc::new(Accesses::plain(&probe, &llrm_analysis::consts::Calls::default()))
+    } else {
+        let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
+        accesses
+    };
     let outer = std::rc::Rc::clone(analyses.outer());
     let terminal = analyses.get::<noreturn::TerminalSites>(unit.context, unit.layout, unit.function);
     let room = profit::registers(&outer);
@@ -189,9 +201,10 @@ pub fn hoisted(
     // scalar slots still in memory, only what a held value costs to release
     // is.
     let pressure = room.priced() && !_slots_remain(unit);
-    let frequency = (pressure || room.priced() && costs.float_release > 0)
-        .then(|| _frequency(unit, analyses, &outer, size))
-        .flatten();
+    let frequency = ((pressure || room.priced() && costs.float_release > 0)
+        && std::env::var_os("HOIST_NOFORECAST").is_none())
+    .then(|| _frequency(unit, analyses, &outer, size))
+    .flatten();
     let room = if pressure { room } else { crate::spill::Room { registers: 0, ..room } };
     // What is known without memory holds as instructions move: no block, edge
     // or value changes.
@@ -239,6 +252,7 @@ pub fn hoisted(
         if run.is_empty() {
             continue;
         }
+        HOISTED.with(|n| n.set(n.get() + run.len()));
         for inst in run {
             unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
         }
@@ -814,7 +828,7 @@ fn _bounded_inside(
     registers: &llrm_support::hash::IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &llrm_analysis::cfg::Shape,
 ) -> bool {
-    if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) {
+    if !matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }) || OFF.with(|o| o[0]) {
         return false;
     }
     let memory =
@@ -877,6 +891,9 @@ pub fn _guaranteed(
     let starts: Vec<i64> =
         successors(loop_.header).into_iter().filter(|at| loop_.body.contains(at) && *at != loop_.header).collect();
     let [start] = starts[..] else { return out };
+    if OFF.with(|o| o[1]) {
+        return out;
+    }
     if ends(loop_.header)
         || !induction::nonempty(
             &Unit::within(unit.context, unit.layout, function, outer).with_registers(registers).with_shape(shape),
