@@ -98,7 +98,15 @@ fn captured_by(
                     // (the attribute is llrm's own where
                     // FunctionAttrs stamped it, so a second
                     // mode trusts none).
+                    // A unit holds the other bodies as declarations and the
+                    // facts follow the summaries of those
+                    // the module defines, so a direct
+                    // call is read only in the mode that reports them (they
+                    // wait for the callee's own capture
+                    // proof).
+                    let direct = llrm_mir::memory::callee(unit.context, function, used.user).is_some();
                     if at < args
+                        && (!direct || llrm_support::env_flag!("LLRM_CHECK_CAPTURES_CALLS"))
                         && !is_lifetime_marker(unit, used.user)
                         && (llrm_support::env_flag!("LLRM_CHECK_CAPTURES_BLIND")
                             || !crate::alias::borrowed(unit, used.user, at))
@@ -234,6 +242,8 @@ mod tests {
     /// facts that forgot it were accepted (the review of #2146).
     #[test]
     fn a_frame_object_passed_to_an_opaque_direct_call_must_be_in_the_escaped_set() {
+        // SAFETY: the tests of this crate set no other thread's environment.
+        unsafe { std::env::set_var("LLRM_CHECK_CAPTURES_CALLS", "1") };
         let module = parsed(&format!(
             "{DOS}declare void @keep(ptr)\ndefine void @f() {{\nentry:\n  %s = alloca i32\n  call void @keep(ptr %s)\n  ret void\n}}\n"
         ));
