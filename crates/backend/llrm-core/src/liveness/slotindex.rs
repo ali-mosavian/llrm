@@ -54,6 +54,9 @@ const NONE: EntryId = u32::MAX;
 /// held in the arena as parallel columns.
 #[derive(Default)]
 struct Arena {
+    /// Bumped whenever entries are renumbered: a `SlotIndex` made in an earlier
+    /// epoch may carry a number the entry no longer has.
+    epoch: u16,
     instr: Vec<Option<InstrKey>>,
     index: Vec<u32>,
     prev: Vec<EntryId>,
@@ -123,13 +126,19 @@ impl Slot {
 #[derive(Clone, Copy)]
 pub struct SlotIndex {
     lie: EntryId,
+    /// The entry's number when this was made and the epoch it was read in: two
+    /// indexes of one epoch compare by these without reading the arena (a
+    /// renumbering changes the epoch, and a stale index is compared through the
+    /// arena).
+    number: u32,
+    epoch: u16,
     slot: u8,
 }
 
 impl Default for SlotIndex {
     /// An invalid index.
     fn default() -> Self {
-        Self { lie: NONE, slot: 0 }
+        Self { lie: NONE, number: 0, epoch: 0, slot: 0 }
     }
 }
 
@@ -141,7 +150,19 @@ impl SlotIndex {
         entry: EntryId,
         slot: Slot,
     ) -> Self {
-        Self { lie: entry, slot: slot as u8 }
+        ARENA.with(|arena| {
+            let arena = arena.borrow();
+            Self { lie: entry, number: arena.index[entry as usize], epoch: arena.epoch, slot: slot as u8 }
+        })
+    }
+
+    /// Another slot of the same instruction, as old as this.
+    fn same_entry(
+        &self,
+        slot: Slot,
+    ) -> Self {
+        assert!(self.lie != NONE, "Attempt to compare reserved index.");
+        Self { slot: slot as u8, ..*self }
     }
 
     fn list_entry(&self) -> EntryId {
@@ -167,7 +188,7 @@ impl SlotIndex {
         li: &SlotIndex,
         slot: Slot,
     ) -> Self {
-        Self::at(li.list_entry(), slot)
+        li.same_entry(slot)
     }
 
     pub fn is_valid(&self) -> bool {
@@ -185,7 +206,7 @@ impl SlotIndex {
         a: &SlotIndex,
         b: &SlotIndex,
     ) -> bool {
-        a.entry_index() < b.entry_index()
+        if a.epoch == b.epoch { a.number < b.number } else { a.entry_index() < b.entry_index() }
     }
 
     pub fn is_earlier_equal_instr(
@@ -226,22 +247,22 @@ impl SlotIndex {
     }
 
     pub fn get_base_index(&self) -> SlotIndex {
-        Self::at(self.list_entry(), Slot::Block)
+        self.same_entry(Slot::Block)
     }
 
     pub fn get_boundary_index(&self) -> SlotIndex {
-        Self::at(self.list_entry(), Slot::Dead)
+        self.same_entry(Slot::Dead)
     }
 
     pub fn get_reg_slot(
         &self,
         early_clobber: bool,
     ) -> SlotIndex {
-        Self::at(self.list_entry(), if early_clobber { Slot::EarlyClobber } else { Slot::Register })
+        self.same_entry(if early_clobber { Slot::EarlyClobber } else { Slot::Register })
     }
 
     pub fn get_dead_slot(&self) -> SlotIndex {
-        Self::at(self.list_entry(), Slot::Dead)
+        self.same_entry(Slot::Dead)
     }
 
     fn next_entry(&self) -> EntryId {
@@ -261,7 +282,7 @@ impl SlotIndex {
     pub fn get_next_slot(&self) -> SlotIndex {
         match self.get_slot() {
             Slot::Dead => Self::at(self.next_entry(), Slot::Block),
-            s => Self::at(self.list_entry(), Slot::from(s as u8 + 1)),
+            s => self.same_entry(Slot::from(s as u8 + 1)),
         }
     }
 
@@ -274,7 +295,7 @@ impl SlotIndex {
     pub fn get_prev_slot(&self) -> SlotIndex {
         match self.get_slot() {
             Slot::Block => Self::at(self.prev_entry(), Slot::Dead),
-            s => Self::at(self.list_entry(), Slot::from(s as u8 - 1)),
+            s => self.same_entry(Slot::from(s as u8 - 1)),
         }
     }
 
@@ -308,6 +329,10 @@ impl Ord for SlotIndex {
         &self,
         other: &Self,
     ) -> Ordering {
+        assert!(self.lie != NONE && other.lie != NONE, "Attempt to compare reserved index.");
+        if self.epoch == other.epoch {
+            return (self.number | u32::from(self.slot)).cmp(&(other.number | u32::from(other.slot)));
+        }
         // One borrow of the arena for both numbers.
         ARENA.with(|arena| {
             let arena = arena.borrow();
@@ -736,6 +761,7 @@ impl SlotIndexes {
         const SPACE: u32 = SlotIndex::INSTR_DIST / 2;
         let (begin_index, index) = ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
+            arena.epoch = arena.epoch.wrapping_add(1);
             let start = arena.prev[cur as usize];
             let mut index = arena.index[start as usize];
             let begin_index = index;
@@ -764,6 +790,7 @@ impl SlotIndexes {
     pub fn pack_indexes(&mut self) {
         ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
+            arena.epoch = arena.epoch.wrapping_add(1);
             let mut at = self.first;
             let mut number = 0u32;
             while at != NONE {
