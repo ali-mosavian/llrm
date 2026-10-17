@@ -216,11 +216,12 @@ The same comparison on the whole file, `-O2` (inclusive M instructions: LLVM fro
 | block order and jumps | `MachineBlockPlacement` 3.2 + `BranchFolder` 2.2 | `lir jumps` 64.3 | 12x |
 | copy and peephole clean-up | `MachineCopyPropagation` 3.2, `MachineCSE` 2.7 | `lir peephole` 129.7 | 22x |
 | phi elimination | `PHIElimination` 1.9 | `lir phielim` 14.4 | 7.6x |
-| x87 stack | `X86FPStackifier` 1.4 | `lir floatassign` 46.6 + `lir floatalloc` 23.2 | 50x |
+| x87 stack form | `X86FPStackifier` 1.4 | `lir floatalloc` 23.7 | 17x |
+| x87 register choice | inside `RAGreedy` (all classes) | `lir floatassign` 47.3 | |
 | scheduling | `MachineScheduler` 9.6 | none | |
 | machine LICM and sinking | `MachineLICM` 8.5 + `MachineSinking` 3.8 | `lir pressuresink` 9.1 | 0.7x |
 
-Selection is the one step at parity. The two largest rows are the allocator and the peephole step; `lir peephole` has no LLVM counterpart of that size on this path, and the x87 rows are the largest ratio (why is not measured here).
+Selection is the one step at parity. The two largest rows are the allocator and the peephole step; `lir peephole` has no LLVM counterpart of that size on this path, and the x87 rows are the largest ratio: `floatalloc` against the stackifier is 17x, and `floatassign` has no separate LLVM figure because greedy allocation covers x87 with every other class. [LIR clean-up](lir-cleanup.md) takes the peephole and x87 rows apart.
 
 ## Proposed change
 
