@@ -1163,7 +1163,11 @@ impl<'a> Occupied<'a> {
                     .collect(),
             );
         }
-        Self { held: Holders::Built { segments, reach }, masks, checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED") }
+        Self {
+            held: Holders::Built { segments, reach },
+            masks,
+            checking: llrm_support::env_flag!("LLRM_CHECK_OCCUPIED"),
+        }
     }
 
     /// The occupants `union` has, but `value`.
@@ -1176,7 +1180,7 @@ impl<'a> Occupied<'a> {
         Self {
             held: Holders::Union { union, live, value, gathered: Default::default() },
             masks,
-            checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED"),
+            checking: llrm_support::env_flag!("LLRM_CHECK_OCCUPIED"),
         }
     }
 }
@@ -1851,7 +1855,7 @@ impl Split<'_> {
         if frame.price(&compact, live, &placement, saving) > 0.0 {
             regions.push(frame.region(&compact));
         }
-        if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
             assert_eq!(
                 regions,
                 placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving),
