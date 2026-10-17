@@ -365,6 +365,11 @@ pub fn promote_loop_accesses_to_scalars(
         store_safety = StoreSafety::Unsafe;
     }
     let first_pointer = pointers[0];
+    // Experiment: leave the allocas to `promote` (LLVM runs mem2reg and SROA
+    // first).
+    if llrm_support::env_flag!("LLRM_EXP_LICM_NO_ALLOCA") && is_alloca(unit, underlying_object(unit, first_pointer)) {
+        return None;
+    }
     if store_safety == StoreSafety::Unknown && safety.any_block_may_throw() {
         // If a loop can throw, we have to insert a store along each unwind
         // edge. That said, we can't actually make the unwind edge explicit.

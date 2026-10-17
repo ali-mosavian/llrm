@@ -341,7 +341,7 @@ pub fn run(
             .with_shape(&shape);
         std::rc::Rc::new(llrm_analysis::memory::exposed_frames(&memory).into_iter().collect())
     };
-    let mut graph: Option<(Mssa, Accesses)> = None;
+    let mut graph: Option<(Mssa, std::rc::Rc<Accesses>)> = None;
     // One look at the function as it stands: the loop's context, the graph
     // (made again if the last edit left it stale), and what `body` decides.
     macro_rules! looking {
@@ -351,11 +351,13 @@ pub fn run(
                 .with_registers(&registers)
                 .with_shape(&shape);
             if graph.is_none() {
-                graph = Some(llrm_analysis::mssa::shadow::translated(&memory));
+                let (built, made) = llrm_analysis::mssa::shadow::translated(&memory);
+                graph = Some((built, std::rc::Rc::new(made)));
                 decisions.rebuilds += 1;
                 decisions.rebuilt_instructions += $view.function.walk().count();
             }
             let ($mssa, $accesses) = graph.as_mut().expect("a graph");
+            let $accesses: &Accesses = &**$accesses;
             let $aa = AliasQuery::new(&memory, $accesses).with_exposed(std::rc::Rc::clone(&exposed));
             // The function stands as the edits so far left it: nothing is
             // simulated.
@@ -373,6 +375,10 @@ pub fn run(
     }
     for one in shape.loops.iter() {
         let header = cfg::block(one.header);
+        // No instruction to start from: nothing is asked of the graph.
+        if !seeded(unit.function, &shape, &innermost, one) {
+            continue;
+        }
         let preheader = {
             use llrm_analysis::cfg::Around;
             one.preheader(unit.function).map(cfg::block)
@@ -445,6 +451,41 @@ pub fn run(
         }
     }
     decisions
+}
+
+/// Whether the loop has an instruction any of the three could start from: one
+/// that may be hoisted (every operand outside the loop), one read only outside
+/// it or by no one (sunk or erased), or a load or store through a pointer the
+/// loop does not change (promoted). The cheap look LLVM's passes have in the
+/// instructions they walk, ahead of the graph they would ask.
+fn seeded(
+    function: &Function,
+    shape: &Shape,
+    innermost: &IdMap<BlockId, usize>,
+    loop_: &Loop,
+) -> bool {
+    let state = State::default();
+    let ctx = LoopCtx { function, shape, loop_, innermost, state: &state, strict_sink: true };
+    ctx.loop_.body.iter().any(|&at| {
+        let block = cfg::block(at);
+        !ctx.in_sub_loop(block)
+            && function.block(block).instructions().iter().any(|&inst| {
+                let instruction = function.instruction(inst);
+                if instruction.opcode.is_terminator() || matches!(instruction.opcode, llrm_mir::opcode::Opcode::Phi) {
+                    return false;
+                }
+                let invariant = ctx.has_loop_invariant_operands(inst);
+                let outside_only = instruction
+                    .result
+                    .is_some_and(|result| function.users(result).iter().all(|one| !ctx.contains(one.user)));
+                let access = match instruction.opcode {
+                    llrm_mir::opcode::Opcode::Load { .. } => Some(instruction.operands[0]),
+                    llrm_mir::opcode::Opcode::Store { .. } => Some(instruction.operands[1]),
+                    _ => None,
+                };
+                invariant || outside_only || access.is_some_and(|pointer| ctx.is_loop_invariant(pointer))
+            })
+    })
 }
 
 /// `runOnLoop` up to the promotion: the sinking, then the hoisting, as
@@ -568,6 +609,17 @@ impl FunctionPass for Licm {
     ) -> PreservedAnalyses {
         let found = if self.apply { run(unit, analyses) } else { decide(unit, analyses) };
         let changed = found_changed(&found);
+        if self.apply && llrm_support::env_flag!("LLRM_DEBUG_LICM") {
+            eprintln!(
+                "licm: {} rebuilds of {} instructions, {} hoisted, {} sunk, {} erased, {} promoted",
+                found.rebuilds,
+                found.rebuilt_instructions,
+                found.hoisted.len(),
+                found.sunk.len(),
+                found.erased.len(),
+                found.promoted.len()
+            );
+        }
         DECIDED.with(|all| {
             let mut all = all.borrow_mut();
             all.hoisted.extend(found.hoisted);
