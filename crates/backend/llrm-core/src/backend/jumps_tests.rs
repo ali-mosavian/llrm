@@ -1372,3 +1372,31 @@ fn starting_a_trace_does_not_look_at_every_block_waiting() {
     let looked = EXAMINED.with(|one| one.get());
     assert!(looked <= 8 * arms as usize, "{looked} entries looked at for {arms} arms");
 }
+
+/// `preferred` solved the block frequencies of both bodies to compare their
+/// executed work, though a body that is no smaller loses whatever the work is
+/// (jumps on d_faces -O2: 9.5 M of 3.4 G, every function). The work is
+/// weighed only where the size falls.
+#[test]
+fn test_a_body_no_smaller_is_refused_without_weighing_its_work() {
+    let solves = |body: &LirBody| body.facts.0.runs::<crate::analysis::frequency::Worked>();
+    let long = vec![
+        block(0, vec![_compare(0), _branch(1, "je", 2)], vec![1, 2]),
+        block(1, vec![_move(2, imm(1)), _return(3)], vec![]),
+        block(2, vec![_move(4, imm(1)), _return(5)], vec![]),
+    ];
+    let short = vec![
+        block(0, vec![_compare(0), _branch(1, "je", 1)], vec![1, 1]),
+        block(1, vec![_move(2, imm(1)), _return(3)], vec![]),
+    ];
+    let (before, same) = (
+        body("f", 0, long.clone().into_iter().map(Block::from).collect()),
+        body("f", 0, long.into_iter().map(Block::from).collect()),
+    );
+    let after = body("f", 0, short.into_iter().map(Block::from).collect());
+    let (b, s, a) = (solves(&before), solves(&same), solves(&after));
+    assert!(std::ptr::eq(preferred(&before, &same), &before), "the same size keeps the body before");
+    assert_eq!((solves(&before) - b, solves(&same) - s), (0, 0), "a body no smaller had its work weighed");
+    assert!(std::ptr::eq(preferred(&before, &after), &after), "premise: a smaller body with no more work is taken");
+    assert!(solves(&after) - a >= 1, "premise: a smaller body is weighed");
+}

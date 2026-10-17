@@ -197,8 +197,13 @@ impl llrm_target::Target for M16 {
     }
 
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
-            .expect("real mode's object.toml parses")
+        static FORMAT: std::sync::OnceLock<llrm_target::object::ObjectFormat> = std::sync::OnceLock::new();
+        FORMAT
+            .get_or_init(|| {
+                llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+                    .expect("real mode's object.toml parses")
+            })
+            .clone()
     }
 
     fn return_address_bytes(
@@ -230,6 +235,19 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// `object` parsed its `object.toml` at every call, and instruction
+    /// selection asks it for the bitness at each memory operand (d_faces -O2:
+    /// 4 M of 3.4 G). It is parsed once.
+    #[test]
+    fn test_the_object_format_is_parsed_once_however_often_it_is_asked() {
+        use llrm_target::Target;
+        let before = llrm_target::object::ObjectFormat::parses();
+        for _ in 0..50 {
+            assert!(M16.object().bitness > 0);
+        }
+        assert!(llrm_target::object::ObjectFormat::parses() - before <= 1, "parsed again at a call");
+    }
+
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
     /// stos` (`i386_cost`, `i486_cost`, `pentium_cost`); none where it is a
     /// loop or a libcall (`pentiumpro_memset`).

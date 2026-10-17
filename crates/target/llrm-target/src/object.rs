@@ -52,10 +52,19 @@ pub struct ObjectFormat {
 /// What `-gdwarf` writes where the target does not say.
 pub const DEFAULT_DWARF_VERSION: u16 = 5;
 
+static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 impl ObjectFormat {
+    /// How many times this process has parsed an `object.toml`, for a test that
+    /// a target parses its own once.
+    pub fn parses() -> usize {
+        PARSES.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// `text`, an `object.toml`: `formats`, `default`, `bitness`, `header` and,
     /// optionally, `dwarf_version`.
     pub fn parse(text: &str) -> Result<Self, String> {
+        PARSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let value: toml::Table = text.parse().map_err(|error: toml::de::Error| error.to_string())?;
         let formats = value
             .get("formats")
