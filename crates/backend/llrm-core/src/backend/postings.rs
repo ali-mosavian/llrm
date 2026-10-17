@@ -101,6 +101,9 @@ pub struct Postings {
     /// For each block, the slots of its instructions with a frame cell among
     /// their operands, ascending.
     frames: Vec<Vec<u32>>,
+    /// The largest value `defs` or `uses` hold a key for, where known: kept as
+    /// they change, found again by one pass only after the key it was is cut.
+    largest: std::cell::Cell<Option<u32>>,
 }
 
 /// What `Postings` holds, by position: the equality of two sets of postings is
@@ -334,7 +337,12 @@ impl Postings {
 
     /// The largest value an instruction defines or reads, or 0.
     pub fn largest(&self) -> u32 {
-        self.defs.keys().chain(self.uses.keys()).copied().max().unwrap_or(0)
+        if let Some(known) = self.largest.get() {
+            return known;
+        }
+        let found = self.defs.keys().chain(self.uses.keys()).copied().max().unwrap_or(0);
+        self.largest.set(Some(found));
+        found
     }
 
     fn listing(&self) -> Listing {
@@ -373,9 +381,11 @@ impl Postings {
             let entry = || Entry { block, slot: *slot, insn: Arc::clone(one), hint: std::cell::Cell::new(at as u32) };
             for value in &one.defines {
                 self.defs.entry(*value).or_default().push(entry());
+                self.raise(*value);
             }
             for value in &one.uses {
                 self.uses.entry(*value).or_default().push(entry());
+                self.raise(*value);
             }
             for (held, _) in &one.requires {
                 self.needs.entry(held.value).or_default().push(entry());
@@ -436,6 +446,32 @@ impl Postings {
                     mine.remove(&value);
                 }
             }
+            if self.defs.contains_key(&value) || self.uses.contains_key(&value) {
+                self.raise(value);
+            } else {
+                self.lowered(value);
+            }
+        }
+    }
+
+    /// `value` has a key in `defs` or `uses`.
+    fn raise(
+        &self,
+        value: u32,
+    ) {
+        if self.largest.get().is_some_and(|known| value > known) {
+            self.largest.set(Some(value));
+        }
+    }
+
+    /// `value` has no key in `defs` or `uses` any more: if it was the largest,
+    /// which one is now is not known.
+    fn lowered(
+        &self,
+        value: u32,
+    ) {
+        if self.largest.get() == Some(value) {
+            self.largest.set(None);
         }
     }
 
@@ -536,6 +572,11 @@ impl Postings {
         for value in &one.uses {
             cut(&mut self.uses, *value);
         }
+        for value in one.defines.iter().chain(&one.uses) {
+            if !self.defs.contains_key(value) && !self.uses.contains_key(value) {
+                self.lowered(*value);
+            }
+        }
         for (held, _) in &one.requires {
             cut(&mut self.needs, held.value);
         }
@@ -555,9 +596,11 @@ impl Postings {
         };
         for value in &one.defines {
             put(&mut self.defs, *value);
+            self.raise(*value);
         }
         for value in &one.uses {
             put(&mut self.uses, *value);
+            self.raise(*value);
         }
         for (held, _) in &one.requires {
             put(&mut self.needs, held.value);
