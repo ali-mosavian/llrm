@@ -37,6 +37,36 @@ use llrm_lir::registers::{RegId, Regs};
 /// A register unit: `root number * 4 + byte lane` (`MCRegUnit`).
 pub type RegUnit = u32;
 
+/// The units of a register (`MCRegUnitIterator`), without a heap allocation.
+#[derive(Clone, Copy)]
+pub struct Units {
+    root: u32,
+    lanes: u32,
+}
+
+impl Iterator for Units {
+    type Item = RegUnit;
+
+    fn next(&mut self) -> Option<RegUnit> {
+        if self.lanes == 0 {
+            return None;
+        }
+        let lane = self.lanes.trailing_zeros();
+        self.lanes &= self.lanes - 1;
+        Some(self.root + lane)
+    }
+}
+
+impl Units {
+    pub fn len(&self) -> usize {
+        self.lanes.count_ones() as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lanes == 0
+    }
+}
+
 /// The target's register file as the allocator asks it (`MCRegisterInfo`).
 #[derive(Clone, Copy)]
 pub struct RegisterInfo {
@@ -52,10 +82,10 @@ impl RegisterInfo {
     pub fn regunits(
         &self,
         reg: RegId,
-    ) -> Vec<RegUnit> {
+    ) -> Units {
         let root = self.regs.root(reg).index() as u32;
-        let lanes = self.regs.lanes(reg);
-        (0..4u32).filter(|lane| lanes & (1 << lane) != 0).map(|lane| root * 4 + lane).collect()
+        let lanes = self.regs.lanes(reg) as u32;
+        Units { root: root * 4, lanes: lanes & 0xf }
     }
 
     /// Whether writing one register can be seen by reading the other.

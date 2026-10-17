@@ -34,8 +34,6 @@
 //! # Used by
 //! the greedy allocator (`greedy`).
 
-use std::collections::HashMap;
-
 use llrm_lir::registers::RegId;
 
 use super::virtregmap::{RegUnit, RegisterInfo, VirtRegMap};
@@ -101,10 +99,10 @@ pub struct LiveRegMatrix {
     tri: RegisterInfo,
     pub vrm: VirtRegMap,
     fixed: Box<dyn PhysInterference>,
-    /// The unions, by register unit (`Matrix`).
-    matrix: HashMap<RegUnit, LiveIntervalUnion>,
+    /// The unions, by register unit (`Matrix`, a `LiveIntervalUnion::Array`).
+    matrix: Vec<LiveIntervalUnion>,
     /// The queries, by register unit (`Queries`).
-    queries: HashMap<RegUnit, Query>,
+    queries: Vec<Query>,
     /// Bumped by `invalidateVirtRegs`: query results from before are stale.
     user_tag: u32,
     /// `RegMaskVirtReg`, `RegMaskTag`, `RegMaskUsable`: the registers a call
@@ -123,8 +121,8 @@ impl LiveRegMatrix {
             tri,
             vrm: VirtRegMap::new(),
             fixed,
-            matrix: HashMap::new(),
-            queries: HashMap::new(),
+            matrix: Vec::new(),
+            queries: Vec::new(),
             user_tag: 0,
             reg_mask: None,
             num_assigned: 0,
@@ -134,6 +132,26 @@ impl LiveRegMatrix {
 
     pub fn tri(&self) -> RegisterInfo {
         self.tri
+    }
+
+    /// The arrays cover `unit` (`LiveIntervalUnion::Array::init`).
+    fn grow(
+        &mut self,
+        unit: RegUnit,
+    ) {
+        let need = unit as usize + 1;
+        if self.matrix.len() < need {
+            self.matrix.resize_with(need, LiveIntervalUnion::new);
+            self.queries.resize_with(need, Query::new);
+        }
+    }
+
+    fn union_of(
+        &mut self,
+        unit: RegUnit,
+    ) -> &mut LiveIntervalUnion {
+        self.grow(unit);
+        &mut self.matrix[unit as usize]
     }
 
     /// `invalidateVirtRegs`: live ranges could have changed.
@@ -150,7 +168,7 @@ impl LiveRegMatrix {
     ) {
         self.vrm.assign_virt2phys(virt.reg(), phys);
         for unit in self.tri.regunits(phys) {
-            self.matrix.entry(unit).or_default().unify(virt.reg(), &virt.range);
+            self.union_of(unit).unify(virt.reg(), &virt.range);
         }
         self.num_assigned += 1;
     }
@@ -164,7 +182,7 @@ impl LiveRegMatrix {
         let phys = self.vrm.get_phys(virt.reg()).expect("unassigning a register that has none");
         self.vrm.clear_virt(virt.reg());
         for unit in self.tri.regunits(phys) {
-            if let Some(union) = self.matrix.get_mut(&unit) {
+            if let Some(union) = self.matrix.get_mut(unit as usize) {
                 union.extract(virt.reg(), &virt.range);
             }
         }
@@ -176,7 +194,7 @@ impl LiveRegMatrix {
         &self,
         phys: RegId,
     ) -> bool {
-        self.tri.regunits(phys).iter().any(|unit| self.matrix.get(unit).is_some_and(|union| !union.empty()))
+        self.tri.regunits(phys).any(|unit| self.matrix.get(unit as usize).is_some_and(|union| !union.empty()))
     }
 
     /// `query` (LiveRegMatrix.cpp#L160) followed by `checkInterference()`: does
@@ -188,8 +206,9 @@ impl LiveRegMatrix {
         lr: &LiveRange,
         unit: RegUnit,
     ) -> bool {
-        let union = self.matrix.entry(unit).or_default();
-        let q = self.queries.entry(unit).or_default();
+        self.grow(unit);
+        let union = &self.matrix[unit as usize];
+        let q = &mut self.queries[unit as usize];
         q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
         q.check_interference(lr, union)
     }
@@ -203,8 +222,9 @@ impl LiveRegMatrix {
         unit: RegUnit,
         max: usize,
     ) -> Vec<VReg> {
-        let union = self.matrix.entry(unit).or_default();
-        let q = self.queries.entry(unit).or_default();
+        self.grow(unit);
+        let union = &self.matrix[unit as usize];
+        let q = &mut self.queries[unit as usize];
         q.init(self.user_tag, u64::from(vreg), u64::from(unit), union);
         q.interfering_vregs(lr, union, max).to_vec()
     }
@@ -256,7 +276,9 @@ impl LiveRegMatrix {
         &self,
         phys: RegId,
     ) -> Option<VReg> {
-        self.tri.regunits(phys).iter().find_map(|unit| self.matrix.get(unit).and_then(LiveIntervalUnion::get_one_vreg))
+        self.tri
+            .regunits(phys)
+            .find_map(|unit| self.matrix.get(unit as usize).and_then(LiveIntervalUnion::get_one_vreg))
     }
 
     pub fn num_assigned(&self) -> usize {
@@ -316,7 +338,7 @@ mod tests {
         let (ax, al, ah, eax, bl) = (RegId::AX, RegId::AL, RegId::AH, RegId::EAX, RegId::BL);
         assert_eq!(tri.regunits(ax).len(), 2);
         assert_eq!(tri.regunits(eax).len(), 4);
-        let shared = |a: RegId, b: RegId| tri.regunits(a).iter().any(|u| tri.regunits(b).contains(u));
+        let shared = |a: RegId, b: RegId| tri.regunits(a).any(|u| tri.regunits(b).any(|v| v == u));
         assert!(shared(ax, al) && shared(ax, ah) && shared(eax, al) && !shared(al, ah) && !shared(al, bl));
         for (a, b) in [(ax, al), (al, ah), (ax, bl), (eax, ax)] {
             assert_eq!(shared(a, b), tri.overlaps(a, b), "{a:?} {b:?} against the file's overlap");
