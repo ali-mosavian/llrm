@@ -119,6 +119,7 @@ pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
 pub mod inline;
+pub mod inlinecost;
 pub mod interprocedural;
 pub mod ipacp;
 pub mod jumpthread;

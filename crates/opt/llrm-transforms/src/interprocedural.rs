@@ -311,6 +311,11 @@ pub struct Interprocedural {
     pub ranges: bool,
 }
 
+thread_local! {
+    /// `LLRM_EXP_INLINECOST` prices the sites once.
+    static SHADOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl ProgramPass for Interprocedural {
     fn name(&self) -> &'static str {
         "interprocedural"
@@ -1145,6 +1150,18 @@ pub fn optimized_with<E: From<String>>(
             let addressed = llrm_mir::callgraph::addressed(module);
             bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
             let counts = inline::call_counts(module);
+            if inline_round == 0 && llrm_support::env_flag!("LLRM_EXP_INLINECOST") && !SHADOWED.replace(true) {
+                crate::inlinecost::shadow(
+                    module,
+                    &program.layout,
+                    &counts,
+                    &addressed,
+                    crate::inlinecost::InlineParams {
+                        compute_full_inline_cost: true,
+                        ..crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 })
+                    },
+                );
+            }
             let (available, more) = candidates(
                 module,
                 &callees(&mut modules[at], module),
