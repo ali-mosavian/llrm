@@ -357,6 +357,8 @@ pub struct SlotIndexes {
     first: EntryId,
     last: EntryId,
     mi2i_map: HashMap<InstrKey, SlotIndex>,
+    /// The block each indexed instruction is in (`MI->getParent()`).
+    mi2mbb: HashMap<InstrKey, usize>,
     /// `MBBRanges`: block number to (start, stop).
     mbb_ranges: Vec<(SlotIndex, SlotIndex)>,
     /// `idx2MBBMap`: sorted pairs of the index of a block's start and the
@@ -409,6 +411,7 @@ impl SlotIndexes {
     /// `clear`: frees the entries one by one.
     pub fn clear(&mut self) {
         self.mi2i_map.clear();
+        self.mi2mbb.clear();
         self.mbb_ranges.clear();
         self.idx2mbb_map.clear();
         if self.live {
@@ -445,6 +448,7 @@ impl SlotIndexes {
                     if group == same {
                         let at = SlotIndex::at(self.last, Slot::Block);
                         self.mi2i_map.insert(one.id(), at);
+                        self.mi2mbb.insert(one.id(), number);
                         continue;
                     }
                 }
@@ -453,6 +457,7 @@ impl SlotIndexes {
                 self.push_back(Some(one.id()), index);
                 let at = SlotIndex::at(self.last, Slot::Block);
                 self.mi2i_map.insert(one.id(), at);
+                self.mi2mbb.insert(one.id(), number);
             }
             // We insert one blank instructions between basic blocks.
             index += SlotIndex::INSTR_DIST;
@@ -599,16 +604,13 @@ impl SlotIndexes {
         self.idx2mbb_map.partition_point(|pair| pair.0 <= *idx)
     }
 
-    /// `getMBBFromIndex`: the block `index` falls in. `block_of` gives the
-    /// block of an instruction (an entry with an instruction is inside its
-    /// block).
+    /// `getMBBFromIndex`: the block `index` falls in.
     pub fn get_mbb_from_index(
         &self,
         index: &SlotIndex,
-        block_of: &dyn Fn(InstrKey) -> usize,
     ) -> usize {
         if let Some(instr) = self.get_instruction_from_index(index) {
-            return block_of(instr);
+            return self.mi2mbb[&instr];
         }
         let at = self.get_mbb_upper_bound(index) - 1;
         let (start, block) = &self.idx2mbb_map[at];
@@ -623,6 +625,7 @@ impl SlotIndexes {
     pub fn insert_machine_instr_in_maps(
         &mut self,
         instr: InstrKey,
+        block: usize,
         prev: &SlotIndex,
         next: &SlotIndex,
         late: bool,
@@ -658,6 +661,7 @@ impl SlotIndexes {
         }
         let new_index = SlotIndex::at(entry, Slot::Block);
         self.mi2i_map.insert(instr, new_index);
+        self.mi2mbb.insert(instr, block);
         new_index
     }
 
@@ -668,6 +672,7 @@ impl SlotIndexes {
         instr: InstrKey,
     ) {
         let Some(index) = self.mi2i_map.remove(&instr) else { return };
+        self.mi2mbb.remove(&instr);
         ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
             let at = index.list_entry() as usize;
@@ -685,6 +690,9 @@ impl SlotIndexes {
         new: InstrKey,
     ) -> SlotIndex {
         let Some(base) = self.mi2i_map.remove(&old) else { return SlotIndex::default() };
+        if let Some(block) = self.mi2mbb.remove(&old) {
+            self.mi2mbb.insert(new, block);
+        }
         ARENA.with(|arena| {
             let mut arena = arena.borrow_mut();
             let at = base.list_entry() as usize;
@@ -907,7 +915,7 @@ mod tests {
         for n in 0..40u64 {
             let key = 1_000_000 + n;
             // each goes immediately before `second`
-            let at = indexes.insert_machine_instr_in_maps(key, &previous, &b, true);
+            let at = indexes.insert_machine_instr_in_maps(key, 0, &previous, &b, true);
             assert!(a < at && at < b, "insert {n}: {a} < {at} < {b}");
             made.push(at);
         }
@@ -957,18 +965,11 @@ mod tests {
         // The blank entry that ends block 0 starts block 1 (its range is half
         // open).
         let blank_between = indexes.get_mbb_end_idx(0);
-        assert_eq!(
-            indexes.get_mbb_from_index(&blank_between, &|_| unreachable!("a blank index names no instruction")),
-            1
-        );
+        assert_eq!(indexes.get_mbb_from_index(&blank_between), 1);
         let last_of_first = indexes.get_mbb_last_idx(0);
-        assert_eq!(
-            indexes.get_mbb_from_index(&last_of_first, &|_| 0),
-            0,
-            "the dead slot of an instruction is in its block"
-        );
+        assert_eq!(indexes.get_mbb_from_index(&last_of_first), 0, "the dead slot of an instruction is in its block");
         let in_second = indexes.get_instruction_index(body.blocks[1].insns[0].id());
-        assert_eq!(indexes.get_mbb_from_index(&in_second, &|_| 1), 1);
+        assert_eq!(indexes.get_mbb_from_index(&in_second), 1);
     }
 
     /// The instructions of a parallel copy are one bundle: they share the
