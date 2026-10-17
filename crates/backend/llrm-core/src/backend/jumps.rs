@@ -190,13 +190,19 @@ pub fn optimized(
     let size = cpu.size;
     let price = Branches::of(cpu);
     let mut candidate = _placed(&_hoisted(body), size)?;
+    let (no_merge, no_prefer, no_dup, no_rotate) = (
+        llrm_support::env_flag!("LLRM_JUMPS_NO_MERGE"),
+        llrm_support::env_flag!("LLRM_JUMPS_NO_PREFER"),
+        llrm_support::env_flag!("LLRM_JUMPS_NO_DUP"),
+        llrm_support::env_flag!("LLRM_JUMPS_NO_ROTATE"),
+    );
     let baseline = threaded(&candidate);
     let settled = candidate.clone();
     // Merging one physical tail may make the condition selecting between its
     // former copies dead; deleting that compare can in turn make predecessor
     // tails identical.  Settle those two machine facts before final threading
     // chooses fall-throughs.  Source-owned tails are refused by `_tail_key`.
-    for _round in 0..std::cmp::max(1, candidate.blocks.len() + candidate.insns().len()) {
+    for _round in 0..if no_merge { 0 } else { std::cmp::max(1, candidate.blocks.len() + candidate.insns().len()) } {
         let before = candidate.clone();
         candidate = machinedce::eliminated(merged(&candidate)?);
         // Python `candidate is before`: both passes return their input itself
@@ -207,8 +213,9 @@ pub fn optimized(
     }
     // Merging nothing leaves the candidate the baseline was threaded from.
     let again = if candidate == settled { baseline.clone() } else { threaded(&candidate) };
-    let placed = preferred(&baseline, &again).clone();
-    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true), &price)? }))
+    let placed = if no_prefer { again.clone() } else { preferred(&baseline, &again).clone() };
+    let copied = if no_dup || size { placed } else { duplicated(&duplicated_tails(&placed), true) };
+    Ok(inverted(&if size { copied } else if no_rotate { copied } else { rotated(&copied, &price)? }))
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
