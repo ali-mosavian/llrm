@@ -350,7 +350,7 @@ fn _repeatable(
 /// loops asked (each asked them of the whole function).
 struct Graph<'a> {
     blocks: BTreeMap<i64, &'a cfg::Block>,
-    predecessors: BTreeMap<i64, BTreeSet<i64>>,
+    predecessors: llrm_support::graph::Predecessors,
 }
 
 /// `loop_`'s shape, where it is one this can expand.
@@ -376,7 +376,7 @@ fn _shape(
     let [first] = succ.iter().copied().filter(|at| loop_.body.contains(at)).collect::<Vec<_>>()[..] else {
         return None;
     };
-    if latch == header || predecessors[&exit] != BTreeSet::from([header]) || blocks[&latch].succ != [header] {
+    if latch == header || !predecessors.are(&exit, &[header]) || blocks[&latch].succ != [header] {
         return None;
     }
     let branch = function.instruction(function.terminator(cfg::block(header))?);

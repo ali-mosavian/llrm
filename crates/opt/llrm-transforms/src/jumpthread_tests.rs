@@ -629,3 +629,19 @@ fn test_the_size_of_the_copies_is_gccs_limit() {
     let after = crate::testing::managed(&mut module, JumpThread { size: true, correlated: true, states: true });
     assert!(after.contains("join:"), "a size build copies nothing: {after}");
 }
+
+/// The four passes that clean what the copies know of their state were each
+/// run after an invalidation of everything, whatever the one before preserved:
+/// the analyses a pass left true were worked out again for the next.
+#[test]
+fn the_cleaning_after_a_thread_keeps_what_each_pass_preserved() {
+    let mut module = parsed(&format!("{DOS}{MACHINE}"));
+    llrm_mir::passes::trace_recomputes(true);
+    managed(&mut module, JumpThread { size: false, correlated: false, states: true });
+    let runs: usize = llrm_mir::passes::recomputes().iter().map(|(.., count)| count).sum();
+    llrm_mir::passes::trace_recomputes(false);
+    assert!(runs <= BOUND, "{runs} analyses worked out");
+}
+/// 53 with everything invalidated before each pass, 38 with what each
+/// preserved.
+const BOUND: usize = 45;

@@ -162,7 +162,7 @@ pub(crate) fn nest_of(
         pre.push(at);
         at = blocks[&at].succ[0];
     }
-    if pre.is_empty() || predecessors[&hi] != BTreeSet::from([*pre.last().expect("one"), li]) {
+    if pre.is_empty() || !predecessors.are(&hi, &[*pre.last().expect("one"), li]) {
         return None;
     }
     // The inner loop leaves from its header alone, into a block only it enters.
@@ -170,7 +170,7 @@ pub(crate) fn nest_of(
     let [xi] = blocks[&hi].succ.iter().copied().filter(|at| !inner.body.contains(at)).collect::<Vec<_>>()[..] else {
         return None;
     };
-    if leaving != 1 || blocks[&hi].succ.len() != 2 || predecessors[&xi] != BTreeSet::from([hi]) {
+    if leaving != 1 || blocks[&hi].succ.len() != 2 || !predecessors.are(&xi, &[hi]) {
         return None;
     }
     let mut post = Vec::new();
