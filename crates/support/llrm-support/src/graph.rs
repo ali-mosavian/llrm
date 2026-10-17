@@ -50,6 +50,63 @@ pub fn reverse_postorder<N: Node>(
     post
 }
 
+/// The strongly connected components of `blocks`, as Tarjan's walk finds them:
+/// every component after the components its blocks reach, so the successors'
+/// are first. Blocks named only as successors are not in the graph.
+pub fn components<N: Node>(blocks: &[N]) -> Vec<Vec<i64>> {
+    let index: crate::hash::HashMap<i64, usize> =
+        blocks.iter().enumerate().map(|(at, block)| (block.at(), at)).collect();
+    let successors: Vec<Vec<usize>> =
+        blocks.iter().map(|block| block.succ().iter().filter_map(|to| index.get(to).copied()).collect()).collect();
+    let count = successors.len();
+    let (mut order, mut low) = (vec![usize::MAX; count], vec![0; count]);
+    let (mut on, mut stack, mut next) = (vec![false; count], Vec::new(), 0);
+    let mut found: Vec<Vec<i64>> = Vec::new();
+    for root in 0..count {
+        if order[root] != usize::MAX {
+            continue;
+        }
+        let mut calls = vec![(root, 0_usize)];
+        order[root] = next;
+        low[root] = next;
+        next += 1;
+        stack.push(root);
+        on[root] = true;
+        while let Some(&mut (at, ref mut child)) = calls.last_mut() {
+            if let Some(&to) = successors[at].get(*child) {
+                *child += 1;
+                if order[to] == usize::MAX {
+                    order[to] = next;
+                    low[to] = next;
+                    next += 1;
+                    stack.push(to);
+                    on[to] = true;
+                    calls.push((to, 0));
+                } else if on[to] {
+                    low[at] = low[at].min(order[to]);
+                }
+                continue;
+            }
+            calls.pop();
+            if let Some(&(parent, _)) = calls.last() {
+                low[parent] = low[parent].min(low[at]);
+            }
+            if low[at] == order[at] {
+                let mut members = Vec::new();
+                while let Some(one) = stack.pop() {
+                    on[one] = false;
+                    members.push(blocks[one].at());
+                    if one == at {
+                        break;
+                    }
+                }
+                found.push(members);
+            }
+        }
+    }
+    found
+}
+
 pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {
     let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
     let mut found = blocks.iter().map(|block| (block.at(), BTreeSet::new())).collect::<BTreeMap<_, _>>();

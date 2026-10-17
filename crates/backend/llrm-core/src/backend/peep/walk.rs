@@ -331,7 +331,7 @@ pub struct Facts<'a> {
     pub regs: Regs,
     /// How many times each value is read, where the caller counted.
     counts: Option<&'a Counter>,
-    exits: OnceCell<IndexMap<i64, Lanes>>,
+    exits: OnceCell<std::rc::Rc<IndexMap<i64, Lanes>>>,
     flags_out: OnceCell<HashMap<i64, Lanes>>,
     users: OnceCell<Counter>,
     zero: OnceCell<HashMap<usize, upperzero::Roots>>,
