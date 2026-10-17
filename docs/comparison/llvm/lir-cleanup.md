@@ -184,7 +184,7 @@ The overlap between rows 1 and 2 is 5.7 M (`worked_out` is inside `dead_at_exit`
 
 For the backend owner (ssa-spill-m16); none built here.
 
-1. One owner for the peephole's lane and block-exit facts (rule 7): at most 29 M, 1.0% of `d_faces` (sizing above). Saving: unmeasured.
+1. One owner for the peephole's lane and block-exit facts (rule 7): at most 29 M, 1.0% of `d_faces` (sizing above). Dropped by the coordinator as not worth a PR.
 2. Take the window as a slice: `taken` in [`windows`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/peep/walk.rs#L612) is a `Vec` built per instruction, 43,539 allocations. Bound: about 4 M at 100 instructions per allocation (2.8 M of allocator calls seen in `windows`). Saving: unmeasured.
 3. Gate the rule groups the way `needs` gates six sub-passes: `needs.rs` keeps one bit per candidate shape per block. The idle-skip experiment in the spec skipped 6% of MIR runs and lost 0.6% overall, because classifying costs; a bit per block set when an instruction of the shape is produced is cheaper than classifying edits. Bound: the sub-passes that find nothing; their number is not counted. Saving: unmeasured.
 4. Pass the live rows `regalloc` already solved to `floatassign` and `floatalloc` (or hold them on the body) instead of `live_rows_by` per call. Bound: 25.7 M (0.9% of `d_faces`); ranks last. Saving: unmeasured.
