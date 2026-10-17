@@ -8,7 +8,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 
 | step | owner | state | last measured |
 |---|---|---|---|
-| 0.1 one baseline | llvm-compare | in progress | none yet |
+| 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
@@ -43,7 +43,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 
 | after | `d_faces` -O2, M instructions | over LLVM's 415 M | what that row counts |
 |---|--:|--:|---|
-| today | 2,903 | 6.8x | [synthesis], main `21f5c9fc8` |
+| today | 2,903 (`21f5c9fc8`); 2,253 at main `5e2e995ef` | 6.8x; 5.4x | [synthesis]; the baseline of 0.1 ([compile-gap-series]) |
 | phase 1 (the in-flight PRs that are ready) | about 2,660 | 6.4x | each PR's own measurement on its parent, multiplied: -8.3% |
 | phase 1 plus the held PRs and drafts | about 2,510 | 6.0x | also [#1958] (an open ready PR, measured on an old main) and the drafts [#1921], [#1962], [#1965] at their old numbers: -13.6%. [#1921] is to be closed (see 1.10) and [#1962] is bundled with 2.6, so this row is an upper bound |
 | phase 2 (open levers, each at its bound) | about 2,210 | 5.3x | point_values, Annotated, persistent MemorySSA, split path, interval recompute: -12% more |
@@ -248,11 +248,12 @@ The checklist every step carries, in order. A step is done only when every box i
 
 Checklist: the shared list. Its own metric boxes:
 
-- [ ] phase table
-- [ ] gap table
-- [ ] ladder json
-- [ ] rows
-- [ ] computations per run
+- [x] phase table ([compile-gap-series], `5e2e995ef`)
+- [x] gap table (clang 24 and 20.1.8, four levels)
+- [x] ladder json (`tools/ladder/ladder-5e2e995ef.json`)
+- [ ] rows (`unmeasured` at this SHA: needs the 71-program run against gcc and clang)
+- [x] computations per run (3.4 at -O2 by the `LLRM_WHY` count)
+- [x] allocations by DHAT and RSS
 
 | outcome | decision | next |
 |---|---|---|
