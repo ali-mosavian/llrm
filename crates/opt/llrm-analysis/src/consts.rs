@@ -1151,10 +1151,6 @@ fn exit_loads(
     found
 }
 
-/// The cell each store writes, and that cell addressed by the indices `placed`
-/// proves constant, found once for the store and not again for each load it
-/// reaches: a scalar written in each arm of N joins is reached by up to N
-/// stores at every load after, N^2 over the body.
 thread_local! {
     static STORES_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1165,6 +1161,10 @@ pub fn stores_decoded() -> usize {
     STORES_DECODED.with(std::cell::Cell::get)
 }
 
+/// The cell each store writes, and that cell addressed by the indices `placed`
+/// proves constant, found once for the store and not again for each load it
+/// reaches: a scalar written in each arm of N joins is reached by up to N
+/// stores at every load after, N^2 over the body.
 #[derive(Default)]
 struct Stores {
     found: RefCell<IdMap<InstId, Option<Rc<(MemRef, MemRef)>>>>,
