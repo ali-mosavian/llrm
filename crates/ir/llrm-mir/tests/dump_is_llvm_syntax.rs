@@ -1,6 +1,8 @@
-//! A dump (`--dump`, `LLRM_DUMP_INPUTS`) was text LLVM's own parser refused: llrm's calling conventions written by
-//! name (`watcallcc`, `sysvcc`, `cc1000`) and `declare internal`. `opt` rejected every dump it was handed; the
-//! dumps now say `cc N` and no linkage on a declaration, and llrm's parser still reads both.
+//! A dump (`--dump`, `LLRM_DUMP_INPUTS`) was text LLVM's own parser refused:
+//! llrm's calling conventions written by name (`watcallcc`, `sysvcc`, `cc1000`)
+//! and `declare internal`. `opt` rejected every dump it was handed; the
+//! dumps now say `cc N` and no linkage on a declaration, and llrm's parser
+//! still reads both.
 
 use llrm_mir::module::{GlobalKind, Linkage};
 use llrm_mir::{parse, print};
@@ -11,7 +13,10 @@ define internal watcallcc i32 @f(i32 %a) {\nb:\n  %r = call watcallcc i32 @exter
 fn printed() -> String {
     let mut module = parse::module(SOURCE).expect("parses");
     for global in &mut module.globals {
-        if matches!(global.kind, GlobalKind::Function(ref function) if function.is_declaration()) {
+        if matches!(
+            global.kind,
+            GlobalKind::Function(ref function) if function.is_declaration()
+        ) {
             global.linkage = Linkage::Internal;
         }
     }

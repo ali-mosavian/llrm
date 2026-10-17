@@ -423,7 +423,8 @@ impl Printer<'_> {
 
     /// A calling convention as LLVM writes it; none for C's.
     fn convention(number: u32) -> Option<String> {
-        // Only the conventions LLVM names are named: llrm's own are `cc N`, which LLVM's parser reads.
+        // Only the conventions LLVM names are named: llrm's own are `cc N`,
+        // which LLVM's parser reads.
         match crate::opcode::CONVENTIONS.iter().find(|(_, one)| *one == number) {
             Some((_, 0)) => None,
             Some((name, one)) if *one < 1000 => Some((*name).to_owned()),
