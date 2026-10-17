@@ -368,6 +368,7 @@ The budgets are counts, not times, so a test can assert them exactly. `llrm-supp
 | `whole_walks` per continuation run | `Function::walk`, `body.insns()` | 0 |
 | allocator `visited` per spill/split | editor | ≤ 40 × instructions in the edited range + 4 × blocks touched |
 | allocator `full_interval_builds` | intervals | 1 per function |
+| lane liveness solved from scratch (`liveness::asks`) per function | `liveness::lanewise` | 1 through the whole peephole; the sub-passes after a change bring the held answer up to date (`test_the_peephole_solves_a_functions_lanes_from_scratch_once`) |
 | clean-up `block_visits` per sub-pass | peephole and jumps drivers | ≤ blocks on the first visit, then ≤ dirty blocks |
 | slopes | `scaling.py`, counted instructions | ≤ gcc's slope + 0.05 per axis |
 | `HINT_DEPTH` | `allocate::HINT_DEPTH`, the copies a fixed register's hint reaches a value through | 128 (a named limit, as gcc's `--param`s; the corpus reaches 74 at most, 99.99% of 141,519 walks ≤ 17); `LLRM_CHECK_WANTED` asserts the bounded walk equals the unbounded one where the walk ended within it |
