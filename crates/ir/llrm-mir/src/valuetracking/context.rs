@@ -52,3 +52,28 @@ pub fn is_implied_by_dom_condition(
     let _ = (q, pred, lhs, rhs, cxt);
     None
 }
+
+/// `computeKnownBitsFromCond(V, Cond, Known, SQ, Invert, Depth)`.
+pub fn compute_known_bits_from_cond(
+    q: &Query,
+    v: Operand,
+    cond: Operand,
+    known: &mut KnownBits,
+    invert: bool,
+    depth: u32,
+) {
+    let _ = (q, v, cond, known, invert, depth);
+}
+
+/// `breakSelfRecursivePHI(U, PHI, ValOut, CtxIOut, PhiOut)` for the incoming
+/// `slot`: the value to analyse in place of the phi's own, the terminator of
+/// its edge and the phi that edge is of.
+pub fn break_self_recursive_phi(
+    q: &Query,
+    phi: InstId,
+    slot: usize,
+) -> (Operand, Option<InstId>, InstId) {
+    let instruction = q.function.instruction(phi);
+    let Operand::Block(from) = instruction.operands[2 * slot + 1] else { unreachable!("a phi's block") };
+    (instruction.operands[2 * slot], q.function.terminator(from), phi)
+}
