@@ -239,7 +239,7 @@ fn sides(
     }
     // Each side as the block a phi of `join` names for it.
     let from = |side: BlockId| if side == join { block } else { side };
-    let mut preds = function.predecessors(join);
+    let mut preds: Vec<BlockId> = function.predecessors(join).into();
     preds.sort();
     let mut expected = vec![from(yes), from(no)];
     expected.sort();
