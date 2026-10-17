@@ -1270,25 +1270,20 @@ fn renamed_into_a_chain(
         }
         _ => ends(was) && ends(now),
     };
-    effects
-        .values()
-        .any(
-            |effect| effect
-                .loads
-                .iter()
-                .chain(effect.stores.iter())
-                .chain(&effect.fills)
-                .any(
-                    |one| [one.pointer, one.root, one.base.map(Operand::Value), one.segment]
-                        .into_iter()
-                        .any(
-                            |named| matches!(
-                                named,
-                                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
-                            ),
-                        ),
-                ),
-        )
+    let differs = |one: &crate::memory::MemRef| {
+        [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
+            matches!(
+                named,
+                Some(Operand::Value(was)) if matches!(substituted(was), Some(Operand::Value(now)) if !alike(was, now))
+            )
+        })
+    };
+    // The lists calls share are looked at once.
+    let mut seen: std::collections::HashSet<*const [crate::memory::MemRef]> = std::collections::HashSet::new();
+    effects.values().any(|effect| {
+        let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
+        lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
+    })
 }
 
 /// What each call of `unit` reads and writes, its callee as `Summaries`
