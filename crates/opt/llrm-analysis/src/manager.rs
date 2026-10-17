@@ -458,7 +458,7 @@ impl Summaries {
         calls_found(module, program, globals, refresh.iter().copied(), &mut facts);
         let table = Table::of(module, program, globals, &facts, Some(slots));
         let memo = analyses.memo::<SummariesMemo>();
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             for (id, function) in bodies(module) {
                 assert!(
                     refresh.contains(&id) || facts[&id].mark == function.mark(),
@@ -490,10 +490,10 @@ impl Summaries {
     ) -> Result<IndexMap<String, Summary>, String> {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(procedures, known, memo, dirty);
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             procedures.check_against_scratch();
         }
-        if llrm_support::env_set("LLRM_CHECK_MODULES") {
+        if llrm_support::env_flag!("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(procedures, known);
             if found != fresh {
                 let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
@@ -1702,7 +1702,7 @@ impl Analysis for FloatFacts {
         let references = analyses.get::<Annotated>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
-        let through = analyses.get::<ThroughMemory>(context, layout, function);
+        let through = analyses.get_exact::<ThroughMemory>(context, layout, function);
         let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)

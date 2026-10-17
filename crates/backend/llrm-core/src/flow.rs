@@ -184,12 +184,13 @@ pub fn checked(
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
-    let body = if llrm_support::env_set("LLRM_STRIP_META") { without_meta(body) } else { body };
+    let body = if llrm_support::env_flag!("LLRM_STRIP_META") { without_meta(body) } else { body };
     let verifying = crate::support::debug::verifying();
     let owned =
         if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };
     let transformed = crate::support::debug::timed_by(|| format!("lir {stage}"), || phase.transform_raising(body))
         .map_err(Checked::Refused)?;
+    transformed.facts.0.end_phase();
     let body = if verifying {
         crate::support::debug::timed("lir verify", || {
             verified(transformed, &stage, in_ssa, &arch.layout().spaces.roles)
@@ -398,5 +399,45 @@ mod tests {
             panic!("the gate let a lost definition through");
         };
         assert!(said.starts_with("loses-definition: value#99 is read"), "{said}");
+    }
+    /// A phase that changes nothing.
+    struct Keeps;
+
+    impl LIRTransform for Keeps {
+        fn class_name(&self) -> &'static str {
+            "Keeps"
+        }
+
+        fn transform(
+            &mut self,
+            body: LirBody,
+        ) -> Result<LirBody, String> {
+            Ok(body)
+        }
+    }
+
+    /// The last answer of `intervals` stayed kept after the phase that asked
+    /// for it, with a body of instructions each: 3.3 MB of the 24 MB peak of
+    /// d_faces -O2. What a body's facts stash of it is let go when a phase
+    /// ends.
+    #[test]
+    fn test_what_the_facts_stash_is_let_go_when_a_phase_ends() {
+        let body =
+            LirBody::new("f", 1, vec![LirBlock::new(1, vec![]).into()], IndexMap::default(), IndexMap::default());
+        let kept = Arc::new(7_u32);
+        body.facts.0.stash(|held: &mut Vec<Arc<u32>>| held.push(Arc::clone(&kept)));
+        assert_eq!(Arc::strong_count(&kept), 2, "premise: the facts hold it");
+        let body = checked(
+            body,
+            &mut Keeps,
+            false,
+            &crate::backend::classes::RegisterClasses::m16(),
+            &crate::backend::target::BUILT_IN,
+            &llrm_x86_m16::M16,
+        )
+        .ok()
+        .expect("a phase that changes nothing");
+        assert_eq!(Arc::strong_count(&kept), 1, "the phase's end kept it");
+        drop(body);
     }
 }

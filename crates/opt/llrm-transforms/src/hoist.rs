@@ -173,7 +173,7 @@ pub fn hoisted(
     // none in any loop nothing moves, and the accesses, the invariant runs
     // and the prices are not made. `LLRM_CHECK_HOISTSKIP` makes them anyway
     // and fails if they find a run.
-    let check = llrm_support::env_set("LLRM_CHECK_HOISTSKIP");
+    let check = llrm_support::env_flag!("LLRM_CHECK_HOISTSKIP");
     if !check && !found.iter().any(|one| _seeded(unit, one)) {
         return false;
     }
@@ -369,8 +369,8 @@ fn _affordable(
         let hoisted = moved.as_ref().map_or(&*unit.function, |(function, _)| function);
         // A floating value held across the loop is released after it, once for
         // each time the loop is entered.
-        let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
-            .into_iter()
+        let floats: IdSet<ValueId> = _crossed_values(hoisted, &run)
+            .iter()
             .filter(|&value| matches!(
                 unit.context.types.get(hoisted.value(value).ty),
                 Type::Float(_)
@@ -411,13 +411,13 @@ fn _affordable(
             _displacement(hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
         };
         let crossing = _crossed_values(hoisted, &run)
-            .into_iter()
+            .iter()
             .filter(|value| forecast.spilled.contains(value))
-            .collect::<BTreeSet<_>>();
+            .collect::<IdSet<_>>();
         let uncounted: i64 = crossing
             .iter()
-            .filter(|&&value| free(value))
-            .filter_map(|value| traffic().get(value))
+            .filter(|&value| free(value))
+            .filter_map(|value| traffic().get(&value))
             .map(|one| one.price(costs))
             .sum();
         for value in forecast.spilled.iter() {
@@ -447,7 +447,6 @@ fn _affordable(
         // and a release, once per entry.
         let unworthy: IdSet<ValueId> = floats
             .iter()
-            .copied()
             .filter(|&value| {
                 let ValueDef::Instruction(def) = unit.function.value(value).def else { return false };
                 let Some(home) = unit.function.parent(def) else { return false };
@@ -465,7 +464,7 @@ fn _affordable(
             0 => unworthy,
             class => {
                 let left = (class - _float_working_set(unit, loop_, &run)).max(0) as usize;
-                floats.iter().copied().skip(left).chain(unworthy.iter()).collect()
+                floats.iter().skip(left).chain(unworthy.iter()).collect()
             }
         };
         if beyond.is_empty() && moved - uncounted <= kept {
@@ -473,12 +472,12 @@ fn _affordable(
             return run;
         }
         let costly = moved - uncounted > kept;
-        let mut stay: BTreeSet<ValueId> =
-            if costly { crossing.into_iter().filter(|&value| !free(value)).collect() } else { BTreeSet::new() };
+        let mut stay: IdSet<ValueId> =
+            if costly { crossing.iter().filter(|&value| !free(value)).collect() } else { IdSet::new() };
         stay.extend(beyond.iter());
         // What costs its release more than it saves stays, with what reads it.
         if costly && costs.float_release > 0 {
-            stay.extend(floats);
+            stay.extend(floats.iter());
         }
         if stay.is_empty() {
             // Nothing moves: the function is as it was priced.
@@ -699,7 +698,7 @@ pub fn _invariant_run(
     // Whether an instruction may move is a fact of the loop, not of how much of
     // it has moved: asked of each once, not once a round.
     let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
-    let mut made: BTreeSet<ValueId> = BTreeSet::new();
+    let mut made: IdSet<ValueId> = IdSet::new();
     let writers = llrm_analysis::memoryssa::Writers::of(accesses, &insts);
     loop {
         let mut grew = false;
@@ -916,10 +915,11 @@ pub fn _guaranteed(
 pub fn _crossed_values(
     function: &Function,
     run: &[InstId],
-) -> BTreeSet<ValueId> {
+) -> IdSet<ValueId> {
+    let inside: IdSet<InstId> = run.iter().copied().collect();
     run.iter()
         .filter_map(|&inst| function.instruction(inst).result)
-        .filter(|&value| function.users(value).iter().any(|one| !run.contains(&one.user)))
+        .filter(|&value| function.users(value).iter().any(|one| !inside.contains(&one.user)))
         .collect()
 }
 

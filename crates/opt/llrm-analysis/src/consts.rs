@@ -83,6 +83,7 @@
 //! for a load's value (`vn_reference_lookup`). `LLRM_CHECK_CYCLES` in
 //! [`crate::constant_cycles`].
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::rc::Rc;
@@ -1184,6 +1185,46 @@ fn exit_loads(
     found
 }
 
+thread_local! {
+    static STORES_DECODED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many stores' cells this thread has decoded, for a test that a store is
+/// decoded once however many loads it reaches.
+pub fn stores_decoded() -> usize {
+    STORES_DECODED.with(std::cell::Cell::get)
+}
+
+/// The cell each store writes, and that cell addressed by the indices `placed`
+/// proves constant, found once for the store and not again for each load it
+/// reaches: a scalar written in each arm of N joins is reached by up to N
+/// stores at every load after, N^2 over the body.
+#[derive(Default)]
+struct Stores {
+    found: RefCell<IdMap<InstId, Option<Rc<(MemRef, MemRef)>>>>,
+}
+
+impl Stores {
+    fn of(
+        &self,
+        unit: &Unit,
+        accesses: &Accesses,
+        placed: &IndexMap<ValueId, Known>,
+        site: InstId,
+    ) -> Option<Rc<(MemRef, MemRef)>> {
+        if let Some(held) = self.found.borrow().get(&site) {
+            return held.clone();
+        }
+        let made = _stored_cell(unit, accesses, site).map(|(cell, _)| {
+            STORES_DECODED.with(|count| count.set(count.get() + 1));
+            let addressed = _addressed(unit, &cell, placed);
+            Rc::new((cell, addressed))
+        });
+        self.found.borrow_mut().insert(site, made.clone());
+        made
+    }
+}
+
 /// What serves a read of `reference` (its index placed by `placed`): the stores
 /// `ask` says reach it, whole or byte by byte. None where a path meets no
 /// write.
@@ -1193,6 +1234,7 @@ fn provider_of(
     graph: &memoryssa::MemorySSA,
     reference: &MemRef,
     ask: &dyn Fn(&MemRef) -> BTreeSet<usize>,
+    stores: &Stores,
 ) -> Option<Provider> {
     let placed = unit.registers.expect("a provider is found over the registers that place the indices");
     let mut values = Vec::new();
@@ -1216,11 +1258,9 @@ fn provider_of(
         let stored = access
             .site
             .filter(|_| access.kind == memoryssa::Kind::Def)
-            .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)));
+            .and_then(|site| Some((site, stores.of(unit, accesses, placed, site)?)));
         match stored {
-            Some((site, (cell, _))) if memoryssa::same_bytes(unit, reference, &_addressed(unit, &cell, placed)) => {
-                values.push(site)
-            }
+            Some((site, held)) if memoryssa::same_bytes(unit, reference, &held.1) => values.push(site),
             _ => {
                 exact = false;
                 break;
@@ -1250,16 +1290,16 @@ fn provider_of(
             }
             for id in nearest {
                 let access = graph.access(id);
-                let Some((site, (cell, _))) = access
+                let Some((site, held)) = access
                     .site
                     .filter(|_| access.kind == memoryssa::Kind::Def)
-                    .and_then(|site| Some((site, _stored_cell(unit, accesses, site)?)))
+                    .and_then(|site| Some((site, stores.of(unit, accesses, placed, site)?)))
                 else {
                     bytes.clear();
                     break 'bytes;
                 };
-                let Some(there) = _addressed(unit, &cell, placed).addr().filter(|there| there.root == address.root)
-                else {
+                let cell = &held.0;
+                let Some(there) = held.1.addr().filter(|there| there.root == address.root) else {
                     bytes.clear();
                     break 'bytes;
                 };
@@ -1293,6 +1333,7 @@ pub fn load_providers(
     let function = unit.function;
     let graph = memoryssa::built(unit, accesses).with_known(_intervals(placed));
     let mut providers: llrm_mir::dense::IdMap<ValueId, Provider> = Default::default();
+    let stores = Stores::default();
     for (_, inst) in function.walk() {
         let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
         if !wanted(result) {
@@ -1305,7 +1346,7 @@ pub fn load_providers(
             continue;
         }
         let ask = |one: &MemRef| graph.nearest_writes(inst, one);
-        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask) {
+        if let Some(provider) = provider_of(unit, accesses, &graph, &reference, &ask, &stores) {
             providers.insert(result, provider);
         }
     }
@@ -1342,12 +1383,13 @@ pub fn cells_read(
     let unit = &unit.with_registers(&known);
     let graph = memoryssa::built(unit, &accesses).with_known(_intervals(&known));
     let mut cells = Cells::default();
+    let stores = Stores::default();
     for reference in references {
         let reference = _addressed(unit, reference, &known);
         if reference.addr().is_none() || crate::memory::constant_bits(unit, &reference).is_some() {
             continue;
         }
-        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &|one| ask(&graph, one)) else {
+        let Some(provider) = provider_of(unit, &accesses, &graph, &reference, &|one| ask(&graph, one), &stores) else {
             continue;
         };
         let Some(fact) = provided(&provider, 8 * reference.width, &|site| _put(unit, site, &known)) else { continue };
