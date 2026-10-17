@@ -53,8 +53,14 @@ pub struct MemoryAccess {
     pub incoming: Vec<(BlockId, AccessId)>,
     /// `MemoryUseOrDef::getOptimized`, set by `OptimizeUses` (stage 2).
     pub optimized: Option<AccessId>,
-    /// `MemoryAccess::users`: the accesses that use this one as an operand.
+    /// `MemoryAccess::users`: the uses and defs that take this one as their
+    /// defining access. Each knows its place here (`user_slot`), so that
+    /// leaving costs what `Use::removeFromList` does, not a scan.
     pub users: Vec<AccessId>,
+    /// The phis that take this one as an incoming value, once for each edge.
+    pub phi_users: Vec<AccessId>,
+    /// Where this access stands in its defining access's `users`.
+    pub user_slot: u32,
     /// `MemoryDef::getID` and `MemoryPhi::getID`.
     pub id: u32,
 }
@@ -160,13 +166,18 @@ impl Mssa {
         new: Option<AccessId>,
     ) {
         if let Some(old) = self.accesses[access as usize].defining {
+            let slot = self.accesses[access as usize].user_slot as usize;
             let users = &mut self.accesses[old as usize].users;
-            if let Some(at) = users.iter().position(|one| *one == access) {
-                users.swap_remove(at);
+            debug_assert_eq!(users[slot], access);
+            users.swap_remove(slot);
+            if let Some(&moved) = users.get(slot) {
+                self.accesses[moved as usize].user_slot = slot as u32;
             }
         }
         self.accesses[access as usize].defining = new;
         if let Some(new) = new {
+            let users = &mut self.accesses[new as usize].users;
+            self.accesses[access as usize].user_slot = users.len() as u32;
             self.accesses[new as usize].users.push(access);
         }
     }
@@ -179,7 +190,7 @@ impl Mssa {
         block: BlockId,
     ) {
         self.accesses[phi as usize].incoming.push((block, value));
-        self.accesses[value as usize].users.push(phi);
+        self.accesses[value as usize].phi_users.push(phi);
     }
 
     /// [`MemorySSA::renumberBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L2132).
