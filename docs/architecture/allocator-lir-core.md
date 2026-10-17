@@ -1,6 +1,6 @@
 # The allocator on the LIR core: design for plan step 3.3
 
-TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. It is 206 rounds at 1.9 M each, not a few slow passes. Representation work (my half: the LIR model and the facts) is bounded at about 25 to 30 M (1%) by the measurements below; the plan's -250 M needs the rounds themselves to cost a sixth as much, which is mostly the split path (greedy-port's half). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft for review, nothing built.
+TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. The decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78); the rounds cost 2.0 M each against LLVM's 150 K, and a fit over 300 allocations says about 75% of a round on the large function scales with the body's size. The sites I and greedy-port have measured add to about 55 M of new work beside the 57 M of #1958; the scaling fit says the whole-body share is much larger than those sites, so the page treats the sum of sites as a floor and the fit as the ceiling to test (section 1.1). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft after review, nothing built.
 
 ## 1. Where the 415.5 M goes
 
@@ -16,6 +16,15 @@ TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M
 | `_allocated` self | 10.3 | | |
 
 LLVM's greedy is 39.5 M for the same bodies. The cost per decision, not the number of passes over the function, is the gap: the plan's exit (`regalloc` 150 M or less, of which about 50 M is the base allocation) is about 0.5 M per round, a quarter of today's, with the same number of rounds.
+
+### 1.1 What scales with the body: a fit, and a hypothesis refuted
+
+Probe in a scratch tree (counters in `_allocated`, wall time of each allocation, min of 3 runs of each corpus file at -O2, 2,113 allocations, 300 with at least 8 rounds; the host was loaded, so the time is a ranking, not an absolute).
+
+- Cost per round against body size: 88 microseconds plus 0.20 microseconds per instruction (R^2 0.51); the medians by size are 60, 89, 129, 191 and 321 microseconds per round for bodies of about 50, 100, 200, 500 and 1,800 instructions. On the large function the size-proportional share is about 72 to 80% of a round. If a round cost only its fixed part, the large function's rounds would cost about a quarter: the plan's exit, with the same rounds.
+- This is a ceiling for any editor that makes every site O(touched), reached only if all the sites do it together; the sites measured so far (facts 83.2 M, split path 180.4 M, spiller 38.8 M, colouring 36.6 M) are about 20 places of 3 to 10 M, each killed below 1% alone. The page's earlier reading, that the representation work cannot reach 150 M, summed the measured sites; the fit says the sum of sites is a floor.
+- Knock-on unassignment is not the cause (a rewrite taking the register of an already-placed value): 104 of 7,694 rounds on the corpus (1.4%), none on `d_faces`. Assignments: 837 on `d_faces` (LLVM 815), evictions 67 (78), queue pops 1,267, requeues after a rewrite 371. The decisions are comparable; the cost of a decision is not.
+- Only two of the 11 `d_faces` allocations have rounds: 162 (1,819 instructions, 274 blocks) and 33 (164 instructions); the large one is 90% of the phase.
 
 ## 2. What already exists
 
@@ -49,7 +58,7 @@ What is left of `Facts::of` is not a missing update. Per update (195, bodies of 
 
 ### 3.1 The edit record
 
-The spiller and the splitter know exactly what they added and removed. Today `ranges::changes(before, body)` finds it again by comparing the two bodies, and every stage below takes its touched set from that. A record made at the edit (instructions gone and added, values touched, blocks changed) replaces the comparison and is what spec 2.3 asks of the editor.
+The spiller and the splitter know exactly what they added and removed. Today `ranges::changes(before, body)` finds it again by comparing the two bodies, and every stage below takes its touched set from that. The contract is spec 2.3's, not a new one: the LIR editor logs the same `Change` records and answers `touched_since(mark)` (the touched blocks and values), as the MIR editor does; a bespoke edit record beside it would be a second contract. It also gives rollback for split pricing. The splitter builds a new `LirBody` per carve today (4.2), so the log is made where the carve edits the touched blocks.
 
 - Early probe: count the instructions `changes` compares per round against the instructions changed (plan: `full_interval_builds`, `visited`). Kill if the comparison is under 5 M.
 - Mechanism in LLVM: `LiveRangeEdit` (`InlineSpiller.cpp`) and `SplitEditor` hand the new virtual registers and the touched blocks to the next dequeue.
@@ -130,9 +139,9 @@ Per (register, union revision): the sorted holders of a register and the points 
 - `placed` (60.5 M after [#1958], 117.4 M before) is eight pieces of 3 to 10 M, each the work the rows ask for (`price` 10.1, interference 10.4, `held` 6.7, `Frame::new` 5.7, `grow` ~9, `iterate` 3.9). LLVM does the same work per candidate (`calcSplitConstraints`, then `SpillPlacement`), and its `SpillPlacement` is 3.3 M for 28 K activations because the bundles are kept; ours is not the shape that is slow. [#1958] is the lever that was there (-57 M, merge it).
 - `spilled_apart` per use, `materialized` 18.7 M: the spiller, shared with ssa-spill-m16 (the plan's E, 0.35%).
 
-### 4.6 The bound, honestly
+### 4.6 The bound
 
-Both halves together reach about 55 to 60 M of the 265 M the plan asks for: section 3 about 25 M (1%), this section about 30 M (1.1%), [#1958] 57 M already in the queue. The rest is the per-round structure: 206 rounds, each a body rewrite, a facts update that still reads tables the size of the function (340 K instructions an update, 220 per body instruction), and a queue rebuild, where LLVM edits the interval in place and goes on. The architecture work that would remove it is the editor contract (spec 2.3 for LIR: an edit record and in-place interval edits) and not a constant factor; section 3.4 measured that an in-place interval edit saves at most 11 M of the intervals' 37 M recompute. If the architecture study finds the same, the allocator's gap is recorded as the cost of the model (plan 3.3 "no effect").
+New work measured so far: section 3 about 25 M (1%) and this section about 30 M (1.1%), beside [#1958]'s 57 M already in the queue: about 112 M of the 265 M the plan asks for. The rest is the per-round structure: 206 rounds, each a body rewrite, a facts update that still reads tables the size of the function (340 K instructions an update, 220 per body instruction), a `Frequency`, a stamp and a `changes` comparison of the whole body, and a queue rebuild. Section 1.1's fit puts 72 to 80% of a large function's round in what scales with the body; that is why the sum of sites is a floor and why the vertical slices (3.0.1, 4.7) must be read as tests of the fit and not of one site: a slice that passes on its own site and leaves the round cost unchanged proves only that site. The in-place interval edit (3.4) is not the missing architecture: `LiveRangeEdit` and `SplitEditor` recompute the new vregs' ranges from their uses too, as `LiveRanges::edit` does.
 
 ### 4.7 The vertical slice before the full build
 
@@ -157,11 +166,18 @@ Steps 3.3.d and 3.3.e for the split path (owner greedy-port):
 
 The joint exit is the plan's: `regalloc` 150 M or less at -O2, identical output, counted `full_interval_builds = 1` and `visited` at most 40 x edited range + 4 x blocks touched. My half alone cannot reach it (section 1); say so in the review.
 
-## 6. Review questions
+## 6. Review
 
-1. Is the per-round cost (0.45 M against 1.9 M) the right unit, or should the plan count decisions (rounds) first?
-2. Is an edit record the right contract for LIR, given the MIR editor's `Change` log (spec 2.3)?
-3. Which of 3.1 to 3.3 should wait for the split path's design, since the splitter produces most edits?
+Reviewed by a second model (Opus), no code read beyond the page's own references. Its points, and what the page now does:
+
+- The unit: per round normalised by body size (section 1.1 does it).
+- The contract: spec 2.3's `Change` log and `touched_since`, not a bespoke record (3.1 now says so).
+- Order: 3.1 and 3.2 wait for the carve to edit through the log (4.4); 3.3 can go on the touched set the allocator has.
+- The central claim: the sum of sites guaranteed a small answer; the fit replaces it with a floor and a ceiling (1.1, 4.6).
+- Omitted: whole-body work per round besides the facts (`Frequency::of`, `Stamp::of`, `required_seen.differing`, `_next_value_following`, `ranges::changes`) is in the round and now in 4.6; knock-on unassignment measured and refuted (1.1).
+- Not answered: the number of candidates per split and `calcSplitConstraints` calls on both sides (section 4.5's claim that `placed` is not the slow shape rests on a count nobody made).
+
+The slice that would discriminate best is the fit itself on a body duplicated 1x, 2x and 4x with the same decisions per copy; the corpus fit above is a first answer.
 
 [#2010]: https://github.com/ali-mosavian/llrm/pull/2010
 [#2021]: https://github.com/ali-mosavian/llrm/pull/2021
