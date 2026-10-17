@@ -40,6 +40,7 @@ pub mod splice;
 pub mod target;
 pub mod tbaa;
 pub mod touched;
+pub mod trace;
 pub mod types;
 pub mod valuetracking;
 pub mod verify;

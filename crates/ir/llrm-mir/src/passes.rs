@@ -2441,6 +2441,7 @@ impl PassManager {
                 }
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
+                crate::trace::run(name, "", function, Some(id.0));
                 let running = crate::counts::pass_run_over(name, function);
                 let preserved = in_function(global.name.as_deref().unwrap_or_default(), || {
                     spanned(name, || {
@@ -2458,6 +2459,7 @@ impl PassManager {
                     })
                 });
                 drop(running);
+                crate::trace::edits(name, function, before);
                 let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));
