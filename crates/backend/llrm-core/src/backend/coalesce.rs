@@ -152,7 +152,7 @@ impl LIRTransform for Coalescer {
 
 pub type Graph = IndexMap<u32, Neighbours>;
 
-fn _find(
+pub(crate) fn _find(
     parent: &mut IndexMap<u32, u32>,
     one: u32,
 ) -> u32 {
@@ -207,6 +207,16 @@ pub fn joined(
     let mut node_of: IndexMap<u32, u32> = IndexMap::default();
     webs.begin(_interference(body), &held);
     let checking = llrm_support::env_flag!("LLRM_CHECK_COALESCE");
+    let shadowing = llrm_support::env_flag!("LLRM_COALESCE_SHADOW");
+    let mut refused: Vec<(usize, &'static str)> = Vec::new();
+    macro_rules! refuse {
+        ($why:expr, $one:expr) => {{
+            if shadowing {
+                refused.push((ranges::key($one), $why));
+            }
+            continue;
+        }};
+    }
 
     // A join is kept, and the first of two that clash is the one that stays:
     // the deepest loops first, as LLVM's `RegisterCoalescer` orders its
@@ -237,19 +247,19 @@ pub fn joined(
             let (mine_pin, theirs_pin) = (held.get(&mine_node).copied(), held.get(&theirs_node).copied());
             if let (Some(mine), Some(theirs)) = (mine_pin, theirs_pin) {
                 if mine != theirs {
-                    continue;
+                    refuse!("pin", one);
                 }
             }
             let (Some(mine), Some(theirs)) = (live.get(&mine_node), live.get(&theirs_node)) else {
-                continue;
+                refuse!("no-interval", one);
             };
             if webs.near.get(&mine_node).is_some_and(|found| found.contains(&theirs_node)) {
-                continue;
+                refuse!("interference", one);
             }
             let allowed: BTreeSet<RegId> =
                 webs.palette(mine_node).intersection(webs.palette(theirs_node)).copied().collect();
             if allowed.is_empty() {
-                continue;
+                refuse!("palette", one);
             }
             let merged = _merged(mine, theirs);
             let width =
@@ -259,10 +269,10 @@ pub fn joined(
                 .filter(|register| !allocate::_clobbered(&merged, *register, &masks, width))
                 .collect();
             if allowed.is_empty() {
-                continue;
+                refuse!("clobber", one);
             }
             if [mine_pin, theirs_pin].into_iter().flatten().any(|pin| !allowed.contains(&pin)) {
-                continue;
+                refuse!("pin-clobber", one);
             }
             let k = allowed.len();
             let significant = webs.significant(mine_node, theirs_node, &allowed);
@@ -288,7 +298,7 @@ pub fn joined(
                     || !webs.either_george(mine_node, theirs_node, &allowed))
             {
                 // Briggs and George: the merged class would not be colourable
-                continue;
+                refuse!("colourability", one);
             }
             if mine_pin.is_some() && theirs_pin.is_none() {
                 std::mem::swap(&mut here, &mut there);
@@ -317,6 +327,21 @@ pub fn joined(
             if checking {
                 assert!(webs.consistent(), "the counts after joining {gone} into {kept}");
             }
+        }
+    }
+
+    if shadowing {
+        let ours: IndexMap<usize, bool> = body
+            .blocks
+            .iter()
+            .flat_map(|block| &block.insns)
+            .filter_map(|one| {
+                _copy(one).map(|pair| (ranges::key(one), _find(&mut parent, pair.0) == _find(&mut parent, pair.1)))
+            })
+            .collect();
+        let theirs = crate::backend::coalesce_shadow::compare(body, &pinned, segments, classes, &ours, &refused);
+        if llrm_support::env_flag!("LLRM_COALESCE_USE_SHADOW") {
+            parent = theirs;
         }
     }
 
@@ -1202,7 +1227,7 @@ fn _kept(
 }
 
 /// One interval covering both, which is what the joined value occupies.
-pub fn _merged(
+pub(crate) fn _merged(
     one: &Interval,
     other: &Interval,
 ) -> Interval {
@@ -1250,7 +1275,7 @@ pub fn _merged(
 }
 
 /// The (written, read) pair this instruction is a plain move of.
-pub fn _copy(one: &Insn) -> Option<(u32, u32)> {
+pub(crate) fn _copy(one: &Insn) -> Option<(u32, u32)> {
     let what = one.what.as_ref()?;
     if what.op != Operation::Move {
         return None;

@@ -138,6 +138,7 @@ pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod coalesce;
+pub mod coalesce_shadow;
 pub mod comparefold;
 pub mod constpool;
 pub mod constrain;
