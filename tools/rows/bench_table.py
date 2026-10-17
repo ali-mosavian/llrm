@@ -34,7 +34,7 @@ def compare(base, main):
 
 
 def render(base, main, allow_failed=False):
-    line, bad = rowcheck.census({"base": base, "main": main}, counters=("instructions",))
+    line, bad = rowcheck.census({"base": base, "main": main}, counters=())  # a size-only cell has no instructions: only an error cell failed
     lines = rowcheck.require(line, bad, allow_failed) + [""]
     groups, changed = compare(base, main)
     lines += ["| language | level | cells | counters changed |", "|---|---|--:|--:|"]

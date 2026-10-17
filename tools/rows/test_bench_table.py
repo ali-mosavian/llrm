@@ -30,3 +30,10 @@ def test_an_error_cell_stops_the_table_and_is_named():
         bench_table.render(base, main)
     text = bench_table.render(base, main, allow_failed=True)
     assert text.startswith("1 rows failed") and "allowed: scroll/c/Os" in text
+
+
+def test_a_size_only_cell_is_not_a_failed_row():
+    """The first version counted the 40 code_bytes-only cells of the bench as failed (113 for 33 real errors)."""
+    size_only = {"code_bytes": 10, "data_bytes": 0, "bss_bytes": 0}
+    text = bench_table.render({"a/c/O2": size_only}, {"a/c/O2": size_only})
+    assert text.startswith("rows total 1 / with counters 2 of 2 / failed 0")
