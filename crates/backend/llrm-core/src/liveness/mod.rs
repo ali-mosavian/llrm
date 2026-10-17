@@ -2,4 +2,5 @@
 //! llvm/include/llvm/CodeGen at d1106deb71cc (see each file for the C++ it
 //! translates and its DEVIATEs).
 
+pub mod liverange;
 pub mod slotindex;
