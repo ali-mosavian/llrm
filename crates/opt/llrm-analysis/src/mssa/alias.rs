@@ -143,9 +143,8 @@ impl<'a> AliasQuery<'a> {
         }
         self.asked.set((asked + 1, worked + 1));
         let writes = self.accesses.writes(def);
-        let found = memoryssa::changes(&loc.effective, false, writes, |written| {
-            memoryssa::may_clobber(self.unit, None, &loc.effective, written)
-        });
+        let found =
+            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written));
         self.cache.borrow_mut().insert(key, found);
         found
     }
@@ -163,9 +162,92 @@ impl<'a> AliasQuery<'a> {
         }
         let touched = |list: Option<&[MemRef]>| match list {
             None => true,
-            Some(list) => list.iter().any(|one| writes.iter().any(|w| memoryssa::may_clobber(self.unit, None, one, w))),
+            Some(list) => list.iter().any(|one| writes.iter().any(|w| self.may_overlap(one, w))),
         };
         touched(self.accesses.reads(call)) || touched(self.accesses.writes(call))
+    }
+
+    /// The identified object (a global or an alloca) `reference` points into:
+    /// `getUnderlyingObject` and `isIdentifiedObject`.
+    fn identified_object(
+        &self,
+        reference: &MemRef,
+    ) -> Option<llrm_mir::module::Operand> {
+        use llrm_mir::context::ConstantKind;
+        use llrm_mir::module::{Operand, ValueDef};
+        let base = if reference.object {
+            reference.root?
+        } else {
+            let unit = self.unit;
+            llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, reference.pointer?).0
+        };
+        let identified = match base {
+            Operand::Constant(id) => matches!(self.unit.context.get(id).kind, ConstantKind::Global(_)),
+            Operand::Value(value) => match self.unit.function.value(value).def {
+                ValueDef::Instruction(def) => {
+                    matches!(
+                        self.unit.function.instruction(def).opcode,
+                        Opcode::Alloca { .. }
+                    )
+                }
+                ValueDef::Argument(_) => false,
+            },
+            Operand::Block(_) => false,
+        };
+        identified.then_some(base)
+    }
+
+    /// `AliasAnalysis::alias` of two references, as far as the stand-in goes:
+    /// two identified objects that differ do not overlap (BasicAA), else the
+    /// overlap test of `may_clobber`.
+    fn may_overlap(
+        &self,
+        one: &MemRef,
+        other: &MemRef,
+    ) -> bool {
+        if one.space == other.space
+            && let (Some(left), Some(right)) = (self.identified_object(one), self.identified_object(other))
+            && left != right
+        {
+            return false;
+        }
+        memoryssa::may_clobber(self.unit, None, one, other)
+    }
+
+    /// `AA.getMemoryEffects(CB)`: whether the call may read and may write
+    /// memory.
+    pub fn call_effects(
+        &self,
+        call: InstId,
+    ) -> (bool, bool) {
+        (
+            self.accesses.reads(call).is_none_or(|reads| !reads.is_empty()),
+            self.accesses.writes(call).is_none_or(|writes| !writes.is_empty()),
+        )
+    }
+
+    /// `!isNoModRef(AA.getModRefInfo(I1, I2))`
+    /// ([`AliasAnalysis.cpp#L390`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L390)):
+    /// whether `first` may read or write a byte `second` reads or writes.
+    pub fn mod_ref_instructions(
+        &self,
+        first: InstId,
+        second: InstId,
+    ) -> bool {
+        let accesses = self.accesses;
+        let touched = |inst: InstId| -> Option<Vec<&MemRef>> {
+            let (reads, writes) = (accesses.reads(inst)?, accesses.writes(inst)?);
+            Some(reads.iter().chain(writes).collect())
+        };
+        let (Some(first_touched), Some(second_touched)) = (touched(first), touched(second)) else {
+            // One may touch anything: it conflicts unless the other touches
+            // nothing.
+            let nothing = |inst: InstId| {
+                accesses.reads(inst).is_some_and(<[_]>::is_empty) && accesses.writes(inst).is_some_and(<[_]>::is_empty)
+            };
+            return !(nothing(first) || nothing(second));
+        };
+        first_touched.iter().any(|one| second_touched.iter().any(|other| self.may_overlap(one, other)))
     }
 
     /// [`isUseTriviallyOptimizableToLiveOnEntry`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L364):

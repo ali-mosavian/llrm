@@ -327,6 +327,64 @@ b0:
     assert!(found[2].1.is_none() && found[2].2 == Kind::Def, "the plain load: {found:?}");
 }
 
+/// Two different globals are different objects: a store to one does not
+/// clobber a load of the other. (Without it the walk of any loop that stores to
+/// another global ended at the header's phi, and LICM kept the load.)
+#[test]
+fn test_a_store_to_another_global_does_not_clobber_the_load() {
+    let found = clobbers_of(
+        "@h = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @g
+  ret i16 %x
+}
+",
+    );
+    let load = found.last().expect("the load");
+    assert!(load.1.is_none() && load.2 == Kind::Def, "{found:?}");
+}
+
+/// A loop that stores through a variable index into one alloca does not clobber
+/// the loads of another: both are identified objects (`getUnderlyingObject`).
+/// Without it the walk ended at the header's phi, and LICM kept every load of a
+/// scalar slot (matmul: 12 of LLVM's 25 hoists missed).
+#[test]
+fn test_a_loop_storing_into_an_array_by_a_variable_index_does_not_clobber_another_slot() {
+    let found = clobbers_of(
+        "define i16 @f(i16 %n) {
+b0:
+  %s = alloca i16
+  %a = alloca [8 x i16]
+  store i16 1, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr %s
+  %o = mul i16 %i, 16
+  %q = getelementptr inbounds i8, ptr %a, i16 %o
+  %o2 = mul i16 %n, 2
+  %p = getelementptr inbounds i8, ptr %q, i16 %o2
+  store i16 %x, ptr %p
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+",
+    );
+    // found: the first store, the load, the store through the index.
+    assert_eq!(found[1].1, Some(found[0].0), "{found:?}");
+}
+
 /// Moving uses off a crowded defining access keeps every other user's place in
 /// its use list (`Use::removeFromList` is O(1); a scan of the list made a body
 /// of N loads cost N^2 to build: loop 1600, 28 M instructions of 305 M).
