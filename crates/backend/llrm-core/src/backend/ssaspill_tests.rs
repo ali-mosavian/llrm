@@ -490,7 +490,7 @@ fn most_live(
     let (_, live_out) = crate::backend::allocate::live(body);
     let mut most = 0;
     for block in &body.blocks {
-        let mut live: BTreeSet<u32> = live_out[&block.at].iter().copied().filter(|value| member(*value)).collect();
+        let mut live: BTreeSet<u32> = live_out[&block.at].iter().filter(|value| member(*value)).collect();
         most = most.max(live.len());
         for one in block.insns.iter().rev() {
             for value in &one.defines {

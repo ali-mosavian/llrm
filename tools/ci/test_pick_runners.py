@@ -43,10 +43,12 @@ def test_a_change_that_leaves_the_compiler_alone_makes_no_perf_job_and_a_fork_ge
     assert fork["groups"]["perf"] == HOSTED and fork["perf_hosted"] == ["perf"], "the ci job fails a compiler change on this"
 
 
-def test_the_tiny_serial_jobs_go_to_tinytim_while_it_is_up_so_they_do_not_requeue_behind_the_hosted_backlog():
-    """bench-merge waited 9 minutes for a hosted slot and ci another 9 (#1915: 2 h 24 min in all)."""
-    assert pick(["unit"], f"{NOW} 2", True, NOW)["small"] == TINYTIM
-    assert pick(["unit"], "", True, NOW)["small"] == HOSTED and pick(["unit"], f"{NOW} 2", False, NOW)["small"] == HOSTED
+def test_the_tiny_serial_jobs_run_hosted_unless_hosted_jobs_wait_and_a_tinytim_runner_is_idle():
+    """On tinytim bench-merge and ci shared a queue with 12-minute cost jobs: a 5-second ci job waited 36 minutes."""
+    assert pick(["unit"], f"{NOW} 2", True, NOW)["small"] == HOSTED
+    assert pick(["unit"], f"{NOW} 2", True, NOW, backlog=20)["small"] == TINYTIM
+    assert pick(["perf", "cost"], f"{NOW} 2", True, NOW, backlog=20)["small"] == HOSTED, "the perf jobs took the idle runners"
+    assert pick(["unit"], "", True, NOW, backlog=20)["small"] == HOSTED and pick(["unit"], f"{NOW} 2", False, NOW, backlog=20)["small"] == HOSTED
 
 
 def test_output_is_json_for_fromjson():

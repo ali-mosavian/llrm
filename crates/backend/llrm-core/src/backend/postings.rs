@@ -56,7 +56,7 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::model::ir::{Loc, Space};
-use crate::model::lir::{Insn, Insns, LirBody};
+use crate::model::lir::{Block, Insn, Insns, LirBody};
 use crate::support::hash::HashMap;
 
 /// An instruction by its block's position in the body and its own in the block.
@@ -594,12 +594,26 @@ fn is_framed(one: &Insn) -> bool {
 /// not reused while it is compared with.
 struct Followed {
     blocks: Vec<(i64, Insns)>,
+    /// The blocks of the body the postings were last made current for, as the
+    /// allocations they were: a body whose blocks all are these needs no look
+    /// at what is in them.
+    seen: Vec<Block>,
     found: Postings,
 }
 
 thread_local! {
     static CURRENT: RefCell<Option<Followed>> = const { RefCell::new(None) };
     static REDONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many blocks `following` has looked into to tell they were the ones the
+/// postings were made of, for a test that asking again of one body looks at
+/// none.
+#[cfg(test)]
+pub fn looked() -> usize {
+    LOOKED.with(std::cell::Cell::get)
 }
 
 /// How many blocks this thread has worked the occurrences of again, for a test
@@ -613,6 +627,14 @@ fn check() -> bool {
     *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_POSTINGS"))
 }
 
+/// Whether `body` has the very blocks the postings were last made current for.
+fn same_blocks(
+    held: &Followed,
+    body: &LirBody,
+) -> bool {
+    held.seen.len() == body.blocks.len() && held.seen.iter().zip(&body.blocks).all(|(was, now)| was.same_as(now))
+}
+
 /// Whether the postings already are those of `body`: its blocks, each of the
 /// same instructions.
 fn current(
@@ -621,6 +643,8 @@ fn current(
 ) -> bool {
     held.blocks.len() == body.blocks.len()
         && held.blocks.iter().zip(&body.blocks).all(|((at, before), block)| {
+            #[cfg(test)]
+            LOOKED.with(|looked| looked.set(looked.get() + 1));
             *at == block.at
                 && (before.same_as(&block.insns)
                     || before.len() == block.insns.len()
@@ -634,8 +658,26 @@ pub fn following<R>(
     body: &LirBody,
     read: impl FnOnce(&Postings) -> R,
 ) -> R {
-    let up_to_date =
-        CURRENT.with(|current_state| current_state.borrow().as_ref().is_some_and(|held| current(held, body)));
+    let up_to_date = CURRENT.with(|state| {
+        let remade = {
+            let guard = state.borrow();
+            let Some(held) = guard.as_ref() else { return false };
+            if same_blocks(held, body) {
+                return true;
+            }
+            if !current(held, body) {
+                return false;
+            }
+            true
+        };
+        // Blocks made again of the same instructions: noted, so that the next
+        // ask of this body is told by the blocks alone (a read that asks again
+        // of the same body has the state borrowed: it notes nothing).
+        if remade && let Ok(mut state) = state.try_borrow_mut() {
+            state.as_mut().expect("held").seen = body.blocks.clone();
+        }
+        remade
+    });
     if !up_to_date {
         CURRENT.with(|state| {
             let mut state = state.borrow_mut();
@@ -649,6 +691,7 @@ pub fn following<R>(
                 REDONE.with(|redone| redone.set(redone.get() + body.blocks.len()));
                 *state = Some(Followed {
                     blocks: body.blocks.iter().map(|block| (block.at, block.insns.clone())).collect(),
+                    seen: body.blocks.clone(),
                     found: Postings::of(body),
                 });
             } else {
@@ -664,6 +707,7 @@ pub fn following<R>(
                     held.found.replaced(block as u32, before, &one.insns);
                     *before = one.insns.clone();
                 }
+                held.seen = body.blocks.clone();
             }
             if check() {
                 let held = state.as_ref().expect("made");
