@@ -24,7 +24,7 @@ out.append("\nrows whose llrm number changed (base -> main), by counter:\n")
 for l in LV:
     for k in ('clocks','ins','mem','code'):
         ch=[(p,base[p][L(l)][k],main[p][L(l)][k]) for p in main if base[p][L(l)][k]!=main[p][L(l)][k]]
-        if ch: out.append(f"-{l} {k}: {len(ch)} rows changed: "+", ".join(f"{p} {a}->{b} ({(b/a-1)*100:+.2f}%)" for p,a,b in sorted(ch,key=lambda t:t[2]/t[1])))
+        if ch: out.append(f"-{l} {k}: {len(ch)} rows changed: "+", ".join(f"{p} {a}->{b} ({(b/max(1,a)-1)*100:+.2f}%)" for p,a,b in sorted(ch,key=lambda t:t[2]/max(1,t[1]))))
 out.append("\nrows newly below / above min(gcc, clang) clocks (ratio crosses 1.00):\n")
 for l in LV:
     nb=[];na=[]
