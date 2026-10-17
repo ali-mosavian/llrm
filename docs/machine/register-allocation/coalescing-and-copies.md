@@ -22,15 +22,14 @@ x86 instructions write one of their sources. [`TwoAddress`](https://github.com/a
 
 ## Coalescing
 
-[`coalesce::joined`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L81) is LLVM's `RegisterCoalescer`, conservative: there is no undo, so a join must be safe. It is the one place an interference graph is built (`_interference`, a sorted set per value that is a bit vector once dense, [`neighbours.rs`](../../optimizations/backend/neighbours.md)).
+[`coalesce::joined`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L81) is LLVM's `RegisterCoalescer`, conservative: there is no undo, so a join must be safe. It joins by live range and builds no interference graph (`_interference` remains for `twoaddr` and the spiller's sibling pricing).
 
 Copies are visited in the blocks of deepest loop first, and in a loop the blocks that run most. A copy of two values `x := y` is joined when:
 
-1. they are not already one web and do not interfere (a copy's own two sides do not);
-2. they are not pinned to different registers, and the registers both may take have a common member, taking each value's class and the registers no point in the merged range destroys;
-3. Briggs's test passes: fewer neighbours of significant degree than registers remain in the merged palette; or, where nothing is pinned, George's test passes for one side into the other.
+1. they are not already one web, and their live ranges share no point, or share one run that the copy begins, of one width, with neither web written inside it (and the copy is not a member of a parallel copy);
+2. they are not pinned to different registers, and the registers both may take have a common member, taking each value's class and the registers no point in the merged range destroys.
 
-The merged web has the union of the two intervals, the wider width and the pin of whichever had one. A joined copy becomes an identity and is removed; every occurrence is renamed to the web's root. `LLRM_CHECK_COALESCE=1` recomputes the counts by scan after each join. Tests: [`test_a_source_redefined_while_its_copy_is_live_cannot_share`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1372), [`test_parallel_copy_sources_interfere_before_any_destination_is_written`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1387), [`test_coalescing_keeps_the_pinned_return_as_representative`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L1506).
+No colourability test is made: two ranges that share no point leave the live count of every point as it was, and what the allocator does with a range of many segments is its to split and evict. The merged web has the union of the two intervals, the wider width and the pin of whichever had one. A joined copy becomes an identity and is removed; every occurrence is renamed to the web's root.
 
 ## Hints
 

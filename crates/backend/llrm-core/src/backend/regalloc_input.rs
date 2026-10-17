@@ -96,6 +96,17 @@ pub fn before_regalloc_unspilled<'a>(
     before_phase_skipping(Calls::C, fixture, name, cpu_name, "RegAlloc", &["SsaSpill"])
 }
 
+/// `before_regalloc_unspilled`, also without the coalescer, which joins the
+/// copies a loop carries: a loop's parallel copy at the length the phis made
+/// it, for tests of the allocator on its own.
+pub fn before_regalloc_uncoalesced<'a>(
+    fixture: &str,
+    name: &str,
+    cpu_name: &'a str,
+) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
+    before_phase_skipping(Calls::C, fixture, name, cpu_name, "RegAlloc", &["SsaSpill", "Coalescer"])
+}
+
 /// `name` of `tests/check/mir/{fixture}` for `cpu`, run through every
 /// phase before the one of class `phase`; the body, and the phases from it on.
 pub fn before_phase<'a>(

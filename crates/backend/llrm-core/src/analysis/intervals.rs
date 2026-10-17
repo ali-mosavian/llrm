@@ -147,6 +147,14 @@ pub fn def_point(slot: i64) -> i64 {
 }
 
 impl Indexes {
+    /// The slot where the instruction `key` writes: where a value it defines
+    /// starts.
+    pub fn write_of(
+        &self,
+        key: usize,
+    ) -> Option<i64> {
+        self.at.get(&key).map(|at| at + DEF)
+    }
     /// The numbering of a hand-made test, where a slot is its own uniform
     /// number.
     pub fn plain() -> Self {
