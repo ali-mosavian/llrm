@@ -21,8 +21,9 @@ fn simplified(
             function.instruction(inst).result.is_some_and(|result| function.value(result).name.as_deref() == Some(name))
         })
         .expect("a named instruction");
-    let found = simplify::simplify_instruction(
+    let found = simplify::simplify_instruction_in(
         &mut module.context,
+        &module.globals,
         &crate::datalayout::DataLayout::default(),
         &function,
         inst,
@@ -321,6 +322,67 @@ fn compare_with_binary_operators() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// `simplifyICmpWithMinMax`: a compare of `llvm.smax`/`smin`/`umax`/`umin`
+/// against one of its arguments, or of a max against a min, answered as LLVM
+/// does.
+#[test]
+fn compare_with_min_max() {
+    let decls: String = ["smax", "smin", "umax", "umin"]
+        .iter()
+        .map(|name| format!("declare i16 @llvm.{name}.i16(i16, i16)\n"))
+        .collect();
+    let cases: &[(&str, Option<&str>)] = &[
+        ("  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %r = icmp sge i16 %m, %x\n", Some("1")),
+        ("  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %r = icmp sge i16 %m, %y\n", Some("1")),
+        ("  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %r = icmp slt i16 %m, %x\n", Some("0")),
+        ("  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %r = icmp sle i16 %x, %m\n", Some("1")),
+        ("  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %r = icmp sgt i16 %x, %m\n", Some("0")),
+        ("  %m = call i16 @llvm.smin.i16(i16 %x, i16 %y)\n  %r = icmp sle i16 %m, %x\n", Some("1")),
+        ("  %m = call i16 @llvm.smin.i16(i16 %x, i16 %y)\n  %r = icmp sgt i16 %m, %y\n", Some("0")),
+        ("  %m = call i16 @llvm.smin.i16(i16 %x, i16 %y)\n  %r = icmp sgt i16 %x, %m\n", None),
+        ("  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = icmp uge i16 %m, %x\n", Some("1")),
+        ("  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = icmp ult i16 %m, %y\n", Some("0")),
+        ("  %m = call i16 @llvm.umin.i16(i16 %x, i16 %y)\n  %r = icmp ule i16 %m, %y\n", Some("1")),
+        ("  %m = call i16 @llvm.umin.i16(i16 %x, i16 %y)\n  %r = icmp ugt i16 %m, %y\n", Some("0")),
+        ("  %m = call i16 @llvm.umin.i16(i16 %x, i16 %y)\n  %r = icmp ult i16 %x, %m\n", Some("0")),
+        ("  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = icmp eq i16 %m, %x\n", None),
+        ("  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = icmp ne i16 %m, %x\n", None),
+        (
+            "  %a = icmp uge i16 %x, %y\n  %s = select i1 %a, i16 %x, i16 %y\n  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %r = icmp eq i16 %m, %x\n",
+            None,
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.smin.i16(i16 %x, i16 %y)\n  %r = icmp sge i16 %m, %n\n",
+            Some("1"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.smin.i16(i16 %x, i16 %y)\n  %r = icmp slt i16 %m, %n\n",
+            Some("0"),
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.smin.i16(i16 %y, i16 %x)\n  %r = icmp slt i16 %n, %m\n",
+            None,
+        ),
+        (
+            "  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.umin.i16(i16 %y, i16 %x)\n  %r = icmp ult i16 %m, %n\n",
+            Some("0"),
+        ),
+        (
+            "  %m = call i16 @llvm.umax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.umin.i16(i16 %y, i16 %x)\n  %r = icmp uge i16 %n, %m\n",
+            None,
+        ),
+        (
+            "  %m = call i16 @llvm.smax.i16(i16 %x, i16 %y)\n  %n = call i16 @llvm.umin.i16(i16 %y, i16 %x)\n  %r = icmp slt i16 %m, %n\n",
+            None,
+        ),
+    ];
+    let wrong: Vec<_> = cases
+        .iter()
+        .filter(|(body, expected)| simplified(&format!("{decls}{}", of(body)), "r").as_deref() != *expected)
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
@@ -344,8 +406,9 @@ fn simplify_cases() {
         }) else {
             continue;
         };
-        let found = simplify::simplify_instruction(
+        let found = simplify::simplify_instruction_in(
             &mut module.context,
+            &module.globals,
             &crate::datalayout::DataLayout::default(),
             &function,
             inst,

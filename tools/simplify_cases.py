@@ -22,7 +22,15 @@ for k in range(N):
               ('a3',f'and {ty} %x, 3'),('a7',f'and {ty} %x, 7'),('sd',f'sdiv exact {ty} %x, %y'),('ae',f'ashr exact {ty} %x, %y'),('zn',f'sub {ty} 0, %zz')]
     derived=[d for d in derived if '%mu0' not in d[1] and '%zz' not in d[1]]
     use=random.sample(derived,random.randint(0,5))
-    names=['x','y']+[n for n,_ in use]
+    # min/max idioms: a compare and the select on it (both kept alive)
+    mm=[('smax','sgt','x','y'),('smin','slt','x','y'),('umax','ugt','x','y'),('umin','ult','x','y'),('smaxy','sgt','y','x'),('uminy','ule','y','x'),('smaxe','sge','x','y'),('umaxe','uge','x','y')]
+    mm=random.sample(mm,random.randint(0,3))
+    mmdefs=''.join(f'  %c_{n} = icmp {pr} {ty} %{a}, %{b}\n  %{n} = select i1 %c_{n}, {ty} %{a}, {ty} %{b}\n' for n,pr,a,b in mm)
+    ik=random.sample([(n,a,b) for n in ('smax','smin','umax','umin') for a,b in (('x','y'),('y','x'))],random.randint(0,3))
+    mmdefs+=''.join(f'  %i_{n}{a} = call {ty} @llvm.{n}.{ty}({ty} %{a}, {ty} %{b})\n' for n,a,b in ik)
+    mmsink_i=''.join(f'  store volatile {ty} %i_{n}{a}, ptr @g_{ty}\n' for n,a,b in ik)
+    mmsink=''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n  store volatile i1 %c_{n}, ptr @g_i1\n' for n,_,_,_ in mm)+mmsink_i
+    names=['x','y']+[n for n,_ in use]+[n for n,_,_,_ in mm]+[f'i_{n}{a}' for n,a,b in ik]
     def operand():
         r=random.random()
         if r<0.65: return '%'+random.choice(names)
@@ -53,13 +61,13 @@ for k in range(N):
     else:
         t=f'{op} {flags}{ty} {a}, {b}'
     # second layer: sometimes wrap an extension pair/compare of ext
-    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)
-    sink=''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n' for n,_ in use)
+    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)+mmdefs
+    sink=''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n' for n,_ in use)+mmsink
     if op=='phi':
         body=f'  br i1 %c, label %p1, label %p2\np1:\n  br label %j\np2:\n  br label %j\nj:\n  %t = {t}\n  store volatile {rty} %t, ptr @g_{rty}\n  ret void\n'
         text=f'define void @f{k}({ty} %x, {ty} %y, i1 %c) {{\nb0:\n{pre_text}{sink}'+body+'}\n'
     else:
         text=f'define void @f{k}({ty} %x, {ty} %y, i1 %c) {{\nb0:\n{pre_text}{sink}  %t = {t}\n  store volatile {rty} %t, ptr @g_{rty}\n  ret void\n}}\n'
     cases.append(text)
-hdr=''.join(f'@g_{t} = global {t} 0\n' for t in ['i1','i8','i16','i32','i64'])
+hdr=''.join(f'@g_{t} = global {t} 0\n' for t in ['i1','i8','i16','i32','i64'])+''.join(f'declare {t} @llvm.{n}.{t}({t}, {t})\n' for t in ['i8','i16','i32'] for n in ('smax','smin','umax','umin'))
 open(sys.argv[3] if len(sys.argv)>3 else 'simplify_cases.ll','w').write(hdr+'\n'.join(cases))

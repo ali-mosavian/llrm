@@ -17,7 +17,9 @@
 //!
 //! DEVIATE, with the reason:
 //! - `undef` (MIR has none), vectors, floating point, pointers, intrinsics
-//!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset.
+//!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset, except the
+//!   `llvm.smax` family, matched by `simplify_instruction_in`, whose caller
+//!   passes the module's globals; the other entry points know no callee.
 //! - The ValueTracking query is `Query::bare` over the body: no module (so no
 //!   intrinsic is known), no dominator tree, no assumptions, no context
 //!   instruction. `simplifyByDomEq`, `isImpliedByDomCondition`,
@@ -38,10 +40,12 @@ use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
 use crate::knownbits::KnownBits;
-use crate::module::{Function, InstId, Operand, ValueDef};
+use crate::module::{Function, GlobalValue, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
-use crate::valuetracking::{Query as ValueQuery, context as conditions, known, nonzero, power2, range, signbits};
+use crate::valuetracking::{
+    Query as ValueQuery, context as conditions, known, nonzero, pattern, power2, range, signbits,
+};
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
 const RECURSION_LIMIT: u32 = 3;
@@ -51,6 +55,9 @@ struct Query<'a> {
     context: &'a mut Context,
     function: &'a Function,
     layout: &'a DataLayout,
+    /// The module's globals, which name the callees; empty where the caller has
+    /// no module.
+    globals: &'a [GlobalValue],
 }
 
 impl Query<'_> {
@@ -253,7 +260,7 @@ impl Query<'_> {
 
     /// A ValueTracking query over this body (`SimplifyQuery`).
     fn tracking(&self) -> ValueQuery<'_> {
-        ValueQuery::bare(self.context, self.function, self.layout)
+        ValueQuery { globals: self.globals, ..ValueQuery::bare(self.context, self.function, self.layout) }
     }
 
     /// `computeKnownBits(V, Q)`.
@@ -1814,8 +1821,8 @@ fn simplify_select(
 /// ([:3883](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3883)):
 /// the constant fold, poison, the compare of a value with itself, the bool and
 /// zero forms, and the compares of an extension against an extension or a
-/// constant, the binary-operator forms and the monotonic values. DEVIATE:
-/// min/max, assume and the `trunc` forms are not yet translated.
+/// constant, the binary-operator and min/max forms and the monotonic values.
+/// DEVIATE: assume and the `trunc` forms are not yet translated.
 fn simplify_icmp(
     q: &mut Query,
     mut pred: IntPredicate,
@@ -1865,10 +1872,199 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_with_bin_op(q, pred, lhs, rhs, max_recurse) {
         return Some(v);
     }
+    if let Some(v) = simplify_icmp_with_min_max(q, pred, lhs, rhs, max_recurse) {
+        return Some(v);
+    }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
     simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs)
+}
+
+/// `CmpInst::getInversePredicate`.
+fn inverse(p: IntPredicate) -> IntPredicate {
+    match p {
+        IntPredicate::Eq => IntPredicate::Ne,
+        IntPredicate::Ne => IntPredicate::Eq,
+        IntPredicate::Ugt => IntPredicate::Ule,
+        IntPredicate::Uge => IntPredicate::Ult,
+        IntPredicate::Ult => IntPredicate::Uge,
+        IntPredicate::Ule => IntPredicate::Ugt,
+        IntPredicate::Sgt => IntPredicate::Sle,
+        IntPredicate::Sge => IntPredicate::Slt,
+        IntPredicate::Slt => IntPredicate::Sge,
+        IntPredicate::Sle => IntPredicate::Sgt,
+    }
+}
+
+/// `m_SMax`, `m_SMin`, `m_UMax` and `m_UMin` (PatternMatch.h): a call of
+/// `llvm.smax` and the like, with its two arguments. Known only where the
+/// query has the module's globals.
+fn min_max_call(
+    q: &Query,
+    v: Operand,
+    signed_kind: bool,
+    max: bool,
+) -> Option<(Operand, Operand)> {
+    let base = match (signed_kind, max) {
+        (true, true) => "llvm.smax",
+        (true, false) => "llvm.smin",
+        (false, true) => "llvm.umax",
+        (false, false) => "llvm.umin",
+    };
+    let tracking = q.tracking();
+    let (_, args) = pattern::intrinsic_call(&tracking, v, base)?;
+    let [a, b] = *args else { return None };
+    Some((a, b))
+}
+
+/// `extractEquivalentCondition`
+/// ([:2640](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L2640)):
+/// the compare `v` selects on if it is `LHS pred RHS`.
+fn extract_equivalent_condition(
+    q: &Query,
+    v: Operand,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let select = q.function.instruction(q.definition(v)?);
+    if select.opcode != Opcode::Select {
+        return None;
+    }
+    let condition = select.operands[0];
+    let cmp = q.function.instruction(q.definition(condition)?);
+    let Opcode::ICmp(cmp_pred) = cmp.opcode else { return None };
+    let [cmp_lhs, cmp_rhs] = cmp.operands[..] else { return None };
+    if (pred == cmp_pred && lhs == cmp_lhs && rhs == cmp_rhs)
+        || (pred == swapped(cmp_pred) && lhs == cmp_rhs && rhs == cmp_lhs)
+    {
+        return Some(condition);
+    }
+    None
+}
+
+/// `simplifyICmpWithMinMax`
+/// ([:3626](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3626)).
+/// The C++ writes the signed and the unsigned variants out; they differ only
+/// in the matchers, `EqP` and the predicates of the switch, so one function
+/// takes the kind.
+fn simplify_icmp_with_min_max(
+    q: &mut Query,
+    mut pred: IntPredicate,
+    mut lhs: Operand,
+    mut rhs: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    for signed_kind in [true, false] {
+        // "A == max/min(A,B)" iff "A eq_p B"; `max_pred` is the predicate of
+        // "max(A, B) p A" read as "A pred max/min".
+        let (max_eq, min_eq, ge, gt, le, lt) = if signed_kind {
+            (
+                IntPredicate::Sge,
+                IntPredicate::Sle,
+                IntPredicate::Sge,
+                IntPredicate::Sgt,
+                IntPredicate::Sle,
+                IntPredicate::Slt,
+            )
+        } else {
+            (
+                IntPredicate::Uge,
+                IntPredicate::Ule,
+                IntPredicate::Uge,
+                IntPredicate::Ugt,
+                IntPredicate::Ule,
+                IntPredicate::Ult,
+            )
+        };
+        let mut found = None;
+        if let Some((a, b)) = min_max_call(q, lhs, signed_kind, true)
+            && (a == rhs || b == rhs)
+        {
+            // max(A, B) pred A.
+            found = Some((if a != rhs { b } else { a }, if a != rhs { a } else { b }, max_eq, pred));
+        } else if let Some((a, b)) = min_max_call(q, rhs, signed_kind, true)
+            && (a == lhs || b == lhs)
+        {
+            // A pred max(A, B), as max(A, B) swapped-pred A.
+            found = Some((if a != lhs { b } else { a }, if a != lhs { a } else { b }, max_eq, swapped(pred)));
+        } else if let Some((a, b)) = min_max_call(q, lhs, signed_kind, false)
+            && (a == rhs || b == rhs)
+        {
+            // min(A, B) pred A, as max(-A, -B) swapped-pred -A.
+            found = Some((if a != rhs { b } else { a }, if a != rhs { a } else { b }, min_eq, swapped(pred)));
+        } else if let Some((a, b)) = min_max_call(q, rhs, signed_kind, false)
+            && (a == lhs || b == lhs)
+        {
+            // A pred min(A, B), as max(-A, -B) pred -A.
+            found = Some((if a != lhs { b } else { a }, if a != lhs { a } else { b }, min_eq, pred));
+        }
+        if let Some((a, b, eq_p, p)) = found {
+            // Cases correspond to "max(A, B) p A".
+            if p == IntPredicate::Eq || p == le {
+                // Equivalent to "A EqP B"; this may be the condition tested in
+                // the max/min, or simplify.
+                if let Some(v) = extract_equivalent_condition(q, lhs, eq_p, a, b) {
+                    return Some(v);
+                }
+                if let Some(v) = extract_equivalent_condition(q, rhs, eq_p, a, b) {
+                    return Some(v);
+                }
+                if max_recurse > 0
+                    && let Some(v) = simplify_icmp(q, eq_p, a, b, max_recurse - 1)
+                {
+                    return Some(v);
+                }
+            } else if p == IntPredicate::Ne || p == gt {
+                let inv_eq_p = inverse(eq_p);
+                if let Some(v) = extract_equivalent_condition(q, lhs, inv_eq_p, a, b) {
+                    return Some(v);
+                }
+                if let Some(v) = extract_equivalent_condition(q, rhs, inv_eq_p, a, b) {
+                    return Some(v);
+                }
+                if max_recurse > 0
+                    && let Some(v) = simplify_icmp(q, inv_eq_p, a, b, max_recurse - 1)
+                {
+                    return Some(v);
+                }
+            } else if p == ge {
+                return Some(q.int(i1, 1));
+            } else if p == lt {
+                return Some(q.null(i1));
+            }
+        }
+    }
+    // Comparing 1 each of min/max with a common operand? Canonicalize min
+    // operand to RHS.
+    if min_max_call(q, lhs, false, false).is_some() || min_max_call(q, lhs, true, false).is_some() {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = swapped(pred);
+    }
+    let shares = |a: Operand, b: Operand, c: Operand, d: Operand| a == c || a == d || b == c || b == d;
+    if let (Some((a, b)), Some((c, d))) = (min_max_call(q, lhs, true, true), min_max_call(q, rhs, true, false))
+        && shares(a, b, c, d)
+    {
+        // smax(A, B) >=s smin(A, D) --> true; <s --> false
+        if pred == IntPredicate::Sge {
+            return Some(q.int(i1, 1));
+        }
+        if pred == IntPredicate::Slt {
+            return Some(q.null(i1));
+        }
+    } else if let (Some((a, b)), Some((c, d))) = (min_max_call(q, lhs, false, true), min_max_call(q, rhs, false, false))
+        && shares(a, b, c, d)
+    {
+        if pred == IntPredicate::Uge {
+            return Some(q.int(i1, 1));
+        }
+        if pred == IntPredicate::Ult {
+            return Some(q.null(i1));
+        }
+    }
+    None
 }
 
 /// `CmpInst::isEquality`.
@@ -2622,10 +2818,29 @@ pub fn simplify_instruction(
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
+    simplify_instruction_with(Query { context, function, layout, globals: &[] }, inst)
+}
+
+/// `simplifyInstruction` for a module's function: `globals` name the callees,
+/// so the intrinsics (`llvm.smax`...) are known.
+pub fn simplify_instruction_in(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    layout: &DataLayout,
+    function: &Function,
+    inst: InstId,
+) -> Option<Operand> {
+    simplify_instruction_with(Query { context, function, layout, globals }, inst)
+}
+
+fn simplify_instruction_with(
+    mut q: Query,
+    inst: InstId,
+) -> Option<Operand> {
+    let function = q.function;
     let instruction = function.instruction(inst);
     let operands = instruction.operands.to_vec();
     let flags = instruction.flags;
-    let mut q = Query { context, function, layout };
     match &instruction.opcode {
         Opcode::Binary(op) => {
             let [lhs, rhs] = operands[..] else { return None };
@@ -2657,7 +2872,7 @@ pub fn simplify_binop_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout };
+    let mut q = Query { context, function, layout, globals: &[] };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
@@ -2670,7 +2885,7 @@ pub fn simplify_icmp_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout };
+    let mut q = Query { context, function, layout, globals: &[] };
     simplify_icmp(&mut q, predicate, lhs, rhs, RECURSION_LIMIT)
 }
 
@@ -2683,7 +2898,7 @@ pub fn simplify_cast_operand(
     value: Operand,
     to: TypeId,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout };
+    let mut q = Query { context, function, layout, globals: &[] };
     simplify_cast(&mut q, op, value, to, RECURSION_LIMIT)
 }
 
@@ -2696,7 +2911,7 @@ pub fn simplify_select_operands(
     if_true: Operand,
     if_false: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout };
+    let mut q = Query { context, function, layout, globals: &[] };
     simplify_select(&mut q, condition, if_true, if_false)
 }
 
