@@ -259,6 +259,13 @@ struct Built {
 
 thread_local! {
     static BEFORE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static STRUCTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many `EscapedBefore` structures this thread has built, for a test that a
+/// solve nothing asks about builds none.
+pub fn structures_built() -> usize {
+    STRUCTURES.with(std::cell::Cell::get)
 }
 
 /// How many answers of `EscapedBefore` this thread has worked out, for a test
@@ -302,6 +309,7 @@ impl Inputs {
         &self,
         width: usize,
     ) -> Built {
+        STRUCTURES.with(|built| built.set(built.get() + 1));
         let graph: Vec<cfg::Block> =
             self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone() }).collect();
         let predecessors = loops::predecessors(&graph);
@@ -422,16 +430,23 @@ impl EscapedBefore {
         });
         // What escaped before `at` is asked of only an access that can reach
         // only what escaped, to a cell in frame objects.
-        let frames = cell.provenance.as_ref().is_some_and(|one| {
-            !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.kind == MemoryKind::Frame)
-        });
+        let frames = cell
+            .provenance
+            .as_ref()
+            .is_some_and(
+                |one| !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.kind == MemoryKind::Frame),
+            );
         if !escaping || !frames {
             return false;
         }
         let Some(bits) = self.before(&at) else { return false };
-        cell.provenance.as_ref().is_some_and(|one| {
-            one.slices.iter().all(|slice| self.objects.get_index_of(&slice.object).is_none_or(|index| !bits.contains(index)))
-        })
+        cell.provenance
+            .as_ref()
+            .is_some_and(
+                |one| one.slices
+                    .iter()
+                    .all(|slice| self.objects.get_index_of(&slice.object).is_none_or(|index| !bits.contains(index))),
+            )
     }
 }
 
@@ -2486,8 +2501,7 @@ pub fn initialized(
     if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
         return Ok(vec![Vec::new(); count]);
     }
-    // The three solves below differ in the call arguments and captures they
-    // ask of the escape phase alone: the value solve is made once.
+    // The value solve is made once; the escape phase is not asked.
     let values = match unit.point_values {
         Some(_) => None,
         None => Some(point_values(unit)?),
@@ -2495,9 +2509,11 @@ pub fn initialized(
     let held =
         Procedure { unit: values.as_ref().map_or(*unit, |values| unit.with_point_values(values)), ..procedure.clone() };
     let (procedure, unit) = (&held, &held.unit);
-    let facts = points_to(unit, None, None)?;
+    // What it reads of the solve is each pointer's objects: neither what
+    // escapes nor, for the actuals, anything the arguments add (they enter
+    // only the escape phase), so the value solve is all it asks.
+    let facts = unit.point_values.expect("the value solve was made above or is held");
     let effects = calls_annotated(procedure, known)?;
-    let actuals = points_to(unit, Some(&procedure.arguments), None)?;
     // `None` is every byte: nothing asked yet.
     type State = Vec<Option<Ranges>>;
     let meet = |one: &State, other: &State| -> State {
@@ -2558,7 +2574,7 @@ pub fn initialized(
                             .and_then(|one| one.parameter_attrs.get(argument))
                             .map_or(&[][..], |attrs| llrm_mir::memory::initializes(attrs)),
                     );
-                    let Some(pointer) = _operand(unit, *operand, &actuals.values) else { continue };
+                    let Some(pointer) = _operand(unit, *operand, &facts.values) else { continue };
                     let [one] = pointer.slices.iter().collect::<Vec<_>>()[..] else { continue };
                     let (Some(index), true) = (_parameter(one), one.high == one.low + 1) else { continue };
                     for (low, high) in ranges {
@@ -3332,14 +3348,21 @@ fn escapes(
     for block in &graph {
         let mut steps = Vec::new();
         for inst in instructions(block.at) {
-            let publishes = publishes[&block.at].get(inst).map(|objects| {
-                objects.iter().for_each(|one| every.insert(*one));
-                let mut sorted = objects.clone();
-                sorted.sort_unstable();
-                sorted
-            });
+            let publishes = publishes[&block.at]
+                .get(inst)
+                .map(
+                    |objects| {
+                        objects.iter().for_each(|one| every.insert(*one));
+                        let mut sorted = objects.clone();
+                        sorted.sort_unstable();
+                        sorted
+                    },
+                );
             let asked = calls.contains(inst)
-                || matches!(function.instruction(*inst).opcode, Opcode::Load { .. } | Opcode::Store { .. });
+                || matches!(
+                    function.instruction(*inst).opcode,
+                    Opcode::Load { .. } | Opcode::Store { .. }
+                );
             if publishes.is_some() || asked {
                 steps.push(Step { inst: *inst, publishes, asked });
             }
