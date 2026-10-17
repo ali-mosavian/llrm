@@ -245,6 +245,82 @@ fn nsw_shl_by_a_nonzero_amount_of_a_large_value() {
     check("  %o = or i16 %x, 1\n  %r = shl nsw i16 -32768, %o\n", "r", Some("poison"));
 }
 
+/// `simplifyICmpWithBinOp`: a compare of a binary operator against an
+/// operand of it, or against another binary operator, answered as LLVM does.
+#[test]
+fn compare_with_binary_operators() {
+    let cases: &[(&str, Option<&str>)] = &[
+        ("  %a = add nuw i16 %x, %y\n  %r = icmp ult i16 %a, %x\n", Some("0")),
+        ("  %a = add i16 %x, %y\n  %r = icmp eq i16 %a, %x\n", None),
+        ("  %a = add nsw i16 %x, %y\n  %r = icmp slt i16 %x, %a\n", None),
+        ("  %a = add nuw i16 %x, 1\n  %b = add nuw i16 %y, 1\n  %r = icmp ult i16 %a, %b\n", None),
+        ("  %a = add nsw i16 %x, 1\n  %b = add nsw i16 %x, 2\n  %r = icmp slt i16 %a, %b\n", Some("1")),
+        ("  %a = add i16 %x, 1\n  %b = add nsw i16 %x, 2\n  %r = icmp slt i16 %a, %b\n", Some("1")),
+        ("  %a = add i16 %x, -2\n  %b = add nsw i16 %x, -3\n  %r = icmp sgt i16 %a, %b\n", Some("1")),
+        ("  %o = or i16 %x, %y\n  %n = xor i16 %y, -1\n  %r = icmp slt i16 %o, %x\n", None),
+        ("  %p = and i16 %x, 32767\n  %o = or i16 %p, %y\n  %r = icmp sge i16 %o, %p\n", None),
+        ("  %m = and i16 %y, 32767\n  %o = or i16 %x, %m\n  %r = icmp slt i16 %o, %x\n", Some("0")),
+        ("  %u = urem i16 %x, %y\n  %r = icmp ult i16 %u, %y\n", Some("1")),
+        ("  %u = urem i16 %x, %y\n  %r = icmp eq i16 %u, %y\n", Some("0")),
+        ("  %u = urem i16 %x, %y\n  %r = icmp sgt i16 %u, %y\n", None),
+        ("  %p = and i16 %y, 32767\n  %u = urem i16 %x, %p\n  %r = icmp sgt i16 %u, %p\n", Some("0")),
+        ("  %p = and i16 %y, 32767\n  %u = urem i16 %x, %p\n  %r = icmp sle i16 %u, %p\n", Some("1")),
+        ("  %z = or i16 %x, 1\n  %s = lshr i16 %z, 2\n  %r = icmp ult i16 %s, %z\n", Some("1")),
+        ("  %z = or i16 %x, 1\n  %s = udiv i16 %z, 3\n  %r = icmp uge i16 %s, %z\n", Some("0")),
+        ("  %m = mul i16 %x, 3\n  %d = udiv i16 %m, 3\n  %r = icmp ugt i16 %d, %x\n", Some("0")),
+        ("  %m = mul i16 %x, 5\n  %d = udiv i16 %m, 3\n  %r = icmp ugt i16 %d, %x\n", None),
+        ("  %m = mul i16 %x, 3\n  %d = lshr i16 %m, 2\n  %r = icmp ule i16 %d, %x\n", Some("1")),
+        ("  %m = shl i16 %x, 1\n  %d = udiv i16 %m, 3\n  %r = icmp ule i16 %d, %x\n", Some("1")),
+        ("  %m = shl i16 %x, 2\n  %d = udiv i16 %m, 3\n  %r = icmp ule i16 %d, %x\n", None),
+        ("  %s = sub i16 5, %x\n  %r = icmp eq i16 %s, %x\n", Some("0")),
+        ("  %s = sub i16 6, %x\n  %r = icmp ne i16 %s, %x\n", None),
+        (
+            "  %z = zext i8 3 to i16\n  %w = zext i1 %c to i16\n  %n = sub i16 0, %w\n  %r = icmp slt i16 %n, 2\n",
+            Some("1"),
+        ),
+        ("  %w = zext i1 %c to i16\n  %n = sub i16 0, %w\n  %r = icmp sle i16 %n, 0\n", Some("1")),
+        ("  %w = zext i1 %c to i16\n  %n = sub i16 0, %w\n  %r = icmp eq i16 %n, 3\n", Some("0")),
+        ("  %w = zext i1 %c to i16\n  %n = sub i16 0, %w\n  %r = icmp sgt i16 %n, 0\n", Some("0")),
+        ("  %s = shl i16 4, %y\n  %r = icmp eq i16 %s, 6\n", Some("0")),
+        ("  %s = shl i16 4, %y\n  %r = icmp eq i16 %s, 0\n", None),
+        ("  %s = shl nuw i16 4, %y\n  %r = icmp eq i16 %s, 0\n", Some("0")),
+        ("  %s = shl i16 1, %y\n  %r = icmp ne i16 %s, 0\n", Some("1")),
+        ("  %s = shl i16 4, %y\n  %r = icmp ugt i16 %s, 32768\n", Some("0")),
+        ("  %s = shl i16 4, %y\n  %r = icmp ule i16 %s, 32768\n", Some("1")),
+        ("  %a = and i16 %x, 3\n  %b = and i16 %x, 7\n  %r = icmp ule i16 %a, %b\n", Some("1")),
+        ("  %a = and i16 %x, 3\n  %b = and i16 %x, 7\n  %r = icmp ugt i16 %b, %a\n", None),
+        ("  %a = and i16 %x, 3\n  %b = and i16 %x, 7\n  %r = icmp ugt i16 %a, %b\n", Some("0")),
+        ("  %a = or i16 %x, 3\n  %b = or i16 %x, 7\n  %r = icmp sle i16 %a, %b\n", Some("1")),
+        ("  %a = or i16 %x, 3\n  %b = or i16 %x, 32775\n  %r = icmp sle i16 %a, %b\n", None),
+        ("  %a = or i16 %x, 3\n  %b = or i16 %x, 32775\n  %r = icmp ule i16 %a, %b\n", Some("1")),
+        ("  %a = or i16 %x, 3\n  %b = or i16 %x, 5\n  %r = icmp ule i16 %a, %b\n", None),
+        (
+            "  %o = or i16 %y, 1\n  %a = shl nuw i16 %x, %o\n  %b = shl nuw i16 %x, %y\n  %r = icmp ult i16 %a, %b\n",
+            None,
+        ),
+        (
+            "  %n = or i16 %x, 1\n  %a = shl nuw i16 %n, %x\n  %b = shl nuw i16 %n, %y\n  %r = icmp eq i16 %a, %b\n",
+            None,
+        ),
+        (
+            "  %n = or i16 %x, 1\n  %a = shl nuw i16 %n, %x\n  %b = shl nuw i16 %n, %y\n  %r = icmp slt i16 %a, %b\n",
+            None,
+        ),
+        (
+            "  %n = or i16 %x, 1\n  %a = shl nuw nsw i16 %n, %x\n  %b = shl nuw nsw i16 %n, %y\n  %r = icmp slt i16 %a, %b\n",
+            None,
+        ),
+        ("  %a = lshr exact i16 %x, %y\n  %b = lshr exact i16 %x, %y\n  %r = icmp ult i16 %a, %b\n", Some("0")),
+        ("  %a = sdiv exact i16 %x, %y\n  %b = sdiv exact i16 %x, %y\n  %r = icmp eq i16 %a, %b\n", Some("1")),
+        ("  %a = ashr exact i16 %x, %y\n  %b = ashr exact i16 %x, %y\n  %r = icmp slt i16 %a, %b\n", Some("0")),
+        ("  %a = shl nuw i16 %x, %y\n  %b = shl nuw i16 %x, %y\n  %r = icmp ult i16 %a, %b\n", Some("0")),
+        ("  %a = shl nsw i16 %x, %y\n  %b = shl nsw i16 %x, %y\n  %r = icmp slt i16 %a, %b\n", Some("0")),
+    ];
+    let wrong: Vec<_> =
+        cases.iter().filter(|(body, expected)| simplified(&of(body), "r").as_deref() != *expected).collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a

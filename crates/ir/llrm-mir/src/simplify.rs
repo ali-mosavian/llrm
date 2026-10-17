@@ -19,16 +19,15 @@
 //! - `undef` (MIR has none), vectors, floating point, pointers, intrinsics
 //!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset.
 //! - The ValueTracking query is `Query::bare` over the body: no module (so no
-//!   intrinsic is known), no dominator tree, no assumptions. `simplifyByDomEq`,
-//!   `isImpliedByDomCondition`, `valueDominatesPHI`,
-//!   `simplifyICmpWithDominatingAssume` and the `llvm.assume` facts of
-//!   ValueTracking need the entry points to take a `FunctionAnalyses`; their
-//!   callers (`earlycse`, the combine worklist, `gvn`, `fold`) would have to
-//!   pass it.
-//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `simplifyICmpWithBinOp`,
-//!   `simplifyICmpWithMinMax`, the `trunc` compares, `simplifyAndOrOfCmps` and
-//!   `simplifyAndOrWithICmpEq`: not yet translated; ValueTracking is not what
-//!   stops them.
+//!   intrinsic is known), no dominator tree, no assumptions, no context
+//!   instruction. `simplifyByDomEq`, `isImpliedByDomCondition`,
+//!   `valueDominatesPHI`, `simplifyICmpWithDominatingAssume` and the
+//!   `llvm.assume` facts of ValueTracking need the entry points to take a
+//!   `FunctionAnalyses`; their callers (`earlycse`, the combine worklist,
+//!   `gvn`, `fold`) would have to pass it.
+//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `simplifyICmpWithMinMax`,
+//!   the `trunc` compares, `simplifyAndOrOfCmps` and `simplifyAndOrWithICmpEq`:
+//!   not yet translated; ValueTracking is not what stops them.
 //! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! # Used by
@@ -1815,7 +1814,7 @@ fn simplify_select(
 /// ([:3883](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3883)):
 /// the constant fold, poison, the compare of a value with itself, the bool and
 /// zero forms, and the compares of an extension against an extension or a
-/// constant, and the monotonic values. DEVIATE: `simplifyICmpWithBinOp`,
+/// constant, the binary-operator forms and the monotonic values. DEVIATE:
 /// min/max, assume and the `trunc` forms are not yet translated.
 fn simplify_icmp(
     q: &mut Query,
@@ -1863,10 +1862,342 @@ fn simplify_icmp(
     {
         return Some(q.int(i1, u128::from(pred == IntPredicate::Ne)));
     }
+    if let Some(v) = simplify_icmp_with_bin_op(q, pred, lhs, rhs, max_recurse) {
+        return Some(v);
+    }
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
     simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs)
+}
+
+/// `CmpInst::isEquality`.
+fn is_equality(p: IntPredicate) -> bool {
+    matches!(p, IntPredicate::Eq | IntPredicate::Ne)
+}
+
+/// `CmpInst::isUnsigned`.
+fn is_unsigned(p: IntPredicate) -> bool {
+    matches!(
+        p,
+        IntPredicate::Ult | IntPredicate::Ule | IntPredicate::Ugt | IntPredicate::Uge
+    )
+}
+
+/// `APInt::operator<<(const APInt &)` on `bits` of `width`: an amount of the
+/// width or more shifts everything out.
+fn shl_apint(
+    bits: u128,
+    amount: u128,
+    width: u32,
+) -> u128 {
+    if amount >= u128::from(width) { 0 } else { (bits << amount) & mask(width) }
+}
+
+/// `simplifyICmpWithBinOpOnLHS`
+/// ([:3247](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3247)):
+/// `icmp pred LBO, RHS`, where `lbo` is the binary operator on the left.
+fn simplify_icmp_with_bin_op_on_lhs(
+    q: &mut Query,
+    pred: IntPredicate,
+    lbo: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    let (op, l0, l1, _) = q.binary(lbo)?;
+    // icmp pred (or X, Y), X
+    if op == BinaryOp::Or
+        && let Some(y) = q.other_of(lbo, BinaryOp::Or, rhs)
+        && matches!(pred, IntPredicate::Slt | IntPredicate::Sge)
+    {
+        let rhs_known = q.known(rhs);
+        let y_known = q.known(y);
+        if rhs_known.is_non_negative() && y_known.is_negative() {
+            return Some(q.int(i1, u128::from(pred == IntPredicate::Slt)));
+        }
+        if rhs_known.is_negative() || y_known.is_non_negative() {
+            return Some(q.int(i1, u128::from(pred != IntPredicate::Slt)));
+        }
+    }
+    // icmp pred (urem X, Y), Y
+    if op == BinaryOp::URem && l1 == rhs {
+        match pred {
+            IntPredicate::Sgt | IntPredicate::Sge if q.known(rhs).is_non_negative() => {
+                return Some(q.null(i1));
+            }
+            IntPredicate::Eq | IntPredicate::Ugt | IntPredicate::Uge => return Some(q.null(i1)),
+            IntPredicate::Slt | IntPredicate::Sle if q.known(rhs).is_non_negative() => {
+                return Some(q.int(i1, 1));
+            }
+            IntPredicate::Ne | IntPredicate::Ult | IntPredicate::Ule => return Some(q.int(i1, 1)),
+            _ => {}
+        }
+    }
+    // If x is nonzero: x >>u C <u x --> true for C != 0, and the like for
+    // x udiv C with C != 1.
+    if l0 == rhs
+        && let Some((c, _)) = q.number(l1)
+        && ((op == BinaryOp::LShr && c != 0) || (op == BinaryOp::UDiv && c != 1))
+        && q.is_known_non_zero(rhs)
+    {
+        match pred {
+            IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ugt => return Some(q.null(i1)),
+            IntPredicate::Ne | IntPredicate::Ult | IntPredicate::Ule => return Some(q.int(i1, 1)),
+            _ => {}
+        }
+    }
+    // (x*C1)/C2 <= x for C1 <= C2, and the shift forms.
+    if matches!(op, BinaryOp::UDiv | BinaryOp::LShr)
+        && let Some((c2, width)) = q.number(l1)
+        && let Some((inner, i0, i1_, _)) = q.binary(l0)
+        && i0 == rhs
+        && let Some((c1, _)) = q.number(i1_)
+        && match (op, inner) {
+            (BinaryOp::UDiv, BinaryOp::Mul) => c1 <= c2,
+            (BinaryOp::LShr, BinaryOp::Mul) => c1 <= shl_apint(1, c2, width),
+            (BinaryOp::UDiv, BinaryOp::Shl) => shl_apint(1, c1, width) <= c2,
+            _ => false,
+        }
+    {
+        if pred == IntPredicate::Ugt {
+            return Some(q.null(i1));
+        }
+        if pred == IntPredicate::Ule {
+            return Some(q.int(i1, 1));
+        }
+    }
+    // (sub C, X) == X, C is odd  --> false
+    if op == BinaryOp::Sub && l1 == rhs && q.number(l0).is_some_and(|(c, _)| c & 1 == 1) && is_equality(pred) {
+        return Some(q.int(i1, u128::from(pred != IntPredicate::Eq)));
+    }
+    None
+}
+
+/// `trySimplifyICmpWithAdds`
+/// ([:3321](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3321)).
+fn try_simplify_icmp_with_adds(
+    q: &Query,
+    pred: IntPredicate,
+    mut lhs: Operand,
+    mut rhs: Operand,
+) -> bool {
+    if !is_signed(pred) {
+        return false;
+    }
+    let nsw_add = |q: &Query, v: Operand| q.binary_of(v, BinaryOp::Add).is_some_and(|(_, _, f)| f.contains(Flags::NSW));
+    if !nsw_add(q, rhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+    }
+    if !nsw_add(q, rhs) {
+        return false;
+    }
+    let (Some((x, c1, _)), Some((x2, c2, _))) = (q.binary_of(lhs, BinaryOp::Add), q.binary_of(rhs, BinaryOp::Add))
+    else {
+        return false;
+    };
+    let (Some((c1, width)), Some((c2, _))) = (q.number(c1), q.number(c2)) else { return false };
+    if x2 != x {
+        return false;
+    }
+    let (s1, s2) = (signed(c1, width), signed(c2, width));
+    (s1 <= s2 && s1 >= 0) || (s2 <= s1 && s1 <= 0)
+}
+
+/// `simplifyICmpWithBinOp`
+/// ([:3392](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3392)).
+fn simplify_icmp_with_bin_op(
+    q: &mut Query,
+    mut pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    let lbo = q.binary(lhs);
+    let rbo = q.binary(rhs);
+    if max_recurse > 0 && (lbo.is_some() || rbo.is_some()) {
+        // LHS = A + B (or A and B are null); RHS = C + D (or C and D are null).
+        let no_wrap_problem = |bo: Option<(BinaryOp, Operand, Operand, Flags)>| match bo {
+            Some((BinaryOp::Add, a, b, flags)) => (
+                Some((a, b)),
+                is_equality(pred)
+                    || (is_unsigned(pred) && flags.contains(Flags::NUW))
+                    || (is_signed(pred) && flags.contains(Flags::NSW)),
+            ),
+            _ => (None, false),
+        };
+        let (ab, no_lhs_wrap_problem) = no_wrap_problem(lbo);
+        let (cd, no_rhs_wrap_problem) = no_wrap_problem(rbo);
+        // icmp (X+Y), X -> icmp Y, 0 for equalities or if there is no overflow.
+        if let Some((a, b)) = ab
+            && (a == rhs || b == rhs)
+            && no_lhs_wrap_problem
+        {
+            let zero = q.null(q.ty(rhs));
+            if let Some(v) = simplify_icmp(q, pred, if a == rhs { b } else { a }, zero, max_recurse - 1) {
+                return Some(v);
+            }
+        }
+        // icmp X, (X+Y) -> icmp 0, Y for equalities or if there is no overflow.
+        if let Some((c, d)) = cd
+            && (c == lhs || d == lhs)
+            && no_rhs_wrap_problem
+        {
+            let zero = q.null(q.ty(lhs));
+            if let Some(v) = simplify_icmp(q, pred, zero, if c == lhs { d } else { c }, max_recurse - 1) {
+                return Some(v);
+            }
+        }
+        // icmp (X+Y), (X+Z) -> icmp Y,Z for equalities or if there is no
+        // overflow.
+        let can_simplify =
+            (no_lhs_wrap_problem && no_rhs_wrap_problem) || try_simplify_icmp_with_adds(q, pred, lhs, rhs);
+        if let (Some((a, b)), Some((c, d))) = (ab, cd)
+            && (a == c || a == d || b == c || b == d)
+            && can_simplify
+        {
+            let (y, z) = if a == c {
+                (b, d)
+            } else if a == d {
+                (b, c)
+            } else if b == c {
+                (a, d)
+            } else {
+                (a, c)
+            };
+            if let Some(v) = simplify_icmp(q, pred, y, z, max_recurse - 1) {
+                return Some(v);
+            }
+        }
+    }
+    if lbo.is_some()
+        && let Some(v) = simplify_icmp_with_bin_op_on_lhs(q, pred, lhs, rhs)
+    {
+        return Some(v);
+    }
+    if rbo.is_some()
+        && let Some(v) = simplify_icmp_with_bin_op_on_lhs(q, swapped(pred), rhs, lhs)
+    {
+        return Some(v);
+    }
+    // 0 - (zext X) pred C
+    if !is_unsigned(pred)
+        && let Some((neg, _)) = q.neg_of(lhs)
+        && matches!(q.cast(neg), Some((CastOp::ZExt, ..)))
+        && let Some((c, width)) = q.number(rhs)
+    {
+        let c = signed(c, width);
+        if c > 0 {
+            if matches!(pred, IntPredicate::Slt | IntPredicate::Ne) {
+                return Some(q.int(i1, 1));
+            }
+            if matches!(pred, IntPredicate::Sge | IntPredicate::Eq) {
+                return Some(q.null(i1));
+            }
+        }
+        if c >= 0 {
+            if pred == IntPredicate::Sle {
+                return Some(q.int(i1, 1));
+            }
+            if pred == IntPredicate::Sgt {
+                return Some(q.null(i1));
+            }
+        }
+    }
+    // If C2 is a power-of-2 and C is not: (C2 << X) == C --> false, != C -->
+    // true.
+    if let Some((BinaryOp::Shl, c2, _, flags)) = lbo
+        && q.number(c2).is_some_and(|(c2, _)| c2.is_power_of_two())
+    {
+        if let Some((c, _)) = q.number(rhs)
+            && !c.is_power_of_two()
+            // C2 << X can equal zero in some circumstances; it is safe if the
+            // shift is nsw or nuw, C2 is one, or C isn't zero.
+            && (flags.contains(Flags::NSW) || flags.contains(Flags::NUW) || q.is_one(c2) || c != 0)
+        {
+            if pred == IntPredicate::Eq {
+                return Some(q.null(i1));
+            }
+            if pred == IntPredicate::Ne {
+                return Some(q.int(i1, 1));
+            }
+        }
+        // If C is a power-of-2: (C << X) >u 0x8000 --> false, <=u --> true.
+        if q.is_sign_mask(rhs) {
+            if pred == IntPredicate::Ugt {
+                return Some(q.null(i1));
+            }
+            if pred == IntPredicate::Ule {
+                return Some(q.int(i1, 1));
+            }
+        }
+    }
+    let (Some((lop, l0, l1, lflags)), Some((rop, r0, r1, rflags))) = (lbo, rbo) else { return None };
+    if max_recurse == 0 || lop != rop {
+        return None;
+    }
+    let both = |flag: Flags| lflags.contains(flag) && rflags.contains(flag);
+    if l0 == r0 {
+        match lop {
+            BinaryOp::Shl => {
+                let (nuw, nsw) = (both(Flags::NUW), both(Flags::NSW));
+                if nuw && !(is_signed(pred) && !nsw) && q.is_known_non_zero(l0) {
+                    if let Some(v) = simplify_icmp(q, pred, l1, r1, max_recurse - 1) {
+                        return Some(v);
+                    }
+                }
+            }
+            // If C1 & C2 == C1, A = X and/or C1, B = X and/or C2:
+            // icmp ule A, B -> true; icmp ugt A, B -> false; and the signed
+            // ones when C1 and C2 are the same sign.
+            BinaryOp::And | BinaryOp::Or => {
+                if !is_equality(pred)
+                    && let (Some((c1, width)), Some((c2, _))) = (q.number(l1), q.number(r1))
+                {
+                    let (mut c1, mut c2) = (c1, c2);
+                    if c1 & !c2 != 0 {
+                        std::mem::swap(&mut c1, &mut c2);
+                        pred = swapped(pred);
+                    }
+                    if c1 & !c2 == 0 {
+                        if pred == IntPredicate::Ule {
+                            return Some(q.int(i1, 1));
+                        }
+                        if pred == IntPredicate::Ugt {
+                            return Some(q.null(i1));
+                        }
+                        let non_negative = |c: u128| c >> (width - 1) & 1 == 0;
+                        if non_negative(c1) == non_negative(c2) {
+                            if pred == IntPredicate::Sle {
+                                return Some(q.int(i1, 1));
+                            }
+                            if pred == IntPredicate::Sgt {
+                                return Some(q.null(i1));
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if l1 == r1 {
+        let exact = both(Flags::EXACT);
+        let compare_first = match lop {
+            BinaryOp::UDiv | BinaryOp::LShr => !is_signed(pred) && exact,
+            BinaryOp::SDiv => is_equality(pred) && exact,
+            BinaryOp::AShr => exact,
+            BinaryOp::Shl => {
+                let (nuw, nsw) = (both(Flags::NUW), both(Flags::NSW));
+                (nuw || nsw) && (nsw || !is_signed(pred))
+            }
+            _ => false,
+        };
+        if compare_first && let Some(v) = simplify_icmp(q, pred, l0, r0, max_recurse - 1) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 /// The zext/sext cases of `simplifyICmpInst` (:3883): the compare of an
