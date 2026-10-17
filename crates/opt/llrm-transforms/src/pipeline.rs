@@ -598,6 +598,44 @@ impl FunctionPass for Slot {
     }
 }
 
+/// Passes that stand for one pass of LLVM, run one after the other and named
+/// as one: SROA runs mem2reg on what it splits, so the slot is SROA, then
+/// Promote, with nothing between (SROA.cpp `promoteAllocas`).
+struct Together {
+    name: &'static str,
+    parts: Vec<Box<dyn FunctionPass>>,
+}
+
+impl FunctionPass for Together {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.parts.iter().any(|part| part.adds_memory_operations())
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.parts.iter().fold(llrm_mir::footprint::Footprint::default(), |all, part| all.with(part.reads()))
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let mut changed = false;
+        for part in &mut self.parts {
+            let preserved = part.run(unit, analyses);
+            if !preserved.are_all_preserved() {
+                changed = true;
+                analyses.invalidate(unit.function, &preserved);
+            }
+        }
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
 /// `LLRM_EXP_LLVM`, read once: the experiment that runs the passes in LLVM's
 /// order and counts (PassBuilderPipelines.cpp at d1106deb71cc).
 pub fn experiment_llvm() -> bool {
@@ -630,8 +668,10 @@ fn llvm_order(
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
-    let sroa = |name| slot(name, Box::new(promote::Sroa));
     let promote = |name| slot(name, Box::new(promote::Promote));
+    let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
+        Box::new(Together { name, parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote)] })
+    };
     let earlycse = |name| -> Box<dyn FunctionPass> {
         if std::env::var("LLRM_EXP_EARLYCSE").is_ok_and(|one| one == "real") {
             slot(name, Box::new(crate::earlycse::EarlyCse))
@@ -645,13 +685,9 @@ fn llvm_order(
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
     let list: Vec<Box<dyn FunctionPass>> = match phase {
-        Phase::Early => vec![
-            decide("decide@1178"),
-            phiopt("phiopt@1178"),
-            sroa("sroa@1179"),
-            promote("promote@1179"),
-            earlycse("earlycse@1180"),
-        ],
+        Phase::Early => {
+            vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+        }
         Phase::Cleanup => vec![
             promote("promote@1241"),
             fold("fold@1242"),
@@ -660,7 +696,7 @@ fn llvm_order(
             phiopt("phiopt@1244"),
         ],
         Phase::Simplify => {
-            let mut list = vec![sroa("sroa@646"), promote("promote@646"), earlycse("earlycse@649")];
+            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
                 decide("decide@675"),
                 phiopt("phiopt@675"),
@@ -695,7 +731,6 @@ fn llvm_order(
                 ),
                 slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
                 sroa("sroa@776"),
-                promote("promote@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 fold("fold@801"),
