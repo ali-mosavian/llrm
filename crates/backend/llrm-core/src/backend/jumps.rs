@@ -1287,7 +1287,7 @@ pub fn _hoisted(body: &LirBody) -> LirBody {
                 held.insert(value, entering);
             }
         }
-        if llrm_support::env_set("LLRM_CHECK_JUMPS") {
+        if llrm_support::env_flag!("LLRM_CHECK_JUMPS") {
             if let Some((held, _)) = &live {
                 let fresh = _live_values(&blocks);
                 assert!(
@@ -2226,56 +2226,11 @@ thread_local! {
 /// The blocks on a cycle: those of a strongly connected component of more than
 /// one block, or with an edge to themselves.
 fn _cyclic(body: &LirBody) -> HashSet<i64> {
-    let index: IndexMap<i64, usize> = body.blocks.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
-    let successors: Vec<Vec<usize>> =
-        body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| index.get(to).copied()).collect()).collect();
-    // Tarjan's, with the recursion on a stack.
-    let count = successors.len();
-    let (mut order, mut low) = (vec![usize::MAX; count], vec![0; count]);
-    let (mut on, mut stack, mut next) = (vec![false; count], Vec::new(), 0);
     let mut cyclic = HashSet::default();
-    for root in 0..count {
-        if order[root] != usize::MAX {
-            continue;
-        }
-        let mut calls = vec![(root, 0_usize)];
-        order[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on[root] = true;
-        while let Some(&mut (at, ref mut child)) = calls.last_mut() {
-            if let Some(&to) = successors[at].get(*child) {
-                *child += 1;
-                if order[to] == usize::MAX {
-                    order[to] = next;
-                    low[to] = next;
-                    next += 1;
-                    stack.push(to);
-                    on[to] = true;
-                    calls.push((to, 0));
-                } else if on[to] {
-                    low[at] = low[at].min(order[to]);
-                }
-                continue;
-            }
-            calls.pop();
-            if let Some(&(parent, _)) = calls.last() {
-                low[parent] = low[parent].min(low[at]);
-            }
-            if low[at] == order[at] {
-                let mut members = Vec::new();
-                while let Some(one) = stack.pop() {
-                    on[one] = false;
-                    members.push(one);
-                    if one == at {
-                        break;
-                    }
-                }
-                if members.len() > 1 || successors[at].contains(&at) {
-                    cyclic.extend(members.into_iter().map(|one| body.blocks[one].at));
-                }
-            }
+    let blocks: IndexMap<i64, &crate::model::lir::Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
+    for members in llrm_support::graph::components(&body.blocks) {
+        if members.len() > 1 || blocks[&members[0]].succ.contains(&members[0]) {
+            cyclic.extend(members);
         }
     }
     cyclic

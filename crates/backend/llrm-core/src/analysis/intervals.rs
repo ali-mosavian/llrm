@@ -1050,7 +1050,7 @@ pub fn intervals_shared_over(
         recent.0.insert(0, held);
         Some(answer)
     }) {
-        if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
+        if llrm_support::env_flag!("LLRM_CHECK_INTERVALS") {
             assert!(
                 *found == worked_out(body, index, busy),
                 "{}: a remembered answer differs from working it out",
@@ -1080,7 +1080,7 @@ pub fn intervals_shared_over(
         Some(found) => {
             llrm_support::debug::counted("intervals edited", true);
             body.facts.0.bump("intervals-edited");
-            if llrm_support::env_set("LLRM_CHECK_INTERVALS") {
+            if llrm_support::env_flag!("LLRM_CHECK_INTERVALS") {
                 let whole = worked_out(body, Some(index), busy);
                 if found.0 != whole {
                     let mut shown = 0;
@@ -1219,7 +1219,7 @@ pub(crate) fn worked_among(
     busy: &Frequency,
     only: &crate::support::hash::HashSet<u32>,
 ) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
-    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_set("LLRM_WALK_ALL") {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_flag!("LLRM_WALK_ALL") {
         return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
     }
     body.facts.0.bump("intervals-by-occurrences");
@@ -1229,7 +1229,7 @@ pub(crate) fn worked_among(
     let found = crate::backend::postings::following(body, |postings| {
         crate::analysis::occurrences::Occurrences::of(postings, &wanted)
     });
-    if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+    if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
         found.check_against_scan(body, &|value| only.contains(&value));
     }
     found.intervals(body, index, busy)
@@ -1332,7 +1332,7 @@ fn _ranges(
     keep: &impl Fn(u32) -> bool,
 ) -> IndexMap<u32, Interval> {
     let found = _walked(body, index, keep);
-    if llrm_support::env_set("LLRM_CHECK_RANGES") {
+    if llrm_support::env_flag!("LLRM_CHECK_RANGES") {
         let reference = _ranges_reference(body, index, keep);
         assert!(found.iter().eq(reference.iter()), "{}: the walk differs from the reference", body.name);
     }

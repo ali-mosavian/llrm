@@ -1818,7 +1818,7 @@ pub fn addresses<'a>(
     let flags_out = _flags_live_out(body);
     let mut blocks = Vec::new();
     for block in &body.blocks {
-        let flags_dead_out = flags_out.get(&block.at).is_some_and(Lanes::is_empty);
+        let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(Lanes::is_empty);
         let block = _loaded_addresses(regs, body.bits, block, flags_dead_out, &virtual_uses, target_cpu)?;
         let dead = _flags_dead_after(regs, body.bits, &block, flags_dead_out);
         let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
@@ -2432,7 +2432,7 @@ pub fn tested(
         let branch = &insns[at(branch_at)];
         if !branch.what.as_ref().is_some_and(|what| {
             what.op == Operation::Branch && what.name.as_deref().is_some_and(|name| rules.zero_jcc.contains(name))
-        }) || !live[&block.at].is_disjoint(&_DIFFERING)
+        }) || !live.entering[&block.at].is_disjoint(&_DIFFERING)
         {
             continue;
         }
@@ -2774,17 +2774,94 @@ fn _sets_from(
 }
 
 /// Which flag lanes something may read after each block's last instruction.
-pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
+pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incremental::Solution<FlagLive>> {
+    let solved = FLAGS.with(|kept| kept.ask(&FlagLive { regs: body.regs(), bits: body.bits }, body));
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
+        assert!(
+            flags_from_scratch(body) == solved.entering,
+            "{}: flag liveness brought up to date differs from one solved from scratch",
+            body.name
+        );
+    }
+    solved
+}
+
+/// Flag liveness as a [`Problem`](crate::backend::incremental::Problem): the
+/// flags live after a block, flowing back from the blocks that follow it.
+pub struct FlagLive {
+    regs: Regs,
+    bits: u32,
+}
+
+impl crate::backend::incremental::Problem for FlagLive {
+    /// `(read, written)`: the flags a block reads before it writes them, and
+    /// those it writes.
+    type Summary = (Lanes, Lanes);
+    type Value = Lanes;
+    const FORWARD: bool = false;
+
+    fn summarize(
+        &self,
+        _body: &LirBody,
+        block: &Block,
+    ) -> (Lanes, Lanes) {
+        block
+            .insns
+            .iter()
+            .rev()
+            .fold(
+                (Lanes::new(), Lanes::new()),
+                |(read, written), one| {
+                    let (reads, writes) = _flag_effect(self.regs, self.bits, one);
+                    (read.minus(&writes).or(&reads), written.or(&writes))
+                },
+            )
+    }
+
+    fn start(&self) -> Lanes {
+        Lanes::new()
+    }
+
+    /// What a block with no way on leaves live, else what the blocks it goes to
+    /// read (a block it names that is not there leaves what a block with no way
+    /// on does).
+    fn entering(
+        &self,
+        _at: i64,
+        _entry: i64,
+        present: &[Lanes],
+        missing: usize,
+    ) -> Lanes {
+        if present.is_empty() && missing == 0 {
+            return _exit_flags();
+        }
+        let live = present.iter().fold(Lanes::new(), |all, next| all.or(next));
+        if missing > 0 { live.or(&_exit_flags()) } else { live }
+    }
+
+    fn leaving(
+        &self,
+        (read, written): &(Lanes, Lanes),
+        after: Lanes,
+    ) -> Lanes {
+        after.minus(written).or(read)
+    }
+}
+
+thread_local! {
+    static FLAGS: crate::backend::incremental::Kept<FlagLive> = const { crate::backend::incremental::Kept::new() };
+}
+
+/// The flags live after each block of `body`, solved from nothing held: what
+/// `LLRM_CHECK_LIVENESS` compares an answer brought up to date with.
+fn flags_from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
     let regs = body.regs();
     let exits = _exit_flags();
     let effects = |one: &Insn| _flag_effect(regs, body.bits, one);
-
     let steps: HashMap<i64, Vec<(Lanes, Lanes)>> =
         body.blocks.iter().map(|block| (block.at, block.insns.iter().map(|one| effects(one)).collect())).collect();
     let nodes: Vec<&Block> = body.blocks.iter().collect();
     let blocks: HashMap<i64, &Block> = nodes.iter().map(|block| (block.at, *block)).collect();
-    // The solution's output is what is live on entry; what a block's last
-    // instruction leaves is its input.
     let solved = dataflow::solve(
         &nodes,
         Direction::Backward,
@@ -2792,12 +2869,12 @@ pub fn _flags_live_out(body: &LirBody) -> HashMap<i64, Lanes> {
         |at, live_in| {
             let block = blocks[&at];
             if block.succ.is_empty() {
-                exits.clone()
+                exits
             } else {
                 block.succ.iter().flat_map(|at| live_in.get(at).unwrap_or(&exits).iter().copied()).collect()
             }
         },
-        |at, after| steps[&at].iter().rev().fold(after.clone(), |live, (reads, writes)| live.minus(writes).or(reads)),
+        |at, after| steps[&at].iter().rev().fold(*after, |live, (reads, writes)| live.minus(writes).or(reads)),
     );
     solved.input.into_iter().collect()
 }
@@ -2811,7 +2888,7 @@ pub fn zeroes(body: &LirBody) -> LirBody {
     for block in &body.blocks {
         // What the block's successors read, not a guess: `mov bx,0; jmp` to a
         // block that sets its own flags first zeroes with xor too.
-        let mut flags_dead = live[&block.at].is_disjoint(&_ARITHMETIC_LANES);
+        let mut flags_dead = live.entering[&block.at].is_disjoint(&_ARITHMETIC_LANES);
         let mut insns = Vec::new();
         for one in block.insns.iter().rev() {
             let mut one = Arc::clone(one);

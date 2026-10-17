@@ -1,0 +1,68 @@
+# The profile-guided llrm-c (tools/pgo/pgo.py, docs/working/pgo.md): 15-18% fewer instructions to compile, byte-identical output. A push to
+# main that changes the compiler builds it and checks it against the plain `dist` build; the pull request gate and every instruction-count
+# budget stay on the plain build, so a change is judged the same with or without this workflow.
+#
+#   cache   the profile (about 30 MB), key = the compiler tree's hash (tools/bench/basecounts.py key); a push whose tree has none reuses the
+#           newest one while it is fresh (50 commits, 14 days: tools/pgo/pgo.py stale) and makes a new one when it is not.
+#   output  artifact llrm-c-pgo: the compiler and the tools identical.py looks for beside it.
+name: pgo
+
+on:
+  push:
+    branches: [main]
+    paths: ["crates/**", "src/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/pgo/**", ".github/workflows/pgo.yml"]
+  # A change to this workflow or the tool runs it on the pull request too: it cannot be tried any other way before it is on main.
+  pull_request:
+    paths: ["tools/pgo/**", ".github/workflows/pgo.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: pgo-${{ github.event.pull_request.number || 'main' }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  pgo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: rustup component add llvm-tools
+      - id: key
+        run: echo "tree=$(python3 tools/bench/basecounts.py key HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: profile
+        with:
+          path: target/pgo-profile
+          key: pgo-profile-${{ steps.key.outputs.tree }}
+          restore-keys: pgo-profile-
+      # The plain dist llrm-c to compare with, and the other tools identical.py looks for beside each compiler (release builds: they do not vary).
+      - name: The plain dist llrm-c
+        run: |
+          cargo build --release --bins -q
+          cargo build --profile dist --bin llrm-c -q
+          mkdir -p target/plain
+          for f in target/release/*; do [ -f "$f" ] && [ -x "$f" ] && ln -sf "$PWD/$f" "target/plain/$(basename "$f")"; done
+          rm -f target/plain/llrm-c
+          cp target/dist/llrm-c target/plain/llrm-c
+      - name: The profile-guided build
+        run: python3 tools/pgo/pgo.py build --out target/pgo-out --profile-dir target/pgo-profile --siblings target/plain
+      - name: The same bytes as the plain build (every program and tests/run/c program at each level)
+        run: |
+          LLRM_BIN="$PWD/target/release" uv run --project tools python tools/identical.py target/plain/llrm-c target/pgo-out/llrm-c --programs-only --stale-ok
+      - if: always() && hashFiles('target/pgo-profile/profile.profdata') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: target/pgo-profile
+          key: pgo-profile-${{ steps.key.outputs.tree }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llrm-c-pgo
+          path: target/pgo-out
+          retention-days: 14

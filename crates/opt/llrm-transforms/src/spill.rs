@@ -385,7 +385,7 @@ pub fn transient(
     function: &Function,
     inst: InstId,
     room: Room,
-    live: &BTreeSet<ValueId>,
+    live: &IdSet<ValueId>,
 ) -> i64 {
     transient_by(context, layout, function, inst, room, live, &mut |value| {
         folded_in(context, function, value, room.index_scales)
@@ -400,7 +400,7 @@ fn transient_by(
     function: &Function,
     inst: InstId,
     room: Room,
-    live: &BTreeSet<ValueId>,
+    live: &IdSet<ValueId>,
     is_folded: &mut dyn FnMut(ValueId) -> bool,
 ) -> i64 {
     let op = function.instruction(inst);
@@ -425,7 +425,7 @@ fn transient_by(
 pub fn copied(
     function: &Function,
     inst: InstId,
-    past: &BTreeSet<ValueId>,
+    past: &IdSet<ValueId>,
     room: Room,
     counted: &dyn Fn(ValueId) -> bool,
 ) -> i64 {
@@ -1146,7 +1146,7 @@ pub fn sites(
     points: &[LivePoint],
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
+    transient: &dyn Fn(InstId, &IdSet<ValueId>) -> i64,
     cells: &BTreeMap<ValueId, ValueId>,
     counted: &dyn Fn(ValueId) -> bool,
     segment: &dyn Fn(ValueId) -> bool,
@@ -1155,9 +1155,8 @@ pub fn sites(
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
     // The cells of the live values that pass `keep`, in order and once each:
     // sorted in a vector, where a tree of them was most of a loop's model.
-    let cells_of = |live: &BTreeSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
-        let mut found: Vec<ValueId> =
-            live.iter().copied().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
+    let cells_of = |live: &IdSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
+        let mut found: Vec<ValueId> = live.iter().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
         found.sort_unstable();
         found.dedup();
         found
@@ -1224,7 +1223,7 @@ pub struct Pressure {
 /// `found` says, so two `Pressure`s of one function are equal whatever was
 /// asked.
 #[derive(Clone, Debug, Default)]
-struct Placed(Option<IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>>);
+struct Placed(Option<IdMap<ValueId, (IdSet<i64>, IdSet<i64>)>>);
 
 impl PartialEq for Placed {
     fn eq(
@@ -1238,7 +1237,7 @@ impl PartialEq for Placed {
 /// The live sets of each block's instructions: a cache of what `found` says,
 /// so two `Pressure`s of one function are equal whatever was asked.
 #[derive(Clone, Default)]
-struct BlockPoints(std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<Vec<LivePoint>>>>>);
+struct BlockPoints(std::rc::Rc<std::cell::RefCell<IdMap<i64, std::rc::Rc<Vec<LivePoint>>>>>);
 
 impl PartialEq for BlockPoints {
     fn eq(
@@ -1262,7 +1261,7 @@ impl std::fmt::Debug for BlockPoints {
 /// one after the other: asked for by every loop around them, found once.
 #[derive(Clone, Default)]
 struct Stepped {
-    steps: std::rc::Rc<std::cell::RefCell<BTreeMap<i64, std::rc::Rc<liveness::Steps>>>>,
+    steps: std::rc::Rc<std::cell::RefCell<IdMap<i64, std::rc::Rc<liveness::Steps>>>>,
     moves: std::rc::Rc<std::cell::RefCell<BTreeMap<(i64, i64), std::rc::Rc<Moves>>>>,
 }
 
@@ -1322,7 +1321,7 @@ impl Pressure {
         let out = &self.found.live_out[&key.0];
         let first = &self.steps(function, to).first;
         let (mut leave, mut enter) = (Vec::new(), Vec::new());
-        let (mut ahead, mut behind) = (out.iter().copied().peekable(), first.iter().copied().peekable());
+        let (mut ahead, mut behind) = (out.iter().peekable(), first.iter().copied().peekable());
         loop {
             match (ahead.peek(), behind.peek()) {
                 (Some(&gone), Some(&new)) if gone == new => {
@@ -1538,24 +1537,24 @@ impl Pressure {
         // shared (the index of every value, made for each copy of a base that
         // clones are priced from, cost as much as solving them afresh).
         let mut placed = index.unwrap_or_else(|| {
-            let mut index = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+            let mut index = IdMap::<ValueId, (IdSet<i64>, IdSet<i64>)>::new();
             for (at, values) in &found.live_in {
                 for value in values.iter().filter(|value| !shared || named.contains(value)) {
-                    index.get_or_insert_with(*value, Default::default).0.insert(*at);
+                    index.get_or_insert_with(value, Default::default).0.insert(*at);
                 }
             }
             for (at, values) in &found.live_out {
                 for value in values.iter().filter(|value| !shared || named.contains(value)) {
-                    index.get_or_insert_with(*value, Default::default).1.insert(*at);
+                    index.get_or_insert_with(value, Default::default).1.insert(*at);
                 }
             }
             index
         });
-        let mut touched = BTreeSet::<i64>::new();
+        let mut touched = IdSet::<i64>::new();
         renewed(&mut found, &mut placed, &named, computed, &mut touched);
-        if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
             let fresh = Pressure::of(context, function, scales);
-            let flat = |sets: &BTreeMap<i64, BTreeSet<ValueId>>| {
+            let flat = |sets: &BTreeMap<i64, IdSet<ValueId>>| {
                 sets.iter()
                     .filter(|(_, set)| !set.is_empty())
                     .map(|(at, set)| (*at, set.clone()))
@@ -1573,16 +1572,16 @@ impl Pressure {
             // moved.
             touched.extend(edits.blocks.iter().map(cfg::id));
             if std::rc::Rc::strong_count(&points.0) == 1 && std::rc::Rc::strong_count(&stepped.steps) == 1 {
-                points.0.borrow_mut().retain(|at, _| !touched.contains(at));
-                stepped.steps.borrow_mut().retain(|at, _| !touched.contains(at));
+                points.0.borrow_mut().retain(|at, _| !touched.contains(&at));
+                stepped.steps.borrow_mut().retain(|at, _| !touched.contains(&at));
                 stepped.moves.borrow_mut().retain(|(from, to), _| !touched.contains(from) && !touched.contains(to));
                 made.points = points;
                 made.stepped = stepped;
             }
         }
-        if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
             for (at, kept) in made.points.0.borrow().iter() {
-                let block = cfg::block(*at);
+                let block = cfg::block(at);
                 let fresh = liveness::live_points(function, &made.found, block);
                 assert!(
                     kept.len() == fresh.len()
@@ -1607,17 +1606,15 @@ impl Pressure {
 /// The blocks whose live sets changed are put in `touched`.
 fn renewed(
     found: &mut Liveness,
-    placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    placed: &mut IdMap<ValueId, (IdSet<i64>, IdSet<i64>)>,
     named: &IdSet<ValueId>,
     mut computed: IdMap<ValueId, liveness::Range>,
-    touched: &mut BTreeSet<i64>,
+    touched: &mut IdSet<i64>,
 ) {
     for value in named.iter() {
         let now = computed.remove(&value).unwrap_or_default();
         let kept = match placed.get(&value) {
-            Some((into, out)) => {
-                into.iter().copied().eq(now.into.iter().copied()) && out.iter().copied().eq(now.out.iter().copied())
-            }
+            Some((into, out)) => into.iter().eq(now.into.iter().copied()) && out.iter().eq(now.out.iter().copied()),
             None => now.into.is_empty() && now.out.is_empty(),
         };
         if !kept {
@@ -1643,22 +1640,22 @@ thread_local! {
 /// `value` live in the blocks of `now` in place of where `placed` has it.
 fn set_range(
     found: &mut Liveness,
-    placed: &mut IdMap<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>,
+    placed: &mut IdMap<ValueId, (IdSet<i64>, IdSet<i64>)>,
     value: ValueId,
     now: liveness::Range,
-    touched: &mut BTreeSet<i64>,
+    touched: &mut IdSet<i64>,
 ) {
     #[cfg(test)]
     RANGES_EDITED.with(|one| one.set(one.get() + 1));
     let (into, out) = placed.remove(&value).unwrap_or_default();
-    touched.extend(into.iter().chain(&out));
-    for at in into {
+    touched.extend(into.iter().chain(out.iter()));
+    for at in into.iter() {
         found.live_in.get_mut(&at).map(|set| set.remove(&value));
     }
-    for at in out {
+    for at in out.iter() {
         found.live_out.get_mut(&at).map(|set| set.remove(&value));
     }
-    touched.extend(now.into.iter().chain(&now.out));
+    touched.extend(now.into.iter().chain(&now.out).copied());
     if now.into.is_empty() && now.out.is_empty() {
         return;
     }
@@ -1861,7 +1858,7 @@ impl<'a> View<'a> {
             for kind in &mut kinds {
                 kind.clear();
             }
-            let mut live = first.iter().copied().collect::<BTreeSet<_>>();
+            let mut live = first.iter().copied().collect::<IdSet<_>>();
             for &value in &first {
                 let (cell, member) = class(value);
                 for (kind, _) in kinds.iter_mut().zip(member).filter(|(_, member)| *member) {

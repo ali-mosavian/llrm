@@ -84,7 +84,7 @@ pub fn solve<S: Clone + PartialEq>(
             pending.extend(feeds[index].iter().map(|dependent| place(*dependent)));
         }
     }
-    if crate::support::env_set("LLRM_CHECK_DATAFLOW") {
+    if crate::support::env_flag!("LLRM_CHECK_DATAFLOW") {
         let mut rounds: IndexMap<i64, S> = nodes.iter().map(|block| (block.at, initial(block.at))).collect();
         let mut seen: IndexMap<i64, S> = IndexMap::default();
         let mut changed = true;

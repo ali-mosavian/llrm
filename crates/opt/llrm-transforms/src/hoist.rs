@@ -168,6 +168,15 @@ pub fn hoisted(
     if found.is_empty() {
         return false;
     }
+    // A run starts from an instruction of a kind that may move whose operands
+    // are all outside the loop (LICM's scan before anything is asked): with
+    // none in any loop nothing moves, and the accesses, the invariant runs
+    // and the prices are not made. `LLRM_CHECK_HOISTSKIP` makes them anyway
+    // and fails if they find a run.
+    let check = llrm_support::env_flag!("LLRM_CHECK_HOISTSKIP");
+    if !check && !found.iter().any(|one| _seeded(unit, one)) {
+        return false;
+    }
     // Asked before anything moves: an instruction keeps its id where it goes.
     let Ok(accesses) = Accesses::managed(unit.context, unit.layout, unit.function, analyses) else { return false };
     let outer = std::rc::Rc::clone(analyses.outer());
@@ -211,7 +220,12 @@ pub fn hoisted(
             asked_after_moving = moved;
             analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
         };
+        let seeded = _seeded(unit, one);
+        if !seeded && !check {
+            continue;
+        }
         let run = _invariant_run(unit, &outer, one, into, &accesses, &terminal, &registers, &shape, &mut bounds);
+        assert!(seeded || run.is_empty(), "LLRM_CHECK_HOISTSKIP: a loop with no seed has a run of {}", run.len());
         if _crossed_values(unit.function, &run).is_empty() {
             continue;
         }
@@ -355,8 +369,8 @@ fn _affordable(
         let hoisted = moved.as_ref().map_or(&*unit.function, |(function, _)| function);
         // A floating value held across the loop is released after it, once for
         // each time the loop is entered.
-        let floats: BTreeSet<ValueId> = _crossed_values(hoisted, &run)
-            .into_iter()
+        let floats: IdSet<ValueId> = _crossed_values(hoisted, &run)
+            .iter()
             .filter(|&value| matches!(
                 unit.context.types.get(hoisted.value(value).ty),
                 Type::Float(_)
@@ -397,13 +411,13 @@ fn _affordable(
             _displacement(hoisted, value) || traffic().get(&value).is_some_and(|one| one.rebuild.is_some())
         };
         let crossing = _crossed_values(hoisted, &run)
-            .into_iter()
+            .iter()
             .filter(|value| forecast.spilled.contains(value))
-            .collect::<BTreeSet<_>>();
+            .collect::<IdSet<_>>();
         let uncounted: i64 = crossing
             .iter()
-            .filter(|&&value| free(value))
-            .filter_map(|value| traffic().get(value))
+            .filter(|&value| free(value))
+            .filter_map(|value| traffic().get(&value))
             .map(|one| one.price(costs))
             .sum();
         for value in forecast.spilled.iter() {
@@ -433,7 +447,6 @@ fn _affordable(
         // and a release, once per entry.
         let unworthy: IdSet<ValueId> = floats
             .iter()
-            .copied()
             .filter(|&value| {
                 let ValueDef::Instruction(def) = unit.function.value(value).def else { return false };
                 let Some(home) = unit.function.parent(def) else { return false };
@@ -451,7 +464,7 @@ fn _affordable(
             0 => unworthy,
             class => {
                 let left = (class - _float_working_set(unit, loop_, &run)).max(0) as usize;
-                floats.iter().copied().skip(left).chain(unworthy.iter()).collect()
+                floats.iter().skip(left).chain(unworthy.iter()).collect()
             }
         };
         if beyond.is_empty() && moved - uncounted <= kept {
@@ -459,12 +472,12 @@ fn _affordable(
             return run;
         }
         let costly = moved - uncounted > kept;
-        let mut stay: BTreeSet<ValueId> =
-            if costly { crossing.into_iter().filter(|&value| !free(value)).collect() } else { BTreeSet::new() };
+        let mut stay: IdSet<ValueId> =
+            if costly { crossing.iter().filter(|&value| !free(value)).collect() } else { IdSet::new() };
         stay.extend(beyond.iter());
         // What costs its release more than it saves stays, with what reads it.
         if costly && costs.float_release > 0 {
-            stay.extend(floats);
+            stay.extend(floats.iter());
         }
         if stay.is_empty() {
             // Nothing moves: the function is as it was priced.
@@ -685,7 +698,7 @@ pub fn _invariant_run(
     // Whether an instruction may move is a fact of the loop, not of how much of
     // it has moved: asked of each once, not once a round.
     let mut movable: llrm_mir::dense::IdMap<InstId, bool> = llrm_mir::dense::IdMap::new();
-    let mut made: BTreeSet<ValueId> = BTreeSet::new();
+    let mut made: IdSet<ValueId> = IdSet::new();
     let writers = llrm_analysis::memoryssa::Writers::of(accesses, &insts);
     loop {
         let mut grew = false;
@@ -902,13 +915,62 @@ pub fn _guaranteed(
 pub fn _crossed_values(
     function: &Function,
     run: &[InstId],
-) -> BTreeSet<ValueId> {
+) -> IdSet<ValueId> {
+    let inside: IdSet<InstId> = run.iter().copied().collect();
     run.iter()
         .filter_map(|&inst| function.instruction(inst).result)
-        .filter(|&value| function.users(value).iter().any(|one| !run.contains(&one.user)))
+        .filter(|&value| function.users(value).iter().any(|one| !inside.contains(&one.user)))
         .collect()
 }
 
 #[cfg(test)]
 #[path = "hoist_tests.rs"]
 mod tests;
+
+/// Whether some instruction of `loop_` could start a run: one of the kinds
+/// `_movable` accepts whose operands are all constants or defined outside the
+/// loop. Every run begins with one, so a loop with none has no run.
+fn _seeded(
+    unit: &passes::Unit,
+    loop_: &Loop,
+) -> bool {
+    let function = &*unit.function;
+    let inside = |block: BlockId| loop_.body.contains(&cfg::id(block));
+    let outside = |value: ValueId| match function.value(value).def {
+        ValueDef::Argument(_) => true,
+        ValueDef::Instruction(def) => function.parent(def).is_some_and(|block| !inside(block)),
+    };
+    function
+        .layout()
+        .iter()
+        .filter(|&&block| inside(block))
+        .any(
+            |&block| function
+                .block(block)
+                .instructions()
+                .iter()
+                .any(
+                    |&inst| {
+                        let op = function.instruction(inst);
+                        matches!(
+                            op.opcode,
+                            Opcode::Binary(_)
+                                | Opcode::Cast(_)
+                                | Opcode::ICmp(_)
+                                | Opcode::FCmp(_)
+                                | Opcode::FNeg
+                                | Opcode::GetElementPtr { .. }
+                                | Opcode::Select
+                                | Opcode::Freeze
+                                | Opcode::ExtractValue(_)
+                                | Opcode::InsertValue(_)
+                                | Opcode::Load { volatile: false, .. }
+                        ) && op.operands.iter().all(|operand| match *operand {
+                            Operand::Value(value) => outside(value),
+                            Operand::Constant(_) => true,
+                            Operand::Block(_) => false,
+                        })
+                    },
+                ),
+        )
+}

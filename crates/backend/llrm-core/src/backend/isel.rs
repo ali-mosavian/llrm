@@ -851,7 +851,7 @@ enum Pointer {
 /// scan of the module gives.
 fn checking_callees() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CALLEES"))
 }
 
 /// `hole` bytes below BP are left free, above the allocas, for spill slots.
@@ -2531,18 +2531,18 @@ impl Selector<'_, '_, '_> {
     fn successors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> llrm_mir::blocklist::BlockList {
         let function = self.function;
         let terminator = function.instruction(function.terminator(block).expect("a terminator"));
         match terminator.operands[..] {
             [condition @ Operand::Constant(_), Operand::Block(taken), Operand::Block(otherwise)]
                 if terminator.opcode == Opcode::Br =>
             {
-                vec![if self.constant(condition, 1) == Some(0) { otherwise } else { taken }]
+                std::iter::once(if self.constant(condition, 1) == Some(0) { otherwise } else { taken }).collect()
             }
             // The unwind edge is the runtime's, not the machine's.
             [.., Operand::Block(normal), Operand::Block(_), _] if matches!(terminator.opcode, Opcode::Invoke(_)) => {
-                vec![normal]
+                std::iter::once(normal).collect()
             }
             _ => function.successors(block),
         }

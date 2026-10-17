@@ -206,7 +206,7 @@ pub fn joined(
     // join costs the smaller's neighbours.
     let mut node_of: IndexMap<u32, u32> = IndexMap::default();
     webs.begin(_interference(body), &held);
-    let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
+    let checking = llrm_support::env_flag!("LLRM_CHECK_COALESCE");
 
     // A join is kept, and the first of two that clash is the one that stays:
     // the deepest loops first, as LLVM's `RegisterCoalescer` orders its

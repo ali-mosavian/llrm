@@ -853,7 +853,7 @@ pub fn live_rows_by(
     // `LiveVariables`). A body with phis is solved over the rows.
     // Under the check every body is followed, so that the walk is held to the
     // rows on all of them.
-    let checking = llrm_support::env_set("LLRM_CHECK_LIVE");
+    let checking = llrm_support::env_flag!("LLRM_CHECK_LIVE");
     let mut numbered = None;
     if checking || body.blocks.len() >= WEB_BLOCKS {
         let values = numbered_by(body, &keep);
@@ -880,7 +880,7 @@ pub fn live_rows_by(
             };
             if let Some(web) = web {
                 let found = LiveRows(Found::Web(web));
-                if llrm_support::env_set("LLRM_CHECK_LIVE") {
+                if llrm_support::env_flag!("LLRM_CHECK_LIVE") {
                     let walk = live_rows_dense(body, &keep);
                     for block in &body.blocks {
                         assert!(
@@ -1645,7 +1645,7 @@ impl Facts {
                     },
                 );
             if let Some(found) = &patched {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     let whole = ranges::indexed_consecutive(body);
                     for (insn, slot) in &found.at {
                         assert_eq!(found.uniform(*slot), whole.at[insn], "{}: an instruction's slot", body.name);
@@ -1704,7 +1704,7 @@ impl Facts {
         let pinned: BTreeSet<u32> = unspillable.iter().chain(protected).copied().collect();
         let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), pinned));
         crate::backend::live::hold(body, &live);
-        if llrm_support::env_set("LLRM_CHECK_FACTS") {
+        if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
             let (base, _) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
             let (mut whole, _) = _sibling_priced(body, base, busy, &index);
             whole = _fold_priced(body, whole, profile, busy, &index);
@@ -1732,7 +1732,7 @@ impl Facts {
                 }
                 _ => None,
             };
-            if let (Some(found), true) = (&found, llrm_support::env_set("LLRM_CHECK_FACTS")) {
+            if let (Some(found), true) = (&found, llrm_support::env_flag!("LLRM_CHECK_FACTS")) {
                 let whole = _masks(body, &index, segments);
                 assert!(
                     found.same_points(&whole),
@@ -1747,7 +1747,7 @@ impl Facts {
                 let _ = before;
                 let found =
                     _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
                 found
@@ -1761,8 +1761,8 @@ impl Facts {
                 None => crate::backend::regclass::Scan::of(body, registers, segments),
             });
             let found = scan.classes(body, protected, segments, registers, &given);
-            if llrm_support::env_set("LLRM_CHECK_CLASSES")
-                || (prior.is_some() && llrm_support::env_set("LLRM_CHECK_FACTS"))
+            if llrm_support::env_flag!("LLRM_CHECK_CLASSES")
+                || (prior.is_some() && llrm_support::env_flag!("LLRM_CHECK_FACTS"))
             {
                 let whole = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
                 assert!(found == whole, "{}: classes from the counts kept from the body before differ", body.name);
@@ -1777,7 +1777,7 @@ impl Facts {
                     body,
                     &changes.touched,
                 );
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
                 }
                 found
@@ -1807,7 +1807,7 @@ fn _overlapping(
     facts: &Facts,
 ) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
-    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+    if llrm_support::env_flag!("LLRM_CHECK_OVERLAPPING") {
         assert!(
             found == _overlapping_reference(union, r#where, facts),
             "values sharing a register found by start differ from the pairwise look"
@@ -2186,7 +2186,7 @@ fn _allocated(
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
             let live_sets = IntervalLive { live: &facts.live, index: &facts.index };
-            if llrm_support::env_set("LLRM_CHECK_PLACING") {
+            if llrm_support::env_flag!("LLRM_CHECK_PLACING") {
                 let rows = live_rows_by(&body, |one| one == value);
                 for block in &body.blocks {
                     assert!(
@@ -2456,7 +2456,7 @@ fn _allocated(
                 }
                 None => constrain::required(&body, classes),
             };
-            if changed.is_some() && llrm_support::env_set("LLRM_CHECK_REQUIRED") {
+            if changed.is_some() && llrm_support::env_flag!("LLRM_CHECK_REQUIRED") {
                 let mut whole = fixed.clone();
                 for (one, register) in constrain::required(&body, classes) {
                     whole.entry(one).or_insert(register);
@@ -2475,7 +2475,7 @@ fn _allocated(
         llrm_support::debug::timed("after wanted", || {
             walk.update(&facts.hints, &fixed, changes.as_ref().map(|changes| &changes.touched));
         });
-        if llrm_support::env_set("LLRM_CHECK_WANTED") {
+        if llrm_support::env_flag!("LLRM_CHECK_WANTED") {
             let whole = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
             assert!(
                 walk.wanted() == whole.wanted(),
@@ -2492,7 +2492,7 @@ fn _allocated(
                     before_ranges.as_ref().expect("taken with the changes"),
                     &*facts.live,
                 );
-                if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
+                if llrm_support::env_flag!("LLRM_CHECK_HOLDERS") {
                     union.check_index(&facts.live);
                 }
             }
@@ -2504,7 +2504,7 @@ fn _allocated(
             match (&changes, facts.masks.added(), &facts.reclassed) {
                 (Some(changes), Some(added), Some(reclassed)) => {
                     let found = _overlapping_after(&union, &r#where, &facts, &changes.touched, reclassed, added);
-                    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+                    if llrm_support::env_flag!("LLRM_CHECK_OVERLAPPING") {
                         let whole = _overlapping(&union, &r#where, &facts);
                         assert!(
                             found == whole,
@@ -2567,7 +2567,7 @@ fn _allocated(
                 Some(looked) => looked.iter().copied().filter(|one| again(one, &waiting)).collect(),
                 None => facts.live.keys().copied().filter(|one| again(one, &waiting)).collect(),
             };
-            if llrm_support::env_set("LLRM_CHECK_IDLE") {
+            if llrm_support::env_flag!("LLRM_CHECK_IDLE") {
                 let whole: Vec<u32> = facts.live.keys().copied().filter(|one| again(one, &waiting)).collect();
                 assert!(
                     found.iter().copied().collect::<BTreeSet<_>>() == whole.iter().copied().collect::<BTreeSet<_>>(),
@@ -2750,7 +2750,7 @@ fn _named_among(
             .collect()
     });
     body.facts.0.bump_by("named-among", wanted.len());
-    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
         let walked: BTreeSet<u32> = _values(body).into_iter().filter(|one| wanted.contains(one)).collect();
         assert!(found == walked, "{}: the values still named, from the postings, differ from the walk", body.name);
     }
@@ -3210,7 +3210,7 @@ pub fn _clobbered(
 
 fn check_clobbered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CLOBBERED"))
 }
 
 /// `_clobbered`, from where each register is destroyed: a segment meets a point
@@ -3619,7 +3619,7 @@ impl Coloring<'_> {
         if depth >= Self::DEPTH {
             return false;
         }
-        if depth == 0 && llrm_support::env_set("LLRM_CHECK_CROWDED") {
+        if depth == 0 && llrm_support::env_flag!("LLRM_CHECK_CROWDED") {
             assert_eq!(
                 self.crowded(value),
                 self.crowded_reference(value),
@@ -3627,7 +3627,7 @@ impl Coloring<'_> {
             );
         }
         if depth == 0 && self.crowded(value) {
-            if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
+            if llrm_support::env_flag!("LLRM_CHECK_RECOLOR") {
                 let mut again = Coloring {
                     union: &mut *self.union,
                     r#where: &mut *self.r#where,
@@ -4633,7 +4633,7 @@ fn _fold_free(
     busy: &Frequency,
 ) -> IndexMap<u32, f64> {
     let discounts = FoldDiscounts::of(profile);
-    let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
+    let check = llrm_support::env_flag!("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);

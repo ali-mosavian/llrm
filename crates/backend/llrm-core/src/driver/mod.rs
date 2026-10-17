@@ -272,7 +272,9 @@ pub fn emitted(
     options: &Options,
 ) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     // Whichever frontend made it, a program is checked before it is lowered.
-    crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
+    if llrm_support::debug::verifying() {
+        crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
+    }
     let emitted = timed("hir to mir", || llrm_hir::mir::emit(program, &options.arch.layout()));
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -307,7 +309,9 @@ pub fn linked(
     target: std::rc::Rc<dyn llrm_mir::target::Machine>,
 ) -> Result<Program, String> {
     let program = Program::new(modules, target)?.with_runtime(runtime)?;
-    timed("mir verify frontend", || verified(&program, "the frontend"))?;
+    if llrm_support::debug::verifying() {
+        timed("mir verify frontend", || verified(&program, "the frontend"))?;
+    }
     Ok(program)
 }
 

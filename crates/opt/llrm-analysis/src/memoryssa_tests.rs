@@ -869,3 +869,160 @@ fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_ot
     // enough).
     assert!(steps <= 9000, "{steps} accesses stepped over for 200 loads");
 }
+
+/// An edit that makes or moves no memory op and no terminator leaves the
+/// structure as it was: the manager's plain accesses carry it. Each
+/// of those edits made the structure again (44 of 90 re-builds for d_faces
+/// -O2, half of the 71 M spent on them); an edit of a store's address still
+/// makes it.
+#[test]
+fn an_edit_that_leaves_memory_ops_and_blocks_alone_keeps_the_structure() {
+    use llrm_mir::module::Operand;
+    use llrm_mir::passes::{Outer, PreservedAnalyses};
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(ptr %p, ptr %q, i16 %x) {{
+b0:
+  %a = add i16 %x, 1
+  store i16 %a, ptr %p
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let structure = |module: &Module, analyses: &mut Analyses| {
+        let (context, function) = (&module.context, function(module, "f"));
+        let plain = analyses.get::<crate::manager::PlainAccesses>(context, &layout, function);
+        let accesses = plain.as_ref().as_ref().unwrap();
+        let unit = Unit::within(context, &layout, function, analyses.outer());
+        built(&unit, accesses);
+    };
+    let before = structures_made();
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 1);
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        let add = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| function.instruction(inst).opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Add))
+            .unwrap();
+        let x = function.instruction(add).operands[0];
+        function.set_operand(add, 1, x);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+        let _ = context;
+    }
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 1, "an add rewritten leaves the structure");
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let store = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+            .unwrap();
+        let q = Operand::Value(crate::testing::value(function, "q"));
+        function.set_operand(store, 1, q);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 2, "a store given another address is another structure");
+}
+
+/// A walk asked each write of the chain whether it may clobber the cell, and
+/// each answer followed the pointer chain of the cell and of the write again
+/// (`Offsets::stepped`): 28 M instructions, 0.8% of the d_faces -O2 compile,
+/// for chains that are the same on every ask. Each pointer's chain is followed
+/// once.
+#[test]
+fn a_walk_follows_the_chain_of_each_pointer_once() {
+    let arms = 12;
+    let params: String = (0..arms).map(|k| format!(", ptr %r{k}")).collect();
+    let cases: String = (0..arms).map(|k| format!("    i16 {k}, label %a{k}\n")).collect();
+    let bodies: String = (0..arms)
+        .map(|k| {
+            format!(
+                "a{k}:\n  %w{k} = getelementptr i8, ptr %r{k}, i16 4\n  store i8 1, ptr %w{k}\n  br label %join\n\n"
+            )
+        })
+        .collect();
+    let parsed = Parsed::new(&format!(
+        "define i8 @f(i16 %n, ptr %q{params}) {{\nb0:\n  %c = getelementptr i8, ptr %q, i16 %n\n  switch i16 %n, label %join [\n{cases}  ]\n\n{bodies}join:\n  %x = load i8, ptr %c\n  ret i8 %x\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let graph = graph(&unit);
+    let load = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Load { .. }))
+        .expect("a load");
+    let cell = cell(&unit, load);
+    crate::pointerfacts::STEPPED.with(|count| count.set(0));
+    let found = graph.nearest_writes(load, &cell);
+    let followed = crate::pointerfacts::STEPPED.with(std::cell::Cell::get);
+    assert!(found.len() >= arms, "premise: the walk met the writes of every arm: {found:?}");
+    assert!(followed <= arms + 2, "{followed} chains followed for {} pointers", arms + 1);
+}
+
+/// A machine that counts how often it is asked for its address spaces.
+struct Counting;
+
+thread_local! {
+    static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl llrm_mir::target::Machine for Counting {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        llrm_mir::spaces::Spaces::FLAT
+    }
+
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::OperationCosts::default()
+    }
+
+    fn registers(&self) -> i64 {
+        0
+    }
+
+    fn call_registers(&self) -> i64 {
+        0
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+}
+
+/// `regions::foreign` asked the machine for its address spaces at every
+/// reference of every pair (a virtual call and a copy of the table: 16 M
+/// instructions, 0.45% of the d_faces -O2 compile); the program proxy holds
+/// them, asked once.
+#[test]
+fn overlap_asks_the_program_for_its_spaces_not_the_machine() {
+    let parsed = Parsed::new(&format!(
+        "define i16 @f(ptr %p, ptr %q) {{\nb0:\n  store i16 1, ptr %p\n  %x = load i16, ptr %q\n  ret i16 %x\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let program = llrm_mir::program::Program::new(vec![parsed.module.clone()], std::rc::Rc::new(Counting)).unwrap();
+    let proxy = llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0);
+    let (store, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1));
+    let (written, read) = (cell(&unit, store), cell(&unit, load));
+    ASKED.with(|asked| asked.set(0));
+    for _ in 0..10 {
+        let _ = crate::regions::overlapping(&read, &written, None, None, Some(&proxy));
+    }
+    let asked = ASKED.with(std::cell::Cell::get);
+    assert_eq!(asked, 0, "the machine was asked for its spaces {asked} times in 10 pairs");
+}

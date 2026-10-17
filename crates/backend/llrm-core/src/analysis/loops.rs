@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 pub use llrm_mir::forest::{Body, Forest, TreeLoop};
-pub use llrm_support::graph::{Dominance, Node};
+pub use llrm_support::graph::{Dominance, Node, Predecessors, predecessors};
 
 use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
@@ -32,19 +32,6 @@ impl Node for crate::model::lir::Block {
     fn succ(&self) -> &[i64] {
         &self.succ
     }
-}
-
-pub fn predecessors<N: Node>(blocks: &[N]) -> BTreeMap<i64, BTreeSet<i64>> {
-    let known = blocks.iter().map(Node::at).collect::<BTreeSet<_>>();
-    let mut found = blocks.iter().map(|block| (block.at(), BTreeSet::new())).collect::<BTreeMap<_, _>>();
-    for block in blocks {
-        for successor in block.succ() {
-            if known.contains(successor) {
-                found.get_mut(successor).expect("known").insert(block.at());
-            }
-        }
-    }
-    found
 }
 
 /// Every block that must have run before each one, to a fixed point.
@@ -176,7 +163,7 @@ pub fn back_edges<N: Node>(
 pub fn _body(
     latch: i64,
     header: i64,
-    preds: &BTreeMap<i64, BTreeSet<i64>>,
+    preds: &Predecessors,
 ) -> BTreeSet<i64> {
     let mut body = BTreeSet::from([header]);
     if latch == header {
@@ -214,7 +201,7 @@ pub fn loops<N: Node>(
         |one, found| one.loops = Some(found),
         || {
             let named = named(&forest_of(blocks, entry));
-            if llrm_support::env_set("LLRM_CHECK_LOOPS") {
+            if llrm_support::env_flag!("LLRM_CHECK_LOOPS") {
                 assert!(
                     flat(&named) == flooded(blocks, entry),
                     "LLRM_CHECK_LOOPS: the forest's loops differ from a flood"

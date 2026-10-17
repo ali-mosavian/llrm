@@ -492,7 +492,7 @@ impl Reaching {
                 || {
                     let mut predecessors = IdMap::<BlockId, Vec<BlockId>>::new();
                     for &block in function.layout() {
-                        predecessors.insert(block, function.predecessors(block));
+                        predecessors.insert(block, function.predecessors(block).into());
                     }
                     Rc::new(predecessors)
                 },
