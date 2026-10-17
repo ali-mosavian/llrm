@@ -586,3 +586,37 @@ fn a_block_is_placed_from_its_insertion_to_its_erasure() {
     f.delete_body();
     assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
 }
+
+/// A run of k instructions moved to another block one at a time was k scans of
+/// both: `hoist` moving a loop's 8,001 invariant instructions was 925 M of the
+/// 23,091 M `loop` compile at N=1600, 4.0x a doubling.
+#[test]
+fn move_all_rewrites_each_block_once_and_moves_as_move_to_does() {
+    let n = 200;
+    let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  br label %body\nbody:\n");
+    for i in 0..n {
+        text += &format!("  %x{i} = add i32 %a, {i}\n");
+    }
+    text += "  br label %exit\nexit:\n  ret i32 %a\n}\n";
+    let mut one = module(&text);
+    let mut all = one.clone();
+    let run = |f: &Function| -> Vec<InstId> {
+        let body = f.layout()[1];
+        f.block(body).instructions()[..n].to_vec()
+    };
+    let (f, g) = (function(&mut one), function(&mut all));
+    let entry_end = f.terminator(f.layout()[0]).expect("a terminator");
+    let inst_run = run(f);
+    for &inst in &inst_run {
+        f.move_to(inst, Position::Before(entry_end)).expect("placed");
+    }
+    let before = crate::edit::instructions_scanned();
+    let moved = run(g);
+    let end = g.terminator(g.layout()[0]).expect("a terminator");
+    g.move_all(&moved, Position::Before(end)).expect("placed");
+    let scanned = crate::edit::instructions_scanned() - before;
+    assert!(scanned <= 4 * n, "{n} moved instructions scanned {scanned}");
+    let (changes_one, changes_all) = (f.take_changes(), g.take_changes());
+    assert_eq!(print::module(&one), print::module(&all));
+    assert_eq!(changes_one, changes_all);
+}
