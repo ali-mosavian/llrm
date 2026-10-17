@@ -19,7 +19,7 @@ def test_only_main_and_own_pull_requests_reach_tinytim():
     assert "head.repo.full_name == github.repository" in eligible and "github.ref == 'refs/heads/main'" in eligible
     assert "runs-on: ${{ fromJSON(needs.plan.outputs.runner_build) }}" in CI
     assert "runs-on: ${{ fromJSON(needs.plan.outputs.runner_groups)[matrix.group] }}" in CI
-    assert "tinytim" not in "\n".join(l for l in CI.splitlines() if l.strip().startswith("runs-on:"))
+    assert "tinytim" not in "\n".join(l for l in CI.splitlines() if l.strip().startswith("runs-on:") and l.strip() != "runs-on: [self-hosted, tinytim]"), "the picker chooses; setup-check is the one job that asks for tinytim"
 
 
 def test_perf_may_only_be_missing_on_a_hosted_runner():

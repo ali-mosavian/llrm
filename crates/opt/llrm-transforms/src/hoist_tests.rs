@@ -807,3 +807,44 @@ fn test_a_486_keeps_loads_in_a_loop_that_its_adds_take_from_memory() {
     let held = invariant_floats_on_a_486(16);
     assert!(held < 8, "{held} of 16 loads hoisted onto a stack of 8");
 }
+
+/// `hoist` made the body's accesses, ran the invariant run and priced it for
+/// every loop, 22 calls on d_faces -O2 with loops, 13 of them with a loop none
+/// of whose instructions reads only what is outside it. With no such
+/// instruction nothing can move, and nothing is asked.
+#[test]
+fn a_loop_with_no_instruction_to_start_a_run_asks_for_no_accesses() {
+    let loop_of = |body: &str, step: &str| {
+        format!(
+            "define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+{body}  %j = add i16 %i, {step}
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}}
+"
+        )
+    };
+    let accesses = |text: &str| {
+        llrm_mir::passes::trace_recomputes(true);
+        let (_, after) = hoisted(text);
+        let built: usize =
+            llrm_mir::passes::recomputes().iter().filter(|(name, ..)| *name == "accesses").map(|(.., n)| n).sum();
+        llrm_mir::passes::trace_recomputes(false);
+        (built, printed(&after))
+    };
+    let (none, _) = accesses(&loop_of("", "1"));
+    assert_eq!(none, 0, "accesses made for a loop with nothing to move");
+    let (some, text) = accesses(&loop_of("  %k = mul i16 %n, 3\n", "%k"));
+    assert!(
+        some > 0 && text.find("%k = mul").unwrap() < text.find("b1:").unwrap(),
+        "premise: an invariant moves\n{text}"
+    );
+}

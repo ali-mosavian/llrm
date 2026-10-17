@@ -902,8 +902,8 @@ fn test_a_value_read_where_it_was_is_not_edited_in_the_live_sets() {
     super::RANGES_EDITED.with(|one| one.set(0));
     super::renewed(&mut found, &mut placed, &named, computed, &mut Default::default());
     assert_eq!(super::RANGES_EDITED.with(|one| one.get()), 2, "b and c are edited, a is not");
-    assert_eq!(found.live_in[&0], BTreeSet::from([a, b]));
-    assert_eq!(found.live_in[&1], BTreeSet::from([a]));
+    assert_eq!(found.live_in[&0], IdSet::from_iter([a, b]));
+    assert_eq!(found.live_in[&1], IdSet::from_iter([a]));
     assert!(placed.get(&c).is_none());
 }
 

@@ -71,11 +71,18 @@ use std::collections::BTreeSet;
 use llrm_analysis::ssa;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::memory::{self, Callees};
-use llrm_mir::module::{Function, InstId, Operand, ValueId};
+use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses, Unit};
 
 use crate::transform::live;
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions the whole-function `dead` was given, for the tests that
+    /// count them.
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 pub struct Dead;
 
@@ -108,6 +115,13 @@ pub fn dead(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
+    #[cfg(test)]
+    SCANNED.with(|scanned| {
+        scanned.set(
+            scanned.get()
+                + function.layout().iter().map(|&block| function.block(block).instructions().len()).sum::<usize>(),
+        )
+    });
     let markers = _unneeded_markers(context, callees, function);
     for &marker in &markers {
         function.erase(marker).expect("a call with no result");
@@ -132,6 +146,79 @@ pub fn dead(
         function.erase(inst).expect("nothing reads it");
     }
     ssa::pruned_phis(function, &alive) | !gone.is_empty() | !markers.is_empty()
+}
+
+/// `dead`, for a function that was free of dead code before an edit: only what
+/// the edit stopped reading (`seeds`) can have died. An instruction is dead
+/// when nothing that stays is reachable from it through its readers; so the
+/// readers of a seed are followed until one that stays is met (the seed lives),
+/// or none is (all of them go, a loop-carried cycle too), and what the dead
+/// read becomes a seed in its turn. The cost is the cone of the seeds, not the
+/// function.
+pub fn dead_from(
+    context: &Context,
+    callees: &Callees,
+    function: &mut Function,
+    seeds: impl IntoIterator<Item = ValueId>,
+) -> bool {
+    let mut pending: Vec<ValueId> = seeds.into_iter().collect();
+    let mut asked = llrm_mir::dense::IdSet::<ValueId>::new();
+    let mut gone = false;
+    while let Some(value) = pending.pop() {
+        if !asked.insert(value) {
+            continue;
+        }
+        let ValueDef::Instruction(start) = function.value(value).def else { continue };
+        if function.parent(start).is_none() {
+            continue;
+        }
+        let Some(cone) = _cone(context, callees, function, start) else { continue };
+        let members: llrm_mir::dense::IdSet<InstId> = cone.iter().copied().collect();
+        for &inst in &cone {
+            for &operand in &function.instruction(inst).operands {
+                if let Operand::Value(read) = operand
+                    && let ValueDef::Instruction(defining) = function.value(read).def
+                    && !members.contains(&defining)
+                {
+                    asked.remove(&read);
+                    pending.push(read);
+                }
+            }
+        }
+        for &inst in &cone {
+            function.set_operands(inst, Vec::new());
+        }
+        for &inst in &cone {
+            function.erase(inst).expect("only the dead read the dead");
+        }
+        gone = true;
+    }
+    gone
+}
+
+/// `start` and every instruction that reads it, and those, so on: none where
+/// one of them stays whatever reads it, which keeps `start`.
+fn _cone(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    start: InstId,
+) -> Option<Vec<InstId>> {
+    let mut seen = llrm_mir::dense::IdSet::<InstId>::new();
+    let (mut stack, mut cone) = (vec![start], Vec::new());
+    while let Some(inst) = stack.pop() {
+        if !seen.insert(inst) {
+            continue;
+        }
+        if _kept(context, callees, function, inst) {
+            return None;
+        }
+        cone.push(inst);
+        if let Some(result) = function.instruction(inst).result {
+            stack.extend(function.users(result).iter().map(|one| one.user));
+        }
+    }
+    Some(cone)
 }
 
 /// The lifetime markers of an object nothing else that stays reads: only
