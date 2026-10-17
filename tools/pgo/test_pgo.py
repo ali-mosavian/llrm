@@ -1,0 +1,117 @@
+"""`uv run --project tools python -m pytest tools/pgo/test_pgo.py`"""
+
+import sys
+import json
+import time
+import subprocess
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import pytest  # noqa: E402
+import pgo  # noqa: E402
+
+
+def git(root: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+def repo(tmp_path: Path) -> tuple[Path, str]:
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "crates").mkdir()
+    (tmp_path / "crates/a.rs").write_text("0")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-q", "-m", "0")
+    return tmp_path, git(tmp_path, "rev-parse", "HEAD")
+
+
+def profile(directory: Path, commit: str, created: float) -> Path:
+    directory.mkdir(exist_ok=True)
+    (directory / "profile.profdata").write_bytes(b"x")
+    (directory / "profile.json").write_text(json.dumps({"commit": commit, "created": created, "compiles": 1, "failed": 0}))
+    return directory
+
+
+def edit(root: Path, name: str) -> None:
+    (root / "crates" / name).write_text(name)
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", name)
+
+
+def test_the_training_corpus_leaves_out_what_is_measured():
+    """The first PGO figure trained on d_faces and measured d_faces: a held-out program is the only honest one."""
+    everything = {name for name, *_ in pgo.corpus()}
+    assert {"lru", "bintree", "queens"} <= everything
+    left = {name for name, *_ in pgo.corpus(exclude=frozenset({"lru", "bintree", "queens"}))}
+    assert left == everything - {"lru", "bintree", "queens"}
+
+
+def test_each_bench_program_is_compiled_flat_and_in_16_bits_at_every_level():
+    jobs = [job for job in pgo.corpus() if job[0] == "fib"]
+    levels = len(pgo.tomllib.loads((pgo.HERE / "corpus.toml").read_text())["levels"])
+    assert len(jobs) == 2 * levels and {"-m32" in job[1] for job in jobs} == {True, False}
+
+
+def test_qcports_modules_are_trained_on_wrapped_and_only_when_it_is_there(tmp_path):
+    (tmp_path / "render").mkdir()
+    for name in ("d_faces.c", "d_alias.c"):
+        (tmp_path / "render" / name).write_text("")
+    jobs = [job for job in pgo.corpus(qcport=tmp_path) if job[3]]
+    assert {job[0] for job in jobs} == {"d_faces", "d_alias"} and not [job for job in pgo.corpus() if job[3]]
+    assert {job[0] for job in pgo.corpus(exclude=frozenset({"d_faces"}), qcport=tmp_path) if job[3]} == {"d_alias"}, "d_faces_norefresh is d_faces too: a prefix"
+
+
+def test_no_profile_is_none_and_a_young_profile_of_the_same_source_is_fresh(tmp_path):
+    root, commit = repo(tmp_path)
+    assert pgo.stale(tmp_path / "none", root) == 2
+    assert pgo.stale(profile(tmp_path / "p", commit, time.time()), root) == 0
+
+
+def test_a_profile_is_stale_past_the_age_or_the_commits_to_the_compiler(tmp_path):
+    """Stale means functions changed since have no profile (the build warns): reuse is for a few commits, not for ever."""
+    root, commit = repo(tmp_path)
+    old = profile(tmp_path / "old", commit, time.time() - (pgo.MAX_AGE_DAYS + 1) * 86400)
+    assert pgo.stale(old, root) == 1
+    young = profile(tmp_path / "young", commit, time.time())
+    for number in range(pgo.MAX_COMMITS):
+        edit(root, f"c{number}.rs")
+    assert pgo.stale(young, root) == 0
+    edit(root, "one-more.rs")
+    assert pgo.stale(young, root) == 1
+
+
+def test_a_commit_that_is_not_the_compilers_does_not_age_the_profile(tmp_path):
+    root, commit = repo(tmp_path)
+    young = profile(tmp_path / "young", commit, time.time())
+    for number in range(pgo.MAX_COMMITS + 5):
+        (root / f"doc{number}.md").write_text("x")
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "doc")
+    assert pgo.stale(young, root) == 0
+
+
+def test_a_profile_from_a_commit_this_clone_lacks_is_stale(tmp_path):
+    root, _ = repo(tmp_path)
+    assert pgo.stale(profile(tmp_path / "p", "0" * 40, time.time()), root) == 1
+
+
+def test_the_unmatched_functions_are_listed_from_the_builds_warnings():
+    text = "warning: x: no profile data available for function _ZN3foo Hash = 1 up to 0 count discarded\nwarning: no profile data available for function _ZN3bar Hash = 2\n"
+    assert pgo.WARNING.findall(text) == ["_ZN3foo", "_ZN3bar"]
+
+
+def test_a_summary_names_the_profile_its_age_and_the_functions_without_data(tmp_path):
+    root, commit = repo(tmp_path)
+    text = pgo.summary([f"f{n}" for n in range(25)], profile(tmp_path / "p", commit, time.time()))
+    assert commit[:12] in text and "25 functions have no profile data" in text and "never ran them" in text and "... and 5 more" in text
+
+
+def test_the_profdata_must_be_the_one_of_rustcs_llvm(monkeypatch, tmp_path):
+    """llvm-profdata 20 read 'raw profile version mismatch' on rustc 1.99's LLVM 23 profiles."""
+    monkeypatch.setattr(pgo, "sh", lambda command, **kw: subprocess.CompletedProcess(command, 0, stdout=str(tmp_path) if "sysroot" in command else "host: x86_64-unknown-linux-gnu\n"))
+    with pytest.raises(SystemExit, match="rustup component add llvm-tools"):
+        pgo.profdata()
+    found = tmp_path / "lib/rustlib/x86_64-unknown-linux-gnu/bin"
+    found.mkdir(parents=True)
+    (found / "llvm-profdata").write_text("")
+    assert pgo.profdata() == found / "llvm-profdata"
