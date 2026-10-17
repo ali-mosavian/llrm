@@ -9,6 +9,8 @@ use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
 pub mod context;
+#[cfg(test)]
+mod context_tests;
 pub mod guarantee;
 pub mod known;
 pub mod nonzero;
@@ -18,7 +20,7 @@ mod query;
 pub mod range;
 pub mod signbits;
 
-pub use query::{AssumptionCache, Query};
+pub use query::{AssumptionCache, DomConditionCache, Query};
 
 /// One column of `examples/vtdump.rs`: ` name=answer`.
 pub fn column(

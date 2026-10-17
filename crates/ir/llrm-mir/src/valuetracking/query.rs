@@ -11,6 +11,7 @@
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
+use crate::hash::HashMap;
 use crate::intrinsics::Intrinsic;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Module, Operand, ValueDef};
 use crate::opcode::Opcode;
@@ -27,6 +28,8 @@ pub struct Query<'a> {
     pub layout: &'a DataLayout,
     pub dt: Option<&'a DominatorTree>,
     pub assumptions: Option<&'a AssumptionCache>,
+    /// `DC`: the conditional branches each value is tested by.
+    pub dom_conditions: Option<&'a DomConditionCache>,
     /// `CxtI`: the instruction the query is asked at.
     pub cxt: Option<InstId>,
 }
@@ -44,6 +47,7 @@ impl<'a> Query<'a> {
             layout,
             dt: None,
             assumptions: None,
+            dom_conditions: None,
             cxt: None,
         }
     }
@@ -55,7 +59,7 @@ impl<'a> Query<'a> {
         function: &'a Function,
         layout: &'a DataLayout,
     ) -> Self {
-        Self { context, globals: &[], function, layout, dt: None, assumptions: None, cxt: None }
+        Self { context, globals: &[], function, layout, dt: None, assumptions: None, dom_conditions: None, cxt: None }
     }
 
     pub fn with_cxt(
@@ -177,25 +181,116 @@ impl<'a> Query<'a> {
     }
 }
 
+/// `MaxAssumesPerValue`.
+const MAX_ASSUMES_PER_VALUE: usize = 1024;
+
 /// `AssumptionCache`: the `llvm.assume` calls of a function, and the values
 /// each one tells of.
 #[derive(Clone, Debug, Default)]
 pub struct AssumptionCache {
     pub assumes: Vec<InstId>,
+    affected: HashMap<Operand, Vec<InstId>>,
 }
 
 impl AssumptionCache {
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(
         module: &Module,
         function: &Function,
     ) -> Self {
         let layout = DataLayout::default();
         let query = Query::new(module, function, &layout);
-        let assumes = function
+        let assumes: Vec<InstId> = function
             .walk()
             .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))
             .map(|(_, inst)| inst)
             .collect();
-        Self { assumes }
+        let mut cache = Self { assumes, affected: HashMap::default() };
+        for assume in cache.assumes.clone() {
+            cache.update_affected_values(&query, assume);
+        }
+        cache
+    }
+
+    /// `assumptionsFor(V)`: the assumes that tell of `value`, in the order they
+    /// were found. MIR has no operand bundles, so each is a plain condition.
+    pub fn assumptions_for(
+        &self,
+        value: Operand,
+    ) -> &[InstId] {
+        self.affected.get(&value).map_or(&[], Vec::as_slice)
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L99>
+    fn update_affected_values(
+        &mut self,
+        q: &Query,
+        assume: InstId,
+    ) {
+        let mut affected = Vec::new();
+        let condition = q.function.instruction(assume).operands[0];
+        super::context::find_values_affected_by_condition(q, condition, true, &mut |v| affected.push(v));
+        for value in affected {
+            let list = self.affected.entry(value).or_default();
+            if list.len() >= MAX_ASSUMES_PER_VALUE {
+                continue;
+            }
+            if !list.contains(&assume) {
+                list.push(assume);
+            }
+        }
+    }
+}
+
+/// `DomConditionCache`: for each value, the conditional branches whose
+/// condition tells of it.
+#[derive(Clone, Debug, Default)]
+pub struct DomConditionCache {
+    affected: HashMap<Operand, Vec<InstId>>,
+}
+
+impl DomConditionCache {
+    /// `registerBranch` of every conditional branch of `function`.
+    pub fn new(
+        module: &Module,
+        function: &Function,
+    ) -> Self {
+        let layout = DataLayout::default();
+        let query = Query::new(module, function, &layout);
+        let mut cache = Self::default();
+        for &block in function.layout() {
+            if let Some(branch) = function.terminator(block)
+                && function.instruction(branch).opcode == Opcode::Br
+                && function.instruction(branch).operands.len() == 3
+            {
+                cache.register_branch(&query, branch);
+            }
+        }
+        cache
+    }
+
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/DomConditionCache.cpp#L19>
+    pub fn register_branch(
+        &mut self,
+        q: &Query,
+        branch: InstId,
+    ) {
+        let mut affected = Vec::new();
+        let condition = q.function.instruction(branch).operands[0];
+        super::context::find_values_affected_by_condition(q, condition, false, &mut |v| affected.push(v));
+        for value in affected {
+            let list = self.affected.entry(value).or_default();
+            if !list.contains(&branch) {
+                list.push(branch);
+            }
+        }
+    }
+
+    /// `conditionsFor(V)`.
+    pub fn conditions_for(
+        &self,
+        value: Operand,
+    ) -> &[InstId] {
+        self.affected.get(&value).map_or(&[], Vec::as_slice)
     }
 }
