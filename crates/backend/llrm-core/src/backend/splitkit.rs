@@ -1163,7 +1163,11 @@ impl<'a> Occupied<'a> {
                     .collect(),
             );
         }
-        Self { held: Holders::Built { segments, reach }, masks, checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED") }
+        Self {
+            held: Holders::Built { segments, reach },
+            masks,
+            checking: llrm_support::env_flag!("LLRM_CHECK_OCCUPIED"),
+        }
     }
 
     /// The occupants `union` has, but `value`.
@@ -1176,7 +1180,7 @@ impl<'a> Occupied<'a> {
         Self {
             held: Holders::Union { union, live, value, gathered: Default::default() },
             masks,
-            checking: llrm_support::env_set("LLRM_CHECK_OCCUPIED"),
+            checking: llrm_support::env_flag!("LLRM_CHECK_OCCUPIED"),
         }
     }
 }
@@ -1851,7 +1855,7 @@ impl Split<'_> {
         if frame.price(&compact, live, &placement, saving) > 0.0 {
             regions.push(frame.region(&compact));
         }
-        if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
             assert_eq!(
                 regions,
                 placed_scan(body, value, index, live, bundles, candidates, occupied, width, saving),
@@ -2308,6 +2312,10 @@ mod tests {
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
         assert_eq!(super::_next_value_following(&cut), super::_next_value(&cut));
         assert_eq!(super::_next_value_following(&cut), 10, "the carve made value 9");
+        // The body again, without value 9: the largest value the postings hold
+        // a key for is cut, and the next value is the body's, not the carve's.
+        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        assert!(super::_next_value_following(&body) < 10, "a stale largest value outlived the key that was it");
     }
 
     /// A carve copied every block of the body three times (into the new blocks,
