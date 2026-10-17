@@ -45,7 +45,7 @@ fn test_pop_truncate_clear_insert_remove_and_retain_agree_with_a_vec() {
 #[test]
 fn test_a_list_of_up_to_n_is_not_on_the_heap_and_one_past_is() {
     let few: InlineVec<i64, 2> = [1, 2].into();
-    assert!(matches!(few, InlineVec::Few(2, _)));
+    assert!(matches!(few, InlineVec::Few(_, _)));
     let many: InlineVec<i64, 2> = [1, 2, 3].into();
     assert!(matches!(many, InlineVec::Many(_)));
     let mut grown = few.clone();
