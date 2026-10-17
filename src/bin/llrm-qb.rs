@@ -1,7 +1,7 @@
 //! Compile QuickBASIC to an object.
 
 #[global_allocator]
-static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static ALLOCATOR: llrm_alloc::Slab = llrm_alloc::Slab;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
