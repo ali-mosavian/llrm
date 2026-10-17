@@ -1026,3 +1026,32 @@ fn overlap_asks_the_program_for_its_spaces_not_the_machine() {
     let asked = ASKED.with(std::cell::Cell::get);
     assert_eq!(asked, 0, "the machine was asked for its spaces {asked} times in 10 pairs");
 }
+
+/// N stores and N loads of 16 cells through a pointer, each by its own address
+/// value (`mem`, N statements of `p[d] = p[a] ^ p[b] + n`), made a jump table
+/// of one entry per access for each address: N^2 entries (N=1600: 152 MB of
+/// 251). The bytes follow the accesses the walks pass, not addresses x
+/// accesses.
+#[test]
+fn test_the_jump_tables_of_n_addresses_do_not_hold_n_squared_entries() {
+    let bytes = |statements: usize| {
+        let address =
+            |k: usize, name: &str| format!("  %{name}{k} = getelementptr i8, ptr %p, i16 {}\n", 4 * (k * 7 % 16));
+        let stores: String =
+            (0..statements).map(|k| format!("{}  store i32 {k}, ptr %s{k}\n", address(k, "s"))).collect();
+        let loads: String =
+            (0..statements).map(|k| format!("{}  %y{k} = load i32, ptr %l{k}\n", address(k, "l"))).collect();
+        let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
+        let unit = parsed.unit();
+        let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+        let graph = built(&unit, &accesses);
+        let before = JUMP_BYTES.with(std::cell::Cell::get);
+        for k in 0..statements {
+            let load = site(&unit, "b0", 2 * statements + 2 * k + 1);
+            graph.clobbers(load, &accesses.references[&load]);
+        }
+        JUMP_BYTES.with(std::cell::Cell::get) - before
+    };
+    let (small, large) = (bytes(1500), bytes(6000));
+    assert!(large < small * 8, "{small} bytes of jump tables at 1500 statements, {large} at 6000: quadratic is 16x");
+}

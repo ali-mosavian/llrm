@@ -872,6 +872,73 @@ struct FrameIndex {
     aliased: std::cell::RefCell<llrm_support::hash::HashMap<u32, bool>>,
 }
 
+/// Where `MemorySSA::jumps` keeps one cell's jumps: by access number, flat for
+/// a body of up to `DENSE_ACCESSES`, else in pages made when a jump is first
+/// written there. A table per address of a body of N accesses and N addresses
+/// held N^2 entries (`mem` 1600: 142 of 251 MB); a walk touches the pages its
+/// chains lie in.
+#[derive(Clone)]
+enum JumpTable {
+    Flat(Vec<u32>),
+    Paged(Vec<Option<Box<[u32; PAGE]>>>),
+}
+
+/// Accesses up to which a table is flat (at most 16 KB).
+const DENSE_ACCESSES: usize = 4096;
+const PAGE: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes of jump tables made.
+    pub(crate) static JUMP_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl JumpTable {
+    fn new(accesses: usize) -> Self {
+        let bytes = |entries: usize| {
+            #[cfg(test)]
+            JUMP_BYTES.with(|total| total.set(total.get() + entries));
+            let _ = entries;
+        };
+        if accesses <= DENSE_ACCESSES {
+            bytes(accesses * 4);
+            Self::Flat(vec![0; accesses])
+        } else {
+            let pages = accesses.div_ceil(PAGE);
+            bytes(pages * size_of::<Option<Box<[u32; PAGE]>>>());
+            Self::Paged(vec![None; pages])
+        }
+    }
+
+    fn get(
+        &self,
+        access: usize,
+    ) -> u32 {
+        match self {
+            Self::Flat(entries) => entries[access],
+            Self::Paged(pages) => pages[access / PAGE].as_ref().map_or(0, |page| page[access % PAGE]),
+        }
+    }
+
+    fn set(
+        &mut self,
+        access: usize,
+        jump: u32,
+    ) {
+        match self {
+            Self::Flat(entries) => entries[access] = jump,
+            Self::Paged(pages) => {
+                let page = pages[access / PAGE].get_or_insert_with(|| {
+                    #[cfg(test)]
+                    JUMP_BYTES.with(|total| total.set(total.get() + PAGE * 4));
+                    Box::new([0; PAGE])
+                });
+                page[access % PAGE] = jump;
+            }
+        }
+    }
+}
+
 /// The key of a byte of an object in the index.
 fn key(
     object: u32,
@@ -1002,7 +1069,7 @@ pub struct MemorySSA<'a> {
     /// reaches before a clobber, a join, the live state or a boundary it was
     /// stopped at (plus one; 0: not known), by access number. A walk takes
     /// the jump instead of the steps, unless its own boundary lies between.
-    jumps: std::cell::RefCell<Vec<Option<Vec<u32>>>>,
+    jumps: std::cell::RefCell<Vec<Option<JumpTable>>>,
     /// Per access, the walk that last visited it, and the walks made.
     stamps: std::cell::RefCell<(Vec<u32>, u32)>,
     /// The last-write index, once made, and the accesses walks have stepped
@@ -1509,22 +1576,22 @@ impl MemorySSA<'_> {
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
         let (slot, edge_slot) = (self.slot(memory), edge_memory.map(|one| self.slot(one)));
         let mut jumps = self.jumps.borrow_mut();
-        let none = &mut Vec::new();
+        let none = &mut JumpTable::new(0);
         let table = if jumpable {
             let at = slot * 2 + usize::from(invariant);
             if jumps.len() <= at {
                 jumps.resize(at + 1, None);
             }
-            jumps[at].get_or_insert_with(|| vec![0; self.span.len()])
+            jumps[at].get_or_insert_with(|| JumpTable::new(self.span.len()))
         } else {
             none
         };
         // Accesses passed that nothing on them touches the cell; a jump to `end
         // + 1` says the ones before `end` are clean.
         let mut chain: Vec<usize> = Vec::new();
-        let ended = |table: &mut Vec<u32>, chain: &mut Vec<usize>, end: usize| {
+        let ended = |table: &mut JumpTable, chain: &mut Vec<usize>, end: usize| {
             for &passed in chain.iter() {
-                table[passed] = end as u32 + 1;
+                table.set(passed, end as u32 + 1);
             }
             chain.clear();
         };
@@ -1539,9 +1606,9 @@ impl MemorySSA<'_> {
                 chain.clear();
                 continue;
             };
-            if jumpable && table[current] != 0 {
+            if jumpable && table.get(current) != 0 {
                 chain.clear();
-                let end = table[current] as usize - 1;
+                let end = table.get(current) as usize - 1;
                 // The boundary lies on the chain when it is behind `current`
                 // and `end` is behind it: the walk stops there.
                 match boundary {
