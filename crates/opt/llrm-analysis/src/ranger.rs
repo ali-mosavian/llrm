@@ -497,7 +497,7 @@ pub struct LoopContext<'a, 'u> {
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
     pub graph: &'a [cfg::Block],
-    pub predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
+    pub predecessors: &'a llrm_support::graph::Predecessors,
     pub positions: &'a std::collections::BTreeMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
@@ -516,7 +516,7 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         shape: &'a cfg::Shape,
         assumed: &'a crate::assumptions::Assumptions,
         graph: &'a [cfg::Block],
-        predecessors: &'a std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>>,
+        predecessors: &'a llrm_support::graph::Predecessors,
         positions: &'a std::collections::BTreeMap<i64, usize>,
         operations: &'a [InstId],
         body: &'a llrm_mir::forest::Body,

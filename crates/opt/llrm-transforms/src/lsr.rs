@@ -1385,7 +1385,7 @@ fn _live_anyway(
     for &at in &loop_.body {
         for succ in function.successors(cfg::block(at)) {
             if !loop_.body.contains(&cfg::id(succ)) {
-                live.extend(found.live_in.get(&cfg::id(succ)).into_iter().flatten().copied());
+                live.extend(found.live_in.get(&cfg::id(succ)).into_iter().flat_map(|set| set.iter()));
             }
         }
     }

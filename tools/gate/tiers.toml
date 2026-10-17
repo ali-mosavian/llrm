@@ -282,6 +282,7 @@ needs = [{ run = "perf stat -x, -e instructions:u true 2>&1 | grep -Eq '^[0-9]+,
 geomean = 1.003      # per level, over QCport's files or the programs
 worst = 1.02         # one file
 excess = 0.01        # an axis' superlinear work (the second difference c(2N) - 3c(N) + 2c(N/2)) may rise by this much of the base's cost at 2N
+fall = 0.001        # an axis whose cost at 2N fell by more than this of the base's is not failed for a rise of its second difference (the axes spread 0.0009)
 step_excess = 0.005  # a step's, of the compile's cost at 2N; the same build measured 3 times spreads D by 0.0005 of it (axes 0.0009 of theirs, 2026-10-09), so 10x above noise
 pass_slack = 1.05    # a step's cost at 2N
 linear = 2.1         # where the base read no such step: what gcc's passes reach

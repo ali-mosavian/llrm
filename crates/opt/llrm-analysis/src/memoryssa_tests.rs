@@ -869,3 +869,63 @@ fn test_a_load_of_one_of_many_fixed_cells_finds_its_store_without_walking_the_ot
     // enough).
     assert!(steps <= 9000, "{steps} accesses stepped over for 200 loads");
 }
+
+/// An edit that makes or moves no memory op and no terminator leaves the
+/// structure as it was: the manager's plain accesses carry it. Each
+/// of those edits made the structure again (44 of 90 re-builds for d_faces
+/// -O2, half of the 71 M spent on them); an edit of a store's address still
+/// makes it.
+#[test]
+fn an_edit_that_leaves_memory_ops_and_blocks_alone_keeps_the_structure() {
+    use llrm_mir::module::Operand;
+    use llrm_mir::passes::{Outer, PreservedAnalyses};
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(ptr %p, ptr %q, i16 %x) {{
+b0:
+  %a = add i16 %x, 1
+  store i16 %a, ptr %p
+  %v = load i16, ptr %p
+  ret i16 %v
+}}
+"
+    ));
+    let layout = layout(&module);
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let structure = |module: &Module, analyses: &mut Analyses| {
+        let (context, function) = (&module.context, function(module, "f"));
+        let plain = analyses.get::<crate::manager::PlainAccesses>(context, &layout, function);
+        let accesses = plain.as_ref().as_ref().unwrap();
+        let unit = Unit::within(context, &layout, function, analyses.outer());
+        built(&unit, accesses);
+    };
+    let before = structures_made();
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 1);
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        let add = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| function.instruction(inst).opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Add))
+            .unwrap();
+        let x = function.instruction(add).operands[0];
+        function.set_operand(add, 1, x);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+        let _ = context;
+    }
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 1, "an add rewritten leaves the structure");
+    {
+        let (_, function) = module.function_mut("f").unwrap();
+        let store = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+            .unwrap();
+        let q = Operand::Value(crate::testing::value(function, "q"));
+        function.set_operand(store, 1, q);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    structure(&module, &mut analyses);
+    assert_eq!(structures_made() - before, 2, "a store given another address is another structure");
+}
