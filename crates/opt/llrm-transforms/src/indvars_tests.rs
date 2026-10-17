@@ -757,3 +757,31 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
     }));
     assert_eq!(indvars, manager);
 }
+
+/// Each widening dropped what was known of the body and the next loop derived
+/// it afresh: d_faces -O2 widened 12 counters and derived a 1,350-instruction
+/// body 12 times (21.8 M, a third of `indvars`). What stands for the values a
+/// widening did not reach is kept, and only the reached are settled again.
+#[test]
+fn test_a_widening_settles_again_only_the_values_it_reached() {
+    let loops = 6;
+    let mut text = String::from(
+        "target datalayout = \"e-p:32:32-n8:16:32\"\n\ndefine i32 @f(i16 %n) {\nb0:\n  %buf = alloca [64 x i8]\n  br label %h0\n\n",
+    );
+    for at in 0..loops {
+        let next = if at + 1 == loops { "done".to_string() } else { format!("h{}", at + 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{pre} ], [ %n{at}, %l{at} ]\n  %go{at} = icmp ult i16 %i{at}, %n\n  br i1 %go{at}, label %l{at}, label %{next}\n\nl{at}:\n  %w{at} = zext i16 %i{at} to i32\n  %p{at} = getelementptr inbounds i8, ptr %buf, i32 %w{at}\n  store i8 1, ptr %p{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n",
+            pre = if at == 0 { "b0".to_string() } else { format!("h{}", at - 1) },
+        );
+    }
+    text += "done:\n  ret i32 0\n}\n";
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let size = function.walk().count();
+    let before = llrm_analysis::consts::derived_work();
+    assert!(super::widened(context, &layout, function, &outer), "the counters are widened");
+    let work = llrm_analysis::consts::derived_work() - before;
+    assert!(work <= 3 * size, "{work} values settled for {loops} widenings of a body of {size} instructions");
+}
