@@ -905,6 +905,35 @@ fn test_a_result_derived_from_the_body_as_it_stands_survives_an_invalidation() {
     assert_eq!(of_effects, vec![("first", 1)], "{counts:?}");
 }
 
+/// A scalar written in each arm of N joins is reached by up to N stores at
+/// every load after, and the cell of each was decoded again for each load that
+/// store reaches (N^2 decodes over the body; 85 K instructions a load at
+/// `joins` 64, 58% of a `ThroughMemory` solve). Once for a store.
+#[test]
+fn test_a_store_s_cell_is_decoded_once_however_many_loads_it_reaches() {
+    let joins = 12;
+    let mut text = format!("{DOS}@g = global i16 0\n\ndefine i16 @f(ptr %g, ");
+    text.push_str(&(0..joins).map(|n| format!("i1 %c{n}")).collect::<Vec<_>>().join(", "));
+    text.push_str(") {\nb:\n  store i16 99, ptr %g\n  br label %t0\n");
+    for n in 0..joins {
+        text += &format!(
+            "t{n}:\n  br i1 %c{n}, label %w{n}, label %j{n}\nw{n}:\n  store i16 {n}, ptr %g\n  br label %j{n}\nj{n}:\n  %l{n} = load i16, ptr %g\n  br label %{}\n",
+            if n + 1 < joins { format!("t{}", n + 1) } else { "end".to_owned() }
+        );
+    }
+    text.push_str("end:\n  ret i16 %l11\n}\n");
+    let mut module = parsed(&text);
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::consts::stores_decoded();
+    analyses.get::<ThroughMemory>(context, &layout, f);
+    let decoded = crate::consts::stores_decoded() - before;
+    assert!(decoded > 0, "premise: the loads were served");
+    assert!(decoded <= 2 * joins, "{decoded} decodes for {joins} stores and {joins} loads");
+}
+
 /// `Summaries` solved where every pointer points for the direct summary, for
 /// the calls' facts and for each summarized call: 4 to 5 value solves a body
 /// state, 11.0% of QCport's -O1 compile with the rest of the family. One a
