@@ -1,6 +1,6 @@
 # Fact placement: the whole-function tower is solved at named positions
 
-TL;DR: the frequent passes (`fold`, `decide`, `promote`, `sroa`, `hoist`) ask the whole-function fact tower and pay a rebuild per body version; LLVM's `InstCombine` asks six cheap per-query analyses and preserves the CFG ones. This page is the design for S1 (architecture-parity A1): the tower is solved at a few named positions, a frequent pass reads the held result while it is current and "unknown" otherwise. The first probe on `d_faces` -O2 saves up to 9.0% for 23% of objects changed; the rows tool has not judged it, and the clean parts are narrow (bounded at `fold`: -3.4%, 1.7% of objects).
+TL;DR: the frequent passes (`fold`, `decide`, `promote`, `sroa`, `hoist`) ask the whole-function fact tower and pay a rebuild per body version; LLVM's `InstCombine` asks six cheap per-query analyses and preserves the CFG ones. This page is the design for S1 (architecture-parity A1): the tower is solved at a few named positions, a frequent pass reads the held result while it is current and "unknown" otherwise. The first probe on `d_faces` -O2 saves up to 9.0% for 23% of objects changed; the rows tool has not judged it, and the clean part is bounded at `fold` and `algebraic`: -2.9%, 3 of 803 objects, rows flat except `x_transpose` +1.0% clocks (bounded at `fold` alone: `tile` +36.7%, killed).
 
 ## LLVM structure, ours, and which we mirror
 
@@ -76,7 +76,7 @@ The whole-function solves (SCCP, GVN's memory dependence, CVP, IndVars, SCEV) ru
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), facts)?;
 ```
 
-and `jumpthread`, which rebuilds blocks without logging a `Change`, invalidates everything and runs `fold`, `algebraic`, `decide` and `dead` to re-ask every fact ([`jumpthread.rs#L227-L246`](https://github.com/ali-mosavian/llrm/blob/269fdf3d11aedeeea6e933b9181c922dc1b17fe8/crates/opt/llrm-transforms/src/jumpthread.rs#L227-L246)):
+and `jumpthread`, which rebuilds blocks with the logging primitives, then invalidates everything and runs `fold`, `algebraic`, `decide` and `dead` to re-ask every fact ([`jumpthread.rs#L227-L246`](https://github.com/ali-mosavian/llrm/blob/269fdf3d11aedeeea6e933b9181c922dc1b17fe8/crates/opt/llrm-transforms/src/jumpthread.rs#L227-L246)):
 
 ```rust
         analyses: &mut Analyses,
@@ -114,7 +114,7 @@ All on `d_faces` -O2 (`-m32 -march=i486 -fno-inline-functions`), origin/main as 
 | idle runs of decide, hoist, indvars | 86 M own (3.0%): none has a cheap "would have said no" check left except hoist's, which exists |
 | through-memory (attrs-budgets, S1 step 0, PR #2054) | enables 24.8% of `fold`'s edits (matmul -O3 up to 97.7%) and none of `decide`'s (33 M wasted); `fold` without it makes 96 more edits in the first run and 240 fewer in total |
 | bounded (same) | enables nothing in six passes at -O2 (one matmul -O2 `algebraic` case, 5.5%) and costs 6-10% of `fold`, `hoist`, `algebraic` |
-| `jumpthread` | edits logged: 0; after it threads, 101.5 M of its 112.5 M is the `fold`, `algebraic`, `decide`, `dead` that re-ask every fact (one function) |
+| `jumpthread` | its edits are logged; after it threads it invalidates everything, and 101.5 M of its 112.5 M is the `fold`, `algebraic`, `decide`, `dead` that re-ask every fact (one function) |
 
 ### The placement probe
 
@@ -157,6 +157,6 @@ What is not measured, and decides between the two: the cost of a capped per-load
 
 ## Open
 
-- Rows for bounded at `fold`: running.
+- Rows for bounded at `fold` and `algebraic`: done (see the TL;DR); at `fold` alone killed.
 - Whether a withheld fact that is empty is worse than conservative for a consumer that assumes a fact exists (the probe's 15-23% differing objects).
 - The alias tower (`Annotated`, `Pointers`) is untested by step 0.
