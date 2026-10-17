@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:de9d6c97423b26d99df325e37da965f165d4f4bf97b8675262044e52fc528694 -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:8decf20dc07891a21b5dcda469cafb1631b2023fb384dff54a3b40966aa3dd18 -->
 
 # splitkit
 
@@ -20,10 +20,10 @@ strategies choose where a piece holds the value, in order:
   and the compact region the use clusters form takes the uses left over.
   Each candidate meets a live block once: a dense table of the value's
   blocks (`cost::Frame`, LLVM's `SplitAnalysis` block table) holds their
-  frequencies, references and neighbours, a candidate's interference is asked
-  per block when first needed, and a `Region` is built only for the best
-  candidate and the compact one. `LLRM_CHECK_SPLIT` holds the result to the
-  region-per-candidate scan (`placed_scan`).
+  frequencies, references and neighbours, a candidate's interference is
+  asked per block when first needed, and a `Region` is built only for the
+  best candidate and the compact one. `LLRM_CHECK_SPLIT` holds the result to
+  the region-per-candidate scan (`placed_scan`).
 - `per_block`: if no region is found, each block naming the value at least
   twice holds it from its first reference to its last (`tryBlockSplit`).
 
