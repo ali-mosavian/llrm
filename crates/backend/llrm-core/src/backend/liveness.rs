@@ -422,7 +422,7 @@ pub fn visits() -> usize {
 pub fn lanewise(body: &LirBody) -> Rc<Solution<LaneLive>> {
     let problem = LaneLive::of(body);
     let solved = KEPT.with(|kept| kept.ask(&problem, body));
-    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             from_scratch(body) == solved.leaving,
             "{}: lane liveness brought up to date differs from one solved from scratch",
