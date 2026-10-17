@@ -24,16 +24,19 @@
 
 use std::borrow::Cow;
 
-use super::pattern::{self, CmpPredicate, IntrinsicId, Side};
+use super::pattern::{
+    self, CmpPredicate, IntrinsicId, Side, arg_size, call_info, call_range, called_function, range_attribute,
+    returned_argument_operand,
+};
 use super::query::Query;
 use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, power2};
 use crate::apint::{ashr, bit, lshr, popcount, sext, signed};
-use crate::constantrange::{ConstantRange, PreferredRangeType};
+use crate::constantrange::ConstantRange;
 use crate::context::{ConstantExpr, ConstantKind, mask};
 use crate::dominators::DominatorTree;
 use crate::knownbits::KnownBits;
 use crate::module::{BlockId, Function, InstId, Instruction, Linkage, MetadataOperand, Operand, ValueDef};
-use crate::opcode::{Attribute, BinaryOp, CallInfo, CastOp, Flags, IntPredicate, Opcode};
+use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
 
 /// `DomConditionsMaxUses`.
@@ -152,47 +155,6 @@ fn has_type_attr(
     attrs.iter().any(|one| matches!(one, Attribute::Type(key, _) if key == name))
 }
 
-fn range_attr(
-    q: &Query,
-    attrs: &[Attribute],
-) -> Option<ConstantRange> {
-    attrs
-        .iter()
-        .find_map(
-            |one| match one {
-                Attribute::Range { ty, lower, upper } => {
-                    Some(ConstantRange::new(q.context.types.int_bits(*ty)?, *lower, *upper))
-                }
-                _ => None,
-            },
-        )
-}
-
-fn call_info(instruction: &Instruction) -> Option<&CallInfo> {
-    match &instruction.opcode {
-        Opcode::Call(info) | Opcode::Invoke(info) => Some(info),
-        _ => None,
-    }
-}
-
-/// `CallBase::arg_size()`.
-fn arg_size(instruction: &Instruction) -> usize {
-    match instruction.opcode {
-        Opcode::Invoke(_) => instruction.operands.len().saturating_sub(3),
-        _ => instruction.operands.len().saturating_sub(1),
-    }
-}
-
-/// `CallBase::getCalledFunction()`.
-fn called_function<'a>(
-    q: &Query<'a>,
-    instruction: &Instruction,
-) -> Option<&'a Function> {
-    let Operand::Constant(id) = *instruction.operands.last()? else { return None };
-    let ConstantKind::Global(global) = q.context.get(id).kind else { return None };
-    q.globals.get(global.0 as usize)?.function()
-}
-
 /// `CallBase::hasRetAttr(Kind)`.
 fn ret_has_attr(
     q: &Query,
@@ -266,33 +228,6 @@ fn is_return_non_null(
         && !null_pointer_is_defined(Some(q.function), pointer_space(q, instruction.ty).unwrap_or(0))
 }
 
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L381>
-fn call_range(
-    q: &Query,
-    instruction: &Instruction,
-) -> Option<ConstantRange> {
-    let site = call_info(instruction).and_then(|info| range_attr(q, &info.return_attrs));
-    let callee = called_function(q, instruction).and_then(|function| range_attr(q, &function.return_attrs));
-    match (site, callee) {
-        (Some(site), Some(callee)) => Some(site.intersect_with(&callee, PreferredRangeType::Smallest)),
-        (site, callee) => site.or(callee),
-    }
-}
-
-/// `CallBase::getReturnedArgOperand()`.
-fn returned_arg_operand(
-    q: &Query,
-    instruction: &Instruction,
-) -> Option<Operand> {
-    let site = call_info(instruction)
-        .and_then(|info| info.argument_attrs.iter().position(|attrs| has_flag(attrs, "returned")));
-    let at = site.or_else(|| {
-        called_function(q, instruction)
-            .and_then(|function| function.parameter_attrs.iter().position(|attrs| has_flag(attrs, "returned")))
-    })?;
-    instruction.operands.get(at).copied()
-}
-
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7219>
 fn get_argument_aliasing_to_returned_pointer(
     q: &Query,
@@ -300,7 +235,7 @@ fn get_argument_aliasing_to_returned_pointer(
     inst: InstId,
     must_preserve_offset: bool,
 ) -> Option<Operand> {
-    if let Some(returned) = returned_arg_operand(q, instruction) {
+    if let Some(returned) = returned_argument_operand(q, instruction) {
         return Some(returned);
     }
     let aliasing = match pattern::call_intrinsic(q, inst)? {
@@ -1080,7 +1015,7 @@ fn is_known_non_zero_from_operator(
                 {
                     return true;
                 }
-                if let Some(rv) = returned_arg_operand(q, i)
+                if let Some(rv) = returned_argument_operand(q, i)
                     && q.type_of(rv) == Some(i.ty)
                     && is_known_non_zero(q, rv, depth)
                 {
@@ -1221,7 +1156,7 @@ fn is_known_non_zero_demanded(
         _ => None,
     };
     if let Some(attrs) = argument
-        && let Some(range) = range_attr(q, attrs)
+        && let Some(range) = range_attribute(q, attrs)
         && !range.contains(0)
     {
         return true;
@@ -1602,7 +1537,7 @@ fn strip_and_accumulate_in_bounds_constant_offsets(
         } else if operator.instruction.opcode == Opcode::Cast(CastOp::AddrSpaceCast) {
             current = operator.instruction.operands[0];
         } else if call_info(&operator.instruction).is_some() {
-            if let Some(returned) = returned_arg_operand(q, &operator.instruction) {
+            if let Some(returned) = returned_argument_operand(q, &operator.instruction) {
                 current = returned;
             }
         } else {

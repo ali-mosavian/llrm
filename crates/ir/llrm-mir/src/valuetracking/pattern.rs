@@ -773,33 +773,38 @@ pub mod nested {
     }
 }
 
+/// `CallBase::arg_size()`: a call's operands are its arguments and its callee,
+/// an invoke's also its two destinations.
+pub fn arg_size(instruction: &Instruction) -> usize {
+    let extra = if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+    instruction.operands.len().saturating_sub(extra)
+}
+
 /// A call's arguments: its operands but the callee (and, of an invoke, its
 /// two destinations).
 pub fn call_arguments(instruction: &Instruction) -> &[Operand] {
-    let tail = if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
-    &instruction.operands[..instruction.operands.len() - tail]
+    &instruction.operands[..arg_size(instruction)]
 }
 
 /// `CallBase::getCalledFunction()`.
 pub fn called_function<'a>(
     q: &Query<'a>,
-    inst: InstId,
+    instruction: &Instruction,
 ) -> Option<&'a Function> {
-    let instruction = q.function.instruction(inst);
     let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
     let Operand::Constant(id) = *instruction.operands.last()? else { return None };
     let ConstantKind::Global(global) = q.context().get(id).kind else { return None };
     q.globals.get(global.0 as usize)?.function()
 }
 
-fn call_info(instruction: &Instruction) -> Option<&CallInfo> {
+pub fn call_info(instruction: &Instruction) -> Option<&CallInfo> {
     match &instruction.opcode {
         Opcode::Call(info) | Opcode::Invoke(info) => Some(info),
         _ => None,
     }
 }
 
-fn range_attribute(
+pub fn range_attribute(
     q: &Query,
     attrs: &[Attribute],
 ) -> Option<ConstantRange> {
@@ -827,11 +832,11 @@ pub fn argument_range(
 /// with the callee's.
 pub fn call_range(
     q: &Query,
-    inst: InstId,
+    instruction: &Instruction,
 ) -> Option<ConstantRange> {
-    let call = call_info(q.function.instruction(inst))?;
+    let call = call_info(instruction)?;
     let at_call = range_attribute(q, &call.return_attrs);
-    let at_function = called_function(q, inst).and_then(|function| range_attribute(q, &function.return_attrs));
+    let at_function = called_function(q, instruction).and_then(|function| range_attribute(q, &function.return_attrs));
     match (at_call, at_function) {
         (Some(one), Some(other)) => Some(one.intersect_with(&other, PreferredRangeType::Smallest)),
         (one, other) => one.or(other),
@@ -841,22 +846,21 @@ pub fn call_range(
 /// `CallBase::getReturnedArgOperand()`.
 pub fn returned_argument_operand(
     q: &Query,
-    inst: InstId,
+    instruction: &Instruction,
 ) -> Option<Operand> {
-    let instruction = q.function.instruction(inst);
     let returned = |attrs: &Vec<Vec<Attribute>>| {
         attrs.iter().position(|one| one.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "returned")))
     };
     let call = call_info(instruction)?;
     let index = returned(&call.argument_attrs)
-        .or_else(|| called_function(q, inst).and_then(|function| returned(&function.parameter_attrs)))?;
+        .or_else(|| called_function(q, instruction).and_then(|function| returned(&function.parameter_attrs)))?;
     call_arguments(instruction).get(index).copied()
 }
 
 /// `CallBase::getRetAlign()`.
 pub fn call_return_align(
     q: &Query,
-    inst: InstId,
+    instruction: &Instruction,
 ) -> Option<u64> {
     let align = |attrs: &[Attribute]| {
         attrs
@@ -868,8 +872,9 @@ pub fn call_return_align(
                 },
             )
     };
-    let call = call_info(q.function.instruction(inst))?;
-    align(&call.return_attrs).or_else(|| called_function(q, inst).and_then(|function| align(&function.return_attrs)))
+    let call = call_info(instruction)?;
+    align(&call.return_attrs)
+        .or_else(|| called_function(q, instruction).and_then(|function| align(&function.return_attrs)))
 }
 
 /// The incoming values and blocks of a phi.

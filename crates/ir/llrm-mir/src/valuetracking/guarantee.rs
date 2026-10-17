@@ -28,15 +28,15 @@
 //! # Example
 //! A `freeze` is never undef or poison.
 
-use super::pattern::{self, IntrinsicId};
+use super::pattern::{self, IntrinsicId, arg_size, call_info, called_function};
 use super::query::Query;
 use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
 use crate::dense::IdSet;
 use crate::hash::HashSet;
 use crate::loops::Loop;
-use crate::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef};
-use crate::opcode::{Attribute, BinaryOp, CallInfo, CastOp, Clause, Flags, Opcode};
+use crate::module::{BlockId, InstId, Instruction, Operand, ValueDef};
+use crate::opcode::{Attribute, BinaryOp, CastOp, Clause, Flags, Opcode};
 use crate::types::Type;
 
 /// `UndefPoisonKind`.
@@ -119,32 +119,6 @@ fn has(
     attributes.iter().any(|one| key(one) == name)
 }
 
-fn call_info(instruction: &Instruction) -> Option<&CallInfo> {
-    match &instruction.opcode {
-        Opcode::Call(info) | Opcode::Invoke(info) => Some(info.as_ref()),
-        _ => None,
-    }
-}
-
-/// `CallBase::getCalledFunction()`.
-fn called_function<'a>(
-    q: &Query<'a>,
-    inst: InstId,
-) -> Option<&'a Function> {
-    let instruction = q.function.instruction(inst);
-    call_info(instruction)?;
-    let Operand::Constant(id) = *instruction.operands.last()? else { return None };
-    let ConstantKind::Global(global) = q.context().get(id).kind else { return None };
-    q.globals.get(global.0 as usize)?.function()
-}
-
-/// `CallBase::arg_size()`: a call's operands are its arguments and its callee,
-/// an invoke's also its two destinations.
-fn arg_size(instruction: &Instruction) -> usize {
-    let extra = if matches!(instruction.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
-    instruction.operands.len().saturating_sub(extra)
-}
-
 /// `CallBase::hasFnAttr(Kind)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instructions.cpp#L463>
@@ -154,7 +128,8 @@ fn has_fn_attr(
     name: &str,
 ) -> bool {
     let Some(info) = call_info(q.function.instruction(inst)) else { return false };
-    has(&info.attrs, name) || called_function(q, inst).is_some_and(|callee| has(&callee.attrs, name))
+    has(&info.attrs, name)
+        || called_function(q, q.function.instruction(inst)).is_some_and(|callee| has(&callee.attrs, name))
 }
 
 /// `CallBase::hasRetAttr(Kind)`.
@@ -166,7 +141,8 @@ fn has_ret_attr(
     name: &str,
 ) -> bool {
     let Some(info) = call_info(q.function.instruction(inst)) else { return false };
-    has(&info.return_attrs, name) || called_function(q, inst).is_some_and(|callee| has(&callee.return_attrs, name))
+    has(&info.return_attrs, name)
+        || called_function(q, q.function.instruction(inst)).is_some_and(|callee| has(&callee.return_attrs, name))
 }
 
 /// `CallBase::paramHasAttr(ArgNo, Kind)`.
@@ -180,7 +156,7 @@ fn param_has_attr(
 ) -> bool {
     let Some(info) = call_info(q.function.instruction(inst)) else { return false };
     info.argument_attrs.get(arg_no).is_some_and(|attrs| has(attrs, name))
-        || called_function(q, inst)
+        || called_function(q, q.function.instruction(inst))
             .is_some_and(|callee| callee.parameter_attrs.get(arg_no).is_some_and(|attrs| has(attrs, name)))
 }
 
@@ -195,7 +171,7 @@ fn returned_arg_operand(
     let info = call_info(instruction)?;
     let somewhere = |lists: &[Vec<Attribute>]| lists.iter().position(|attrs| has(attrs, "returned"));
     let index = somewhere(&info.argument_attrs)
-        .or_else(|| called_function(q, inst).and_then(|f| somewhere(&f.parameter_attrs)))?;
+        .or_else(|| called_function(q, q.function.instruction(inst)).and_then(|f| somewhere(&f.parameter_attrs)))?;
     instruction.operands.get(index).copied().filter(|_| index < arg_size(instruction))
 }
 

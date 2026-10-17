@@ -1136,7 +1136,7 @@ fn pointer_alignment(
                     Opcode::Alloca { allocated, align, .. } => {
                         align.unwrap_or_else(|| q.layout.align(types, *allocated))
                     }
-                    Opcode::Call(_) | Opcode::Invoke(_) => call_return_align(q, inst).unwrap_or(1),
+                    Opcode::Call(_) | Opcode::Invoke(_) => call_return_align(q, instruction).unwrap_or(1),
                     Opcode::Load { .. } => instruction
                         .metadata
                         .iter()
@@ -1178,11 +1178,11 @@ fn known_bits_of_call(
         compute_known_bits_from_range_metadata(q, node, known);
     }
 
-    if let Some(range) = call_range(q, inst) {
+    if let Some(range) = call_range(q, instruction) {
         *known = known.union_with(&range.to_known_bits());
     }
 
-    if let Some(rv) = returned_argument_operand(q, inst) {
+    if let Some(rv) = returned_argument_operand(q, instruction) {
         if q.type_of(rv) == Some(instruction.ty) {
             let known2 = compute_known_bits(q, rv, depth + 1);
             *known = known.union_with(&known2);
