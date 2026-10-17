@@ -52,3 +52,37 @@ pub fn is_implied_by_dom_condition(
     let _ = (q, pred, lhs, rhs, cxt);
     None
 }
+
+/// `isKnownNonZeroFromAssume(V, Q)`.
+pub fn is_known_non_zero_from_assume(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    let _ = (q, v);
+    false
+}
+
+/// `isTruePredicate(Pred, LHS, RHS)`.
+pub fn is_true_predicate(
+    q: &Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> bool {
+    let _ = (q, pred, lhs, rhs);
+    false
+}
+
+/// `isImpliedCondition(LHS, RHSPred, RHSOp0, RHSOp1, DL, LHSIsTrue, Depth)`.
+pub fn is_implied_condition_pred(
+    q: &Query,
+    lhs: Operand,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+    lhs_is_true: bool,
+    depth: u32,
+) -> Option<bool> {
+    let _ = (q, lhs, pred, op0, op1, lhs_is_true, depth);
+    None
+}
