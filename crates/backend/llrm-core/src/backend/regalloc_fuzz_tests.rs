@@ -2300,3 +2300,24 @@ fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
     }
     assert!(checked > 10, "premise: only {checked} bodies had counts to compare");
 }
+
+/// An eviction billed a victim that had another register free at nothing, so a
+/// value was put out of its register for a victim that then took another one
+/// the later values wanted: seed 286 on the 486 (pool 14, ops 20) came out at
+/// 135 instructions, 9 more than the allocation that bills every victim its
+/// weight, as LLVM's `tryEvict` does (d_faces -O2: 3.3% more instructions,
+/// 7% more stack operands).
+#[test]
+fn test_an_evicted_value_is_billed_its_weight_even_if_it_could_move() {
+    let (generated, _) = body(286, &Shape { pool: 14, ops: 20 });
+    let mut phase = RegAlloc::new(
+        None,
+        None,
+        ProfileOrName::Name("486"),
+        &*target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+    )
+    .expect("an allocator");
+    let allocated = phase.transform(generated).expect("allocates");
+    assert!(allocated.insns().len() <= 126, "{} instructions, 126 without the discount", allocated.insns().len());
+}

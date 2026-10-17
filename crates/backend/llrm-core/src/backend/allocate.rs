@@ -2141,25 +2141,6 @@ fn _allocated(
 
         // An unspillable range has no fallback, so it may evict at any stage.
         if at == Stage::Assign || facts.live.weight(value) == INF {
-            let movable = |other: u32, register: RegId| -> bool {
-                if fixed.contains_key(&other) {
-                    return false;
-                }
-                let elsewhere: Vec<RegId> = target::order(facts.confined.get(&other), segments, classes)
-                    .into_iter()
-                    .filter(|one| _whole(*one) != _whole(register))
-                    .filter(|one| data_free || _whole(*one) != segments.data)
-                    .collect();
-                _free(
-                    &facts.live[&other],
-                    &elsewhere,
-                    &union,
-                    &facts.live,
-                    &facts.masks,
-                    facts.widths.get(&other).copied().unwrap_or(4),
-                )
-                .is_some()
-            };
             let evicted = llrm_support::debug::timed("regalloc evict", || {
                 _evict(
                     &mine,
@@ -2167,7 +2148,6 @@ fn _allocated(
                     &union,
                     &facts.live,
                     &facts.masks,
-                    &movable,
                     &fenced,
                     width,
                     Some(cascades.get(&value).copied().unwrap_or(newest)),
@@ -3343,7 +3323,6 @@ fn _evict(
     union: &LiveUnion,
     live: &LiveRanges,
     masks: &Masks,
-    movable: &dyn Fn(u32, RegId) -> bool,
     protected: &BTreeSet<u32>,
     width: u32,
     cascade: Option<i64>,
@@ -3373,7 +3352,7 @@ fn _evict(
         }
         let mut bill = 0.0;
         for other in &victims {
-            bill += if movable(*other, *register) { 0.0 } else { live.weight(*other) };
+            bill += live.weight(*other);
         }
         if bill >= live.weight(one.value) {
             continue;
@@ -5800,7 +5779,6 @@ mod tests {
             &union,
             &LiveRanges::stated(live.clone()),
             &Masks::default(),
-            &|_, _| false,
             &values(&[1]),
             4,
             None,
