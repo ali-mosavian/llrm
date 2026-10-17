@@ -12,7 +12,7 @@ the per-body fixed point, and which options switch them off.
 every body, the whole-program [`crate::interprocedural`](../analyses/interprocedural.md) step, and loop and
 address passes that run once, after the program is settled. Every pass
 after `globalopt` is a function, module or program pass of the manager.
-With `LLRM_VERIFY` set the module is verified after each manager pass;
+With `LLRM_VERIFY` set (or `-fverify-ir`) the module is verified after each manager pass;
 with `Applied::dump` set each changed step of each body is written there.
 A body sent back through `Fixed` by a later stage starts only the passes
 that found nothing last time and read nothing that changed since
