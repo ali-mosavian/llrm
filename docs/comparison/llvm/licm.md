@@ -68,3 +68,10 @@ LLVM decides locally and leaves register pressure to the machine passes (`Machin
 | invariant runs found | in the walk | `_invariant_run` 37.5 M (43 calls), `_frequency` 16.1 M |
 
 Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M. The `-Os` figure is from `LLRM_DEBUG=hoist` on commit 954bc48fa.
+
+## Proposed change
+
+- **Files**: `crates/opt/llrm-transforms/src/hoist.rs` (`_affordable`), `crates/opt/llrm-transforms/src/spill.rs` (`View::forecast`, `Pressure::updated`), `crates/opt/llrm-transforms/src/gvn.rs` (`crossing_price`).
+- **What**: price a run by its cheap exact terms first and run the whole-function forecast only when the verdict is open; or forecast the affected region only.
+- **Expected saving**: the first is small and not exact: at `-Os` the frequency is flat, so 34 of 36 priced candidates differ only by the float-release term, and the forecast cost is 0 before and after; a rejection still needs the forecast before. The second, an incremental forecast sweep, re-sweeps 2 to 144 of about 216 blocks per candidate at `-Os` and 204 to 213 of 228 at `-O2`: a cell's price is its traffic over the whole function, so a hoist reprices cells live across hundreds of blocks. Ceiling about 1.5% at `-Os`, about 0 at `-O2`.
+- **Status**: measured and not kept ([compile-time-spec section 8](../../architecture/compile-time-spec.md), "Hoist's per-block sweep memo"); the forecast-first pricing was sized and not built.
