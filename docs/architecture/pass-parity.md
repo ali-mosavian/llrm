@@ -1,6 +1,6 @@
 # Pass-list parity with clang
 
-For contributors choosing which passes run at which level. Clang 20's pipelines are the reference (it compiles d_faces in 520/670/672/567 M instructions at -O1/-O2/-O3/-Os, gcc 13.4 in 636/1137/1413/944, llrm in 3,040/5,521/5,930/5,671); gcc's passes are listed beside them and taken only where a measured row says gcc does better.
+For contributors choosing which passes run at which level. Clang 20's pipelines are the reference (the pass lists; the costs below are the distro clang 20.1.8's and are void as a cost reference to the pinned 24.0.0git, whose `d_faces` -O2 is 415.5 M. It compiles d_faces in 520/670/672/567 M instructions at -O1/-O2/-O3/-Os, gcc 13.4 in 636/1137/1413/944, llrm in 3,040/5,521/5,930/5,671); gcc's passes are listed beside them and taken only where a measured row says gcc does better.
 
 TL;DR: the pass lists differ only at -O1, where llrm runs `jumpthread`, `dse` and a full `gvn` that clang's -O1 does not; dropping the first two is free on the 71 programs and d_faces (-164 M, -5.5%), once a slot's stores go with its last read. At -O2, -O3 and -Os llrm's list is a subset of clang's; the 8x gap is each pass costing 4x to 23x its clang counterpart, and `rounds` (clang runs each instance once, 8 interleaved InstCombines and SimplifyCFGs) is a step that cost 50% more instructions when removed at -O1.
 
@@ -160,7 +160,7 @@ Levers at -O2, own instructions against the clang counterpart's share of its opt
 | `lir` (`peephole` 106, `jumps` 64, ...) | 366 | ~35 | ~330 (10.5%) |
 | module analyses with no timer of their own (`mir pipeline`: `Summaries`, `GlobalsAA`) | 81 | none | 81 (2.6%) |
 
-The ceilings of the rows above the analyses sum to 1,569 M of 3,147: reaching every one leaves 1,578 M, 2.8x clang's 557, and taking half of the analyses' 701 as well leaves 1,228 M, 2.2x. The rest of the gap is not in a pass of the list: it is the 385 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 100 M of summaries and `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
+The ceilings of the rows above the analyses sum to 1,569 M of 3,147: reaching every one leaves 1,578 M, 2.8x clang's 557 (distro; 3.8x the pinned clang 24's 415.5 M), and taking half of the analyses' 701 as well leaves 1,228 M, 2.2x (3.0x the pinned). The rest of the gap is not in a pass of the list: it is the 385 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 100 M of summaries and `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
 
 An earlier version of this table read inclusive times (`annotated` 37 ms is its 8 ms plus the analyses it asks for) as if own; the rows above do not overlap.
 
