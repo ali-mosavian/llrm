@@ -1457,6 +1457,9 @@ pub struct Standing<'h> {
     /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
+    /// What stood before an edit, and the values the edit reached: `derived`
+    /// is made from them when next asked.
+    edited: Option<(Knowns, llrm_mir::dense::IdSet<ValueId>)>,
     /// The blocks, edges and loops of the body, as `held` has them or derived
     /// once: they stand while the body's blocks and edges do (`reshaped`).
     shape: Option<std::rc::Rc<crate::cfg::Shape>>,
@@ -1465,7 +1468,7 @@ pub struct Standing<'h> {
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None, shape: None }
+        Self { held: Some(registers), bounds: None, derived: None, edited: None, shape: None }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1473,12 +1476,12 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
+        Self { held: Some(registers), bounds: Some(bounds), derived: None, edited: None, shape: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None, shape: None }
+        Self { held: None, bounds: None, derived: None, edited: None, shape: None }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1510,6 +1513,73 @@ impl<'h> Standing<'h> {
         self.held = None;
         self.bounds = None;
         self.derived = None;
+        self.edited = None;
+    }
+
+    /// The body changed by `changes` and not in its blocks or edges: a value's
+    /// fact is of the values it is made from alone, so what stood stands for
+    /// every value the edit did not reach (`manager::Registers::update`),
+    /// and the rest are settled when next asked.
+    pub fn edited(
+        &mut self,
+        function: &Function,
+        changes: &[llrm_mir::module::Change],
+    ) {
+        use llrm_mir::module::Change;
+        let kept = match (self.edited.take(), self.derived.take(), self.held.take()) {
+            (Some((kept, _)), _, _) | (None, Some(kept), _) => kept,
+            (None, None, Some(held)) => held.clone(),
+            // Nothing stood: derived afresh when asked.
+            (None, None, None) => {
+                self.changed();
+                return;
+            }
+        };
+        self.bounds = None;
+        let mut kept = kept;
+        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
+        let mut work = Vec::<ValueId>::new();
+        for change in changes {
+            let inst = match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => inst,
+                Change::Cloned { to, .. } => to,
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted { .. } => continue,
+                Change::Parameters => {
+                    self.changed();
+                    return;
+                }
+            };
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
+        // The touched, those whose fact was made from them, and the users of
+        // each.
+        let mut dirty = touched.clone();
+        let mut seen = touched;
+        while let Some(value) = work.pop() {
+            kept.swap_remove(&value);
+            for user in function.users(value) {
+                if function.parent(user.user).is_none() {
+                    continue;
+                }
+                let Some(result) = function.instruction(user.user).result else { continue };
+                dirty.insert(result);
+                if kept.contains_key(&result) && seen.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+        self.edited = Some((kept, dirty));
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they
@@ -1530,6 +1600,9 @@ impl<'h> Standing<'h> {
     ) -> &Knowns {
         if let Some(held) = self.held {
             return held;
+        }
+        if let Some((kept, dirty)) = self.edited.take() {
+            self.derived = Some(crate::consts::known_from(&Unit { registers: None, ..*unit }, kept, Some(&dirty), &[]));
         }
         self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }

@@ -1005,9 +1005,11 @@ pub fn known_from(
                 break;
             }
         }
+        DERIVED_WORK.with(|count| count.set(count.get() + region.iter().count()));
         return constant_cycles::propagated(unit, facts, None, Some(&region));
     }
     let walked: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
+    DERIVED_WORK.with(|count| count.set(count.get() + walked.len()));
     let mut changing = true;
     while changing {
         changing = false;
@@ -1024,6 +1026,7 @@ pub fn known_from(
 
 thread_local! {
     static REGISTER_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DERIVED_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MEMORY_DERIVATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TABLE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -1038,6 +1041,13 @@ pub fn table_walks() -> usize {
 /// memory, for a test that two passes that ask of one body share the answer.
 pub fn memory_derivations() -> usize {
     MEMORY_DERIVATIONS.with(std::cell::Cell::get)
+}
+
+/// The values `known_from` had to settle on this thread: a whole body for a
+/// derivation from nothing, the values an edit reached for one from the facts
+/// that stand. For a test that an edit costs what it reached.
+pub fn derived_work() -> usize {
+    DERIVED_WORK.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has derived what is known of a body without
