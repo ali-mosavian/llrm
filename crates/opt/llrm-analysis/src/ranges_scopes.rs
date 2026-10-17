@@ -1,7 +1,7 @@
-//! A loop's scopes: what `Bounds` knows at a block of it, made from the loop's
-//! `known` by the edges that narrow it there. The solve of the loop and the
-//! consumer that asks later make them the same way, from the same state kept
-//! with the loop (`Caches`).
+// A loop's scopes: what `Bounds` knows at a block of it, made from the loop's
+// `known` by the edges that narrow it there. The solve of the loop and the
+// consumer that asks later make them the same way, from the same state kept
+// with the loop (`Caches`).
 
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};

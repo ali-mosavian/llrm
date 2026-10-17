@@ -42,6 +42,15 @@
 //! block. `Bounds` records the decision, and an update works from a solve made
 //! under the same one. `LLRM_CHECK_CAP` holds a capped solve to containing the
 //! uncapped facts.
+//!
+//! Scopes. A loop's scope at a block is made from the loop's `known` by the
+//! edges that narrow it there (`scopes::LoopScope::scope_at`), the loops around
+//! the block narrowing one another outermost first. The solve keeps each loop
+//! (`Lazy`) and makes a block's scope when it is first asked (`Bounds::force`,
+//! from the unit the consumer asks with) or when a loop inside needs the
+//! scope of a block outside it; a solve that is not lazy makes them all.
+//! `LLRM_CHECK_LAZY` holds the scopes made when asked to those of a solve that
+//! makes them all.
 //! `Bounds` holds the result: facts from the loops (`within`) over those from
 //! the edges. A change re-solves only the loops it reaches (`loops_reached`). A
 //! loop with no counted proof and no phi to box (`box_candidates`) is left
@@ -131,6 +140,7 @@
 //! LLVM's LazyValueInfo and ScalarEvolution value ranges.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::rc::Rc;
@@ -1278,6 +1288,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
                 // body's.
+                held.force_all(unit);
                 let facts = held.loops_facts();
                 assert!(
                     (!unit.loop_intervals && facts.is_empty())
@@ -1341,7 +1352,7 @@ struct Prefixes {
 /// loops give (`within`), and those with the edges' facts where a block is in
 /// none (`edges`). A block that did not change shares its map with the solve
 /// before.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct Bounds {
     headers: Vec<i64>,
     /// The edges' facts it was worked out under: a loop reads them where it
@@ -1350,14 +1361,133 @@ pub struct Bounds {
     /// The edges' facts as the manager keeps them, asked of by value and block
     /// (`ranger`), and `edges` holds none.
     lazy: Option<crate::ranger::EdgeFacts>,
-    within: IndexMap<i64, Scope>,
+    /// The counted loops, outermost first, whose scopes `within` is made from
+    /// when a block is first asked.
+    loops: Vec<Rc<Lazy>>,
+    /// The scopes made so far.
+    within: RefCell<IndexMap<i64, Scope>>,
     /// The blocks two loops' facts contradict each other at: none executes
-    /// them.
-    dead: BTreeSet<i64>,
+    /// them. Known of the blocks made.
+    dead: RefCell<BTreeSet<i64>>,
     /// From what nest depth the loops were given the facts of their header
     /// alone (`capped_from`): an update works from a solve made under the
     /// same decision.
     capped: Option<usize>,
+    /// What making a scope later reads of the body that the unit asked with
+    /// does not carry.
+    ground: std::cell::OnceCell<Rc<Ground>>,
+}
+
+/// The body's blocks, their predecessors and places, as the solve had them.
+#[derive(Debug)]
+struct Ground {
+    graph: Vec<cfg::Block>,
+    predecessors: BTreeMap<i64, BTreeSet<i64>>,
+    positions: BTreeMap<i64, usize>,
+}
+
+/// One counted loop as the solve left it: what its blocks are narrowed from.
+/// Its scopes are made when a block is asked (`Bounds::force`), by the same
+/// code the solve made them with.
+struct Lazy {
+    header: i64,
+    loop_: loops::Loop,
+    /// The blocks that take `known`.
+    inside: BTreeSet<i64>,
+    known: Rc<Intervals>,
+    known_id: u64,
+    /// What the header is narrowed from where it is not in `inside`.
+    held: Option<(Rc<Intervals>, u64)>,
+    operations: Vec<InstId>,
+    /// From the nest depth `capped_from` gave header facts alone.
+    beyond: bool,
+    caches: Rc<scopes::Caches>,
+}
+
+impl std::fmt::Debug for Lazy {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        write!(out, "Lazy(b{}, {} blocks, {} known)", self.header, self.inside.len(), self.known.len())
+    }
+}
+
+impl PartialEq for Lazy {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.header == other.header
+            && self.inside == other.inside
+            && self.beyond == other.beyond
+            && *self.known == *other.known
+            && self.held.as_ref().map(|(held, _)| &**held) == other.held.as_ref().map(|(held, _)| &**held)
+    }
+}
+
+impl Lazy {
+    /// Whether the loop narrows the scope of `at`.
+    fn covers(
+        &self,
+        at: i64,
+    ) -> bool {
+        self.inside.contains(&at) || (self.held.is_some() && at == self.header)
+    }
+}
+
+impl PartialEq for Bounds {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.headers == other.headers
+            && self.edges == other.edges
+            && self.lazy == other.lazy
+            && self.loops == other.loops
+            && self.capped == other.capped
+    }
+}
+
+/// The scope of block `at` of the loops that cover it, outermost first, each
+/// narrowing the last: made once and kept in `within`. None where no loop
+/// covers it.
+fn scope_in(
+    loops: &[Rc<Lazy>],
+    solve: &scopes::Solve,
+    within: &RefCell<IndexMap<i64, Scope>>,
+    dead: &RefCell<BTreeSet<i64>>,
+    at: i64,
+) -> Result<Option<Scope>, String> {
+    if let Some(found) = within.borrow().get(&at) {
+        return Ok(Some(Rc::clone(found)));
+    }
+    let mut made: Option<Intervals> = None;
+    for held in loops.iter().filter(|held| held.covers(at)) {
+        let (known, id) = match &held.held {
+            Some((known, id)) if at == held.header && !held.inside.contains(&at) => (known, *id),
+            _ => (&held.known, held.known_id),
+        };
+        let scoped = if held.beyond {
+            // Beyond the cap a block has what the loop holds throughout, not
+            // what the edges to it narrow that to.
+            Rc::clone(known)
+        } else {
+            let scope =
+                scopes::LoopScope { solve, loop_: &held.loop_, operations: &held.operations, caches: &held.caches };
+            scope.scope_at(at, known, id, true)?
+        };
+        let destination = made.get_or_insert_with(Intervals::default);
+        for (value, interval) in scoped.iter() {
+            if narrow_to(destination, value, interval) {
+                dead.borrow_mut().insert(at);
+            }
+        }
+    }
+    let Some(made) = made else { return Ok(None) };
+    let made = Rc::new(made);
+    within.borrow_mut().insert(at, Rc::clone(&made));
+    Ok(Some(made))
 }
 
 impl Bounds {
@@ -1367,17 +1497,62 @@ impl Bounds {
     /// prove it).
     pub fn unreachable(
         &self,
+        unit: &Unit,
         at: i64,
     ) -> bool {
-        self.dead.contains(&at)
+        let _ = self.force(unit, at);
+        self.dead.borrow().contains(&at)
+    }
+
+    /// The scope of the counted loops at `at`, where one holds it: made when
+    /// first asked, from the body `unit` stands over.
+    pub fn force(
+        &self,
+        unit: &Unit,
+        at: i64,
+    ) -> Option<Scope> {
+        if let Some(found) = self.within.borrow().get(&at) {
+            return Some(Rc::clone(found));
+        }
+        if !self.loops.iter().any(|held| held.covers(at)) {
+            return None;
+        }
+        let ground = self.ground.get()?;
+        let registers = unit.registers();
+        let (shape, assumed) = (unit.shape(), unit.assumptions());
+        let solve = scopes::Solve {
+            unit,
+            facts: &registers,
+            graph: &ground.graph,
+            predecessors: &ground.predecessors,
+            positions: &ground.positions,
+            shape: &shape,
+            assumed: &assumed,
+        };
+        let found = scope_in(&self.loops, &solve, &self.within, &self.dead, at);
+        assert!(found.is_ok() || !llrm_support::env_set("LLRM_CHECK_LAZY"), "a scope asked for failed: {found:?}");
+        found.ok().flatten()
+    }
+
+    /// Every scope the loops give, made.
+    pub fn force_all(
+        &self,
+        unit: &Unit,
+    ) {
+        for held in &self.loops {
+            for &at in held.inside.iter().chain(held.held.iter().map(|_| &held.header)) {
+                let _ = self.force(unit, at);
+            }
+        }
     }
 
     /// What the counted loops know at `at`, where one holds it.
     pub fn within(
         &self,
+        unit: &Unit,
         at: i64,
-    ) -> Option<&Intervals> {
-        self.within.get(&at).map(|scope| &**scope)
+    ) -> Option<Scope> {
+        self.force(unit, at)
     }
 
     /// What is known at block `at`: the loops' facts where a loop holds it,
@@ -1387,7 +1562,7 @@ impl Bounds {
         unit: &'a Unit<'u>,
         at: i64,
     ) -> BlockScope<'a, 'u> {
-        BlockScope { bounds: self, unit, at }
+        BlockScope { bounds: self, unit, at, loops: std::cell::OnceCell::new() }
     }
 
     /// As `bounded` gives them, the edges' facts asked of `unit` where they are
@@ -1396,6 +1571,7 @@ impl Bounds {
         &self,
         unit: &Unit,
     ) -> Facts {
+        self.force_all(unit);
         let Some(edges) = &self.lazy else { return self.facts() };
         let mut found = self.loops_facts();
         for (at, scope) in edges.blocks(unit, &unit.registers()) {
@@ -1404,16 +1580,17 @@ impl Bounds {
         found
     }
 
-    /// The loops' facts alone.
+    /// The loops' facts made so far: all of them where the solve was not lazy.
     pub fn loops_facts(&self) -> Facts {
-        self.within.iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
+        self.within.borrow().iter().map(|(at, scope)| (*at, (**scope).clone())).collect()
     }
 
     /// As `bounded` gives them, where the edges' facts are held (not lazy).
     pub fn facts(&self) -> Facts {
-        self.within
+        let within = self.within.borrow();
+        within
             .iter()
-            .chain(self.edges.iter().filter(|(at, _)| !self.within.contains_key(*at)))
+            .chain(self.edges.iter().filter(|(at, _)| !within.contains_key(*at)))
             .map(|(at, scope)| (*at, (**scope).clone()))
             .collect()
     }
@@ -1436,6 +1613,8 @@ pub struct BlockScope<'a, 'u> {
     bounds: &'a Bounds,
     unit: &'a Unit<'u>,
     at: i64,
+    /// The loops' scope here, made on the first ask.
+    loops: std::cell::OnceCell<Option<Scope>>,
 }
 
 impl Lookup for BlockScope<'_, '_> {
@@ -1443,7 +1622,7 @@ impl Lookup for BlockScope<'_, '_> {
         &self,
         value: &ValueId,
     ) -> Option<Cow<'_, Interval>> {
-        if let Some(scope) = self.bounds.within.get(&self.at) {
+        if let Some(scope) = self.loops.get_or_init(|| self.bounds.force(self.unit, self.at)) {
             return scope.get(value).map(Cow::Borrowed);
         }
         let Some(edges) = &self.bounds.lazy else {
@@ -1618,13 +1797,26 @@ pub fn bounded_solved(
     lazy: bool,
 ) -> Result<Bounds, String> {
     let found = bounded_solved_under(unit, facts, prior, lazy, true)?;
+    // The scopes of a lazy solve, made at every block, are those of one that
+    // makes them all (`LLRM_CHECK_LAZY`), whether the solve was brought up to
+    // date or not.
+    if lazy && llrm_support::env_set("LLRM_CHECK_LAZY") {
+        found.force_all(unit);
+        let whole = bounded_solved_under(unit, facts, None, false, true)?;
+        assert!(
+            *found.within.borrow() == *whole.within.borrow() && *found.dead.borrow() == *whole.dead.borrow(),
+            "the scopes made when asked are not the scopes made by the solve"
+        );
+    }
     // A capped solve is a coarser one: where the solve with no cap has a fact,
     // the capped has one that holds it (`LLRM_CHECK_CAP`).
     if found.capped.is_some() && llrm_support::env_set("LLRM_CHECK_CAP") {
         let whole = bounded_solved_under(unit, facts, None, lazy, false)?;
-        for (at, scope) in &whole.within {
+        found.force_all(unit);
+        whole.force_all(unit);
+        for (at, scope) in whole.within.borrow().iter() {
             for (value, interval) in scope.iter() {
-                let held = found.within.get(at).and_then(|capped| capped.get(&value));
+                let held = found.within.borrow().get(at).and_then(|capped| capped.get(&value).cloned());
                 if let Some(held) = held.filter(|held| held.width == interval.width) {
                     assert!(
                         held.low <= interval.low && held.high >= interval.high,
@@ -1692,36 +1884,36 @@ fn bounded_solved_under(
     let mut nest: Vec<_> = shape.loops.iter().collect();
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
     let capped = if cap { capped_from(function, &nest) } else { None };
-    let mut result: IndexMap<i64, Scope> =
-        match prior.filter(|(held, _)| held.headers == headers && held.capped == capped) {
-            // The blocks of a loop to be worked again start from nothing: what
-            // its loops narrow is put in anew.
-            Some((held, dirty)) => {
-                let redone: BTreeSet<i64> = nest
-                    .iter()
-                    .filter(|one| dirty.contains(&one.header))
-                    .flat_map(|one| one.body.iter().copied())
-                    .collect();
-                held.within
-                    .iter()
-                    .filter(|(at, _)| !redone.contains(at))
-                    .map(|(at, scope)| (*at, Rc::clone(scope)))
-                    .collect()
-            }
-            None => IndexMap::default(),
-        };
+    let rank: HashMap<i64, usize> = nest.iter().enumerate().map(|(at, one)| (one.header, at)).collect();
     let prior = prior.filter(|(held, _)| held.headers == headers && held.capped == capped);
-    let mut dead: BTreeSet<i64> = match prior {
-        Some((held, dirty)) => {
-            let redone: BTreeSet<i64> = nest
-                .iter()
-                .filter(|one| dirty.contains(&one.header))
-                .flat_map(|one| one.body.iter().copied())
-                .collect();
-            held.dead.difference(&redone).copied().collect()
+    // The loops to be worked again start from nothing: what their loops narrow
+    // is put in anew. The others keep what they had, the scopes made and the
+    // loops to make the rest from.
+    let redone: BTreeSet<i64> = match prior {
+        Some((_, dirty)) => {
+            nest.iter().filter(|one| dirty.contains(&one.header)).flat_map(|one| one.body.iter().copied()).collect()
         }
         None => BTreeSet::new(),
     };
+    let within: RefCell<IndexMap<i64, Scope>> = RefCell::new(match prior {
+        Some((held, _)) => held
+            .within
+            .borrow()
+            .iter()
+            .filter(|(at, _)| !redone.contains(at))
+            .map(|(at, scope)| (*at, Rc::clone(scope)))
+            .collect(),
+        None => IndexMap::default(),
+    });
+    let dead: RefCell<BTreeSet<i64>> = RefCell::new(match prior {
+        Some((held, _)) => held.dead.borrow().difference(&redone).copied().collect(),
+        None => BTreeSet::new(),
+    });
+    let registered: RefCell<Vec<Rc<Lazy>>> = RefCell::new(match prior {
+        Some((held, dirty)) => held.loops.iter().filter(|one| !dirty.contains(&one.header)).cloned().collect(),
+        None => Vec::new(),
+    });
+    let failure: RefCell<Option<String>> = RefCell::new(None);
     let solve = scopes::Solve {
         unit,
         facts,
@@ -1730,6 +1922,16 @@ fn bounded_solved_under(
         positions: &positions,
         shape: &shape,
         assumed: &assumed,
+    };
+    // What the loops outside the one worked know at a block, made when asked.
+    let forced = |at: i64| -> Option<Scope> {
+        match scope_in(&registered.borrow(), &solve, &within, &dead, at) {
+            Ok(found) => found,
+            Err(error) => {
+                failure.borrow_mut().get_or_insert(error);
+                None
+            }
+        }
     };
     for loop_ in nest {
         if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
@@ -1803,7 +2005,8 @@ fn bounded_solved_under(
         // What is known above the loop of the values made outside it.
         let at_entry = |at: i64, value: &ValueId| -> Option<Interval> {
             let edge = edges_at(at, value);
-            let narrowed = result.get(&at).and_then(|scope| scope.get(value));
+            let outside = forced(at);
+            let narrowed = outside.as_deref().and_then(|scope| scope.get(value));
             match (edge, narrowed) {
                 (edge, None) => edge,
                 (None, Some(held)) => Some(held.clone()),
@@ -1940,37 +2143,48 @@ fn bounded_solved_under(
         // though the header itself also sees the exit value.
         let known = closed(known);
         let known_id = fresh_known();
-        for &at in &inside {
-            // Beyond the cap a block has what the loop holds throughout, not
-            // what the edges to it narrow that to.
-            let scoped = if beyond { None } else { Some(scope_at(at, &known, known_id, true)?) };
-            let scoped = scoped.as_deref().unwrap_or(&known);
-            let destination = Rc::make_mut(result.entry(at).or_default());
-            for (value, interval) in scoped.iter() {
-                if narrow_to(destination, value, interval) {
-                    dead.insert(at);
-                }
-            }
-        }
-        if let Some(held) = at_header {
-            let held_id = fresh_known();
-            let scoped = scope_at(loop_.header, &held, held_id, true)?;
-            let destination = Rc::make_mut(result.entry(loop_.header).or_default());
-            for (value, interval) in scoped.iter() {
-                if narrow_to(destination, value, interval) {
-                    dead.insert(loop_.header);
-                }
+        let made = Rc::new(Lazy {
+            header: loop_.header,
+            loop_: loop_.clone(),
+            inside: inside.clone(),
+            known: Rc::new(known),
+            known_id,
+            held: at_header.map(|held| (Rc::new(held), fresh_known())),
+            operations: operations.clone(),
+            beyond,
+            caches: Rc::clone(&caches),
+        });
+        // What the blocks it covers had from the loops outside it is made
+        // again.
+        within.borrow_mut().retain(|at, _| !made.covers(*at));
+        let mut held = registered.borrow_mut();
+        let place = held.partition_point(|one| rank[&one.header] < rank[&made.header]);
+        held.insert(place, made);
+    }
+    if let Some(error) = failure.take() {
+        return Err(error);
+    }
+    let loops = registered.into_inner();
+    // A solve that was not asked to be lazy makes every scope now.
+    if ranger.is_none() || !lazy {
+        for held in &loops {
+            for &at in held.inside.iter().chain(held.held.iter().map(|_| &held.header)) {
+                scope_in(&loops, &solve, &within, &dead, at)?;
             }
         }
     }
-    Ok(Bounds {
+    let bounds = Bounds {
         headers,
         edges: edges_above,
         lazy: unit.edges.filter(|_| ranger.is_some()).cloned(),
-        within: result,
+        loops,
+        within,
         dead,
         capped,
-    })
+        ground: std::cell::OnceCell::new(),
+    };
+    let _ = bounds.ground.set(Rc::new(Ground { graph, predecessors, positions }));
+    Ok(bounds)
 }
 
 #[cfg(test)]
@@ -2243,7 +2457,7 @@ pub fn scoped(unit: &Unit) -> Result<Facts, String> {
     let bounds = bounded_solved(unit, &unit.registers(), None, false)?;
     let mut result = bounds.facts();
     for (at, edges) in &bounds.edges {
-        if !bounds.within.contains_key(at) {
+        if !bounds.within.borrow().contains_key(at) {
             continue;
         }
         let edges = (**edges).clone();

@@ -15,12 +15,13 @@ use super::{
     Annotated, CallEffects, DominatedEdges, GlobalsAA, Pointers, Registers, Summaries, TableLoads, ThroughMemory,
 };
 use crate::alias::{self, Procedure};
+use crate::cfg;
 use crate::cfg::Shape;
 use crate::consts::{self, Calls};
 use crate::memory::Unit;
 use crate::ranges;
 use crate::regions::tests::Dos;
-use crate::testing::{DOS, corpus, function, layout, parsed, value};
+use crate::testing::{DOS, block as parsed_block, corpus, function, layout, parsed, value};
 
 /// A pass that does its first and preserves its second.
 struct Step(Box<dyn FnMut(&mut PassUnit, &mut Analyses)>, PreservedAnalyses);
@@ -1310,4 +1311,80 @@ fn a_terminator_rewritten_in_one_loop_proves_that_loop_again_and_not_the_other()
         *Analyses::new(outer).get::<super::Counted>(context, &layout, function),
         "what was brought up to date is what deriving it afresh gives"
     );
+}
+
+/// A nest of `depth` loops, each reading the counter of the one around it.
+fn nest(depth: usize) -> String {
+    let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %h1\n");
+    for k in 1..=depth {
+        let before = if k == 1 { "entry".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %l{k} ]\n  %a{k} = add i16 %i{k}, %n\n");
+        text += &if k < depth { format!("  br label %h{}\n", k + 1) } else { format!("  br label %l{k}\n") };
+    }
+    for k in (1..=depth).rev() {
+        let out = if k == 1 { "exit".to_owned() } else { format!("l{}", k - 1) };
+        text += &format!(
+            "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %n{k}, 10\n  br i1 %c{k}, label %h{k}, label %{out}\n"
+        );
+    }
+    text + "exit:\n  ret i16 %n\n}\n"
+}
+
+/// Every block of every loop was given its scope by the solve (queens -O3:
+/// 7,022 scopes, 1,636 of them ever asked), the edges to it walked and narrowed
+/// each time. A solve makes the scopes the loops below it start from, and a
+/// block's scope is made when a consumer asks, once.
+#[test]
+fn the_scopes_of_a_loop_are_made_when_a_block_is_asked() {
+    let depth = 6;
+    let module = parsed(&format!("{DOS}{}", nest(depth)));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let function = function(&module, "f");
+    let made = ranges::scopes_made();
+    let held = super::Ranges::of(&module.context, &layout, function, &mut analyses, true);
+    let unit = held.unit(&module.context, &layout, function, analyses.outer());
+    let Some(Ok(bounds)) = held.bounds() else { panic!("bounds") };
+    let solved = ranges::scopes_made() - made;
+    let blocks = 2 * depth + 2;
+    let eager = {
+        let before = ranges::scopes_made();
+        let registers = unit.registers();
+        let _ = ranges::bounded_solved(&unit, &registers, None, false).unwrap();
+        ranges::scopes_made() - before
+    };
+    assert!(eager >= blocks, "premise: the solve with no laziness made {eager} scopes");
+    assert!(solved < eager / 2, "the solve made {solved} of the {eager} scopes");
+    // One block asked: one scope for each loop that holds it.
+    let innermost = cfg::id(parsed_block(function, "h6"));
+    let asked = ranges::scopes_made();
+    let _ = bounds.force(&unit, innermost);
+    assert!(ranges::scopes_made() - asked <= depth, "{} scopes for one block", ranges::scopes_made() - asked);
+    let again = ranges::scopes_made();
+    let _ = bounds.force(&unit, innermost);
+    assert_eq!(ranges::scopes_made(), again, "a block asked twice was made twice");
+}
+
+/// A scope made when asked is the scope the solve makes: at every block of a
+/// nest, whichever block is asked first.
+#[test]
+fn a_scope_made_when_asked_is_the_scope_the_solve_makes() {
+    let module = parsed(&format!("{DOS}{}", nest(6)));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    let function = function(&module, "f");
+    let held = super::Ranges::of(&module.context, &layout, function, &mut analyses, true);
+    let unit = held.unit(&module.context, &layout, function, analyses.outer());
+    let Some(Ok(bounds)) = held.bounds() else { panic!("bounds") };
+    // Asked innermost first, the order that makes the fewest scopes of the
+    // outer.
+    for k in (1..=6).rev() {
+        let _ = bounds.force(&unit, cfg::id(parsed_block(function, &format!("l{k}"))));
+    }
+    let registers = unit.registers();
+    let whole = ranges::bounded_solved(&unit, &registers, None, false).unwrap();
+    bounds.force_all(&unit);
+    assert_eq!(bounds.loops_facts(), whole.loops_facts());
 }

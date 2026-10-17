@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 41 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 41 documented, 1 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -42,6 +42,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 41 documented, 0 undoc
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`, `LoopView::at`. | [ranger](ranger.md) |
 | ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block and the counted loops that hold it. | The interval facts above. In the manager they are `DominatedEdges` and | [ranges](ranges.md) |
+| ranges_scopes | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges_scopes.rs) |
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
