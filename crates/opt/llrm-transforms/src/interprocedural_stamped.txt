@@ -1,61 +1,61 @@
-emitted/demo-deedlines define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-deedlines define cc1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
-emitted/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-deedlines define cc1000 void @GETMAP(ptr %0) addrspace(1)
-emitted/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) norecurse
-emitted/demo-deedlines define cc1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) memory(readwrite, argmem: none) willreturn nounwind norecurse
-emitted/demo-deedlines define cc1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @LOADOBJECT(ptr %0) addrspace(1)
-emitted/demo-deedlines define cc1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
-emitted/demo-deedlines define cc1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-deedlines define cc1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-emitted/demo-deedlines define cc1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-deedlines define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-oimad define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
-emitted/demo-oimad define cc1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-oimad define cc1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-oimad define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
-emitted/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/demo-qbdemo define cc1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
-emitted/demo-qbdemo define cc1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
-emitted/demo-qbdemo define cc1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-emitted/demo-qbdemo define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc 1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc 1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc 1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/demo-deedlines define cc 1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc 1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc 1000 void @GETMAP(ptr %0) addrspace(1)
+emitted/demo-deedlines define cc 1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-deedlines define cc 1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @KEYACTION() addrspace(1) memory(readwrite, argmem: none) willreturn nounwind norecurse
+emitted/demo-deedlines define cc 1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @LOADOBJECT(ptr %0) addrspace(1)
+emitted/demo-deedlines define cc 1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc 1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-deedlines define cc 1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+emitted/demo-deedlines define cc 1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-deedlines define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-oimad define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-oimad define cc 1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
+emitted/demo-oimad define cc 1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-oimad define cc 1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-oimad define cc 1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-oimad define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/demo-qbdemo define cc 1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
+emitted/demo-qbdemo define cc 1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/demo-qbdemo define cc 1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) norecurse
+emitted/demo-qbdemo define cc 1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
+emitted/demo-qbdemo define cc 1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/demo-qbdemo define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind norecurse
 emitted/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
@@ -68,11 +68,11 @@ emitted/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(pt
 emitted/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
-emitted/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-emitted/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
-emitted/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) norecurse
-emitted/nib-examples-basic-sortlib define cc1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+emitted/nib-examples-basic-sortlib define cc 1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
+emitted/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) norecurse
+emitted/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 emitted/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) memory(read, argmem: readwrite, inaccessiblemem: none) willreturn norecurse
@@ -200,7 +200,7 @@ emitted/nib-examples-modules-report define internal ptr @describe(ptr addrspace(
 emitted/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 emitted/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind norecurse
-emitted/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
+emitted/nib-examples-pascal-levels define cc 1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
 emitted/nib-examples-pascal-levels define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-examples-pipeline define internal void @Source.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 emitted/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) memory(read, inaccessiblemem: none) norecurse
@@ -481,116 +481,116 @@ emitted/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly deref
 emitted/nib-sum define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 emitted/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) memory(read, inaccessiblemem: none) norecurse
 emitted/nib-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-addrm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arith define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arrays define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arridx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arrprm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
-emitted/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
-emitted/qb-arrudt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-arrudt define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-bools define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-byref2 define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
-emitted/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
-emitted/qb-chain define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-cmpof define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-cmpord define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpcalc define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpcse define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpcsex define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpdeep define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpemu define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpi2cs define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-fpicse define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-harr define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-hotlop define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-hotlpx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-ivchan define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-lngmix define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-lngmxx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-matrix define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-nbody define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-negnot define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-nested define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-nestud define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-nestud define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-nots define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-press define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-pressx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-procs define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
-emitted/qb-procs define cc1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
-emitted/qb-rcflip define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-rcflip define cc1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-rotate define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-segld define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-spill define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-split define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-stride define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-subexp define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-udt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-wendgo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-emitted/qb-wendgo define cc1000 void @TURN() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
-optimized/demo-deedlines define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-optimized/demo-deedlines define cc1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
-optimized/demo-deedlines define cc1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-optimized/demo-deedlines define cc1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
-optimized/demo-deedlines define cc1000 void @GETMAP(ptr %0) addrspace(1)
-optimized/demo-deedlines define cc1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-deedlines define cc1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-optimized/demo-deedlines define cc1000 void @KEYACTION() addrspace(1) willreturn memory(readwrite, argmem: none) nounwind norecurse
-optimized/demo-deedlines define cc1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @LOADOBJECT(ptr %0) addrspace(1)
-optimized/demo-deedlines define cc1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-optimized/demo-deedlines define cc1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
-optimized/demo-deedlines define cc1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-optimized/demo-deedlines define cc1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
-optimized/demo-deedlines define cc1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
-optimized/demo-deedlines define cc1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
-optimized/demo-deedlines define cc1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-deedlines define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-oimad define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-oimad define cc1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) willreturn memory(readwrite, argmem: read) norecurse
-optimized/demo-oimad define cc1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-oimad define cc1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-oimad define cc1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
-optimized/demo-oimad define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/demo-qbdemo define cc1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
-optimized/demo-qbdemo define cc1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-optimized/demo-qbdemo define cc1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
-optimized/demo-qbdemo define cc1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
-optimized/demo-qbdemo define cc1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
-optimized/demo-qbdemo define cc1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+emitted/qb-addrm define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arith define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arrays define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arridx define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arrprm define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arrprm define cc 1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
+emitted/qb-arrprm define cc 1000 void @FILLPTS(ptr nocapture %0) addrspace(1) memory(write, argmem: read, inaccessiblemem: none) willreturn norecurse
+emitted/qb-arrudt define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-arrudt define cc 1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-bools define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-byref2 define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-byref2 define cc 1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/qb-byref2 define cc 1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/qb-chain define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-cmpof define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-cmpord define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpcalc define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpcse define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpcsex define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpdeep define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpemu define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpi2cs define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-fpicse define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-harr define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-hotlop define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-hotlpx define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-ivchan define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-lngmix define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-lngmxx define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-matrix define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-nbody define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-negnot define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-nested define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-nestud define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-nestud define cc 1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-nots define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-press define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-pressx define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-procs define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-procs define cc 1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+emitted/qb-procs define cc 1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
+emitted/qb-rcflip define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-rcflip define cc 1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-rotate define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-segld define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-spill define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-split define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-stride define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-subexp define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-udt define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-wendgo define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+emitted/qb-wendgo define cc 1000 void @TURN() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @ACTIONS() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @ACTIONS3D() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @ANIMATEWAVELET(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @CLEARSCREEN(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @COPPER() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @CREATEOBJECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc 1000 void @CROSFADE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-deedlines define cc 1000 void @CYCLEBLOBS() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @DEEDLINESAX(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc 1000 void @DELAY(ptr nocapture readnone %0) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/demo-deedlines define cc 1000 void @FADEFROMCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-deedlines define cc 1000 void @FADETOCOLOR(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-deedlines define cc 1000 void @GETMAP(ptr %0) addrspace(1)
+optimized/demo-deedlines define cc 1000 void @GETPAL() addrspace(1) memory(readwrite, argmem: none) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @INITCROSFADEPICS(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-deedlines define cc 1000 void @INTERSECTIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc 1000 void @KEYACTION() addrspace(1) willreturn memory(readwrite, argmem: none) nounwind norecurse
+optimized/demo-deedlines define cc 1000 void @LOAD3DRECORD() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @LOADOBJECT(ptr %0) addrspace(1)
+optimized/demo-deedlines define cc 1000 void @LOADQBINSIDE() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @LOADRECORD() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @MOV3DPOS(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc 1000 void @OUTPUT0() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @OUTPUT3D() addrspace(1) memory(readwrite, argmem: none) norecurse
+optimized/demo-deedlines define cc 1000 void @PLASMABLOBS() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @PRECALCULATIONS() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @PREHISTORICODE() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @RGBLIGHTS() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @ROTATE3D(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc 1000 void @SAVERECORD() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @SETCROSFADEPAL(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
+optimized/demo-deedlines define cc 1000 void @SETPAL(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2, ptr nocapture readonly %3, ptr nocapture readonly %4, ptr nocapture readonly %5, ptr nocapture readonly %6, ptr nocapture readonly %7) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-deedlines define cc 1000 void @SPHEREMAPLASMA() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @SUCKING() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @TRANSLATE3D() addrspace(1) memory(readwrite, argmem: none, inaccessiblemem: none) norecurse
+optimized/demo-deedlines define cc 1000 void @ZOOMDISTORT() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-deedlines define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-oimad define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-oimad define cc 1000 i16 @DMADONE(ptr nocapture readonly %0) addrspace(1) willreturn memory(readwrite, argmem: read) norecurse
+optimized/demo-oimad define cc 1000 void @INIT() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-oimad define cc 1000 void @PLAYMUSIC() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-oimad define cc 1000 void @SENDDSP(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) norecurse
+optimized/demo-oimad define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/demo-qbdemo define cc 1000 void @DRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
+optimized/demo-qbdemo define cc 1000 void @FRACLINE(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/demo-qbdemo define cc 1000 void @FRACLINE2(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3, ptr nocapture %4, ptr nocapture %5) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @FRACTALEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @OHCANADA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @PLASMA(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @RENDER(ptr nocapture %0, ptr nocapture %1, ptr nocapture %2, ptr nocapture %3) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @SHADEBOBEFFECT(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @UNDRAWBOB(ptr nocapture %0) addrspace(1) memory(readwrite, inaccessiblemem: none) willreturn norecurse
+optimized/demo-qbdemo define cc 1000 void @UNWHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @UPDPALPLASMA(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read) willreturn norecurse
+optimized/demo-qbdemo define cc 1000 void @WHITEFADE(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/demo-qbdemo define cc 1000 void @BENCHMARK(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-control define internal i16 @step(i16 %0) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-control define internal i16 @count(i16 %0) addrspace(1) memory(none) nounwind norecurse
 optimized/nib-descriptors define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
@@ -603,11 +603,11 @@ optimized/nib-examples-basic-sortlib define internal i16 @abi.basic.array_count(
 optimized/nib-examples-basic-sortlib define internal ptr addrspace(1) @abi.qb45.string_data(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-basic-sortlib define internal i16 @abi.qb45.string_length(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-basic-sortlib define internal ptr @abi.qb45.string_result(ptr addrspace(1) nocapture readnone %0, i16 %1) addrspace(1) memory(readwrite, argmem: none)
-optimized/nib-examples-basic-sortlib define cc1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
-optimized/nib-examples-basic-sortlib define cc1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
-optimized/nib-examples-basic-sortlib define cc1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
-optimized/nib-examples-basic-sortlib define cc1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) willreturn norecurse
-optimized/nib-examples-basic-sortlib define cc1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
+optimized/nib-examples-basic-sortlib define cc 1000 void @SORTSCORES(ptr nocapture %0, ptr nocapture %1) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) norecurse
+optimized/nib-examples-basic-sortlib define cc 1000 void @UPPER(ptr nocapture %0) addrspace(1) memory(readwrite, argmem: read, inaccessiblemem: none) willreturn norecurse
+optimized/nib-examples-basic-sortlib define cc 1000 double @AVERAGE(ptr nocapture readonly %0, ptr nocapture readonly %1, ptr nocapture readonly %2) addrspace(1) memory(readwrite, argmem: read)
+optimized/nib-examples-basic-sortlib define cc 1000 i16 @ROWTOTAL(ptr nocapture readonly %0, ptr nocapture readonly %1) addrspace(1) memory(read, inaccessiblemem: none) willreturn norecurse
+optimized/nib-examples-basic-sortlib define cc 1000 ptr @INITIALS(ptr nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-borrows define internal ptr addrspace(1) @leader(ptr addrspace(1) %0, ptr addrspace(1) %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-borrows define internal void @best(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1)
 optimized/nib-examples-borrows define internal void @first_name(ptr addrspace(1) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1) addrspace(1) willreturn memory(read, argmem: readwrite, inaccessiblemem: none) norecurse
@@ -735,7 +735,7 @@ optimized/nib-examples-modules-report define internal ptr @describe(ptr addrspac
 optimized/nib-examples-modules-shapes-geometry define internal i32 @Point.shifted(ptr addrspace(1) nocapture readonly %0, i16 %1) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-modules-shapes-geometry define internal i8 @side(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
 optimized/nib-examples-modules-shapes-geometry define internal i16 @secret() addrspace(1) memory(none) willreturn nounwind norecurse
-optimized/nib-examples-pascal-levels define cc1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
+optimized/nib-examples-pascal-levels define cc 1000 i16 @CLAMP(i16 %0, i16 %1, i16 %2) addrspace(1) memory(none) willreturn nounwind norecurse
 optimized/nib-examples-pascal-levels define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-examples-pipeline define internal void @Source.drop(ptr addrspace(1) nocapture readonly %0) addrspace(1) memory(readwrite, argmem: read)
 optimized/nib-examples-pipeline define internal i32 @number(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
@@ -1009,48 +1009,48 @@ optimized/nib-sum define internal i16 @sum(ptr addrspace(1) noalias readonly der
 optimized/nib-sum define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
 optimized/nib-sum_three define internal i16 @sum_three(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %1, ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %2) addrspace(1) willreturn memory(read, inaccessiblemem: none) norecurse
 optimized/nib-sum_three define internal i16 @main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-addrm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arith define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arrays define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arridx define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arrprm define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arrprm define cc1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
-optimized/qb-arrprm define cc1000 void @FILLPTS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
-optimized/qb-arrudt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-arrudt define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-bools define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-byref2 define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-byref2 define cc1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
-optimized/qb-byref2 define cc1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
-optimized/qb-chain define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-cmpof define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-cmpord define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-fpcse define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-fpdeep define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-fpemu define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-harr define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-hotlop define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-ivchan define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-lngmix define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-matrix define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-nbody define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-negnot define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-nested define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-nestud define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-nestud define cc1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-nots define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-press define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-procs define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-procs define cc1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
-optimized/qb-procs define cc1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
-optimized/qb-rcflip define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-rcflip define cc1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-rotate define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-segld define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-spill define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-split define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-stride define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-subexp define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-udt define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-wendgo define internal cc1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
-optimized/qb-wendgo define cc1000 void @TURN() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind norecurse
+optimized/qb-addrm define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arith define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arrays define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arridx define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arrprm define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arrprm define cc 1000 void @FILLNUMS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
+optimized/qb-arrprm define cc 1000 void @FILLPTS(ptr nocapture %0) addrspace(1) willreturn memory(write, argmem: read, inaccessiblemem: none) norecurse
+optimized/qb-arrudt define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-arrudt define cc 1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-bools define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-byref2 define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-byref2 define cc 1000 float @"HALF!"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/qb-byref2 define cc 1000 double @"DOUBLED#"(ptr nocapture readonly %0, ptr nocapture readnone %1) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/qb-chain define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-cmpof define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-cmpord define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-fpcse define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-fpdeep define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-fpemu define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-harr define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-hotlop define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-ivchan define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-lngmix define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-matrix define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-nbody define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-negnot define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-nested define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-nestud define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-nestud define cc 1000 void @INSIDE() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-nots define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-press define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-procs define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-procs define cc 1000 i32 @"TWICE&"(ptr nocapture readonly %0) addrspace(1) memory(argmem: read) willreturn norecurse
+optimized/qb-procs define cc 1000 void @REPORT(ptr %0, ptr nocapture readonly %1) addrspace(1)
+optimized/qb-rcflip define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-rcflip define cc 1000 void @RAMP() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-rotate define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-segld define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-spill define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-split define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-stride define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-subexp define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-udt define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-wendgo define internal cc 1000 void @__main() addrspace(1) memory(readwrite, argmem: none)
+optimized/qb-wendgo define cc 1000 void @TURN() addrspace(1) willreturn memory(readwrite, argmem: none, inaccessiblemem: none) nounwind norecurse

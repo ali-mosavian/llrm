@@ -2293,7 +2293,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         let text = llrm_mir::print::module(&emitted.module);
         let half = between(
             &text,
-            &format!("define cc1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"),
+            &format!("define cc 1000 ptr @\"HALF{suffix}\"(ptr dereferenceable({bytes}) %0, ptr %1)"),
             "\n}",
         );
         assert!(
@@ -2304,7 +2304,7 @@ fn test_a_floating_function_returns_through_its_hidden_destination() {
         assert!(half.lines().any(|line| line.trim() == "ret ptr %1"), "{half}");
         let call = text
             .lines()
-            .find(|line| line.contains(&format!("call cc1000 addrspace(1) ptr @\"HALF{suffix}\"(")))
+            .find(|line| line.contains(&format!("call cc 1000 addrspace(1) ptr @\"HALF{suffix}\"(")))
             .unwrap_or_else(|| panic!("{text}"));
         let returned = call.trim().split(' ').next().expect("a named result");
         assert!(text.contains(&format!("load {mir}, ptr {returned}")), "{text}");
@@ -3098,7 +3098,7 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
     };
     let loads_of_b = |text: &str| {
         let mir = optimized_mir(&parsed_as(&written(&directory, "arrays.bas", text.as_bytes()), "qb45", "qb45"));
-        let at = mir.find("define internal cc1000 void @__main").expect("the body");
+        let at = mir.find("define internal cc 1000 void @__main").expect("the body");
         let body = &mir[at..at + mir[at..].find("\n}\n").expect("its end")];
         // b's tag is the first array's: the one loaded first.
         let first = body
@@ -3117,7 +3117,7 @@ fn two_dynamic_arrays_are_apart_but_a_parameters_array_is_not() {
         "qb45",
         "qb45",
     ));
-    let at = mir.find("define cc1000 void @FILL(").expect("the SUB");
+    let at = mir.find("define cc 1000 void @FILL(").expect("the SUB");
     let sub = &mir[at..at + mir[at..].find("\n}\n").expect("its end")];
     let far = sub
         .lines()
