@@ -1629,7 +1629,7 @@ pub fn bounded_solved(
     let found = bounded_solved_under(unit, facts, prior, lazy, true)?;
     // A capped solve is a coarser one: where the solve with no cap has a fact,
     // the capped has one that holds it (`LLRM_CHECK_CAP`).
-    if found.capped.is_some() && llrm_support::env_set("LLRM_CHECK_CAP") {
+    if found.capped.is_some() && llrm_support::env_flag!("LLRM_CHECK_CAP") {
         let whole = bounded_solved_under(unit, facts, None, lazy, false)?;
         for (at, scope) in &whole.within {
             for (value, interval) in scope.iter() {
