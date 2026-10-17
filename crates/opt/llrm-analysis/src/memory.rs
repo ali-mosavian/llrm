@@ -283,14 +283,16 @@ pub struct ObjectRef {
     pub key: Key,
 }
 
-/// `Identity`, small enough to be copied beside the id.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// `Identity`, small enough to be copied beside the id. A name or a tuple (a
+/// test's, the linear region's) is `Other` with a hash of it that does not
+/// depend on the process or the order anything was interned in.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Key {
     None,
     Int(i64),
     Global(u32),
     Value(u32),
-    Other,
+    Other(u64),
 }
 
 impl Key {
@@ -300,7 +302,60 @@ impl Key {
             Some(Identity::Int(number)) => Self::Int(*number),
             Some(Identity::Global(number)) => Self::Global(*number),
             Some(Identity::Value(number)) => Self::Value(*number),
-            Some(Identity::Str(_) | Identity::Tuple(_)) => Self::Other,
+            Some(named @ (Identity::Str(_) | Identity::Tuple(_))) => {
+                let mut bytes = Vec::new();
+                named.encode(&mut bytes);
+                Self::Other(fnv1a(&bytes))
+            }
+        }
+    }
+}
+
+/// FNV-1a: fixed by its definition, so what it numbers does not change between
+/// runs, builds or the order anything was done in.
+const fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut at = 0;
+    while at < bytes.len() {
+        hash = (hash ^ bytes[at] as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        at += 1;
+    }
+    hash
+}
+
+/// The `Key::Other` of the name "linear".
+const LINEAR_NAME: u64 = fnv1a(b"S\x06\x00\x00\x00linear");
+
+impl Identity {
+    /// A canonical encoding of the identity: its kind, then its length and
+    /// bytes.
+    fn encode(
+        &self,
+        out: &mut Vec<u8>,
+    ) {
+        match self {
+            Self::Int(number) => {
+                out.push(b'I');
+                out.extend(number.to_le_bytes());
+            }
+            Self::Global(number) => {
+                out.push(b'G');
+                out.extend(number.to_le_bytes());
+            }
+            Self::Value(number) => {
+                out.push(b'V');
+                out.extend(number.to_le_bytes());
+            }
+            Self::Str(name) => {
+                out.push(b'S');
+                out.extend((name.len() as u32).to_le_bytes());
+                out.extend(name.as_bytes());
+            }
+            Self::Tuple(parts) => {
+                out.push(b'T');
+                out.extend((parts.len() as u32).to_le_bytes());
+                parts.iter().for_each(|part| part.encode(out));
+            }
         }
     }
 }
@@ -325,7 +380,7 @@ impl ObjectRef {
         captured: true,
         constant: false,
         extent: None,
-        key: Key::Other,
+        key: Key::Other(LINEAR_NAME),
     };
     pub const NONLOCAL: Self = Self {
         id: 1,
@@ -340,6 +395,12 @@ impl ObjectRef {
     /// The number this object was given: the order it was first interned in.
     pub fn id(self) -> u32 {
         self.id
+    }
+
+    /// What the object is, apart from the number it was given: the order and
+    /// the hash of an `ObjectRef` are this one's.
+    fn identity(self) -> (MemoryKind, Key, Option<i64>) {
+        (self.kind, self.key, self.extent)
     }
 
     /// Some code computes its address, so a pointer of unknown origin may hold
@@ -375,7 +436,7 @@ impl std::hash::Hash for ObjectRef {
         &self,
         state: &mut H,
     ) {
-        self.id.hash(state);
+        self.identity().hash(state);
     }
 }
 
@@ -393,7 +454,12 @@ impl Ord for ObjectRef {
         &self,
         other: &Self,
     ) -> std::cmp::Ordering {
-        self.id.cmp(&other.id)
+        // By what the object is, not by when it was first asked for: the
+        // order of a set of them, and of what is made by iterating one,
+        // must not depend on what an analysis that ran first interned.
+        // Objects of one identity but another generation (no pass makes
+        // one) tell apart by their numbers.
+        self.identity().cmp(&other.identity()).then_with(|| self.id.cmp(&other.id))
     }
 }
 
@@ -425,11 +491,42 @@ impl std::hash::Hash for Exact {
 pub struct ObjectInterner {
     held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
     lookups: std::cell::Cell<u64>,
+    /// Where `LLRM_CHECK_INTERN` numbers objects by `scrambled`: the place of
+    /// each number in `held`.
+    places: std::cell::RefCell<llrm_support::hash::HashMap<u32, u32>>,
+}
+
+/// `LLRM_CHECK_INTERN=SEED` (any other value is seed 1): the numbers objects
+/// are given are a seeded permutation of the order they were first asked for
+/// in, so that a result that depends on the order analyses ran in (and
+/// interned in) differs from the run without it. The three objects every
+/// interner starts with keep their numbers.
+fn interning_seed() -> Option<u32> {
+    static SEED: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    if !llrm_support::env_flag!("LLRM_CHECK_INTERN") {
+        return None;
+    }
+    *SEED.get_or_init(|| {
+        let value = std::env::var("LLRM_CHECK_INTERN").ok();
+        Some(value.and_then(|value| value.parse().ok()).unwrap_or(1))
+    })
+}
+
+/// The number the `place`th object is given under `seed`: a bijection of the
+/// places onto 31 bits (an odd multiplier and an xor, both mod 2^31), above
+/// the numbers the constants hold.
+fn scrambled(
+    place: u32,
+    seed: u32,
+) -> u32 {
+    const MASK: u32 = 0x7fff_ffff;
+    let odd = (seed.wrapping_mul(0x9e37_79b1) | 1) & MASK;
+    0x8000_0000 | ((place.wrapping_mul(odd) ^ seed.wrapping_mul(0x85eb_ca6b)) & MASK)
 }
 
 impl Default for ObjectInterner {
     fn default() -> Self {
-        let interner = Self { held: Default::default(), lookups: Default::default() };
+        let interner = Self { held: Default::default(), lookups: Default::default(), places: Default::default() };
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
         assert_eq!(
@@ -458,16 +555,20 @@ impl ObjectInterner {
         let mut held = self.held.borrow_mut();
         let (objects, ids) = &mut *held;
         let key = Exact(object);
-        let id = match ids.get(&key) {
-            Some(&id) => id,
+        let place = match ids.get(&key) {
+            Some(&place) => place,
             None => {
-                let id = objects.len() as u32;
+                let place = objects.len() as u32;
                 objects.push(key.0.clone());
-                ids.insert(key, id);
-                id
+                ids.insert(key, place);
+                if let Some(seed) = interning_seed().filter(|_| place >= 3) {
+                    self.places.borrow_mut().insert(scrambled(place, seed), place);
+                }
+                place
             }
         };
-        let one = &objects[id as usize];
+        let one = &objects[place as usize];
+        let id = interning_seed().filter(|_| place >= 3).map_or(place, |seed| scrambled(place, seed));
         ObjectRef { id, kind: one.kind, addressed, captured, constant, extent: one.extent, key: Key::of(&one.identity) }
     }
 
@@ -486,7 +587,7 @@ impl ObjectInterner {
             addressed: one.addressed,
             captured: one.captured,
             constant: one.constant,
-            ..self.held.borrow().0[one.id as usize].clone()
+            ..self.held.borrow().0[self.places.borrow().get(&one.id).map_or(one.id, |&place| place) as usize].clone()
         }
     }
 }
@@ -2513,6 +2614,43 @@ mod tests {
         assert_eq!(one.id(), again.id());
         let longer = super::ObjectRef::from(MemoryObject { extent: Some(4), ..global });
         assert_ne!(one, longer);
+    }
+
+    /// A solve skipped (a cache hit that is exact) is interning not done, and
+    /// every object after it got another number: a set of objects iterated in
+    /// another order, and 131 of 1,583 objects of the corpus came out
+    /// different. An object orders and hashes by what it is: the same objects,
+    /// asked for in any order, sort the same.
+    #[test]
+    fn objects_order_and_hash_alike_whatever_order_they_were_interned_in() {
+        use std::hash::{Hash, Hasher};
+        let objects = |at: u32| -> Vec<MemoryObject> {
+            vec![
+                MemoryObject { identity: Some(Identity::Global(at)), ..object(MemoryKind::Global) },
+                MemoryObject { identity: Some(Identity::Value(at)), extent: Some(8), ..object(MemoryKind::Frame) },
+                MemoryObject { identity: Some(Identity::Int(i64::from(at))), ..object(MemoryKind::Parameter) },
+                MemoryObject { identity: Some(Identity::Str(format!("n{at}"))), ..object(MemoryKind::Named) },
+            ]
+        };
+        let order = |forwards: bool| {
+            let interner = super::ObjectInterner::default();
+            let mut all: Vec<MemoryObject> = (1..=3).flat_map(objects).collect();
+            if !forwards {
+                all.reverse();
+            }
+            let refs: Vec<super::ObjectRef> = all.into_iter().map(|one| interner.intern(one)).collect();
+            let sorted: BTreeSet<super::ObjectRef> = refs.iter().copied().collect();
+            let hashes: Vec<u64> = sorted
+                .iter()
+                .map(|one| {
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    one.hash(&mut hasher);
+                    hasher.finish()
+                })
+                .collect();
+            (sorted.iter().map(|one| (one.kind, one.key, one.extent)).collect::<Vec<_>>(), hashes)
+        };
+        assert_eq!(order(true), order(false));
     }
 
     /// A process-wide interner numbered objects by everything interned before
