@@ -2308,6 +2308,10 @@ mod tests {
         let cut = carved(&body, 3, 9, 2, &region(&body, &[0x10])).expect("cut");
         assert_eq!(super::_next_value_following(&cut), super::_next_value(&cut));
         assert_eq!(super::_next_value_following(&cut), 10, "the carve made value 9");
+        // The body again, without value 9: the largest value the postings hold
+        // a key for is cut, and the next value is the body's, not the carve's.
+        assert_eq!(super::_next_value_following(&body), super::_next_value(&body));
+        assert!(super::_next_value_following(&body) < 10, "a stale largest value outlived the key that was it");
     }
 
     /// A carve copied every block of the body three times (into the new blocks,
