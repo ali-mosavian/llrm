@@ -256,6 +256,7 @@ fn _decisions(
         }
         values
     };
+    let initial = facts.clone();
     let facts = constant_cycles::propagated(
         unit,
         facts.clone(),
@@ -281,7 +282,11 @@ fn _decisions(
             continue;
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
-        let mut source = if answer.is_some() { "consts" } else { "" };
+        let mut source = if answer.is_some() {
+            if _outcome(unit, block, &initial, Some(&nonnull)).is_some() { "consts-registers" } else { "consts-cycles" }
+        } else {
+            ""
+        };
         if answer.is_none() {
             let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
