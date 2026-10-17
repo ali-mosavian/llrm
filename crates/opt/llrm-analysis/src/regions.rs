@@ -438,7 +438,7 @@ fn _unescaped(reference: &MemRef) -> bool {
             && !provenance
                 .slices
                 .iter()
-                .any(|one| (one.object.addressed && one.object.captured) || one.object.kind == MemoryKind::Absolute)
+                .any(|one| (one.object.addressed() && one.object.captured()) || one.object.kind == MemoryKind::Absolute)
     })
 }
 
@@ -1524,7 +1524,7 @@ impl<'a, T: Copy> Index<'a, T> {
                         self.by_object.entry(slice.object).or_default().push(at);
                     }
                 }
-                if seen.iter().any(|object| object.addressed) {
+                if seen.iter().any(|object| object.addressed()) {
                     self.addressed.push(at);
                 }
             }
@@ -1565,7 +1565,7 @@ impl<'a, T: Copy> Index<'a, T> {
                 lists.extend(self.by_object.get(&slice.object));
             }
         }
-        if asked.iter().any(|object| object.addressed) {
+        if asked.iter().any(|object| object.addressed()) {
             lists.push(&self.addressed);
         }
         lists.into_iter().all(|list| list.iter().all(|&at| asks(at, &mut reached)))
@@ -1588,7 +1588,7 @@ impl<'a, T: Copy> Index<'a, T> {
                 found.extend(self.by_object.get(&slice.object).into_iter().flatten());
             }
         }
-        if asked.iter().any(|object| object.addressed) {
+        if asked.iter().any(|object| object.addressed()) {
             found.extend(&self.addressed);
         }
         found.sort_unstable();
