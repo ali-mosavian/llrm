@@ -126,19 +126,92 @@ pub struct Matcher {
 /// any definitions it asked for; where each stands in `list`.
 #[derive(Clone)]
 pub struct Window<'a> {
-    insns: Vec<&'a Arc<Insn>>,
-    at: Vec<usize>,
+    insns: Few<&'a Arc<Insn>>,
+    at: Few<usize>,
     list: &'a [Arc<Insn>],
     gap: &'a [Arc<Insn>],
+}
+
+/// A few items without a heap allocation: a walk makes a window at every
+/// instruction, nearly all of which no rule matches.
+#[derive(Clone)]
+struct Few<T: Copy> {
+    inline: [Option<T>; 6],
+    len: usize,
+    more: Vec<T>,
+}
+
+impl<T: Copy> Few<T> {
+    fn new() -> Self {
+        Self { inline: [None; 6], len: 0, more: Vec::new() }
+    }
+
+    fn push(
+        &mut self,
+        item: T,
+    ) {
+        match self.inline.get_mut(self.len) {
+            Some(slot) => *slot = Some(item),
+            None => self.more.push(item),
+        }
+        self.len += 1;
+    }
+
+    fn get(
+        &self,
+        k: usize,
+    ) -> Option<T> {
+        if k >= self.len {
+            None
+        } else if k < self.inline.len() {
+            self.inline[k]
+        } else {
+            Some(self.more[k - self.inline.len()])
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn iter(&self) -> impl Iterator<Item = T> + '_ {
+        (0..self.len).map(|k| self.get(k).expect("within len"))
+    }
+}
+
+impl<T: Copy> std::iter::FromIterator<T> for Few<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(items: I) -> Self {
+        let mut few = Self::new();
+        for item in items {
+            few.push(item);
+        }
+        few
+    }
+}
+
+impl<T: Copy> std::ops::Index<usize> for Few<T> {
+    type Output = T;
+
+    fn index(
+        &self,
+        k: usize,
+    ) -> &T {
+        if k < self.inline.len() && k < self.len {
+            self.inline[k].as_ref().expect("within len")
+        } else {
+            &self.more[k - self.inline.len()]
+        }
+    }
 }
 
 impl<'a> Window<'a> {
     fn new(
         list: &'a [Arc<Insn>],
-        at: Vec<usize>,
+        at: impl IntoIterator<Item = usize>,
         gap: &'a [Arc<Insn>],
     ) -> Self {
-        Self { insns: at.iter().map(|one| &list[*one]).collect(), at, list, gap }
+        let at: Few<usize> = at.into_iter().collect();
+        Self { insns: at.iter().map(|one| &list[one]).collect(), at, list, gap }
     }
 
     /// This window and the nearest instruction before it that defines `value`.
@@ -543,7 +616,7 @@ pub fn each(
     blocks(body, facts, |cx| {
         let mut out: Option<Vec<Arc<Insn>>> = None;
         for at in 0..cx.insns.len() {
-            match run(cx, matcher, &Window::new(cx.insns, vec![at], &[])).map(|made| made.out) {
+            match run(cx, matcher, &Window::new(cx.insns, [at], &[])).map(|made| made.out) {
                 Some(mut made) => match made.pop() {
                     Some(Out::Put(made)) => out.get_or_insert_with(|| cx.insns[..at].to_vec()).push(made),
                     _ => unreachable!("an each rule puts one instruction"),
@@ -610,7 +683,7 @@ fn windows(
         if let Some(out) = &mut out {
             out.extend(insns[next..code[at]].iter().cloned());
         }
-        let taken = code[at..(at + matcher.width).min(code.len())].to_vec();
+        let taken = code[at..(at + matcher.width).min(code.len())].iter().copied();
         match run(cx, matcher, &Window::new(insns, taken, &[])) {
             Some(made) => {
                 // Until a match the output is the input, so the first one
@@ -681,7 +754,7 @@ pub fn slide(
                 at += 1;
                 continue;
             }
-            let Some(made) = run(cx, matcher, &Window::new(insns, (at..at + matcher.width).collect(), &[])) else {
+            let Some(made) = run(cx, matcher, &Window::new(insns, at..at + matcher.width, &[])) else {
                 at += 1;
                 continue;
             };
@@ -737,7 +810,8 @@ pub fn gap(
             }
             let first = if first_original { Arc::clone(&original[work[at]]) } else { Arc::clone(&insns[work[at]]) };
             let mut next = at + 1;
-            let head = Window { insns: vec![&first], at: vec![work[at]], list: insns, gap: &[] };
+            let head = Window::new(insns, [work[at]], &[]);
+            let head = Window { insns: std::iter::once(&first).collect(), ..head };
             let state = (matcher.head)(&head);
             if state != 0 {
                 for candidate in at + 1..work.len() {
@@ -749,7 +823,7 @@ pub fn gap(
                         gap: &insns[work[at] + 1..work[candidate]],
                     };
                     if let Some(made) = (matcher.tail)(cx, &window, state) {
-                        let places = window.at.clone();
+                        let places: Vec<usize> = window.at.iter().collect();
                         drop(window);
                         if resume_past {
                             next = candidate + made.len - 1;
@@ -770,4 +844,19 @@ pub fn gap(
         }
         owned
     })
+}
+
+#[cfg(test)]
+mod few_tests {
+    use super::Few;
+
+    /// A window of more instructions than fit inline lost the extra ones.
+    #[test]
+    fn test_few_keeps_items_past_its_inline_room() {
+        let few: Few<usize> = (10..19).collect();
+        assert_eq!(few.len(), 9);
+        assert_eq!((0..9).map(|k| few[k]).collect::<Vec<_>>(), (10..19).collect::<Vec<_>>());
+        assert_eq!(few.iter().collect::<Vec<_>>(), (10..19).collect::<Vec<_>>());
+        assert_eq!(few.get(9), None);
+    }
 }
