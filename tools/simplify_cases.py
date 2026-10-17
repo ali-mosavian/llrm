@@ -35,13 +35,29 @@ for k in range(N):
         r=random.random()
         if r<0.65: return '%'+random.choice(names)
         return str(random.choice(leaves(ty)))
-    op=random.choice(['icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi'])
+    op=random.choice(['cmpmix','cmpmix','cmpmix','icmp','icmp','icmp','add','sub','mul','and','or','xor','shl','lshr','ashr','udiv','sdiv','urem','srem','icmp','select','zext','trunc','sext','phi'])
     flags=''
     if op in ('add','sub','mul','shl'): flags=random.choice(['','','nuw ','nsw ','nuw nsw '])
     if op in ('udiv','sdiv','lshr','ashr'): flags=random.choice(['','','exact '])
     a,b=operand(),operand()
     rty=ty
-    if op=='icmp':
+    extra=''
+    if op=='cmpmix':
+        vals=['%'+n for n in names]+['0','0','1','-1']+[str(random.choice(leaves(ty))) for _ in range(3)]
+        sub=f'  %dsub = sub {ty} %{random.choice(names)}, %{random.choice(names)}\n'
+        adds=f'  %dadd = add {"nuw " if random.random()<0.5 else ""}{ty} %x, {random.choice([1,2,3])}\n'
+        extra=sub+adds
+        vals+=['%dsub','%dadd']
+        def cmp(k):
+            pr=random.choice(['eq','ne','ult','ule','ugt','uge','slt','sle','sgt','sge'])
+            a,b=random.choice(vals),random.choice(vals)
+            if random.random()<0.4: a,b=b,'0'
+            if not a.startswith('%') and not b.startswith('%'): a='%'+random.choice(names)
+            return f'  %k{k} = icmp {pr} {ty} {a}, {b}\n'
+        extra+=cmp(1)+cmp(2)
+        extra=extra.replace('%dsub','%dsub') 
+        t=f'{random.choice(["and","or"])} i1 %k1, %k2'; rty='i1'
+    elif op=='icmp':
         pred=random.choice(['eq','ne','ult','ule','ugt','uge','slt','sle','sgt','sge'])
         t=f'icmp {pred} {ty} {a}, {b}'; rty='i1'
     elif op=='select':
@@ -61,8 +77,9 @@ for k in range(N):
     else:
         t=f'{op} {flags}{ty} {a}, {b}'
     # second layer: sometimes wrap an extension pair/compare of ext
-    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)+mmdefs
-    sink=''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n' for n,_ in use)+mmsink
+    pre_text=''.join(f'  %{n} = {e}\n' for n,e in use)+mmdefs+extra
+    sinkx=''.join(f'  store volatile i1 %k{k}, ptr @g_i1\n' for k in (1,2)) if extra else ''
+    sink=sinkx+''.join(f'  store volatile {ty} %{n}, ptr @g_{ty}\n' for n,_ in use)+mmsink
     if op=='phi':
         body=f'  br i1 %c, label %p1, label %p2\np1:\n  br label %j\np2:\n  br label %j\nj:\n  %t = {t}\n  store volatile {rty} %t, ptr @g_{rty}\n  ret void\n'
         text=f'define void @f{k}({ty} %x, {ty} %y, i1 %c) {{\nb0:\n{pre_text}{sink}'+body+'}\n'

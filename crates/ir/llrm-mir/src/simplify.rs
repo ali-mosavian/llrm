@@ -31,8 +31,9 @@
 //!   instruction, which `simplify_instruction_in` sets). `earlycse`, the
 //!   combine worklist, `gvn` and `fold` would have to call
 //!   `simplify_instruction_in` with their `FunctionAnalyses`.
-//! - `simplifyAndOrOfCmps`, `simplifyAndOrWithICmpEq`,
-//!   `simplifySelectWithICmpCond`, `simplifySelectWithBitTest`,
+//! - `simplifyWithOpsReplaced` (behind `simplifyAndOrWithICmpEq`) does not
+//!   simplify a call, whose C++ folds the intrinsics.
+//! - `simplifySelectWithICmpCond`, `simplifySelectWithBitTest`,
 //!   `simplifyICmpWithDominatingAssume`: not yet translated; ValueTracking is
 //!   not what stops them.
 //! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
@@ -41,6 +42,7 @@
 //! `earlycse`, the combine worklist, `gvn`, `fold`.
 
 use crate::constantrange::ConstantRange;
+use crate::constantrange::PreferredRangeType;
 use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
 use crate::datalayout::DataLayout;
@@ -356,6 +358,16 @@ impl Query<'_> {
                     flags.contains(Flags::NUW).then_some((x, shifted, amount, y))
                 },
             )
+    }
+
+    /// `dyn_cast<ICmpInst>`: the predicate and the operands.
+    fn icmp(
+        &self,
+        operand: Operand,
+    ) -> Option<(IntPredicate, Operand, Operand)> {
+        let instruction = self.function.instruction(self.definition(operand)?);
+        let (Opcode::ICmp(pred), [a, b]) = (&instruction.opcode, &instruction.operands[..]) else { return None };
+        Some((*pred, *a, *b))
     }
 
     /// `dyn_cast<SelectInst>`: the condition and the two arms.
@@ -829,6 +841,415 @@ fn simplify_by_dom_eq(
         BinaryOp::And | BinaryOp::Or => Some(op1),
         _ => None,
     }
+}
+
+/// `simplifyWithOpsReplaced`
+/// ([:4429](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L4429))
+/// for one replacement, `AllowRefinement` and no `DropFlags`: what `v` equals
+/// with `rep_op` in place of `op`.
+fn simplify_with_op_replaced(
+    q: &mut Query,
+    v: Operand,
+    op: Operand,
+    rep_op: Operand,
+    mut max_recurse: u32,
+) -> Option<Operand> {
+    // We cannot replace a constant, and shouldn't even try.
+    q.constant(op).is_none().then_some(())?;
+    // Trivial replacement.
+    if v == op {
+        return Some(rep_op);
+    }
+    if max_recurse == 0 {
+        return None;
+    }
+    max_recurse -= 1;
+    let inst = q.definition(v)?;
+    // The arguments of a phi node might refer to a value from a previous cycle
+    // iteration. Don't simplify freeze.
+    if matches!(
+        q.function.instruction(inst).opcode,
+        Opcode::Phi | Opcode::Freeze
+    ) {
+        return None;
+    }
+    // Replace Op with RepOp in instruction operands.
+    let mut new_ops = Vec::new();
+    let mut any_replaced = false;
+    for inst_op in q.function.instruction(inst).operands.to_vec() {
+        if let Some(new_inst_op) = simplify_with_op_replaced(q, inst_op, op, rep_op, max_recurse) {
+            new_ops.push(new_inst_op);
+            any_replaced = inst_op != new_inst_op;
+        } else {
+            new_ops.push(inst_op);
+        }
+    }
+    if !any_replaced {
+        return None;
+    }
+    // The simplification may return the original value (when RepOp does not
+    // dominate it): prevent that.
+    simplify_instruction_with_operands(q, inst, &new_ops, max_recurse).filter(|&simplified| simplified != v)
+}
+
+/// `m_ICmpLike`: the predicate and operands of an `icmp`, or of a `trunc nuw`
+/// to `i1` as `icmp ne x, 0`.
+fn icmp_like(
+    q: &mut Query,
+    v: Operand,
+) -> Option<(IntPredicate, Operand, Operand)> {
+    let inst = q.definition(v)?;
+    let instruction = q.function.instruction(inst);
+    if let (Opcode::ICmp(pred), [a, b]) = (&instruction.opcode, &instruction.operands[..]) {
+        return Some((*pred, *a, *b));
+    }
+    if q.width(v) == Some(1)
+        && let Some((CastOp::Trunc, x, flags)) = q.cast(v)
+        && flags.contains(Flags::NUW)
+    {
+        let ty = q.ty(x);
+        let zero = q.null(ty);
+        return Some((IntPredicate::Ne, x, zero));
+    }
+    None
+}
+
+/// `simplifyAndOrWithICmpEq`
+/// ([:1945](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L1945)).
+fn simplify_and_or_with_icmp_eq(
+    q: &mut Query,
+    opcode: BinaryOp,
+    op0: Operand,
+    op1: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    let (pred, a, b) = icmp_like(q, op0)?;
+    if !is_equality(pred) {
+        return None;
+    }
+    let simplify = |q: &mut Query, res: Operand| -> Option<Operand> {
+        let ty = q.ty(res);
+        // The absorber of and is 0 and of or is -1; the identity the reverse.
+        let (absorber, identity) =
+            if opcode == BinaryOp::And { (q.null(ty), q.all_ones(ty)) } else { (q.all_ones(ty), q.null(ty)) };
+        // and (icmp eq a, b), x implies (a==b) inside x; or (icmp ne a, b), x
+        // likewise. If x simplifies to true/false, we can simplify the and/or.
+        if pred == if opcode == BinaryOp::And { IntPredicate::Eq } else { IntPredicate::Ne } {
+            if res == absorber {
+                return Some(absorber);
+            }
+            if res == identity {
+                return Some(op0);
+            }
+            return None;
+        }
+        // If we have and (icmp ne a, b), x and for a==b we can simplify x to
+        // false, then we can drop the icmp, as x will already be false in the
+        // case where the icmp is false. Similar for or and true.
+        if res == absorber {
+            return Some(op1);
+        }
+        None
+    };
+    if let Some(res) = simplify_with_op_replaced(q, op1, a, b, max_recurse) {
+        return simplify(q, res);
+    }
+    if let Some(res) = simplify_with_op_replaced(q, op1, b, a, max_recurse) {
+        return simplify(q, res);
+    }
+    None
+}
+
+/// `m_c_ICmp(Pred, m_Specific(a), m_Specific(b))`: the predicate of the compare
+/// of `a` and `b`, in that order.
+fn icmp_of_pair(
+    q: &mut Query,
+    v: Operand,
+    a: Operand,
+    b: Operand,
+) -> Option<IntPredicate> {
+    let (pred, l, r) = q.icmp(v)?;
+    if (l, r) == (a, b) {
+        Some(pred)
+    } else if (l, r) == (b, a) {
+        Some(swapped(pred))
+    } else {
+        None
+    }
+}
+
+/// `simplifyUnsignedRangeCheck`
+/// ([:1512](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L1512)).
+/// Commuted variants are assumed to be handled by calling this function again
+/// with the parameters swapped.
+fn simplify_unsigned_range_check(
+    q: &mut Query,
+    zero_icmp: Operand,
+    unsigned_icmp: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    let (eq_pred, y, zero) = q.icmp(zero_icmp)?;
+    if !q.is_zero(zero) || !is_equality(eq_pred) {
+        return None;
+    }
+    let mut unsigned_pred;
+    // Y = (A - B);
+    if let Some((a, b, _)) = q.binary_of(y, BinaryOp::Sub) {
+        if let Some(pred) = icmp_of_pair(q, unsigned_icmp, a, b)
+            && is_unsigned(pred)
+        {
+            unsigned_pred = pred;
+            // A >=/<= B || (A - B) != 0  <-->  true
+            if matches!(unsigned_pred, IntPredicate::Uge | IntPredicate::Ule) && eq_pred == IntPredicate::Ne && !is_and
+            {
+                return Some(q.int(i1, 1));
+            }
+            // A </> B && (A - B) == 0  <-->  false
+            if matches!(unsigned_pred, IntPredicate::Ult | IntPredicate::Ugt) && eq_pred == IntPredicate::Eq && is_and {
+                return Some(q.null(i1));
+            }
+            // A </> B && (A - B) != 0  <-->  A </> B
+            // A </> B || (A - B) != 0  <-->  (A - B) != 0
+            if eq_pred == IntPredicate::Ne && matches!(unsigned_pred, IntPredicate::Ult | IntPredicate::Ugt) {
+                return Some(if is_and { unsigned_icmp } else { zero_icmp });
+            }
+            // A <=/>= B && (A - B) == 0  <-->  (A - B) == 0
+            // A <=/>= B || (A - B) == 0  <-->  A <=/>= B
+            if eq_pred == IntPredicate::Eq && matches!(unsigned_pred, IntPredicate::Ule | IntPredicate::Uge) {
+                return Some(if is_and { zero_icmp } else { unsigned_icmp });
+            }
+        }
+        // Given Y = (A - B)
+        //   Y >= A && Y != 0  --> Y >= A  iff B != 0
+        //   Y <  A || Y == 0  --> Y <  A  iff B != 0
+        if let Some(pred) = icmp_of_pair(q, unsigned_icmp, y, a) {
+            if pred == IntPredicate::Uge && is_and && eq_pred == IntPredicate::Ne && q.is_known_non_zero(b) {
+                return Some(unsigned_icmp);
+            }
+            if pred == IntPredicate::Ult && !is_and && eq_pred == IntPredicate::Eq && q.is_known_non_zero(b) {
+                return Some(unsigned_icmp);
+            }
+        }
+    }
+    let x;
+    match q.icmp(unsigned_icmp) {
+        Some((pred, l, r)) if r == y && is_unsigned(pred) => {
+            x = l;
+            unsigned_pred = pred;
+        }
+        Some((pred, l, r)) if l == y && is_unsigned(swapped(pred)) => {
+            x = r;
+            unsigned_pred = swapped(pred);
+        }
+        _ => return None,
+    }
+    // X > Y && Y == 0  -->  Y == 0  iff X != 0
+    // X > Y || Y == 0  -->  X > Y   iff X != 0
+    if unsigned_pred == IntPredicate::Ugt && eq_pred == IntPredicate::Eq && q.is_known_non_zero(x) {
+        return Some(if is_and { zero_icmp } else { unsigned_icmp });
+    }
+    // X <= Y && Y != 0  -->  X <= Y  iff X != 0
+    // X <= Y || Y != 0  -->  Y != 0  iff X != 0
+    if unsigned_pred == IntPredicate::Ule && eq_pred == IntPredicate::Ne && q.is_known_non_zero(x) {
+        return Some(if is_and { unsigned_icmp } else { zero_icmp });
+    }
+    // X < Y && Y != 0  -->  X < Y
+    // X < Y || Y != 0  -->  Y != 0
+    if unsigned_pred == IntPredicate::Ult && eq_pred == IntPredicate::Ne {
+        return Some(if is_and { unsigned_icmp } else { zero_icmp });
+    }
+    // X >= Y && Y == 0  -->  Y == 0
+    // X >= Y || Y == 0  -->  X >= Y
+    if unsigned_pred == IntPredicate::Uge && eq_pred == IntPredicate::Eq {
+        return Some(if is_and { zero_icmp } else { unsigned_icmp });
+    }
+    // X < Y && Y == 0  -->  false
+    if unsigned_pred == IntPredicate::Ult && eq_pred == IntPredicate::Eq && is_and {
+        return Some(q.null(i1));
+    }
+    // X >= Y || Y != 0  -->  true
+    if unsigned_pred == IntPredicate::Uge && eq_pred == IntPredicate::Ne && !is_and {
+        return Some(q.int(i1, 1));
+    }
+    None
+}
+
+/// `simplifyAndOrOfICmpsWithConstants`
+/// ([:1621](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L1621)):
+/// a pair of compares with a shared operand and 2 constants has an empty set
+/// intersection, full set union, or one compare is a superset of the other.
+fn simplify_and_or_of_icmps_with_constants(
+    q: &mut Query,
+    cmp0: Operand,
+    cmp1: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    let (pred0, x0, c0) = q.icmp(cmp0)?;
+    let (pred1, x1, c1) = q.icmp(cmp1)?;
+    // Look for this pattern: {and/or} (icmp X, C0), (icmp X, C1)).
+    if x0 != x1 {
+        return None;
+    }
+    let ((c0, width), (c1, _)) = (q.number(c0)?, q.number(c1)?);
+    let range0 = ConstantRange::make_exact_icmp_region(pred0, width, c0);
+    let range1 = ConstantRange::make_exact_icmp_region(pred1, width, c1);
+    // For and-of-compares, check if the intersection is empty.
+    if is_and && range0.intersect_with(&range1, PreferredRangeType::Smallest).is_empty_set() {
+        return Some(q.null(i1));
+    }
+    // For or-of-compares, check if the union is full.
+    if !is_and && range0.union_with(&range1, PreferredRangeType::Smallest).is_full_set() {
+        return Some(q.int(i1, 1));
+    }
+    // Is one range a superset of the other? If this is and-of-compares, take
+    // the smaller set; or-of-compares, the larger.
+    if range0.contains_range(&range1) {
+        return Some(if is_and { cmp1 } else { cmp0 });
+    }
+    if range1.contains_range(&range0) {
+        return Some(if is_and { cmp0 } else { cmp1 });
+    }
+    None
+}
+
+/// `simplifyAndOfICmpsWithAdd` (:1658) and `simplifyOrOfICmpsWithAdd`
+/// (:1757), which differ only in the predicates and the answer.
+fn simplify_and_or_of_icmps_with_add(
+    q: &mut Query,
+    op0: Operand,
+    op1: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
+    // (icmp (add V, C0), C1) & (icmp V, C0)
+    let (pred0, add, c1) = q.icmp(op0)?;
+    let (v, c0, add_flags) = q.binary_of(add, BinaryOp::Add)?;
+    let ((c0_bits, width), (c1_bits, _)) = (q.number(c0)?, q.number(c1)?);
+    let (pred1, v1, rhs1) = q.icmp(op1)?;
+    if v1 != v || c0 != rhs1 {
+        return None;
+    }
+    let (is_nsw, is_nuw) = (add_flags.contains(Flags::NSW), add_flags.contains(Flags::NUW));
+    let delta = c1_bits.wrapping_sub(c0_bits) & mask(width);
+    // The answer is false for and, true for or.
+    use IntPredicate::*;
+    let (p2_unsigned, p2_signed, p1_unsigned, p1_signed, signed_b, unsigned_b) =
+        if is_and { (Ult, Slt, Ule, Sle, Sgt, Ugt) } else { (Uge, Sge, Ugt, Sgt, Sle, Ule) };
+    let answer = |q: &mut Query| Some(q.int(i1, u128::from(!is_and)));
+    if signed(c0_bits, width) > 0 {
+        if delta == 2 {
+            if pred0 == p2_unsigned && pred1 == signed_b {
+                return answer(q);
+            }
+            if pred0 == p2_signed && pred1 == signed_b && is_nsw {
+                return answer(q);
+            }
+        }
+        if delta == 1 {
+            if pred0 == p1_unsigned && pred1 == signed_b {
+                return answer(q);
+            }
+            if pred0 == p1_signed && pred1 == signed_b && is_nsw {
+                return answer(q);
+            }
+        }
+    }
+    if c0_bits != 0 && is_nuw {
+        if delta == 2 && pred0 == p2_unsigned && pred1 == unsigned_b {
+            return answer(q);
+        }
+        if delta == 1 && pred0 == p1_unsigned && pred1 == unsigned_b {
+            return answer(q);
+        }
+    }
+    None
+}
+
+/// `simplifyAndOrOfICmpsWithCtpop`
+/// ([:1706](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L1706)).
+fn simplify_and_or_of_icmps_with_ctpop(
+    q: &mut Query,
+    cmp0: Operand,
+    cmp1: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    let (pred0, ctpop, c) = q.icmp(cmp0)?;
+    let tracking = q.tracking();
+    let (_, args) = pattern::intrinsic_call(&tracking, ctpop, "llvm.ctpop")?;
+    let [x] = *args else { return None };
+    let (pred1, x1, zero) = q.icmp(cmp1)?;
+    if x1 != x || !q.is_zero(zero) || q.number(c).is_none_or(|(bits, _)| bits == 0) {
+        return None;
+    }
+    // (ctpop(X) == C) || (X != 0) --> X != 0 where C > 0
+    if !is_and && pred0 == IntPredicate::Eq && pred1 == IntPredicate::Ne {
+        return Some(cmp1);
+    }
+    // (ctpop(X) != C) && (X == 0) --> X == 0 where C > 0
+    if is_and && pred0 == IntPredicate::Ne && pred1 == IntPredicate::Eq {
+        return Some(cmp1);
+    }
+    None
+}
+
+/// `simplifyAndOfICmps` (:1725) and `simplifyOrOfICmps` (:1799).
+fn simplify_and_or_of_icmps(
+    q: &mut Query,
+    op0: Operand,
+    op1: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    if let Some(x) = simplify_unsigned_range_check(q, op0, op1, is_and) {
+        return Some(x);
+    }
+    if let Some(x) = simplify_unsigned_range_check(q, op1, op0, is_and) {
+        return Some(x);
+    }
+    if let Some(x) = simplify_and_or_of_icmps_with_constants(q, op0, op1, is_and) {
+        return Some(x);
+    }
+    if let Some(x) = simplify_and_or_of_icmps_with_ctpop(q, op0, op1, is_and) {
+        return Some(x);
+    }
+    if let Some(x) = simplify_and_or_of_icmps_with_ctpop(q, op1, op0, is_and) {
+        return Some(x);
+    }
+    if let Some(x) = simplify_and_or_of_icmps_with_add(q, op0, op1, is_and) {
+        return Some(x);
+    }
+    simplify_and_or_of_icmps_with_add(q, op1, op0, is_and)
+}
+
+/// `simplifyAndOrOfCmps`
+/// ([:1902](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L1902)).
+fn simplify_and_or_of_cmps(
+    q: &mut Query,
+    mut op0: Operand,
+    mut op1: Operand,
+    is_and: bool,
+) -> Option<Operand> {
+    // Look through casts of the 'and' operands to find compares.
+    let cast0 = q.cast(op0);
+    let cast_ty = cast0.map(|_| q.ty(op0));
+    if let (Some((opc0, src0, _)), Some((opc1, src1, _))) = (cast0, q.cast(op1))
+        && opc0 == opc1
+        && q.ty(src0) == q.ty(src1)
+    {
+        op0 = src0;
+        op1 = src1;
+    }
+    let v = if q.icmp(op0).is_some() && q.icmp(op1).is_some() {
+        simplify_and_or_of_icmps(q, op0, op1, is_and)
+    } else {
+        None
+    }?;
+    let Some((cast_op, _, _)) = cast0 else { return Some(v) };
+    // If we looked through casts, we can only handle a constant simplification
+    // because we are not allowed to create a cast instruction here.
+    let c = q.constant(v)?;
+    constfold::cast(q.context, cast_op, c, cast_ty?).map(Operand::Constant)
 }
 
 /// `simplifyAssociativeBinOp`
@@ -1640,6 +2061,7 @@ fn simplify_and_commutative(
     q: &mut Query,
     op0: Operand,
     op1: Operand,
+    max_recurse: u32,
 ) -> Option<Operand> {
     // ~A & A == 0
     if q.not_of(op0) == Some(op1) {
@@ -1693,7 +2115,7 @@ fn simplify_and_commutative(
         let ty = q.ty(op0);
         return Some(q.null(ty));
     }
-    None
+    simplify_and_or_with_icmp_eq(q, BinaryOp::And, op0, op1, max_recurse)
 }
 
 /// `simplifyAndInst`
@@ -1724,10 +2146,10 @@ fn simplify_and(
     if q.is_all_ones(op1) {
         return Some(op0);
     }
-    if let Some(v) = simplify_and_commutative(q, op0, op1) {
+    if let Some(v) = simplify_and_commutative(q, op0, op1, max_recurse) {
         return Some(v);
     }
-    if let Some(v) = simplify_and_commutative(q, op1, op0) {
+    if let Some(v) = simplify_and_commutative(q, op1, op0, max_recurse) {
         return Some(v);
     }
     if let Some(v) = simplify_logic_of_add_sub(q, op0, op1, BinaryOp::And) {
@@ -1763,6 +2185,9 @@ fn simplify_and(
             let ty = q.ty(op1);
             return Some(q.null(ty));
         }
+    }
+    if let Some(v) = simplify_and_or_of_cmps(q, op0, op1, true) {
+        return Some(v);
     }
     // (zext X) & (sext X) = zext X; the other order likewise.
     if let (Some((CastOp::ZExt, x, _)), Some((CastOp::SExt, y, _))) = (q.cast(op0), q.cast(op1))
@@ -1936,6 +2361,15 @@ fn simplify_or(
         && x == y
     {
         return Some(op0);
+    }
+    if let Some(v) = simplify_and_or_with_icmp_eq(q, BinaryOp::Or, op0, op1, max_recurse) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_and_or_with_icmp_eq(q, BinaryOp::Or, op1, op0, max_recurse) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_and_or_of_cmps(q, op0, op1, false) {
+        return Some(v);
     }
     // Try some generic simplifications for associative operations.
     if let Some(v) = simplify_associative(q, BinaryOp::Or, op0, op1, max_recurse) {
@@ -3335,27 +3769,40 @@ fn simplify_instruction_with(
     mut q: Query,
     inst: InstId,
 ) -> Option<Operand> {
-    let function = q.function;
     q.cxt = Some(inst);
+    let operands = q.function.instruction(inst).operands.to_vec();
+    simplify_instruction_with_operands(&mut q, inst, &operands, RECURSION_LIMIT)
+}
+
+/// `simplifyInstructionWithOperands`
+/// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741)):
+/// what `inst` equals with `operands` in place of its own. DEVIATE: calls and
+/// the other opcodes are not simplified (the C++ constant-folds them).
+fn simplify_instruction_with_operands(
+    q: &mut Query,
+    inst: InstId,
+    operands: &[Operand],
+    max_recurse: u32,
+) -> Option<Operand> {
+    let function = q.function;
     let instruction = function.instruction(inst);
-    let operands = instruction.operands.to_vec();
     let flags = instruction.flags;
     match &instruction.opcode {
         Opcode::Binary(op) => {
             let [lhs, rhs] = operands[..] else { return None };
-            simplify_binop_flags(&mut q, *op, lhs, rhs, flags, RECURSION_LIMIT)
+            simplify_binop_flags(q, *op, lhs, rhs, flags, max_recurse)
         }
         Opcode::ICmp(pred) => {
             let [lhs, rhs] = operands[..] else { return None };
-            simplify_icmp(&mut q, *pred, lhs, rhs, RECURSION_LIMIT)
+            simplify_icmp(q, *pred, lhs, rhs, max_recurse)
         }
         Opcode::Select => {
             let [cond, a, b] = operands[..] else { return None };
-            simplify_select(&mut q, cond, a, b)
+            simplify_select(q, cond, a, b)
         }
-        Opcode::Cast(op) => simplify_cast(&mut q, *op, operands[0], instruction.ty, RECURSION_LIMIT),
-        Opcode::Phi => simplify_phi(&mut q, inst),
-        Opcode::GetElementPtr { .. } => simplify_gep(&mut q, operands[0], &operands[1..]),
+        Opcode::Cast(op) => simplify_cast(q, *op, operands[0], instruction.ty, max_recurse),
+        Opcode::Phi => simplify_phi(q, inst),
+        Opcode::GetElementPtr { .. } => simplify_gep(q, operands[0], &operands[1..]),
         _ => None,
     }
 }

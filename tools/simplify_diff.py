@@ -27,14 +27,24 @@ cases = {}
 for body in re.split(r'(?m)^(?=define )', open(src).read())[1:]:
     cases[re.match(r'define void @(\w+)', body).group(1)] = body
 theirs = {}
+skipped = set()
 for body in re.split(r'(?m)^(?=define )', llvm)[1:]:
     name = re.match(r'define void @(\w+)', body).group(1)
     stores = [l for l in body.splitlines() if 'store volatile' in l and ('@g_i' in l)]
     m = re.search(r'store volatile (i\d+) (\S+), ptr @g_i\d+', stores[-1])
     ty, val = m.group(1), m.group(2).rstrip(',')
+    # opt simplifies to a fixed point: a case whose other instructions it
+    # changed first measures the pass, not the one query, and is skipped.
+    kept = set(re.findall(r'(?m)^\s+(%\w+) = ', body))
+    wanted = set(re.findall(r'(?m)^\s+(%\w+) = ', cases[name]))
+    skipped_names = wanted - kept - {'%t'}
+    if skipped_names:
+        skipped.add(name)
     theirs[name] = None if val == '%t' else norm(val, ty)
 wrong = gap = same = 0
 for name, body in cases.items():
+    if name in skipped:
+        continue
     mine = ours[name].strip()
     mine = None if mine == 'none' else mine.split(' ', 1)[1]
     ty = re.search(r'store volatile (i\d+) %t', body).group(1)
@@ -45,5 +55,6 @@ for name, body in cases.items():
     gap += kind == 'GAP'; wrong += kind == 'WRONG'
     print(kind, f'ours={mine} llvm={t}', [l.strip() for l in body.splitlines() if re.match(r'\s+%t = ', l) or (l.startswith('  %') and '%t' not in l and 'store' not in l)], sep=' | ')
 print(f'llvm_simplified={sum(v is not None for v in theirs.values())} ', end='')
+print(f'skipped={len(skipped)} ', end='')
 print(f'cases={len(cases)} same={same} gap={gap} wrong={wrong}')
 sys.exit(1 if wrong else 0)

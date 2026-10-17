@@ -477,6 +477,97 @@ fn threading_and_dominating_conditions() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// `simplifyAndOrOfCmps` and `simplifyAndOrWithICmpEq`: the and/or of two
+/// compares (an unsigned range check on a difference, constant ranges, ctpop,
+/// the add forms, one that is equal inside the other), answered as LLVM does.
+#[test]
+fn and_or_of_compares() {
+    let decls = "declare i16 @llvm.ctpop.i16(i16)\n";
+    let cases: &[(&str, Option<&str>)] = &[
+        (
+            "  %d = sub i16 %x, %y\n  %a = icmp eq i16 %d, 0\n  %b = icmp ult i16 %x, %y\n  %r = and i1 %a, %b\n",
+            Some("0"),
+        ),
+        (
+            "  %d = sub i16 %x, %y\n  %a = icmp ne i16 %d, 0\n  %b = icmp uge i16 %x, %y\n  %r = or i1 %a, %b\n",
+            Some("1"),
+        ),
+        (
+            "  %d = sub i16 %x, %y\n  %a = icmp ne i16 %d, 0\n  %b = icmp ugt i16 %x, %y\n  %r = and i1 %a, %b\n",
+            Some("%b"),
+        ),
+        (
+            "  %d = sub i16 %x, %y\n  %a = icmp eq i16 %d, 0\n  %b = icmp ule i16 %x, %y\n  %r = or i1 %a, %b\n",
+            Some("%b"),
+        ),
+        ("  %a = icmp eq i16 %y, 0\n  %b = icmp ult i16 %x, %y\n  %r = and i1 %a, %b\n", Some("0")),
+        ("  %a = icmp ne i16 %y, 0\n  %b = icmp uge i16 %x, %y\n  %r = or i1 %a, %b\n", Some("1")),
+        ("  %a = icmp ne i16 %y, 0\n  %b = icmp ult i16 %x, %y\n  %r = and i1 %a, %b\n", Some("%b")),
+        ("  %a = icmp eq i16 %y, 0\n  %b = icmp uge i16 %x, %y\n  %r = or i1 %a, %b\n", Some("%b")),
+        (
+            "  %n = or i16 %x, 1\n  %a = icmp eq i16 %y, 0\n  %b = icmp ugt i16 %n, %y\n  %r = and i1 %a, %b\n",
+            Some("%a"),
+        ),
+        ("  %a = icmp ult i16 %x, 5\n  %b = icmp ugt i16 %x, 9\n  %r = and i1 %a, %b\n", Some("0")),
+        ("  %a = icmp ult i16 %x, 5\n  %b = icmp uge i16 %x, 3\n  %r = or i1 %a, %b\n", Some("1")),
+        ("  %a = icmp sgt i16 %x, 4\n  %b = icmp sgt i16 %x, 42\n  %r = and i1 %a, %b\n", Some("%b")),
+        ("  %a = icmp sgt i16 %x, 4\n  %b = icmp sgt i16 %x, 42\n  %r = or i1 %a, %b\n", Some("%a")),
+        ("  %a = icmp ult i16 %x, 5\n  %b = icmp ult i16 %y, 9\n  %r = and i1 %a, %b\n", None),
+        (
+            "  %c1 = call i16 @llvm.ctpop.i16(i16 %x)\n  %a = icmp eq i16 %c1, 3\n  %b = icmp ne i16 %x, 0\n  %r = or i1 %a, %b\n",
+            Some("%b"),
+        ),
+        (
+            "  %c1 = call i16 @llvm.ctpop.i16(i16 %x)\n  %a = icmp ne i16 %c1, 3\n  %b = icmp eq i16 %x, 0\n  %r = and i1 %a, %b\n",
+            Some("%b"),
+        ),
+        (
+            "  %v = add i16 %x, 1\n  %a = icmp ult i16 %v, 3\n  %b = icmp sgt i16 %x, 1\n  %r = and i1 %a, %b\n",
+            Some("0"),
+        ),
+        (
+            "  %v = add nsw i16 %x, 1\n  %a = icmp slt i16 %v, 3\n  %b = icmp sgt i16 %x, 1\n  %r = and i1 %a, %b\n",
+            Some("0"),
+        ),
+        (
+            "  %v = add nuw i16 %x, 1\n  %a = icmp ult i16 %v, 3\n  %b = icmp ugt i16 %x, 1\n  %r = and i1 %a, %b\n",
+            Some("0"),
+        ),
+        ("  %v = add nuw i16 %x, 1\n  %a = icmp ugt i16 %v, 3\n  %b = icmp ule i16 %x, 1\n  %r = or i1 %a, %b\n", None),
+        (
+            "  %e = icmp eq i16 %x, 5\n  %s = add i16 %x, 1\n  %b = icmp eq i16 %s, 6\n  %r = and i1 %e, %b\n",
+            Some("%e"),
+        ),
+        ("  %e = icmp eq i16 %x, 5\n  %s = add i16 %x, 1\n  %b = icmp eq i16 %s, 7\n  %r = and i1 %e, %b\n", Some("0")),
+        ("  %e = icmp ne i16 %x, 5\n  %s = add i16 %x, 1\n  %b = icmp eq i16 %s, 7\n  %r = or i1 %e, %b\n", Some("%e")),
+        (
+            "  %e = icmp ne i16 %x, 5\n  %s = add i16 %x, 1\n  %b = icmp ne i16 %s, 6\n  %r = and i1 %e, %b\n",
+            Some("%b"),
+        ),
+        (
+            "  %e = icmp eq i16 %x, %y\n  %s = sub i16 %x, %y\n  %b = icmp eq i16 %s, 0\n  %r = and i1 %e, %b\n",
+            Some("%e"),
+        ),
+        (
+            "  %e = icmp eq i16 %x, %y\n  %s = sub i16 %x, %y\n  %b = icmp ne i16 %s, 0\n  %r = and i1 %e, %b\n",
+            Some("0"),
+        ),
+        (
+            "  %a = icmp ult i16 %x, 5\n  %b = icmp ugt i16 %x, 9\n  %za = zext i1 %a to i16\n  %zb = zext i1 %b to i16\n  %r = and i16 %za, %zb\n",
+            Some("0"),
+        ),
+        (
+            "  %a = icmp ult i16 %x, 5\n  %b = icmp ugt i16 %x, 9\n  %za = sext i1 %a to i16\n  %zb = sext i1 %b to i16\n  %r = and i16 %za, %zb\n",
+            Some("0"),
+        ),
+    ];
+    let wrong: Vec<_> = cases
+        .iter()
+        .filter(|(body, expected)| simplified(&format!("{decls}{}", of(body)), "r").as_deref() != *expected)
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
