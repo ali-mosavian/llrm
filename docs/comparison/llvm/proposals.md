@@ -1,6 +1,6 @@
 # LLVM compared: proposed changes, in order of importance
 
-TL;DR: nine changes, ranked by what the measurements say is at stake on `d_faces` -O2 (2,874 M instructions) and by how fast the cost grows with the body (the ladder exponent). Four are built or under way; the rest have an exact site and a bound but no measured saving. A bound is the cost of the thing the change removes or reshapes, not a promised saving.
+TL;DR: ten changes, ranked by what the measurements say is at stake on `d_faces` -O2 (2,874 M instructions) and by how fast the cost grows with the body (the ladder exponent). Four are built or under way; the rest have an exact site and a bound but no measured saving. A bound is the cost of the thing the change removes or reshapes, not a promised saving.
 
 Order: first by the share of `d_faces` the thing costs, then by slope where `d_faces` hides it (its loops are small, so a quadratic pass can cost nothing there and 40% of a larger file). "unmeasured" means no number exists yet. llrm line links are at main `21f5c9fc8`, the code the measurements ran on; LLVM links are at `d1106deb71cc81016406a1917d0508d2df296266`.
 
@@ -44,13 +44,14 @@ flowchart LR
 |---:|---|---|---|---|
 | 1 | allocation and copying | 518 M (18.0%, a bound: it includes 22.7 M of `memcmp`); 3,765,923 allocations against 62,881; 24% of D1 misses, the largest group | memory 4 to 12 KB per IR instruction (system allocator) | unassigned; none built |
 | 2 | lazy, per-version memory facts | analyses 651 M of 2,830 M (23%) in [LLVM measured](measured.md), overlapping #1 (memory SSA and alias facts are 19% of the allocations); self cost of `alias::escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames` 210 M (7.3%) | through-memory 3.7x per doubling | keep-analyses, design; walker tables greedy-port |
-| 3 | idle pass runs | 361 M (12.8%) in 637 runs | none | unassigned; none built |
+| 3 | idle pass runs | 361 M (12.8%) in 637 runs; the idle-skip experiment skipped 6% of runs and made the compile 0.6% slower | none | measured, not kept (`notkept/idle-skip`); the remaining lever is asking analyses after the work check |
 | 4 | mask test made at each branch | none on `d_faces` stated; `diamond 800`: 1,995 M to 1,075 M reported | removes 79 splits | ssa-spill-m16, [#2010](https://github.com/ali-mosavian/llrm/pull/2010), open |
 | 5 | quadratic `dse` | unmeasured on `d_faces`; 1,829 M of 5,577 M at `mem` N=1600 | 4.0x per doubling | edit-rollback, PR coming |
 | 6 | linear `gvn` | `d_faces` unchanged (reported); `loop` N=1600 -14% | 2.9x per doubling on `mem`; `loop` 1.41 to 1.34 | greedy-port, [#1999](https://github.com/ali-mosavian/llrm/pull/1999), open |
 | 7 | linear `lsr` | about 1 M (reported); `loop` N=1600 `lsr` 8,619 M to 962 M | `lsr` N^1.4 | greedy-port, [#2008](https://github.com/ali-mosavian/llrm/pull/2008), open |
 | 8 | bookkeeping | 46 M printed-body history, 49 M `Stamp`, 22 M verifiers, 11 M `env_set`: about 4% | none | [#1931](https://github.com/ali-mosavian/llrm/pull/1931) merged; [#2007](https://github.com/ali-mosavian/llrm/pull/2007) open; `Stamp` and verifiers unassigned |
 | 9 | split step reads and copies the whole body | 369 M on `diamond 800` before #2010 (`split placed` 221, `split carving` 148); `d_faces`: unmeasured | none stated | ssa-spill-m16 (structural sharing of LIR rewrites), design |
+| 10 | LIR clean-up: about 40 whole-body peephole sub-passes, x87 liveness solved again | `lir peephole` 129.7 M and x87 passes 70.9 M against about 30 M and 1.4 M in LLVM; 25.7 M of the x87 is `live_rows_by` | linear (exponent 0.9 to 1.0) | ssa-spill-m16, roadmap step 6 (liveness owner, dirty blocks); sent with the page |
 
 ## 1. Allocation and copying
 
@@ -83,6 +84,10 @@ What: the printed-body history (46 M, 1.6%) is a digest since [#1931](https://gi
 ## 9. The split step
 
 What: [`Blocks::of`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L596) once per split round, and [`body.blocks.clone()`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L670) replaced by sharing untouched blocks. LLVM edits in place: [`trySplit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975). Re-measure after #2010: on `diamond 800` the splits go away and the bound shrinks to what other shapes still split. Page: [register allocation](regalloc.md#proposed-change).
+
+## 10. LIR clean-up
+
+What: the peephole's about 40 whole-body sub-passes re-derive lane and flag liveness; the two x87 passes solve whole-function live rows again (25.7 M of 70.9 M). LLVM does the rewrites inside four DAG combine runs at selection (20.1 M) and its stackifier reads live-in masks left by the allocator. Cause and measurements: [LIR clean-up](lir-cleanup.md). Where: [`peephole.rs#L314`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/peephole.rs#L314), [`floatassign.rs#L1869`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/floatassign.rs#L1869); LLVM [`X86FloatingPoint.cpp#L81`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L81). Owner: ssa-spill-m16, roadmap step 6.
 
 ## Not proposed
 
