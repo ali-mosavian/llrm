@@ -14,8 +14,8 @@ Per loop (a loop pass, 41 invocations here: 27 in `d_draw_faces`, 11 in `sc_mipf
 
 | row | M | LLVM | here | probe / kill |
 |---|--:|---|---|---|
-| `Standing::of` in `widened_with`: `consts::known` of the whole body derived afresh after each widening | 21.8 (12 widenings, 12 derivations of a 1,350-instruction body, 1.8 M each) | `WidenIV` edits the IV's uses; `SE.forgetValue` on what changed; the rest stands | `standing.changed()` drops all facts; the restart derives them for the next loop | probe: for each widening, is the next candidate loop's `_find` input (header phi, bound, start, compare) outside the users-closure of what the widening rewrote? Kill: under 70% independent |
-| `exitfold::folded_with` | 20.8 (`induction::exits` 13.9 over 111 calls, 125 K each; `guards` 4.9) | `getExitCount` cached per loop | the exit counts found again at every run, whether or not the body changed | probe: calls of `exits` per (loop, body version); kill if the repeat ratio is under 2 |
+| `Standing::of` in `widened_with`: `consts::known` of the whole body derived afresh after each widening | 21.8 (12 widenings, 12 derivations of a 1,350-instruction body, 1.8 M each) | `WidenIV` edits the IV's uses; `SE.forgetValue` on what changed; the rest stands | `standing.changed()` drops all facts; the restart derives them for the next loop | done (#2100): the facts that stand are kept for every value the widening did not reach, the rest settled again with the manager's rule (`known_from` with a dirty set); `Standing::of` 21.8 to 5.0 M, `indvars` 65.5 to 48.7 M, d_faces -O2 -0.80% |
+| `exitfold::folded_with` | 20.8 (`induction::exits` 13.9 over 111 calls, 125 K each; `guards` 4.9) | `getExitCount` cached per loop | the exit counts found again at every run, whether or not the body changed | probe, measured: 111 calls (92 `exitfold`, 19 `indvars`) over 21 distinct (body version, loop): repeat ratio 5.3, so about 90 of the 111 are asked of a body and loop already answered (11 M, 0.45%); passes. Next: the exit counts kept by (mark, loop) in the manager |
 | `Bounded` first ask | 5.6 | `SE` | the manager's analyses, built at the first ask of the step | the same analyses are asked by the next steps: not a row of this pass |
 | `exitsink::sunk` | 4.3 (46 calls, 93 K each) | `sinkUnusedInvariants` | scans every exit of the function each run | probe: runs that sink nothing; kill if under 80% sink nothing: then a structural precheck |
 | `loopexit::evaluated`, `exit_values`, `congruent`, `rewound` | under 1 M together | `rewriteLoopExitValues`, `replaceCongruentIVs` | | none |
@@ -33,6 +33,6 @@ Not like for like: LLVM's loop dump is the loop alone and the pass sees a loop; 
 
 ## 4. Order
 
-1. Row 1 by independence (exact: the facts of values the widening did not reach are kept), or by patching the derived facts for the rewritten values; oracle: the derivation checked against a fresh one under `LLRM_CHECK_`. Early probe above.
-2. Row 2 by keeping the exit counts per (loop, body version) in the manager's `Counted`: the analysis exists; `exitfold` and `loopexit` ask `induction::exits` directly.
+1. Row 1: done, #2100.
+2. Row 2 by keeping the exit counts per (loop, body version) in the manager's `Counted`: the analysis exists; `exitfold` and `indvars` ask `induction::exits` directly.
 3. Then the LLVM-shaped proof of concept on a dumped input (edit-contract-replay's set): row 1 and 2 as LLVM has them, edits missed classified.
