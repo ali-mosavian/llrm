@@ -154,6 +154,37 @@ It sits late in the round, after the loop passes and after `dse`; `sroa`, `fold`
         // Ordinary scalar write-through promotion remains after memory GVN.
 ```
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph LV["LLVM, per function"]
+    direction LR
+    e1["<b>SROA</b><br/><small>5.3 M</small>"]:::mid
+    e2["<b>EarlyCSE</b><br/><small>13.7 M</small>"]:::opt
+    e3["<b>InstCombine</b><br/><small>29.1 M</small>"]:::mid
+    e4["<b>GVN</b><br/><small>2.0 M, sees a third</small>"]:::out
+    e5["<b>DSE</b><br/><small>12.9 M</small>"]:::mid
+    e1 --> e2 --> e3 --> e4 --> e5
+  end
+  subgraph RK["llrm, round 1"]
+    direction LR
+    f1["<b>sroa</b>"]:::mid
+    f2["<b>fold</b>"]:::mid
+    f3["<b>dse</b><br/><small>35.5 M, finds nothing</small>"]:::warn
+    f4["<b>gvn</b><br/><small>59.7 M, 2,941 to 761 instructions</small>"]:::warn
+    f1 --> f2 --> f3 --> f4
+  end
+  style LV fill:transparent,stroke:#16a34a
+  style RK fill:transparent,stroke:#dc2626
+```
+
+*`mem` N=200: the order of the redundancy passes and what each costs*
+
 ## Divergence
 
 The caps are alike (100 writes in llrm's walk, 100 in LLVM's), so caps are not the gap. Two things are. First, order and size: the first `gvn` run takes 59.7 M and removes 2,180 of 2,941 MIR instructions (counted lines of the stage dump); LLVM does the same removal in EarlyCSE (13.7 M) and DSE (12.9 M) and its GVN then sees 556. Second, what a run asks for first: `gvn` needs `memoryssa::Accesses`, `alias::PointsTo` and `Summaries`, which `LLRM_DEBUG=runs` bills to the step (`r01-fold`: 2.4 M own work, 27.5 M with its analyses; `r01-decide`: 0.47 M, 13.0 M; `r01-sroa`: 1.9 M, 19.8 M), while EarlyCSE asks for memory SSA and uses it only when the generation counters differ, and InstCombine asks for a dominator tree and alias analysis it queries lazily.
@@ -193,15 +224,15 @@ Superlinear in llrm, none in LLVM: M instructions of `LLRM_DEBUG=time` totals, m
 | 800 | 466.9 | 414.1 | 338.4 | 297.8 |
 | 1600 | 1,829 | 1,186 | 1,205 | 1,106 |
 
-From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled body; LLVM's whole optimizer grows 2.0x ([the ladder](llvm-compared.md#the-ladder)).
+From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled body; LLVM's whole optimizer grows 2.0x ([the ladder](readme.md#the-ladder)).
 
 ## Proposed change
 
 1. Linear `gvn`: [#1999](https://github.com/ali-mosavian/llrm/pull/1999) (greedy-port, open) removes two quadratic loops in `transform::subexpressions`; reported on `loop` N=1600: 31,766 M to 27,311 M, exponent 1.41 to 1.34, `d_faces` unchanged. The `mem` shape's `gvn` (exponent 1.5 above) after it: unmeasured.
 2. Sparse reached set for `dse` (edit-rollback, PR coming): `dse` is 1,829 M of 5,577 M at `mem` N=1600 and doubles to 4.0x. LLVM bounds the same pass: [`dse-memoryssa-scanlimit` 150 and the step limits](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp#L127-L160). Saving on `d_faces`: unmeasured.
-3. A generation-counter pass before `dse` and `gvn`. A new `FunctionPass` named `earlycse`, inserted in the `every` list [after `fold`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L485), shaped as [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066): one walk in dominator order, a table of available loads keyed by pointer value and type, a generation number bumped by any instruction that may write memory, and a memory-SSA query only when the generations differ, at most 500 a function. Target: the first `gvn` run (59.7 M, 2,941 to 761 instructions on `mem 200`) and the idle `dse` before it (35.5 M). Saving: unmeasured. The tracker records moving `gvn` before `dse` as measured and not the lever; this is a different, cheaper pass.
+3. A generation-counter pass before `dse` and `gvn`, `EarlyCSE`-shaped. Measured elsewhere and not kept ([compile-time spec](../../architecture/compile-time-spec.md), `d79d8beea`, branch `alim/exp/early-cse`): with an alias-checked table it is a loss of 8.4% at -O2 on `d_faces`; with a write killing every held cell, as EarlyCSE does, it saves 3.1% to 3.4% at -O2, -O3 and -Os (3,157 to 3,058 M at -O2), costs 0.6% at -O1, shrinks `D_DRAW_FACES` from 2,914 to 2,354 instructions before `decide`, and changes four vsgcc cells for the worse. The tracker also records `gvn` before `decide` (-4.4% at -O2, +5.4% at -O3, rows lost) as not built.
 4. Lazy memory facts (keep-analyses, design): the analyses a `gvn`, `fold` or `decide` run asks for first (`r01-fold` 2.4 M own, 27.5 M with analyses).
 
-Ranked list: [proposals](llvm-compared-proposals.md).
+Ranked list: [proposals](proposals.md).
 
 Open: what each of these four does per query that costs the whole body ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
