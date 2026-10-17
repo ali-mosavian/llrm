@@ -123,9 +123,7 @@ pub fn dead(
         )
     });
     let markers = _unneeded_markers(context, callees, function);
-    for &marker in &markers {
-        function.erase(marker).expect("a call with no result");
-    }
+    function.erase_all(&markers).expect("a call with no result");
     let alive = live(context, callees, function);
     let gone = function
         .walk()
@@ -142,9 +140,7 @@ pub fn dead(
             function.replace_all_uses_with(result, Operand::Constant(poison));
         }
     }
-    for &inst in &gone {
-        function.erase(inst).expect("nothing reads it");
-    }
+    function.erase_all(&gone).expect("nothing reads it");
     ssa::pruned_phis(function, &alive) | !gone.is_empty() | !markers.is_empty()
 }
 
@@ -188,9 +184,7 @@ pub fn dead_from(
         for &inst in &cone {
             function.set_operands(inst, Vec::new());
         }
-        for &inst in &cone {
-            function.erase(inst).expect("only the dead read the dead");
-        }
+        function.erase_all(&cone).expect("only the dead read the dead");
         gone = true;
     }
     gone

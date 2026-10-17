@@ -159,11 +159,16 @@ pub fn identities(
     function: &mut Function,
 ) -> bool {
     let mut changed = false;
+    // Out of its block once, at the end: erasing one at a time scans the block
+    // for each (a long block of k identities was O(k) a block rewrite). What
+    // an identity read stops being read at once, so no later test sees it.
+    let mut gone = Vec::new();
     for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
         if let Some(kept) = algebraic::identity(context, function, inst) {
             let result = function.instruction(inst).result.expect("a value");
             function.replace_value(result, kept);
-            function.erase(inst).expect("its uses were replaced");
+            function.set_operands(inst, Vec::new());
+            gone.push(inst);
             changed = true;
         } else if _zero_tested(context, function, inst) {
             changed = true;
@@ -180,6 +185,7 @@ pub fn identities(
             changed = true;
         }
     }
+    function.erase_all(&gone).expect("their uses were replaced");
     changed
 }
 
