@@ -114,7 +114,16 @@ One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with 
 | -O3 | 2,497 | 415 | 6.0x | 464 | 5.4x | 48.4 | 1,748 | 747 | 3008 / 1021 = 2.9 |
 | -Os | 2,322 | 407 | 5.7x | 459 | 5.1x | 48.4 | 1,560 | 729 | 2227 / 758 = 2.9 |
 
-The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows (the 71 vsgcc programs) are `unmeasured` at this SHA: the run needs gcc and clang results to compare against and was not re-done; the last table is [rows-series](rows-series.md).
+The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
+
+| level | clocks geomean | worst (program) | rows above 1.00 | code bytes geomean | worst (program) | rows above 1.00 |
+|---|---:|---|---:|---:|---|---:|
+| -O1 | 0.8875 | 2.01 (`recfloat`) | 27 | 0.9435 | 2.68 (`x_switch_dense`) | 17 |
+| -O2 | 0.9044 | 1.80 (`x_dct`) | 31 | 1.0304 | 4.85 (`rectwo`) | 23 |
+| -O3 | 0.9021 | 1.91 (`tile`) | 27 | 1.2813 | 8.58 (`queens`) | 36 |
+| -Os | 0.9169 | 2.19 (`lru`) | 36 | 0.9471 | 1.77 (`x_switch_ranges`) | 19 |
+
+These are the baseline for the "output never worse" column: a step that changes output is compared with them. m16 rows exist only through `tools/bench` and were not re-run.
 
 Ladder (`tools/ladder/ladder-5e2e995ef.json`, N=25 to 1,600; slopes fit N up to 200, exponents over all N):
 
