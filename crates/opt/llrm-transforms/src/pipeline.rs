@@ -680,7 +680,9 @@ fn llvm_order(
     };
     let promote = |name| slot(name, promoted());
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together { name, parts: vec![Box::new(promote::Sroa), promoted()] })
+        let first: Box<dyn FunctionPass> =
+            if experiment_mem2reg() { Box::new(crate::sroa::Sroa) } else { Box::new(promote::Sroa) };
+        Box::new(Together { name, parts: vec![first, promoted()] })
     };
     let earlycse = |name| -> Box<dyn FunctionPass> {
         if std::env::var("LLRM_EXP_EARLYCSE").is_ok_and(|one| one == "real") {
