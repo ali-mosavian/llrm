@@ -34,6 +34,7 @@ pub fn column(
         "p2z" => power2::column(query, value, true),
         "cru" => range::column(query, value, false),
         "crs" => range::column(query, value, true),
+        "gp" => guarantee::column(query, value),
         other => format!(" {other}=?"),
     }
 }

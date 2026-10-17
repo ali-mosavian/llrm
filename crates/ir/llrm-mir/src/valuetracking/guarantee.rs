@@ -42,3 +42,16 @@ pub fn is_guaranteed_to_transfer_execution_to_successor(
     let _ = (q, inst);
     false
 }
+
+/// The `gp` column of `examples/vtdump.rs`: `isGuaranteedNotToBePoison` then
+/// `isGuaranteedNotToBeUndef`, each 0 or 1.
+pub fn column(
+    q: &Query,
+    v: Operand,
+) -> String {
+    format!(
+        " gp={}{}",
+        u8::from(is_guaranteed_not_to_be_poison(q, v, 0)),
+        u8::from(is_guaranteed_not_to_be_undef(q, v, 0))
+    )
+}
