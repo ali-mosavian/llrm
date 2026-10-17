@@ -259,3 +259,19 @@ fn a_loop_of_sixteen_trips_is_copied_only_where_it_does_not_grow() {
     assert!(!summing(17, "%x", "").admitted(&Limits::default()));
     assert!(!summing(16, "%x", "").admitted(&kept));
 }
+
+/// Eight trips of a body with six stores. Each store built its own alias
+/// queries, copying every value the simulation knew: a copy of the known
+/// values for each store of each trip, the square of the unrolled size, and
+/// 4.7% of matmul's -O3 compile. The queries are built once a trip.
+#[test]
+fn the_simulated_stores_of_a_trip_share_the_alias_queries() {
+    let stores = (0..6)
+        .map(|at| format!("  store i16 %i, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * at))
+        .collect::<String>();
+    let looped = summing(8, "0", &stores);
+    consts::QUERY_BUILDS.with(|built| built.set(0));
+    assert!(looped.admitted(&Limits::default()));
+    let built = consts::QUERY_BUILDS.with(std::cell::Cell::get);
+    assert!(built <= 8 + 2, "8 trips of 6 stores built {built} sets of alias queries");
+}

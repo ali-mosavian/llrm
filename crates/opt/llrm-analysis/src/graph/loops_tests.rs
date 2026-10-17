@@ -202,7 +202,7 @@ fn a_loop_with_two_exits_keeps_neither_exit_in_its_body() {
 #[test]
 fn a_branch_with_both_arms_to_one_block_is_one_edge() {
     let chain = [block(0, &[1]), block(1, &[1, 1]), block(2, &[])];
-    assert_eq!(predecessors(&chain)[&1], set(&[0, 1]));
+    assert!(predecessors(&chain).are(&1, &[0, 1]));
     assert_eq!(loops(&chain, None), vec![Loop { header: 1, latches: set(&[1]), body: Body::from_blocks(set(&[1])) }]);
 }
 
