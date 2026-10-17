@@ -116,7 +116,8 @@ jobs:
           ELIGIBLE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || github.ref == 'refs/heads/main' }}
           GROUPS_JSON: ${{ steps.plan.outputs.groups }}
           GH_TOKEN: ${{ github.token }}
-          COMPILER: ${{ steps.plan.outputs.compiler }}
+          # The perf and cost jobs judge a pull request; a push to main runs neither (each merge queued a pair on six runners: 16 of 20 waiting jobs).
+          COMPILER: ${{ github.event_name == 'pull_request' && steps.plan.outputs.compiler || 'false' }}
         run: |
           # The hosted jobs waiting for a runner now: a new job queues behind them.
           backlog=$(python3 tools/ci/hosted_backlog.py)
