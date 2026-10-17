@@ -141,7 +141,7 @@ use std::rc::Rc;
 use llrm_mir::context::{Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::depends::Depends;
-use llrm_mir::module::{Change, Function, GlobalValue, InstId, Linkage, Mark, Module, ValueId};
+use llrm_mir::module::{Change, Function, GlobalValue, InstId, Linkage, Mark, Module, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{Analyses, Analysis, Declarations, ModuleAnalyses, ModuleAnalysis, Outer};
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramAnalysis, ProgramProxy};
@@ -1063,8 +1063,9 @@ impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
     const SKIPS: bool = true;
+    const INCREMENTAL: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1073,6 +1074,55 @@ impl Analysis for ExposedFrames {
         analyses: &mut Analyses,
     ) -> Self::Result {
         crate::memory::exposed_frames(&Unit::within(context, layout, function, analyses.outer()))
+    }
+
+    /// An alloca's answer reads the instructions its address moves through
+    /// and uses: the allocas behind the values the edits read are asked
+    /// again, the others stand (`frameescape::exposed_renewed`).
+    fn update(
+        previous: &Self::Result,
+        changes: &[Change],
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Option<Self::Result> {
+        let mut touched = Vec::<ValueId>::new();
+        let mut read = |operand: &Operand| {
+            if let Operand::Value(value) = operand {
+                touched.push(*value);
+            }
+        };
+        for change in changes {
+            match change {
+                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
+                Change::Operand { was, .. } => read(was),
+                Change::Operands { was, .. } => was.iter().for_each(&mut read),
+                Change::Erased { inst, .. } => function.instruction(*inst).operands.iter().for_each(&mut read),
+                Change::Inserted { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Cloned { to: inst, .. }
+                | Change::Rewritten(inst) => {
+                    if function.is_erased(*inst) {
+                        continue;
+                    }
+                    let instruction = function.instruction(*inst);
+                    instruction.operands.iter().for_each(&mut read);
+                    if let Some(result) = instruction.result {
+                        read(&Operand::Value(result));
+                    }
+                }
+                Change::Substituted { .. } => {}
+            }
+        }
+        let unit = Unit::within(context, layout, function, analyses.outer());
+        Some(
+            crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst| {
+                crate::memory::is_lifetime_marker(&unit, inst)
+            })
+            .into_iter()
+            .collect(),
+        )
     }
 }
 
@@ -1090,7 +1140,7 @@ impl Analysis for PointerValues {
     const NAME: &'static str = "pointer-values";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: false })
     }
     fn run(
         context: &Context,
@@ -1111,7 +1161,7 @@ impl Analysis for Pointers {
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
+        Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -1197,14 +1247,14 @@ impl Analysis for CallEffects {
         function: &Function,
     ) -> bool {
         match (old, fresh) {
-            (Ok(old), Ok(fresh)) => {
-                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
-            }
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
+                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
+            }),
             (old, fresh) => old == fresh,
         }
     }
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     /// Each effect with the values it names followed through the substitution:
     /// the same bytes by the value that replaced one found equal.
@@ -1589,7 +1639,7 @@ impl Analysis for Writes {
     const NAME: &'static str = "writes";
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
-        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
+        Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at), edges: true })
     }
     fn run(
         context: &Context,
@@ -2041,6 +2091,24 @@ impl Held {
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
             bounded: None,
+        }
+    }
+
+    /// `of` without the memory annotations and points-to (`PointerValues`,
+    /// `Annotated`): the loop facts and what is known without memory, for a
+    /// pass that decides from the values.
+    pub fn of_without_memory(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            values: None,
+            annotated: None,
+            counted: Some(analyses.get::<Counted>(context, layout, function)),
+            followers: Some(analyses.get::<Followers>(context, layout, function)),
+            ..Self::of(context, layout, function, analyses, false)
         }
     }
 

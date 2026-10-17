@@ -1123,10 +1123,10 @@ pub struct Unit<'a> {
     /// purpose.
     pub loop_intervals: bool,
     /// The congruences of this body under these registers
-    /// (`alias::congruences_with`), where a caller asking many times of one
+    /// (`alias::congruences_of`), where a caller asking many times of one
     /// body made a cell for them: each proof of a loop's trips asked of the
     /// whole function, once for each loop.
-    pub congruent: Option<&'a std::cell::OnceCell<crate::alias::Congruences>>,
+    pub congruent: Option<&'a std::cell::RefCell<crate::alias::CongruenceMemo>>,
     /// The proofs of the loops' trips found so far by a call that asks many:
     /// the proof of a loop asks those of the loops around it, each of which
     /// asks those around it, 2^depth proofs of the outermost for a nest.
@@ -1505,15 +1505,48 @@ pub struct Standing<'h> {
     /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
+    /// What stood before an edit, and the values the edit reached: `derived`
+    /// is made from them when next asked.
+    edited: Option<(Knowns, llrm_mir::dense::IdSet<ValueId>)>,
     /// The blocks, edges and loops of the body, as `held` has them or derived
     /// once: they stand while the body's blocks and edges do (`reshaped`).
     shape: Option<std::rc::Rc<crate::cfg::Shape>>,
+    /// Brings the facts the manager holds up to date with the body, asked once
+    /// the body changed and with whether its blocks and edges did: the
+    /// manager updates them from the changes logged, where deriving them again
+    /// walks the whole body.
+    renew: Option<Box<Renew<'h>>>,
+    renewed: Option<std::rc::Rc<Knowns>>,
+    reshaped: bool,
 }
 
+/// What `Standing::renewing` is given: the context, layout and function, and
+/// whether the blocks and edges changed.
+pub type Renew<'h> = dyn FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h;
+
 impl<'h> Standing<'h> {
+    /// `self`, asking `renew` for the facts of the body once it has changed,
+    /// where it would derive them.
+    pub fn renewing(
+        mut self,
+        renew: impl FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h,
+    ) -> Self {
+        self.renew = Some(Box::new(renew));
+        self
+    }
+
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: None,
+            derived: None,
+            edited: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1521,12 +1554,30 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: Some(bounds),
+            derived: None,
+            edited: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None, shape: None }
+        Self {
+            held: None,
+            bounds: None,
+            derived: None,
+            edited: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1551,6 +1602,7 @@ impl<'h> Standing<'h> {
     pub fn reshaped(&mut self) {
         self.shape = None;
         self.changed();
+        self.reshaped = true;
     }
 
     /// The body changed: what was found of it no longer holds.
@@ -1558,6 +1610,76 @@ impl<'h> Standing<'h> {
         self.held = None;
         self.bounds = None;
         self.derived = None;
+        self.edited = None;
+        self.renewed = None;
+    }
+
+    /// The body changed by `changes` and not in its blocks or edges: a value's
+    /// fact is of the values it is made from alone, so what stood stands for
+    /// every value the edit did not reach (`manager::Registers::update`),
+    /// and the rest are settled when next asked.
+    pub fn edited(
+        &mut self,
+        function: &Function,
+        changes: &[llrm_mir::module::Change],
+    ) {
+        use llrm_mir::module::Change;
+        let kept = match (self.edited.take(), self.derived.take(), self.held.take()) {
+            (Some((kept, _)), _, _) | (None, Some(kept), _) => kept,
+            (None, None, Some(held)) => held.clone(),
+            (None, None, None) if self.renewed.is_some() => (**self.renewed.as_ref().unwrap()).clone(),
+            // Nothing stood: derived afresh when asked.
+            (None, None, None) => {
+                self.changed();
+                return;
+            }
+        };
+        self.bounds = None;
+        self.renewed = None;
+        let mut kept = kept;
+        let mut touched = llrm_mir::dense::IdSet::<ValueId>::new();
+        let mut work = Vec::<ValueId>::new();
+        for change in changes {
+            let inst = match *change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Rewritten(inst) => inst,
+                Change::Cloned { to, .. } => to,
+                Change::BlockCreated(_)
+                | Change::BlockErased(_)
+                | Change::Operand { .. }
+                | Change::Operands { .. }
+                | Change::Substituted { .. } => continue,
+                Change::Parameters => {
+                    self.changed();
+                    return;
+                }
+            };
+            if let Some(result) = function.instruction(inst).result
+                && touched.insert(result)
+            {
+                work.push(result);
+            }
+        }
+        // The touched, those whose fact was made from them, and the users of
+        // each.
+        let mut dirty = touched.clone();
+        let mut seen = touched;
+        while let Some(value) = work.pop() {
+            kept.swap_remove(&value);
+            for user in function.users(value) {
+                if function.parent(user.user).is_none() {
+                    continue;
+                }
+                let Some(result) = function.instruction(user.user).result else { continue };
+                dirty.insert(result);
+                if kept.contains_key(&result) && seen.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+        self.edited = Some((kept, dirty));
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they
@@ -1578,6 +1700,19 @@ impl<'h> Standing<'h> {
     ) -> &Knowns {
         if let Some(held) = self.held {
             return held;
+        }
+        if let Some((kept, dirty)) = self.edited.take() {
+            self.renewed = None;
+            self.derived = Some(crate::consts::known_from(&Unit { registers: None, ..*unit }, kept, Some(&dirty), &[]));
+        }
+        if self.derived.is_none()
+            && self.renewed.is_none()
+            && let Some(renew) = self.renew.as_mut()
+        {
+            self.renewed = Some(renew(unit.context, unit.layout, unit.function, self.reshaped));
+        }
+        if let Some(renewed) = &self.renewed {
+            return renewed;
         }
         self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }

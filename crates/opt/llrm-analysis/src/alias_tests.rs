@@ -1242,6 +1242,21 @@ fn initialized_solves_the_pointer_values_of_a_body_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
 }
 
+/// `initialized` asked the escape phase twice more (with the call arguments,
+/// and plain) for provenance alone: `.values` of each is the value solve's, and
+/// 20 of d_faces' 252 escape phases at -O2 were these. It asks the one of
+/// `calls_annotated`, whose effects it reads.
+#[test]
+fn initialized_asks_no_escape_phase_of_its_own() {
+    let parsed = Parsed::new(
+        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
+    );
+    let unit = parsed.unit();
+    let before = crate::alias::escape_solves();
+    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+    assert_eq!(crate::alias::escape_solves() - before, 1, "initialized asked for what escapes for its own use");
+}
+
 /// A loop the shape does not know of: the shape was taken before a copy loop
 /// was spliced in, so its dominance says no block dominates a latch and no back
 /// edge widens the pointers that walk it. Each round adds an offset to them
@@ -1553,6 +1568,33 @@ b0:
     assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
 }
 
+/// `apart` found what escaped before the instruction (the block-entry dataflow
+/// of the whole body) before it looked at the two references: 4,503 asks over
+/// d_faces -O2, nearly all of an access that reaches more than what escaped.
+/// It asks only for an access that reaches only what escaped, to a frame cell,
+/// and then once.
+#[test]
+fn apart_builds_what_escaped_only_for_an_access_that_reaches_only_what_escaped() {
+    let parsed = Parsed::new(
+        "define void @f(ptr %p) {\nb0:\n  %a = alloca i16\n  store i16 1, ptr %a\n  store i16 2, ptr %p\n  ret void\n}\n",
+    );
+    let facts = parsed.facts();
+    let unit = parsed.unit();
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    let held = |store| {
+        let reference = MemRef::of(&unit, store).expect("a store");
+        MemRef { provenance: facts.reference(&unit, &reference), ..reference }
+    };
+    let (own, through) = (held(stores[0]), MemRef::of(&unit, stores[1]).expect("a store"));
+    assert!(own.provenance.is_some() && through.provenance.is_none(), "premise");
+    let before = crate::alias::structures_built();
+    assert!(!facts.escaped_before.apart(stores[1], &own, &own), "an access to a frame object reaches it");
+    assert_eq!(crate::alias::structures_built() - before, 0, "built for an access that reaches more");
+    assert!(facts.escaped_before.apart(stores[1], &through, &own), "an unplaced pointer cannot reach a frame cell");
+    assert!(facts.escaped_before.apart(stores[1], &through, &own));
+    assert_eq!(crate::alias::structures_built() - before, 1, "built once, when asked");
+}
+
 /// An access was held for each version of its function, and a type tag
 /// attached afterwards logs no change: the held access kept no type, so a
 /// store tagged `!tbaa` after its first ask was apart from nothing.
@@ -1595,4 +1637,37 @@ fn the_live_points_of_a_block_allocate_a_set_each_not_a_node_for_eleven_values()
     let made = counted::made() - before;
     assert!(points.len() > 2 * values - 2);
     assert!(made <= 4 * points.len(), "{} points of up to {values} live values made {made} allocations", points.len());
+}
+
+/// Two arguments of a call, one a constant global and one a pointer nothing
+/// places, replaced by one value the analysis knows nothing of: the effect kept
+/// past the edit lists the global beside the unknown, a fresh run lists the
+/// unknown alone. `covers` took that for a contradiction and the replay check
+/// (`LLRM_CHECK_REPLAY`) stopped QCport's `ls` at -O2 once two arguments were
+/// merged. The kept effect has every reference of the fresh one.
+#[test]
+fn an_effect_with_a_global_beside_the_unknown_covers_the_unknown_alone() {
+    let global = MemoryObject {
+        identity: Some(Identity::Global(12)),
+        extent: Some(2),
+        constant: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let other =
+        MemoryObject { identity: Some(Identity::Global(13)), extent: Some(2), ..MemoryObject::new(MemoryKind::Global) };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let placed = reference(one(&global, 0, 2));
+    let unknown = reference(UNKNOWN.clone());
+    assert!(
+        effect(vec![unknown.clone(), placed.clone()]).covers(&effect(vec![unknown])),
+        "the global is within the unknown"
+    );
+    assert!(
+        !effect(vec![placed.clone()]).covers(&effect(vec![reference(one(&other, 0, 2))])),
+        "another global is a new read"
+    );
+    let unknown = reference(UNKNOWN.clone());
+    assert!(!effect(vec![placed]).covers(&effect(vec![unknown])), "a kept global does not cover a fresh unknown");
 }

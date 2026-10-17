@@ -196,11 +196,24 @@ impl FunctionPass for IndVars {
             unit.function.walk().any(|(_, inst)| unit.function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt));
         let bounded =
             widens.then(|| analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function));
+        let shape = analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function);
+        // Once the body has changed, the manager brings what it holds up to
+        // date from the changes logged, where `Standing` would derive
+        // it again (13 times at d_faces -O2, 25 M).
         let mut standing = match bounded.as_deref() {
             Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds),
             _ => llrm_analysis::memory::Standing::held(&held),
         }
-        .with_shape(analyses.get::<cfg::Shape>(unit.context, unit.layout, unit.function));
+        .with_shape(shape)
+        .renewing(|context, layout, function, reshaped| {
+            let kept = if reshaped {
+                PreservedAnalyses::none()
+            } else {
+                PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
+            };
+            analyses.invalidate(function, &kept);
+            analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
+        });
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -798,8 +811,12 @@ pub fn widened_with(
                 _find(&unit.with_registers(facts), &loop_, unrolls)
             };
             if let Some(found) = found {
+                let mark = function.mark();
                 _widen(context, function, &found);
-                standing.changed();
+                match function.changes_since(mark) {
+                    Some(changes) => standing.edited(function, changes),
+                    None => standing.changed(),
+                }
                 changed = true;
                 continue 'again;
             }

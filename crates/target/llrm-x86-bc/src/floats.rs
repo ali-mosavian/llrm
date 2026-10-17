@@ -187,7 +187,7 @@ fn intrinsic(
 ) -> Emit<Operand> {
     let &(callee, ty) = emitter.unit.intrinsics.get(name).ok_or_else(|| format!("@{name} undeclared"))?;
     let made = emitter.b.call(ty, Operand::Constant(callee), arguments, "").ok_or("an intrinsic answering nothing")?;
-    emitter.note_pure();
+    emitter.note_pure(made);
     Ok(made)
 }
 
@@ -262,7 +262,7 @@ fn instruction(
             let result = match name {
                 "fchs" => {
                     let made = emitter.b.fneg(value, "");
-                    emitter.note_pure();
+                    emitter.note_pure(made);
                     made
                 }
                 "fabs" => intrinsic(emitter, "llvm.fabs.f64", &[value])?,
@@ -354,9 +354,9 @@ fn helped(
             // sahf: CF is C0, ZF is C3; each is set when unordered too. SF
             // is the busy bit, and OF is not written.
             let below = emitter.b.fcmp(FloatPredicate::Ult, first, second, "");
-            emitter.note_pure();
+            emitter.note_pure(below);
             let equal = emitter.b.fcmp(FloatPredicate::Ueq, first, second, "");
-            emitter.note_pure();
+            emitter.note_pure(equal);
             emitter.set_bit(Bit::C, below);
             emitter.set_bit(Bit::Z, equal);
             Ok(())
