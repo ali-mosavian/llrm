@@ -102,3 +102,39 @@ The profile-guided column is `tools/pgo/pgo.py build` of the same commit ([pgo.m
 Worst ratio: queens -O3, 36.4x (29.9x profile-guided). Geometric mean of the 20 ratios: 3.0x (2.6x profile-guided); d_faces alone over its four levels: 6.2x (5.3x). Profile-guided instructions are 14.1% to 17.9% below the plain build's on every row. Against the distro clang the same mean is 1.8x.
 
 Where the compile goes beside the pass work, d_faces (callgrind, dist build): copying a `Function` (gvn's forks, hoist's clones, interprocedural's, sink's) is about 0.1% of the compile, not the 6% to 10% of the scopes that contain the copies: what those scopes cost is the numbering and the spill forecast. Idle reruns, the passes' own work in a run that changed nothing (`LLRM_DEBUG=runs`, `5344082af`, release build): 637 runs, 247.0 M = 7.8% of the -O2 compile (decide 42.3 M, fill 32.8, hoist 24.8, promote 24.8, algebraic 21.8, indvars 21.5), and 318.9 M = 9.9% at -Os (hoist 96.7 M, 3.0%).
+
+## 2026-10-17, `5e2e995ef`: one baseline for the plan (step 0.1)
+
+One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with `--features system-alloc`), `perf stat -e instructions:u` min of 3 including the `wccq` child, `d_faces.c` of qbq-llrm with `-m32 -march=i486 -fno-inline-functions` and the Borland keywords defined away. Clang 24 is the static build at `d1106deb71cc`, clang 20.1.8 the static build of the tag, each `-c`. Phases are `LLRM_DEBUG=time` inclusive totals; the in-process front end excludes the `wccq` child (about 18 M). Computes per pass run counts `WHY fn` lines of `LLRM_WHY=1` over the pass runs of `LLRM_DEBUG=runs`; the spec's 2.8 uses its own counter.
+
+| level | llrm M | clang 24 M | ratio | clang 20.1.8 M | ratio | front end (in process) | `mir pipeline` | `assemble` | computes per pass run |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| -O1 | 1,789 | 348 | 5.1x | 397 | 4.5x | 48.4 | 1,094 | 669 | 2121 / 473 = 4.5 |
+| -O2 | 2,253 | 413 | 5.5x | 462 | 4.9x | 48.4 | 1,519 | 718 | 2502 / 746 = 3.4 |
+| -O3 | 2,497 | 415 | 6.0x | 464 | 5.4x | 48.4 | 1,748 | 747 | 3008 / 1021 = 2.9 |
+| -Os | 2,322 | 407 | 5.7x | 459 | 5.1x | 48.4 | 1,560 | 729 | 2227 / 758 = 2.9 |
+
+The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
+
+| level | clocks geomean | worst (program) | rows above 1.00 | code bytes geomean | worst (program) | rows above 1.00 |
+|---|---:|---|---:|---:|---|---:|
+| -O1 | 0.8875 | 2.01 (`recfloat`) | 27 | 0.9435 | 2.68 (`x_switch_dense`) | 17 |
+| -O2 | 0.9044 | 1.80 (`x_dct`) | 31 | 1.0304 | 4.85 (`rectwo`) | 23 |
+| -O3 | 0.9021 | 1.91 (`tile`) | 27 | 1.2813 | 8.58 (`queens`) | 36 |
+| -Os | 0.9169 | 2.19 (`lru`) | 36 | 0.9471 | 1.77 (`x_switch_ranges`) | 19 |
+
+These are the baseline for the "output never worse" column: a step that changes output is compared with them. m16 rows exist only through `tools/bench` and were not re-run.
+
+Ladder (`tools/ladder/ladder-5e2e995ef.json`, N=25 to 1,600; slopes fit N up to 200, exponents over all N):
+
+| shape | optimizer k/IR LLVM / llrm | backend k/IR LLVM / llrm | optimizer exponent LLVM / llrm | backend exponent LLVM / llrm | N=1600 total M clang / llrm |
+|---|---:|---:|---:|---:|---:|
+| arith | 46 / 46 | 27 / 37 | 0.95 / 1.10 | 0.82 / 0.92 | 989 / 1,981 |
+| mem | 39 / 109 | 16 / 39 | 0.94 / 1.23 | 0.70 / 0.98 | 1,133 / 6,544 |
+| loop | 46 / 338 | n/a (LSR cliff) / 201 | 0.82 / 1.40 | n/a / 0.91 | 1,254 / 20,952 |
+| diamond | 59 / 134 | 58 / 80 | 0.83 / 1.09 | 0.88 / 1.00 | 795 / 2,067 |
+| calls | 45 / 69 | 74 / 108 | 0.76 / 1.05 | 0.83 / 1.00 | 609 / 1,206 |
+| float | 24 / 37 | 22 / 20 | 0.84 / 1.02 | 0.92 / 0.95 | 735 / 1,345 |
+| mixed | 39 / 178 | 40 / 66 | 0.86 / 1.11 | 0.90 / 1.05 | 2,036 / 9,025 |
+
+Allocations and memory at -O2 (`d_faces`; DHAT on the system-allocator build): 2,979,190 blocks, 601.7 MB allocated, peak live 18.7 MB in 88,000 blocks; by phase: optimizer 1,069,863 blocks (35.9%, 226.7 MB), backend 642,017 (21.6%, 91.1 MB), front end 210,006 (7.0%, 27.2 MB), the rest 1,056,587 (35.5%, 256.7 MB); about 900 per IR instruction against clang's 19. Peak resident set (`/usr/bin/time`): `d_faces` 84 MB with mimalloc and 39 MB with the system allocator; `mem` N=1,600 339 MB and 250 MB.
