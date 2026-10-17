@@ -71,7 +71,7 @@ When the queue is empty, `_recolored_hints` moves a value to a copy partner's re
 
 ## Search over shapes of the body
 
-`transform` first runs the body as is, with splitting (`regalloc base`). If it spilled something and `Profile::search` is on (`-fallocation-search`, off at -O0), it builds other shapes the spills suggest, runs each as a `regalloc trial`, and keeps a trial only if it is cheaper and spilled none of the values the shape protects.
+`transform` first runs the body as is, with splitting (`regalloc base`). If it spilled something and `Profile::search` is on (`-fallocation-search`; -Omax), it builds other shapes the spills suggest, runs each as a `regalloc trial`, and keeps a trial only if it is cheaper and spilled none of the values the shape protects.
 
 | `Shape` | Body |
 |---|---|
@@ -82,7 +82,7 @@ When the queue is empty, `_recolored_hints` moves a value to a copy partner's re
 | `Retainable` | the body, with one spilled loop-invariant base protected |
 | `Whole` | the body, allocated without splitting |
 
-Not exhaustive (-Os to -O3): `Whole` without splitting, and the first of `Retainable`, `Scoped`, `Addressed`, `Unfolded` present, with splitting. `-fallocation-search-all` (-Omax): every shape, both with and without splitting. Trial counts per level are in [levels](../../reference/levels.md); tests [`test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L1030) and [`test_an_allocator_that_does_not_search_allocates_a_body_once`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L994).
+Not exhaustive (`-fallocation-search` below -Omax): `Whole` without splitting, and the first of `Retainable`, `Scoped`, `Addressed`, `Unfolded` present, with splitting. `-fallocation-search-all` (-Omax): every shape, both with and without splitting. Trial counts per level are in [levels](../../reference/levels.md); tests [`test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L1030) and [`test_an_allocator_that_does_not_search_allocates_a_body_once`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/regalloc_fuzz_tests.rs#L994).
 
 ### Cost model
 

@@ -1352,7 +1352,6 @@ entry:
     let o1 = pipeline::Options::basic();
     assert!(!o1.searches() && !o1.compares_routes());
     let o2 = pipeline::Options::standard();
-    assert!(o2.searches() && o2.compares_routes(), "premise: -O2 keeps both");
     let (kept, _) = pipelined(text, o1);
     let kept = crate::testing::printed(&kept);
     assert_eq!(

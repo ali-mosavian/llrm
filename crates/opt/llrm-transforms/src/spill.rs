@@ -1471,54 +1471,16 @@ impl Pressure {
         function: &Function,
         scales: u8,
     ) -> Option<Pressure> {
-        use llrm_mir::module::Change;
-        let mut named = IdSet::<ValueId>::new();
-        let name_operand = |named: &mut IdSet<ValueId>, operand: &Operand| {
-            if let Operand::Value(value) = operand {
-                named.insert(*value);
-            }
-        };
-        let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
-            let op = function.instruction(inst);
-            named.extend(op.result);
-            op.operands.iter().for_each(|one| name_operand(named, one));
-        };
-        for change in changes {
-            match change {
-                Change::BlockCreated(_) | Change::BlockErased(_) | Change::Parameters => return None,
-                Change::Inserted { inst, .. } | Change::Moved { inst, .. } | Change::Erased { inst, .. } => {
-                    if function.instruction(*inst).opcode.is_terminator() {
-                        return None;
-                    }
-                    name_inst(&mut named, *inst);
-                }
-                Change::Cloned { to, .. } => name_inst(&mut named, *to),
-                Change::Rewritten(inst) => name_inst(&mut named, *inst),
-                // Each user is told by its own entries.
-                Change::Substituted { .. } => {}
-                Change::Operand { inst, was, index } => {
-                    name_operand(&mut named, was);
-                    if function.instruction(*inst).opcode.is_terminator()
-                        && (matches!(was, Operand::Block(_))
-                            || matches!(
-                                function.instruction(*inst).operands.get(*index as usize),
-                                Some(Operand::Block(_))
-                            ))
-                    {
-                        return None;
-                    }
-                }
-                Change::Operands { inst, was } => {
-                    was.iter().for_each(|one| name_operand(&mut named, one));
-                    if function.instruction(*inst).opcode.is_terminator()
-                        && was.iter().any(|one| matches!(one, Operand::Block(_)))
-                        && was[..] != function.instruction(*inst).operands[..]
-                    {
-                        return None;
-                    }
-                }
-            }
+        let edits = function.touched_by(changes);
+        if edits.parameters
+            || !edits.blocks_created.is_empty()
+            || !edits.blocks_erased.is_empty()
+            || edits.terminators_made
+            || !edits.cfg.is_empty()
+        {
+            return None;
         }
+        let mut named = edits.named.clone();
         // What was asked of the blocks (their live points, their steps) is kept
         // past the update for the blocks it did not touch, where nothing else
         // holds it: the caches were dropped and made again for every block at
@@ -1608,25 +1570,7 @@ impl Pressure {
         if let Some((points, stepped)) = caches {
             // The blocks the edits were in, with the blocks whose live sets
             // moved.
-            for change in changes {
-                use Change as C;
-                let inst = match change {
-                    C::Inserted { block, .. } | C::Moved { block, .. } | C::Erased { block, .. } => {
-                        touched.insert(cfg::id(*block));
-                        if let C::Moved { from, .. } = change {
-                            touched.insert(cfg::id(*from));
-                        }
-                        continue;
-                    }
-                    C::Cloned { to: inst, .. }
-                    | C::Rewritten(inst)
-                    | C::Operand { inst, .. }
-                    | C::Operands { inst, .. } => *inst,
-                    // Each user is told by its own entries.
-                    C::BlockCreated(_) | C::BlockErased(_) | C::Parameters | C::Substituted { .. } => continue,
-                };
-                touched.extend(function.parent(inst).map(cfg::id));
-            }
+            touched.extend(edits.blocks.iter().map(cfg::id));
             if std::rc::Rc::strong_count(&points.0) == 1 && std::rc::Rc::strong_count(&stepped.steps) == 1 {
                 points.0.borrow_mut().retain(|at, _| !touched.contains(at));
                 stepped.steps.borrow_mut().retain(|at, _| !touched.contains(at));

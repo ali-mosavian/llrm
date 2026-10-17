@@ -281,7 +281,8 @@ def test_ssa_flow_is_not_swept_per_step_of_the_longest_way_in_a_loop_nest(tmp_pa
     its readers alone: 81 Minstr, the N^2 pairs once. The bound is on the cost, 2N/N being 4 for N^2 work."""
     source = tmp_path / "nest_128.c"
     source.write_text(scaling.AXES["nest"](128))
-    own = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    # The spiller's route, which -Omax alone makes by default, is the subject.
+    own = gate.own_work([*gate.levels_time.command("llrm", "O2", source), "-fallocation-routes"])
     assert own["ssa flow"] <= 200, f"{own['ssa flow']:.1f} Minstr"
 
 
@@ -599,7 +600,8 @@ def test_the_immediate_dominators_are_the_trees_not_every_blocks_set_of_dominato
     sets, a scan of the blocks for each phi asked and the liveness of a body with phis over rows) 78."""
     source = tmp_path / "branches_1024.c"
     source.write_text(scaling.AXES["branches"](1024))
-    rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
+    # The spiller's route, which -Omax alone makes by default, is the subject.
+    rows = gate.own_work([*gate.levels_time.command("llrm", "O2", source), "-fallocation-routes"])
     assert rows["masm return overhead"] <= 400 and rows["ssa repaired"] <= 400, rows
 
 

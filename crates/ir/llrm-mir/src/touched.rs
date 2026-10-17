@@ -60,6 +60,47 @@ pub struct Touched {
     /// rewritten name: what a flow-insensitive points-to solve is built from.
     /// Empty until `with_pointers` fills it (it needs the types).
     pub pointers: IdSet<ValueId>,
+    /// Instructions added, moved or rewritten since the mark and still there:
+    /// where `reach` starts.
+    pub insts: IdSet<InstId>,
+    /// The results and operands of the instructions added, erased, moved,
+    /// cloned or rewritten, and the operands an edit replaced: every value
+    /// whose reads or definition an edit touched.
+    pub named: IdSet<ValueId>,
+    /// A terminator was added, erased or moved.
+    pub terminators_made: bool,
+    /// A terminator was rewritten (it may name the same blocks).
+    pub terminators_rewritten: bool,
+}
+
+/// What a change reached: the blocks holding an instruction it touched, or one
+/// that reads a value a touched instruction makes, or one that reads the value
+/// such a reader makes, and so on; and of those the blocks whose branch, or
+/// assume, or call, is one that reads a value the change made, which can alter
+/// what holds below them.
+#[derive(Clone, Debug, Default)]
+pub struct Reach {
+    pub blocks: IdSet<BlockId>,
+    pub conditions: IdSet<BlockId>,
+    /// A block was made or erased, or a terminator added, erased or moved.
+    pub cfg: bool,
+    /// A terminator was rewritten: the CFG is the same where it names the same
+    /// blocks in the same order, which the caller checks.
+    pub rewired: bool,
+}
+
+impl Reach {
+    /// The CFG may differ from the one the mark saw.
+    pub fn cfg_changed(&self) -> bool {
+        self.cfg || self.rewired
+    }
+}
+
+// Log entries and operands the digest's edge search has looked at, for a test
+// that its work is linear in the edits.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Touched {
@@ -108,6 +149,43 @@ impl Touched {
         }
         self.pointers = pointers;
         self
+    }
+
+    /// What the touched instructions reach through the uses of the values they
+    /// make (`Reach`), found in `function`.
+    pub fn reach(
+        &self,
+        function: &Function,
+    ) -> Reach {
+        let mut blocks = self.blocks.clone();
+        let mut conditions = IdSet::<BlockId>::new();
+        let mut work: Vec<InstId> = self.insts.iter().collect();
+        let mut seen: IdSet<InstId> = self.insts.clone();
+        while let Some(inst) = work.pop() {
+            let one = function.instruction(inst);
+            if let Some(block) = function.parent(inst) {
+                blocks.insert(block);
+                if one.opcode.is_terminator() || matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                    conditions.insert(block);
+                }
+            }
+            if let Some(result) = one.result {
+                for user in function.users(result) {
+                    if seen.insert(user.user) {
+                        work.push(user.user);
+                    }
+                }
+            }
+        }
+        Reach {
+            blocks,
+            conditions,
+            cfg: !self.blocks_created.is_empty()
+                || !self.blocks_erased.is_empty()
+                || self.terminators_made
+                || !self.cfg.is_empty(),
+            rewired: self.terminators_rewritten,
+        }
     }
 
     /// Whether a load, a store or a call was added, removed, moved or
@@ -204,7 +282,35 @@ impl Function {
         &self,
         mark: Mark,
     ) -> Option<Touched> {
-        let changes = self.changes_since(mark)?;
+        Some(self.touched_by(self.changes_since(mark)?))
+    }
+
+    /// What `changes` reached, none where the parameters changed.
+    pub fn reach_of(
+        &self,
+        changes: &[Change],
+    ) -> Option<Reach> {
+        let touched = self.touched_with(changes, false);
+        (!touched.parameters).then(|| touched.reach(self))
+    }
+
+    /// The digest of `changes`, the log since some mark.
+    pub fn touched_by(
+        &self,
+        changes: &[Change],
+    ) -> Touched {
+        self.touched_with(changes, true)
+    }
+
+    /// `touched_by`, with the edges added and removed (`cfg`) found only where
+    /// asked: a consumer of `reach` needs to know that a terminator changed
+    /// (`terminators_rewritten`), not which edges differ, and a switch of N
+    /// arms rewritten for each of N edits costs N each time.
+    fn touched_with(
+        &self,
+        changes: &[Change],
+        edges: bool,
+    ) -> Touched {
         let mut out = Touched::default();
         let mut added = IdSet::<InstId>::new();
         let mut erased = IdSet::<InstId>::new();
@@ -249,6 +355,7 @@ impl Function {
                     }
                 }
                 Change::Operand { inst, .. } | Change::Operands { inst, .. } => {
+                    out.blocks.extend(self.parent(inst));
                     if let Some(result) = self.instruction(inst).result {
                         out.operands_changed.insert(result);
                     }
@@ -317,21 +424,99 @@ impl Function {
                 out.memory_rewritten.insert(inst);
             }
         }
+        if !edges {
+            terminators.clear();
+        }
+        // What each terminator named at the mark: its operands now, with the
+        // replaced ones put back, in one pass over the log (not one per
+        // terminator).
+        // (A list by instruction, not a dense map: a map would be as long as
+        // the function for the few terminators an edit touches.)
+        let mut thens: Vec<(u32, Vec<Operand>)> =
+            terminators.iter().map(|&(inst, _)| (inst.0, self.instruction(inst).operands.clone())).collect();
+        thens.sort_unstable_by_key(|one| one.0);
+        if !thens.is_empty() {
+            let find = |thens: &mut Vec<(u32, Vec<Operand>)>, inst: InstId| {
+                thens.binary_search_by_key(&inst.0, |one| one.0).ok()
+            };
+            for change in changes.iter().rev() {
+                #[cfg(test)]
+                VISITED.with(|visited| visited.set(visited.get() + 1));
+                match change {
+                    Change::Operand { inst, index, was } => {
+                        if let Some(at) = find(&mut thens, *inst) {
+                            thens[at].1[*index as usize] = *was;
+                        }
+                    }
+                    Change::Operands { inst, was } => {
+                        if let Some(at) = find(&mut thens, *inst) {
+                            thens[at].1 = was.to_vec();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         for (inst, at_mark) in terminators {
-            self.edges_of(inst, at_mark, changes, !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
+            let at = thens.binary_search_by_key(&inst.0, |one| one.0).expect("a terminator listed");
+            self.edges_of(inst, at_mark, &thens[at].1, !added.contains(&inst), !self.is_erased(inst), &mut out.cfg);
         }
         // A terminator replaced by another naming the same block leaves the
-        // edge.
-        let all = std::mem::take(&mut out.cfg);
-        out.cfg = all
-            .iter()
-            .copied()
-            .filter(|&(from, to, edge)| {
-                let opposite = if edge == Edge::Added { Edge::Removed } else { Edge::Added };
-                !all.contains(&(from, to, opposite))
-            })
-            .collect();
-        Some(out)
+        // edge: a pair both added and removed is in neither.
+        let pair = |&(from, to, _): &(BlockId, BlockId, Edge)| (from.0, to.0);
+        let mut made: Vec<(u32, u32)> = out.cfg.iter().filter(|one| one.2 == Edge::Added).map(pair).collect();
+        let mut gone: Vec<(u32, u32)> = out.cfg.iter().filter(|one| one.2 == Edge::Removed).map(pair).collect();
+        made.sort_unstable();
+        gone.sort_unstable();
+        out.cfg.retain(|one| {
+            let key = pair(one);
+            !(made.binary_search(&key).is_ok() && gone.binary_search(&key).is_ok())
+        });
+        let name_inst = |named: &mut IdSet<ValueId>, inst: InstId| {
+            let one = self.instruction(inst);
+            named.extend(one.result);
+            for operand in &one.operands {
+                if let Operand::Value(value) = operand {
+                    named.insert(*value);
+                }
+            }
+        };
+        for change in changes {
+            match change {
+                Change::Inserted { inst, .. }
+                | Change::Erased { inst, .. }
+                | Change::Moved { inst, .. }
+                | Change::Cloned { to: inst, .. } => {
+                    out.terminators_made |= self.instruction(*inst).opcode.is_terminator();
+                    name_inst(&mut out.named, *inst);
+                }
+                Change::Rewritten(inst) => {
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
+                    name_inst(&mut out.named, *inst);
+                }
+                Change::Operand { inst, was, .. } => {
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
+                    if let Operand::Value(value) = was {
+                        out.named.insert(*value);
+                    }
+                }
+                Change::Operands { inst, was } => {
+                    out.terminators_rewritten |= self.instruction(*inst).opcode.is_terminator();
+                    for operand in was.iter() {
+                        if let Operand::Value(value) = operand {
+                            out.named.insert(*value);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for inst in added.iter().chain(moved.iter()).chain(rewritten.iter()) {
+            if !self.is_erased(inst) {
+                out.insts.insert(inst);
+            }
+        }
+        out
     }
 
     /// The edges terminator `inst` added and removed since the changes began:
@@ -340,44 +525,38 @@ impl Function {
         &self,
         inst: InstId,
         at_mark: Option<BlockId>,
-        changes: &[Change],
+        then: &[Operand],
         existed: bool,
         exists: bool,
         out: &mut Vec<(BlockId, BlockId, Edge)>,
     ) {
-        let mut then: Vec<Operand> = self.instruction(inst).operands.clone();
-        for change in changes.iter().rev() {
-            match change {
-                Change::Operand { inst: one, index, was } if *one == inst => then[*index as usize] = *was,
-                Change::Operands { inst: one, was } if *one == inst => then = was.to_vec(),
-                _ => {}
-            }
-        }
-        let targets = |operands: &[Operand]| -> Vec<BlockId> {
-            let mut out: Vec<BlockId> = Vec::new();
-            for operand in operands {
-                if let Operand::Block(block) = operand
-                    && !out.contains(block)
-                {
-                    out.push(*block);
-                }
-            }
-            out
+        #[cfg(test)]
+        VISITED.with(|visited| visited.set(visited.get() + then.len() + self.instruction(inst).operands.len()));
+        // The blocks named, once each and in order: a switch of N arms names
+        // N, which a scan of the list for each would make N^2.
+        let targets = |operands: &[Operand]| -> (Vec<BlockId>, IdSet<BlockId>) {
+            let mut seen = IdSet::<BlockId>::new();
+            let list = operands
+                .iter()
+                .filter_map(|operand| if let Operand::Block(block) = operand { Some(*block) } else { None })
+                .filter(|block| seen.insert(*block))
+                .collect();
+            (list, seen)
         };
         let before = at_mark.filter(|_| existed);
         let after = self.parent(inst).filter(|_| exists);
-        let old: Vec<(BlockId, BlockId)> =
-            before.map(|from| targets(&then).into_iter().map(|to| (from, to)).collect()).unwrap_or_default();
-        let new: Vec<(BlockId, BlockId)> = after
-            .map(|from| targets(&self.instruction(inst).operands).into_iter().map(|to| (from, to)).collect())
-            .unwrap_or_default();
-        for &(from, to) in &old {
-            if !new.contains(&(from, to)) {
+        let (old, old_set) = if before.is_some() { targets(then) } else { Default::default() };
+        let (new, new_set) =
+            if after.is_some() { targets(&self.instruction(inst).operands) } else { Default::default() };
+        // From another block, every edge differs.
+        let same = before == after;
+        if let Some(from) = before {
+            for &to in old.iter().filter(|to| !same || !new_set.contains(to)) {
                 out.push((from, to, Edge::Removed));
             }
         }
-        for &(from, to) in &new {
-            if !old.contains(&(from, to)) {
+        if let Some(from) = after {
+            for &to in new.iter().filter(|to| !same || !old_set.contains(to)) {
                 out.push((from, to, Edge::Added));
             }
         }
