@@ -933,7 +933,8 @@ fn find_common_type(
     let mut ty: Option<TypeId> = None;
     let mut ty_is_common = true;
     let mut integer: Option<TypeId> = None;
-    let begin = slices[first].begin;
+    // A partition of split tails alone has no slice of its own.
+    let Some(begin) = slices.get(first).filter(|_| first < last).map(|one| one.begin) else { return (None, None) };
     for slice in &slices[first..last] {
         let used = slice.used.expect("a live slice");
         if slice.begin != begin || slice.end != end_offset {

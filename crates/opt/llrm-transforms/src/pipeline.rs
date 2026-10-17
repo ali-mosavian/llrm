@@ -643,9 +643,17 @@ pub fn experiment_llvm() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_EXP_LLVM").is_some())
 }
 
-/// `LLRM_EXP_SROA=real`, read once: the slot's mem2reg is the translated
-/// `PromoteMemToReg` ([`crate::mem2reg`]), not the write-through `Promote`.
+/// `LLRM_EXP_SROA=real` or `mem2reg`, read once: the slot's mem2reg is the
+/// translated `PromoteMemToReg` ([`crate::mem2reg`]), not the write-through
+/// `Promote`.
 fn experiment_mem2reg() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("LLRM_EXP_SROA").is_ok_and(|one| one == "real" || one == "mem2reg"))
+}
+
+/// `LLRM_EXP_SROA=real`, read once: the slot's SROA is the translated
+/// `SROA.cpp` ([`crate::sroa`]).
+fn experiment_sroa() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("LLRM_EXP_SROA").is_ok_and(|one| one == "real"))
 }
@@ -681,7 +689,7 @@ fn llvm_order(
     let promote = |name| slot(name, promoted());
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let first: Box<dyn FunctionPass> =
-            if experiment_mem2reg() { Box::new(crate::sroa::Sroa) } else { Box::new(promote::Sroa) };
+            if experiment_sroa() { Box::new(crate::sroa::Sroa) } else { Box::new(promote::Sroa) };
         Box::new(Together { name, parts: vec![first, promoted()] })
     };
     let earlycse = |name| -> Box<dyn FunctionPass> {
