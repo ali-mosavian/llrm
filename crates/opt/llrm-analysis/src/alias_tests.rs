@@ -1638,3 +1638,31 @@ fn the_live_points_of_a_block_allocate_a_set_each_not_a_node_for_eleven_values()
     assert!(points.len() > 2 * values - 2);
     assert!(made <= 4 * points.len(), "{} points of up to {values} live values made {made} allocations", points.len());
 }
+
+/// Two arguments of a call, one a constant global and one a pointer nothing
+/// places, replaced by one value the analysis knows nothing of: the effect kept
+/// past the edit lists the global beside the unknown, a fresh run lists the
+/// unknown alone. `covers` took that for a contradiction and the replay check
+/// (`LLRM_CHECK_REPLAY`) stopped QCport's `ls` at -O2 once two arguments were
+/// merged. The global is within the unknown: the kept effect holds.
+#[test]
+fn an_effect_with_a_global_beside_the_unknown_covers_the_unknown_alone() {
+    let global = MemoryObject {
+        identity: Some(Identity::Global(12)),
+        extent: Some(2),
+        constant: true,
+        ..MemoryObject::new(MemoryKind::Global)
+    };
+    let other =
+        MemoryObject { identity: Some(Identity::Global(13)), extent: Some(2), ..MemoryObject::new(MemoryKind::Global) };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let placed = reference(one(&global, 0, 2));
+    let unknown = reference(UNKNOWN.clone());
+    assert!(
+        effect(vec![unknown.clone(), placed.clone()]).covers(&effect(vec![unknown])),
+        "the global is within the unknown"
+    );
+    assert!(!effect(vec![placed]).covers(&effect(vec![reference(one(&other, 0, 2))])), "another global is a new read");
+}

@@ -2214,6 +2214,34 @@ pub struct Effect {
     pub fills: Vec<MemRef>,
 }
 
+impl Effect {
+    /// Whether `self`, held past edits that keep every value's meaning, still
+    /// states what `fresh` finds, as `Summary::covers` has it: a reference
+    /// `fresh` gives up on (no placed slice: the unknown object, or any byte of
+    /// a whole one) refutes nothing, and any other is in `self`. Entries only
+    /// `self` has stay: two values found equal and replaced by one leave the
+    /// precise reference of the one beside the unknown of the other, which a
+    /// fresh run states once.
+    pub fn covers(
+        &self,
+        fresh: &Effect,
+    ) -> bool {
+        let gives_up = |one: &MemRef| {
+            one.provenance
+                .as_ref()
+                .is_none_or(
+                    |found| found.slices.as_slice().is_empty()
+                        || found.slices.iter().any(|slice| {
+                            slice.object.kind == MemoryKind::Unknown
+                                || (slice.low <= -(1_i64 << 31) && slice.high >= 1_i64 << 31)
+                        }),
+                )
+        };
+        let within = |old: &[MemRef], new: &[MemRef]| new.iter().all(|one| gives_up(one) || old.contains(one));
+        within(&self.loads, &fresh.loads) && within(&self.stores, &fresh.stores) && within(&self.fills, &fresh.fills)
+    }
+}
+
 /// `effects` with each value `to` gives another operand named by it, the
 /// effects of the same calls on the same bytes after a value is replaced by
 /// one found equal. The lists the calls share stay shared. None where a
