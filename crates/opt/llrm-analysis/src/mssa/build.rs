@@ -46,6 +46,7 @@ impl Mssa {
             value_to_access: IdMap::new(),
             dominance: dominance.clone(),
             next_id: 0,
+            use_list_steps: 0,
             block_numbering: Default::default(),
             block_numbering_valid: Default::default(),
         };

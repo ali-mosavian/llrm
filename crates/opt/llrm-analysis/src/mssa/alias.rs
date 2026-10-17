@@ -44,6 +44,9 @@ pub struct AliasQuery<'a> {
     cache: RefCell<llrm_support::hash::HashMap<u64, bool>>,
     /// Questions asked of `mod_set_loc`, and those it had to work out.
     asked: std::cell::Cell<(usize, usize)>,
+    /// Entries of the cache looked at to answer the questions: one a question,
+    /// for the test that holds the cost linear.
+    cache_steps: std::cell::Cell<u64>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -61,7 +64,13 @@ impl<'a> AliasQuery<'a> {
             by_instruction: Default::default(),
             cache: Default::default(),
             asked: Default::default(),
+            cache_steps: Default::default(),
         }
+    }
+
+    /// Cache entries looked at to answer the questions so far.
+    pub fn cache_steps(&self) -> u64 {
+        self.cache_steps.get()
     }
 
     /// How many `mod_set_loc` questions were asked and how many were worked out
@@ -128,6 +137,7 @@ impl<'a> AliasQuery<'a> {
         let (asked, worked) = self.asked.get();
         self.asked.set((asked + 1, worked));
         let key = (u64::from(def.0) << 32) | u64::from(loc.id);
+        self.cache_steps.set(self.cache_steps.get() + 1);
         if let Some(&known) = self.cache.borrow().get(&key) {
             return known;
         }

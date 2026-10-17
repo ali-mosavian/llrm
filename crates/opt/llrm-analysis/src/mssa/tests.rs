@@ -348,3 +348,64 @@ fn test_leaving_a_crowded_defining_access_keeps_the_other_users_in_its_list() {
     }
     mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
 }
+
+/// The loads of a body of `n` loads and one store, in `@f`.
+fn loads_and_a_store(n: usize) -> String {
+    let loads: String = (0..n)
+        .map(|k| format!("  %x{k} = load i16, ptr getelementptr (i8, ptr @g, i16 {})\n", 2 * (k % 120)))
+        .collect();
+    format!(
+        "define i16 @f() {{\nb0:\n  store i16 1, ptr getelementptr (i8, ptr @g, i16 250)\n{loads}  ret i16 %x0\n}}\n"
+    )
+}
+
+/// Taking a use off its defining access looks at a constant number of
+/// use-list entries, whatever the list holds (`Use::removeFromList`). A scan of
+/// the list made it N^2: the 1,600-statement `loop` ladder body was 1.9x
+/// today's walk (256 loads: 16,512 entries looked at for 256 removals, here at
+/// most 256).
+#[test]
+fn test_taking_a_use_off_a_crowded_defining_access_is_constant_work() {
+    for n in [256, 1024] {
+        let parsed = Parsed::new(&loads_and_a_store(n));
+        let unit = parsed.unit();
+        let (mut mssa, _) = translated(&unit);
+        let live = mssa.live_on_entry_def();
+        let uses: Vec<_> = (1..mssa.len() as u32).filter(|a| mssa.access(*a).kind == Kind::Use).collect();
+        let before = mssa.use_list_steps();
+        for &one in &uses {
+            mssa.set_defining_access(one, None);
+            mssa.set_defining_access(one, Some(live));
+        }
+        let steps = mssa.use_list_steps() - before;
+        assert!(steps <= uses.len() as u64, "{n} loads: {steps} entries looked at for {} removals", uses.len());
+    }
+}
+
+/// An alias question looks at one cache entry, however many locations have been
+/// asked of the def: the cache is a map, as `AAQueryInfo::AliasCache`. A list
+/// per def made 1,024 locations cost 1,024^2 / 2 entries looked at.
+#[test]
+fn test_an_alias_question_looks_at_one_cache_entry() {
+    use super::alias::AliasQuery;
+    for n in [256, 1024] {
+        let parsed = Parsed::new(&loads_and_a_store(n));
+        let unit = parsed.unit();
+        let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+        let aa = AliasQuery::new(&unit, &accesses);
+        let store = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| accesses.writes(inst).is_some_and(|w| !w.is_empty()))
+            .expect("the store");
+        let locations: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+        for _ in 0..2 {
+            for loc in &locations {
+                aa.mod_set_loc(store, loc);
+            }
+        }
+        let (asked, _) = aa.questions();
+        assert!(aa.cache_steps() <= asked as u64, "{n} locations: {} entries for {asked} questions", aa.cache_steps());
+    }
+}

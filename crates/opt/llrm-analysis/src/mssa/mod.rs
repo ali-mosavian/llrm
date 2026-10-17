@@ -94,6 +94,9 @@ pub struct Mssa {
     /// `BlockNumbering` and `BlockNumberingValid`.
     pub(crate) block_numbering: RefCell<IdMap<AccessId, u32>>,
     pub(crate) block_numbering_valid: RefCell<IdSet<BlockId>>,
+    /// Entries of a use list looked at to take an access out of it: one a
+    /// removal, for the tests that hold the cost linear.
+    pub(crate) use_list_steps: u64,
 }
 
 impl Mssa {
@@ -176,6 +179,7 @@ impl Mssa {
     ) {
         if let Some(old) = self.accesses[access as usize].defining {
             let slot = self.accesses[access as usize].user_slot as usize;
+            self.use_list_steps += 1;
             let users = &mut self.accesses[old as usize].users;
             debug_assert_eq!(users[slot], access);
             users.swap_remove(slot);
@@ -189,6 +193,11 @@ impl Mssa {
             self.accesses[access as usize].user_slot = users.len() as u32;
             self.accesses[new as usize].users.push(access);
         }
+    }
+
+    /// Use-list entries looked at so far to take accesses out of lists.
+    pub fn use_list_steps(&self) -> u64 {
+        self.use_list_steps
     }
 
     /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets
@@ -248,6 +257,7 @@ impl Mssa {
     ) {
         if let Some(old) = self.accesses[access as usize].optimized {
             let slot = self.accesses[access as usize].optimized_slot as usize;
+            self.use_list_steps += 1;
             let users = &mut self.accesses[old as usize].optimized_users;
             debug_assert_eq!(users[slot], access);
             users.swap_remove(slot);
