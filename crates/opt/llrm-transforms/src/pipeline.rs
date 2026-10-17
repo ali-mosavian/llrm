@@ -1443,8 +1443,9 @@ impl Run {
             .unwrap_or_else(|error| panic!("{}: {error}", file.display()));
     }
 
-    /// `LLRM_DUMP_INPUTS`: the body each pass is about to run over, a run that changes nothing included, with a
-    /// line in `manifest.txt` (pass, run, file, instructions) beside the dump.
+    /// `LLRM_DUMP_INPUTS`: the body each pass is about to run over, a run that
+    /// changes nothing included, with a line in `manifest.txt` (pass, run,
+    /// file, instructions) beside the dump.
     fn input(
         &self,
         name: &str,
