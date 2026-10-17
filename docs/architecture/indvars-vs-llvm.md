@@ -1,6 +1,6 @@
 # indvars against LLVM's IndVarSimplify
 
-TL;DR: `indvars` is 64.4 M of `d_faces` -O2 (46 runs, 34 of them in the pipeline step), LLVM's `IndVarSimplify` 23.6 M (41 loop invocations). Two rows are 65% of it and both are an analysis derived again after an edit, where LLVM's `ScalarEvolution` is kept and told what changed: the facts of the body are derived afresh after each of 12 widenings (21.8 M), and each exit's trip count is found again at every run (13.9 M).
+TL;DR: `indvars` is 64.4 M of `d_faces` -O2 (46 runs, 34 of them in the pipeline step), LLVM's `IndVarSimplify` 23.6 M (41 loop invocations). Two rows are 55% of it and both are an analysis derived again after an edit, where LLVM's `ScalarEvolution` is kept and told what changed: the facts of the body are derived afresh after each of 12 widenings (21.8 M), and each exit's trip count is found again at every run (13.9 M).
 
 Sources: llrm CI-mode build of main 7ac662405, `llrm-c -m32 -O2` of `d_faces.c`, callgrind inclusive, `LLRM_DEBUG=time` for runs; LLVM 24 (d1106deb71cc) `opt -passes='default<O2>'` on the same file, callgrind inclusive of `IndVarSimplifyPass::run`, which includes the `ScalarEvolution` it builds.
 
@@ -16,7 +16,7 @@ Per loop (a loop pass, 41 invocations here: 27 in `d_draw_faces`, 11 in `sc_mipf
 |---|--:|---|---|---|
 | `Standing::of` in `widened_with`: `consts::known` of the whole body derived afresh after each widening | 21.8 (12 widenings, 12 derivations of a 1,350-instruction body, 1.8 M each) | `WidenIV` edits the IV's uses; `SE.forgetValue` on what changed; the rest stands | `standing.changed()` drops all facts; the restart derives them for the next loop | probe: for each widening, is the next candidate loop's `_find` input (header phi, bound, start, compare) outside the users-closure of what the widening rewrote? Kill: under 70% independent |
 | `exitfold::folded_with` | 20.8 (`induction::exits` 13.9 over 111 calls, 125 K each; `guards` 4.9) | `getExitCount` cached per loop | the exit counts found again at every run, whether or not the body changed | probe: calls of `exits` per (loop, body version); kill if the repeat ratio is under 2 |
-| `Bounded` / `Counted` first ask | 5.6 + 4.6 | `SE` | the manager's analyses, built at the first ask of the step | the same analyses are asked by the next steps: not a row of this pass |
+| `Bounded` first ask | 5.6 | `SE` | the manager's analyses, built at the first ask of the step | the same analyses are asked by the next steps: not a row of this pass |
 | `exitsink::sunk` | 4.3 (46 calls, 93 K each) | `sinkUnusedInvariants` | scans every exit of the function each run | probe: runs that sink nothing; kill if under 80% sink nothing: then a structural precheck |
 | `loopexit::evaluated`, `exit_values`, `congruent`, `rewound` | under 1 M together | `rewriteLoopExitValues`, `replaceCongruentIVs` | | none |
 
