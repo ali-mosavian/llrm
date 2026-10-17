@@ -4793,46 +4793,12 @@ fn _inserted(
     Arc::new(made)
 }
 
-/// A requirement, naming whichever value now feeds the instruction.
-fn _wants(
-    side: &[(Held, RegId)],
-    rename: &IndexMap<u32, u32>,
-) -> Vec<(Held, RegId)> {
-    side.iter()
-        .map(|(held, register)| {
-            (Held { value: rename.get(&held.value).copied().unwrap_or(held.value), width: held.width }, *register)
-        })
-        .collect()
-}
-
 /// The instruction reading and writing the reload's value instead.
 pub fn _renamed(
-    one: &Insn,
+    one: &Arc<Insn>,
     rename: &IndexMap<u32, u32>,
 ) -> Arc<Insn> {
-    let swap = |value: &u32| rename.get(value).copied().unwrap_or(*value);
-    _with(one, |made| {
-        if let Some(what) = &one.what {
-            made.what = Some(Semantics {
-                dests: what.dests.iter().map(|x| _settled(x, rename)).collect(),
-                sources: what.sources.iter().map(|x| _settled(x, rename)).collect(),
-                ..what.clone()
-            });
-        }
-        made.defines = one.defines.iter().map(swap).collect();
-        made.uses = one.uses.iter().map(swap).collect();
-        made.requires = _wants(&one.requires, rename);
-        made.delivers = _wants(&one.delivers, rename);
-        made.widths = one.widths.iter().map(|(value, width)| (swap(value), *width)).collect();
-    })
-}
-
-/// One operand with every value it names put through the rename.
-fn _settled(
-    place: &Loc,
-    rename: &IndexMap<u32, u32>,
-) -> Loc {
-    ir::mapped(place, |one| Held { value: rename.get(&one.value).copied().unwrap_or(one.value), width: one.width })
+    one.renamed(&|value| rename.get(&value).copied().unwrap_or(value))
 }
 
 /// One move of a parallel copy, with its spilled end read or written where it

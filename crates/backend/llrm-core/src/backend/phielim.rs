@@ -933,28 +933,7 @@ fn _renamed(
     if rename.is_empty() {
         return Ok(Arc::clone(one));
     }
-    let mut out = (**one).clone();
-    if let Some(what) = &one.what {
-        let mut what = what.clone();
-        what.dests = what.dests.iter().map(|x| _settled(x, rename)).collect::<Result<_, _>>()?;
-        what.sources = what.sources.iter().map(|x| _settled(x, rename)).collect::<Result<_, _>>()?;
-        out.what = Some(what);
-    }
-    out.defines = one.defines.iter().map(|&v| _name(v, rename)).collect::<Result<_, _>>()?;
-    out.uses = one.uses.iter().map(|&v| _name(v, rename)).collect::<Result<_, _>>()?;
-    out.requires = one
-        .requires
-        .iter()
-        .map(|(held, register)| Ok((Held { value: _name(held.value, rename)?, width: held.width }, *register)))
-        .collect::<Result<_, String>>()?;
-    out.delivers = one
-        .delivers
-        .iter()
-        .map(|(held, register)| Ok((Held { value: _name(held.value, rename)?, width: held.width }, *register)))
-        .collect::<Result<_, String>>()?;
-    out.widths =
-        one.widths.iter().map(|&(value, width)| Ok((_name(value, rename)?, width))).collect::<Result<_, String>>()?;
-    Ok(Arc::new(out))
+    one.try_renamed(&|value| _name(value, rename))
 }
 
 /// The final identity after chained trivial phis are unified.
