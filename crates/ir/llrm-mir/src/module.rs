@@ -47,7 +47,7 @@ pub struct MetadataId(pub u32);
 
 /// An instruction's operand: a local value, a constant (a global value is
 /// one), or a block.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Operand {
     Value(ValueId),
     Constant(ConstantId),
