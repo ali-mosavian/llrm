@@ -10,10 +10,12 @@
 //! renaming down the CFG from the entry.
 //!
 //! DEVIATE, each with its reason:
-//! - Debug records (`dbg.declare`, assignment tracking): an alloca a `Declare`
-//!   record names is not promoted, so `-g` keeps its variables.
-//! - No `llvm.assume`, `noundef` metadata (`convertMetadataToAssumes`),
-//!   lifetime or droppable intrinsics, `fake_use`: MIR has none.
+//! - Debug records: a `Declare` of the alloca becomes `Value` records of what
+//!   is stored (`ConvertDebugDeclareToDebugValue`), a `Piece` where the stored
+//!   value is narrower than the alloca. No assignment tracking (`dbg.assign`):
+//!   MIR has none.
+//! - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
+//!   and no droppable users; no `fake_use`. Lifetime markers are translated.
 //! - MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 //! - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
 //!   only (no `noundef` arguments).
@@ -24,7 +26,9 @@
 //! - `NoSignedZeros` (fast-math flags of the phi): MIR phis carry none.
 
 use llrm_analysis::cfg;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
@@ -47,9 +51,10 @@ impl FunctionPass for Mem2Reg {
     fn run(
         &mut self,
         unit: &mut passes::Unit,
-        _analyses: &mut Analyses,
+        analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if promote_memory_to_register(unit.context, unit.function) {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        if promote_memory_to_register(unit.context, unit.layout, outer.callees(), unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -61,42 +66,27 @@ impl FunctionPass for Mem2Reg {
 /// there are none. Mem2Reg.cpp#L34
 fn promote_memory_to_register(
     context: &mut Context,
+    layout: &DataLayout,
+    callees: &Callees,
     function: &mut Function,
 ) -> bool {
     let Some(entry) = function.entry() else { return false };
     let mut changed = false;
     loop {
-        let declared = declared_allocas(function);
         let allocas: Vec<InstId> = function
             .block(entry)
             .instructions()
             .iter()
             .copied()
             .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
-            .filter(|&inst| is_alloca_promotable(context, function, inst) && !declared.contains(&inst))
+            .filter(|&inst| is_alloca_promotable(context, callees, function, inst))
             .collect();
         if allocas.is_empty() {
             return changed;
         }
-        promote_mem_to_reg(context, function, &allocas);
+        promote_mem_to_reg(context, layout, callees, function, &allocas);
         changed = true;
     }
-}
-
-/// The allocas a debug record names (DEVIATE: they are not promoted).
-fn declared_allocas(function: &Function) -> HashSet<InstId> {
-    function
-        .debug_records()
-        .iter()
-        .filter_map(|one| match one.what {
-            llrm_mir::DebugWhat::Declare(Operand::Value(value)) => Some(value),
-            _ => None,
-        })
-        .filter_map(|value| match function.value(value).def {
-            llrm_mir::module::ValueDef::Instruction(inst) => Some(inst),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Whether every operand of `gep` after the base is the constant zero.
@@ -120,12 +110,26 @@ fn has_all_zero_indices(
         )
 }
 
+/// `onlyUsedByLifetimeMarkers`: every use of `value` is a `llvm.lifetime.*`
+/// call about it. PromoteMemoryToRegister.cpp#L75 (`Instruction.cpp`)
+fn only_used_by_lifetime_markers(
+    context: &Context,
+    callees: &Callees,
+    function: &Function,
+    value: ValueId,
+) -> bool {
+    function
+        .users(value)
+        .iter()
+        .all(|one| memory::lifetime(context, callees, function, one.user) == Some(Operand::Value(value)))
+}
+
 /// `isAllocaPromotable`: only direct, non-volatile loads and stores of one
-/// type; a pointer derived by a bitcast or a gep of zeros is accepted when
-/// nothing uses it (what MIR leaves of `onlyUsedByLifetimeMarkers`).
-/// PromoteMemoryToRegister.cpp#L66
+/// type, lifetime markers, and pointers derived by a bitcast or a gep of
+/// zeros that only lifetime markers use. PromoteMemoryToRegister.cpp#L66
 pub fn is_alloca_promotable(
     context: &Context,
+    callees: &Callees,
     function: &Function,
     alloca: InstId,
 ) -> bool {
@@ -154,14 +158,23 @@ pub fn is_alloca_promotable(
                 }
                 expected = stored;
             }
+            Opcode::Call(_) => {
+                // Only a lifetime marker about the alloca (DEVIATE: no
+                // droppable intrinsics in MIR).
+                if memory::lifetime(context, callees, function, one.user) != Some(Operand::Value(address)) {
+                    return false;
+                }
+            }
             Opcode::Cast(CastOp::BitCast) | Opcode::Cast(CastOp::AddrSpaceCast) => {
-                if user.result.is_some_and(|result| !function.users(result).is_empty()) {
+                let Some(result) = user.result else { return false };
+                if !only_used_by_lifetime_markers(context, callees, function, result) {
                     return false;
                 }
             }
             Opcode::GetElementPtr { .. } => {
+                let Some(result) = user.result else { return false };
                 if !has_all_zero_indices(context, function, one.user)
-                    || user.result.is_some_and(|result| !function.users(result).is_empty())
+                    || !only_used_by_lifetime_markers(context, callees, function, result)
                 {
                     return false;
                 }
@@ -170,6 +183,68 @@ pub fn is_alloca_promotable(
         }
     }
     true
+}
+
+/// `removeIntrinsicUsers`: the lifetime markers of a promotable alloca, and
+/// the pointers derived from it, go; a marker leaves a store of poison where
+/// it was, as the memory is dead from there. PromoteMemoryToRegister.cpp#L522
+fn remove_intrinsic_users(
+    context: &mut Context,
+    callees: &Callees,
+    function: &mut Function,
+    alloca: InstId,
+) {
+    let address = function.instruction(alloca).result.expect("an alloca's address");
+    // The type used by the loads and stores (the first one found).
+    let promoted_type = function
+        .users(address)
+        .iter()
+        .find_map(
+            |one| {
+                let user = function.instruction(one.user);
+                match user.opcode {
+                    Opcode::Load { .. } => Some(user.ty),
+                    Opcode::Store { .. } => function.operand_type(context, user.operands[0]),
+                    _ => None,
+                }
+            },
+        );
+    let align = match function.instruction(alloca).opcode {
+        Opcode::Alloca { align, .. } => align,
+        _ => None,
+    };
+    let void = context.types.void();
+    let users: Vec<InstId> = function.users(address).iter().map(|one| one.user).collect();
+    for user in users {
+        if matches!(
+            function.instruction(user).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. }
+        ) {
+            continue;
+        }
+        if let Some(derived) = function.instruction(user).result {
+            // Erase the users of the derived pointer now (its lifetime
+            // markers).
+            for inner in function.users(derived).iter().map(|one| one.user).collect::<Vec<_>>() {
+                function.erase(inner).expect("a marker has no value");
+            }
+        }
+        // A marker directly on the alloca: the bytes are dead from here.
+        if let Some(ty) = promoted_type
+            && memory::lifetime(context, callees, function, user).is_some()
+        {
+            let value = poison(context, ty);
+            let store = function.create_instruction(
+                Opcode::Store { align, volatile: false },
+                void,
+                vec![value, Operand::Value(address)],
+                Flags::default(),
+                None,
+            );
+            function.insert(store, Position::Before(user)).expect("a placed marker");
+        }
+        function.erase(user).expect("nothing uses it any more");
+    }
 }
 
 /// `AllocaInfo`: what the loads and stores of one alloca are.
@@ -297,11 +372,57 @@ fn is_guaranteed_not_poison(
     )
 }
 
+/// The variables a `Declare` record says live in `address` (`DPUsers`).
+fn declared_variables(
+    function: &Function,
+    address: ValueId,
+) -> Vec<llrm_mir::MetadataId> {
+    function
+        .debug_records()
+        .iter()
+        .filter(|one| {
+            matches!(
+                one.what,
+                llrm_mir::DebugWhat::Declare(at) if at == Operand::Value(address)
+            )
+        })
+        .map(|one| one.variable)
+        .collect()
+}
+
+/// `ConvertDebugDeclareToDebugValue`: before `at`, each of `variables` is
+/// `value`: all of it, or the `bytes` of it that the value covers.
+/// PromoteMemoryToRegister.cpp#L118 (`Local.cpp`)
+fn convert_declares_to_values(
+    context: &Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    alloca: InstId,
+    variables: &[llrm_mir::MetadataId],
+    at: InstId,
+    value: Operand,
+) {
+    if variables.is_empty() {
+        return;
+    }
+    let Opcode::Alloca { allocated, .. } = function.instruction(alloca).opcode else { return };
+    let covered = function.operand_type(context, value).map(|ty| layout.alloc_size(&context.types, ty));
+    let whole = layout.alloc_size(&context.types, allocated);
+    for &variable in variables {
+        let what = match covered {
+            Some(bytes) if bytes != whole => llrm_mir::DebugWhat::Piece { value, offset: 0, bytes: bytes as u32 },
+            _ => llrm_mir::DebugWhat::Value(value),
+        };
+        function.add_debug_record(at, variable, what);
+    }
+}
+
 /// `rewriteSingleStoreAlloca`: one store; each load it dominates takes its
 /// value. Whether the alloca is gone; if not, `info.using_blocks` holds the
 /// blocks of the loads left. PromoteMemoryToRegister.cpp#L593
 fn rewrite_single_store_alloca(
     context: &mut Context,
+    layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
     info: &mut AllocaInfo,
@@ -351,6 +472,10 @@ fn rewrite_single_store_alloca(
     if !info.using_blocks.is_empty() {
         return false;
     }
+    // The variable is the stored value from the store on.
+    let variables = declared_variables(function, address);
+    let stored = function.instruction(only_store).operands[0];
+    convert_declares_to_values(context, layout, function, alloca, &variables, only_store, stored);
     function.erase(only_store).expect("a store has no users");
     lbi.delete_value(only_store);
     erase_alloca(function, alloca);
@@ -374,6 +499,7 @@ fn erase_alloca(
 /// store). PromoteMemoryToRegister.cpp#L706
 fn promote_single_block_alloca(
     context: &mut Context,
+    layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
     lbi: &mut LargeBlockInfo,
@@ -422,7 +548,10 @@ fn promote_single_block_alloca(
         lbi.delete_value(load);
     }
     // The stores and the alloca are dead.
+    let variables = declared_variables(function, address);
     for (_, store) in stores {
+        let stored = function.instruction(store).operands[0];
+        convert_declares_to_values(context, layout, function, alloca, &variables, store, stored);
         function.erase(store).expect("a store has no users");
         lbi.delete_value(store);
     }
@@ -473,6 +602,8 @@ struct RenamePassData {
 /// `PromoteMem2Reg`, for the allocas of one call.
 /// PromoteMemoryToRegister.cpp#L375
 struct PromoteMem2Reg<'a> {
+    layout: &'a DataLayout,
+    callees: &'a Callees,
     context: &'a mut Context,
     function: &'a mut Function,
     allocas: Vec<InstId>,
@@ -483,6 +614,8 @@ struct PromoteMem2Reg<'a> {
     phi_to_alloca: HashMap<InstId, usize>,
     alloca_lookup: HashMap<ValueId, usize>,
     alloca_value_types: Vec<Option<TypeId>>,
+    /// The variables declared to live in each alloca (`AllocaDPUsers`).
+    alloca_variables: Vec<Vec<llrm_mir::MetadataId>>,
     visited: HashSet<BlockId>,
     incoming_vals: VectorWithUndo,
     worklist: Vec<RenamePassData>,
@@ -530,8 +663,10 @@ impl<'a> PromoteMem2Reg<'a> {
     /// `PromoteMem2Reg::run`. PromoteMemoryToRegister.cpp#L800
     fn run(&mut self) {
         let mut lbi = LargeBlockInfo::default();
-        // `removeIntrinsicUsers` (L522) has no intrinsic to remove in MIR; the
-        // dead pointers derived from an alloca go with it (`erase_alloca`).
+        // All the inserted stores in advance: one numbering of each block.
+        for alloca in self.allocas.clone() {
+            remove_intrinsic_users(self.context, self.callees, self.function, alloca);
+        }
         let mut alloca_num = 0;
         while alloca_num < self.allocas.len() {
             let alloca = self.allocas[alloca_num];
@@ -561,6 +696,7 @@ impl<'a> PromoteMem2Reg<'a> {
             if info.defining_blocks.len() == 1
                 && rewrite_single_store_alloca(
                     self.context,
+                    self.layout,
                     self.function,
                     alloca,
                     &mut info,
@@ -574,7 +710,8 @@ impl<'a> PromoteMem2Reg<'a> {
             }
 
             // Only read and written in one block: a linear sweep.
-            if info.only_used_in_one_block && promote_single_block_alloca(self.context, self.function, alloca, &mut lbi)
+            if info.only_used_in_one_block
+                && promote_single_block_alloca(self.context, self.layout, self.function, alloca, &mut lbi)
             {
                 self.remove_from_allocas_list(&mut alloca_num);
                 alloca_num = alloca_num.wrapping_add(1);
@@ -582,6 +719,7 @@ impl<'a> PromoteMem2Reg<'a> {
             }
 
             self.alloca_value_types[alloca_num] = info.value_type;
+            self.alloca_variables[alloca_num] = declared_variables(self.function, address);
             self.alloca_lookup.insert(address, alloca_num);
 
             // The blocks that define the value, and those it is live into.
@@ -835,6 +973,28 @@ impl<'a> PromoteMem2Reg<'a> {
                 self.function.set_operands(inst, operands);
                 let result = self.function.instruction(inst).result.expect("a phi's value");
                 self.incoming_vals.set(alloca_no, Operand::Value(result));
+                // And the variable is the phi from the top of the block.
+                let variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
+                let top = self
+                    .function
+                    .block(block)
+                    .instructions()
+                    .iter()
+                    .copied()
+                    .find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+                if let Some(top) = top {
+                    let alloca = self.allocas[alloca_no];
+                    convert_declares_to_values(
+                        self.context,
+                        self.layout,
+                        self.function,
+                        alloca,
+                        &variables,
+                        top,
+                        Operand::Value(result),
+                    );
+                }
+                self.alloca_variables[alloca_no] = variables;
             }
         }
 
@@ -861,6 +1021,18 @@ impl<'a> PromoteMem2Reg<'a> {
                     // The value written is the alloca's from here on.
                     let value = op.operands[0];
                     self.incoming_vals.set(alloca_no, value);
+                    let variables = std::mem::take(&mut self.alloca_variables[alloca_no]);
+                    let alloca = self.allocas[alloca_no];
+                    convert_declares_to_values(
+                        self.context,
+                        self.layout,
+                        self.function,
+                        alloca,
+                        &variables,
+                        inst,
+                        value,
+                    );
+                    self.alloca_variables[alloca_no] = variables;
                     self.function.erase(inst).expect("a store has no users");
                 }
                 _ => {}
@@ -939,6 +1111,8 @@ fn simplify_phi(
 /// `PromoteMemToReg`: `allocas` promoted. PromoteMemoryToRegister.cpp#L1264
 fn promote_mem_to_reg(
     context: &mut Context,
+    layout: &DataLayout,
+    callees: &Callees,
     function: &mut Function,
     allocas: &[InstId],
 ) {
@@ -948,6 +1122,8 @@ fn promote_mem_to_reg(
     let dominance = cfg::Dominance::of(function);
     let count = allocas.len();
     PromoteMem2Reg {
+        layout,
+        callees,
         context,
         function,
         allocas: allocas.to_vec(),
@@ -956,6 +1132,7 @@ fn promote_mem_to_reg(
         phi_to_alloca: Default::default(),
         alloca_lookup: Default::default(),
         alloca_value_types: vec![None; count],
+        alloca_variables: vec![Vec::new(); count],
         visited: Default::default(),
         incoming_vals: VectorWithUndo { values: Vec::new(), undo: Vec::new() },
         worklist: Vec::new(),

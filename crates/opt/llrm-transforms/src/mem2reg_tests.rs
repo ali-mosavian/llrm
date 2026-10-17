@@ -149,3 +149,49 @@ b0:
     );
     assert!(after.contains("alloca") && after.contains("load volatile"), "{after}");
 }
+
+/// An alloca with lifetime markers around its store and load is promoted and
+/// the markers go. The markers were a use that is no load or store, and kept
+/// the alloca in memory.
+#[test]
+fn test_an_alloca_with_lifetime_markers_is_promoted_and_the_markers_go() {
+    let after = promoted(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+
+define i32 @f(i32 %a) {
+b0:
+  %s = alloca i32
+  call void @llvm.lifetime.start.p0(i64 4, ptr %s)
+  store i32 %a, ptr %s
+  %x = load i32, ptr %s
+  call void @llvm.lifetime.end.p0(i64 4, ptr %s)
+  ret i32 %x
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("call void @llvm.lifetime"), "{after}");
+    assert!(after.contains("ret i32 %a"), "{after}");
+}
+
+/// A declared variable's alloca is promoted, and the debugger is told the
+/// stored value. The declare kept the alloca in memory.
+#[test]
+fn test_a_declared_alloca_is_promoted_and_its_variable_is_the_stored_value() {
+    let after = promoted(
+        "define i32 @f(i32 %a) {
+b0:
+  %x = alloca i32
+  #dbg_declare(ptr %x, !0)
+  store i32 %a, ptr %x
+  %v = load i32, ptr %x
+  ret i32 %v
+}
+
+!0 = !{!\"f\", !\"x\", !1, i64 0}
+!1 = !{!\"int\"}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("#dbg_declare"), "{after}");
+    assert!(after.contains("#dbg_value(i32 %a, !0)"), "{after}");
+}
