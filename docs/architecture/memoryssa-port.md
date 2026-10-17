@@ -84,7 +84,7 @@ Each updater function has a DEVIATE-free translation target; the editing contrac
 
 ## 3. Shadow measurement
 
-On the dumped inputs (`~/scratch/replay/inputs-base`, `inputs-exp`, and the replay set) the translated build and walker run beside today's, never in the pipeline:
+On the dumped pass inputs (the replay set of every pass run, with and without the LLVM-order switches) the translated build and walker run beside today's, never in the pipeline:
 
 1. Equality: for every load and store of every body the translated `getClobberingMemoryAccess` is one of today's `clobbers` set (or its phi optimum) with the same caps; any difference is classified (cap, a fact LLVM lacks, a bug).
 2. Cost: `build_memory_ssa` instructions per IR instruction against LLVM's `MemorySSAAnalysis::run` on the same function bodies (2.47 M over 27 builds; the bodies from `-print-before=memoryssa`-style dumps of `clang -cc1`), and walker steps per query against LLVM's 286 queries at about 11,000.
