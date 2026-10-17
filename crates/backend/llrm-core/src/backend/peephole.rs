@@ -315,75 +315,103 @@ impl Peephole {
         // everything below to reason about, and it is the only pass here
         // that can remove a copy the coalescer refused on colourability.
         let mut seen = needs::Contents::default();
-        let body = gated(&mut seen, needs::COPY, phielim::unsplit(&body), |body| Ok(regthrash::thrashed(body)))?;
-        let body = frame_copies(&body, &self.cpu, &self.classes)?;
-        let body = gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?;
-        let body = extensions(self.rules, &body);
-        let body = copysink::sunk(&body);
-        let body = spillforward::forwarded(&body);
-        // After the forwarding: a reload on the other path is gone, and the
-        // store need not run there.
-        let body = crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body));
-        let body = storecombine::combined(&body);
-        let body = pushed_constants(self.rules, &body);
-        let body = far_loads(
-            self.rules,
-            &fused_calls(
-                self.rules,
-                &fused(
-                    self.rules,
-                    &overwritten(&shuttles(
-                        self.rules,
-                        &restored_copies(
-                            self.rules,
-                            &high_extracts(
-                                &transferred(
-                                    self.rules,
-                                    &commuted(self.rules, &constants(&pushes(self.rules, &body, &self.cpu))),
-                                ),
-                                &self.cpu,
-                            )?,
-                        ),
-                    )),
-                ),
-            ),
+        let body = phielim::unsplit(&body);
+        let before = body.clone();
+        let body =
+            note("regthrash", &before, gated(&mut seen, needs::COPY, body, |body| Ok(regthrash::thrashed(body)))?);
+        let body = note("frame_copies", &body, frame_copies(&body, &self.cpu, &self.classes)?);
+        let before = body.clone();
+        let body =
+            note("copyprop", &before, gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?);
+        let body = note("extensions", &body, extensions(self.rules, &body));
+        let body = note("copysink", &body, copysink::sunk(&body));
+        let body = note("spillforward", &body, spillforward::forwarded(&body));
+        let body =
+            note("postrasink", &body, crate::backend::postrasink::latched(&crate::backend::postrasink::sunk(&body)));
+        let body = note("storecombine", &body, storecombine::combined(&body));
+        let body = note("pushed_constants", &body, pushed_constants(self.rules, &body));
+        let body = note("pushes", &body, pushes(self.rules, &body, &self.cpu));
+        let body = note("constants", &body, constants(&body));
+        let body = note("commuted", &body, commuted(self.rules, &body));
+        let body = note("transferred", &body, transferred(self.rules, &body));
+        let body = note("high_extracts", &body, high_extracts(&body, &self.cpu)?);
+        let body = note("restored_copies", &body, restored_copies(self.rules, &body));
+        let body = note("shuttles", &body, shuttles(self.rules, &body));
+        let body = note("overwritten", &body, overwritten(&body));
+        let body = note("fused", &body, fused(self.rules, &body));
+        let body = note("fused_calls", &body, fused_calls(self.rules, &body));
+        let body = note("far_loads", &body, far_loads(self.rules, &body));
+        let before = body.clone();
+        let body = note(
+            "exact_addresses",
+            &before,
+            gated(&mut seen, needs::EXACT_CELL, body, |body| {
+                crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
+            })?,
         );
-        let body = gated(&mut seen, needs::EXACT_CELL, body, |body| {
-            crate::backend::exactaddress::exact_addresses(&body, &self.cpu)
-        })?;
-        let body = addresses(&body, &self.cpu)?;
-        let body = stepped_after_compare(self.rules, &body);
-        let body = gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?;
-        let body = borrows(self.rules, &increments(self.rules, &body));
-        let body = doubled(self.rules, &body, &self.cpu)?;
-        let body = narrowed_arithmetic(self.rules, &body);
+        let body = note("addresses", &body, addresses(&body, &self.cpu)?);
+        let body = note("stepped_after_compare", &body, stepped_after_compare(self.rules, &body));
+        let before = body.clone();
+        let body = note(
+            "secondary_bases",
+            &before,
+            gated(&mut seen, needs::INSERTED | needs::BASED, body, |body| secondary_bases(&body, &self.cpu))?,
+        );
+        let body = note("increments", &body, increments(self.rules, &body));
+        let body = note("borrows", &body, borrows(self.rules, &body));
+        let body = note("doubled", &body, doubled(self.rules, &body, &self.cpu)?);
+        let body = note("narrowed_arithmetic", &body, narrowed_arithmetic(self.rules, &body));
         // A zero upper half proven by the first is what the second reads, and
         // the copies it makes are forwarded.
         let body = if self.rules.zero_extensions.is_some() {
-            let body =
-                zero_extensions(self.rules, &widened_moves(self.rules, &crate::backend::upperzero::hoisted(&body)));
-            gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?
+            let body = note("upperzero_hoisted", &body, crate::backend::upperzero::hoisted(&body));
+            let body = note("widened_moves", &body, widened_moves(self.rules, &body));
+            let body = note("zero_extensions", &body, zero_extensions(self.rules, &body));
+            let before = body.clone();
+            note("copyprop2", &before, gated(&mut seen, needs::COPY, body, |body| Ok(copyprop::forwarded(&body)))?)
         } else {
             body
         };
-        let body = zeroed_loads(self.rules, &body, &self.cpu)?;
-        let body = sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes);
-        let body = machinecse::eliminated(&body)?;
-        let body = waits(&zero_compares(
-            self.rules,
-            &compares_again(&tested(self.rules, &zeroes(&narrowed_moves(self.rules, &body)))),
-        ));
-        let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = note("zeroed_loads", &body, zeroed_loads(self.rules, &body, &self.cpu)?);
+        let body = note("sharedstores", &body, sharedstores::shared(&body, &self.cpu, &self.saved, &self.classes));
+        let body = note("machinecse", &body, machinecse::eliminated(&body)?);
+        let body = note("narrowed_moves", &body, narrowed_moves(self.rules, &body));
+        let body = note("zeroes", &body, zeroes(&body));
+        let body = note("tested", &body, tested(self.rules, &body));
+        let body = note("compares_again", &body, compares_again(&body));
+        let body = note("zero_compares", &body, zero_compares(self.rules, &body));
+        let body = note("waits", &body, waits(&body));
+        let body = note("machinedce", &body, machinedce::eliminated(body.clone()));
+        let body = note("popped_arguments", &body, popped_arguments(&body, &self.cpu)?);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
         // 32-bit address is the prefixed form of a 16-bit one. A native
         // one reads whole registers.
-        let body = self._frame(body);
+        let body = note("frame", &body, self._frame(body.clone()));
         let native = self.cpu.dword_address_form().is_some_and(|form| !form.secondary);
         if native {
             return Ok(body);
         }
-        gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))
+        let before = body.clone();
+        Ok(note(
+            "upperzero_established",
+            &before,
+            gated(&mut seen, needs::UNHELD, body, |body| Ok(crate::backend::upperzero::established(&body)))?,
+        ))
     }
+}
+
+/// `LLRM_PEEPHOLE_STEPS`: what each sub-pass did to the body (a spike's
+/// counter).
+fn note(
+    name: &str,
+    before: &LirBody,
+    after: LirBody,
+) -> LirBody {
+    if llrm_support::env_flag!("LLRM_PEEPHOLE_STEPS") {
+        let (was, now) = (before.insns().len() as i64, after.insns().len() as i64);
+        eprintln!("[peephole-step] {name} {} {}", u8::from(*before != after), now - was);
+    }
+    after
 }
 
 /// A call's `add sp,unit*n` as `n` pops into a dead scratch register, as BCC
