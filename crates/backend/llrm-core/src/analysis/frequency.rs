@@ -15,18 +15,35 @@ use llrm_analysis::branchprob;
 
 use crate::analysis::facts::Fact;
 use crate::analysis::loops;
-use crate::model::lir::{Block, LirBlock, LirBody};
+use crate::model::lir::{Block, Insns, LirBlock, LirBody};
 use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::support::hash::IndexMap;
 
 /// The body's blocks as a frequency reads them: the flow between them, the odds
-/// on its edges and the proven trips. No instruction is read, so a spill or a
-/// reload leaves a frequency as it was.
+/// on its edges and the proven trips, and, of a block with one successor,
+/// whether it only jumps on (`idle`: a bridge is left out of the loops). No
+/// other instruction is read, so a spill or a reload leaves a frequency as it
+/// was, unless it lands in a bridge.
 pub struct Cfg {
     entry: i64,
     shape: Vec<(i64, Vec<i64>)>,
     odds: BlockOdds,
     trips: Vec<(i64, i64)>,
+    /// The instructions of each block of one successor, and whether they are
+    /// idle.
+    idle: Vec<Option<(Insns, bool)>>,
+}
+
+/// Whether a block does nothing but jump on: no instruction that prints, but
+/// jumps.
+fn idle(block: &LirBlock) -> bool {
+    block
+        .insns
+        .iter()
+        .all(
+            |one| !crate::backend::masm::prints(one)
+                || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
+        )
 }
 
 impl Cfg {
@@ -36,6 +53,14 @@ impl Cfg {
             shape: body.blocks.iter().map(|block| (block.at, block.succ.to_vec())).collect(),
             odds: body.odds.clone(),
             trips: body.loop_trip_counts.clone(),
+            idle: body
+                .blocks
+                .iter()
+                .map(|block| {
+                    (block.at != body.entry && block.succ.len() == 1 && block.succ[0] != block.at)
+                        .then(|| (block.insns.clone(), idle(block)))
+                })
+                .collect(),
         }
     }
 
@@ -48,6 +73,9 @@ impl Cfg {
             && self.shape.iter().zip(&body.blocks).all(|((at, succ), block)| *at == block.at && *succ == block.succ)
             && self.odds == body.odds
             && self.trips == body.loop_trip_counts
+            && self.idle.iter().zip(&body.blocks).all(|(kept, block)| {
+                kept.as_ref().is_none_or(|(insns, was)| insns.same_as(&block.insns) || *was == idle(block))
+            })
     }
 }
 
@@ -270,14 +298,7 @@ impl Frequency {
         let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
-            let idle = one
-                .insns
-                .iter()
-                .all(
-                    |one| !crate::backend::masm::prints(one)
-                        || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
-                );
-            (at != entry && idle && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
+            (at != entry && idle(one) && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
         };
         // Past the bridges, and the share of the edge that reaches there.
         let beyond = |mut at: i64| -> i64 {
@@ -509,6 +530,38 @@ mod tests {
         let body = body.with_blocks(blocks);
         let found = Frequency::of(&body);
         assert!((found.block(4) - found.block(3)).abs() < 1e-6, "{} against {}", found.block(4), found.block(3));
+    }
+
+    /// Whether a block is a bridge, and so left out of the loops' flow, is read
+    /// from its instructions. A bridge on a loop's back edge that took a
+    /// reload kept the frequencies worked out while it was one: the kept
+    /// `flow` had its edge and working it out again does not
+    /// (`LLRM_CHECK_FACTS` failed every regalloc fuzz test on main).
+    #[test]
+    fn test_a_bridge_that_takes_work_is_asked_again() {
+        let mut body = counted(Some(5), 124.0 / 128.0);
+        body.frequencies = None;
+        let mut split = body.clone();
+        split.odds.rerouted(2, &[2, 3], 2, &[(9, 1.0)]);
+        split.blocks[1].succ = vec![9, 3].into();
+        split.blocks.push(block(9, "jmp", Operation::Jump, vec![2]).into());
+        let bridge = Frequency::of(&split);
+        let worked = split.with_blocks(
+            split
+                .blocks
+                .iter()
+                .map(|one| {
+                    if one.at == 9 {
+                        one.with_insns(vec![insn(9, Operation::Move, "mov"), one.insns[0].clone()])
+                    } else {
+                        one.clone()
+                    }
+                })
+                .collect(),
+        );
+        let kept = Frequency::of(&worked);
+        let fresh = Frequency::over(&worked, &worked.blocks);
+        assert_eq!(*kept, fresh, "a block with work in it was still a bridge (bridge flow {:?})", bridge.table());
     }
 
     fn counted(
