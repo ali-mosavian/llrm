@@ -22,7 +22,9 @@ same bytes (every program and tests/run/c program at each level; the job fails o
 
 ## The profile
 
-- What trains it: `tools/pgo/corpus.toml`: every bench C program at -m32 and -m16, at -O1, -O2 and -Os, and QCport's render modules.
+- What trains it: `tools/pgo/corpus.toml`: every bench C program at -m32 and -m16, at -O1, -O2 and -Os, and every tests/run/c program at its
+  own flags. All in the repository: QCport's modules need its C library headers, which CI does not have. With `QCPORT` set (its `src`) they
+  join the training locally. A compile of the corpus that fails fails the job: a corpus that does not compile trains less than it says.
 - Size: about 30 MB. It is a CI cache keyed by the compiler tree's hash (`tools/bench/basecounts.py key`), never committed.
 - Age: it describes the source it was made from. A function changed since gets no profile data, as does one the training never ran
   (a fresh profile already leaves about 6,000 of them: the nib and OMF front ends, error paths). The build prints `no profile data available
