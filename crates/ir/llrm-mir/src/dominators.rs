@@ -450,9 +450,10 @@ fn postorder(
     function: &Function,
     entry: BlockId,
 ) -> Vec<BlockId> {
-    let mut out = Vec::new();
-    let mut seen = crate::hash::HashSet::from_iter([entry]);
-    let mut stack = vec![(entry, function.successors(entry), 0)];
+    let mut out = Vec::with_capacity(function.layout().len());
+    let mut seen = crate::dense::IdSet::from_iter([entry]);
+    let mut stack = Vec::with_capacity(function.layout().len().min(64));
+    stack.push((entry, function.successors(entry), 0));
     while let Some((block, successors, next)) = stack.last_mut() {
         if let Some(&successor) = successors.get(*next) {
             *next += 1;
