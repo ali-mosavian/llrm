@@ -170,7 +170,7 @@ fn clobbers_of(body: &str) -> Vec<(llrm_mir::module::InstId, Option<llrm_mir::mo
     let unit = parsed.unit();
     let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
     let (mut mssa, _) = {
-        let mssa = Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses));
+        let mssa = Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses, unit.function));
         (mssa, ())
     };
     let aa = AliasQuery::new(&unit, &accesses);
@@ -282,4 +282,47 @@ b3:
 ",
     );
     assert_eq!(found.last().expect("the load").2, Kind::Phi, "{found:?}");
+}
+
+/// A volatile load is ordered against the other defs, so it is a def, not a use
+/// (`isOrdered`,
+/// [`MemorySSA.cpp#L1748`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L1748)).
+/// Taken as a use it would move across a store.
+#[test]
+fn test_a_volatile_load_is_a_def() {
+    let parsed = Parsed::new(
+        "define i16 @f() {
+b0:
+  %a = load volatile i16, ptr getelementptr (i8, ptr @g, i16 32)
+  %b = load i16, ptr getelementptr (i8, ptr @g, i16 48)
+  ret i16 %b
+}
+",
+    );
+    let unit = parsed.unit();
+    let (mssa, _) = translated(&unit);
+    mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
+    let block = unit.function.layout()[0];
+    let insts = unit.function.block(block).instructions();
+    assert_eq!(mssa.access(mssa.get_memory_access(insts[0]).expect("an access")).kind, Kind::Def);
+    assert_eq!(mssa.access(mssa.get_memory_access(insts[1]).expect("an access")).kind, Kind::Use);
+}
+
+/// Two volatile loads are never reordered (`areLoadsReorderable`): the second
+/// is clobbered by the first. A plain load of another cell after them is
+/// clobbered by neither.
+#[test]
+fn test_a_volatile_load_clobbers_the_next_volatile_load_only() {
+    let found = clobbers_of(
+        "define i16 @f() {
+b0:
+  %a = load volatile i16, ptr getelementptr (i8, ptr @g, i16 32)
+  %b = load volatile i16, ptr getelementptr (i8, ptr @g, i16 48)
+  %c = load i16, ptr getelementptr (i8, ptr @g, i16 64)
+  ret i16 %c
+}
+",
+    );
+    assert_eq!(found[1].1, Some(found[0].0), "the second volatile load: {found:?}");
+    assert!(found[2].1.is_none() && found[2].2 == Kind::Def, "the plain load: {found:?}");
 }

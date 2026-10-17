@@ -52,8 +52,11 @@ fn main() {
             "newwalk" => {
                 let accesses = Accesses::plain(&unit, &Default::default());
                 let shape = unit.shape();
-                let mut built =
-                    llrm_analysis::mssa::Mssa::build(function, &shape.dominance, &shadow::effect_of(&accesses));
+                let mut built = llrm_analysis::mssa::Mssa::build(
+                    function,
+                    &shape.dominance,
+                    &shadow::effect_of(&accesses, unit.function),
+                );
                 let aa = llrm_analysis::mssa::alias::AliasQuery::new(&unit, &accesses);
                 for (_, inst) in function.walk() {
                     if let Some(access) = built.get_memory_access(inst) {
