@@ -175,6 +175,13 @@ pub fn analysed(function: &Function) -> Escapes {
 
 thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WHOLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out a whole function's exposed
+/// allocas, for a test that an edit does not.
+pub fn whole_runs() -> usize {
+    WHOLE.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has asked `exposes` of one alloca, for a test
@@ -191,6 +198,7 @@ pub fn exposed_allocas(
     function: &Function,
     marker: impl Fn(InstId) -> bool,
 ) -> BTreeSet<ValueId> {
+    WHOLE.with(|runs| runs.set(runs.get() + 1));
     let mut exposing = vec![false; function.value_count()];
     // The values a value moves into, reversed: who feeds each.
     let mut feeds: Vec<llrm_mir::inline::InlineVec<ValueId, 3>> = vec![Default::default(); function.value_count()];
@@ -223,6 +231,51 @@ pub fn exposed_allocas(
         }
     }
     allocas.into_iter().filter(|one| exposing[one.0 as usize]).collect()
+}
+
+/// `exposed_allocas` of a function as it stands, from `previous`, what it was
+/// before edits that touched instructions reading `touched`: an alloca's
+/// answer changes only where an instruction that reads one of the values its
+/// address moves through is edited, and walking back through moves and phis
+/// from the values the edits read finds those allocas. Each is asked again;
+/// the rest are as they were.
+pub fn exposed_renewed(
+    function: &Function,
+    previous: impl IntoIterator<Item = ValueId>,
+    touched: &[ValueId],
+    marker: impl Fn(InstId) -> bool,
+) -> Vec<ValueId> {
+    use llrm_mir::module::ValueDef;
+    let mut affected = llrm_mir::dense::IdSet::<ValueId>::new();
+    let mut seen = llrm_mir::dense::IdSet::<ValueId>::new();
+    let mut pending = touched.to_vec();
+    while let Some(value) = pending.pop() {
+        if !seen.insert(value) {
+            continue;
+        }
+        let ValueDef::Instruction(inst) = function.value(value).def else { continue };
+        if function.is_erased(inst) {
+            continue;
+        }
+        let instruction = function.instruction(inst);
+        if matches!(instruction.opcode, Opcode::Alloca { .. }) {
+            affected.insert(value);
+        } else if instruction.opcode == Opcode::Phi {
+            pending.extend(instruction.operands.iter().filter_map(|one| match one {
+                Operand::Value(value) => Some(*value),
+                _ => None,
+            }));
+        } else if let Some(Operand::Value(from)) = source(function, inst) {
+            pending.push(from);
+        }
+    }
+    let gone = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => function.is_erased(inst),
+        ValueDef::Argument(_) => false,
+    };
+    let mut found: Vec<ValueId> = previous.into_iter().filter(|one| !affected.contains(one) && !gone(*one)).collect();
+    found.extend(affected.iter().filter(|&one| exposes(function, one, &marker)));
+    found
 }
 
 /// Whether `alloca`'s address is exposed, as `analysed` finds it: it

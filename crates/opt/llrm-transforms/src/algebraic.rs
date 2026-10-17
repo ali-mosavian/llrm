@@ -833,14 +833,20 @@ fn _recurrences(
     analyses: &mut Analyses,
     edited: bool,
 ) -> BTreeSet<ValueId> {
-    let masked_scale = function
+    // The values `_mask_scaled` asks about: the source of each mask that a
+    // scale reads. Only a loop holding the definition of one can have it among
+    // its recurrences, so only those loops are asked (LLVM asks SCEV of the
+    // one value, not of every loop).
+    let sources: Vec<i64> = function
         .walk()
-        .any(
-            |(_, inst)| _scale(context, function, inst)
-                .and_then(|scale| _definition(function, scale.source))
-                .is_some_and(|mask| _bitwise(context, function, mask).is_some_and(|(op, ..)| op == BinaryOp::And)),
-        );
-    if !masked_scale {
+        .filter_map(|(_, inst)| {
+            let mask = _definition(function, _scale(context, function, inst)?.source)?;
+            let (BinaryOp::And, Operand::Value(source), _) = _bitwise(context, function, mask)? else { return None };
+            let ValueDef::Instruction(defining) = function.value(source).def else { return None };
+            function.parent(defining).map(cfg::id)
+        })
+        .collect();
+    if sources.is_empty() {
         return BTreeSet::new();
     }
     // The manager's shape and register facts, brought up to date by what the
@@ -853,7 +859,12 @@ fn _recurrences(
     let shape = analyses.get::<Shape>(context, layout, function);
     let registers = analyses.get::<Registers>(context, layout, function);
     let analysed = Unit::within(context, layout, function, outer).with_shape(&shape).with_registers(&registers);
-    shape.loops.iter().flat_map(|one| induction::advances(&analysed, one).into_keys()).collect()
+    shape
+        .loops
+        .iter()
+        .filter(|one| sources.iter().any(|at| one.body.contains(at)))
+        .flat_map(|one| induction::advances(&analysed, one).into_keys())
+        .collect()
 }
 
 /// `(x & m) * 2^k` is `(x * 2^k) & (m * 2^k)` at every width, where the
