@@ -131,6 +131,18 @@ The harness (`LLRM_SOLVE_AT`, `LLRM_PLACE_FACTS`; throwaway branch) names the st
 
 `registers`, `annotated` and `exposed-frames` cannot be placed: withheld from `fold` the `d_faces` object doubles (8,068 to 15,320 bytes); they are the cheap many and stay per version. Through-memory away from `decide` is already its own change (#2061). "Objects differ" is the instrument, not the verdict: the rows tool (bytes and executed work against min(gcc, clang), worst program beside geomean) decides, and no row may get worse.
 
+## The rule, and why not asking lazily at the rewrite site
+
+**The rule.** A whole-function fact is solved at every pass whose edits consume it, and at no other: the set a pass reads is the pass's declared requirement, LLVM's `getAnalysisUsage` required set, and a position is where a consumer sits, not a tuned list. The probe states it from the consumer side: bounded is consumed by `fold` and `algebraic` (`tile`'s object is byte-identical when bounded is solved at `fold,algebraic`, and 3 of 803 corpus objects differ), through-memory by `fold` and not by `decide` (0 of its edits).
+
+**Why not lazy.** A pass that asks "when it needs it" would make placement fall out of the passes' own asks, and for per-query facts that is the design (LLVM's `AAManager`, `computeKnownBits` to depth 6: asked at the site, capped, no whole-function state). It does not work for the facts here that are solves:
+
+1. *A solve answers for one body version, and a pass edits as it goes.* The ask after an edit is a rebuild. `fold` builds `ThroughMemory` once per body version (5 builds on the `mem` ladder at N=1600), each one a walk of every load (4,832 provider queries); that is 531 M of `fold`'s 600 M, and the manager's "compute on first ask" is what produces 2.8 computations per pass run against LLVM's 0.5. A lazy ask at the site keeps the rebuild per edit; placement removes the ask.
+2. *The pass cannot know that it will not need the answer until it has it.* `decide` asks the facts at 574 branch visits and decides none; the facts are what decides. A guard on "a load is in the condition's cone" was built and measured: `ThroughMemory` is asked by `fold` earlier in the same pipeline, so decide reads a cached result and the guard saved nothing (+0.6% of decide, +0.03% of the compile; [compile-time-spec section 8](compile-time-spec.md), "Decide's facts only where a branch needs them"). Only a per-query form of the fact, which does not exist for `ThroughMemory`, would make the ask cheap.
+3. *Consumers read most of a solve.* `Annotated` is asked for 87% of what `point_values` solves ([redesign-plan](redesign-plan.md), 2.1); a per-query form saves what the pass does not ask, which is little.
+
+What is not measured, and decides between the two: the cost of a capped per-load walk for `ThroughMemory` at the site (LLVM's `memdep-block-scan-limit` 100) against the whole build, per ask. That is the prototype with the kill rule "asks times cost per ask at least the whole build" ([redesign-plan](redesign-plan.md), 3.1). Until it exists the placement and the lazy form are not alternatives: the facts that have a per-query form are asked lazily with a cap; the solves are placed.
+
 ## Design
 
 **Positions.** A solver position is a step label (`r01-fold`) or a pass. Which: the first `fold` of round 1 and the `fold` after `gvn` are the candidates; step 0's per-(pass, round) counts of fact-enabled rewrites choose them. The number of positions per function is bounded (the study's rule: three or fewer cover 90% of fact-enabled rewrites).
