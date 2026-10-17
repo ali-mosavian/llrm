@@ -941,6 +941,8 @@ thread_local! {
     pub(crate) static UNCHANGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Accesses the walks stepped over.
     pub(crate) static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Candidate writes the index walk asked of a read.
+    pub(crate) static CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1024,6 +1026,12 @@ pub struct MemorySSA<'a> {
 /// checks, gcc's value numbering at `sccvn-max-alias-queries-per-access`
 /// (1000).
 pub const MAX_NEAREST_WRITES: usize = 100;
+
+/// Writes nearer than the exact one that the index walk asks of one read before
+/// it answers with the next as a clobber (LLVM's `MaxCheckLimit` counts defs
+/// visited the same way). With no exact write of the cell, a body of N writes
+/// through unknown pointers asked N of every read: `mem` 1600, 1.26 M asks.
+pub const MAX_CANDIDATES: usize = 100;
 
 /// Accesses one walk steps over before it answers with the access it stopped
 /// at, as a clobber (LLVM's walker stops at `memssa-check-limit` checks). The
@@ -1447,6 +1455,7 @@ impl MemorySSA<'_> {
             let (mut wild, mut escaping) =
                 (index.wild[above], if reaches_others { index.escaping[above] } else { None });
             let mut hit = None;
+            let mut asked = 0usize;
             // The writes nearer than the exact one that may reach the cell,
             // nearest first: the walk asks each, as it asks any def.
             loop {
@@ -1469,6 +1478,14 @@ impl MemorySSA<'_> {
                     wild = index.up_wild[candidate];
                 } else {
                     escaping = index.up_escaping[candidate];
+                }
+                asked += 1;
+                #[cfg(test)]
+                CANDIDATES.with(|count| count.set(count.get() + 1));
+                if asked > MAX_CANDIDATES {
+                    self.stopped.set(true);
+                    hit = Some(candidate);
+                    break;
                 }
                 let at = self.access(candidate).site.expect("a def has a site");
                 if !is_wild

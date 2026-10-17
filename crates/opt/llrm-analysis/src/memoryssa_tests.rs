@@ -1046,3 +1046,42 @@ fn test_a_walk_stops_at_the_step_limit_with_the_access_it_stopped_at() {
     assert!(steps <= MAX_WALK_STEPS + 1, "{steps} steps for one walk");
     assert!(found.iter().all(|id| graph.access(*id).kind != Kind::Live), "the walk said nothing clobbers the load");
 }
+
+/// A read of a cell one store wrote, past N writes at a variable index of
+/// another object (wild: no cell, yet none reaches it), asked each of them in
+/// the index walk (`mem` 1600: 1.26 M asks, a hash of the cell and a clobber
+/// check each). It asks `MAX_CANDIDATES` and answers with the next write as a
+/// clobber.
+#[test]
+fn test_a_read_asks_at_most_the_candidate_limit_of_the_writes_before_it() {
+    let writes = 400;
+    let wild: String = (0..writes)
+        .map(|k| {
+            format!(
+                "  %j{k} = add i16 %i, {k}\n  %w{k} = getelementptr i8, ptr %buf, i16 %j{k}\n  store i8 1, ptr %w{k}\n"
+            )
+        })
+        .collect();
+    let reads = 60;
+    let cell = |k: usize| format!("getelementptr (i8, ptr @g, i16 {})", 8 + k);
+    let first: String = (0..reads).map(|k| format!("  store i8 0, ptr {}\n", cell(k))).collect();
+    let loads: String = (0..reads).map(|k| format!("  %y{k} = load i8, ptr {}\n", cell(k))).collect();
+    let parsed = Parsed::new(&format!(
+        "define void @f(i16 %i) {{\nb0:\n  %buf = alloca [256 x i8]\n{first}{wild}{loads}  ret void\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let mut most = 0;
+    for _ in 0..3 {
+        most = 0;
+        for k in 0..reads {
+            let load = site(&unit, "b0", 1 + reads + 3 * writes + k);
+            let before = CANDIDATES.with(std::cell::Cell::get);
+            graph.clobbers(load, &accesses.references[&load]);
+            most = most.max(CANDIDATES.with(std::cell::Cell::get) - before);
+        }
+    }
+    assert!(most > 0, "the index walk was not taken");
+    assert!(most <= MAX_CANDIDATES + 1, "{most} writes asked of one read");
+}
