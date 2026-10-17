@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,24 +93,28 @@ def main() -> None:
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     inputs = {"d_faces": (str(qc / "render/d_faces.c"), KEYWORDS + includes)}
     for name in filter(None, args.programs.split(",")):
-        inputs[name] = (str(ROOT / "bench" / name / f"{name}.c"), [])
-    sink = ["-S", "-o", "/dev/null"]
+        inputs[name] = (str(ROOT / "bench" / name / f"{name}.c"), KEYWORDS)
+    # An object each compiler writes, not assembly text to the null device: llrm printed the text (21 M of d_faces -O2) instead of
+    # encoding and writing the object (22 M), and clang and gcc would not have run their assemblers.
+    target = os.path.join(tempfile.mkdtemp(prefix="compile-gap-"), "out.o")
+    sink = ["-o", target]
+    sink_cc = ["-c", *sink]
     flags = ["-m32", "-march=i486", "-fno-inline-functions"]
     for level in LEVELS:
         print(f"{level}: compile M instructions   llrm / clang / gcc")
         for name, (source, extra) in inputs.items():
             cost = [
-                instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *sink, source])
+                instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *(sink if cc == args.llrm else sink_cc), source])
                 / 1e6
                 for cc in (args.llrm, "clang", "gcc")
             ]
             print(f"  {name:10} {cost[0]:7.0f} / {cost[1]:7.0f} / {cost[2]:7.0f}   ({cost[0] / min(cost[1:]):.1f}x)")
         source, extra = inputs["d_faces"]
         ours = phases(args.llrm, level, [*extra, *sink, source])
-        theirs = clang_phases(level, [*extra, *sink, source])
+        theirs = clang_phases(level, [*extra, *sink_cc, source])
         whole = sum(ours.values())
         print("  d_faces llrm own Minstr: " + ", ".join(f"{k} {v:.0f} ({100 * v / whole:.0f}%)" for k, v in ours.most_common(6)))
-        clang = instructions(["clang", *flags, level, *KEYWORDS, *extra, *sink, source]) / 1e6
+        clang = instructions(["clang", *flags, level, *KEYWORDS, *extra, *sink_cc, source]) / 1e6
         print(
             f"  d_faces clang: optimizer {theirs[0] / theirs[5] * clang:.0f} M ({100 * theirs[0] / theirs[5]:.0f}% of "
             f"its time), codegen {theirs[4] / theirs[5] * clang:.0f} M ({100 * theirs[4] / theirs[5]:.0f}%)"
