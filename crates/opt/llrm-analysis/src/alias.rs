@@ -3416,12 +3416,8 @@ fn could_publish(
         Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => return true,
         Opcode::Store { .. } => return is_pointer(unit, op.operands[0]) || names_a_global(unit, op),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. }
-        | Opcode::GetElementPtr { .. }
-        | Opcode::Phi
-        | Opcode::Select
-        | Opcode::Call(_)
-        | Opcode::Invoke(_) => true,
+        Opcode::Phi | Opcode::Select => false,
+        Opcode::Load { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) => true,
         _ => false,
     };
     (!carried && op.operands.iter().any(|&operand| is_pointer(unit, operand))) || names_a_global(unit, op)
@@ -3460,12 +3456,17 @@ fn _lost(
     values: &IndexMap<ValueId, Provenance>,
 ) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
+    // A join with an arm no fact follows is itself no fact (`UNKNOWN`): the
+    // objects of its other arms are no longer followed (a load through
+    // `phi [%slot, %b0], [%q, %b1]` reads the slot).
+    let joins_unknown = matches!(op.opcode, Opcode::Phi | Opcode::Select)
+        && joined(op)
+            .is_some_and(|arms| arms.iter().any(|&arm| is_pointer(unit, arm) && _operand(unit, arm, values).is_none()));
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
-            true
-        }
+        Opcode::Phi | Opcode::Select => !joins_unknown,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
     };
@@ -3594,7 +3595,7 @@ fn mod_floor(
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> Congruences {
-    congruences_with(unit, &unit.registers())
+    congruences_of(unit, &unit.registers(), None, None)
 }
 
 /// Each value's (residue, modulus): what it is congruent to.
@@ -3610,32 +3611,184 @@ pub fn congruences_found() -> usize {
     CONGRUENCES.with(std::cell::Cell::get)
 }
 
-/// `congruences`, given what `consts::known` finds without memory.
-pub fn congruences_with(
+/// What the congruences of one body asked of by value have found: the answers,
+/// the body's order and each loop's counters, kept for the asks of one version
+/// of the body under one set of facts (an ask under others starts it again).
+#[derive(Default)]
+pub struct CongruenceMemo {
+    order: Option<llrm_mir::dense::IdMap<InstId, usize>>,
+    counters: Vec<Option<Rc<Vec<induction::Affine>>>>,
+    answers: llrm_mir::dense::IdMap<ValueId, Option<(BigInt, BigInt)>>,
+    scratch: Congruences,
+    inserted: Vec<ValueId>,
+}
+
+impl CongruenceMemo {
+    /// The map `congruences_of` made of the last ask by value, given back: it
+    /// is the size of the body's last value, and one made for each ask costs as
+    /// much as the body.
+    pub fn recycle(
+        &mut self,
+        mut found: Congruences,
+    ) {
+        for value in self.inserted.drain(..) {
+            found.remove(&value);
+        }
+        self.scratch = found;
+    }
+}
+
+/// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
+/// or of every value where none, given what `consts::known` finds without
+/// memory: what they are congruent to is what the additions, subtractions,
+/// products and shifts they are computed from, and the loops' counters among
+/// them, give. The values nothing else reaches are not worked out (the whole
+/// body's, once for each version of a body of 128 loops, was 7.2 M and 3.9% of
+/// the compile).
+///
+/// The answer for each value asked is the one asked of every value gives: the
+/// values a value is computed from are visited in the body's order, as it
+/// does, so that one visited before its operand is given the operand's
+/// weaker answer in both.
+pub fn congruences_of(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
+    wanted: Option<&[ValueId]>,
+    memo: Option<&std::cell::RefCell<CongruenceMemo>>,
 ) -> Congruences {
-    CONGRUENCES.with(|count| count.set(count.get() + 1));
+    let mut inserted: Vec<ValueId> = Vec::new();
+    let mut result = match memo.filter(|_| wanted.is_some()) {
+        Some(memo) => std::mem::take(&mut memo.borrow_mut().scratch),
+        None => Congruences::default(),
+    };
+    if wanted.is_none() {
+        CONGRUENCES.with(|count| count.set(count.get() + 1));
+    }
     let function = unit.function;
-    let mut result = Congruences::default();
+    let qualifies = |value: ValueId, op: &llrm_mir::module::Instruction| {
+        matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+        )
+            && op.operands.len() == 2
+            && unit.int_bits(Operand::Value(value)).is_some()
+    };
+    let memo = memo.filter(|_| wanted.is_some());
+    // Held answers are for the unit's own registers alone: a map made for one
+    // ask and dropped can be followed at its address by another. The body's
+    // order and its loops' counters hold under any facts.
+    let answers = memo.filter(|_| unit.registers.is_some_and(|own| std::ptr::eq(constants, own)));
+    // The values reached by the operations that make a congruence, and the ones
+    // they stop at: for the whole body, every operation, in the body's order.
+    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
+    let mut operations: Vec<InstId> = Vec::new();
+    match wanted {
+        None => {
+            operations.extend(function.walk().map(|(_, inst)| inst).filter(|&inst| {
+                let op = function.instruction(inst);
+                op.result.is_some_and(|value| qualifies(value, op))
+            }));
+        }
+        Some(wanted) => {
+            let mut work: Vec<ValueId> = wanted.to_vec();
+            while let Some(value) = work.pop() {
+                if !reached.insert(value) {
+                    continue;
+                }
+                // What is found of a value is found of what it is made of
+                // alone.
+                if let Some(held) = answers.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
+                    if let Some(fact) = held {
+                        inserted.push(value);
+                        result.insert(value, fact);
+                    }
+                    continue;
+                }
+                let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
+                let op = function.instruction(inst);
+                if qualifies(value, op) {
+                    operations.push(inst);
+                    work.extend(
+                        op.operands
+                            .iter()
+                            .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
+                    );
+                }
+            }
+            // In the body's order, round after round, as the whole body's goes.
+            let position = |inst: &InstId| -> usize {
+                let order = || -> llrm_mir::dense::IdMap<InstId, usize> {
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect()
+                };
+                match memo {
+                    Some(memo) => {
+                        let mut held = memo.borrow_mut();
+                        held.order.get_or_insert_with(order)[inst]
+                    }
+                    None => order()[inst],
+                }
+            };
+            if memo.is_some() {
+                operations.sort_by_key(position);
+            } else {
+                let order: llrm_mir::dense::IdMap<InstId, usize> =
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+                operations.sort_by_key(|inst| order[inst]);
+            }
+        }
+    }
     let zero = BigInt::from(0);
-    for loop_ in &unit.shape().loops {
-        for affine in induction::basics(unit, loop_).values() {
+    // The loops' counters among the values reached.
+    let shape = unit.shape();
+    let block_of = |value: ValueId| match function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
+        _ => None,
+    };
+    for (at, loop_) in shape.loops.iter().enumerate() {
+        if wanted.is_some()
+            && !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block)))
+        {
+            continue;
+        }
+        let counters = match memo {
+            Some(memo) => {
+                let held = memo.borrow().counters.get(at).cloned().flatten();
+                held.unwrap_or_else(|| {
+                    let made = Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>());
+                    let mut held = memo.borrow_mut();
+                    if held.counters.len() <= at {
+                        held.counters.resize(at + 1, None);
+                    }
+                    held.counters[at] = Some(Rc::clone(&made));
+                    made
+                })
+            }
+            None => Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>()),
+        };
+        for affine in counters.iter() {
+            if wanted.is_some() && !reached.contains(&affine.value) {
+                continue;
+            }
+            // A held answer is the last word.
+            if answers.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
+                continue;
+            }
             let width = affine.start.width();
             let (Some(start), Some(step)) = (
-                induction::_signed(&affine.start, &constants, width),
-                induction::_signed(&affine.step, &constants, width),
+                induction::_signed(&affine.start, constants, width),
+                induction::_signed(&affine.step, constants, width),
             ) else {
                 continue;
             };
             if step != zero {
+                inserted.push(affine.value);
                 result.insert(affine.value, reduced(step, start, width));
             }
         }
     }
     loop {
         let mut changed = false;
-        for (_, inst) in function.walk() {
+        for &inst in &operations {
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) =
@@ -3643,8 +3796,6 @@ pub fn congruences_with(
             else {
                 continue;
             };
-            // A value nothing is known of is a multiple of 1: `x << 1` is a
-            // multiple of 2 all the same.
             let fact = |one: Operand| match one {
                 Operand::Value(source) => Some(
                     result
@@ -3679,10 +3830,20 @@ pub fn congruences_with(
             if found.0 == BigInt::from(1) {
                 continue;
             }
+            inserted.push(value);
             result.insert(value, found);
             changed = true;
         }
         if !changed {
+            if let Some(memo) = answers {
+                let mut held = memo.borrow_mut();
+                for value in reached.iter() {
+                    held.answers.insert(value, result.get(&value).cloned());
+                }
+            }
+            if let Some(memo) = memo.filter(|_| wanted.is_some()) {
+                memo.borrow_mut().inserted = inserted;
+            }
             return result;
         }
     }
@@ -3758,7 +3919,7 @@ pub fn annotated_with(
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
+    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {

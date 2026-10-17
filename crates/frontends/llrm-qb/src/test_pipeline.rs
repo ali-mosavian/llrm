@@ -107,7 +107,7 @@ mod decided_tests {
         let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
         // The pipeline verifies its result: every value read is defined.
         let optimized = crate::test_hir::optimized_mir(&program);
-        assert!(optimized.contains("define cc1000 void @T("), "{optimized}");
+        assert!(optimized.contains("define cc 1000 void @T("), "{optimized}");
     }
 }
 
