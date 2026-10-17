@@ -32,3 +32,19 @@ pub fn column(
     let _ = (q, v);
     " kb=?".to_owned()
 }
+
+/// The `nn` column of `examples/vtdump.rs`.
+pub fn column_non_negative(
+    q: &Query,
+    v: Operand,
+) -> String {
+    format!(" nn={}", u8::from(compute_known_bits(q, v, 0).is_non_negative()))
+}
+
+/// The `ng` column of `examples/vtdump.rs`.
+pub fn column_negative(
+    q: &Query,
+    v: Operand,
+) -> String {
+    format!(" ng={}", u8::from(compute_known_bits(q, v, 0).is_negative()))
+}

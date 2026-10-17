@@ -1,7 +1,7 @@
 // Prints what LLVM's ValueTracking proves of every integer and pointer value of a module, one line each:
 //   <function> <n> <column>=<answer> ...
 // where <n> numbers the function's arguments and then its instructions that have a scalar integer or pointer result.
-// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z nn ng cru crs gp sp ov
+// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z gp nn ng cru crs sp ov (the order printed)
 // `sp` is matchSelectPattern of a select: flavor/NaN behaviour/ordered/cast/LHS/RHS (`-` on anything else).
 // `ov` is computeOverflowFor* of an add, sub or mul, as letters M(ay) L(ow) H(igh) N(ever): add u/s(AddOperator)/s(operands), sub u/s, mul u/s.
 // `tools/llvmport/vtcompare.py` runs it beside the Rust `vtdump` example and compares the lines.

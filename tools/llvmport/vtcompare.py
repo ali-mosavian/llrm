@@ -3,7 +3,7 @@
 
     tools/llvmport/vtcompare.py COLS FILE.ll... [--show N]
 
-FILE may be a directory (every `.ll` under it). A file either side cannot read is skipped and counted. COLS is the comma list `vtdump` takes (kb sb nz p2 p2z nn ng cru crs gp). Prints the number of values compared
+FILE may be a directory (every `.ll` under it). A file either side cannot read is skipped and counted. COLS is a comma list of kb sb nz p2 p2z gp nn ng cru crs sp ov, in any order (both dumps print them in that order). Prints the number of values compared
 and, for each differing one, both lines. Exit 1 on a difference. LLVM's side is `vtdump.sh`, llrm's the
 `vtdump` example of llrm-mir (CARGO_TARGET_DIR is honoured).
 """
@@ -13,6 +13,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+CANONICAL = "kb sb nz p2 p2z gp nn ng cru crs sp ov".split()
+
+
+def canonical(cols):
+    """`cols` in the order `vtdump` prints; unknown columns are an error."""
+    wanted = cols.split(",")
+    unknown = [c for c in wanted if c not in CANONICAL]
+    if unknown:
+        sys.exit(f"unknown column(s): {','.join(unknown)}")
+    return ",".join(c for c in CANONICAL if c in wanted)
 
 
 def run(cmd):
@@ -27,7 +37,7 @@ def main():
     if "--show" in sys.argv:
         show = int(sys.argv[sys.argv.index("--show") + 1])
         args = [a for a in args if a != str(show)]
-    cols, paths = args[0], args[1:]
+    cols, paths = canonical(args[0]), args[1:]
     files = []
     for path in paths:
         files += sorted(str(f) for f in Path(path).rglob("*.ll")) if Path(path).is_dir() else [path]
