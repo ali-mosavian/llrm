@@ -855,6 +855,32 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// A `ThroughMemory` kept past an edit as sound knows no more than it did:
+/// `%n` replaced by the 7 it was found equal to leaves the loaded `%v` unknown
+/// in it, and a fresh solve has `%v = 7`. Which a pass reads depended on
+/// whether something had asked for it earlier in the round: matmul bq32 -O3
+/// came out 18 KB of asm with `floatloop` asking it and 34 KB without (#1909).
+/// A pass whose decisions follow what is known asks for the body as it stands.
+#[test]
+fn test_a_pass_that_follows_what_is_known_reads_it_for_the_body_as_it_stands() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %n) {{\nb:\n  store i16 %n, ptr @g\n  %v = load i16, ptr @g\n  ret i16 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let (n, v) = (crate::testing::value(f, "n"), crate::testing::value(f, "v"));
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<ThroughMemory>(context, &layout, f);
+    let seven = Operand::Constant(context.int(f.value(n).ty, 7));
+    f.replace_value(n, seven);
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let known = |result: &Rc<<ThroughMemory as Analysis>::Result>| {
+        Result::as_ref(&**result).unwrap().get(&v).map(|fact| fact.n.clone())
+    };
+    assert_eq!(known(&analyses.get_exact::<ThroughMemory>(context, &layout, f)), Some(7.into()));
+}
+
 /// `Annotated` and the `Held` a unit carries asked `Pointers`, so each body
 /// state paid for the escape phase (a walk of every instruction and a dataflow
 /// over the blocks) of which they read nothing: 88 of d_faces' -O1 compile's
@@ -920,6 +946,35 @@ fn test_a_result_derived_from_the_body_as_it_stands_survives_an_invalidation() {
     let of_effects: Vec<_> =
         counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
     assert_eq!(of_effects, vec![("first", 1)], "{counts:?}");
+}
+
+/// A scalar written in each arm of N joins is reached by up to N stores at
+/// every load after, and the cell of each was decoded again for each load that
+/// store reaches (N^2 decodes over the body; 85 K instructions a load at
+/// `joins` 64, 58% of a `ThroughMemory` solve). Once for a store.
+#[test]
+fn test_a_store_s_cell_is_decoded_once_however_many_loads_it_reaches() {
+    let joins = 12;
+    let mut text = format!("{DOS}@g = global i16 0\n\ndefine i16 @f(ptr %g, ");
+    text.push_str(&(0..joins).map(|n| format!("i1 %c{n}")).collect::<Vec<_>>().join(", "));
+    text.push_str(") {\nb:\n  store i16 99, ptr %g\n  br label %t0\n");
+    for n in 0..joins {
+        text += &format!(
+            "t{n}:\n  br i1 %c{n}, label %w{n}, label %j{n}\nw{n}:\n  store i16 {n}, ptr %g\n  br label %j{n}\nj{n}:\n  %l{n} = load i16, ptr %g\n  br label %{}\n",
+            if n + 1 < joins { format!("t{}", n + 1) } else { "end".to_owned() }
+        );
+    }
+    text.push_str("end:\n  ret i16 %l11\n}\n");
+    let mut module = parsed(&text);
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    let before = crate::consts::stores_decoded();
+    analyses.get::<ThroughMemory>(context, &layout, f);
+    let decoded = crate::consts::stores_decoded() - before;
+    assert!(decoded > 0, "premise: the loads were served");
+    assert!(decoded <= 2 * joins, "{decoded} decodes for {joins} stores and {joins} loads");
 }
 
 /// `Summaries` solved where every pointer points for the direct summary, for

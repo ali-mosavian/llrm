@@ -116,6 +116,20 @@ impl<K: Hash + Eq> Nearest<K> {
         keys: &[&K],
         at: BlockId,
     ) -> Walk<'a> {
+        self.dominating_below(tree, keys, at, usize::MAX)
+    }
+
+    /// `dominating`, but of the items in `at` itself only those below `below`:
+    /// a caller that places its items in block order asks for those before one
+    /// of them, and is not given the N-1 after it (N loads of one cell in a
+    /// block: N^2/2 items walked for the nearest of each).
+    pub fn dominating_below<'a>(
+        &'a self,
+        tree: &DominatorTree,
+        keys: &[&K],
+        at: BlockId,
+        below: usize,
+    ) -> Walk<'a> {
         let Some((point, _)) = tree.span(at) else { return Walk { cursors: Vec::new(), last: None } };
         let cursors = keys
             .iter()
@@ -129,7 +143,15 @@ impl<K: Hash + Eq> Nearest<K> {
                     }
                     at = chain[one].up;
                 }
-                at.map(|entry| Cursor { chain, entry: Some(entry), within: chain[entry].items.len() })
+                let entry = at?;
+                let within = if chain[entry].enter == point {
+                    chain[entry].items.partition_point(|item| *item < below)
+                } else {
+                    chain[entry].items.len()
+                };
+                let mut cursor = Cursor { chain, entry: Some(entry), within };
+                cursor.settle();
+                cursor.entry.is_some().then_some(cursor)
             })
             .collect();
         Walk { cursors, last: None }
@@ -152,11 +174,27 @@ impl Cursor<'_> {
 
     fn take(&mut self) {
         self.within -= 1;
-        if self.within == 0 {
-            self.entry = self.chain[self.entry.expect("an entry")].up;
+        self.settle();
+    }
+
+    /// On to the entry above while this one has no item left to give.
+    fn settle(&mut self) {
+        while self.within == 0 {
+            let Some(entry) = self.entry else { return };
+            self.entry = self.chain[entry].up;
             self.within = self.entry.map_or(0, |one| self.chain[one].items.len());
         }
     }
+}
+
+thread_local! {
+    static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many items this thread's walks have gone through, for a test that the
+/// loads of a block are not each asked of all the others.
+pub fn steps() -> usize {
+    STEPS.with(std::cell::Cell::get)
 }
 
 pub struct Walk<'a> {
@@ -169,6 +207,7 @@ impl Iterator for Walk<'_> {
 
     fn next(&mut self) -> Option<(u32, usize)> {
         loop {
+            STEPS.with(|steps| steps.set(steps.get() + 1));
             let best = (0..self.cursors.len())
                 .filter_map(|at| self.cursors[at].peek().map(|key| (key, at)))
                 .max_by_key(|(key, _)| *key)?;

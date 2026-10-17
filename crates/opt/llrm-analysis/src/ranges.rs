@@ -138,7 +138,7 @@ use std::rc::Rc;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::context::signed;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, MetadataOperand, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, IntPredicate, Opcode};
@@ -1052,13 +1052,13 @@ impl<T: Lookup + ?Sized> Lookup for Rc<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct EdgeStates {
     order: Vec<i64>,
-    own: BTreeMap<i64, Scope>,
-    below: BTreeMap<i64, Scope>,
+    own: IdMap<i64, Scope>,
+    below: IdMap<i64, Scope>,
     /// What `below` was made of, block by block: its source's, and what the
     /// block put over it. A block made of the same is the same, so whether a
     /// block's facts changed is asked of these, not of the maps, which are
     /// deep.
-    made: BTreeMap<i64, u64>,
+    made: IdMap<i64, u64>,
 }
 
 impl EdgeStates {
@@ -1128,18 +1128,13 @@ pub fn edges_solved(
 ) -> Result<EdgeStates, String> {
     let function = unit.function;
     let Some(entry) = function.entry() else {
-        return Ok(EdgeStates {
-            order: Vec::new(),
-            own: BTreeMap::new(),
-            below: BTreeMap::new(),
-            made: BTreeMap::new(),
-        });
+        return Ok(EdgeStates { order: Vec::new(), own: IdMap::new(), below: IdMap::new(), made: IdMap::new() });
     };
     let shape = unit.shape();
     // A change that left the CFG as it was (`Touched::reach`) leaves the order
     // of the blocks as it was.
     let order = match before {
-        Some((states, _)) if !llrm_support::env_set("LLRM_CHECK_REPLAY") => states.order.clone(),
+        Some((states, _)) if !llrm_support::env_flag!("LLRM_CHECK_REPLAY") => states.order.clone(),
         _ => {
             ORDERS_FOUND.with(|count| count.set(count.get() + 1));
             loops::reverse_postorder(&cfg::graph(function), cfg::id(entry))
@@ -1148,10 +1143,10 @@ pub fn edges_solved(
     // The blocks as they were: none to reuse where the order of blocks is not
     // the same.
     let before = before.filter(|(states, _)| states.order == order);
-    let mut known: BTreeMap<i64, Scope> = BTreeMap::new();
-    let mut own: BTreeMap<i64, Scope> = BTreeMap::new();
-    let mut moved: BTreeSet<i64> = BTreeSet::new();
-    let mut made: BTreeMap<i64, u64> = BTreeMap::new();
+    let mut known: IdMap<i64, Scope> = IdMap::new();
+    let mut own: IdMap<i64, Scope> = IdMap::new();
+    let mut moved: IdSet<i64> = IdSet::new();
+    let mut made: IdMap<i64, u64> = IdMap::new();
     let assumed = unit.assumptions();
     // A block's way in counts only where its one predecessor names it once.
     let once = |parent: i64, block: i64| !names_twice(unit, parent, block);
@@ -1274,7 +1269,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 // The body's own intervals, or at a level without them (-O1:
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
@@ -1354,7 +1349,7 @@ pub struct Bounds {
     within: IndexMap<i64, Scope>,
     /// The blocks two loops' facts contradict each other at: none executes
     /// them.
-    dead: BTreeSet<i64>,
+    dead: IdSet<i64>,
     /// From what nest depth the loops were given the facts of their header
     /// alone (`capped_from`): an update works from a solve made under the
     /// same decision.
@@ -1469,9 +1464,9 @@ pub fn loops_reached(
     blocks: &IdSet<BlockId>,
     conditions: &IdSet<BlockId>,
     edges_changed: &dyn Fn(i64) -> bool,
-) -> BTreeSet<i64> {
+) -> IdSet<i64> {
     let loops = &shape.loops;
-    let reached: BTreeSet<i64> = blocks.iter().map(cfg::id).collect();
+    let reached: IdSet<i64> = blocks.iter().map(cfg::id).collect();
     let judged: Vec<i64> = conditions.iter().map(cfg::id).collect();
     let graph = cfg::graph(function);
     let entering = loops::predecessors(&graph);
@@ -1486,7 +1481,7 @@ pub fn loops_reached(
             .collect()
     };
     let moved = |at: &i64| edges_changed(*at);
-    let mut dirty: BTreeSet<i64> = loops
+    let mut dirty: IdSet<i64> = loops
         .iter()
         .filter(|one| {
             one.body.iter().any(|at| reached.contains(at))
@@ -1496,15 +1491,15 @@ pub fn loops_reached(
         .map(|one| one.header)
         .collect();
     // The loops holding each block, found once from the loops' blocks.
-    let mut holders: HashMap<i64, Vec<i64>> = HashMap::default();
+    let mut holders: IdMap<i64, Vec<i64>> = IdMap::new();
     for one in loops {
         for &at in one.body.iter() {
             HOSTS_ASKED.with(|asked| asked.set(asked.get() + 1));
-            holders.entry(at).or_default().push(one.header);
+            holders.get_or_insert_with(at, Vec::new).push(one.header);
         }
     }
     // What each loop starts from, held by other loops.
-    let hosts: HashMap<i64, Vec<i64>> = loops
+    let hosts: IdMap<i64, Vec<i64>> = loops
         .iter()
         .map(|one| {
             let held: BTreeSet<i64> = starts(one)
@@ -1628,7 +1623,7 @@ pub fn loops_solved() -> usize {
 pub fn bounded_solved(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    prior: Option<(&Bounds, &BTreeSet<i64>)>,
+    prior: Option<(&Bounds, &IdSet<i64>)>,
     lazy: bool,
 ) -> Result<Bounds, String> {
     let found = bounded_solved_under(unit, facts, prior, lazy, true)?;
@@ -1654,7 +1649,7 @@ pub fn bounded_solved(
 fn bounded_solved_under(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    prior: Option<(&Bounds, &BTreeSet<i64>)>,
+    prior: Option<(&Bounds, &IdSet<i64>)>,
     lazy: bool,
     cap: bool,
 ) -> Result<Bounds, String> {
@@ -1673,7 +1668,7 @@ fn bounded_solved_under(
     };
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let positions: BTreeMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
+    let positions: IdMap<i64, usize> = graph.iter().enumerate().map(|(at, block)| (block.at, at)).collect();
     let shape = unit.shape();
     let assumed = unit.assumptions();
     // The manager's, where the facts asked of are the unit's own registers.
@@ -1686,7 +1681,7 @@ fn bounded_solved_under(
     };
     let edges_above: IndexMap<i64, Scope> = match &ranger {
         Some(ranger) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 crate::ranger::check_against(ranger, unit, &edges_solved(unit, facts, None)?);
             }
             IndexMap::default()
@@ -1712,7 +1707,7 @@ fn bounded_solved_under(
             // The blocks of a loop to be worked again start from nothing: what
             // its loops narrow is put in anew.
             Some((held, dirty)) => {
-                let redone: BTreeSet<i64> = nest
+                let redone: IdSet<i64> = nest
                     .iter()
                     .filter(|one| dirty.contains(&one.header))
                     .flat_map(|one| one.body.iter().copied())
@@ -1726,16 +1721,16 @@ fn bounded_solved_under(
             None => IndexMap::default(),
         };
     let prior = prior.filter(|(held, _)| held.headers == headers && held.capped == capped);
-    let mut dead: BTreeSet<i64> = match prior {
+    let mut dead: IdSet<i64> = match prior {
         Some((held, dirty)) => {
-            let redone: BTreeSet<i64> = nest
+            let redone: IdSet<i64> = nest
                 .iter()
                 .filter(|one| dirty.contains(&one.header))
                 .flat_map(|one| one.body.iter().copied())
                 .collect();
-            held.dead.difference(&redone).copied().collect()
+            held.dead.difference(&redone).collect()
         }
-        None => BTreeSet::new(),
+        None => IdSet::new(),
     };
     for loop_ in nest {
         if prior.is_some_and(|(_, dirty)| !dirty.contains(&loop_.header)) {
@@ -1747,7 +1742,7 @@ fn bounded_solved_under(
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
-        let mut inside: BTreeSet<i64> = loop_.body.iter().copied().collect();
+        let mut inside: IdSet<i64> = loop_.body.iter().copied().collect();
         if proofs.is_empty() || !proofs.iter().all(|proof| proof.posttested) {
             inside.remove(&loop_.header);
         }
@@ -1954,7 +1949,7 @@ fn bounded_solved_under(
         // worked again in `scoped`.
         let propagate = |scoped: &mut Intervals, changed: &mut dyn Iterator<Item = ValueId>| {
             let touching = touching_of();
-            let mut queue: BTreeSet<usize> = changed
+            let mut queue: IdSet<usize> = changed
                 .flat_map(|value| touching.get(&value).into_iter().flatten().copied().collect::<Vec<_>>())
                 .collect();
             while let Some(place) = queue.pop_first() {
@@ -2335,7 +2330,7 @@ fn bounded_solved_under(
         // though the header itself also sees the exit value.
         let known = closed(known);
         let known_id = fresh_known();
-        for &at in &inside {
+        for at in inside.iter() {
             // Beyond the cap a block has what the loop holds throughout, not
             // what the edges to it narrow that to.
             let scoped = if beyond { None } else { Some(scope_at(at, &known, known_id, true)?) };
@@ -2407,12 +2402,12 @@ pub(crate) fn replayed<R>(body: impl FnOnce() -> R) -> R {
 }
 
 fn replaying() -> bool {
-    check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
+    check_scopes() || llrm_support::env_flag!("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
 }
 
 fn check_scopes() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_SCOPES"))
 }
 
 /// A header phi that may be boxed: its width, the hull of its entries'
