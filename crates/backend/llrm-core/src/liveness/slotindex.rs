@@ -17,6 +17,14 @@
 //!   slots   B E R D B E R D ...
 //! ```
 //!
+//! DEVIATE (representation, number): a `SlotIndex` also carries the entry's
+//! number and the arena epoch it was read in (LLVM's is only the tagged pointer
+//! and reads the entry's number on every compare). Two indexes of one epoch
+//! compare by those numbers; a renumbering bumps the epoch and a stale index is
+//! compared through the arena. Reading the arena was 16.4 M of 97 M
+//! instructions of the shadow allocator on chain-8 (17%); with the numbers
+//! carried it is inlined away. The index is 12 bytes, not 4.
+//!
 //! DEVIATE (container, no number): the entries live in a per-thread arena
 //! (parallel columns indexed by `EntryId`, `prev`/`next` links) instead of an
 //! intrusive `simple_ilist` in a bump allocator, so a `SlotIndex` is `Copy`
