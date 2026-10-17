@@ -415,20 +415,23 @@ impl EscapedBefore {
         reference: &MemRef,
         cell: &MemRef,
     ) -> bool {
-        let Some(bits) = self.before(&at) else { return false };
         // No provenance is a pointer no fact follows: `_lost` publishes what
         // it came from.
         let escaping = reference.provenance.as_ref().is_none_or(|one| {
             one.slices.iter().all(|slice| matches!(slice.object.kind, MemoryKind::Unknown | MemoryKind::Nonlocal))
         });
-        let unreached = |object: &ObjectRef| {
-            object.kind == MemoryKind::Frame && self.objects.get_index_of(object).is_none_or(|one| !bits.contains(one))
-        };
-        escaping
-            && cell
-                .provenance
-                .as_ref()
-                .is_some_and(|one| !one.slices.is_empty() && one.slices.iter().all(|slice| unreached(&slice.object)))
+        // What escaped before `at` is asked of only an access that can reach
+        // only what escaped, to a cell in frame objects.
+        let frames = cell.provenance.as_ref().is_some_and(|one| {
+            !one.slices.is_empty() && one.slices.iter().all(|slice| slice.object.kind == MemoryKind::Frame)
+        });
+        if !escaping || !frames {
+            return false;
+        }
+        let Some(bits) = self.before(&at) else { return false };
+        cell.provenance.as_ref().is_some_and(|one| {
+            one.slices.iter().all(|slice| self.objects.get_index_of(&slice.object).is_none_or(|index| !bits.contains(index)))
+        })
     }
 }
 
