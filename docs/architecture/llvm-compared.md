@@ -12,7 +12,11 @@ Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (cl
 | [allocation and layout](llvm-compared-allocation.md) | 3.77 M allocations against 62,881; memory per IR instruction |
 | [GVN and its neighbours](llvm-compared-gvn.md) | EarlyCSE, GVN, DSE and order against `gvn`; the quadratic passes |
 | [runs that change nothing](llvm-compared-idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
-| [analysis manager](llvm-compared-analysis-manager.md) | LLVM's analysis manager and preserved analyses against llrm's `Analyses` |
+| [analysis manager](llvm-compared-analysis-manager.md) | preserved analyses and invalidation against `Analyses` |
+| [memory SSA](llvm-compared-memoryssa.md) | walker caps against `avail::forwardable_walk` |
+| [alias analysis](llvm-compared-alias.md) | depth-limited BasicAA against `regions` and `may_alias` |
+| [LICM](llvm-compared-licm.md) | LICM against `hoist` |
+| [SimplifyCFG](llvm-compared-simplifycfg.md) | SimplifyCFG against `decide` |
 | [flat profile](llvm-compared-profile.md) | top functions by instructions and by L1d misses, both compilers |
 
 ## The ladder
@@ -123,10 +127,6 @@ llrm prints the whole body to a `String` after every round of the pass loop and 
 ```
 
 On `d_faces` `Printer::instruction` is 46 M (1.6%), `Stamp` 49 M (1.7%), the HIR and MIR verifiers 22 M, `env_set` (an environment lookup per step) 11 M: about 4% of the compile. LLVM's function pipeline is a fixed list run once per function; there is no body history to keep.
-
-## Where LLVM's mechanisms are written up
-
-Four more pages compare a mechanism each, from the same measurements, and are linked here when they land: memory SSA walker caps, alias analysis depth limits, LICM, SimplifyCFG (`llvm-compared-memoryssa.md`, `-alias.md`, `-licm.md`, `-simplifycfg.md`).
 
 ## Reproduce
 
