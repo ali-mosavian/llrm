@@ -94,15 +94,14 @@ fn captured_by(
                         Opcode::Call(_) => op.operands.len() - 1,
                         _ => op.operands.len() - 3,
                     };
-                    // A unit holds the other bodies as declarations and the
-                    // facts follow the summaries of those
-                    // the module defines: only a call through a
-                    // pointer is read here.
-                    let defined = llrm_mir::memory::callee(unit.context, function, used.user).is_some();
+                    // Captured unless the callee's parameter says `nocapture`
+                    // (the attribute is llrm's own where
+                    // FunctionAttrs stamped it, so a second
+                    // mode trusts none).
                     if at < args
-                        && !defined
                         && !is_lifetime_marker(unit, used.user)
-                        && !crate::alias::borrowed(unit, used.user, at)
+                        && (llrm_support::env_flag!("LLRM_CHECK_CAPTURES_BLIND")
+                            || !crate::alias::borrowed(unit, used.user, at))
                     {
                         return Some(used.user);
                     }
@@ -175,6 +174,12 @@ pub fn check(
             ));
         }
     }
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_COUNT") {
+        for one in &missed {
+            eprintln!("CAPTURES-MISS {}", one.2);
+        }
+        return;
+    }
     assert!(
         missed.is_empty(),
         "LLRM_CHECK_CAPTURES: frame objects captured by a use that the facts say never escape: {:?}",
@@ -222,5 +227,22 @@ mod tests {
         facts.escaped.clear();
         let forgotten = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&unit, &facts)));
         assert!(forgotten.is_err(), "facts that lost the slot behind the join were accepted");
+    }
+
+    /// `&local` passed to a function nobody defines is the commonest capture
+    /// there is. The check read only calls through a pointer at first, so
+    /// facts that forgot it were accepted (the review of #2146).
+    #[test]
+    fn a_frame_object_passed_to_an_opaque_direct_call_must_be_in_the_escaped_set() {
+        let module = parsed(&format!(
+            "{DOS}declare void @keep(ptr)\ndefine void @f() {{\nentry:\n  %s = alloca i32\n  call void @keep(ptr %s)\n  ret void\n}}\n"
+        ));
+        let layout = layout(&module);
+        let unit = crate::testing::with_registers(Unit::of(&module, &layout, function(&module, "f")));
+        let mut facts = points_to(&unit, None, None).unwrap();
+        check(&unit, &facts);
+        facts.escaped.clear();
+        let forgotten = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&unit, &facts)));
+        assert!(forgotten.is_err(), "facts that forgot the escape to an opaque call were accepted");
     }
 }
