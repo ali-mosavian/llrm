@@ -27,8 +27,9 @@
 //!
 //! Approximated by what MIR holds: a global without `align`, an `alloca`
 //! without `align` and an `sret` parameter have their type's ABI alignment,
-//! where LLVM has the preferred one (`Value::getPointerAlignment`,
-//! `DataLayout::getPreferredAlign`); a function's pointer has alignment 1.
+//! where LLVM has the preferred one, which MIR's `DataLayout` lacks
+//! (`Value::getPointerAlignment`, `DataLayout::getPreferredAlign`); a
+//! function's pointer has alignment 1.
 //!
 //! # Example
 //! `and i32 %x, 255` has its top 24 bits known zero.
@@ -55,7 +56,9 @@ use crate::apint::{countl_zero, countr_zero, set_high, set_range, sext, sign_bit
 use crate::constantrange::ConstantRange;
 use crate::context::{ConstantExpr, ConstantKind, mask};
 use crate::knownbits::KnownBits;
-use crate::module::{GlobalKind, InstId, Instruction, MetadataNode, MetadataOperand, Operand, ValueDef};
+use crate::module::{
+    GlobalKind, GlobalValue, InstId, Instruction, Linkage, MetadataNode, MetadataOperand, Operand, ValueDef,
+};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::{Type, TypeId};
 
@@ -1082,8 +1085,29 @@ fn pointer_alignment(
     };
     match v {
         Operand::Constant(id) => match &q.context().get(id).kind {
-            ConstantKind::Global(global) => match q.globals.get(global.0 as usize).map(|global| &global.kind) {
-                Some(GlobalKind::Variable(variable)) => variable.align.or_else(|| abi(variable.ty)).unwrap_or(1),
+            ConstantKind::Global(global) => match q.globals.get(global.0 as usize) {
+                Some(GlobalValue { kind: GlobalKind::Variable(variable), linkage, .. }) => {
+                    if let Some(align) = variable.align {
+                        return align;
+                    }
+                    let Some(align) = abi(variable.ty) else { return 1 };
+                    let strong = variable.initializer.is_some()
+                        && !matches!(
+                            linkage,
+                            Linkage::Weak
+                                | Linkage::WeakOdr
+                                | Linkage::LinkOnce
+                                | Linkage::LinkOnceOdr
+                                | Linkage::Common
+                                | Linkage::ExternWeak
+                                | Linkage::AvailableExternally
+                        );
+                    if !strong {
+                        return align;
+                    }
+                    // `getPreferredAlign`: a large global is 16-byte aligned.
+                    if align < 16 && q.layout.size_bits(types, variable.ty) > 128 { 16 } else { align }
+                }
                 _ => 1,
             },
             ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => {
