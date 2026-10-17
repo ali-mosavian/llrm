@@ -1676,12 +1676,20 @@ pub struct MemRef {
 /// The accesses worked out for a version of a function, and which version.
 struct Held {
     key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Option<MemRef>>>>,
+    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, Option<std::rc::Rc<MemRef>>>>>,
 }
 
 /// The most versions kept: the analyses of one function ask in a run, and a
 /// call summary asks of its callees in between.
 const ACCESS_VERSIONS: usize = 8;
+
+/// How many cells the held versions of accesses take, for a test that asking
+/// of one instruction in a large body takes one: a slot for every id below its
+/// own cost 56.6 M of the 5.9 G instructions of a d_faces -O2 compile.
+#[cfg(test)]
+pub(crate) fn held_cells() -> usize {
+    ACCESSES.with(|held| held.borrow().iter().map(|one| one.seen.borrow().len()).sum())
+}
 
 thread_local! {
     static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -1831,7 +1839,7 @@ impl MemRef {
         let key = (unit.function.mark(), unit.spaces());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
-            held.iter().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
+            held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
         });
         let seen = match held {
             Some(seen) => seen,
@@ -1840,24 +1848,26 @@ impl MemRef {
                 if held.len() >= ACCESS_VERSIONS {
                     held.remove(0);
                 }
-                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_mir::dense::IdMap::new()));
+                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_support::hash::SparseIdMap::default()));
                 held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
                 seen
             }),
         };
         let found = seen.borrow().get(&inst).cloned();
-        let Some(mut found) = found else {
-            let made = crate::references::of(unit, inst).map(|one| (*one).clone());
+        let Some(found) = found else {
+            let made = crate::references::of(unit, inst);
             seen.borrow_mut().insert(inst, made.clone());
-            return made;
+            return made.map(|one| (*one).clone());
         };
         // Metadata is attached without a change logged: the type is asked
         // again.
+        let mut found = found.map(|one| (*one).clone());
         if let Some(access) = &mut found {
             access.typed = typed(unit, inst);
             access.lineage = lineage(unit, inst);
         }
-        if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
+        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_ACCESSES")) {
             assert!(
                 found == Self::derived(unit, inst),
                 "the held access of {inst:?} is not what deriving it again gives"
