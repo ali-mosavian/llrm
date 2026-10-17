@@ -163,10 +163,28 @@ fn _decided(
     }
     let held = Held::of(context, layout, function, analyses, true).with_bounded(context, layout, function, analyses);
     // What is known through memory is the manager's, as every other client
-    // reads it.
-    let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
-    let facts = Result::as_ref(&*through).map_err(String::clone)?;
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), facts)?;
+    // reads it, and is solved only where a branch is made of a loaded value:
+    // the registers' facts (already held) settle every other condition, as
+    // LLVM's isKnownNonZero asks one value rather than solving memory.
+    let asks_memory = _asks(function, llrm_mir::touched::touches_memory);
+    let cycles = _asks(function, |opcode| *opcode == Opcode::Phi);
+    let decisions = if asks_memory {
+        let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+        let facts = Result::as_ref(&*through).map_err(String::clone)?;
+        _decisions(&held.unit(context, layout, function, analyses.outer()), facts, cycles)?
+    } else {
+        let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
+        _decisions(&held.unit(context, layout, function, analyses.outer()), &registers, cycles)?
+    };
+    if llrm_support::env_set("LLRM_CHECK_DECIDE_MEMORY") {
+        let through = analyses.get::<llrm_analysis::manager::ThroughMemory>(context, layout, function);
+        let facts = Result::as_ref(&*through).map_err(String::clone)?;
+        let whole = _decisions(&held.unit(context, layout, function, analyses.outer()), facts, true)?;
+        assert!(
+            whole == decisions,
+            "decide: memory asked {asks_memory}, cycles asked {cycles}, yet the whole facts decide otherwise: {whole:?} vs {decisions:?}"
+        );
+    }
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -179,10 +197,48 @@ fn _decided(
     Ok(true)
 }
 
+/// Whether a branch or switch of `function` reads, among what its condition
+/// is made of, a value loaded or returned by a call: the only conditions the
+/// facts through memory can settle beyond the registers'.
+fn _asks(function: &Function, seeds: fn(&Opcode) -> bool) -> bool {
+    let mut tainted = llrm_mir::dense::IdSet::<ValueId>::default();
+    let mut work = Vec::new();
+    for &block in function.layout() {
+        for &inst in function.block(block).instructions() {
+            let one = function.instruction(inst);
+            if let (true, Some(result)) = (seeds(&one.opcode), one.result) {
+                if tainted.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+    }
+    while let Some(value) = work.pop() {
+        for used in function.users(value) {
+            if let Some(result) = function.instruction(used.user).result {
+                if tainted.insert(result) {
+                    work.push(result);
+                }
+            }
+        }
+    }
+    let read = |operands: &[Operand]| {
+        operands.iter().any(|operand| matches!(operand, Operand::Value(value) if tainted.contains(value)))
+    };
+    function.layout().iter().any(|&block| {
+        let Some(last) = function.terminator(block) else { return false };
+        let instruction = function.instruction(last);
+        read(&instruction.operands)
+            || transform::_comparison(function, block, last)
+                .is_some_and(|compare| read(&function.instruction(compare).operands))
+    })
+}
+
 /// Each block whose terminator's way is known, with that way.
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    cycles: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -220,12 +276,16 @@ fn _decisions(
         }
         values
     };
-    let facts = constant_cycles::propagated(
-        unit,
-        facts.clone(),
-        Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
-        None,
-    );
+    let facts = if cycles {
+        constant_cycles::propagated(
+            unit,
+            facts.clone(),
+            Some(constant_cycles::Successors { choose: &successors, reads: &reads }),
+            None,
+        )
+    } else {
+        facts.clone()
+    };
     let scoped = ranges::bounds(unit)?;
     let mut out = Vec::new();
     for &block in function.layout() {
