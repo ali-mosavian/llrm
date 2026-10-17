@@ -7,9 +7,11 @@
 //! defining access, per-block access and def lists in order); dense ids and
 //! `Vec` are the representation under it.
 
+pub mod alias;
 pub mod build;
 pub mod shadow;
 pub mod verify;
+pub mod walker;
 
 #[cfg(test)]
 #[path = "tests.rs"]
@@ -51,8 +53,11 @@ pub struct MemoryAccess {
     pub defining: Option<AccessId>,
     /// `MemoryPhi`: `(getIncomingBlock(i), getIncomingValue(i))`.
     pub incoming: Vec<(BlockId, AccessId)>,
-    /// `MemoryUseOrDef::getOptimized`, set by `OptimizeUses` (stage 2).
+    /// A def's optimized access (operand 1), none for a use (whose optimized
+    /// access is its defining access).
     pub optimized: Option<AccessId>,
+    /// `OptimizedID`: the id of the access this one was optimized to.
+    pub optimized_id: Option<u32>,
     /// `MemoryAccess::users`: the accesses that use this one as an operand.
     pub users: Vec<AccessId>,
     /// `MemoryDef::getID` and `MemoryPhi::getID`.
@@ -168,6 +173,63 @@ impl Mssa {
         self.accesses[access as usize].defining = new;
         if let Some(new) = new {
             self.accesses[new as usize].users.push(access);
+        }
+    }
+
+    /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets
+    /// operand 0 (the defining access); for a def, operand 1.
+    pub(crate) fn set_optimized(
+        &mut self,
+        access: AccessId,
+        to: AccessId,
+    ) {
+        let id = self.accesses[to as usize].id;
+        if self.accesses[access as usize].kind == Kind::Use {
+            self.set_defining_access(access, Some(to));
+        } else {
+            if let Some(old) = self.accesses[access as usize].optimized {
+                let users = &mut self.accesses[old as usize].users;
+                if let Some(at) = users.iter().position(|one| *one == access) {
+                    users.swap_remove(at);
+                }
+            }
+            self.accesses[access as usize].optimized = Some(to);
+            self.accesses[to as usize].users.push(access);
+        }
+        self.accesses[access as usize].optimized_id = Some(id);
+    }
+
+    /// `MemoryUseOrDef::getOptimized`.
+    pub fn get_optimized(
+        &self,
+        access: AccessId,
+    ) -> Option<AccessId> {
+        let one = self.access(access);
+        if one.kind == Kind::Use { one.defining } else { one.optimized }
+    }
+
+    /// `MemoryUseOrDef::isOptimized`.
+    pub fn is_optimized(
+        &self,
+        access: AccessId,
+    ) -> bool {
+        let one = self.access(access);
+        self.get_optimized(access).is_some_and(|target| one.optimized_id == Some(self.access(target).id))
+    }
+
+    /// `MemoryUseOrDef::resetOptimized`.
+    pub(crate) fn reset_optimized(
+        &mut self,
+        access: AccessId,
+    ) {
+        self.accesses[access as usize].optimized_id = None;
+        if self.accesses[access as usize].kind != Kind::Use {
+            if let Some(old) = self.accesses[access as usize].optimized.take() {
+                let users = &mut self.accesses[old as usize].users;
+                if let Some(at) = users.iter().position(|one| *one == access) {
+                    users.swap_remove(at);
+                }
+            }
         }
     }
 
