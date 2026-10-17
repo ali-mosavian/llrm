@@ -71,7 +71,7 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "testing"))]
             USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
@@ -417,7 +417,7 @@ impl Function {
             }
             for (operand, indexes) in places {
                 if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
+                    #[cfg(any(test, feature = "testing"))]
                     USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                     uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
                 }
@@ -675,7 +675,7 @@ impl Function {
         }
         for operand in operands {
             if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "testing"))]
                 USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                 uses.retain(|one| !gone.contains(&one.user));
             }
