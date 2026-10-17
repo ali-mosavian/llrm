@@ -14,7 +14,7 @@ Shares are of the `d_faces` -O2 compile under callgrind (2,903 M; the flat profi
 | 4 | Passes that grow faster than the body | `gvn` 249 M, `fold` 267 M, `hoist` 168 M, `lsr` 149 M, `decide` 135 M, `dse` 54 M (inclusive, with their analyses); exponents 1.2 to 1.4 for the optimizer, `dse` and `through-memory` 4.0x and 3.7x per doubling | per-pass scan limits and caps ([GVN](gvn.md), [LICM](licm.md), [SimplifyCFG](simplifycfg.md)) | in flight: `gvn` linear (#1999) and `lsr` linear (#2008), both about 0 on `d_faces`; `fold`: the float half is 45% and the integer half's invalidate-all forces it to recompute (bound 52.5 M, [page](fold-hoist-decide.md)); `dse` sparse set (edit-rollback, PR coming); unowned: `hoist`, `fold`, `decide` |
 | 5 | Runs that change nothing | 637 of 722 itemised runs; own work 224 M (7.8%), 362 M with the analyses the next pass would ask anyway | last-run tracking, a fixed list run once per position ([idle runs](idle.md)) | not kept: idle skip on the edit digest (+0.6%); unowned: a work check before the analyses are asked |
 | 6 | LIR clean-up | `lir peephole` 130.7 M, `jumps` 65.4, `coalesce` 60.2, x87 70.9, `phielim` 14.4; LLVM about 40 M for the same work | DAG combine at selection (20.1 M), `PeepholeOptimizer`, block placement ([LIR clean-up](lir-cleanup.md)) | in flight: liveness owner and dirty blocks (ssa-spill-m16, roadmap step 6); not kept: shared lane and exit facts (at most 29 M, 1.0%, dropped as not worth a PR); unowned: gating the rule groups; ranks last: x87 live rows (25.7 M) |
-| 7 | Bookkeeping | printed-body history 46 M, `Stamp` 49 M, verifiers 22 M, `env_set` 11 M (about 4.4%) | none; the pipeline is a fixed list | landed: digest (#1931); in flight: #2007; unowned: `Stamp`, verifiers |
+| 7 | Bookkeeping | printed-body history 46 M, `Stamp` 49 M, verifiers 22 M, `env_set` 11 M (about 4.4%) | none; the pipeline is a fixed list | landed: digest (#1931), `env_set` read once (#2007), verifiers off in release (#1963: no `verify` frame in the profile); `Stamp` is real work (PostOrderFunctionAttrs, 108 M in three runs, 88 M of it `alias::initialized`): keep-analyses' lazy facts, skipping unchanged bodies saves 2 M |
 | 8 | Front end and the rest | 81 M against 33 M (2.5x): `wccq` child 18, `translate` 42, `hir to mir` 15, `hir::unit` 6; the 30 M of HIR verification is off since #1963 | clang's front end | unowned |
 | 9 | More rounds than a fixed list | the third round of -O2 is 211 M (6.3%); `gvn` ahead of `decide` -4.4% at -O2, +5.4% at -O3 | one fixed function pipeline ([GVN](gvn.md#proposed-change)) | not kept: fewer rounds (#1933, #1960, 35 cells worse), `gvn` first (rows lost), early scoped CSE (saves 3.1% to 3.4%, 4 cells worse), two rounds (not built) |
 | 10 | Instruction selection | 54.6 M against 51.3 M | `SelectionDAGISel` | parity, nothing to do |
@@ -36,7 +36,7 @@ The 13.9x in L1d misses is not a tenth cause: it follows rows 1 to 3. Allocation
 2. The work check before analyses in idle runs (row 5; bound 224 M of own work).
 3. `hoist`, `fold`, `decide` per-run cost (row 4; 168, 267 and 135 M inclusive).
 4. Front end (row 8; 92 M above LLVM's).
-5. `Stamp` and the verifiers (row 7; 71 M).
+5. ~~`Stamp` and the verifiers~~ (row 7): the verifiers are gone from release, `Stamp` is keep-analyses' (`alias::initialized`).
 6. Gating the peephole rule groups (row 6).
 
 Open questions: [#1994](https://github.com/ali-mosavian/llrm/issues/1994).
