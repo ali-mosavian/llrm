@@ -1,0 +1,9 @@
+[package]
+name = "llrm-alloc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The compilers' global allocator: size-class free lists over mimalloc"
+
+[dependencies]
+mimalloc = { workspace = true }
