@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C source of `f` with about N statements in one of five shapes, for compile-cost ladders.
 
-    gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls
+    gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float
 
 Same C89 text goes to every compiler (wccq takes no C99 declarations); unsigned arithmetic only, so there is no UB to
 fold differently. Every value reaches the return or a store, so none is dead.
@@ -11,7 +11,7 @@ from __future__ import annotations
 import random
 import sys
 
-SHAPES = ("arith", "mem", "loop", "diamond", "calls")
+SHAPES = ("arith", "mem", "loop", "diamond", "calls", "float")
 OPS = ("+", "-", "^")
 
 
@@ -58,6 +58,15 @@ def calls(n: int, rnd: random.Random) -> str:
     for _ in range(max(1, n // 3)):
         out.append(f"  s = s + ext(s ^ b, {rnd.randrange(1, 99)}u) * {rnd.randrange(1, 9)}u;")
     out += ["  return s;", "}"]
+    return "\n".join(out)
+
+
+def float(n: int, rnd: random.Random) -> str:
+    out = ["double f(double a, double b, double c, double d) {", "  double v[4];", "  v[0] = a; v[1] = b; v[2] = c; v[3] = d;"]
+    for i in range(n):
+        x, y = rnd.randrange(4), rnd.randrange(4)
+        out.append(f"  v[{i % 4}] = v[{x}] {rnd.choice(('+', '-', '*'))} (v[{y}] {rnd.choice(('+', '-'))} {rnd.randrange(1, 99)}.5);")
+    out += ["  return v[0] + v[1] + v[2] + v[3];", "}"]
     return "\n".join(out)
 
 
