@@ -38,3 +38,20 @@ def test_a_missing_corpus_leaves_the_row_unchecked_not_checked_or_failed_as_a_mi
     out = {KEY: dict(SIZED)}
     bench.run_timed(out, {KEY: Path("a.exe")}, {KEY: {"files": (), "want": []}}, tmp_path, timing=False)
     assert out[KEY] == SIZED | {"unchecked": "corpus not here"}
+
+
+def test_the_default_bench_feeds_a_program_its_ci_bytes_under_the_corpus_name_and_wants_the_ci_output(monkeypatch, tmp_path):
+    """grep read all 10 MB or nothing: unavailable on CI it was never run. The gate runs it on ci_bytes of the corpus (same file name) against NAME.ci.out."""
+    corpus_file = tmp_path / "cache" / "dickens"
+    corpus_file.parent.mkdir()
+    corpus_file.write_bytes(bytes(range(256)) * 8)
+    directory = tmp_path / "grep"
+    directory.mkdir()
+    (directory / "grep.out").write_text("9\n9\n")
+    (directory / "grep.ci.out").write_text("1\n2\n")
+    monkeypatch.setattr(bench.corpus, "path", lambda name: corpus_file)
+    variant = bench.Variant("grep", "c", directory / "grep.c", "bench_grep", None, "qb45", True, ("@dickens",), 100)
+    small = bench.timing_input(variant, directory, tmp_path / "ci")
+    assert small["want"] == ["1", "2"] and [f.name for f in small["files"]] == ["dickens"] and small["files"][0].stat().st_size == 100
+    full = bench.timing_input(variant, directory)
+    assert full["want"] == ["9", "9"] and full["files"][0].stat().st_size == 2048, "--time keeps the whole corpus"

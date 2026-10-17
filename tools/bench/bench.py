@@ -124,6 +124,7 @@ class Variant:
     dialect: str = "qb45"
     timed_only: bool = False  # no instruction count (the emulator would step ~10^8 of them): timed in DOSBox, sized, output-checked there
     data: tuple[str, ...] = ()  # files it reads, as run_tests' `data:` header: `@name` is a cached corpus
+    ci_bytes: int = 0  # the default bench (no --time) feeds a timed-only program this many bytes of its corpus, and checks NAME.ci.out
 
 
 def directory_name(directory: Path) -> str:
@@ -145,7 +146,7 @@ def variants(directory: Path) -> list[Variant]:
             head = run_tests.header(source)
             region = settings["region"].get(language) or settings["region"]["bas"]  # our BASIC is the same kernel
             out.append(Variant(name, language, source, region, None if language in OURS_BASIC else head.get("known"), head.get("dialect", "qb45").split()[0],
-                              bool(settings.get("timed_only")), tuple(head.get("data", "").split())))
+                              bool(settings.get("timed_only")), tuple(head.get("data", "").split()), int(settings.get("ci_bytes", 0))))
     return out
 
 
@@ -560,7 +561,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             plain[key] = exe  # timed, not counted
         else:
             jobs.append((key, (stem, exe, listing, None if variant.timed_only else variant.region, expected_output(directory), folder / f"{stem}.obj")))
-            needs[key] = timing_input(variant, directory)
+            needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor() as pool:
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
@@ -606,15 +607,24 @@ def mark_known(measured: dict, all_variants: list[Variant], opts: list[str]) -> 
     return measured
 
 
-def timing_input(variant: Variant, directory: Path) -> dict | None:
+def timing_input(variant: Variant, directory: Path, reduced: Path | None = None) -> dict | None:
     """{files a timed-only program reads, want: the output it must print}, or {skip: why} when its corpus is unavailable, or None
-    for the programs the emulator counts."""
+    for the programs the emulator counts. With `reduced` (a work folder) and a program that names `ci_bytes`, the first ci_bytes of each
+    corpus are copied there under the corpus's own name and the output wanted is NAME.ci.out's (tools/bench/mkci.py): the default bench
+    runs the program on every gate, --time runs it on all of its corpus."""
     if not variant.timed_only:
         return None
     try:
         files = tuple(corpus.path(one[1:]) if one.startswith("@") else variant.source.parent / one for one in variant.data)
     except corpus.Unavailable as error:
         return {"skip": str(error)}
+    if reduced is not None and variant.ci_bytes:
+        reduced.mkdir(parents=True, exist_ok=True)
+        small = []
+        for file in files:
+            (reduced / file.name).write_bytes(file.read_bytes()[: variant.ci_bytes])
+            small.append(reduced / file.name)
+        return {"files": tuple(small), "want": run_tests.lines((directory / f"{directory.name}.ci.out").read_text())}
     return {"files": files, "want": expected_output(directory)}
 
 
