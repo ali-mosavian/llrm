@@ -1035,7 +1035,7 @@ fn simplify_shift(
     }
     if is_nsw {
         let known_value = q.known(op0);
-        let mut known_shl = KnownBits::shl(&known_value, &known_amount, false, true, false);
+        let mut known_shl = KnownBits::shl(&known_value, &known_amount, false, false, false);
         if known_value.zero >> (width - 1) & 1 == 1 {
             known_shl.zero |= 1u128 << (width - 1);
         }

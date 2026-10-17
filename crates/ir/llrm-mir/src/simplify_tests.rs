@@ -235,6 +235,16 @@ fn and_or_of_implied_bools_and_masked_adds() {
     check(&format!("{m}  %a = and i16 %p, 255\n  %b = and i16 %x, 65280\n  %r = or i16 %a, %b\n"), "r", None);
 }
 
+/// `simplifyShift` asks `KnownBits::shl` with no wrap flags: with `nsw` it
+/// left the poison of `shl nsw 32767, X` (X >= 1) unfound.
+#[test]
+fn nsw_shl_by_a_nonzero_amount_of_a_large_value() {
+    let o = "  %o = or i16 %x, 9\n";
+    check(&format!("{o}  %r = shl nsw i16 32767, %o\n"), "r", Some("poison"));
+    check(&format!("{o}  %r = shl nsw i16 32767, %y\n"), "r", None);
+    check("  %o = or i16 %x, 1\n  %r = shl nsw i16 -32768, %o\n", "r", Some("poison"));
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
