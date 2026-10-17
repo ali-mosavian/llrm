@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/addresssink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/addresssink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:915cdca4c2205319084298ae70fb235640349b2bc9c6b9cd3f1a5f1d30ad9ea6 -->
+<!-- src: crates/opt/llrm-transforms/src/addresssink.rs sha256:57ad4705d06f5ed7bf8dc15abfcffec2a1105b24c65dcb0a5bedb21d29c20d8c -->
 
 # addresssink
 
@@ -18,12 +18,12 @@ only where the target has a single condition register
 (`!target().multiple_condition_registers()`).
 
 An `and` that only compares of it with zero read (`x & mask == 0`), some in
-other blocks than its own, is made again before each of those compares, where
-the target makes one instruction of the pair (`OperationCosts::mask_test`)
-and the copy would not stretch two values read nowhere else
-(`sinkAndCmp0Expression`). Numbering made one value of the repeated tests of
-a bit; the compares sunk into the blocks that branch on it left the `and`
-held across all of them.
+other blocks than its own, is made again before each of those compares,
+where the target makes one instruction of the pair
+(`OperationCosts::mask_test`) and the copy would not stretch two values read
+nowhere else (`sinkAndCmp0Expression`). Numbering made one value of the
+repeated tests of a bit; the compares sunk into the blocks that branch on it
+left the `and` held across all of them.
 
 A phi read only as an address (`spill::address_only`: loads, stores through
 it, and GEPs of up to three levels that are themselves only addresses) whose
