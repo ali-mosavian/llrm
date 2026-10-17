@@ -512,7 +512,7 @@ pub fn propagated(
                 for at in live.iter().copied() {
                     let reached = match (successors.choose)(at, &facts, &states) {
                         Some(selected) => selected,
-                        None => blocks[&at].succ.clone(),
+                        None => blocks[&at].succ.to_vec(),
                     };
                     assert!(
                         reached.iter().all(|target| !blocks.contains_key(target) || edges.contains(&(at, *target))),

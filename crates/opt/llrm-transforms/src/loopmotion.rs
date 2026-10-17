@@ -259,7 +259,7 @@ fn _moved(
     loop_: &Loop,
     operations: &[InstId],
     predecessors: &llrm_support::graph::Predecessors,
-    successors: &BTreeMap<i64, Vec<i64>>,
+    successors: &BTreeMap<i64, llrm_analysis::cfg::Successors>,
     dominators: &llrm_analysis::cfg::Dominance,
     source: i64,
 ) -> Result<Vec<(InstId, Option<Stored>)>, String> {

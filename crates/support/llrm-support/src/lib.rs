@@ -1,5 +1,6 @@
 //! Target-independent support code.
 
+pub mod alloc_count;
 pub mod bits;
 pub mod codepage;
 pub mod debug;
