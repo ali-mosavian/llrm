@@ -152,3 +152,16 @@ def test_llrm_pass_runs_the_one_pass_it_is_asked_for_and_no_other(tmp_path):
     assert out.count(" add i32 %") == 2 and "mul i32" in out, out
     refused = subprocess.run([str(llrm_pass()), "-O2", "nosuch", str(source)], capture_output=True, text=True)
     assert refused.returncode == 2 and "no pass named nosuch" in refused.stderr
+
+
+def test_a_run_with_a_check_switch_nobody_named_is_refused_before_it_replays(monkeypatch):
+    """llvm-order-poc blamed callee-first order for a failure that came from LLRM_CHECK_* on in one run only: llrm-pass inherits the environment."""
+    monkeypatch.setenv("LLRM_CHECK_ORDER", "1")
+    monkeypatch.setattr(difftest, "pairs", lambda *a, **k: (_ for _ in ()).throw(AssertionError("replayed")))
+    monkeypatch.setattr(sys, "argv", ["difftest.py", "run", "sroa", "--llrm-pass", "/x/llrm-pass"])
+    with pytest.raises(SystemExit, match="LLRM_CHECK_ORDER=1"):
+        difftest.main()
+    monkeypatch.setattr(sys, "argv", ["difftest.py", "run", "sroa", "--allow-env", "LLRM_CHECK_ORDER"])
+    monkeypatch.setattr(difftest, "manifest", lambda *a, **k: [])
+    with pytest.raises(AssertionError, match="replayed"):
+        difftest.main()

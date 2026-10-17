@@ -27,6 +27,10 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+
+import envguard  # noqa: E402
+
 INPUTS = Path(os.environ.get("LLRM_DIFFTEST_INPUTS") or Path.home() / "scratch/replay/inputs")
 LLVM_BIN = Path(os.environ.get("LLVM_BIN") or (Path.home() / "scratch/llvm-build/bin" if (Path.home() / "scratch/llvm-build/bin/opt").is_file() else "/usr/lib/llvm-20/bin"))
 
@@ -360,18 +364,22 @@ def main() -> int:
     run.add_argument("--config", nargs="*")
     run.add_argument("--limit", type=int, default=0)
     run.add_argument("--json", type=Path)
+    run.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     run.add_argument("--llrm-pass", type=Path, help="llrm-pass (src/bin/llrm-pass.rs): llrm's answer is the pass run alone on the input, not the next input")
     dumps = sub.add_parser("dumps")
     dumps.add_argument("pass_name", metavar="PASS")
     dumps.add_argument("directory", type=Path, nargs="+")
     dumps.add_argument("--limit", type=int, default=0)
     dumps.add_argument("--json", type=Path)
+    dumps.add_argument("--allow-env", nargs="*", default=[], metavar="NAME", help="the LLRM_CHECK_*/LLRM_EXP_* switch under test; any other in the environment is refused")
     dumps.add_argument("--llrm-pass", type=Path, help="the llrm-pass of the tree that made the dumps")
     pair = sub.add_parser("pair")
     pair.add_argument("input", type=Path)
     pair.add_argument("llrm_out", type=Path)
     pair.add_argument("--pass", dest="pass_name", required=True)
     args = parser.parse_args()
+    if args.command != "pair":
+        envguard.require_clean("difftest", allow=args.allow_env)
     if args.pass_name not in COUNTERPART:
         print(f"difftest: {args.pass_name} has no counterpart in LLVM; the passes with one: {' '.join(sorted(COUNTERPART))}", file=sys.stderr)
         return 2
