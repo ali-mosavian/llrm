@@ -42,9 +42,6 @@ jobs:
           path: target/pgo-profile
           key: pgo-profile-${{ steps.key.outputs.tree }}
           restore-keys: pgo-profile-
-      # QCport's modules (public) are most of the compile the profile is for.
-      - run: |
-          git clone -q --depth 1 https://github.com/ali-mosavian/rm-quake "$RUNNER_TEMP/rm-quake" || echo "::warning::rm-quake not cloned, trained on the bench programs alone"
       # The plain dist llrm-c to compare with, and the other tools identical.py looks for beside each compiler (release builds: they do not vary).
       - name: The plain dist llrm-c
         run: |
@@ -55,8 +52,6 @@ jobs:
           rm -f target/plain/llrm-c
           cp target/dist/llrm-c target/plain/llrm-c
       - name: The profile-guided build
-        env:
-          QCPORT: ${{ runner.temp }}/rm-quake/src
         run: python3 tools/pgo/pgo.py build --out target/pgo-out --profile-dir target/pgo-profile --siblings target/plain
       - name: The same bytes as the plain build (every program and tests/run/c program at each level)
         run: |

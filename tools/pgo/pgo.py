@@ -54,6 +54,12 @@ def corpus(root: Path = ROOT, exclude: frozenset[str] = frozenset(), qcport: Pat
             for level in config["levels"]:
                 jobs.append((source.stem, ["-m32", "-mabi=sysv", level, "-march=i486", *include], source, False))
                 jobs.append((source.stem, ["-m16", level, "-march=i486", *include], source, False))
+    for source in sorted((root / "tests/run/c").glob("*.c")):
+        if source.stem in exclude:
+            continue
+        header = next((line for line in source.read_text().splitlines()[:3] if line.startswith("// flags:")), None)
+        for flags in [v.split() for v in header.removeprefix("// flags:").split("|")] if header else [["-O2"]]:
+            jobs.append((source.stem, flags, source, False))
     if qcport:
         for source in sorted((qcport / "render").glob("*.c")):
             if any(source.stem.startswith(name) for name in exclude):
@@ -64,24 +70,25 @@ def corpus(root: Path = ROOT, exclude: frozenset[str] = frozenset(), qcport: Pat
     return jobs
 
 
-def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]]) -> tuple[int, int]:
-    """(compiles that worked, that failed): a failed compile still trained what ran before it."""
+def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]]) -> tuple[int, list[str]]:
+    """(compiles that worked, one line per compile that failed): the caller fails on any, a corpus that does not compile trains less than it says."""
     work = Path(tempfile.mkdtemp(prefix="pgo-train-"))
 
-    def one(job: tuple[int, tuple[str, list[str], Path, bool]]) -> bool:
+    def one(job: tuple[int, tuple[str, list[str], Path, bool]]) -> str:
         number, (name, arguments, source, wrapped) = job
         if wrapped:  # QCport's modules read as C with the segmented keywords emptied
             wrapped = work / f"{number}-{source.name}"
             wrapped.write_text(HEADER + f'#include "{source}"\n')
             source = wrapped
-        return sh([binary, *arguments, "-o", "/dev/null", source], check=False).returncode == 0
+        done = sh([binary, *arguments, "-o", "/dev/null", source], check=False)
+        return "" if done.returncode == 0 else f"{name} {' '.join(arguments)}: " + " ".join((done.stderr or done.stdout).split())[:200]
 
     try:
         with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
             done = list(pool.map(one, enumerate(jobs)))
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    return sum(done), len(done) - sum(done)
+    return done.count(""), [line for line in done if line]
 
 
 def profdata() -> Path:
@@ -125,7 +132,10 @@ def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport:
     if built.returncode:
         raise SystemExit("pgo: the instrumented build failed:\n" + built.stderr[-2000:])
     ok, failed = train(target / "dist" / "llrm-c", corpus(root, exclude, qcport))
-    print(f"pgo: trained on {ok} compiles ({failed} failed), {len(list(raw.glob('*.profraw')))} raw profiles", flush=True)
+    print(f"pgo: trained on {ok} compiles ({len(failed)} failed), {len(list(raw.glob('*.profraw')))} raw profiles", flush=True)
+    if failed:
+        raise SystemExit("pgo: the training corpus does not compile:\n  " + "\n  ".join(failed[:20]))
+    profile_dir.mkdir(parents=True, exist_ok=True)
     merged = sh([profdata(), "merge", "-o", profile_dir / "profile.profdata", *sorted(raw.glob("*.profraw"))], check=False)
     if merged.returncode:
         raise SystemExit("pgo: llvm-profdata merge failed:\n" + merged.stderr[-2000:])
@@ -172,14 +182,17 @@ def main() -> int:
         else:
             one.add_argument("--profile-dir", type=Path, default=Path(os.environ.get("PGO_DIR", ROOT / "target" / "pgo")))
     args = parser.parse_args()
+    for name in ("profile_dir", "out", "siblings", "binary"):  # the builds run in the repository: a relative path is read from there
+        if getattr(args, name, None):
+            setattr(args, name, getattr(args, name).resolve())
     qcport = Path(os.environ["QCPORT"]) if os.environ.get("QCPORT") else None
     exclude = frozenset(args.exclude)
     if args.command == "stale":
         return stale(args.profile_dir)
     if args.command == "train":
         ok, failed = train(args.binary, corpus(ROOT, exclude, qcport))
-        print(f"trained on {ok} compiles, {failed} failed")
-        return 0
+        print(f"trained on {ok} compiles, {len(failed)} failed", *failed, sep="\n  ")
+        return 1 if failed else 0
     missing = build(ROOT, args.out, args.profile_dir, args.siblings, exclude, qcport)
     text = summary(missing, args.profile_dir)
     print(text)
