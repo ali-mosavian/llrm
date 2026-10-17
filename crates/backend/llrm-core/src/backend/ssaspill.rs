@@ -478,7 +478,7 @@ impl Flow {
         use std::collections::BinaryHeap;
         let mut holders: IndexMap<u32, Vec<i64>> = IndexMap::default();
         for block in &body.blocks {
-            let entering: BTreeSet<u32> = self.live_in[&block.at].iter().copied().chain(block.arrives()).collect();
+            let entering: BTreeSet<u32> = self.live_in[&block.at].iter().chain(block.arrives()).collect();
             for value in entering {
                 holders.entry(value).or_default().push(block.at);
             }
@@ -541,7 +541,7 @@ impl Flow {
         for _ in 0..64 {
             let mut changed = false;
             for block in body.blocks.iter().rev() {
-                let entering: BTreeSet<u32> = flow.live_in[&block.at].iter().copied().chain(block.arrives()).collect();
+                let entering: BTreeSet<u32> = flow.live_in[&block.at].iter().chain(block.arrives()).collect();
                 for value in entering {
                     let first = flow.uses[&block.at].get(&value).and_then(|list| list.first().copied());
                     let here = match first {
@@ -1568,7 +1568,6 @@ fn simulated(
             preds.get(at).into_iter().flatten().filter_map(|from| edits.get(from)).map(|one| &one.w_out).collect();
         let mut candidates: Vec<(usize, i64, u32)> = flow.live_in[at]
             .iter()
-            .copied()
             .chain(block.arrives())
             .filter(|value| {
                 wanted(*value) && !memory.contains(value) && !dropped.get(at).is_some_and(|set| set.contains(value))
@@ -2111,7 +2110,7 @@ fn loop_room(
     let wanted = |value: &u32| machine.registered(*value) && !skip.contains(value);
     let mut most: IndexMap<i64, usize> = IndexMap::default();
     for block in &body.blocks {
-        let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().copied().filter(|value| wanted(value)).collect();
+        let mut live: BTreeSet<u32> = flow.live_out[&block.at].iter().filter(|value| wanted(value)).collect();
         let mut peak = live.len();
         for one in block.insns.iter().rev() {
             peak = peak.max(live.len());

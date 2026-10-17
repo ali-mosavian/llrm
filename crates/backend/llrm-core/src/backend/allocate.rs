@@ -392,7 +392,7 @@ pub fn _group_start(
     first
 }
 
-pub type Live = IndexMap<i64, BTreeSet<u32>>;
+pub type Live = IndexMap<i64, llrm_mir::dense::IdSet<u32>>;
 
 /// What is live at each block's entry and exit, to a fixed point.
 ///
@@ -1185,7 +1185,7 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
         }
     }
     let numbered = &numbered;
-    let values = |set: &[u64]| -> BTreeSet<u32> {
+    let values = |set: &[u64]| -> llrm_mir::dense::IdSet<u32> {
         set.iter()
             .enumerate()
             .flat_map(|(word, bits)| {
