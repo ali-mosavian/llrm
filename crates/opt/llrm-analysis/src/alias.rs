@@ -229,6 +229,8 @@ pub struct EscapedBefore {
 }
 
 thread_local! {
+    pub static CONSUMER: std::cell::Cell<&'static str> = const { std::cell::Cell::new("other") };
+    static DEMAND: RefCell<DemandBox> = RefCell::new(DemandBox::default());
     static BEFORE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -477,7 +479,18 @@ fn _operand(
     values: &IndexMap<ValueId, Provenance>,
 ) -> Option<Provenance> {
     match operand {
-        Operand::Value(value) => values.get(&value).cloned(),
+        Operand::Value(value) => {
+            if llrm_support::env_flag!("LLRM_PV_DEMAND") {
+                let addr = values as *const _ as usize;
+                let who = CONSUMER.with(std::cell::Cell::get);
+                DEMAND.with(|d| {
+                    let mut d = d.borrow_mut();
+                    d.0.insert((addr, value.0, who));
+                    d.1.insert(addr, values.len());
+                });
+            }
+            values.get(&value).cloned()
+        }
         Operand::Constant(_) => {
             let access = MemRef::at(unit, operand, 1);
             let root = access.root?;
@@ -1234,6 +1247,7 @@ pub fn visits() -> usize {
 }
 
 pub fn _direct_summary(unit: &Unit) -> Result<Summary, String> {
+    let _label = Label::set("direct");
     DIRECT_RUNS.with(|runs| runs.set(runs.get() + 1));
     let (mut reads, mut writes) = (BTreeSet::new(), BTreeSet::new());
     let (mut unknown_read, mut unknown_write) = (false, false);
@@ -2122,6 +2136,7 @@ pub fn calls_annotated(
     procedure: &Procedure,
     known: &IndexMap<String, Summary>,
 ) -> Result<IndexMap<InstId, Effect>, String> {
+    let _label = Label::set("calls");
     // Capture is part of escape flow. Unknown callees may retain every
     // pointer actual; known callees retain only the parameters their fixed
     // point summary says they capture.
@@ -2345,6 +2360,7 @@ pub fn initialized(
     procedure: &Procedure,
     known: &IndexMap<String, Summary>,
 ) -> Result<Vec<Ranges>, String> {
+    let _label = Label::set("initialized");
     let unit = &procedure.unit;
     let function = unit.function;
     let count = function.parameters().len();
@@ -2743,7 +2759,147 @@ impl Solve {
 /// changed. The contents of a cell are one abstract location per object (every
 /// pointer stored into it anywhere, or unknown): what an exact cell holds at a
 /// point is the memory SSA's to say per query.
+#[derive(Default)]
+struct DemandBox(HashSet<(usize, u32, &'static str)>, HashMap<usize, usize>);
+
+impl Drop for DemandBox {
+    fn drop(&mut self) {
+        if !self.0.is_empty() {
+            eprintln!("PVDEMAND {}", report_of(self));
+        }
+    }
+}
+
+fn report_of(d: &DemandBox) -> String {
+    {
+        let mut asked: std::collections::BTreeMap<&str, (usize, HashSet<usize>)> = Default::default();
+        for (addr, _, who) in &d.0 {
+            let e = asked.entry(who).or_default();
+            e.0 += 1;
+            e.1.insert(*addr);
+        }
+        let mut out = String::new();
+        for (who, (n, addrs)) in asked {
+            let solved: usize = addrs.iter().map(|a| d.1[a]).sum();
+            out += &format!("{who}: asked {n} of {solved} solved over {} maps; ", addrs.len());
+        }
+        out
+    }
+}
+
+
+
+struct Label(&'static str);
+
+impl Label {
+    fn set(who: &'static str) -> Self {
+        Label(CONSUMER.with(|c| c.replace(who)))
+    }
+}
+
+impl Drop for Label {
+    fn drop(&mut self) {
+        CONSUMER.with(|c| c.set(self.0));
+    }
+}
+
+/// What the value solve reads of the unit, hashed: every instruction's opcode,
+/// type, operands and result in block order, the exposed allocas, and the back
+/// edges the shape's dominance gives.
+fn solve_fingerprint(unit: &Unit) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let function = unit.function;
+    let mut hasher = std::hash::BuildHasher::build_hasher(&llrm_support::hash::FxBuild::default());
+    function.ty.hash(&mut hasher);
+    function.parameter_attrs.hash(&mut hasher);
+    function.attrs.hash(&mut hasher);
+    for parameter in function.parameters() {
+        function.value(*parameter).ty.hash(&mut hasher);
+    }
+    for (block, inst) in function.walk() {
+        block.hash(&mut hasher);
+        let op = function.instruction(inst);
+        op.opcode.hash(&mut hasher);
+        op.ty.hash(&mut hasher);
+        op.operands.hash(&mut hasher);
+        op.result.hash(&mut hasher);
+    }
+    if let Some(exposed) = unit.exposed {
+        exposed.len().hash(&mut hasher);
+        exposed.iter().for_each(|one| one.hash(&mut hasher));
+    }
+    let shape = unit.shape();
+    for block in cfg::graph(function) {
+        for successor in &block.succ {
+            if shape.dominance.dominates(*successor, block.at) {
+                (block.at, *successor).hash(&mut hasher);
+            }
+        }
+    }
+    hasher.finish()
+}
+
+thread_local! {
+    static SOLVED: RefCell<HashMap<(u64, usize, usize), PointValues>> = RefCell::new(HashMap::default());
+    static SHARED_HITS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+struct ShareReport;
+
+impl Drop for ShareReport {
+    fn drop(&mut self) {
+        let (hits, solves) = SHARED_HITS.with(std::cell::Cell::get);
+        if hits + solves > 0 {
+            eprintln!("PVSHARE hits {hits} solves {solves}");
+        }
+    }
+}
+
+thread_local! {
+    static SHARE_REPORT: ShareReport = const { ShareReport };
+}
+
+#[track_caller]
 pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
+    if !llrm_support::env_flag!("LLRM_PV_SHARE") {
+        return point_values_solved(unit);
+    }
+    SHARE_REPORT.with(|_| ());
+    // The solve of one body version in one view of the program's globals.
+    let key = (
+        solve_fingerprint(unit),
+        unit.globals_aa.map_or(0, |aa| std::ptr::from_ref(aa) as usize),
+        std::ptr::from_ref(unit.context) as usize,
+    );
+    if let Some(held) = SOLVED.with(|solved| solved.borrow().get(&key).cloned()) {
+        SHARED_HITS.with(|h| h.set((h.get().0 + 1, h.get().1)));
+        if llrm_support::env_flag!("LLRM_CHECK_PVSHARED") {
+            let fresh = point_values_solved(unit)?;
+            if held != fresh {
+                let d = held.values.iter().zip(fresh.values.iter()).find(|(a, b)| a != b).map(|(a, b)| format!("{a:?} || {b:?}"));
+                panic!("LLRM_CHECK_PVSHARED: the shared value solve is not the solve: sizes {} {} first difference {:?}", held.values.len(), fresh.values.len(), d);
+            }
+        }
+        return Ok(held);
+    }
+    let found = point_values_solved(unit)?;
+    SHARED_HITS.with(|h| h.set((h.get().0, h.get().1 + 1)));
+    SOLVED.with(|solved| {
+        let mut solved = solved.borrow_mut();
+        if solved.len() >= 256 {
+            solved.clear();
+        }
+        solved.insert(key, found.clone());
+    });
+    Ok(found)
+}
+
+#[track_caller]
+fn point_values_solved(unit: &Unit) -> Result<PointValues, String> {
+    if llrm_support::env_flag!("LLRM_PV_DEMAND") {
+        let at = std::panic::Location::caller();
+        eprintln!("PVSOLVE {:?} {}:{} prog={}", unit.function.mark(), at.file().rsplit('/').next().unwrap(), at.line(), unit.program.is_some());
+    }
     VALUE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let seeds = seeds(unit);
@@ -3007,6 +3163,7 @@ fn escapes(
     arguments: Option<&llrm_support::hash::SparseIdMap<InstId, Vec<Actual>>>,
     captures: Option<&llrm_support::hash::SparseIdMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
 ) -> Result<PointsTo, String> {
+    let _label = Label::set("escapes");
     ESCAPE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let graph = cfg::graph(function);
@@ -3642,6 +3799,7 @@ pub fn annotated_with(
     facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
+    let _label = Label::set("annotated");
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
             if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
