@@ -165,6 +165,34 @@ fn an_intrinsic_declaration_takes_llvms_attributes() {
     );
 }
 
+/// `Intrinsics.td` gives the copies and fills `nosync`; without it a pass
+/// reads each as a possible synchronisation point.
+#[test]
+fn the_copies_and_fills_are_nosync() {
+    for declaration in [
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)",
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)",
+        "declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)",
+        "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)",
+    ] {
+        let text = print::module(&parse::module(&format!("{declaration}\n")).expect("a module"));
+        assert!(text.contains(" nosync "), "{text}");
+    }
+}
+
+/// `memcpy`'s two pointers are `noalias` in `Intrinsics.td`: the copy does not
+/// overlap, which `memmove` does not say.
+#[test]
+fn memcpy_pointers_are_noalias_and_memmove_pointers_are_not() {
+    let text = |name: &str| {
+        print::module(&parse::module(&format!("declare void @llvm.{name}.p0.p0.i16(ptr, ptr, i16, i1)\n")).unwrap())
+    };
+    assert!(text("memcpy").starts_with(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr noalias nocapture writeonly, ptr noalias nocapture readonly,"
+    ));
+    assert!(!text("memmove").contains("noalias"));
+}
+
 /// Inline assembly's registers are in its callee's name; the declaration
 /// must answer them, and a block that reaches no memory keeps its place
 /// among the ports as their own state does.

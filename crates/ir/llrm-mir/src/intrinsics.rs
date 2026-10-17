@@ -337,7 +337,7 @@ const TABLE: [Spec; 35] = [
             (Slot::Any(1), &[]),
             (Slot::Int(1), &["immarg"]),
         ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
     },
     Spec {
@@ -351,7 +351,7 @@ const TABLE: [Spec; 35] = [
             (Slot::Any(2), &[]),
             (Slot::Int(1), &["immarg"]),
         ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "write")],
     },
     Spec {
@@ -360,12 +360,12 @@ const TABLE: [Spec; 35] = [
         overloads: &[Kind::Pointer, Kind::Pointer, Kind::Int],
         returns: Slot::Void,
         parameters: &[
-            (Slot::Any(0), &["nocapture", "writeonly"]),
-            (Slot::Any(1), &["nocapture", "readonly"]),
+            (Slot::Any(0), &["noalias", "nocapture", "writeonly"]),
+            (Slot::Any(1), &["noalias", "nocapture", "readonly"]),
             (Slot::Any(2), &[]),
             (Slot::Int(1), &["immarg"]),
         ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {
@@ -379,7 +379,7 @@ const TABLE: [Spec; 35] = [
             (Slot::Any(2), &[]),
             (Slot::Int(1), &["immarg"]),
         ],
-        attrs: &["nocallback", "nofree", "nounwind", "willreturn"],
+        attrs: &["nocallback", "nofree", "nosync", "nounwind", "willreturn"],
         memory: &[(Some("argmem"), "readwrite")],
     },
     Spec {
