@@ -2,12 +2,12 @@
 # rows/run.sh NAME LLRM_C [gccclang-from]: build + run the 71 vsgcc programs; llrm variants always, gcc/clang unless copied
 set -e
 # run.sh NAME LLRM_C [NAME_WITH_GCC_CLANG_RESULTS]: the 71 vsgcc programs; the first run (no third argument) also builds and runs gcc and clang
-R=$(cd "$(dirname "$0")/../.." && pwd); H=$R/crates/target/llrm-x86-m32/vsgcc
+R=$(cd "$(dirname "$0")/../.." && pwd); H=$(echo $R/crates/target/*/vsgcc)
 NAME=$1; export LLRM=$2; FROM=$3
 export VSGCC_WORK=${ROWS_WORK:-$HOME/scratch/rows}/$NAME; mkdir -p $VSGCC_WORK
 PROGS=$(python3 $H/programs.py)
-gcc -m32 -c $H/stub.s -o $VSGCC_WORK/stub.o && ld -m $(python3 $R/tools/linkrecipe.py x86-m32 ld-emulation) -static -e 0 -Ttext=0x8000 -o $VSGCC_WORK/stub.elf $VSGCC_WORK/stub.o
-sha256sum $H/stub.s | cut -d" " -f1 | tr -d "\n" > $VSGCC_WORK/stub.elf.src
+# the stub's build is vsgcc/run.sh's own lines, not a copy of them
+eval "$(grep -E '^(gcc -m32 -c|sha256sum) ' $H/run.sh)"
 if [ -n "$FROM" ]; then
   mkdir -p $VSGCC_WORK/b $VSGCC_WORK/o; cp -a ${ROWS_WORK:-$HOME/scratch/rows}/$FROM/b/. $VSGCC_WORK/b/; cp -a ${ROWS_WORK:-$HOME/scratch/rows}/$FROM/abi $VSGCC_WORK/abi
   export VSGCC_ONLY=llrm
