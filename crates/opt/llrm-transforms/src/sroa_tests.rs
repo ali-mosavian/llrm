@@ -225,3 +225,55 @@ b0:
     );
     assert!(after.contains("ret i32 %a"), "{after}");
 }
+
+/// A select of two locals' addresses, loaded: the load becomes a select of the
+/// values (the loads speculated and promoted), so no memory is left. A select
+/// that aborts the slice walk leaves both allocas.
+#[test]
+fn test_a_load_through_a_select_of_two_locals_is_speculated() {
+    let after = sroa(
+        "define i32 @f(i1 %c, i32 %a, i32 %b) {
+b0:
+  %x = alloca i32
+  %y = alloca i32
+  store i32 %a, ptr %x
+  store i32 %b, ptr %y
+  %p = select i1 %c, ptr %x, ptr %y
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
+    assert!(after.contains("select i1 %c, i32 %a, i32 %b"), "{after}");
+}
+
+/// A phi of two locals' addresses, loaded in its block: the loads go into the
+/// predecessors and are promoted.
+#[test]
+fn test_a_load_through_a_phi_of_two_locals_is_speculated() {
+    let after = sroa(
+        "define i32 @f(i1 %c, i32 %a, i32 %b) {
+b0:
+  %x = alloca i32
+  %y = alloca i32
+  store i32 %a, ptr %x
+  store i32 %b, ptr %y
+  br i1 %c, label %t, label %e
+
+t:
+  br label %j
+
+e:
+  br label %j
+
+j:
+  %p = phi ptr [ %x, %t ], [ %y, %e ]
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
+    assert!(after.contains("phi i32 [ %a, %t ], [ %b, %e ]"), "{after}");
+}

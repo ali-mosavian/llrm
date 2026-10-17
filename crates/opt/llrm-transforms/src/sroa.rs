@@ -192,6 +192,22 @@ struct Slice {
     /// The use the slice is of, none once the slice is killed.
     used: Option<Use>,
     splittable: bool,
+    kind: Kind,
+}
+
+/// What a slice's user is, which SROA.cpp reads off the instruction's class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// A load or a store.
+    Memory,
+    /// `llvm.memset`.
+    MemSet,
+    /// `llvm.memcpy` or `llvm.memmove`.
+    Transfer,
+    /// `llvm.lifetime.start` or `.end`.
+    Lifetime,
+    /// A phi or select of pointers.
+    PhiOrSelect,
 }
 
 impl Slice {
@@ -252,6 +268,114 @@ fn constant_unsigned(
     }
 }
 
+/// `foldPHINodeOrSelectInst`: the value a phi or select with one possible
+/// result is. SROA.cpp#L1010
+fn fold_phi_or_select(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<Operand> {
+    let instruction = function.instruction(inst);
+    match instruction.opcode {
+        // `PHINode::hasConstantValue`: the one value besides the phi itself.
+        Opcode::Phi => {
+            let own = instruction.result.map(Operand::Value);
+            let mut common: Option<Operand> = None;
+            for pair in instruction.operands.chunks(2) {
+                if Some(pair[0]) == own {
+                    continue;
+                }
+                match common {
+                    None => common = Some(pair[0]),
+                    Some(seen) if seen == pair[0] => {}
+                    Some(_) => return None,
+                }
+            }
+            common
+        }
+        // `foldSelectInst` (L997).
+        Opcode::Select => {
+            if let Some(condition) = constant_unsigned(context, instruction.operands[0]) {
+                return Some(instruction.operands[if condition == 0 { 2 } else { 1 }]);
+            }
+            (instruction.operands[1] == instruction.operands[2]).then_some(instruction.operands[1])
+        }
+        _ => None,
+    }
+}
+
+/// `hasUnsafePHIOrSelectUse`: the size of the largest load or store through
+/// the phi or select `root`, or Err where a use is unsafe. SROA.cpp#L1288
+fn has_unsafe_phi_or_select_use(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    root: InstId,
+) -> Result<u64, ()> {
+    let mut visited: HashSet<InstId> = HashSet::default();
+    visited.insert(root);
+    let mut uses: Vec<(Option<ValueId>, InstId)> = vec![(None, root)];
+    // With no loads or stores the access is dead: a size of zero.
+    let mut size = 0_u64;
+    while let Some((used, inst)) = uses.pop() {
+        let instruction = function.instruction(inst);
+        match &instruction.opcode {
+            Opcode::Load { .. } => {
+                size = size.max(layout.store_size(&context.types, instruction.ty));
+                continue;
+            }
+            Opcode::Store { .. } => {
+                let stored = instruction.operands[0];
+                if used.map(Operand::Value) == Some(stored) {
+                    return Err(());
+                }
+                let ty = function.operand_type(context, stored).expect("a typed value");
+                size = size.max(layout.store_size(&context.types, ty));
+                continue;
+            }
+            Opcode::GetElementPtr { .. } => {
+                if !instruction.operands[1..].iter().all(|&one| constant_index(context, one) == Some(0)) {
+                    return Err(());
+                }
+            }
+            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::Phi | Opcode::Select => {}
+            _ => return Err(()),
+        }
+        if let Some(result) = instruction.result {
+            for &user in function.users(result) {
+                if visited.insert(user.user) {
+                    uses.push((Some(result), user.user));
+                }
+            }
+        }
+    }
+    Ok(size)
+}
+
+/// `findCommonTypeThroughPHIOrSelect`: the type every user of a phi or select
+/// loads or stores. SROA.cpp#L1490
+fn find_common_type_through_phi_or_select(
+    context: &Context,
+    function: &Function,
+    inst: InstId,
+) -> Option<TypeId> {
+    let result = function.instruction(inst).result?;
+    let mut ty: Option<TypeId> = None;
+    for user in function.users(result) {
+        let instruction = function.instruction(user.user);
+        let user_ty = match instruction.opcode {
+            Opcode::Load { .. } => Some(instruction.ty),
+            Opcode::Store { .. } => function.operand_type(context, instruction.operands[0]),
+            _ => None,
+        };
+        match user_ty {
+            Some(one) if ty.is_none_or(|current| current == one) => ty = Some(one),
+            _ => return None,
+        }
+    }
+    ty
+}
+
 /// `AllocaSlices::AllocaSlices` with `SliceBuilder` and `PtrUseVisitor`
 /// (SROA.cpp#L1416, L1022; PtrUseVisitor.h `visitPtr`).
 fn build_slices(
@@ -265,6 +389,8 @@ fn build_slices(
     // `MemTransferSliceMap` (L1034): the slice a transfer made from its first
     // side.
     let mut transfer_slice: HashMap<InstId, usize> = HashMap::default();
+    // `PHIOrSelectSizes` (L1035): the largest access through a phi or select.
+    let mut phi_or_select_sizes: HashMap<InstId, u64> = HashMap::default();
     let intrinsic = |inst: InstId| {
         let callee = llrm_mir::memory::callee(context, function, inst)?;
         llrm_mir::intrinsics::Intrinsic::named(globals.get(callee.0 as usize)?.name.as_deref()?)
@@ -304,7 +430,8 @@ fn build_slices(
                           visited_dead: &mut HashSet<InstId>,
                           offset: i128,
                           size: u64,
-                          splittable: bool| {
+                          splittable: bool,
+                          kind: Kind| {
             if size == 0 || offset < 0 || offset as u128 >= u128::from(alloc_size) {
                 if visited_dead.insert(user) {
                     found.dead_users.push(user);
@@ -316,7 +443,7 @@ fn build_slices(
             if size > alloc_size - begin {
                 end = alloc_size;
             }
-            found.slices.push(Slice { begin, end, used: Some(used), splittable });
+            found.slices.push(Slice { begin, end, used: Some(used), splittable, kind });
         };
         let result_users = |instruction: &llrm_mir::module::Instruction| {
             instruction.result.map_or(0, |result| function.users(result).len())
@@ -364,7 +491,7 @@ fn build_slices(
                 let splittable = int_bits(context, instruction.ty).is_some()
                     && !volatile
                     && size_equals_store_size(layout, context, instruction.ty);
-                insert_use(&mut found, &mut visited_dead, offset, size, splittable);
+                insert_use(&mut found, &mut visited_dead, offset, size, splittable, Kind::Memory);
             }
             // `visitStoreInst` (L1138).
             Opcode::Store { volatile, .. } => {
@@ -386,15 +513,52 @@ fn build_slices(
                 let splittable = int_bits(context, value_ty).is_some()
                     && !volatile
                     && size_equals_store_size(layout, context, value_ty);
-                insert_use(&mut found, &mut visited_dead, offset, size, splittable);
+                insert_use(&mut found, &mut visited_dead, offset, size, splittable, Kind::Memory);
             }
-            // DEVIATE: `visitPHINodeOrSelectInst` (L1338) beyond the dead case.
-            Opcode::Phi | Opcode::Select => {
+            // `visitPHINodeOrSelectInst` (L1338). A select's condition is no
+            // pointer.
+            Opcode::Phi | Opcode::Select if !(matches!(instruction.opcode, Opcode::Select) && used.index == 0) => {
                 if result_users(instruction) == 0 {
                     mark_dead(&mut found);
-                } else {
-                    aborted = true;
+                    continue;
                 }
+                // The result of a constant fold: the pointer itself is as if
+                // the phi were replaced by it, any other operand is dead.
+                if let Some(result) = fold_phi_or_select(context, function, user) {
+                    if result == instruction.operands[used.index as usize] {
+                        if let Some(value) = instruction.result {
+                            enqueue(&mut worklist, &mut visited_uses, value, known, offset);
+                        }
+                    } else {
+                        found.dead_operands.push(used);
+                    }
+                    continue;
+                }
+                if !known {
+                    aborted = true;
+                    continue;
+                }
+                // The size is worked out once for each phi or select.
+                let size = match phi_or_select_sizes.get(&user).copied().filter(|&size| size != 0) {
+                    Some(size) => size,
+                    None => match has_unsafe_phi_or_select_use(context, layout, function, user) {
+                        Ok(size) => {
+                            phi_or_select_sizes.insert(user, size);
+                            size
+                        }
+                        Err(()) => {
+                            aborted = true;
+                            continue;
+                        }
+                    },
+                };
+                // An operand outside the alloca is dead; the other side may
+                // matter.
+                if offset < 0 || offset as u128 >= u128::from(alloc_size) {
+                    found.dead_operands.push(used);
+                    continue;
+                }
+                insert_use(&mut found, &mut visited_dead, offset, size, false, Kind::PhiOrSelect);
             }
             Opcode::Call(_) => match intrinsic(user) {
                 // `visitMemSetInst` (L1177).
@@ -406,7 +570,7 @@ fn build_slices(
                         aborted = true;
                     } else {
                         let size = length.unwrap_or(alloc_size - offset as u64);
-                        insert_use(&mut found, &mut visited_dead, offset, size, length.is_some());
+                        insert_use(&mut found, &mut visited_dead, offset, size, length.is_some(), Kind::MemSet);
                     }
                 }
                 // `visitMemTransferInst` (L1194).
@@ -443,7 +607,7 @@ fn build_slices(
                         if !volatile {
                             mark_dead(&mut found);
                         } else {
-                            insert_use(&mut found, &mut visited_dead, offset, size, false);
+                            insert_use(&mut found, &mut visited_dead, offset, size, false, Kind::Transfer);
                         }
                         continue;
                     }
@@ -462,14 +626,21 @@ fn build_slices(
                         // split.
                         found.slices[at].splittable = false;
                     }
-                    insert_use(&mut found, &mut visited_dead, offset, size, inserted && length.is_some());
+                    insert_use(
+                        &mut found,
+                        &mut visited_dead,
+                        offset,
+                        size,
+                        inserted && length.is_some(),
+                        Kind::Transfer,
+                    );
                 }
                 // `visitIntrinsicInst` (L1266): a lifetime marker.
                 Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) if used.index == 1 => {
                     if !known {
                         aborted = true;
                     } else {
-                        insert_use(&mut found, &mut visited_dead, offset, alloc_size, true);
+                        insert_use(&mut found, &mut visited_dead, offset, alloc_size, true, Kind::Lifetime);
                     }
                 }
                 // A droppable intrinsic (`llvm.assume`).
@@ -756,9 +927,14 @@ fn find_common_type(
             continue;
         }
         let user = function.instruction(used.user);
+        // An intrinsic says nothing of the type.
+        if slice.kind != Kind::Memory && slice.kind != Kind::PhiOrSelect {
+            continue;
+        }
         let user_ty = match user.opcode {
             Opcode::Load { .. } => Some(user.ty),
             Opcode::Store { .. } => function.operand_type(context, user.operands[0]),
+            Opcode::Phi | Opcode::Select => find_common_type_through_phi_or_select(context, function, used.user),
             _ => None,
         };
         if let Some(bits) = user_ty.and_then(|one| int_bits(context, one)) {
@@ -795,6 +971,10 @@ fn is_integer_widening_viable_for_slice(
     let rel_end = slice.end - alloc_begin_offset;
     let used = slice.used.expect("a live slice");
     let user = function.instruction(used.user);
+    // Lifetime markers are always promotable and do not count.
+    if slice.kind == Kind::Lifetime {
+        return true;
+    }
     if rel_end > size {
         return false;
     }
@@ -833,6 +1013,16 @@ fn is_integer_widening_viable_for_slice(
                     return false;
                 }
             } else if rel_begin != 0 || rel_end != size || !can_convert_value(layout, context, value_ty, alloca_ty) {
+                return false;
+            }
+        }
+        // A memory intrinsic: a constant length, not volatile, splittable.
+        Opcode::Call(_) if slice.kind == Kind::MemSet || slice.kind == Kind::Transfer => {
+            let volatile = constant_unsigned(context, user.operands[3]) != Some(0);
+            if volatile || !matches!(user.operands[2], Operand::Constant(_)) {
+                return false;
+            }
+            if !slice.splittable {
                 return false;
             }
         }
@@ -902,6 +1092,10 @@ struct State<'a, 'b, 'c> {
     promotable_allocas: Vec<InstId>,
     dead_insts: Vec<InstId>,
     globals: std::rc::Rc<Vec<llrm_mir::module::GlobalValue>>,
+    /// `SpeculatablePHIs`, `PHIsWithStoreToRewrite`, `SelectsToRewrite`.
+    speculatable_phis: Vec<InstId>,
+    phis_with_store_to_rewrite: Vec<InstId>,
+    selects_to_rewrite: Vec<(InstId, Vec<InstId>)>,
 }
 
 /// What `AllocaSliceRewriter` carries from slice to slice (L2811).
@@ -925,6 +1119,10 @@ struct Rewriter {
     old_ai: InstId,
     old_use: Option<Use>,
     old_ptr: Option<Operand>,
+    /// The phis and selects the partition's pointer reached (`PHIUsers`,
+    /// `SelectUsers`).
+    phi_users: Vec<InstId>,
+    select_users: Vec<InstId>,
 }
 
 impl<'a, 'b, 'c> State<'a, 'b, 'c> {
@@ -941,6 +1139,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             post_promotion_worklist: Vec::new(),
             promotable_allocas: Vec::new(),
             dead_insts: Vec::new(),
+            speculatable_phis: Vec::new(),
+            phis_with_store_to_rewrite: Vec::new(),
+            selects_to_rewrite: Vec::new(),
         }
     }
 
@@ -1193,6 +1394,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             return changed;
         }
         changed |= self.split_alloca(alloca, &mut slices);
+        // Speculating phis, rewriting stores through phis, rewriting selects.
+        while let Some(phi) = self.speculatable_phis.pop() {
+            self.speculate_phi_node_loads(phi);
+        }
+        for phi in std::mem::take(&mut self.phis_with_store_to_rewrite).into_iter().rev() {
+            self.rewrite_phi_node_store(phi);
+        }
+        for (select, loads) in std::mem::take(&mut self.selects_to_rewrite).into_iter().rev() {
+            self.rewrite_select_inst_mem_ops(select, &loads);
+        }
         changed
     }
 
@@ -1367,6 +1578,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             old_ai: alloca,
             old_use: None,
             old_ptr: None,
+            phi_users: Vec::new(),
+            select_users: Vec::new(),
         };
         let mut promotable = true;
         for &tail in &p.split_tails {
@@ -1374,6 +1587,32 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         for slice in &slices[p.first..p.last] {
             promotable &= self.visit_slice(&mut rewriter, slice);
+        }
+        // Now that the slices are processed, check whether any phi or select
+        // would block promotion.
+        let mut new_speculatable_phis: Vec<InstId> = Vec::new();
+        let mut new_phis_with_store: Vec<InstId> = Vec::new();
+        let mut select_users = std::mem::take(&mut rewriter.select_users);
+        for phi in std::mem::take(&mut rewriter.phi_users) {
+            if self.is_safe_phi_to_speculate(phi) {
+                new_speculatable_phis.push(phi);
+            } else if self.get_phi_store_to_rewrite(phi).is_some() {
+                new_phis_with_store.push(phi);
+            } else {
+                promotable = false;
+                select_users.clear();
+                break;
+            }
+        }
+        let mut new_selects: Vec<(InstId, Vec<InstId>)> = Vec::new();
+        for &select in &select_users {
+            match self.is_safe_select_to_speculate(select) {
+                Some(loads) => new_selects.push((select, loads)),
+                None => {
+                    promotable = false;
+                    break;
+                }
+            }
         }
         if promotable {
             // `dropDroppableUse`: an `llvm.assume`'s condition becomes true.
@@ -1384,9 +1623,20 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.unit.function.set_operand(used.user, used.index as usize, one);
                 self.delete_if_trivially_dead(old);
             }
-            // Promote the alloca.
-            if !self.promotable_allocas.contains(&new_ai) {
-                self.promotable_allocas.push(new_ai);
+            if new_speculatable_phis.is_empty() && new_phis_with_store.is_empty() && select_users.is_empty() {
+                // Promote the alloca.
+                if !self.promotable_allocas.contains(&new_ai) {
+                    self.promotable_allocas.push(new_ai);
+                }
+            } else {
+                // The phis and selects to rewrite are queued and the new
+                // alloca is looked at again to promote it next time.
+                self.speculatable_phis.extend(new_speculatable_phis);
+                self.phis_with_store_to_rewrite.extend(new_phis_with_store);
+                self.selects_to_rewrite.extend(new_selects);
+                if !self.worklist.contains(&new_ai) {
+                    self.worklist.push(new_ai);
+                }
             }
         } else {
             // Drop any post-promotion work items if promotion didn't happen.
@@ -1429,7 +1679,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.visit_mem_transfer_inst(rewriter, used.user),
                 _ => self.visit_intrinsic_inst(rewriter, used.user),
             },
-            _ => unreachable!("only loads, stores and memory intrinsics make slices in this step"),
+            Opcode::Phi => self.visit_phi_node(rewriter, used.user),
+            Opcode::Select => self.visit_select_inst(rewriter, used.user),
+            _ => unreachable!("only loads, stores, memory intrinsics, phis and selects make slices"),
         }
     }
 
@@ -2188,6 +2440,382 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         new_operands[1] = pointer;
         self.call_like(marker, new_operands);
         true
+    }
+
+    /// Where a pointer made for a phi or select goes: at the old pointer,
+    /// which dominates it (after the phis of its block, where it is one).
+    fn place_for_old_pointer(
+        &self,
+        old: Operand,
+    ) -> InstId {
+        let Operand::Value(value) = old else { unreachable!("a pointer value") };
+        let llrm_mir::module::ValueDef::Instruction(def) = self.function().value(value).def else {
+            unreachable!("an instruction")
+        };
+        if self.function().instruction(def).opcode == Opcode::Phi {
+            let block = self.function().parent(def).expect("a placed phi");
+            return self
+                .function()
+                .block(block)
+                .instructions()
+                .iter()
+                .copied()
+                .find(|&one| self.function().instruction(one).opcode != Opcode::Phi)
+                .expect("a block ends in a terminator");
+        }
+        def
+    }
+
+    /// `AllocaSliceRewriter::visitPHINode`. SROA.cpp#L4204
+    fn visit_phi_node(
+        &mut self,
+        rewriter: &mut Rewriter,
+        phi: InstId,
+    ) -> bool {
+        let old = rewriter.old_ptr.expect("a slice's pointer");
+        // The new pointer is made once, at the old one, which dominates the
+        // phi.
+        let at = self.place_for_old_pointer(old);
+        let new_ptr = self.new_alloca_slice_ptr(rewriter, at);
+        // Replace the operands which were using the old pointer.
+        let operands = self.function().instruction(phi).operands.clone();
+        for (index, operand) in operands.iter().enumerate() {
+            if index % 2 == 0 && *operand == old {
+                self.unit.function.set_operand(phi, index, new_ptr);
+            }
+        }
+        self.delete_if_trivially_dead(old);
+        // DEVIATE: `fixLoadStoreAlign` (L4180): a load's alignment cannot be
+        // rewritten in place in MIR.
+        // PHIs can't be promoted on their own, but often can be speculated:
+        // checked outside the rewriter, on the fully rewritten alloca.
+        if !rewriter.phi_users.contains(&phi) {
+            rewriter.phi_users.push(phi);
+        }
+        true
+    }
+
+    /// `AllocaSliceRewriter::visitSelectInst`. SROA.cpp#L4238
+    fn visit_select_inst(
+        &mut self,
+        rewriter: &mut Rewriter,
+        select: InstId,
+    ) -> bool {
+        let old = rewriter.old_ptr.expect("a slice's pointer");
+        let new_ptr = self.new_alloca_slice_ptr(rewriter, select);
+        // Replace the operands which were using the old pointer.
+        for index in [1, 2] {
+            if self.function().instruction(select).operands[index] == old {
+                self.unit.function.set_operand(select, index, new_ptr);
+            }
+        }
+        self.delete_if_trivially_dead(old);
+        if !rewriter.select_users.contains(&select) {
+            rewriter.select_users.push(select);
+        }
+        true
+    }
+
+    /// Whether a load is simple (not volatile).
+    fn is_simple_load(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        matches!(
+            self.function().instruction(inst).opcode,
+            Opcode::Load { volatile: false, .. }
+        )
+    }
+
+    /// The number of edges leaving `block`.
+    fn successor_edges(
+        &self,
+        block: llrm_mir::module::BlockId,
+    ) -> usize {
+        let Some(terminator) = self.function().terminator(block) else { return 0 };
+        self.function().instruction(terminator).operands.iter().filter(|one| matches!(one, Operand::Block(_))).count()
+    }
+
+    /// `isSafeToLoadUnconditionally` for a load of `bytes` from `pointer`.
+    /// DEVIATE: dereferenceable alone (an alloca or a sized argument, not a
+    /// global: no alignment, no "a load already dominates" proof).
+    fn safe_to_load_unconditionally(
+        &self,
+        pointer: Operand,
+        bytes: u64,
+    ) -> bool {
+        llrm_mir::valuetracking::dereferenceable(
+            self.context(),
+            self.unit.layout,
+            &llrm_mir::valuetracking::Sizes::default(),
+            self.function(),
+            pointer,
+            bytes,
+        )
+    }
+
+    /// `isSafePHIToSpeculate`. SROA.cpp#L1583
+    fn is_safe_phi_to_speculate(
+        &self,
+        phi: InstId,
+    ) -> bool {
+        let function = self.function();
+        let Some(result) = function.instruction(phi).result else { return false };
+        let block = function.parent(phi).expect("a placed phi");
+        let mut load_type: Option<TypeId> = None;
+        let users: Vec<Use> = function.users(result).to_vec();
+        for user in &users {
+            let load = user.user;
+            if !self.is_simple_load(load) || function.parent(load) != Some(block) {
+                return false;
+            }
+            let ty = function.instruction(load).ty;
+            if load_type.is_some_and(|one| one != ty) {
+                return false;
+            }
+            load_type = Some(ty);
+            // Nothing between the phi and the load may store.
+            let list = function.block(block).instructions();
+            let from = list.iter().position(|&one| one == phi).expect("in its block");
+            let to = list.iter().position(|&one| one == load).expect("in its block");
+            if to < from {
+                return false;
+            }
+            for &between in &list[from..to] {
+                let writes = match function.instruction(between).opcode {
+                    Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Resume => true,
+                    Opcode::Load { volatile, .. } => volatile,
+                    _ => false,
+                };
+                if writes {
+                    return false;
+                }
+            }
+        }
+        let Some(load_type) = load_type else { return false };
+        let load_size = self.unit.layout.store_size(&self.context().types, load_type);
+        // The loads go into the predecessors: no critical edge may take a
+        // possibly trapping one.
+        for pair in function.instruction(phi).operands.chunks(2) {
+            let Operand::Block(pred) = pair[1] else { return false };
+            let Some(terminator) = function.terminator(pred) else { return false };
+            if matches!(function.instruction(terminator).opcode, Opcode::Invoke(_)) {
+                return false;
+            }
+            if self.successor_edges(pred) == 1 {
+                continue;
+            }
+            if self.safe_to_load_unconditionally(pair[0], load_size) {
+                continue;
+            }
+            return false;
+        }
+        true
+    }
+
+    /// Whether `value` is available at the end of `block`.
+    fn available_at_end_of(
+        &self,
+        value: Operand,
+        block: llrm_mir::module::BlockId,
+    ) -> bool {
+        let Operand::Value(id) = value else { return true };
+        match self.function().value(id).def {
+            llrm_mir::module::ValueDef::Instruction(def) => {
+                let defined = self.function().parent(def).expect("a placed definition");
+                defined == block
+                    || llrm_analysis::cfg::Dominance::of(self.function())
+                        .dominates(llrm_analysis::cfg::id(defined), llrm_analysis::cfg::id(block))
+            }
+            _ => true,
+        }
+    }
+
+    /// `getPHIStoreToRewrite` (preserving the CFG: every predecessor has the
+    /// block as its only successor). SROA.cpp#L1659
+    fn get_phi_store_to_rewrite(
+        &self,
+        phi: InstId,
+    ) -> Option<InstId> {
+        let function = self.function();
+        let result = function.instruction(phi).result?;
+        let users = function.users(result);
+        let [only] = users else { return None };
+        let store = only.user;
+        let Opcode::Store { volatile: false, .. } = function.instruction(store).opcode else { return None };
+        if only.index != 1 {
+            return None;
+        }
+        let block = function.parent(phi).expect("a placed phi");
+        let first = function
+            .block(block)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        if first != Some(store) {
+            return None;
+        }
+        let stored = function.instruction(store).operands[0];
+        let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
+        for pair in function.instruction(phi).operands.chunks(2) {
+            let Operand::Block(pred) = pair[1] else { return None };
+            if seen.contains(&pred) {
+                continue;
+            }
+            seen.push(pred);
+            if pred == block || self.successor_edges(pred) != 1 {
+                return None;
+            }
+            if !self.available_at_end_of(stored, pred) {
+                return None;
+            }
+        }
+        Some(store)
+    }
+
+    /// `speculatePHINodeLoads`. SROA.cpp#L1712
+    fn speculate_phi_node_loads(
+        &mut self,
+        phi: InstId,
+    ) {
+        let result = self.function().instruction(phi).result.expect("a phi");
+        let users: Vec<InstId> = self.function().users(result).iter().map(|one| one.user).collect();
+        let some_load = *users.last().expect("a phi with loads");
+        let load_ty = self.function().instruction(some_load).ty;
+        let Opcode::Load { align, .. } = self.function().instruction(some_load).opcode else { unreachable!("a load") };
+        let name = self.function().value(result).name.clone().map(|one| format!("{one}.sroa.speculated"));
+        let new_phi =
+            self.unit.function.create_instruction(Opcode::Phi, load_ty, Vec::new(), Flags::default(), name.as_deref());
+        self.unit.function.insert(new_phi, Position::Before(phi)).expect("a placed phi");
+        let new_value = Operand::Value(self.function().instruction(new_phi).result.expect("a phi"));
+        // Every load of the phi reads the new one.
+        for load in users {
+            let loaded = self.function().instruction(load).result.expect("a load");
+            self.unit.function.replace_value(loaded, new_value);
+            self.unit.function.erase(load).expect("its uses were replaced");
+        }
+        // Loads in all of the predecessors; one for duplicate edges.
+        let mut injected: Vec<(llrm_mir::module::BlockId, Operand)> = Vec::new();
+        let mut incoming: Vec<Operand> = Vec::new();
+        let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
+        for pair in pairs.chunks(2) {
+            let Operand::Block(pred) = pair[1] else { unreachable!("a phi's block") };
+            if let Some(&(_, load)) = injected.iter().find(|(block, _)| *block == pred) {
+                incoming.extend([load, Operand::Block(pred)]);
+                continue;
+            }
+            let terminator = self.function().terminator(pred).expect("a terminated block");
+            let load = self.build(
+                terminator,
+                Opcode::Load { align, volatile: false },
+                load_ty,
+                vec![pair[0]],
+                Some("sroa.speculate.load"),
+            );
+            incoming.extend([load, Operand::Block(pred)]);
+            injected.push((pred, load));
+        }
+        self.unit.function.set_operands(new_phi.to_owned(), incoming);
+        self.unit.function.erase(phi).expect("its loads were replaced");
+    }
+
+    /// `rewritePHINodeStore` for a phi whose predecessors have no other
+    /// successor. SROA.cpp#L1767
+    fn rewrite_phi_node_store(
+        &mut self,
+        phi: InstId,
+    ) {
+        let result = self.function().instruction(phi).result.expect("a phi");
+        let store = self.function().users(result)[0].user;
+        let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
+        let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
+        for pair in pairs.chunks(2) {
+            let Operand::Block(pred) = pair[1] else { unreachable!("a phi's block") };
+            if seen.contains(&pred) {
+                continue;
+            }
+            seen.push(pred);
+            // Revisit the alloca exposed by removing the pointer phi.
+            if let Some(root) = self.strip_in_bounds_offsets(pair[0]) {
+                if !self.worklist.contains(&root) {
+                    self.worklist.push(root);
+                }
+            }
+            let terminator = self.function().terminator(pred).expect("a terminated block");
+            let mut operands = self.function().instruction(store).operands.clone();
+            operands[1] = pair[0];
+            let opcode = self.function().instruction(store).opcode.clone();
+            let void = self.unit.context.types.void();
+            self.build(terminator, opcode, void, operands, None);
+        }
+        self.unit.function.erase(store).expect("a store");
+        self.unit.function.erase(phi).expect("its store is gone");
+    }
+
+    /// `isSafeSelectToSpeculate` (preserving the CFG: simple loads whose both
+    /// pointers are safe to load). SROA.cpp#L1854
+    fn is_safe_select_to_speculate(
+        &self,
+        select: InstId,
+    ) -> Option<Vec<InstId>> {
+        let function = self.function();
+        let result = function.instruction(select).result?;
+        let mut loads = Vec::new();
+        for user in function.users(result) {
+            if !self.is_simple_load(user.user) {
+                return None;
+            }
+            let ty = function.instruction(user.user).ty;
+            let size = self.unit.layout.store_size(&self.context().types, ty);
+            let operands = &function.instruction(select).operands;
+            if !self.safe_to_load_unconditionally(operands[1], size)
+                || !self.safe_to_load_unconditionally(operands[2], size)
+            {
+                return None;
+            }
+            loads.push(user.user);
+        }
+        Some(loads)
+    }
+
+    /// `rewriteSelectInstMemOps` with every load speculatable: each load of the
+    /// select is a select of two loads. SROA.cpp#L2002, L1897
+    fn rewrite_select_inst_mem_ops(
+        &mut self,
+        select: InstId,
+        loads: &[InstId],
+    ) {
+        let operands = self.function().instruction(select).operands.clone();
+        for &load in loads {
+            let ty = self.function().instruction(load).ty;
+            let Opcode::Load { align, .. } = self.function().instruction(load).opcode else { unreachable!("a load") };
+            let true_load = self.build(
+                load,
+                Opcode::Load { align, volatile: false },
+                ty,
+                vec![operands[1]],
+                Some("sroa.speculate.load.true"),
+            );
+            let false_load = self.build(
+                load,
+                Opcode::Load { align, volatile: false },
+                ty,
+                vec![operands[2]],
+                Some("sroa.speculate.load.false"),
+            );
+            let chosen =
+                self.build(load, Opcode::Select, ty, vec![operands[0], true_load, false_load], Some("sroa.speculated"));
+            let loaded = self.function().instruction(load).result.expect("a load");
+            self.unit.function.replace_value(loaded, chosen);
+            self.unit.function.erase(load).expect("its uses were replaced");
+        }
+        // The select goes with the pointers it chose between.
+        let result = self.function().instruction(select).result.expect("a select");
+        for user in self.function().users(result).iter().map(|one| one.user).collect::<Vec<_>>() {
+            self.unit.function.erase(user).ok();
+        }
+        self.dead_insts.push(select);
     }
 
     /// `Value::stripInBoundsOffsets` to an alloca of the entry block.
