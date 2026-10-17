@@ -1247,9 +1247,9 @@ impl Analysis for CallEffects {
         function: &Function,
     ) -> bool {
         match (old, fresh) {
-            (Ok(old), Ok(fresh)) => {
-                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
-            }
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
+                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
+            }),
             (old, fresh) => old == fresh,
         }
     }
