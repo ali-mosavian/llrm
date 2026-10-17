@@ -156,6 +156,24 @@ fn exact_shifts_and_divisions_read_the_one_bits() {
     check("  %m = mul nuw i16 3, %x\n  %r = sdiv exact i16 %m, 3\n", "r", None);
 }
 
+/// The power-of-two cases of `simplifyAnd`.
+#[test]
+fn and_of_a_power_of_two() {
+    let p = "  %p = shl i16 1, %y\n";
+    check(&format!("{p}  %n = sub i16 0, %p\n  %r = and i16 %n, %p\n"), "r", Some("%p"));
+    check(&format!("{p}  %a = add i16 %p, -1\n  %r = and i16 %a, %p\n"), "r", Some("0"));
+    let t = |mask: u32| {
+        format!("  %t = and i16 %y, {mask}\n  %p = shl i16 1, %t\n  %a = add i16 %p, -1\n  %r = and i16 %a, 16\n")
+    };
+    check(&t(3), "r", Some("0"));
+    check(&t(7), "r", None);
+    check(
+        &format!("{p}  %s1 = shl i16 %p, 5\n  %s2 = shl i16 %p, 3\n  %a = add i16 %s2, -1\n  %r = and i16 %s1, %a\n"),
+        "r",
+        Some("0"),
+    );
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a

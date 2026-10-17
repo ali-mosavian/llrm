@@ -41,7 +41,7 @@ use crate::knownbits::KnownBits;
 use crate::module::{Function, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
-use crate::valuetracking::{Query as ValueQuery, known, nonzero, range};
+use crate::valuetracking::{Query as ValueQuery, known, nonzero, power2, range};
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
 const RECURSION_LIMIT: u32 = 3;
@@ -279,6 +279,15 @@ impl Query<'_> {
         operand: Operand,
     ) -> bool {
         nonzero::is_known_non_zero(&self.tracking(), operand, 0)
+    }
+
+    /// `isKnownToBeAPowerOfTwo(V, DL, OrZero, ...)`.
+    fn is_power_of_two(
+        &self,
+        operand: Operand,
+        or_zero: bool,
+    ) -> bool {
+        power2::is_known_to_be_a_power_of_two(&self.tracking(), operand, or_zero, 0)
     }
 
     /// `match(C, m_LowBitMask())`: `2^n - 1`, n > 0.
@@ -1159,8 +1168,34 @@ fn simplify_and_commutative(
     {
         return Some(x);
     }
-    // (-A) & A --> A, and (A + -1) & A --> 0, for A a power of two: needs
-    // isKnownToBeAPowerOfTwo (DEVIATE).
+    // -A & A = A if A is a power of two or zero.
+    if q.neg_of(op0).is_some_and(|(inner, _)| inner == op1) && q.is_power_of_two(op1, true) {
+        return Some(op1);
+    }
+    // (A - 1) & A --> 0 (if A is a power-of-2 or 0)
+    if let Some((a, c, _)) = q.binary_of(op0, BinaryOp::Add)
+        && a == op1
+        && q.is_all_ones(c)
+        && q.is_power_of_two(op1, true)
+    {
+        let ty = q.ty(op1);
+        return Some(q.null(ty));
+    }
+    // (x << N) & ((x << M) - 1) --> 0, where x is known to be a power of 2 and
+    // M <= N.
+    if let Some((BinaryOp::Shl, x, n, _)) = q.binary(op0)
+        && let Some((n, _)) = q.number(n)
+        && let Some((sum, c, _)) = q.binary_of(op1, BinaryOp::Add)
+        && q.is_all_ones(c)
+        && let Some((BinaryOp::Shl, x2, m, _)) = q.binary(sum)
+        && x2 == x
+        && let Some((m, _)) = q.number(m)
+        && q.is_power_of_two(x, true)
+        && n >= m
+    {
+        let ty = q.ty(op0);
+        return Some(q.null(ty));
+    }
     None
 }
 
@@ -1216,6 +1251,20 @@ fn simplify_and(
             && (((!mask_bits & mask(width)) << shift) & mask(width)) == 0
         {
             return Some(op0);
+        }
+    }
+    // and 2^x-1, 2^C --> 0 where x <= C.
+    if let Some((power, _)) = q.number(op1)
+        && power.is_power_of_two()
+        && let Some((shift, c, _)) = q.binary_of(op0, BinaryOp::Add)
+        && q.is_all_ones(c)
+        && q.is_power_of_two(shift, false)
+    {
+        // Use the active bits to make use of the power of two knowledge.
+        let active_bits = |value: u128| 128 - value.leading_zeros();
+        if active_bits(power) >= active_bits(q.known(shift).max_value()) {
+            let ty = q.ty(op1);
+            return Some(q.null(ty));
         }
     }
     // (zext X) & (sext X) = zext X; the other order likewise.
