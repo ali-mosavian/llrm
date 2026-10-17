@@ -83,19 +83,30 @@ fn dropped(
         if !has_store {
             return Ok(false);
         }
-        let accesses = Accesses::managed(context, layout, function, analyses)?;
-        let pointers = analyses.get::<Pointers>(context, layout, function);
-        let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
-        let published = analyses.get::<observers::Published>(context, layout, function);
-        let published = Result::as_ref(&*published).map_err(String::clone)?;
+        let plain = std::env::var_os("POC_PLAIN").is_some();
+        let nopriv = std::env::var_os("POC_NOPRIV").is_some();
+        let managed = if plain { None } else { Some(Accesses::managed(context, layout, function, analyses)?) };
+        let pointers_held = (!nopriv).then(|| analyses.get::<Pointers>(context, layout, function));
+        let published_held = (!nopriv).then(|| analyses.get::<observers::Published>(context, layout, function));
         let shape = analyses.get::<cfg::Shape>(context, layout, function);
         let memory = Unit::within(context, layout, function, analyses.outer()).with_shape(&shape);
-        let private = observers::private_of(memory, pointers, published);
+        let accesses = managed.unwrap_or_else(|| {
+            std::rc::Rc::new(Accesses::plain(&memory, &llrm_analysis::consts::Calls::default()))
+        });
+        let private_fn: Box<dyn Fn(&MemRef) -> bool> = match (&pointers_held, &published_held) {
+            (Some(pointers), Some(published)) => {
+                let pointers = Result::as_ref(&**pointers).map_err(String::clone)?;
+                let published = Result::as_ref(&**published).map_err(String::clone)?;
+                Box::new(observers::private_of(memory, pointers, published))
+            }
+            _ => Box::new(|_| false),
+        };
+        let private = &*private_fn;
         let graph = memoryssa::built(&memory, &accesses);
         if std::env::var_os("POC_ANALYSES").is_some() {
             return Ok(false);
         }
-        let dead = State::new(&memory, &accesses, &graph, &private, &shape).eliminate();
+        let dead = State::new(&memory, &accesses, &graph, private, &shape).eliminate();
         dead
     };
     unit.function.erase_all(&dead)?;
