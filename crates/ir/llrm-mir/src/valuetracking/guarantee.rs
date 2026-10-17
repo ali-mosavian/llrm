@@ -32,6 +32,7 @@ use super::pattern::{self, IntrinsicId};
 use super::query::Query;
 use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
+use crate::dense::IdSet;
 use crate::hash::HashSet;
 use crate::loops::Loop;
 use crate::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef};
@@ -1216,7 +1217,7 @@ fn program_undefined_if_undef_or_poison_of(
     }
 
     let mut yields_poison: HashSet<Operand> = HashSet::default();
-    let mut visited: HashSet<BlockId> = HashSet::default();
+    let mut visited: IdSet<BlockId> = IdSet::new();
     yields_poison.insert(v);
     visited.insert(block);
 
