@@ -564,7 +564,7 @@ fn compared_again(
     }
     // Reached from one of them by going back from `at`.
     let mut seen = std::collections::BTreeSet::new();
-    let mut stack = function.predecessors(at);
+    let mut stack: Vec<BlockId> = function.predecessors(at).into();
     while let Some(block) = stack.pop() {
         if !seen.insert(block) {
             continue;

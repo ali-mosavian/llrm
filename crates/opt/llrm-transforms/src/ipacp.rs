@@ -419,9 +419,9 @@ fn time_saved(
             let decided = (terminator.opcode == Opcode::Br && terminator.operands.len() == 3)
                 .then(|| consts::_operand(&unit, terminator.operands[0], &values, None))
                 .flatten();
-            let successors = match (decided, &terminator.operands[..]) {
+            let successors: llrm_mir::blocklist::BlockList = match (decided, &terminator.operands[..]) {
                 (Some(number), [_, Operand::Block(yes), Operand::Block(no)]) => {
-                    vec![if number.n.sign() == num_bigint::Sign::NoSign { *no } else { *yes }]
+                    std::iter::once(if number.n.sign() == num_bigint::Sign::NoSign { *no } else { *yes }).collect()
                 }
                 _ => body.successors(block),
             };
