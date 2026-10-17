@@ -193,7 +193,7 @@ Superlinear in llrm, none in LLVM: M instructions of `LLRM_DEBUG=time` totals, m
 | 800 | 466.9 | 414.1 | 338.4 | 297.8 |
 | 1600 | 1,829 | 1,186 | 1,205 | 1,106 |
 
-From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled body; LLVM's whole optimizer grows 2.0x ([the ladder](llvm-compared.md#the-ladder)).
+From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled body; LLVM's whole optimizer grows 2.0x ([the ladder](readme.md#the-ladder)).
 
 ## Proposed change
 
@@ -202,6 +202,6 @@ From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled 
 3. A generation-counter pass before `dse` and `gvn`. A new `FunctionPass` named `earlycse`, inserted in the `every` list [after `fold`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L485), shaped as [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066): one walk in dominator order, a table of available loads keyed by pointer value and type, a generation number bumped by any instruction that may write memory, and a memory-SSA query only when the generations differ, at most 500 a function. Target: the first `gvn` run (59.7 M, 2,941 to 761 instructions on `mem 200`) and the idle `dse` before it (35.5 M). Saving: unmeasured. The tracker records moving `gvn` before `dse` as measured and not the lever; this is a different, cheaper pass.
 4. Lazy memory facts (keep-analyses, design): the analyses a `gvn`, `fold` or `decide` run asks for first (`r01-fold` 2.4 M own, 27.5 M with analyses).
 
-Ranked list: [proposals](llvm-compared-proposals.md).
+Ranked list: [proposals](proposals.md).
 
 Open: what each of these four does per query that costs the whole body ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

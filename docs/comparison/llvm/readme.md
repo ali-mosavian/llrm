@@ -2,18 +2,24 @@
 
 TL;DR: on identical inputs the gap is slope, not fixed cost. An empty function costs 10 M instructions in llrm and 15 M in clang; per instruction of the function llrm's optimizer costs 1.5x to 9x LLVM's and grows faster than linear (exponent 1.0 to 1.4) where LLVM's stays under 1. On `d_faces` `-O2` that is 6.8x in instructions, 4.8x in cycles and 12.5x to 13.9x in L1d misses (counter, simulation). The measured causes, largest first: heap churn (3.77 M allocations against 62,881), whole-function tables rebuilt after each pass, a register allocator that splits 79 times where greedy splits 3 (llrm holds repeated `x & mask` tests as values across blocks, LLVM re-tests `x` at each branch), and passes that are quadratic in the body (`dse`, `gvn`, `fold`, the through-memory analysis).
 
-Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (clang 24, Release, assertions off, X86, static) and llrm main `21f5c9fc8`, both with `perf stat -e instructions:u`, minimum of three, LLVM and llrm alternating. Instructions are the claim; cycles are soft on a loaded host. Setup of the LLVM build and the earlier whole-file totals are in [LLVM measured](llvm-measured.md).
+Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (clang 24, Release, assertions off, X86, static) and llrm main `21f5c9fc8`, both with `perf stat -e instructions:u`, minimum of three, LLVM and llrm alternating. Instructions are the claim; cycles are soft on a loaded host. Setup of the LLVM build and the earlier whole-file totals are in [LLVM measured](measured.md).
 
 ## Pages
 
 | page | question |
 |---|---|
-| [register allocation](llvm-compared-regalloc.md) | greedy splitting against llrm's split step |
-| [allocation and layout](llvm-compared-allocation.md) | 3.77 M allocations against 62,881; memory per IR instruction |
-| [GVN and its neighbours](llvm-compared-gvn.md) | EarlyCSE, GVN, DSE and order against `gvn`; the quadratic passes |
-| [runs that change nothing](llvm-compared-idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
-| [proposals](llvm-compared-proposals.md) | every proposed change, ranked, with owner and PR |
-| [flat profile](llvm-compared-profile.md) | top functions by instructions and by L1d misses, both compilers |
+| [LLVM measured](measured.md) | whole-file totals, pass runs, analyses and caps on `d_faces` |
+| [analysis manager](analysis-manager.md) | preserved analyses and invalidation against `Analyses` |
+| [memory SSA](memoryssa.md) | walker caps against `avail::forwardable_walk` |
+| [alias analysis](alias.md) | depth-limited BasicAA against `regions` and `may_alias` |
+| [LICM](licm.md) | LICM against `hoist` |
+| [SimplifyCFG](simplifycfg.md) | SimplifyCFG against `decide` |
+| [register allocation](regalloc.md) | greedy splitting against llrm's split step |
+| [allocation and layout](allocation.md) | 3.77 M allocations against 62,881; memory per IR instruction |
+| [GVN and its neighbours](gvn.md) | EarlyCSE, GVN, DSE and order against `gvn`; the quadratic passes |
+| [runs that change nothing](idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
+| [proposals](proposals.md) | every proposed change, ranked, with owner and PR |
+| [flat profile](profile.md) | top functions by instructions and by L1d misses, both compilers |
 
 ## The ladder
 
@@ -80,7 +86,7 @@ llrm's `lsr` has no such cap and grows as N^1.4 (201, 601, 1,524, 3,728 M at N=1
 
 ## Per pass at equal input
 
-At N=200 the per-run cost of llrm's `fold` equals InstCombine's (36.8 and 29.1 M on `mem`, 73.6 and 71.2 M on `loop`), so the algorithm of that pass is not the gap. The gap is `gvn` (68 against 2.0 M), `dse` (42 against 13), `decide` (15.6 against SimplifyCFG's 1.4) and the analyses llrm computes before a pass's own work: for `r01-fold`, `r01-decide`, `r01-sroa` the pass's own instructions are 2.4, 0.47 and 1.9 M and with its analyses 27.5, 13.0 and 19.8 M. Details and the isolated GVN runs are on the [GVN page](llvm-compared-gvn.md).
+At N=200 the per-run cost of llrm's `fold` equals InstCombine's (36.8 and 29.1 M on `mem`, 73.6 and 71.2 M on `loop`), so the algorithm of that pass is not the gap. The gap is `gvn` (68 against 2.0 M), `dse` (42 against 13), `decide` (15.6 against SimplifyCFG's 1.4) and the analyses llrm computes before a pass's own work: for `r01-fold`, `r01-decide`, `r01-sroa` the pass's own instructions are 2.4, 0.47 and 1.9 M and with its analyses 27.5, 13.0 and 19.8 M. Details and the isolated GVN runs are on the [GVN page](gvn.md).
 
 Analyses computed in one compile of `mem` N=200: LLVM `DominatorTree` 4, `AAManager` 3, `MemorySSA` 2, `ScalarEvolution` 2, `LoopInfo` 2, `BasicAA` is stateless; llrm `through-memory` 7 times (27.8 M), `annotated` 11 (42.9 M), `accesses` 15 (34 M), `globals-aa` 6 (16.6 M), `registers` 17 (16.5 M).
 
@@ -100,7 +106,7 @@ Host load 35 to 38 (`uptime`) throughout, so cycles are the soft column; minimum
 | arith400.c | llrm | 632 | 209 | 3.03 | 0.90 | 14.8 |
 | arith400.c | llrm/LLVM | 2.3x | 2.0x | | 1.5x | 8.0x |
 
-llrm retires more instructions per cycle (2.2 against 1.6 on `d_faces`), so the cycle gap (4.9x) is smaller than the instruction gap (6.8x); it misses L1d 12.5x as often, 19 against 10 per thousand instructions. Cache simulation (`valgrind --tool=callgrind --cache-sim=yes`, D1 32 KB): 42.7 M D1 misses against 3.08 M, LL misses 0.67 M against 0.25 M. The [flat profile page](llvm-compared-profile.md) breaks the misses down: allocation and copying 24%, memory-fact tables 14%, register-allocation tables 9%, IR walks 7%.
+llrm retires more instructions per cycle (2.2 against 1.6 on `d_faces`), so the cycle gap (4.9x) is smaller than the instruction gap (6.8x); it misses L1d 12.5x as often, 19 against 10 per thousand instructions. Cache simulation (`valgrind --tool=callgrind --cache-sim=yes`, D1 32 KB): 42.7 M D1 misses against 3.08 M, LL misses 0.67 M against 0.25 M. The [flat profile page](profile.md) breaks the misses down: allocation and copying 24%, memory-fact tables 14%, register-allocation tables 9%, IR walks 7%.
 
 ## Bookkeeping with no counterpart in LLVM
 
@@ -123,10 +129,6 @@ At main `21f5c9fc8` llrm printed the whole body to a `String` after every round 
 ```
 
 On `d_faces` `Printer::instruction` is 46 M (1.6%), `Stamp` 49 M (1.7%), the HIR and MIR verifiers 22 M, `env_set` (an environment lookup per step) 11 M: about 4% of the compile. LLVM's function pipeline is a fixed list run once per function; there is no body history to keep.
-
-## Where LLVM's mechanisms are written up
-
-Five more pages compare a mechanism each, from the same measurements: analysis manager and preserved analyses, memory SSA walker caps, alias analysis depth limits, LICM, SimplifyCFG (`llvm-compared-analysis-manager.md`, `-memoryssa.md`, `-alias.md`, `-licm.md`, `-simplifycfg.md`).
 
 ## Reproduce
 

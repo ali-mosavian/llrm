@@ -182,6 +182,6 @@ Input `tools/ladder/gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc
 2. Build the block table once per split round: [`Blocks::of(body)`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L596) runs in `carved_moving` and again in [`placed`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L1648) for each attempt; construct it in `allocate.rs` before `splitkit::local` and pass `&Blocks`. Bound before #2010: `split placed` 221 M and `split carving` 148 M of 2,014 M on `diamond 800`. Saving: unmeasured.
 3. Carve without copying the block list: [`let mut out: Vec<Block> = body.blocks.clone()`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L670) copies every block's `Vec<Arc<Insn>>` for a change to `touched` blocks only; hold blocks behind `Arc<Block>` in `LirBody` so a carve copies the touched ones (structural sharing of LIR rewrites, ssa-spill-m16). Saving: unmeasured.
 
-Ranked list of all proposals: [proposals](llvm-compared-proposals.md).
+Ranked list of all proposals: [proposals](proposals.md).
 
 Open: what the allocator still costs per attempt once the mask test is made at the branch ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

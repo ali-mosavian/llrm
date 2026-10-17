@@ -90,7 +90,7 @@ The mechanism is the same; its reach is not. LLVM's pipeline is a fixed list tha
 
 ## Measured
 
-`LLRM_DEBUG=runs` on `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`, llrm main `21f5c9fc8`. "With analyses" is the pass's own instructions plus the analyses it computed first. LLVM: 856 function and loop pass runs, 182 change the IR ([LLVM measured](llvm-measured.md)).
+`LLRM_DEBUG=runs` on `d_faces.c` of qbq-llrm, `-O2 -m32 -march=i486 -fno-inline-functions`, llrm main `21f5c9fc8`. "With analyses" is the pass's own instructions plus the analyses it computed first. LLVM: 856 function and loop pass runs, 182 change the IR ([LLVM measured](measured.md)).
 
 | | runs | M instr with analyses | M per run |
 |---|---:|---:|---:|
@@ -120,6 +120,6 @@ The 722 itemised runs are 24 fewer than the 746 the pass counter reports; the st
 2. Narrow `reads()` for the costliest idle passes, from that log: `promote` (29 idle runs, 45.2 M), `hoist` (30, 44.7 M), `decide` (32, 39.1 M), `sroa` (12, 35.6 M), `fold` (25, 32.4 M), `fill` (26, 29.0 M). Upper bound 226 M of the 361 M; saving: unmeasured.
 3. Check for work before asking for analyses, as [`InstCombinePass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L6258) asks last-run tracking first. `sroa` idle runs cost 3.0 M each, `decide` 0.47 M own against 13.0 M with analyses: a cheap scan for a candidate (a promotable alloca, a foldable branch) ahead of the analysis request. Saving: unmeasured.
 
-Ranked list: [proposals](llvm-compared-proposals.md).
+Ranked list: [proposals](proposals.md).
 
 Open: why most idle runs are not skipped, and whether the `reads()` footprints are too coarse ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
