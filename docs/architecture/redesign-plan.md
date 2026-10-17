@@ -8,26 +8,27 @@
 |---|--:|--:|---|
 | today | 2,903 | 6.8x | [synthesis], main `21f5c9fc8` |
 | phase 1 (the in-flight PRs that are ready) | about 2,660 | 6.4x | each PR's own measurement on its parent, multiplied: -8.3% |
-| phase 1 plus the held drafts | about 2,510 | 6.0x | also the stale drafts [#1958], [#1921], [#1962], [#1965] at their old numbers: -13.6% |
+| phase 1 plus the held PRs and drafts | about 2,510 | 6.0x | also [#1958] (an open ready PR, measured on an old main) and the drafts [#1921], [#1962], [#1965] at their old numbers: -13.6%. [#1921] is to be closed (see 1.10) and [#1962] is bundled with 2.6, so this row is an upper bound |
 | phase 2 (open levers, each at its bound) | about 2,210 | 5.3x | point_values, Annotated, persistent MemorySSA, split path, interval recompute: -12% more |
 | phase 3 (structural tracks, each at its bound) | about 1,460 | 3.5x | facts per query, one pipeline pass, allocator on the LIR core, LIR clean-up, pricing: -34% more |
 | phase 4 (each pass at the spec's per-run budget) | 720 | 1.7x | [spec] section 1.3, a budget derived from gcc, not from clang |
 | parity | 415 to 462 | 1.0x | needs budgets re-derived from clang's own phases (front end 33 M, optimizer 178 M, codegen 196 M, [readme]) |
 
-The pools overlap, so each product overstates what the steps save together.
+The pools overlap, so each product overstates what the steps save together. The phase 2 and 3 rows are the plan's original bounds: 2.4 and 2.5 have since shrunk or closed (see their blocks), 3.1's saving is `unmeasured` until a family is built, and the "held drafts" row includes [#1921], which is to be closed. B1 re-derives the rows.
 
-**Why the listed steps cannot close it.** The gap is not the number of pass runs (746 against 856). It is the cost of each run: a MIR pass run costs about 19 k instructions per IR instruction, against LLVM's 220 ([spec] 1.2). Every llrm pass sweeps the whole function with whole-function facts, recomputed 2.8 times per pass run. An LLVM pass makes one worklist walk over a body that SROA and EarlyCSE have already shrunk. It asks per-query facts with caps, and 0.53 analysis computations per run ([spec] 1.2, [measured]). The in-flight set lowers constants: allocation, containers and quadratic loops. It does not change that shape.
+**Why the listed steps cannot close it.** The gap is not the number of pass runs (746 against 856). It is the cost of each run: a MIR pass run costs about 19 k instructions per IR instruction, against LLVM's 220 ([spec] 1.2). Every llrm pass sweeps the whole function with whole-function facts, recomputed 2.8 times per pass run; only 1.4% of the computes are on a body version already computed, so the ratio falls only by updating facts from the change log or asking them per query (step 3.1). An LLVM pass makes one worklist walk over a body that SROA and EarlyCSE have already shrunk. It asks per-query facts with caps, and 0.53 analysis computations per run ([spec] 1.2, [measured]). The in-flight set lowers constants: allocation, containers and quadratic loops. It does not change that shape.
 
 **What the plan puts on the critical path:**
 
-1. Facts asked per query, taking analysis computations per pass run from 2.8 to 0.5 or fewer (step 3.1; keep-analyses with edit-rollback). Its first instance is `point_values` as a per-query provenance (step 2.1).
+0. Unresolved: a skipped or shared `points_to` solve changes output (131 of 1,583 objects) because objects are interned by their facts; a context-free `ObjectRef` identity (step 0.3; objectref-identity) is being tested against the skip prototype. It comes before the skipping families of 2.1b and 3.1.
+1. Facts updated from the change log, taking analysis computations per pass run from 2.8 toward 0.5 for edit-rollback's family (step 3.1; edit-rollback with keep-analyses). The pointer families are small after the escape PRs; the family that carries the saving is edit-rollback's `Held`, `ThroughMemory` and decide facts (403 M own, 12.8%).
 2. One pipeline pass with a combine worklist instead of rounds (step 3.2; pass-list-parity with hoist-bounded).
 3. The allocator on the LIR core, 444 M against greedy's 39.5 M (step 3.3; greedy-port with ssa-spill-m16).
 4. Each pass held to a counted per-run budget (phase 4; each pass's owner).
 
 ## 2. Baseline snapshot
 
-Main was `ef40f30a7` when this was read and is `64429bfbb` now. `d_faces` flags are `-m32 -march=i486 -fno-inline-functions`, as in [synthesis]. Percentages are of `d_faces` -O2 instructions, measured on the PR's own parent unless stated.
+Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR states below were checked with `gh` on that day. `d_faces` flags are `-m32 -march=i486 -fno-inline-functions`, as in [synthesis]. Percentages are of `d_faces` -O2 instructions, measured on the PR's own parent unless stated.
 
 ### 2.1 Landed
 
@@ -37,36 +38,41 @@ Main was `ef40f30a7` when this was read and is `64429bfbb` now. `d_faces` flags 
 | [#1988], [#1992] | profile-guided release build | -14.1% to -17.9% instructions on every row, objects identical ([compile-gap-series]) |
 | [#1956] | successors and predecessors inline | -0.54% |
 | [#1931] | fixed point tells a state by a digest | -0.9% |
-| [#1963] | front-end verifier under the check mode only | HIR and MIR verifiers gone from release ([synthesis] row 7) |
+| [#1963] | front-end verifier under the check mode only; `-fverify-ir` is the user switch, `tests/timing.rs` asserts the three steps | HIR and MIR verifiers gone from release, -1.40% / -1.23% / -1.05% instructions at -O1/-O2/-Os ([synthesis] row 7) |
+| [#1964] | `compile-gap` writes an object for each compiler | measures the object write (22 M) instead of `masm::text` (21 M) |
+| [#1975] | LIR clean-up facts held and brought up to date from the blocks that changed | -1.71% / -1.50% / -1.29% at -O1/-O2/-Os, objects byte-identical (its own dirty-block mechanism supersedes [#1921]) |
 | [#2007] | check switches read once | -0.40% |
 | [#1959], [#1954], [#1961], [#1970], [#1975], [#1984], [#1998], [#1955] | dense sets in dead and spill placement, pointer values read by Annotated, walker chain once, LIR clean-up facts held, verifier names | in [rows-series] `9bce914f3` (all output identical) |
 | [#2026] | dense value sets (liveness, hoist, constant cycles) | -0.42% (merged after this was read) |
 | [#1912] | one allocation per function below -Omax | -1.95 G at -O1 on `c04886c2e` ([spec] 7) |
+| [#2027] | facts rings let go at phase end | peak heap -13.9% (23.97 to 20.65 MB); instructions -0.02%; cycles unchanged |
+| [#2017] | a load is offered the loads before it in its block | `d_faces` -0.14% |
+| [#1915] | exact ThroughMemory for decisions | correctness fix for [#1909]; +1.0% at -O2 |
+| [#2031], [#2033] | docs: withdrawn `fold` fix; escape structure not kept | no instruction change |
 
 ### 2.2 In flight
 
 | PR | owner | state | measured (on its parent) |
 |---|---|---|---|
 | [#2022] slab allocator | pass-list-parity | ready | -4.2% instructions at every level, -2.9% cycles (min of 11); RSS +7% (`d_faces`), +18% (`mdl_ai`) |
-| [#1971] block-address ids dense | attrs-budgets | ready | -1.17% |
+| [#1971] block-address ids dense | attrs-budgets | ready | -1.04% / -1.17% / -1.32% at -O1/-O2/-Os against its parent (main `39501a050`); B-tree frames 224.7 to 203.3 M (-21.5 M at -O2); identity 1583/0 |
 | [#2032] register and live sets dense | ssa-spill-m16 | ready | -0.38% |
 | [#2035], [#2037] escape phase | keep-analyses | ready, draft (stacked) | -0.29%, then -0.64% |
 | [#2021] LIR rename shares | ssa-spill-m16 | ready | -0.56%; peak heap -15% |
-| [#2027] facts rings let go | ssa-spill-m16 | ready | peak heap -13.9%; instructions -0.02% |
 | [#2038] facts bundle edited in place | ssa-spill-m16 | ready | -0.52% (`Facts::of` 86.8 to 70.7 M) |
 | [#2010] mask test made at each branch | ssa-spill-m16 | ready | diamond 800: 1,995 to 1,075 M, 419 stack operands to 0; `d_faces` 0 (byte-identical) |
-| [#1999], [#2012], [#2017], [#2011], [#2020], [#2034], [#2008] | greedy-port | ready, stacked | ladder `loop` N=1600 31,766 to 19,654 M ([#1999] with [#2008]); diamond N=1600 -13% ([#2034]); `d_faces` +0.14% ([#2011]), +0.11% ([#2020]), +0.14% ([#2034]), -0.07% ([#2012]), -0.14% ([#2017]) |
-| [#2013], [#2015] dse | edit-rollback | ready | `dse` 3.5x to 4.0x per doubling down to 2.0x; `d_faces` +0.2% and +0.02% |
+| [#1999], [#2012], [#2011], [#2020], [#2034], [#2008] | greedy-port | ready, stacked | everything stacked with [#2010]: ladder `loop` N=1600 30,626 to 10,804 M (-65%), exponent 400 to 1600 = 1.1, `mem` 7,299 to 5,969 M ([#1999] with [#2008] alone: 31,766 to 19,654 M, -38%); diamond N=1600 -13% ([#2034]). `d_faces` per PR: [#2020] +0.07% to +0.11%, [#2034] +0.09%, [#1999], [#2012], [#2011] about -0.15% to +0.15%; together +0.1% to +0.2% (nothing measured is negative) |
+| [#2013], [#2015] dse | edit-rollback | ready | `dse` 3.5x to 4.0x per doubling down to 2.0x on the distinct-offset and `arith` shapes (2.17x then 2.33x on `mem`); `d_faces` +0.03% to +0.04% ([#2013] `e717bd522`, index only past 256 cells) and +0.01% to +0.03% ([#2015] `b6d39ca35`), objects identical. The two conflict in `avail.rs` and `dse_tests.rs` (two hunks; the owner resolves at landing) |
 | [#1977], [#1978] bounded on deep nests | greedy-port | ready, stacked | queens -O3 1,703 to 1,306 M; `d_faces` -O2 3,248 to 3,193 M |
-| [#1915] exact ThroughMemory for decisions | keep-analyses | ready | correctness fix ([#1909]); +1.0% at -O2 |
-| [#1958] split placed from one table | greedy-port | ready, measured on an old main | -3.4% (3,450 to 3,333 M) |
-| [#1921] LIR clean-up on blocks with work | ssa-spill-m16 | draft | -1.77% on main `254855801` |
-| [#1962] `initialized` events once | attrs-budgets | draft | -0.46% |
+| [#1958] split placed from one table | greedy-port | open, ready (not a draft), measured on an old main | -3.4% (3,450 to 3,333 M); re-measure on main |
+| [#1921] LIR clean-up on blocks with work | ssa-spill-m16 | draft; to be closed ([#1975] did its dirty-block mechanism in general; its allocation-free rule windows, -4 M, live on branch `alim/perf/lir-cleanup-2` `6db843a29`, not a PR) | -1.77% on main `254855801`, now stale |
+| [#1962] `initialized` events once | attrs-budgets | draft | -0.46%, under the 0.5% bar: bundle with 2.6, not a loose draft |
 | [#1965] allocator rewrites from a floor | UNOWNED | draft | -0.3% |
 | [#1972], [#1973] footprints by part | keep-analyses | draft | -0.02%, -0.07%; carries [parity] |
 | [#1945], [#1943] checkpoint and rollback, `Touched` per slot | edit-rollback | draft | +0.09%; 144 function clones at -O2 left |
 | [#1948] counted budgets as tests | attrs-budgets | draft | counter cost +0.04% |
-| [#2033], [#2036] | keep-analyses, ssa-spill-m16 | docs | not-kept entries for spec section 8 |
+| [#2036] | ssa-spill-m16 | docs, open | not-kept entries for spec section 8 |
+| [#2039] | keep-analyses | ready | `LLRM_CHECK_SAMEBYTES` read once through `env_flag!` (env fix) |
 
 ### 2.3 Measured and not kept
 
@@ -83,7 +89,7 @@ Do not measure these again on the same shape. Reviving one needs a new mechanism
 | -O2 at two rounds; `jumpthread` in the round | rows lost or -0.3% | [spec 8] |
 | `gvn` ahead of `decide` | -4.4% at -O2, +5.4% at -O3, rows lost | [spec 8] |
 | promote before gvn | -1.9% instructions, +2.7% object | [#2036] |
-| `FloatFacts` filter before the float solve | 6 of 20 solves skipped, +0.04% | [spec 8] |
+| `FloatFacts` filter before the float solve | 6 of 20 solves skipped, +0.04%; the 94 M in the float half is the lazy query of 3.1 | [spec 8] |
 | keeping analyses across `fold`'s integer half | unsound in 5 of 11 changing runs; ceiling about 1% | [fold-hoist-decide] ([#2031]) |
 | analysis rebuilds that return what was held (`Homes` reporting no change, empty-log `Outer`) | 0.00% and -0.04% | [spec 8] |
 | a separate types bit in `Outer` | at most 0.4% | [#1994] |
@@ -106,7 +112,12 @@ Do not measure these again on the same shape. Reviving one needs a new mechanism
 | split carving constants | not built; the carving was spill pressure that [#2010] removes | [#2036] |
 | peephole's shared lane and exit facts | at most 1.0%, dropped | [lir-cleanup] |
 | SsaSpill route B as the single engine | rows worse (quicksort -Os +32.5%) | [spec] 4.2 |
-| x87 live rows handed from the allocator | at most 0.9%; ranks last, parked | [lir-cleanup] |
+| x87 live rows handed from the allocator | at most 0.9%; ranks last, dropped | [lir-cleanup] |
+| interval recompute in `Facts::of` as its own step | avoidable bound about 11 M (0.4%), realistic 6 to 7 M (0.25%); kill rule met, 3 to 4 M buffer reuse folded into the next intervals PR | ssa-spill-m16 report |
+| `masm::return_overhead_bytes` shared | 13.9 M, not shareable; the masm frame logic is ruled out | attrs-budgets report |
+| `exposed-frames` as its own step | one pass per fact computation; belongs to 3.x | attrs-budgets report |
+| position and row tables for the split path (B') | built: -0.03% (2,744.59 to 2,743.70 M); hash probes are not the cost, the 506 instructions per row visit are the rows' own work | greedy-port report, [#2036] |
+| a one-worklist combine of fold, algebraic, phiopt, dead and decide's branch fold at today's positions and rounds | about 0 compile-time gain (the cost is analyses and idle reruns, not rewriting); branch `notkept/combine-worklist` `fba7c4051..fea9b27f0`, no spec 8 entry yet | pass-list-parity report |
 
 ## 3. The plan
 
@@ -118,30 +129,32 @@ The exit method M and the bars it uses are defined once in section 4.
 |---|---|---|---|---|
 | 0.1 one baseline | one table on one SHA: phases, gap, rows, ladder | two instruments differ by more than 1% on one binary | llvm-compare | to do |
 | 0.2 counters as tests | computations per run and spec 6 counters in CI | counter cost above 0.1% | attrs-budgets | draft [#1948] |
+| 0.3 context-free `ObjectRef` identity (unresolved) | a skipped or shared solve changes no output (131 of 1,583 objects differ in the skip prototype; 0 differ on main under `LLRM_CHECK_INTERN=SEED`) | the 131 do not fall to 0 | objectref-identity, keep-analyses | testing, blocks 2.1b and 3.1 |
+| 1.0 inline storage across the hot `Vec` sites | allocations removed as far as the probe says; instructions and cycles on `d_faces`; peak RSS | a site whose inline fraction does not fit, or whose struct growth is not justified | pass-list-parity | to do ([#1956] first instance) |
 | 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | ready [#2022] |
-| 1.2 dense ids | -1.5% | below 0.5% together | attrs-budgets, ssa-spill-m16 | ready |
+| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | ready |
 | 1.3 escape phase | -0.9% | below 0.5% together | keep-analyses | ready |
-| 1.4 backend copies | -1.1%, peak heap -25% | below 0.5% and no heap change | ssa-spill-m16 | ready |
+| 1.4 backend copies | -1.1% instructions ([#2021] -0.56%, [#2038] -0.52%); peak heap -15.4% ([#2021]) and -13.9% ([#2027], merged), each against main alone, stacked peak unmeasured | below 0.5% and no heap change | ssa-spill-m16 | ready |
 | 1.5 mask at each branch | diamond 1,951 to 1,075 M; `d_faces` 0 | any object differs | ssa-spill-m16 | ready [#2010] |
-| 1.6 gvn, walker, lsr slopes | `loop` N=1600 -38%; exponent 1.41 to 1.34 or lower | `d_faces` above +0.5% together | greedy-port | ready, stacked |
-| 1.7 dse slope | `dse` 2.0x per doubling | `d_faces` above +0.3% | edit-rollback | ready |
+| 1.6 gvn, walker, lsr slopes | `loop` N=1600 -65% stacked (30,626 to 10,804 M), exponent 400 to 1600 = 1.1; `mem` 7,299 to 5,969 M | `d_faces` above +0.5% together | greedy-port | ready, stacked |
+| 1.7 dse slope | `dse` 2.0x per doubling on the distinct-offset and `arith` shapes, 2.17x to 2.33x on `mem` (partial) | `d_faces` above +0.3% | edit-rollback | ready |
 | 1.8 bounded on deep nests | queens -O3 -23% | any object differs | greedy-port | ready, stacked |
 | 1.9 exact ThroughMemory | fixes [#1909] at +1.0% | none (correctness) | keep-analyses | ready [#1915] |
-| 1.10 held drafts on main | -3% if they reproduce | each one below 0.5% on main | greedy-port, ssa-spill-m16, attrs-budgets | drafts |
+| 1.10 held PRs on main | -3% if they reproduce; [#1921] to be closed, [#1962] bundled with 2.6 | each one below 0.5% on main | greedy-port, attrs-budgets | [#1958] ready, [#1965] draft |
 | B1 re-baseline | the phase-1 row of the TL;DR measured | n/a | llvm-compare | after 1.x |
-| 2.1 point_values per query | up to -4.1% | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 running |
-| 2.2 Annotated per access | up to -1.3% | recoverable recomputes below 15 M | keep-analyses, edit-rollback | to do |
+| 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b repeats at most 0.45% (13.6 M), blocked by 0.3 | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
+| 2.2 Annotated per access | up to -1.3% (the 57-of-116 held-result figure comes from [#1994] and is unverified; the pool is 42.4 M of edited rebuilds) | recoverable recomputes below 15 M | keep-analyses, edit-rollback | to do |
 | 2.3 persistent MemorySSA | -1.3% to -3.9% | probe below 1% | hoist-bounded, keep-analyses | to do |
-| 2.4 split path tables | about -2% | `split placed` with `carving` self below 30 M | greedy-port | sized |
-| 2.5 interval recompute | up to -1.3% | avoidable below 15 M | ssa-spill-m16 | sized |
-| 2.6 `Frequencies` dense | `unmeasured` | self below 15 M, or density below a quarter | attrs-budgets | to do |
-| 2.7 rollback, not clones | function clones 144 to 0, at most +0.1% | above +0.3%, or `LLRM_CHECK_ROLLBACK` fails | edit-rollback | draft [#1945] |
+| 2.4 split path tables | B' built and killed (-0.03%); A' alone (`carved_moving` from allocator postings, 29 M, 1.0%, never built) | A' below 30 M | greedy-port | dies as written unless A' is kept alone |
+| 2.5 interval recompute | closed: avoidable bound about 11 M (0.4%), realistic 6 to 7 M (0.25%) | kill rule met | ssa-spill-m16 | closed; buffer reuse folded into the next intervals PR |
+| 2.6 `Frequencies` dense | `unmeasured`; the cost is `frequency.get(&cfg::id(block))` per instruction in `spill::TrafficBase`, not construction; bundles [#1962] | self below 15 M, or density below a quarter (density about 1) | attrs-budgets | to do, after pass-list-parity's hoist and spill pricing PRs |
+| 2.7 rollback, not clones | function clones 144 to 0, at most +0.1%; an enabler with no instruction saving of its own (the clones cost about 0.1% of the compile) | above +0.3%, or `LLRM_CHECK_ROLLBACK` fails | edit-rollback | draft [#1945] |
 | 2.8 scaling shapes | queens -O3, joins, unrolled no steeper than gcc's | its lead cost belongs to a step already listed | hoist-bounded | to do |
 | B2 re-baseline | the phase-2 row measured | n/a | llvm-compare | after 2.x |
-| 3.1 facts per query | computations per run 2.8 to 0.5 or fewer; up to -12% | a per-query prototype costs at least the whole build | keep-analyses, edit-rollback | design |
-| 3.2 one pipeline pass | -10% or more; rows held | a vsgcc row newly above min(gcc, clang) at one round with combine | pass-list-parity, hoist-bounded | design |
-| 3.3 allocator on the LIR core | 444 M to 100 M or less | whole-body work per edit below 1% | greedy-port, ssa-spill-m16 | design |
-| 3.4 LIR clean-up | about 340 M to 80 M | idle block visits below 30% of clean-up | ssa-spill-m16 | after 3.3 |
+| 3.1 facts updated from the change log (re-pointed: edit-rollback's family `Held`, `ThroughMemory`, decide facts, 403 M own, 12.8%) | computations per run 2.8 toward 0.5 for that family only; the pointer families are small now | a prototype costs at least the whole build | edit-rollback, keep-analyses | design |
+| 3.2 one pipeline pass | the combine alone about 0; the round drop is the effect and the risk (see 3.2) | a vsgcc row newly above min(gcc, clang), or an enabler the combine cannot absorb | pass-list-parity, hoist-bounded | design |
+| 3.3 allocator on the LIR core | `regalloc` 415.5 M on main with [#2010], [#2021], [#2027], [#2032] (444 M is older) to 100 M or less | whole-body work per edit below 1% | greedy-port, ssa-spill-m16 | design |
+| 3.4 LIR clean-up | about 290 M on the merged tree to a credible 240 M (about 50 M recoverable) | idle block visits below 30% of clean-up (expected to fire) | ssa-spill-m16 | after 3.3 |
 | 3.5 pricing in the back end | -1.4% (-O2) to -2.5% (-Os) | forecast and pressure below 1% at both levels | greedy-port, ssa-spill-m16, hoist-bounded | after 3.3 |
 | B3 re-baseline | the phase-3 row measured | n/a | llvm-compare | after 3.x |
 | 4.1 per-pass budgets | each pass 300 instructions or fewer per IR instruction per run | a pass already within budget | each pass's owner | measure first |
@@ -217,15 +230,15 @@ Checklist: the shared list. Its own metric boxes:
   - `whole_walks`.
 
   Plus a per-analysis, per-asking-pass count. This gives phase 3 the numbers it is judged by: today 2,742 function-level computes, 631 M own, 545 of them on a body version already computed (41.3 M, 1.4%) ([#1994]). The pass-run count behind 2.8 is from -O1 ([spec] 1.2) and is `unmeasured` at -O2.
-- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1% ([#1948] states +0.04%).
+- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1%. [#1948]'s +0.04% was measured earlier on `d_faces` -O2: re-measure on current main before the PR is ready (a checklist box below).
 - **(c) Gate:** none.
 - **(d) Exit:** M (identical output); `tools/test_budgets.py` green on main; computations per run printed by `LLRM_DEBUG=counts` at -O1/-O2/-Os.
 - **(e) Who:** attrs-budgets. Depends on 0.1. Touches `llrm_mir::counts`, `tools/budgets.toml`, `tools/test_budgets.py`.
 
 Checklist: the shared list. Its own metric boxes:
 
-- [ ] counter cost
-- [ ] computations per run at three levels
+- [ ] counter cost re-measured on current main
+- [ ] computations per run at three levels (needs `LLRM_DEBUG=counts` at -O1 and -Os)
 - [ ] budget rows re-measured on main
 
 | outcome | decision | next |
@@ -234,22 +247,81 @@ Checklist: the shared list. Its own metric boxes:
 | no effect (counter cost above 0.1%) | compile the counters out of release; read them in a `counts` build only | 1.1 |
 | worse elsewhere (any object differs) | revert; the coordinator decides | 1.1 |
 
+### 0.3 A context-free identity for `ObjectRef` (unresolved)
+
+- **(a) Effect:** none on instructions. The blocker is this: a skipped or shared `points_to` solve changes output (131 of 1,583 objects differ in keep-analyses' skip prototype), because objects are interned by their facts, including whether they are addressed or captured, and a skipped solve never makes those spellings. It is not the interning id order: `LLRM_CHECK_INTERN=SEED` shows 0 of 1,583 objects differ on main (a positive check was done). objectref-identity (branch `perf/objectref-identity`) is testing the skip prototype against a context-free identity to see whether that fixes it. Until it is resolved, every step that skips or shares a solve (2.1b, the same-result slice of 3.1) is judged by identical output and is blocked.
+- **(b) Early:** run the skip prototype (branch `alim/exp/pv-demand` `4fb50bd931c2`) with the new identity and `LLRM_CHECK_INTERN=SEED`; count the objects that still differ. Kill the identity (record in [spec 8]) if the 131 do not fall to 0.
+- **(c) Gate:** a short design note: what the identity is, and which consumers read the spelling.
+- **(d) Exit:** M; identical.py 0 differ with the skip prototype on and `LLRM_CHECK_INTERN=SEED` at several seeds.
+- **(e) Who:** objectref-identity, with keep-analyses. Depends on nothing. Blocks 2.1b and 3.1's skipping families.
+
+Checklist: the shared list. Its own metric boxes:
+
+- [ ] objects that differ with the skip prototype, before and after the identity
+- [ ] identical at several seeds
+
+| outcome | decision | next |
+|---|---|---|
+| partial (some objects still differ) | list them with the fact that spells them; each blocks only the step that skips that solve | 2.1b for the rest |
+| no effect | the spelling, not the identity, is the cause: make the skipped solve produce its spellings, or keep the solve and cache its answer by exact key | 2.1b |
+| worse elsewhere (output changes) | the new identity orders differently on some object; fix the consumer, not the oracle | 0.3 again |
+
 ## Phase 1: land what is measured (output identical)
 
 All phase-1 steps run in parallel. Each is re-measured on main by M before merge, because each number in 2.2 was taken on its own parent.
 
+### Allocation: the path to LLVM's count
+
+**Where we stand.** LLVM makes about 63 K allocations (38 MB) on `d_faces` -O2, about 19 per IR instruction ([allocation]). llrm makes about 3.1 M (600 MB; [#2022]'s DHAT counts 3.16 M blocks), about 950 per IR instruction, about 50x. The profile (pass-list-parity, DHAT with system malloc; the site figures are a session report): the biggest site is 3.3% of the blocks ([#2022]) and the top 60 sites 37%; `Vec` `with_capacity` and `collect` 42% (1.34 M), growth past capacity 25% (779 K), `Rc` and `Arc` slices 6.7%, B-trees 16%; 61% of the blocks are 64 bytes or less and 26% 16 bytes or less; 54% die within 100 K instructions.
+
+**What does not reduce the count.** The slab (1.1) cuts the cost of an allocation, about 71 instructions to about 15 to 18 ([#2022]: "about four times cheaper"), not the number of them. Count reducers so far: [#1956] successors inline (259 K allocations), dense sets ([#1971], [#2026], [#2032]), [#2021] (3.163 M to 3.112 M, -1.6%; peak heap -15%). Operands inline in `Instruction` is measured at no more than 2.7% of the blocks ([#2022]) and 0.2% of instructions (pass-list-parity's report): not the lever.
+
+**What gets to LLVM's level, in order.**
+
+1. Inline storage (SmallVec-style) across the hot `Vec` sites: step 1.0, early by the user's order.
+2. Build less data: per-query facts and no rebuild (steps 2.x and 3.1; the memory-fact tables are about 19% of the allocations).
+3. Edit in place instead of copying: the allocator on the LIR core (3.3), rollback instead of 144 clones (2.7).
+4. Dense flat tables (1.2 and 2.6).
+5. Reuse scratch buffers across calls through the analysis manager.
+6. A per-pass-run arena: `unmeasured`, it fits the lifetime profile; size it as a probe after 1.0.
+
+**What it buys in instructions.** After the slab, allocator work is about 15 instructions times 3.1 M, about 47 M (1.6%). Matching LLVM's count directly saves at most 2% to 3%; the rest of the 518 M bucket is filling and copying data, which (2) to (4) remove. The cache effect may be larger: allocation is 24% of L1d misses and the working set is 25x to 50x LLVM's ([allocation]).
+
+**Exit measurement for the whole track.** Allocation count and bytes by DHAT per phase, re-baselined at B1, B2 and B3, with the target stated per phase at B1 (`unmeasured` until then).
+
+### 1.0 Inline storage ([#1956] is the first instance)
+
+- **(a) Effect:** allocations removed, as far as the probe says (LLVM about 19 per IR instruction, llrm about 950), with the instructions and cycles on `d_faces`, and peak RSS. Already measured: [#1956] (successors, 4 slots) took 259 K allocations; operands in `Instruction` at 2 to 4 slots is at most 2.7% of the blocks ([#2022]) and 0.2% of instructions (pass-list-parity's report), so it is not a first site. See the [allocation path](#allocation-the-path-to-llvms-count). Moves [synthesis] row 2.
+- **(b) Early:** a length-at-drop histogram per `Vec` site over the top 40 sites by blocks (DHAT, `d_faces` -O2 and one large QCport module): the fraction of each site that stays inline at 2, 4 and 8 slots. Stop rule per site: it converts only if that fraction fits and the struct growth is justified (a site whose owner struct grows past a cache line, or whose elements are large, stays a `Vec`).
+- **(c) Gate:** none for a site; the choice of inline type (a local `Inline<T, N>` or the `smallvec` crate) needs the owner's decision first, since `llrm-mir` depends on no crate.
+- **(d) Exit:** M plus DHAT allocation count; instructions and cycles on the PR's parent; RSS within the limits (`d_faces` +10%, `mdl_ai` +20%); identical.py 0 differ. Pass: the count falls by the histogram's prediction within 20%, and instructions do not rise.
+- **(e) Who:** pass-list-parity. Depends on 0.1. Touches the sites the histogram names, and `llrm_mir` for a shared inline type.
+
+Checklist: the shared list. Its own metric boxes:
+
+- [ ] histogram of the top 40 sites at 2, 4 and 8 slots
+- [ ] allocation count by DHAT, before and after
+- [ ] instructions and cycles on the parent
+- [ ] RSS on two programs
+
+| outcome | decision | next |
+|---|---|---|
+| partial (some sites fit) | convert the sites that fit; record the rest with their histograms | 1.1 |
+| no effect (few sites fit) | record in [spec 8] with the histogram; the count falls only by (2) to (4) of the [allocation path](#allocation-the-path-to-llvms-count) | 1.1 |
+| worse elsewhere (struct growth costs more than the allocations saved) | revert that site | 1.1 |
+
 ### 1.1 Slab allocator ([#2022])
 
-- **(a) Effect:** -4.2% instructions at every level (2,908 to 2,787 M at -O2) and cycles -2.9% (min of 11). Moves [synthesis] row 2 (allocation, 518 M).
-- **(b) Early:** on a host with load below 4, pinned to one core, run `perf stat -e cycles:u` min of 11, alternating base and head. Kill if cycles are not below base. A change that moves instructions and not cycles is the mimalloc lesson ([spec 8]).
+- **(a) Effect:** (this cuts the cost of an allocation, not their count: see the [allocation path](#allocation-the-path-to-llvms-count)) -4.2% instructions at every level (2,908 to 2,787 M at -O2) and cycles -2.9% (min of 11). Moves [synthesis] row 2 (allocation, 518 M).
+- **(b) Early:** user-space instructions are the kill criterion (the host's load has been 30 to 38 all week, so a quiet cycle figure cannot be had); cycles are a sign check, `perf stat -e cycles:u` min of 11, alternating base and head, with single cells swinging by 5%, or a named quiet host. Kill if instructions are not below base. A change that moves instructions and not cycles is the mimalloc lesson ([spec 8]).
 - **(c) Gate:** none (unsafe invariants stated in the crate docs).
-- **(d) Exit:** M. Also max RSS: `d_faces` -O2 within +10%, `mdl_ai` -O2 within +20%; 2N/N exponents within ±0.012 of base. Pass: instructions -3.4% or better and cycles negative.
-- **(e) Who:** pass-list-parity. Depends on 0.1. Touches crate `llrm-alloc`, the four binaries' entry points, the nib-lsp path list.
+- **(d) Exit:** M. Also max RSS: `d_faces` -O2 within +10% (measured +6.9%), `mdl_ai` -O2 within +20% (measured +17.7%); little room is left, so re-measure RSS at every B-step (2.7's rollback clones could push `mdl_ai` over); 2N/N exponents within ±0.012 of base. Pass: instructions -3.4% or better and cycles not above base.
+- **(e) Who:** pass-list-parity. Depends on 0.1. Touches crate `llrm-alloc`, the four binaries' entry points, `tests/bins_use_the_slab.rs` (replaces `bins_use_mimalloc.rs`), the docs ([allocation], `crates.md`, `source-layout.md`, [spec 9]) and `.github/workflows/nib-lsp-release.yml` (the generated-paths test, which is what failed [#2022]).
 
 Checklist: the shared list. Its own metric boxes:
 
 - [ ] instructions
-- [ ] cycles on a quiet host
+- [ ] cycles sign check (min of 11, alternating), or a named quiet host
 - [ ] RSS on two programs
 - [ ] scaling exponents
 
@@ -261,11 +333,11 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 1.2 Dense ids ([#1971], [#2032])
 
-- **(a) Effect:** -1.17% and -0.38% (with [#2026] landed). Moves [spec 9] container rows (B-tree 10.5%).
+- **(a) Effect:** [#1971] -1.04% / -1.17% / -1.32% at -O1/-O2/-Os against its parent (main `39501a050`), B-tree frames 224.7 to 203.3 M (-21.5 M at -O2), identity 1583/0; [#2032] -0.38% (with [#2026] landed). Moves [spec 9] container rows (B-tree 10.5%). The early-kill threshold (15 M) is met.
 - **(b) Early:** on main, callgrind self cost of B-tree frames keyed by block address and `RegId`. Kill if their sum is below 15 M (0.5%).
 - **(c) Gate:** none.
 - **(d) Exit:** M. Pass: -1.0% or better together.
-- **(e) Who:** attrs-budgets ([#1971]), ssa-spill-m16 ([#2032]). Depends on 0.1. Touches `llrm_mir::dense`, `ranges`, `slotstores`, `spill.rs` ([#1971]); `llrm-lir` `RegSet`, `allocate::Live` ([#2032]).
+- **(e) Who:** attrs-budgets ([#1971]), ssa-spill-m16 ([#2032]). Depends on 0.1. Touches `llrm_mir::dense` (`Dense` for `i64`; `IdSet` `is_subset`, `is_disjoint`, `union_with`, `difference`, `pop_first`; `IdMap::retain`), `ranges` (`LoopContext.positions`), `slotstores`, `spill.rs`, `noreturn`, `induction`, the manager (`dominated_by`) ([#1971]); `llrm-lir` `RegSet`, `allocate::Live` ([#2032]).
 
 Checklist: the shared list. Its own metric box:
 
@@ -297,14 +369,14 @@ Checklist: the shared list. Its own metric box:
 
 ### 1.4 Backend copies ([#2021], [#2027], [#2038])
 
-- **(a) Effect:**
+- **(a) Effect:** (the [allocation path](#allocation-the-path-to-llvms-count), item 3)
   - instructions -0.56% ([#2021]) and -0.52% ([#2038]);
-  - DHAT peak heap 24.0 to 20.3 MB ([#2021]) and 23.97 to 20.65 MB ([#2027]).
+  - DHAT peak heap 24.0 to 20.3 MB (-15.4%, [#2021]) and 23.97 to 20.65 MB (-13.9%, [#2027], merged), each against main alone; stacked, the peak is `unmeasured`. [#2038] is an instruction item (-0.52% to -0.64%; callgrind -0.68%, `Facts::of` 86.8 to 70.7 M), not a heap item.
 
-  Both PRs claim the 24 MB peak; together the peak is `unmeasured`. Moves [synthesis] row 3 and the [allocation] memory row.
+  [#2021], [#2027] and [#2038] moved no cycles beyond noise, so 1.1's cycle sign check does not apply here. Moves [synthesis] row 3 and the [allocation] memory row.
 - **(b) Early:** DHAT peak of the three stacked on main. Kill [#2027] if it adds nothing on top of [#2021].
 - **(c) Gate:** none.
-- **(d) Exit:** M plus DHAT peak. Pass: instructions -0.8% or better together, and peak -15% or better.
+- **(d) Exit:** M plus DHAT peak. Pass: instructions -0.8% or better together (met by [#2021] and [#2038]: -1.08%), and peak -15% or better.
 - **(e) Who:** ssa-spill-m16. Depends on 0.1. Touches `model/lir.rs` (`Insn::renamed`), `phielim`, `coalesce`, `spiller`, `Facts`, `regclass`, `postings`.
 
 Checklist: the shared list. Its own metric boxes:
@@ -315,9 +387,9 @@ Checklist: the shared list. Its own metric boxes:
 
 | outcome | decision | next |
 |---|---|---|
-| partial | the interval recompute (37.4 M) is the remainder ([#2038]) | 2.5 |
-| no effect | close the PR that adds nothing on top of the others | 2.5 |
-| worse elsewhere | revert that PR | 2.5 |
+| partial | the remainder is `Indexes::patch` (4.6 M) and the postings following (14 M), both 3.3 | 3.3 |
+| no effect | close the PR that adds nothing on top of the others | 3.3 |
+| worse elsewhere | revert that PR | 3.3 |
 
 ### 1.5 Mask test at each branch ([#2010])
 
@@ -330,7 +402,7 @@ Checklist: the shared list. Its own metric boxes:
 - **(b) Early:** none; this is measured.
 - **(c) Gate:** none.
 - **(d) Exit:** M plus `tools/ladder` diamond at N=400/800/1600 and its backend exponent (1.44 before, [readme]). Pass: diamond N=1600 3,000 M or less and identical.py 0 differ.
-- **(e) Who:** ssa-spill-m16. Depends on 0.1. Touches `addresssink`, `opcosts.txt`.
+- **(e) Who:** ssa-spill-m16. Depends on 0.1. Touches `addresssink::masks_sunk`, the target fact `mask_test` in `opcosts.txt` (x86 m16 and m32), and the guard that skips a mask whose operands are values read nowhere else (the CodeGenPrepare `:2224` guard).
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -342,18 +414,18 @@ Checklist: the shared list. Its own metric boxes:
 |---|---|---|
 | partial | re-measure [regalloc]'s split table on diamond; what is still split goes to 2.4 | 2.4 |
 | no effect | instrument suspect (the PR measured it); diff the diamond asm base against head | 1.5 again |
-| worse elsewhere | revert; coordinator | 2.4 |
+| worse elsewhere | check `waivers/mask-test-runtime.toml` first: the scroll bq32 +1 instruction is a DOSBox REP-slicing artifact, not a regression; only then revert; coordinator | 2.4 |
 
 ### 1.6 gvn, walker and lsr slopes ([#1999], [#2012], [#2017], [#2011], [#2020], [#2034], [#2008])
 
 - **(a) Effect:**
-  - ladder `loop` N=1600: 31,766 to 19,654 M for [#1999] with [#2008], with the rest on top;
-  - `loop` exponent from N=400 to 1600: 1.41 to 1.34 or lower;
-  - mem N=1600 peak RSS 331 to 181 MB ([#2011]);
+  - ladder `loop` N=1600, everything stacked with [#2010] and [#2012]: 30,626 to 10,804 M (-65%); [#1999] with [#2008] alone: 31,766 to 19,654 M (-38%);
+  - `loop` exponent from N=400 to 1600: 1.1 stacked (1.41 to 1.34 with [#1999] alone);
+  - `mem` N=1600: 7,299 to 5,969 M; peak RSS 331 to 181 MB ([#2011]);
   - diamond -13% ([#2034]).
 
-  `d_faces` net about +0.1% (per-PR +0.14, +0.11, +0.14, -0.07, -0.14). Moves [synthesis] row 4 (slopes).
-- **(b) Early:** stack the seven on main and measure `d_faces` -O1/-O2/-Os. Kill (rework the gating thresholds) if the stack is above +0.3%. A shortcut must pay nothing on short bodies: gate it at entry, with the threshold measured by a sweep.
+  `d_faces` per PR: [#2020] +0.07% to +0.11%, [#2034] +0.09%, [#1999], [#2012], [#2011] about -0.15% to +0.15%; together +0.1% to +0.2%, nothing measured is negative. [#2012] is `erase_all` in gvn; [#2017] (merged) is `Nearest::dominating_below`. Moves [synthesis] row 4 (slopes).
+- **(b) Early:** stack the seven on main and measure `d_faces` -O1/-O2/-Os. Kill (rework the gating thresholds) if the stack is above +0.3%. A shortcut must pay nothing on short bodies: it is gated at entry by structural counts of work (a chain of at least 64 accesses, a body of at least 1,024, 8 joins), which are counts and not thresholds found by a sweep.
 - **(c) Gate:** none.
 - **(d) Exit:** M plus `tools/ladder` all shapes. Pass:
   - `loop` N=1600 -35% or better;
@@ -371,9 +443,9 @@ Checklist: the shared list. Its own metric boxes:
 
 | outcome | decision | next |
 |---|---|---|
-| partial (exponent still at or above 1.34) | callgrind the `loop` N=1600 compile; the next lead is the per-(slot, candidate) `clobbered` memo ([memoryssa]) | 2.3 |
+| partial (exponent still at or above 1.1 stacked) | callgrind the `loop` N=1600 compile; the next lead is gvn `subexpressions` for equal loads whose `MemRef`s differ only by pointer value (about 440 M at `mem` N=1600); [#2034] replaced the per-(slot, candidate) `clobbered` memo | 2.3 |
 | no effect | the ladder binary is stale or confounded; rebuild both from parents | 1.6 again |
-| worse elsewhere (`d_faces` above +0.3%) | raise the entry thresholds by a sweep; otherwise drop the PR that pays on short bodies | 2.3 |
+| worse elsewhere (`d_faces` above +0.3%) | drop the PR that pays on short bodies, or tighten its structural gate | 2.3 |
 
 ### 1.7 dse slope ([#2013], [#2015])
 
@@ -381,13 +453,13 @@ Checklist: the shared list. Its own metric boxes:
   - `dse` mem N=1600: 1,907 to 179 M;
   - distinct-offset shape: 3,395 to 162 M;
   - arith: 818 to 52 M;
-  - 2.0x per doubling (was 3.5x to 4.0x);
-  - `d_faces` +0.2%.
+  - 2.0x per doubling on the distinct-offset and `arith` shapes (was 3.5x to 4.0x); `mem` 38.1 / 82.6 / 192.1 M at N=400 / 800 / 1600, 2.17x then 2.33x;
+  - `d_faces` +0.03% to +0.04% ([#2013], index only past 256 cells) and +0.01% to +0.03% ([#2015]), objects identical; the +0.2% in the PR text was before the threshold.
 
   Moves [synthesis] row 4.
 - **(b) Early:** none; this is measured.
 - **(c) Gate:** none.
-- **(d) Exit:** M plus `mem` and `arith` ladders. Pass: `dse` 2.2x or less per doubling, and `d_faces` at most +0.3%.
+- **(d) Exit:** M plus `mem` and `arith` ladders. Pass: `dse` 2.2x or less per doubling, and `d_faces` at most +0.3%. The first part is missed on `mem` (2.17x then 2.33x): that is the partial row.
 - **(e) Who:** edit-rollback. Depends on 0.1. Touches `avail.rs` (`Solve::reaching`, `Stored::related`) and `regions.rs`.
 
 Checklist: the shared list. Its own metric boxes:
@@ -398,9 +470,9 @@ Checklist: the shared list. Its own metric boxes:
 
 | outcome | decision | next |
 |---|---|---|
-| partial | pairwise `may_clobber` of wild array accesses is the remainder ([#1913]) | 2.8 |
+| partial | the remainder is `dse`'s inputs, not pairwise `may_clobber`: `Published` 27 M, `Accesses::managed` 17 M and `reaching` 44.7 M of `Dse::run`'s 185 M at `mem` N=1600 ([#1913] is the draft behind it) | 2.8 |
 | no effect | instrument suspect; [#1994] records a fake +2% from a confounded base | 1.7 again |
-| worse elsewhere | raise the 256-cell index threshold by a sweep | 2.8 |
+| worse elsewhere | the 256-cell index threshold is already set by a sweep (0, 64, 128, 256, 400; 256 kept) | 2.8 |
 
 ### 1.8 Bounded on deep nests ([#1977], [#1978])
 
@@ -447,19 +519,19 @@ Checklist: the shared list. Its own metric boxes:
 | no effect | n/a | |
 | worse elsewhere | a row moves: fix forward; never revert a correctness fix for cost | 3.1 |
 
-### 1.10 Held drafts on main ([#1958], [#1921], [#1962], [#1965])
+### 1.10 Held PRs on main ([#1958], [#1921], [#1962], [#1965])
 
 - **(a) Effect:** each draft's number, re-measured on main:
-  - [#1958]: -3.4% on main `90bce0774`-era;
-  - [#1921]: -1.77% on `254855801`;
-  - [#1962]: -0.46%;
+  - [#1958]: -3.4% on main `90bce0774`-era; an open PR, ready (not a draft);
+  - [#1921]: -1.77% on `254855801`; to be closed, since [#1975] (merged) did its dirty-block mechanism in general, and its allocation-free rule windows (-4 M) live on branch `alim/perf/lir-cleanup-2` `6db843a29`, not a PR;
+  - [#1962]: -0.46%, under the 0.5% bar: bundled with 2.6;
   - [#1965]: -0.3%.
 
   Several are stale against [#1975] and [#1938]. Moves [synthesis] rows 3, 6 and 7.
-- **(b) Early:** rebase each draft on main and measure it with M. Kill a draft if it is below 0.5% on main, unless it bundles with a same-area step: [#1962] with 2.1, [#1965] with 2.4.
+- **(b) Early:** rebase each draft on main and measure it with M. Kill a draft if it is below 0.5% on main, unless it bundles with a same-area step: [#1962] with 2.6, [#1965] with 2.4.
 - **(c) Gate:** none.
 - **(d) Exit:** M per PR. Pass: 70% or more of its stated effect.
-- **(e) Who:** greedy-port ([#1958]), ssa-spill-m16 ([#1921]), attrs-budgets ([#1962]), UNOWNED ([#1965]; proposed owner greedy-port, with 2.4). Depends on 0.1. Touches `splitkit`, LIR `peep/`, `alias::initialized`, `allocate`.
+- **(e) Who:** greedy-port ([#1958]), ssa-spill-m16 ([#1921], to close), attrs-budgets ([#1962], with 2.6), UNOWNED ([#1965]; proposed owner greedy-port, with 2.4). Depends on 0.1. Touches `splitkit`, LIR `peep/`, `alias::initialized`, `allocate`.
 
 Checklist: the shared list. Its own metric box:
 
@@ -481,25 +553,15 @@ Re-run 0.1 on main after phase 1 merges.
 
 ## Phase 2: open levers with a bound in the repo (output identical)
 
-### 2.1 point_values as a per-query provenance
+### 2.1 point_values as a per-query provenance (stop) and 2.1b repeats
 
-- **(a) Effect:** `point_values` costs 124 M (4.1%) at -O2. That figure is `unmeasured` in the repo (session report); [#1994] has `point_values` about 6 M inside `initialized` and pointer-values 69.6 M own. A local walk matches the solve on 99.39% of 659,040 accesses, with 0 of 1,583 objects different, but costs +276 M eagerly (also `unmeasured` in the repo). Only a per-query form pays. Moves [synthesis] row 1.
-- **(b) Early:**
-  - step 0: on main, measure the `point_values` own cost with `LLRM_DEBUG=time` and callgrind inclusive;
-  - count, per consumer, the values asked against the values solved, on `d_faces` -O2, with a throwaway counter. Consumers: Annotated, escapes, `initialized`, Summaries; `initialized` is Stamp's 88 M ([spec 8]).
-
-  The projected saving is the solve cost less (values asked × the local walk's per-value cost). Kill if it is below 15 M (0.5%), or if the answer-level oracle differs on any of the 1,583 objects.
-- **(c) Gate:** a design page with a big-picture review before code. It covers:
-  - the query, `provenance(value)`, owned by one analysis;
-  - its consumers;
-  - a dense-id memo per body version;
-  - the exactness oracle, including the 0.61% where the local walk is coarser or unanswered;
-  - the expected instructions at -O1/-O2/-Os.
-- **(d) Exit:** M plus `LLRM_WHY` pointer-values computes. Pass:
-  - 50% or more of the projected saving;
-  - pointer-values computes down by the asked/solved ratio;
-  - identical.py 0 differ with the new `LLRM_CHECK_PROVENANCE` on.
-- **(e) Who:** keep-analyses. Depends on B1 and 1.3. Touches `alias.rs`, `manager.rs` (PointerValues), consumers in `Annotated` and `initialized`.
+- **(a) Effect:** measured. Callgrind inclusive `alias::point_values` is 123.97 M on main `ff49545a5` (`slotstores::reaching` 37.7, `_direct` 18.9, `MemRef::of` 16.6, `IdMap` 6.3, `learn` 4.9). Step 0's asked-against-solved counts are done: `annotated` asks 87% of what is solved (7,540 of 8,634), `escapes` 60%, `initialized` 63%. By the plan's rule (saving = solve cost less asked values times the walk's per-value cost), the per-query form saves at most the unread 13% to 40% minus its own query cost, and the eager local walk costs +276 M: 2.1 as written meets its "no effect" row. Stop, and record the table in [spec 8]. Moves [synthesis] row 1.
+  - **2.1b, repeats:** 209 solves over 96 body versions (113 repeats; QCport 13,269 equal repeats against 8,048 first). An exact-key cache hits 78 times for a net 13.6 M (0.45%), blocked by step 0.3: a skipped solve never makes the captured and addressed spellings of fact-interned objects. Branch `alim/exp/pv-demand` `4fb50bd931c2`. Owner keep-analyses with objectref-identity; it does not depend on [#2035] and [#2037].
+  - Other families: `Annotated`, accesses and `through-memory` consume objects; only the producers intern (`PointerValues`, the escape phase, `CallEffects` summaries, `ExposedFrames`). Skipping a consumer is exact iff its inputs are. Spelling dependence through results kept as sound is `unmeasured` (`LLRM_CHECK_ORDER` seeds 1 to 3 are clean).
+- **(b) Early:** done for 2.1 (counts above). For 2.1b: step 0.3's probe.
+- **(c) Gate:** none for the stop; a design page only if 2.1b survives 0.3.
+- **(d) Exit:** 2.1: the [spec 8] entry. 2.1b: M, identical.py 0 differ with `LLRM_CHECK_INTERN=SEED`, and 60% or more of 13.6 M.
+- **(e) Who:** keep-analyses. 2.1b depends on 0.3.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -518,7 +580,7 @@ Checklist: the shared list. Its own metric boxes:
 ### 2.2 Annotated brought up to date per access
 
 - **(a) Effect:** Annotated costs 78.9 M own at -O2. 116 builds; 57 returned the held result, about 39 M (1.3%) ([#1994]). Keyed removal of erasures realised -0.6 M ([#1973]); what remains is re-annotating the accesses whose operands changed ([analysis-manager]). Moves [synthesis] row 1.
-- **(b) Early:** `LLRM_WHY` blockers ([#1972]) for Annotated's recomputes on main. Count those whose log holds only operand edits that reach no address operand, and sum their cost. Kill if below 15 M.
+- **(b) Early:** `LLRM_WHY` blockers ([#1972]) for Annotated's recomputes on main. Count those whose log holds only operand edits that reach no address operand, and sum their cost. Annotated's same-version recompute is 1.2 M; its 87 edited rebuilds (42.4 M) are the pool, and 5 of 11 changing `fold` runs substitute an address operand (81 of 128 replaced values feed a load, store or `gep`). Kill if the recoverable sum is below 15 M.
 - **(c) Gate:** the update rule goes into [spec] 3.2's table, with a review.
 - **(d) Exit:** M plus `LLRM_WHY` annotated `same` count. Pass: 50% or more of the probe's sum, and `LLRM_CHECK_REPLAY` silent on the corpus.
 - **(e) Who:** keep-analyses (meaning), edit-rollback (record, [#1943] `operands_edited`). Depends on [#1943] and B1. Touches `manager.rs` (Annotated) and `touched.rs`.
@@ -564,27 +626,16 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 2.4 Split path tables
 
-- **(a) Effect:** `unmeasured` in the repo (session report): the split path is about 132 M after [#1958]. The parts:
-  - B': position tables keyed by body position, about 1.0%;
-  - A': `carved_moving` fed from the allocator's postings, about 0.5%;
-  - E: `spilled_apart`, about 0.35%.
-
-  About 2% in all. Moves [synthesis] row 3.
-- **(b) Early:**
-  - step 0: on main with [#1958], callgrind self and inclusive of `split placed`, `split carving` and `spilled_apart` on `d_faces` -O2;
-  - count hash probes per row visit in `placement::iterate`.
-
-  Kill if B' and A' together are below 30 M (1%).
+- **(a) Effect:** the split path is about 132 M with [#1958] (117 M `placed` without), `unmeasured` in the repo (session report). B' (position and row tables keyed by body position) was built and measured: -0.03% (2,744.59 to 2,743.70 M); hash probes are not the cost, the rows' own work is (506 instructions per row visit: interference about 10 M, `Placement::iterate` 3.9, price 10.1, held 6.7, `Frame::new` 5.7, growth about 9). Of the rest, A' (`carved_moving` fed from the allocator's postings, 29 M, 1.0%) was never built; E (`spilled_apart`) and C are each below 0.5%. `InterferenceCache` (per register and block) is the 10 M interference part and belongs to 3.3. The result is in [spec 8] ([#2036]). Moves [synthesis] row 3.
+- **(b) Early:** none left: by its own kill rule (B' and A' together below 30 M) 2.4 dies as written. Keep it only as A' alone, with step 0 on main with [#1958]: callgrind self and inclusive of `split carving` and `carved_moving`.
 - **(c) Gate:** none (same algorithm, dense tables).
-- **(d) Exit:** M plus those rows. Pass: 60% or more of the probe sum per PR.
-- **(e) Who:** greedy-port. Depends on 1.10 ([#1958]). Touches `splitkit.rs`, `spillplacement.rs`, `allocate.rs`.
+- **(d) Exit:** M plus those rows. Pass: 60% or more of A''s 29 M.
+- **(e) Who:** greedy-port. Depends on 1.10 ([#1958]). Touches `splitkit.rs`, `allocate.rs`.
 
 Checklist: the shared list. Its own metric boxes:
 
 - [ ] step-0 rows
-- [ ] B'
-- [ ] A'
-- [ ] E
+- [ ] A' alone
 
 | outcome | decision | next |
 |---|---|---|
@@ -592,33 +643,21 @@ Checklist: the shared list. Its own metric boxes:
 | no effect | record; the allocator gap is not in the split path | 3.3 |
 | worse elsewhere (row or object moves) | revert; allocation must be identical | 3.3 |
 
-### 2.5 Interval recompute in `Facts::of`
+### 2.5 Interval recompute in `Facts::of` (closed)
 
-- **(a) Effect:** the interval recompute is 37.4 M (132 K per update of 10.6 touched values) ([#2038]); bound 1.3%. Moves [synthesis] row 3.
-- **(b) Early:** count the intervals recomputed per update whose values the rewrite did not touch. Kill if the avoidable share is below 15 M.
-- **(c) Gate:** none if exact; spec 4.1's "local edits" rule.
-- **(d) Exit:** M; counted test that intervals are recomputed only for touched values. Pass: 60% or more of the probe.
-- **(e) Who:** ssa-spill-m16. Depends on 1.4. Touches `intervals.rs` and `Facts`.
-
-Checklist: the shared list. Its own metric boxes:
-
-- [ ] probe
-- [ ] instructions
-- [ ] counted test
-
-| outcome | decision | next |
-|---|---|---|
-| partial | the rest is `Indexes::patch`: per-block versions (3.3) | 3.3 |
-| no effect | record in [spec 8] | 3.3 |
-| worse elsewhere | revert | 3.3 |
+- **(a) Effect:** closed by ssa-spill-m16. The interval recompute is 37.4 M ([#2038]: 132 K per update of 10.6 touched values), but the avoidable part is about 11 M (0.4%) and the realistic part 6 to 7 M (0.25%). The kill rule (15 M) is met.
+- **(b) Early:** met; recorded in [spec 8].
+- **(c) Gate:** none.
+- **(d) Exit:** none. The 3 to 4 M of buffer reuse is folded into the next intervals PR.
+- **(e) Who:** ssa-spill-m16. The remainder (`Indexes::patch` 4.6 M, postings following 14 M) is 3.3's.
 
 ### 2.6 `Frequencies` dense
 
-- **(a) Effect:** `unmeasured`. [#1971] lists `profit::Frequencies` and `Frequency::over` as not converted. Moves [spec 9] container rows.
-- **(b) Early:** callgrind self of both and their maps; key density against the block-id space. Kill if below 15 M, or if density is below a quarter ([#2026]'s lesson).
+- **(a) Effect:** `unmeasured`. The cost is `frequency.get(&cfg::id(block))` per instruction in `spill::TrafficBase::of`, `without` and `_add` (`often`), not construction; [#1971] lists `profit::Frequencies` and `Frequency::over` as not converted. The type `BTreeMap<i64, i64>` runs through `llrm-analysis` `branchprob` (`estimated`, `taken_from`), `candidate.rs`, `lsr.rs`, `hoist.rs`, `inline.rs`, `sink.rs` and `spill.rs` (a trial rename gave 9 errors in two crates), and it collides with pass-list-parity's hoist and spill pricing PRs, so it comes after them. Bundles [#1962] (-0.46%, under the 0.5% bar). Moves [spec 9] container rows.
+- **(b) Early:** callgrind self of `TrafficBase` and the `frequency.get` calls; key density against the block-id space (about 1: every block has an entry). Kill if below 15 M, or if density is below a quarter ([#2026]'s lesson); the 15 M probe decides.
 - **(c) Gate:** none.
 - **(d) Exit:** M. Pass: 60% or more of the probe.
-- **(e) Who:** attrs-budgets. Depends on 1.2. Touches `profit.rs` and `frequency.rs`.
+- **(e) Who:** attrs-budgets. Depends on 1.2 and on pass-list-parity's hoist and spill pricing PRs. Touches `profit.rs`, `frequency.rs` and the files above.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -633,7 +672,7 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 2.7 Rollback, not clones ([#1945], [#1943])
 
-- **(a) Effect:** 144 function clones at -O2 down to 0 ([#1945]: `stamped` 84, gvn fork 38, `sink` 11, interprocedural 11), at most +0.1% instructions. It enables 3.1's updaters, 3.5's pricing on the live function, and [spec] 2.3.
+- **(a) Effect:** (the [allocation path](#allocation-the-path-to-llvms-count), item 3) 144 function clones at -O2 down to 0 ([#1945]: `stamped` 84, gvn fork 38, `sink` 11, interprocedural 11), at most +0.1% instructions. It is an enabler with no instruction saving of its own: 3.1's updaters, 3.5's pricing on the live function, and [spec] 2.3. The 144 clones cost about 0.1% of the compile (the scopes that contain them are 6% to 10%, from numbering and forecasting, not from the copy); the +0.1% above is the cost side.
 - **(b) Early:** none; draft measured. Kill if a site costs more than +0.3% or `LLRM_CHECK_ROLLBACK` fails.
 - **(c) Gate:** [spec] 2.3 is the gate (already written).
 - **(d) Exit:** M; counted `function_clones = 0` in the pipeline. Pass: 0 clones and at most +0.1%.
@@ -673,6 +712,14 @@ Checklist: the shared list. Its own metric boxes:
 | no effect | the axis cost is in an existing step | that step |
 | worse elsewhere | revert | 3.2 |
 
+### 2.9 Vec growth by site
+
+- **(a) Effect:** mimalloc's `realloc` memcpy is 72 M (2.6%) of `d_faces` -O2 and was missing from this plan. Growing in place was measured at +0.34% instructions with cycles flat. The candidate is a per-site `with_capacity` on the six biggest growers (`forest` 4.1 M, `exposed_allocas` 3.2, `live_rows_within` 2.2, and three more), about 15 M, under the 1% rule: it lands only bundled with 1.2's remainder or as a correctness-free cleanup. Moves [synthesis] row 2.
+- **(b) Early:** callgrind callers of the `realloc` memcpy, per site, on main. Kill if the six sites sum below 15 M.
+- **(c) Gate:** none.
+- **(d) Exit:** M. Pass: 60% or more of the probe.
+- **(e) Who:** UNOWNED (proposed: attrs-budgets, with 2.6). Touches the sites the probe names.
+
 ### B2 Re-baseline
 
 Re-run 0.1 on main after phase 2 merges.
@@ -685,13 +732,16 @@ Re-run 0.1 on main after phase 2 merges.
 
 ### 3.1 Facts asked per query
 
-- **(a) Effect:** analysis computations per pass run from 2.8 to 0.5 or fewer ([spec] 1.2, 6). Analyses own 631 M at -O2 over 2,742 computes ([#1994]). At the target ratio the bound is about 518 M; net of 2.1 and 2.2 it is about 355 M (12%). Moves [synthesis] row 1 and row 5 (idle runs: their cost is the facts, [idle]).
+- **(a) Effect:** (the [allocation path](#allocation-the-path-to-llvms-count), item 2) analysis computations per pass run from 2.8 toward 0.5 ([spec] 1.2, 6). Analyses own 631 M at -O2 over 2,742 computes ([#1994]). Two measured results shape the step.
+  - Preserving across no-change cannot carry it: 545 of 2,742 computes (20%) are on a body version already computed, 41.3 M, 1.4%; 1,965 (72%, 510 M) follow an edit (edit-rollback, [#1994] comment 6234166683). The same-version slice is capped at 1.4%; its largest cause is 0.4% (the `Outer` wipe when only type ancestry differs; under the bar, no PR).
+  - Laziness does not carry it in the pointer families either (keep-analyses): of 2,499 computes, 24% (592) are in the lazy families and 44% (1,090) in the cheap many (`exposed-frames`, `registers`, `assumptions`, `dominators`, `loops`, `shape`), which are recomputed after edits that touch what they read (94%), so per-query does not take them to 0.5; they need updaters. The pointer-family ceilings are small now: escapes -27 M landed (0.9%), `point_values` sharing at most 0.45% and blocked (2.1b), predicate call effect dropped.
+  - The -12% can come only from edit-rollback's measured family: `Held`, `ThroughMemory` and decide facts, 403 M own, 12.8% (`decide` asks 574 branch visits and decides none), brought up to date from the change log (`facts.at`; `Touched` exists). The step is re-pointed at that family, owned by edit-rollback with keep-analyses; its saving is `unmeasured` until one family is built. Moves [synthesis] row 1 and row 5 (idle runs: their cost is the facts, [idle]).
 - **(b) Early:**
   - per analysis: computes per run, from 0.2's counter;
   - which pass asks it;
   - entries read per build (the missing number in [#1994]).
 
-  Prototype one family per query on a throwaway branch: `bounded` asked per loop and block, the shape of [#1978]'s lazy scopes, the ranger form of [analysis-avoidance]. Kill that family if:
+  Count first which analyses can be updated from the change log (the per-analysis table of the 545 same-version computes: `registers` 15.5 M, `call-effects` 5.6, `bounded` 3.8, `exposed-frames` 3.3). Prototype one family on a throwaway branch (an updater from the change log, or a per-query form where its consumers ask little): `bounded` asked per loop and block, the shape of [#1978]'s lazy scopes, the ranger form of [analysis-avoidance]. Kill that family if:
   - the prototype's asks × cost per ask is at least the whole build's cost; or
   - any object differs; or
   - the projected saving is below 15 M.
@@ -703,7 +753,7 @@ Re-run 0.1 on main after phase 2 merges.
 
   The ablation in [rows-series] is the constraint: keep each fact exact, make it cheap.
 - **(d) Exit:** M; counted test `analysis_computations / pass_runs <= 0.5` on the fixtures; `LLRM_CHECK_REPLAY` and `LLRM_CHECK_ORDER` silent. Pass: the ratio is met at -O1/-O2/-Os, and 60% or more of each landed family's probe.
-- **(e) Who:** keep-analyses (meaning), edit-rollback (record and updater API). Depends on 0.2, 2.1, 2.2 and 2.7. Touches `passes.rs`, `manager.rs`, `ranges.rs`, `consts.rs`, `alias.rs`. One family per PR.
+- **(e) Who:** edit-rollback (family, record and updater API), keep-analyses (meaning). Depends on 0.2, 2.2 and 2.7; the families that skip a solve also on 0.3. The first question of the design page is which analyses can be updated from the change log and which are per query. Touches `passes.rs`, `manager.rs`, `ranges.rs`, `consts.rs`, `alias.rs`. One family per PR.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -726,18 +776,18 @@ Checklist: the shared list. Its own metric boxes:
   - rounds of two or more: 35% to 56% of step work ([parity]);
   - idle reruns: 247 M (7.8%) ([compile-gap-series]).
 
-  Expected -10% or more, with rows held. Moves [synthesis] rows 5 and 9.
-- **(b) Early:** on a throwaway branch, merge fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass, at today's positions and today's round count. Then:
-  1. identical.py first, which must be 0 differ;
-  2. then rounds at 1 with the combine;
+  The combine alone is expected at about 0; the effect is the round drop, which is also the risk. Closed ideas, not to repeat: `gvn`, `dse` and `inferspace` ahead of `decide` (-4.4% at -O2, +5.4% at -O3, `x_hanoi2` crosses above 1.00); early scoped CSE (+8% to +11% with the alias-checked table, -3.1% to -3.4% kill-all but 4 cells worse, +1.6% to +1.9% once the stray exit phi is folded). Moves [synthesis] rows 5 and 9.
+- **(b) Early:** step 1 was built and measured before this plan (branch `notkept/combine-worklist`, `fba7c4051..fea9b27f0`): merging fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass at today's positions and rounds gave about 0 compile time, because the cost is analyses and idle reruns, not rewriting (no spec 8 entry yet; the owner re-measures and writes it). Treat step 1 as expected 0, not part of the -10%. The risky part is dropping repeat runs: round-1-only per pass changes output (`hoist` at least 20 objects, `fill` at least 20, `loopsimplify` 17, `promote` 6, `trivialunswitch` 2; all five together -3.0% at -O2 and -6.0% at -Os on `d_faces`), and the enabling relations are dense (`dead`, `gvn`, `dse`, `lcssa` and `fold` enable nearly everything); global `rounds=1` lost 25, 32 and 51 rows at -O1. So the early check is a per-pass ablation: run pass P in round 1 only, list the objects that change, name the enabling pass. Then:
+  1. identical.py, which must be 0 differ;
+  2. per-pass ablation table, one named enabler per repeat run that matters;
   3. vsgcc rows and bench cells against main.
 
-  Kill if a vsgcc row newly crosses above min(gcc, clang), or a bench cell is worse, and the combine cannot remake the cause. The known causes are the third-round chain fold, decide, lcssa, gvn ([spec 8]) and the stray exit phi ([spec 8]).
+  Kill if a vsgcc row newly crosses above min(gcc, clang), or a bench cell is worse, and the combine cannot absorb the named enabler. The known causes are the third-round chain fold, decide, lcssa, gvn ([spec 8]) and the stray exit phi ([spec 8]).
 - **(c) Gate:** a design page (pass list per level against clang's, [pass-parity]; the re-queue rule; the loop worklist) with a big-picture review.
 - **(d) Exit:** M; `LLRM_CHECK_FIXPOINT` silent (every pass run in full after convergence changes nothing); vsgcc rows, `d_faces` executed, QCport bytes, bench cells all four levels, m16 and m32. Pass:
   - the landing rule of [spec] 4.3;
   - -8% or better at -O2 and -Os;
-  - idle runs per compile down 50% or more.
+  - idle runs per compile down 50% or more: row 5 is closed ([#2028], [#2030]), so this can come only from the round drop, not from a skip.
 - **(e) Who:** pass-list-parity (pipeline, combine), hoist-bounded (rounds, loop worklist). Depends on 3.1 for the round drop (steps 1 and 2 of R3 can start at B1). Touches `pipeline.rs`, `fold.rs`, `algebraic.rs`, `phiopt.rs`, `dead.rs`, `decide.rs`.
 
 Checklist: the shared list. Its own metric boxes:
@@ -756,7 +806,7 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 3.3 The allocator on the LIR core ([spec] stage 2)
 
-- **(a) Effect:** `regalloc` 444 M against greedy's 39.5 M ([regalloc]). Budget 100 M at -O2 ([spec] 1.3), about -250 M (8.6%) net of 2.4 and 2.5. Spec 4.1 shape:
+- **(a) Effect:** (the [allocation path](#allocation-the-path-to-llvms-count), item 3) `regalloc` is 415.5 M on main with [#2010], [#2021], [#2027] and [#2032] (444 M is older), against greedy's 39.5 M ([regalloc]). The split path is 132 M with [#1958]: carve O(body) 29 M, `Facts` rescans of untouched values about 50 M, `_next_value_following` 5.6 M, about 85 M (3%). Budget 100 M at -O2 ([spec] 1.3). Spec 4.1 shape:
   - LIR in an arena with MIR-shaped operands;
   - slots on instructions;
   - use lists;
@@ -784,19 +834,11 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 3.4 LIR clean-up on dirty blocks and at selection
 
-- **(a) Effect:**
-  - `lir peephole` 130 M;
-  - `jumps` 65 M;
-  - `coalesce` 60 M;
-  - x87 71 M;
-  - `phielim` 14 M;
-  - about 340 M against about 40 M ([synthesis] row 6).
-
-  Budget 80 M ([spec] 1.3). Rewrites that need no physical register move into selection (DAG-combine style, [lir-cleanup] item 5). Moves [synthesis] row 6.
-- **(b) Early:** count, per sub-pass, the block visits that change nothing on `d_faces` -O2 (the open question in [lir-cleanup]). Kill if idle block visits are below 30% of clean-up cost.
-- **(c) Gate:** a design page for the selection-time rewrites with a review.
-- **(d) Exit:** M; counted `block_visits` at most the dirty blocks after the first visit (spec 6). Pass: clean-up 160 M or less at -O2.
-- **(e) Who:** ssa-spill-m16. Depends on 3.3 and 1.10 ([#1921]). Touches `peephole.rs`, `peep/`, `jumps`, `floatassign.rs`, isel combine.
+- **(a) Effect:** merged-tree numbers (ssa-spill-m16): `Peephole` 97.1 M, `jumps` 58.7, `coalesce` 57.8, `FloatAssign` plus `FloatAlloc` 65.1, `phielim` 11.4: 290 M (and `parcopy` 9.8, `twoaddr` 8.3, `pressuresink` 8.1, `loopslots` 7.0 beside it); the 340 M of [synthesis] row 6 is stale. The credible exit is about 240 M (about 50 M recoverable), not 160. The peephole's shared lane and exit facts (at most 1.0%) and the x87 live rows (0.9%) are dropped. Rewrites that need no physical register could move into selection (DAG-combine style, [lir-cleanup] item 5). Moves [synthesis] row 6.
+- **(b) Early:** the idle-visit count, per sub-pass, on `d_faces` -O2: the block visits that change nothing (the open question in [lir-cleanup]). It is the first probe. Kill if idle block visits are below 30% of clean-up cost; ssa-spill-m16 expects it to fire.
+- **(c) Gate:** a design page for the selection-time rewrites with a review, only if the probe does not fire.
+- **(d) Exit:** M; counted `block_visits` at most the dirty blocks after the first visit (spec 6). Pass: clean-up 240 M or less at -O2.
+- **(e) Who:** ssa-spill-m16. Depends on 3.3. [#1921] is closed, not depended on ([#1975] merged); its allocation-free rule windows (-4 M) are on branch `alim/perf/lir-cleanup-2`. Touches `peephole.rs`, `peep/`, `jumps`, isel combine.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -806,7 +848,7 @@ Checklist: the shared list. Its own metric boxes:
 
 | outcome | decision | next |
 |---|---|---|
-| partial | the x87 live rows (25.7 M) come next, last in rank | 3.5 |
+| partial | the remainder is the per-useful-visit cost: phase 4 budgets | 3.5 |
 | no effect | record; the cost is per useful visit: phase 4 budgets | 4.1 |
 | worse elsewhere | revert | 3.5 |
 
@@ -959,17 +1001,17 @@ These apply at -O1/-O2/-O3/-Os, m16 and m32. A row is never traded for compile t
 
 ## 5. Parallelism and critical path
 
-**Critical path:** 0.1 → 0.2 → (phase 1 merges) → B1 → 2.1 → 3.1 (design, then one family per PR) → 3.2 (round drop) → B3 → 4.1.
+**Critical path:** 0.1 → 0.2 → (phase 1 merges; 0.3 resolves in parallel) → B1 → 3.1 (design, then one family per PR) → 3.2 (round drop) → B3 → 4.1.
 
-The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spec 7 notes these touch disjoint crates.
+The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.5. Spec 7 notes these touch disjoint crates.
 
 | can run together | blocked by |
 |---|---|
 | all of phase 1 (1.6 and 1.7 serialised on `avail.rs`) | 0.1 |
-| 2.1, 2.2, 2.4, 2.5, 2.6, 2.7, 2.8 | B1; 2.2 after [#1943]; 2.4 after [#1958] |
+| 2.1b, 2.2, 2.4 (A'), 2.6, 2.7, 2.8, 2.9 | B1; 2.1b after 0.3; 2.2 after [#1943]; 2.4 after [#1958] |
 | 2.3 | 1.6 merged (`memoryssa.rs`) |
-| 3.1 families; 3.2 steps 1-2 (identical at today's rounds); 3.3 | B2 for 3.1 and 3.3; B1 for 3.2 steps 1-2 |
-| 3.2 round drop | 3.1 |
+| 3.1 families; 3.3 | 0.3 and B2 for 3.1; B2 for 3.3 |
+| 3.2 per-pass ablation, then the round drop | B1 for the ablation; 3.1 for the round drop |
 | 3.4 | 3.3 |
 | 3.5 | 3.3 and 2.7 |
 
@@ -985,14 +1027,14 @@ The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spe
 
 | work | owner | recommendation | reason |
 |---|---|---|---|
-| point_values demand counts per consumer | keep-analyses | keep | step 0 of 2.1, which is on the critical path |
+| point_values demand counts per consumer | keep-analyses | done | 2.1 stops; 2.1b is blocked on 0.3 |
 | lazy call-effects and `captured_before` design | keep-analyses | cancel | dropped after the walk fusion; the escape side left is about 34 M |
 | cheap-many redundancy sizing | edit-rollback | close | answered: 1.4%, largest cause 0.4% ([#1994]) |
 | Annotated update from the record | edit-rollback, keep-analyses | keep | it is 2.2 |
-| per-(slot, candidate) `clobbered` memo | greedy-port | keep | the next slope after 1.6 |
-| split path B', A' | greedy-port | keep | it is 2.4 |
+| per-(slot, candidate) `clobbered` memo | greedy-port | cancel | [#2034] replaced it; the next lead is gvn `subexpressions` for equal loads whose `MemRef`s differ by pointer value |
+| split path B', A' | greedy-port | B' killed, A' alone | B' built: -0.03% |
 | split carving constants | greedy-port | cancel | the carving was spill pressure that [#2010] removes |
-| interval recompute | ssa-spill-m16 | keep | it is 2.5 |
+| interval recompute | ssa-spill-m16 | close | recorded in spec 8; buffer reuse folded into the next intervals PR |
 | `Frequencies` dense map | attrs-budgets | keep | it is 2.6, small |
 | idle-run work (hoist and decide idle facts) | hoist-bounded | pause | idle cost is the facts (3.1); move to 2.3 and 2.8 |
 | LLVM pages beyond the re-baselines | llvm-compare | pause | refresh [proposals] and [synthesis] at B1 to B3 only |
@@ -1003,6 +1045,7 @@ The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spe
 | [#1894] spiller survivors, [#1897] alloc judge | UNOWNED | pause | route B is closed to -Omax ([spec] 4.2) |
 | [#1917] stale waivers | UNOWNED | keep | trivial, unblocks bench noise |
 | [#1982] order check | keep-analyses | keep | the oracle for 1.9 and 3.1 |
+| `ObjectRef` identity | objectref-identity | keep | step 0.3 (unresolved), blocks 2.1b and 3.1 |
 
 ## 6. Timeline
 
@@ -1077,6 +1120,7 @@ The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spe
 [#1961]: https://github.com/ali-mosavian/llrm/pull/1961
 [#1962]: https://github.com/ali-mosavian/llrm/pull/1962
 [#1963]: https://github.com/ali-mosavian/llrm/pull/1963
+[#1964]: https://github.com/ali-mosavian/llrm/pull/1964
 [#1965]: https://github.com/ali-mosavian/llrm/pull/1965
 [#1968]: https://github.com/ali-mosavian/llrm/pull/1968
 [#1970]: https://github.com/ali-mosavian/llrm/pull/1970
@@ -1105,6 +1149,8 @@ The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spe
 [#2022]: https://github.com/ali-mosavian/llrm/pull/2022
 [#2026]: https://github.com/ali-mosavian/llrm/pull/2026
 [#2027]: https://github.com/ali-mosavian/llrm/pull/2027
+[#2028]: https://github.com/ali-mosavian/llrm/pull/2028
+[#2030]: https://github.com/ali-mosavian/llrm/pull/2030
 [#2031]: https://github.com/ali-mosavian/llrm/pull/2031
 [#2032]: https://github.com/ali-mosavian/llrm/pull/2032
 [#2033]: https://github.com/ali-mosavian/llrm/pull/2033
@@ -1113,3 +1159,4 @@ The back-end track runs beside it from B1: 2.4, 2.5 → 3.3 → 3.4 → 3.5. Spe
 [#2036]: https://github.com/ali-mosavian/llrm/pull/2036
 [#2037]: https://github.com/ali-mosavian/llrm/pull/2037
 [#2038]: https://github.com/ali-mosavian/llrm/pull/2038
+[#2039]: https://github.com/ali-mosavian/llrm/pull/2039
