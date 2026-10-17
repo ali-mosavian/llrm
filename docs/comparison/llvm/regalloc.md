@@ -159,6 +159,34 @@ pub fn carved_moving(
 
 The input tests bit `i % 31` of one parameter in diamond `i`, so each of 31 masks recurs about 6 times. Both compilers merge the repeated `x & mask` at IR level. LLVM's instruction selection then makes one `TEST8ri x, mask` per branch: 187 of them, no `AND32ri`, `x` the only value held across the chain, 5 stack operands in the output. llrm keeps the 31 merged `and` results alive across up to 30 diamonds, so the allocator has 31 long ranges to place in 6 registers, splits 79 times and writes 419 stack operands (1,974 instructions against clang's 1,455).
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph LL["LLVM: instruction selection"]
+    direction LR
+    x1["<b>x</b><br/><small>the only value held across the chain</small>"]:::mid
+    t1["<b>TEST8ri x, mask</b><br/><small>one per branch, 187</small>"]:::out
+    x1 -->|"each diamond"| t1
+  end
+  subgraph LR2["llrm: before #2010"]
+    direction LR
+    x2["<b>x</b>"]:::mid
+    a2["<b>and x, mask</b><br/><small>31 values, merged by numbering</small>"]:::opt
+    h2["<b>held across up to 30 diamonds</b><br/><small>79 splits, 419 stack operands</small>"]:::warn
+    c2["<b>cmp [slot], 0</b><br/><small>at each later branch</small>"]:::mid
+    x2 --> a2 --> h2 --> c2
+  end
+  style LL fill:transparent,stroke:#16a34a
+  style LR2 fill:transparent,stroke:#dc2626
+```
+
+*`diamond 800`: where the repeated `x & mask` test lives*
+
 ## Divergence
 
 The allocator is slower on every attempt and is given more to do. LLVM edits the live intervals in place (`SplitEditor`) and splits rarely; llrm re-derives block tables, live sets and placement for every attempt and clones the body to carve. `EdgeBundles` is not the cause: llrm caches it too (`spillplacement::edge_bundles`). Isel is equal (51 M against 62 M), coalescing 1.4x (108 M against 76 M); the allocator is 75x.
@@ -182,6 +210,6 @@ Input `tools/ladder/gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc
 2. Build the block table once per split round: [`Blocks::of(body)`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L596) runs in `carved_moving` and again in [`placed`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L1648) for each attempt; construct it in `allocate.rs` before `splitkit::local` and pass `&Blocks`. Bound before #2010: `split placed` 221 M and `split carving` 148 M of 2,014 M on `diamond 800`. Saving: unmeasured.
 3. Carve without copying the block list: [`let mut out: Vec<Block> = body.blocks.clone()`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L670) copies every block's `Vec<Arc<Insn>>` for a change to `touched` blocks only; hold blocks behind `Arc<Block>` in `LirBody` so a carve copies the touched ones (structural sharing of LIR rewrites, ssa-spill-m16). Saving: unmeasured.
 
-Ranked list of all proposals: [proposals](llvm-compared-proposals.md).
+Ranked list of all proposals: [proposals](proposals.md).
 
 Open: what the allocator still costs per attempt once the mask test is made at the branch ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
