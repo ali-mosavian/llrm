@@ -960,7 +960,7 @@ pub(crate) fn only_reads(
         && !allowed.other.writes
 }
 
-fn _borrowed(
+pub(crate) fn borrowed(
     unit: &Unit,
     at: InstId,
     index: usize,
@@ -3128,7 +3128,11 @@ pub fn points_to(
         }
         None => std::borrow::Cow::Owned(point_values(unit)?),
     };
-    escapes(unit, &solved, arguments, captures)
+    let found = escapes(unit, &solved, arguments, captures)?;
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES") {
+        crate::capturecheck::check(unit, &found);
+    }
+    Ok(found)
 }
 
 /// What `points_to` adds to the value solve: what escapes, and when.
@@ -3268,7 +3272,7 @@ fn escapes(
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     let kept = |index: usize| -> Result<bool, String> {
                         match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                            None => Ok(!_borrowed(unit, inst, index)),
+                            None => Ok(!borrowed(unit, inst, index)),
                             Some(selected) => Ok(selected
                                 .iter()
                                 .map(_index)
@@ -3295,7 +3299,7 @@ fn escapes(
                     // The callee's own address is no argument.
                     let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
                     let kept = (0..count)
-                        .filter(|&index| !_borrowed(unit, inst, index))
+                        .filter(|&index| !borrowed(unit, inst, index))
                         .map(|index| op.operands[index])
                         .collect::<Vec<_>>();
                     newly.extend(provenances(&kept, &values));
