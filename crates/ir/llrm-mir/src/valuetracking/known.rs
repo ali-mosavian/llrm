@@ -9,18 +9,18 @@
 //! alternative survives into the next, as in C++.
 //!
 //! Not translated, as MIR has no such thing:
-//! - vectors and scalable vectors: `getShuffleDemandedElts` (L127-L144),
-//!   `computeKnownBitsForHorizontalOperation` (L1229-L1255), the
-//!   `ShuffleVector`, `InsertElement` and `ExtractElement` cases (L2282-L2441),
-//!   the vector `BitCast` cases (L1574-L1652), constant vectors (L2573-L2616),
-//!   the `vector_*` and `stepvector` intrinsics and the x86 `pmulh*` and `ph*`
-//!   intrinsics (L2226-L2243, L2272-L2279, L2347-L2410), `ptrtoaddr`;
-//! - floating point classes: `FPToSI` (L1518-L1530) and the float to integer
-//!   `BitCast` (L1561-L1572), both `computeKnownFPClass`;
-//! - `getAbsoluteSymbolRange` of a global (L2675), `isReadVLENB` and
-//!   `getRISCVVLENBRange` (L1309-L1350: `read_register` takes metadata);
+//! - vectors and scalable vectors: `getShuffleDemandedElts` (L127-L140),
+//!   `computeKnownBitsForHorizontalOperation` (L1257-L1281), the
+//!   `ShuffleVector`, `InsertElement` and `ExtractElement` cases (L2398-L2480),
+//!   the vector `BitCast` cases (L1596-L1660), constant vectors (L2599-L2641),
+//!   the `vector_*` and `stepvector` intrinsics (L2211-L2247, L2370-L2397), the
+//!   x86 `pmulh*` and `ph*` intrinsics (L2280-L2293, L2297-L2330), `ptrtoaddr`;
+//! - floating point classes: `FPToSI` (L1528-L1540) and the float to integer
+//!   `BitCast` (L1584-L1595), both `computeKnownFPClass`;
+//! - `getAbsoluteSymbolRange` of a global (L2672-L2675), `isReadVLENB` and
+//!   `getRISCVVLENBRange` (L1319-L1350: `read_register` takes metadata);
 //! - the `vscale_range` attribute, which MIR does not parse: `getVScaleRange`
-//!   (L1297) is the range without it;
+//!   (L1297-L1316) is the range without it;
 //! - `SimplifyQuery::CC`, the injected condition: `getWithoutCondContext` is
 //!   the query itself;
 //! - `smulh` and `umulh` above 64 bits, where `KnownBits::mulhs` stops.
@@ -1199,6 +1199,16 @@ fn known_bits_of_call(
 
     let Some(id) = intrinsic_id(q, inst) else { return };
     let args = call_arguments(instruction);
+    let arity = match id {
+        IntrinsicId::Vscale => 0,
+        IntrinsicId::Bitreverse | IntrinsicId::Bswap | IntrinsicId::Ctpop => 1,
+        IntrinsicId::Fshl | IntrinsicId::Fshr | IntrinsicId::RiscvVsetvli => 3,
+        IntrinsicId::Assume => return,
+        _ => 2,
+    };
+    if args.len() != arity {
+        return;
+    }
     let bit_width_of = |count: u32| -> u32 { 32 - count.leading_zeros() };
 
     match id {
@@ -1455,7 +1465,7 @@ fn compute_known_bits_from_operator(
         }
         Opcode::ExtractValue(indices) => {
             if let Some((ii, call)) = q.instruction_of(operand(0)).filter(|(inst, _)| is_intrinsic(q, *inst)) {
-                if indices.len() == 1 && indices[0] == 0 {
+                if indices.len() == 1 && indices[0] == 0 && call_arguments(call).len() == 2 {
                     let arguments = call_arguments(call);
                     match intrinsic_id(q, ii) {
                         Some(IntrinsicId::UaddWithOverflow | IntrinsicId::SaddWithOverflow) => {

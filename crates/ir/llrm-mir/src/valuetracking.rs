@@ -20,6 +20,9 @@ pub mod signbits;
 
 pub use query::{AssumptionCache, Query};
 
+#[cfg(test)]
+mod known_tests;
+
 /// One column of `examples/vtdump.rs`: ` name=answer`.
 pub fn column(
     query: &Query,
