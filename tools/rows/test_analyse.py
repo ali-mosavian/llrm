@@ -1,0 +1,46 @@
+import importlib.util
+import os
+from pathlib import Path
+
+import pytest
+
+HERE = Path(__file__).parent
+
+
+def load(tmp_path, monkeypatch):
+    work = tmp_path / "w"
+    for name in ("base", "main"):
+        (work / name).mkdir(parents=True)
+    monkeypatch.setenv("ROWS_WORK", str(work))
+    return work
+
+
+def row(prog, variant, clocks, code=10):
+    import json
+
+    return json.dumps({"prog": prog, "variant": variant, "ins": clocks, "mem": 1, "misaligned": 0, "clocks": clocks, "code": code, "ok": True}) + "\n"
+
+
+def test_a_row_crossing_min_of_gcc_and_clang_is_reported_newly_below(tmp_path, monkeypatch):
+    """A row that was above the cheaper of gcc and clang and is now below it is named; one that only moved is not."""
+    work = load(tmp_path, monkeypatch)
+    levels = ("O1", "O2", "O3", "Os")
+    for name, clocks in (("base", 120), ("main", 90)):
+        lines = ""
+        for level in levels:
+            llrm = "llrm" if level == "O2" else "llrm" + level
+            lines += row("p", llrm, clocks) + row("p", "gcc" + level, 100) + row("p", "clang" + level, 110)
+        (work / name / "results.jsonl").write_text(lines)
+    import json
+
+    for name in ("base", "main"):
+        (work / f"df-{name}.json").write_text(
+            "".join(row("dfaces", v, 100) for v in ("llrm", "llrmO1", "llrmO3", "llrmOs", "gccO1", "gccO2", "gccO3", "gccOs", "clangO1", "clangO2", "clangO3", "clangOs"))
+        )
+    (work / "qcport.json").write_text(json.dumps([[n, "m", level, 5] for n in ("base", "main") for level in ("-O1", "-O2", "-O3", "-Os")]))
+    spec = importlib.util.spec_from_file_location("analyse", HERE / "analyse.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    text = "\n".join(module.out)
+    assert "newly below (better): ['p 1.200->0.900']" in text
+    assert "newly above (worse): none" in text
