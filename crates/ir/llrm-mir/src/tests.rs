@@ -824,8 +824,8 @@ fn a_body_is_told_apart_by_a_digest_that_agrees_with_its_text_and_prints_nothing
     for (path, text) in fixtures(false) {
         let Ok(module) = parse::module(&text) else { continue };
         // A constant is numbered by its context: bodies of one module.
-        let mut text_of = std::collections::HashMap::<u128, String>::new();
-        let mut digest_of = std::collections::HashMap::<String, u128>::new();
+        let mut text_of = crate::hash::HashMap::<u128, String>::default();
+        let mut digest_of = crate::hash::HashMap::<String, u128>::default();
         for global in &module.globals {
             let crate::module::GlobalKind::Function(function) = &global.kind else { continue };
             let (body, digest) = (print::body(&module.context, function), print::fingerprint(function));
