@@ -357,7 +357,7 @@ impl Stored {
         // address of a block are one set, not N.
         let key = self.group_of[at].iter().any(Option::is_some).then(|| (kind, self.group_of[at].clone()));
         if let Some(shared) = key.as_ref().and_then(|key| self.twins.borrow().get(key).cloned()) {
-            if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
+            if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS") {
                 let all =
                     (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
                 assert!(
