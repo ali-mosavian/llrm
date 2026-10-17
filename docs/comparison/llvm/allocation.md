@@ -1,6 +1,6 @@
 # Allocation and instruction layout against LLVM
 
-TL;DR: compiling `d_faces` at `-O2`, llrm makes 3,765,923 allocations (638 MB); clang's `cc1` makes 62,881 (38 MB), 60x fewer. Peak live heap is 23 MB against 5.5 MB; peak resident set is 8 to 18 KB per IR instruction against 0.3 to 0.7 KB. 24% of llrm's L1d misses are allocation and copying.
+TL;DR: compiling `d_faces` at `-O2`, llrm makes 3,765,923 allocations (638 MB); clang's `cc1` makes 62,881 (38 MB), 60x fewer. Peak live heap is 23 MB against 5.5 MB; peak resident set is 4 to 12 KB per IR instruction with the system allocator (8 to 18 KB with mimalloc, which keeps freed pages) against 0.3 to 0.9 KB in clang. 24% of llrm's L1d misses are allocation and copying.
 
 ## LLVM
 
@@ -87,9 +87,36 @@ pub struct Instruction {
     }
 ```
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph LV["LLVM: one allocation per instruction"]
+    direction LR
+    lb["<b>one block</b><br/><small>Use, Use, Use | Instruction</small>"]:::out
+    ls["<b>successors()</b><br/><small>a range over the Uses, no allocation</small>"]:::out
+    lb --> ls
+  end
+  subgraph RK["llrm: separate blocks"]
+    direction LR
+    ri["<b>Instruction</b><br/><small>operands: Vec, metadata: Vec</small>"]:::mid
+    ro["<b>operand block</b><br/><small>one heap block per instruction</small>"]:::warn
+    rs["<b>successors()</b><br/><small>a new list per call: 258,958 blocks before #1956</small>"]:::warn
+    ri --> ro
+    ri --> rs
+  end
+  style LV fill:transparent,stroke:#16a34a
+  style RK fill:transparent,stroke:#dc2626
+```
+
+*An instruction and its neighbours' lists, in memory*
+
 ## Divergence
 
-The instruction itself is not where DHAT finds the allocations (`Instruction::clone` is 86,673 of 3.77 M); they are in the tables built beside the IR, one `Vec` per block, per value or per query, rebuilt after every pass that changes the body. `Function::successors` alone makes 258,958 allocations (6.9%), for `cfg::graph` (109 k), `DominatorTree::new` (34 k), `LoopInfo::new` (31 k) and `cfg::natural` (30 k). Allocation inside CFG, loop and dominator builders is 14% of all allocations, memory SSA 10.7% (126 MB, 20% of the bytes), alias facts 8.5% (73 MB), register allocation 11.1%.
+The instruction itself is not where DHAT finds the allocations (`Instruction::clone` is 86,673 of 3.77 M); they are in the tables built beside the IR, one `Vec` per block, per value or per query, rebuilt after every pass that changes the body. `Function::successors` alone made 258,958 allocations (6.9%) before #1956, for `cfg::graph` (109 k), `DominatorTree::new` (34 k), `LoopInfo::new` (31 k) and `cfg::natural` (30 k). Allocation inside CFG, loop and dominator builders is 14% of all allocations, memory SSA 10.7% (126 MB, 20% of the bytes), alias facts 8.5% (73 MB), register allocation 11.1%.
 
 ## Measured
 
@@ -103,7 +130,8 @@ The instruction itself is not where DHAT finds the allocations (`Instruction::cl
 | peak live (`t-gmax`) | 5.5 MB in 7,843 blocks | 23.3 MB in 106,021 blocks |
 | blocks living under 1,000 instructions | 12% | 36% |
 | blocks of 16 bytes or less | 9% | 36% |
-| peak resident set (`/usr/bin/time`) | 63 MB | 85 MB |
+| peak resident set (`/usr/bin/time`), mimalloc | 63 MB | 82 MB |
+| peak resident set, system allocator (empty input: 18 MB) | 63 MB | 44 MB |
 
 Resident set above an empty input, per pre-optimization IR instruction (`tools/ladder/rss.py`, clang end to end against `llrm-c`):
 
@@ -113,6 +141,16 @@ Resident set above an empty input, per pre-optimization IR instruction (`tools/l
 | mem 1600 | 19,205 | 302 B | 16,192 B |
 | arith 1600 | 14,467 | 445 B | 7,836 B |
 | diamond 1600 | 6,413 | 941 B | 15,108 B |
+
+The same with `llrm-c` built without mimalloc (system allocator), which returns freed memory:
+
+| shape, N | IR instructions | clang | llrm-c |
+|---|---:|---:|---:|
+| mem 1600 | 19,205 | 309 B | 11,652 B |
+| arith 1600 | 14,467 | 377 B | 4,450 B |
+| diamond 1600 | 6,413 | 920 B | 7,443 B |
+
+What is live at the peak, from DHAT (`t-gmax`, 23.3 MB in 106,021 blocks on `d_faces`): the backend's copies of LIR, not the analysis tables: `peephole::EffectsHeld::remember` 2.9 MB, `spiller::_renamed` 2.3, `allocate::applied` 2.1, `phielim::_renamed` 1.9, `coalesce::_renamed` 1.1, `Semantics::clone` 0.8 (18,442 blocks). The rest of the 82 MB is mimalloc keeping pages after `free`: 44 MB with the system allocator.
 
 Allocations by owner in llrm-c (first matching frame of the DHAT stack, so each block counts once):
 
@@ -132,8 +170,8 @@ Allocations by owner in llrm-c (first matching frame of the DHAT stack, so each 
 LLVM does not make small allocations. It keeps the few elements inline ([`SmallVector`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/ADT/SmallVector.h#L1251), storage at [`#L1166`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/ADT/SmallVector.h#L1166)), puts an instruction's operands in the instruction's own block ([`User.cpp#L137`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137)), and gives per-compile tables a bump arena ([`BumpPtrAllocatorImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/Allocator.h#L68)). In llrm 2,518,817 allocations (67%) are 64 bytes or less, and 28% of all allocations are that small and gone within 1,000 instructions. The changes in that shape, largest first:
 
 1. Inline operands. [`Instruction::operands: Vec<Operand>`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/module.rs#L75) becomes a small vector with 3 inline slots (`SmallVec<[Operand; 3]>`, LLVM's `SmallVector<Value *, 3>` is the same choice). `Instruction::clone` makes 86,673 allocations, and every instruction built makes one. Needs a `smallvec` dependency (not in `Cargo.lock`) or a local inline type. Saving: unmeasured; operand counts per instruction are not measured either.
-2. Successor and predecessor lists without a heap block: `successors` as an iterator (258,958 allocations), `predecessors` (44,655) as an iterator or a 2-slot inline list. No dependency for the iterator. [`module.rs#L548`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/module.rs#L548).
-3. A per-pass scratch arena for tables that die within the pass: `Vec<i64>` collects 143,858, `forest::forest` 82,268, `DominatorTree::new` 70,084, `alias::escapes` 56,507, `alias::point_values` 32,607: 385,324 allocations (10%). Either `bumpalo::Bump` reset after each pass (new dependency) or a `Scratch` struct held by `Analyses` whose vectors are cleared and reused, which is how LLVM's passes keep member `SmallVector`s. Saving: unmeasured.
+2. Successor and predecessor lists without a heap block: landed as [#1956](https://github.com/ali-mosavian/llrm/pull/1956) (`BlockList`, four blocks inline, `Vec` beyond). Measured here before it landed, on main `21f5c9fc8`, with a prototype of two inline blocks and every other line as it was: `d_faces` -O2 2,814.4 M to 2,788.1 M instructions (-26.3 M, -0.93%) for 258,958 allocations removed, objects byte-identical, `diamond 800` -1.2%, `mem 200` and `arith 400` -0.03%. That is 102 instructions per allocation removed. The prototype was not kept; #1956 states 42 M for four inline blocks.
+3. A per-pass scratch arena for tables that die within the pass (the [compile-time spec](../../architecture/compile-time-spec.md) lists it as not built: 34% of the allocations, 1.27 M, are freed within 1,000 instructions, from 549 sites, 56 of which hold 80%; reusing the buffers needs `&mut Scratch` threaded through APIs that return owned `Vec`, `BTreeSet` and `IdMap`, and it estimates about 75 instructions per allocation against the 102 measured above for `successors`): `Vec<i64>` collects 143,858, `forest::forest` 82,268, `DominatorTree::new` 70,084, `alias::escapes` 56,507, `alias::point_values` 32,607: 385,324 allocations (10%). Either `bumpalo::Bump` reset after each pass (new dependency) or a `Scratch` struct held by `Analyses` whose vectors are cleared and reused, which is how LLVM's passes keep member `SmallVector`s. Saving: unmeasured.
 4. Presize the 4-byte-id vectors: 515,831 allocations are one `RawVec::grow_one` shared by every `Vec` of `BlockId`, `ValueId`, `InstId` and `TypeId`, and `finish_grow` is 49.9 M self instructions. `Vec::with_capacity(known length)` where the length is known (`cfg::graph`, `LoopInfo::new`, `forest::forest`). Saving: unmeasured; bound 49.9 M plus the copies after a `realloc` (2.0 M of 3.9 M D1 misses).
 5. Build the CFG tables once per body version (`cfg::graph` 108,796, `DominatorTree::new` 34,406, `LoopInfo::new` 30,876, `cfg::natural` 30,346; 523,311 in CFG builders, 13.9%): share the successor lists of `cfg::Shape`. Saving: unmeasured.
 6. Memory-SSA and alias tables dense: `memoryssa::structure_of` 36,340 blocks, 28.9 MB; see lazy memory facts in the proposals.
@@ -157,7 +195,7 @@ const _: () = assert!(std::mem::size_of::<Instruction>() <= 128); // bound to be
 
 `SmallVec` derefs to a slice, so `.operands.as_slice()`, `iter()` and indexing are unchanged; construction sites change from `vec![..]` to `smallvec![..]`. Three slots because printed MIR has at most 3 comma-separated operands in 98.9% of `d_faces` instructions (counted from the stage dump; type arguments are counted too, so the true share is higher). Without the dependency: a local `Inline<T, const N: usize>` of `[MaybeUninit<T>; N]` and a length, spilling to `Vec`.
 
-**Successors without a block** (std only):
+**Successors without a block** (landed as #1956 with an inline list; the iterator form below is the alternative that needs no storage at all):
 
 ```rust
 pub fn successors(&self, block: BlockId) -> impl Iterator<Item = BlockId> + '_ {
@@ -203,6 +241,6 @@ drop(order); scratch.reset();                    // all of it freed at once, no 
 
 Dependencies are a decision for the owner. Everything marked std only needs none.
 
-Ranked list: [proposals](llvm-compared-proposals.md).
+Ranked list: [proposals](proposals.md).
 
-Open: what holds 8 to 18 KB per IR instruction, and whether `successors` as an iterator saves the 259 k allocations and their misses ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
+Open: why `mem` 1600 holds 11.7 KB per IR instruction against 4.4 KB for `arith` (the resident set of the memory shape is superlinear: 4.8 KB per instruction at N=100), and whether `successors` as an iterator saves the 259 k allocations and their misses ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
