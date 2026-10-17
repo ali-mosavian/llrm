@@ -1698,7 +1698,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                     }
                     called_back.as_ref().and_then(CalledBack::summary)
                 });
-                if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+                if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
                     let fresh = procedures.globals().and_then(|globals| callbacks_over(globals, &result));
                     assert!(now == fresh, "the callbacks folded in are not what adding the entries up again gives");
                 }
@@ -2132,7 +2132,7 @@ pub fn calls_annotated(
     let computed;
     let callbacks = match procedure.unit.callbacks() {
         Some(held) => {
-            if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+            if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
                 assert!(
                     *held == _callbacks(&procedure.unit, known),
                     "the held callbacks are not what adding the entries up gives"
@@ -2368,7 +2368,7 @@ pub fn initialized(
                 Opcode::Store { volatile: false, .. } | Opcode::Call(_) | Opcode::Invoke(_)
             )
         });
-    if !pointers && !llrm_support::env_set("LLRM_CHECK_INITIALIZED") {
+    if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
         return Ok(vec![Vec::new(); count]);
     }
     // The three solves below differ in the call arguments and captures they
@@ -2990,7 +2990,7 @@ pub fn points_to(
 ) -> Result<PointsTo, String> {
     let solved = match unit.point_values {
         Some(held) => {
-            if llrm_support::env_set("LLRM_CHECK_POINTVALUES") {
+            if llrm_support::env_flag!("LLRM_CHECK_POINTVALUES") {
                 assert!(*held == point_values(unit)?, "the held point values are not what solving again gives");
             }
             std::borrow::Cow::Borrowed(held)
@@ -3644,7 +3644,7 @@ pub fn annotated_with(
 ) -> Result<IndexMap<InstId, MemRef>, String> {
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 // The body's own intervals, or at a level without them (-O1:
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the

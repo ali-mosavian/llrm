@@ -288,3 +288,144 @@ b3:
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     assert!(!crate::testing::printed(&module).contains("phi"));
 }
+
+/// Machine that tests `x & mask` against zero in one instruction.
+fn testing() -> crate::testing::Tuned {
+    crate::testing::Tuned {
+        costs: crate::profit::OperationCosts { add: 1, mask_test: 1, ..Default::default() },
+        ..Default::default()
+    }
+}
+
+/// `text` through the pass on `machine`, answering as before on `inputs`.
+fn sunk_on(
+    text: &str,
+    inputs: &[&[i128]],
+    machine: crate::testing::Tuned,
+) -> String {
+    let original = parsed(&format!("{HEAD}{text}"));
+    let mut module = original.clone();
+    let after = crate::testing::managed_on(&mut module, AddressSink, machine);
+    assert_eq!(results(&module, inputs), results(&original, inputs), "{after}");
+    after
+}
+
+/// Three branches on one test of a bit, as numbering leaves repeated tests.
+const ONE_BIT_TESTED_THREE_TIMES: &str = "define i32 @f(i32 %x, i32 %a) {
+b0:
+  %m = and i32 %x, 1
+  %c = icmp ne i32 %m, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %p = add i32 %a, 3
+  br label %b3
+
+b2:
+  %q = mul i32 %a, 5
+  br label %b3
+
+b3:
+  %v = phi i32 [ %p, %b1 ], [ %q, %b2 ]
+  br i1 %c, label %b4, label %b5
+
+b4:
+  %r = add i32 %v, 7
+  br label %b6
+
+b5:
+  %s = mul i32 %v, 9
+  br label %b6
+
+b6:
+  %w = phi i32 [ %r, %b4 ], [ %s, %b5 ]
+  br i1 %c, label %b7, label %b8
+
+b7:
+  ret i32 %w
+
+b8:
+  %t = sub i32 %w, 1
+  ret i32 %t
+}
+";
+
+/// 800 diamonds testing 31 bits held 31 `x & mask` values across up to 30 of
+/// them, 419 stack operands and 79 allocator splits (2.2 G to compile) where
+/// a `test` at each branch has none: each block that branches on the bit
+/// tests it itself.
+#[test]
+fn test_a_bit_test_the_branches_of_later_blocks_read_is_made_in_each() {
+    let after = sunk_on(ONE_BIT_TESTED_THREE_TIMES, &[&[1, 2], &[0, 2], &[3, 5]], testing());
+    assert_eq!(after.matches("and i32").count(), 3, "{after}");
+    for name in ["b3", "b6"] {
+        let text = after.split(&format!("{name}:")).nth(1).expect("a block").split("\n\n").next().unwrap();
+        assert!(text.contains("and i32 %x, 1"), "{name} tests the bit itself:\n{after}");
+    }
+}
+
+/// A target with no one instruction for it keeps the one value.
+#[test]
+fn test_a_target_without_a_bit_test_keeps_the_one_and() {
+    let after = sunk_on(ONE_BIT_TESTED_THREE_TIMES, &[&[1, 2], &[0, 2]], Default::default());
+    assert_eq!(after.matches("and i32").count(), 1, "{after}");
+}
+
+/// Two values read nowhere else would both be held to the compare: the copy
+/// costs two registers where the `and` held one.
+#[test]
+fn test_an_and_of_two_values_read_nowhere_else_is_not_made_again() {
+    let text = ONE_BIT_TESTED_THREE_TIMES
+        .replace("define i32 @f(i32 %x, i32 %a)", "define i32 @f(i32 %p0, i32 %a)")
+        .replace("  %m = and i32 %x, 1", "  %x = add i32 %p0, 1\n  %y = add i32 %p0, 2\n  %m = and i32 %x, %y");
+    let after = sunk_on(&text, &[&[1, 2], &[2, 2]], testing());
+    assert_eq!(after.matches("and i32").count(), 1, "{after}");
+}
+
+/// The bit tests (`%m..` and `%c..`) a block reads that another block
+/// defined.
+fn read_across_blocks(text: &str) -> usize {
+    let mut across = 0;
+    for block in text.split("\n\n") {
+        let defined: Vec<&str> = block.lines().filter_map(|line| line.trim().split(" = ").next()).collect();
+        for line in block.lines() {
+            let reads = line.split(" = ").last().unwrap_or("");
+            for word in reads
+                .split(|c: char| !(c.is_alphanumeric() || c == '%'))
+                .filter(|w| w.starts_with("%m") || w.starts_with("%c"))
+            {
+                across += usize::from(!defined.contains(&word));
+            }
+        }
+    }
+    across
+}
+
+/// `f` branches twice on each of 31 bits of `x`, as numbering leaves it.
+#[test]
+fn test_31_bit_tests_held_across_the_chain_are_none_after() {
+    let mut text = String::from("define i32 @f(i32 %x, i32 %a) {\nb0:\n  br label %t0\n\n");
+    let mut n = 0;
+    for round in 0..2 {
+        for bit in 0..31 {
+            let name = format!("m{bit}");
+            if round == 0 {
+                text +=
+                    &format!("t{n}:\n  %{name} = and i32 %x, {}\n  %c{bit} = icmp ne i32 %{name}, 0\n", 1u32 << bit);
+            } else {
+                text += &format!("t{n}:\n");
+            }
+            text += &format!(
+                "  br i1 %c{bit}, label %y{n}, label %z{n}\n\ny{n}:\n  br label %t{}\n\nz{n}:\n  br label %t{}\n\n",
+                n + 1,
+                n + 1
+            );
+            n += 1;
+        }
+    }
+    text += &format!("t{n}:\n  ret i32 %a\n}}\n");
+    let before = read_across_blocks(&text);
+    let after = sunk_on(&text, &[&[5, 1], &[0, 1]], testing());
+    assert!(before >= 31, "premise: the bit tests are read across blocks, {before}");
+    assert_eq!(read_across_blocks(&after), 0, "{after}");
+}

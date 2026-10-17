@@ -1737,7 +1737,7 @@ pub fn _loses_live_definition(
     parts: &[Arc<Insn>],
     combined: &Insn,
     after: &[Arc<Insn>],
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> bool {
     let eliminated: BTreeSet<u32> = parts
         .iter()
@@ -1752,7 +1752,7 @@ pub fn _loses_live_definition(
 pub fn _read_before_redefined(
     eliminated: &BTreeSet<u32>,
     after: &[Arc<Insn>],
-    live_out: &BTreeSet<u32>,
+    live_out: &llrm_mir::dense::IdSet<u32>,
 ) -> bool {
     let reads =
         |one: &Insn, value: u32| one.uses.contains(&value) || one.requires.iter().any(|(held, _)| held.value == value);
@@ -2776,7 +2776,7 @@ fn _sets_from(
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incremental::Solution<FlagLive>> {
     let solved = FLAGS.with(|kept| kept.ask(&FlagLive { regs: body.regs(), bits: body.bits }, body));
-    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             flags_from_scratch(body) == solved.entering,
             "{}: flag liveness brought up to date differs from one solved from scratch",

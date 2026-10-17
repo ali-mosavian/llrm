@@ -1150,7 +1150,7 @@ fn siblings_over(
                 group.iter().all(|one| live.range(*one as u32).is_some_and(|other| !mine.overlaps(other)))
             })
         });
-        if apart && !llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+        if apart && !llrm_support::env_flag!("LLRM_CHECK_SIBLINGS") {
             return false;
         }
         // The graph of the group and every candidate of this round, made once
@@ -1160,7 +1160,7 @@ fn siblings_over(
             llrm_support::debug::timed("siblings interference", || coalesce::_interference_among(body, Some(round)))
         });
         let found = group.iter().any(|one| near.get(&candidate).is_some_and(|found| found.contains(&(*one as u32))));
-        if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+        if llrm_support::env_flag!("LLRM_CHECK_SIBLINGS") {
             let every = whole.get_or_init(|| coalesce::_interference(body));
             let by_whole =
                 group.iter().any(|one| every.get(&candidate).is_some_and(|found| found.contains(&(*one as u32))));
@@ -1198,7 +1198,7 @@ fn siblings_over(
             let each = |block: u32| ranges::level(deep.get(&body.blocks[block as usize].at).copied().unwrap_or(0));
             let found: Vec<(f64, Arc<Insn>)> =
                 at.iter().map(|one| (each(one.0), Arc::clone(_at(body, *one)))).collect();
-            if llrm_support::env_set("LLRM_CHECK_SIBLINGS") {
+            if llrm_support::env_flag!("LLRM_CHECK_SIBLINGS") {
                 let mut everywhere: Vec<(f64, Arc<Insn>)> = Vec::new();
                 for block in &body.blocks {
                     let level = ranges::level(deep.get(&block.at).copied().unwrap_or(0));
@@ -1733,7 +1733,7 @@ fn _existing_colors(
     frame: &mut Frame,
 ) -> (Vec<(i64, u32, Vec<Interval>)>, Lives) {
     let found = _existing_colors_by(body, frame, false);
-    if llrm_support::env_set("LLRM_CHECK_COLORS") {
+    if llrm_support::env_flag!("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
         assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps
@@ -2296,7 +2296,7 @@ fn homes_kept(
         }
     }
     let result = result.unwrap_or_else(|| fresh_for(&(0..homes.len()).collect::<Vec<_>>()));
-    if kept.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+    if kept.is_some() && llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
         assert!(
             result == fresh_for(&(0..homes.len()).collect::<Vec<_>>()),
             "{}: the homes' intervals kept from an earlier body differ from finding them afresh",
@@ -2386,7 +2386,7 @@ fn _existing_colors_by(
             }
         }
     });
-    if llrm_support::env_set("LLRM_CHECK_NAMED") {
+    if llrm_support::env_flag!("LLRM_CHECK_NAMED") {
         // The body read whole, instruction by instruction.
         let mut walked: Vec<(usize, usize, BTreeSet<u32>, BTreeSet<u32>)> = Vec::new();
         let (mut walked_capacities, mut walked_unknown, mut walked_flipped) = (
@@ -2488,7 +2488,7 @@ fn _existing_colors_by(
     let owned;
     let index: &ranges::Indexes;
     let live;
-    if whole || flipped || llrm_support::env_set("LLRM_CHECK_RANGES") {
+    if whole || flipped || llrm_support::env_flag!("LLRM_CHECK_RANGES") {
         let mut tracked = body.clone();
         for (block_index, at, made) in changed_insns() {
             let mut insns = tracked.blocks[block_index].insns.to_vec();
@@ -2522,7 +2522,7 @@ fn _existing_colors_by(
         index = &*shared;
         let homes_found =
             llrm_support::debug::timed("intervals homes", || homes_kept(body, &shared, &named, &homes, first));
-        if llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+        if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
             let walked = homes_by_sparse_body(body, index, &changed_insns(), first);
             assert!(
                 homes_found == walked,
@@ -2801,7 +2801,7 @@ fn _stable_loads_from(
         Some(postings) => crate::analysis::occurrences::Occurrences::of(postings, &asked),
         None => crate::analysis::occurrences::Occurrences::scan(body, &|value| asked.contains(&value)),
     };
-    if postings.is_some() && llrm_support::env_set("LLRM_CHECK_OCCURRENCES") {
+    if postings.is_some() && llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
         occurrences.check_against_scan(body, &|value| asked.contains(&value));
     }
     // Each use of an owner by an instruction, once for every distinct value of
@@ -2900,7 +2900,7 @@ fn _stable_loads_from(
             let flow = flow.get_or_init(|| Flow::of(body));
             _unchanged(body, flow, define, cell, &uses[value])
         };
-        if llrm_support::env_set("LLRM_CHECK_UNCHANGED") {
+        if llrm_support::env_flag!("LLRM_CHECK_UNCHANGED") {
             assert!(
                 held == _unchanged_reference(body, define, cell, &uses[value]),
                 "{}: whether the cell holds differs from working it out as before",
@@ -4235,7 +4235,7 @@ pub fn _constants(
 
 fn check_postings() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_POSTINGS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_POSTINGS"))
 }
 
 fn _at<'b>(
@@ -4793,46 +4793,12 @@ fn _inserted(
     Arc::new(made)
 }
 
-/// A requirement, naming whichever value now feeds the instruction.
-fn _wants(
-    side: &[(Held, RegId)],
-    rename: &IndexMap<u32, u32>,
-) -> Vec<(Held, RegId)> {
-    side.iter()
-        .map(|(held, register)| {
-            (Held { value: rename.get(&held.value).copied().unwrap_or(held.value), width: held.width }, *register)
-        })
-        .collect()
-}
-
 /// The instruction reading and writing the reload's value instead.
 pub fn _renamed(
-    one: &Insn,
+    one: &Arc<Insn>,
     rename: &IndexMap<u32, u32>,
 ) -> Arc<Insn> {
-    let swap = |value: &u32| rename.get(value).copied().unwrap_or(*value);
-    _with(one, |made| {
-        if let Some(what) = &one.what {
-            made.what = Some(Semantics {
-                dests: what.dests.iter().map(|x| _settled(x, rename)).collect(),
-                sources: what.sources.iter().map(|x| _settled(x, rename)).collect(),
-                ..what.clone()
-            });
-        }
-        made.defines = one.defines.iter().map(swap).collect();
-        made.uses = one.uses.iter().map(swap).collect();
-        made.requires = _wants(&one.requires, rename);
-        made.delivers = _wants(&one.delivers, rename);
-        made.widths = one.widths.iter().map(|(value, width)| (swap(value), *width)).collect();
-    })
-}
-
-/// One operand with every value it names put through the rename.
-fn _settled(
-    place: &Loc,
-    rename: &IndexMap<u32, u32>,
-) -> Loc {
-    ir::mapped(place, |one| Held { value: rename.get(&one.value).copied().unwrap_or(one.value), width: one.width })
+    one.renamed(&|value| rename.get(&value).copied().unwrap_or(value))
 }
 
 /// One move of a parallel copy, with its spilled end read or written where it
@@ -7129,6 +7095,21 @@ mod tests {
             let shared = old.iter().filter(|one| new.iter().any(|other| Arc::ptr_eq(one, other))).count();
             assert_eq!(covered, shared, "round {round}: an instruction both lists hold is in no run");
         }
+    }
+
+    /// Asking for the postings of a body they follow already looked into every
+    /// block of it (10.5 M instructions of d_faces -O2 in 3,617 asks): the
+    /// blocks are told apart by the allocations they are.
+    #[test]
+    fn test_asking_the_postings_of_the_body_they_follow_looks_into_no_block() {
+        let body = _three_blocks();
+        crate::backend::postings::following(&body, |_| ());
+        let before = crate::backend::postings::looked();
+        for _ in 0..100 {
+            crate::backend::postings::following(&body, |_| ());
+            crate::backend::postings::following(&body.clone(), |_| ());
+        }
+        assert_eq!(crate::backend::postings::looked() - before, 0, "blocks were looked into again");
     }
 
     #[test]

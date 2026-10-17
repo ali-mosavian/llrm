@@ -670,3 +670,20 @@ fn test_a_load_blocked_by_its_nearest_load_collects_no_others() {
     assert!(found.len() >= 40, "each second load is served by the first: {}", found.len());
     assert!(collected < 10 * 40, "{collected} candidates collected for 80 loads in 40 stages");
 }
+
+/// A load asked its block's loads of the same bytes from the last down, the
+/// ones after it too, to find the nearest before it: N loads of one cell in a
+/// block walked N^2/2 items (12 k walks of 105 k instructions on 800
+/// statements of a loop, and `Walk::next` 437 M of its 7 G). A load is given
+/// the loads before it.
+#[test]
+fn test_a_load_is_not_offered_the_loads_after_it_in_its_block() {
+    let loads: String = (0..60).map(|at| format!("  %y{at} = load i16, ptr {CELL}\n")).collect();
+    let parsed = Parsed::new(&format!("define void @f() {{\nb0:\n{loads}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let before = crate::nearest::steps();
+    let offered = forwarded(&unit, &Calls::default());
+    let walked = crate::nearest::steps() - before;
+    assert_eq!(offered.len(), 59, "every load but the first is served by the one before");
+    assert!(walked <= 4 * 60, "{walked} items walked for 60 loads of one cell");
+}

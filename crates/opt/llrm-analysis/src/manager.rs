@@ -458,7 +458,7 @@ impl Summaries {
         calls_found(module, program, globals, refresh.iter().copied(), &mut facts);
         let table = Table::of(module, program, globals, &facts, Some(slots));
         let memo = analyses.memo::<SummariesMemo>();
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             for (id, function) in bodies(module) {
                 assert!(
                     refresh.contains(&id) || facts[&id].mark == function.mark(),
@@ -490,10 +490,10 @@ impl Summaries {
     ) -> Result<IndexMap<String, Summary>, String> {
         counted("summaries updated", dirty.is_some());
         let found = alias::summaries_updating(procedures, known, memo, dirty);
-        if llrm_support::env_set("LLRM_CHECK_SUMMARIES") {
+        if llrm_support::env_flag!("LLRM_CHECK_SUMMARIES") {
             procedures.check_against_scratch();
         }
-        if llrm_support::env_set("LLRM_CHECK_MODULES") {
+        if llrm_support::env_flag!("LLRM_CHECK_MODULES") {
             let fresh = alias::summaries(procedures, known);
             if found != fresh {
                 let (now, then) = (found.as_ref().ok(), fresh.as_ref().ok());
@@ -1702,7 +1702,7 @@ impl Analysis for FloatFacts {
         let references = analyses.get::<Annotated>(context, layout, function);
         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
         // The integers under it are `ThroughMemory`'s, which others ask too.
-        let through = analyses.get::<ThroughMemory>(context, layout, function);
+        let through = analyses.get_exact::<ThroughMemory>(context, layout, function);
         let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let unit = Unit::within(context, layout, function, analyses.outer())
             .with_shape(&shape)
@@ -1826,7 +1826,7 @@ impl Analysis for DominatedEdges {
             return Some(Ok(crate::ranger::EdgeFacts::default()));
         }
         let shape = analyses.get::<Shape>(context, layout, function);
-        let reached: BTreeSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
+        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let held = Rc::try_unwrap(previous).unwrap_or_else(|shared| (*shared).clone()).ok()?;
         Some(Ok(held.keeping(|at| !dominated_by(&shape, &reached, at))))
     }
@@ -1835,7 +1835,7 @@ impl Analysis for DominatedEdges {
 /// Whether `at`, or a block above it, is one of `reached`.
 pub fn dominated_by(
     shape: &Shape,
-    reached: &BTreeSet<i64>,
+    reached: &llrm_mir::dense::IdSet<i64>,
     at: i64,
 ) -> bool {
     let mut above = Some(at);
@@ -1888,7 +1888,7 @@ impl Analysis for Bounded {
         edges.as_ref().as_ref().ok()?;
         // A loop starts from the edges' facts of its dominator: those of a
         // block a change reached or one it dominates may have changed.
-        let reached: BTreeSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
+        let reached: llrm_mir::dense::IdSet<i64> = reach.blocks.iter().map(crate::cfg::id).collect();
         let dirty = ranges::loops_reached(function, &shape, &reach.blocks, &reach.conditions, &|at| {
             dominated_by(&shape, &reached, at)
         });
@@ -1981,7 +1981,7 @@ impl Bounded {
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-        prior: Option<(&ranges::Bounds, &BTreeSet<i64>)>,
+        prior: Option<(&ranges::Bounds, &llrm_mir::dense::IdSet<i64>)>,
     ) -> <Self as Analysis>::Result {
         let held = Ranges::of(context, layout, function, analyses, false);
         ranges::bounded_solved(&held.unit(context, layout, function, analyses.outer()), held.registers(), prior, true)

@@ -599,7 +599,7 @@ pub fn spill_forecast_after(
         return spill_forecast(context, layout, function, costs, room, across, frequency);
     };
     let found = spill::View::over(&pressure, context, layout, function, room, across).forecast(costs, frequency);
-    if llrm_support::env_set("LLRM_CHECK_VIEW") {
+    if llrm_support::env_flag!("LLRM_CHECK_VIEW") {
         let whole = spill::View::of(context, layout, function, room, across).forecast(costs, frequency);
         let spilled =
             |forecast: &spill::Forecast<llrm_mir::dense::IdSet<ValueId>>| forecast.spilled.iter().collect::<Vec<_>>();

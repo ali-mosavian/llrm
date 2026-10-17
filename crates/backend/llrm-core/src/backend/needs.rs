@@ -96,7 +96,7 @@ pub fn gated(
     if seen.has(&body, needs) {
         return pass(body);
     }
-    if llrm_support::env_set("LLRM_CHECK_NEEDS") {
+    if llrm_support::env_flag!("LLRM_CHECK_NEEDS") {
         let done = pass(body.clone())?;
         assert!(done == body, "a pass skipped for lack of {needs:#x} changed the body");
     }
