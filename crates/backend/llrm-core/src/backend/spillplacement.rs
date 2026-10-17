@@ -64,6 +64,8 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use llrm_mir::dense::IdSet;
+
 use crate::analysis::facts::Fact;
 use crate::analysis::graph::Shape;
 use crate::analysis::intervals as ranges;
@@ -255,12 +257,8 @@ pub struct Placement<'a> {
     pub bundles: &'a Bundles,
     pub frequency: Arc<IndexMap<i64, f64>>,
     nodes: Vec<Node>,
-    /// The bundles a query has touched, and whether each is (by bundle).
-    active: Vec<usize>,
-    is_active: Vec<bool>,
-    /// The bundles to settle, the largest first, and whether each waits.
-    todo: std::collections::BinaryHeap<usize>,
-    waiting: Vec<bool>,
+    active: IdSet<usize>,
+    todo: IdSet<usize>,
     /// Bundles that turned positive since the last scan or iteration.
     pub recent: Vec<usize>,
     threshold: f64,
@@ -278,10 +276,8 @@ impl<'a> Placement<'a> {
             bundles,
             frequency,
             nodes: vec![Node::default(); bundles.blocks.len()],
-            active: Vec::new(),
-            is_active: vec![false; bundles.blocks.len()],
-            todo: std::collections::BinaryHeap::new(),
-            waiting: vec![false; bundles.blocks.len()],
+            active: IdSet::new(),
+            todo: IdSet::new(),
             recent: Vec::new(),
             threshold: 2.0 / 16384.0,
         }
@@ -289,33 +285,18 @@ impl<'a> Placement<'a> {
 
     pub fn prepare(&mut self) {
         self.recent.clear();
-        while let Some(bundle) = self.todo.pop() {
-            self.waiting[bundle] = false;
-        }
-        for bundle in self.active.drain(..) {
-            self.is_active[bundle] = false;
-        }
-    }
-
-    /// Settle `bundle` (a set: waiting twice is once).
-    fn wait(
-        &mut self,
-        bundle: usize,
-    ) {
-        if !std::mem::replace(&mut self.waiting[bundle], true) {
-            self.todo.push(bundle);
-        }
+        self.todo.clear();
+        self.active.clear();
     }
 
     fn activate(
         &mut self,
         bundle: usize,
     ) {
-        self.wait(bundle);
-        if std::mem::replace(&mut self.is_active[bundle], true) {
+        self.todo.insert(bundle);
+        if !self.active.insert(bundle) {
             return;
         }
-        self.active.push(bundle);
         self.nodes[bundle].clear(self.threshold);
         // A bundle joining many blocks needs many of them to want a register.
         if self.bundles.blocks[bundle].len() > 100 {
@@ -441,19 +422,14 @@ impl<'a> Placement<'a> {
             .map(|(_, other)| *other)
             .filter(|other| self.nodes[*other].value != value)
             .collect();
-        for other in dissenting {
-            self.wait(other);
-        }
+        self.todo.extend(dissenting);
         true
     }
 
     /// Whether any bundle wants a register once the constraints are in.
     pub fn scan(&mut self) -> bool {
         self.recent.clear();
-        // In bundle order, as the set this was kept in iterated.
-        self.active.sort_unstable();
-        for at in 0..self.active.len() {
-            let bundle = self.active[at];
+        for bundle in self.active.clone().iter() {
             self.update(bundle);
             if self.nodes[bundle].must_spill() {
                 continue;
@@ -470,8 +446,7 @@ impl<'a> Placement<'a> {
         let mut limit = self.nodes.len() * 10;
         while limit > 0 {
             limit -= 1;
-            let Some(bundle) = self.todo.pop() else { break };
-            self.waiting[bundle] = false;
+            let Some(bundle) = self.todo.pop_last() else { break };
             if self.update(bundle) && self.nodes[bundle].prefers_register() {
                 self.recent.push(bundle);
             }
@@ -479,13 +454,12 @@ impl<'a> Placement<'a> {
     }
 
     /// `finish`, ascending, to search.
-    pub fn finished(&mut self) -> Vec<usize> {
-        self.active.sort_unstable();
-        self.active.iter().copied().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
+    pub fn finished(&self) -> Vec<usize> {
+        self.active.iter().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
     }
 
     /// The bundles that settled in a register.
-    pub fn finish(&self) -> BTreeSet<usize> {
-        self.active.iter().copied().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
+    pub fn finish(&self) -> IdSet<usize> {
+        self.active.iter().filter(|bundle| self.nodes[*bundle].prefers_register()).collect()
     }
 }

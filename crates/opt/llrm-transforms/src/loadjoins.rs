@@ -86,7 +86,7 @@
 //! the same step as a function pass, for tests.
 //!
 //! # Needs
-//! `memoryssa::Accesses` and the managed `Pointers` (a missing `Summaries`
+//! `memoryssa::Accesses` and the managed `PointerValues` (a missing `Summaries`
 //! means every call is unknown, so less is found), `cfg::Shape`.
 //!
 //! # Keeps
@@ -98,10 +98,10 @@
 
 use std::collections::BTreeMap;
 
-use llrm_analysis::alias::PointsTo;
+use llrm_analysis::alias::PointValues;
 use llrm_analysis::avail::{loaded_into, stored_from};
 use llrm_analysis::graph::loops::{self, Loop};
-use llrm_analysis::manager::Pointers;
+use llrm_analysis::manager::PointerValues;
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_analysis::memoryssa::{self, Accesses, same_bytes};
 use llrm_analysis::{cfg, ssa};
@@ -132,7 +132,7 @@ impl FunctionPass for LoadJoins {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let (context, layout) = (&*unit.context, unit.layout);
-        let pointers = analyses.get::<Pointers>(context, layout, unit.function);
+        let pointers = analyses.get::<PointerValues>(context, layout, unit.function);
         let changed = Accesses::managed(context, layout, unit.function, analyses).and_then(|accesses| {
             let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
             let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, layout, unit.function);
@@ -166,7 +166,7 @@ pub fn reused(
     outer: &Outer,
     callees: &Callees,
     accesses: &Accesses,
-    pointers: &PointsTo,
+    pointers: &PointValues,
     insert: bool,
     shape: &llrm_analysis::cfg::Shape,
 ) -> Result<bool, String> {
@@ -281,7 +281,7 @@ fn planned(
     unit: &Unit,
     callees: &Callees,
     accesses: &Accesses,
-    pointers: &PointsTo,
+    pointers: &PointValues,
     insert: bool,
 ) -> Vec<Joined> {
     let function = unit.function;

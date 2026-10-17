@@ -1638,7 +1638,7 @@ fn _held(
     found: &Blocks,
     analysis: &Analysis,
     through: &[i64],
-    live: &BTreeSet<usize>,
+    live: &llrm_mir::dense::IdSet<usize>,
     blocked: Blocked,
 ) -> Region {
     let borders = |block: i64, live_in: bool, live_out: bool| {
