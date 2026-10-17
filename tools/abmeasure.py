@@ -111,7 +111,7 @@ def main() -> int:
     a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
     work = CACHE / "work"
     work.mkdir(parents=True, exist_ok=True)
-    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; load {open('/proc/loadavg').read().split()[0]}")
+    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; switches: {' '.join(envguard.stray(allow=())) or 'none'}{' (allowed: ' + ' '.join(args.allow_env) + ')' if args.allow_env else ''}; load {open('/proc/loadavg').read().split()[0]}")
     for name, (source, flags) in programs(ROOT, args.programs, os.environ.get("QCPORT") or os.environ.get("DFACES_SRC"), work).items():
         for level in args.levels:
             ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]
