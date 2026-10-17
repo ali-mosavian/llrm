@@ -39,6 +39,7 @@ use std::cmp::Ordering;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
+use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Operand, Use, ValueId};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, PreservedAnalyses};
@@ -217,6 +218,8 @@ struct AllocaSlices {
     slices: Vec<Slice>,
     dead_users: Vec<InstId>,
     dead_operands: Vec<Use>,
+    /// Uses of the alloca that go once it is promoted: an `llvm.assume`'s.
+    dead_use_if_promotable: Vec<Use>,
 }
 
 /// The constant value of an index operand, signed.
@@ -235,15 +238,37 @@ fn constant_index(
     }
 }
 
+/// `ConstantInt::getLimitedValue`: the unsigned value of a constant integer,
+/// saturated at `u64::MAX`.
+fn constant_unsigned(
+    context: &Context,
+    operand: Operand,
+) -> Option<u64> {
+    let Operand::Constant(id) = operand else { return None };
+    match context.get(id).kind {
+        ConstantKind::Int(bits) => Some(u64::try_from(bits).unwrap_or(u64::MAX)),
+        ConstantKind::Zero => Some(0),
+        _ => None,
+    }
+}
+
 /// `AllocaSlices::AllocaSlices` with `SliceBuilder` and `PtrUseVisitor`
 /// (SROA.cpp#L1416, L1022; PtrUseVisitor.h `visitPtr`).
 fn build_slices(
     context: &Context,
     layout: &DataLayout,
+    globals: &[llrm_mir::module::GlobalValue],
     function: &Function,
     alloca: InstId,
 ) -> AllocaSlices {
     let mut found = AllocaSlices::default();
+    // `MemTransferSliceMap` (L1034): the slice a transfer made from its first
+    // side.
+    let mut transfer_slice: HashMap<InstId, usize> = HashMap::default();
+    let intrinsic = |inst: InstId| {
+        let callee = llrm_mir::memory::callee(context, function, inst)?;
+        llrm_mir::intrinsics::Intrinsic::named(globals.get(callee.0 as usize)?.name.as_deref()?)
+    };
     let root = function.instruction(alloca).result.expect("an alloca has a result");
     let Opcode::Alloca { allocated, .. } = function.instruction(alloca).opcode else { unreachable!("an alloca") };
     let alloc_size = layout.alloc_size(&context.types, allocated);
@@ -371,8 +396,92 @@ fn build_slices(
                     aborted = true;
                 }
             }
-            // DEVIATE: `visitCallBase` (L1402): every call escapes the pointer.
-            Opcode::Call(_) | Opcode::Invoke(_) => {
+            Opcode::Call(_) => match intrinsic(user) {
+                // `visitMemSetInst` (L1177).
+                Some(Intrinsic::MemSet) if used.index == 0 => {
+                    let length = constant_unsigned(context, instruction.operands[2]);
+                    if length == Some(0) || (known && (offset < 0 || offset as u128 >= u128::from(alloc_size))) {
+                        mark_dead(&mut found);
+                    } else if !known {
+                        aborted = true;
+                    } else {
+                        let size = length.unwrap_or(alloc_size - offset as u64);
+                        insert_use(&mut found, &mut visited_dead, offset, size, length.is_some());
+                    }
+                }
+                // `visitMemTransferInst` (L1194).
+                Some(Intrinsic::MemCpy | Intrinsic::MemMove) if used.index <= 1 => {
+                    let length = constant_unsigned(context, instruction.operands[2]);
+                    let volatile = constant_unsigned(context, instruction.operands[3]) != Some(0);
+                    if length == Some(0) {
+                        mark_dead(&mut found);
+                        continue;
+                    }
+                    // Because these are visited twice, the first time may have
+                    // marked it dead.
+                    if found.dead_users.contains(&user) {
+                        continue;
+                    }
+                    if !known {
+                        aborted = true;
+                        continue;
+                    }
+                    // This side of the transfer is out of bounds: the whole
+                    // transfer goes, with the other side's slice if made.
+                    if offset < 0 || offset as u128 >= u128::from(alloc_size) {
+                        if let Some(&made) = transfer_slice.get(&user) {
+                            found.slices[made].used = None;
+                        }
+                        mark_dead(&mut found);
+                        continue;
+                    }
+                    let raw = offset as u64;
+                    let size = length.unwrap_or(alloc_size - raw);
+                    // The same value as source and destination.
+                    let operand = instruction.operands[used.index as usize];
+                    if operand == instruction.operands[0] && operand == instruction.operands[1] {
+                        if !volatile {
+                            mark_dead(&mut found);
+                        } else {
+                            insert_use(&mut found, &mut visited_dead, offset, size, false);
+                        }
+                        continue;
+                    }
+                    // Both sides seen: both point into this alloca.
+                    let inserted = !transfer_slice.contains_key(&user);
+                    let at = *transfer_slice.entry(user).or_insert(found.slices.len());
+                    if !inserted {
+                        // Equal begin offsets and not volatile: the transfer is
+                        // elided.
+                        if !volatile && found.slices[at].begin == raw {
+                            found.slices[at].used = None;
+                            mark_dead(&mut found);
+                            continue;
+                        }
+                        // An offset transfer within the same alloca cannot be
+                        // split.
+                        found.slices[at].splittable = false;
+                    }
+                    insert_use(&mut found, &mut visited_dead, offset, size, inserted && length.is_some());
+                }
+                // `visitIntrinsicInst` (L1266): a lifetime marker.
+                Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) if used.index == 1 => {
+                    if !known {
+                        aborted = true;
+                    } else {
+                        insert_use(&mut found, &mut visited_dead, offset, alloc_size, true);
+                    }
+                }
+                // A droppable intrinsic (`llvm.assume`).
+                Some(Intrinsic::Assume) => found.dead_use_if_promotable.push(used),
+                // `visitCallBase` (L1402): any other call escapes the pointer.
+                _ => {
+                    found.escaped = true;
+                    aborted = true;
+                }
+            },
+            // DEVIATE: `visitCallBase` (L1402): an invoke escapes the pointer.
+            Opcode::Invoke(_) => {
                 found.escaped = true;
                 aborted = true;
             }
@@ -792,6 +901,7 @@ struct State<'a, 'b, 'c> {
     post_promotion_worklist: Vec<InstId>,
     promotable_allocas: Vec<InstId>,
     dead_insts: Vec<InstId>,
+    globals: std::rc::Rc<Vec<llrm_mir::module::GlobalValue>>,
 }
 
 /// What `AllocaSliceRewriter` carries from slice to slice (L2811).
@@ -810,6 +920,9 @@ struct Rewriter {
     new_end: u64,
     slice_size: u64,
     is_split: bool,
+    /// The slice is splittable (`IsSplittable`, L2866).
+    is_splittable: bool,
+    old_ai: InstId,
     old_use: Option<Use>,
     old_ptr: Option<Operand>,
 }
@@ -819,9 +932,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         unit: &'a mut passes::Unit<'b>,
         analyses: &'c mut Analyses,
     ) -> Self {
+        let globals = std::rc::Rc::clone(&analyses.outer().globals);
         Self {
             unit,
             analyses,
+            globals,
             worklist: Vec::new(),
             post_promotion_worklist: Vec::new(),
             promotable_allocas: Vec::new(),
@@ -831,6 +946,15 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
 
     fn function(&self) -> &Function {
         self.unit.function
+    }
+
+    /// The intrinsic `inst` calls, if it calls one.
+    fn intrinsic(
+        &self,
+        inst: InstId,
+    ) -> Option<Intrinsic> {
+        let callee = llrm_mir::memory::callee(self.context(), self.function(), inst)?;
+        Intrinsic::named(self.globals.get(callee.0 as usize)?.name.as_deref()?)
     }
 
     fn context(&self) -> &Context {
@@ -1041,7 +1165,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         // First, split any aggregate loads and stores touching this alloca.
         changed |= self.agg_rewrite(alloca);
-        let mut slices = build_slices(self.context(), self.unit.layout, self.function(), alloca);
+        let mut slices = build_slices(self.context(), self.unit.layout, &self.globals, self.function(), alloca);
         if slices.escaped || slices.escaped_read_only {
             return changed;
         }
@@ -1125,7 +1249,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         // Rewrite each partition.
         for (number, p) in partitions(&slices.slices).iter().enumerate() {
-            if self.rewrite_partition(alloca, &slices.slices, p, number).is_some() {
+            if self.rewrite_partition(alloca, &slices.slices, &slices.dead_use_if_promotable, p, number).is_some() {
                 changed = true;
             }
         }
@@ -1188,6 +1312,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         &mut self,
         alloca: InstId,
         slices: &[Slice],
+        dead_if_promotable: &[Use],
         p: &Partition,
         number: usize,
     ) -> Option<InstId> {
@@ -1238,6 +1363,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             new_end: 0,
             slice_size: 0,
             is_split: false,
+            is_splittable: false,
+            old_ai: alloca,
             old_use: None,
             old_ptr: None,
         };
@@ -1249,6 +1376,14 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             promotable &= self.visit_slice(&mut rewriter, slice);
         }
         if promotable {
+            // `dropDroppableUse`: an `llvm.assume`'s condition becomes true.
+            for &used in dead_if_promotable {
+                let old = self.function().instruction(used.user).operands[used.index as usize];
+                let ty = self.type_of(old);
+                let one = self.int_constant(ty, 1);
+                self.unit.function.set_operand(used.user, used.index as usize, one);
+                self.delete_if_trivially_dead(old);
+            }
             // Promote the alloca.
             if !self.promotable_allocas.contains(&new_ai) {
                 self.promotable_allocas.push(new_ai);
@@ -1283,12 +1418,18 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         rewriter.new_end = slice.end.min(rewriter.new_alloca_end);
         rewriter.slice_size = rewriter.new_end - rewriter.new_begin;
         let used = slice.used.expect("a live slice");
+        rewriter.is_splittable = slice.splittable;
         rewriter.old_use = Some(used);
         rewriter.old_ptr = Some(self.function().instruction(used.user).operands[used.index as usize]);
         match self.function().instruction(used.user).opcode {
             Opcode::Load { .. } => self.visit_load_inst(rewriter, used.user),
             Opcode::Store { .. } => self.visit_store_inst(rewriter, used.user),
-            _ => unreachable!("only loads and stores make slices in this step"),
+            Opcode::Call(_) => match self.intrinsic(used.user) {
+                Some(Intrinsic::MemSet) => self.visit_mem_set_inst(rewriter, used.user),
+                Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.visit_mem_transfer_inst(rewriter, used.user),
+                _ => self.visit_intrinsic_inst(rewriter, used.user),
+            },
+            _ => unreachable!("only loads, stores and memory intrinsics make slices in this step"),
         }
     }
 
@@ -1763,6 +1904,290 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         new_pointer == Operand::Value(rewriter.new_ai_value)
             && self.type_of(stored) == rewriter.new_alloca_ty
             && !volatile
+    }
+
+    /// `getAdjustedPtr`: `ptr` advanced by `offset` bytes, in bounds.
+    /// getAdjustedPtr. SROA.cpp#L2036
+    fn adjusted_ptr(
+        &mut self,
+        at: InstId,
+        ptr: Operand,
+        offset: u64,
+    ) -> Operand {
+        if offset == 0 {
+            return ptr;
+        }
+        let ptr_ty = self.type_of(ptr);
+        let space = pointer_space(self.context(), ptr_ty);
+        let index_ty = self.unit.context.types.int(self.unit.layout.pointer(space).index_bits);
+        let byte = self.unit.context.types.int(8);
+        let index = self.int_constant(index_ty, offset as i128);
+        let created = self
+            .unit
+            .function
+            .create_instruction(
+                Opcode::GetElementPtr { source: byte },
+                ptr_ty,
+                vec![ptr, index],
+                Flags::INBOUNDS,
+                Some("sroa_idx"),
+            );
+        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+        Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+    }
+
+    /// `getIntegerSplat`: an i8 spread over `size` bytes.
+    /// AllocaSliceRewriter::getIntegerSplat. SROA.cpp#L3747
+    fn get_integer_splat(
+        &mut self,
+        at: InstId,
+        byte: Operand,
+        size: u64,
+    ) -> Operand {
+        if size == 1 {
+            return byte;
+        }
+        let splat_ty = self.unit.context.types.int((size * 8) as u32);
+        // `IRBuilder` folds a constant byte.
+        if let (Operand::Constant(id), true) = (byte, size <= 16) {
+            if let ConstantKind::Int(bits) = self.context().get(id).kind {
+                let mut value: u128 = 0;
+                for _ in 0..size {
+                    value = (value << 8) | (bits & 0xff);
+                }
+                return self.int_constant(splat_ty, value as i128);
+            }
+        }
+        let extended = self.build(at, Opcode::Cast(CastOp::ZExt), splat_ty, vec![byte], Some("zext"));
+        let all = self.int_constant(splat_ty, -1);
+        let byte_ty = self.type_of(byte);
+        let byte_ones = self.int_constant(byte_ty, -1);
+        let ones = self.build(at, Opcode::Cast(CastOp::ZExt), splat_ty, vec![byte_ones], None);
+        let unit = self.build(at, Opcode::Binary(llrm_mir::BinaryOp::UDiv), splat_ty, vec![all, ones], None);
+        self.build(at, Opcode::Binary(llrm_mir::BinaryOp::Mul), splat_ty, vec![extended, unit], Some("isplat"))
+    }
+
+    /// A call like `call`, with other operands.
+    /// The `IRB.CreateMemSet`, `CreateMemCpy`, `CreateLifetimeStart` of
+    /// SROA.cpp#L3834, L4020, L4170.
+    fn call_like(
+        &mut self,
+        call: InstId,
+        operands: Vec<Operand>,
+    ) -> InstId {
+        let instruction = self.function().instruction(call);
+        let (opcode, ty, flags) = (instruction.opcode.clone(), instruction.ty, instruction.flags);
+        let created = self.unit.function.create_instruction(opcode, ty, operands, flags, None);
+        self.unit.function.insert(created, Position::Before(call)).expect("a placed instruction");
+        created
+    }
+
+    /// `AllocaSliceRewriter::visitMemSetInst`. SROA.cpp#L3771
+    fn visit_mem_set_inst(
+        &mut self,
+        rewriter: &mut Rewriter,
+        memset: InstId,
+    ) -> bool {
+        let layout = self.unit.layout;
+        let operands = self.function().instruction(memset).operands.clone();
+        let (dest, byte, length) = (operands[0], operands[1], operands[2]);
+        let volatile = constant_unsigned(self.context(), operands[3]) != Some(0);
+        // A memset of variable size cannot be split: only its pointer moves.
+        let Some(len) = constant_unsigned(self.context(), length) else {
+            let pointer = self.new_alloca_slice_ptr(rewriter, memset);
+            self.unit.function.set_operand(memset, 0, pointer);
+            self.delete_if_trivially_dead(dest);
+            return false;
+        };
+        self.dead_insts.push(memset);
+        let new_ty = rewriter.new_alloca_ty;
+        let can_continue = rewriter.int_ty.is_some() || {
+            if rewriter.begin > rewriter.new_alloca_begin || rewriter.end < rewriter.new_alloca_end {
+                false
+            } else if len > u64::from(u32::MAX) {
+                false
+            } else {
+                // `<len x i8>` converts as the integer of its width.
+                let source = self.unit.context.types.int((len * 8) as u32);
+                can_convert_value(layout, self.context(), source, new_ty)
+                    && layout.legal_integer(layout.size_bits(&self.context().types, new_ty) as u32)
+            }
+        };
+        // Not representable as one value: a memset of the slice.
+        if !can_continue {
+            let pointer = self.new_alloca_slice_ptr(rewriter, memset);
+            let size = self.int_constant(self.type_of(length), (rewriter.new_end - rewriter.new_begin) as i128);
+            let mut new_operands = operands.clone();
+            new_operands[0] = pointer;
+            new_operands[2] = size;
+            self.call_like(memset, new_operands);
+            return false;
+        }
+        let value = if let Some(int_ty) = rewriter.int_ty {
+            let size = rewriter.new_end - rewriter.new_begin;
+            let mut value = self.get_integer_splat(memset, byte, size);
+            if rewriter.new_begin != rewriter.new_alloca_begin || rewriter.new_end != rewriter.new_alloca_end {
+                let align = self.new_ai_align(rewriter);
+                let old = self.build(
+                    memset,
+                    Opcode::Load { align: Some(align), volatile: false },
+                    new_ty,
+                    vec![Operand::Value(rewriter.new_ai_value)],
+                    Some("oldload"),
+                );
+                let old = self.bit_preserving_cast_chain(memset, old, int_ty);
+                let offset = rewriter.new_begin - rewriter.new_alloca_begin;
+                value = self.insert_integer(memset, old, value, offset, "insert");
+            }
+            self.bit_preserving_cast_chain(memset, value, new_ty)
+        } else {
+            let bytes = layout.size_bits(&self.context().types, new_ty) / 8;
+            let splat = self.get_integer_splat(memset, byte, bytes);
+            self.bit_preserving_cast_chain(memset, splat, new_ty)
+        };
+        let void = self.unit.context.types.void();
+        let align = self.new_ai_align(rewriter);
+        self.build(
+            memset,
+            Opcode::Store { align: Some(align), volatile },
+            void,
+            vec![value, Operand::Value(rewriter.new_ai_value)],
+            None,
+        );
+        !volatile
+    }
+
+    /// `AllocaSliceRewriter::visitMemTransferInst`. SROA.cpp#L3911
+    fn visit_mem_transfer_inst(
+        &mut self,
+        rewriter: &mut Rewriter,
+        transfer: InstId,
+    ) -> bool {
+        let layout = self.unit.layout;
+        let operands = self.function().instruction(transfer).operands.clone();
+        let used = rewriter.old_use.expect("a slice's use");
+        let is_dest = used.index == 0;
+        let volatile = constant_unsigned(self.context(), operands[3]) != Some(0);
+        // An unsplit transfer only has its pointer moved: it may be within one
+        // alloca, of variable length, or a memmove.
+        if !rewriter.is_splittable {
+            let adjusted = self.new_alloca_slice_ptr(rewriter, transfer);
+            self.unit.function.set_operand(transfer, used.index as usize, adjusted);
+            self.delete_if_trivially_dead(rewriter.old_ptr.expect("a slice's pointer"));
+            return false;
+        }
+        // A split transfer: the two sides are in different allocas, one of
+        // which does not escape, so a memmove is a memcpy.
+        let new_ty = rewriter.new_alloca_ty;
+        let emit_memcpy = rewriter.int_ty.is_none()
+            && (rewriter.begin > rewriter.new_alloca_begin
+                || rewriter.end < rewriter.new_alloca_end
+                || rewriter.slice_size != layout.store_size(&self.context().types, new_ty)
+                || !size_equals_store_size(layout, self.context(), new_ty)
+                || !is_single_value(self.context(), new_ty));
+        // The alloca unchanged and the size not shrunk: nothing to do.
+        if emit_memcpy && rewriter.old_ai == rewriter.new_ai {
+            if rewriter.new_end != rewriter.end {
+                let size =
+                    self.int_constant(self.type_of(operands[2]), (rewriter.new_end - rewriter.new_begin) as i128);
+                self.unit.function.set_operand(transfer, 2, size);
+            }
+            return false;
+        }
+        self.dead_insts.push(transfer);
+        // The other side's root alloca is looked at again once this is
+        // rewritten.
+        let other = if is_dest { operands[1] } else { operands[0] };
+        if let Some(root) = self.strip_in_bounds_offsets(other) {
+            if !self.worklist.contains(&root) {
+                self.worklist.push(root);
+            }
+        }
+        let other_offset = rewriter.new_begin - rewriter.begin;
+        if emit_memcpy {
+            let other_ptr = self.adjusted_ptr(transfer, other, other_offset);
+            let our = self.new_alloca_slice_ptr(rewriter, transfer);
+            let size = self.int_constant(self.type_of(operands[2]), (rewriter.new_end - rewriter.new_begin) as i128);
+            let (destination, source) = if is_dest { (our, other_ptr) } else { (other_ptr, our) };
+            let mut new_operands = operands.clone();
+            // `IRB.CreateMemCpy`: a memcpy even where it was a memmove is not
+            // made here: the callee stays, DEVIATE.
+            new_operands[0] = destination;
+            new_operands[1] = source;
+            new_operands[2] = size;
+            self.call_like(transfer, new_operands);
+            return false;
+        }
+        let whole = rewriter.new_begin == rewriter.new_alloca_begin && rewriter.new_end == rewriter.new_alloca_end;
+        let size = rewriter.new_end - rewriter.new_begin;
+        let sub_int_ty = rewriter.int_ty.map(|_| self.unit.context.types.int((size * 8) as u32));
+        let other_ty = match (rewriter.int_ty, whole) {
+            (Some(_), false) => sub_int_ty.expect("an integer"),
+            _ => new_ty,
+        };
+        let adjusted = self.adjusted_ptr(transfer, other, other_offset);
+        let (destination, source) = if is_dest {
+            (Operand::Value(rewriter.new_ai_value), adjusted)
+        } else {
+            (adjusted, Operand::Value(rewriter.new_ai_value))
+        };
+        let new_align = self.new_ai_align(rewriter);
+        let mut value;
+        if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
+            value = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("load"),
+            );
+            value = self.bit_preserving_cast_chain(transfer, value, int_ty);
+            let offset = rewriter.new_begin - rewriter.new_alloca_begin;
+            value = self.extract_integer(transfer, value, sub_int_ty.expect("an integer"), offset, "extract");
+        } else {
+            value = self.build(
+                transfer,
+                Opcode::Load { align: Some(1), volatile },
+                other_ty,
+                vec![source],
+                Some("copyload"),
+            );
+        }
+        if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
+            let old = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("oldload"),
+            );
+            let old = self.bit_preserving_cast_chain(transfer, old, int_ty);
+            let offset = rewriter.new_begin - rewriter.new_alloca_begin;
+            value = self.insert_integer(transfer, old, value, offset, "insert");
+            value = self.bit_preserving_cast_chain(transfer, value, new_ty);
+        }
+        let void = self.unit.context.types.void();
+        self.build(transfer, Opcode::Store { align: Some(1), volatile }, void, vec![value, destination], None);
+        !volatile
+    }
+
+    /// `AllocaSliceRewriter::visitIntrinsicInst`: a lifetime marker.
+    /// AllocaSliceRewriter::visitIntrinsicInst. SROA.cpp#L4145
+    fn visit_intrinsic_inst(
+        &mut self,
+        rewriter: &mut Rewriter,
+        marker: InstId,
+    ) -> bool {
+        self.dead_insts.push(marker);
+        let operands = self.function().instruction(marker).operands.clone();
+        let pointer = self.new_alloca_slice_ptr(rewriter, marker);
+        // DEVIATE: MIR's marker names the size, which LLVM's has dropped.
+        let size = self.int_constant(self.type_of(operands[0]), (rewriter.new_end - rewriter.new_begin) as i128);
+        let mut new_operands = operands;
+        new_operands[0] = size;
+        new_operands[1] = pointer;
+        self.call_like(marker, new_operands);
+        true
     }
 
     /// `Value::stripInBoundsOffsets` to an alloca of the entry block.

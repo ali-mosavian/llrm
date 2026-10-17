@@ -153,3 +153,75 @@ b0:
     );
     assert!(after.contains("alloca i32") && after.contains("store volatile i32 %a"), "{after}");
 }
+
+/// A struct filled by a memcpy and read by field: the copy becomes a load and
+/// a store of each part (the stores promoted away), so the loads read the
+/// source. With the memcpy escaping the alloca, it stays and so do the loads.
+#[test]
+fn test_a_struct_copied_by_memcpy_and_read_by_field_is_split() {
+    let after = sroa(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i32 @f(ptr %src) {
+b0:
+  %s = alloca { i32, i32 }
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr %src, i16 8, i1 false)
+  %p1 = getelementptr i8, ptr %s, i16 4
+  %x = load i32, ptr %s
+  %y = load i32, ptr %p1
+  %r = add i32 %x, %y
+  ret i32 %r
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("call void @llvm.memcpy"), "{after}");
+    assert_eq!(after.matches("load i32").count(), 2, "{after}");
+}
+
+/// A local set by a memset and read whole: the byte is spread over the integer
+/// and the load is that constant.
+#[test]
+fn test_a_memset_of_a_local_then_a_load_is_the_constant() {
+    let after = sroa(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define i32 @f() {
+b0:
+  %s = alloca i32
+  call void @llvm.memset.p0.i16(ptr %s, i8 1, i16 4, i1 false)
+  %v = load i32, ptr %s
+  ret i32 %v
+}
+",
+    );
+    assert!(
+        !after.contains("alloca") && !after.contains("call void @llvm.memset") && !after.contains("load"),
+        "{after}"
+    );
+    assert!(after.contains("ret i32 16843009"), "{after}");
+}
+
+/// Lifetime markers about a local do not keep it in memory.
+#[test]
+fn test_lifetime_markers_about_a_local_go_with_it() {
+    let after = sroa(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+
+define i32 @f(i32 %a) {
+b0:
+  %s = alloca i32
+  call void @llvm.lifetime.start.p0(i64 4, ptr %s)
+  store i32 %a, ptr %s
+  %v = load i32, ptr %s
+  call void @llvm.lifetime.end.p0(i64 4, ptr %s)
+  ret i32 %v
+}
+",
+    );
+    assert!(
+        !after.contains("alloca") && !after.contains("call void @llvm.lifetime") && !after.contains("load"),
+        "{after}"
+    );
+    assert!(after.contains("ret i32 %a"), "{after}");
+}
