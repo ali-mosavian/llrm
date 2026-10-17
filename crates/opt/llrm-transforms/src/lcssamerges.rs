@@ -178,7 +178,7 @@ pub fn closed(
             if needed.contains(&at) {
                 continue;
             }
-            if loop_.body.contains(&at) || Some(at) == entry || predecessors.get(&at).is_none_or(BTreeSet::is_empty) {
+            if loop_.body.contains(&at) || Some(at) == entry || predecessors.get(&at).is_none_or(<[i64]>::is_empty) {
                 broke = true;
                 break;
             }
@@ -202,7 +202,7 @@ pub fn _merged(
     value: ValueId,
     needed: &BTreeSet<i64>,
     exits: &BTreeSet<i64>,
-    predecessors: &BTreeMap<i64, BTreeSet<i64>>,
+    predecessors: &llrm_support::graph::Predecessors,
 ) -> Result<bool, String> {
     let mut reaching = needed
         .iter()

@@ -3011,7 +3011,7 @@ fn escapes(
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let none = BTreeSet::new();
+    let none: &[i64] = &[];
     let values = &solved.values;
     let instructions = |at: i64| function.block(cfg::block(at)).instructions();
     // Escape is flow-sensitive separately from pointer contents. A pointer
@@ -3244,7 +3244,7 @@ fn escapes(
     let parents: Vec<Vec<usize>> = graph
         .iter()
         .map(|block| {
-            predecessors.get(&block.at).unwrap_or(&none).iter().filter_map(|one| index.get(one).copied()).collect()
+            predecessors.get(&block.at).unwrap_or(none).iter().filter_map(|one| index.get(one).copied()).collect()
         })
         .collect();
     let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);

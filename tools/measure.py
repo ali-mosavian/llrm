@@ -418,14 +418,17 @@ def two_n(key: str) -> str:
 
 
 def axis_rises(base: dict[str, list[int]], now: dict[str, list[int]], general: dict) -> tuple[list[str], list[str]]:
-    """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`."""
+    """Per axis and level: the second difference may not rise by more than `excess` of the base's cost at 2N, nor the cost at 2N by `worst`.
+    A rise of the second difference stands only if the cost at 2N did not fall (by more than `fall` of the base's): the claim is that no
+    step became worse at scale, and a row where every point got cheaper has nothing worse in it. Removing a cost that weighs more at N
+    than at 2N does raise the second difference while it lowers all three (#1955: 542.4/1079.1/2214.1 -> 538.9/1063.4/2202.5 Minstr)."""
     lines, bad = [], []
     for key in sorted(base.keys() & now.keys()):
         (half, small, big), (was_half, was_small, was_big) = now[key], base[key]
         tol = row_tolerance(general, key)
         more = grown(half, small, big) - superlinear(was_half, was_small, was_big)
         lines.append(f"{key}: second difference {second(half, small, big) / was_big:+.4f} of the base's 2N (base {second(was_half, was_small, was_big) / was_big:+.4f}), {two_n(key)} x{big / was_big:.4f} ({half}/{small}/{big} against {was_half}/{was_small}/{was_big})")
-        if more > tol["excess"] * was_big:
+        if more > tol["excess"] * was_big and big >= was_big * (1 - tol["fall"]):
             bad.append(f"{key}: superlinear work grew by {more / was_big:.4f} of the base's cost at 2N (> {tol['excess']}): a step is superlinear where it was not")
         if big > was_big * tol["worst"]:
             bad.append(f"{key}: cost at {two_n(key)} x{big / was_big:.4f} > {tol['worst']}")
