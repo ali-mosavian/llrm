@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 94 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -43,6 +43,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 94 documented,
 | framefree | Decides, before allocation, whether a function can do without its frame register, which is then one more value register. | In `assemble::staged`, after isel and before `frame::of`, once per function. | [framefree](framefree.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
 | hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
+| incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | isel | Instruction selection: one MIR function becomes LIR over virtual registers, as LLVM's SelectionDAG makes MachineInstrs. | First of the staged phases in `assemble::staged`, once per function and | [isel](isel.md) |
 | jumps | Orders the blocks of an allocated body and removes the jumps and blocks the order makes redundant; merges and copies tails. | `ControlFlow` is the last machine phase, because this physical order | [jumps](jumps.md) |
