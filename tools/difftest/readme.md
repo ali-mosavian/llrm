@@ -13,3 +13,5 @@ cannot read after that is listed with its first error. The block order of the tw
 as a large hunk with equal histograms.
 
 `test_difftest.py` checks the output on a hand-made input where the answers agree and one where they differ.
+
+`inlinediff.py BEFORE.ll AFTER.ll` (or `dumps DIR...`) compares the call sites llrm's inline stage inlined with those of `opt -passes=inline` at the same module, with LLVM's cost, threshold and reason (see its docstring); `test_inlinediff.py` has a module where a call over the threshold must show as llrm-only and one where both agree.
