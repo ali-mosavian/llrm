@@ -168,6 +168,36 @@ fn _decided(
     // the pass.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
     let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
+    if std::env::var_os("LLRM_POC_CE").is_some() {
+        let sources = SOURCES.with(|one| one.borrow().clone());
+        let unit = held.unit(context, layout, function, analyses.outer());
+        let w0 = llrm_support::debug::work();
+        let found = crate::constraint_elim::decisions(&unit);
+        let ce_work = llrm_support::debug::work() - w0;
+        // Real decisions as (block, way): true when the first successor is taken.
+        let real: std::collections::BTreeMap<i64, bool> = decisions
+            .iter()
+            .map(|&(block, target)| {
+                let last = function.terminator(block).expect("a terminator");
+                let first = function.instruction(last).operands.get(1).copied() == Some(Operand::Block(target));
+                (cfg::id(block), first)
+            })
+            .collect();
+        let ce: std::collections::BTreeMap<i64, bool> = found.iter().map(|&(block, way)| (cfg::id(block), way)).collect();
+        let mut both = 0;
+        let mut conflict = 0;
+        let mut missed = std::collections::BTreeMap::<&str, usize>::new();
+        for (block, way) in &real {
+            match ce.get(block) {
+                Some(other) if other == way => both += 1,
+                Some(_) => conflict += 1,
+                None => *missed.entry(sources.get(block).copied().unwrap_or("?")).or_default() += 1,
+            }
+        }
+        let extra = ce.keys().filter(|block| !real.contains_key(block)).count();
+        let insts = function.walk().count();
+        eprintln!("POCCE insts={insts} real={} ce={} both={both} conflict={conflict} missed={missed:?} extra={extra} ce_work={ce_work}", real.len(), ce.len());
+    }
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -181,10 +211,15 @@ fn _decided(
 }
 
 /// Each block whose terminator's way is known, with that way.
+thread_local! {
+    static SOURCES: std::cell::RefCell<std::collections::BTreeMap<i64, &'static str>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
+    SOURCES.with(|one| one.borrow_mut().clear());
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
     // isKnownNonZero of one value rather than solving every pointer.
@@ -235,13 +270,18 @@ fn _decisions(
         };
         let instruction = function.instruction(last);
         if instruction.opcode == Opcode::Switch {
-            out.extend(_switch_target(unit, last, &facts).map(|target| (block, target)));
+            let target = _switch_target(unit, last, &facts);
+            if target.is_some() {
+                SOURCES.with(|one| one.borrow_mut().insert(cfg::id(block), "switch"));
+            }
+            out.extend(target.map(|target| (block, target)));
             continue;
         }
         let [_, Operand::Block(taken), Operand::Block(other)] = instruction.operands[..] else {
             continue;
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
+        let mut source = if answer.is_some() { "consts" } else { "" };
         if answer.is_none() {
             let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
@@ -252,10 +292,17 @@ fn _decisions(
             }
             if let [one] = possible[..] {
                 answer = Some(one == taken);
+                source = "ranges";
             }
         }
         if answer.is_none() {
             answer = _implied(unit, block, last);
+            if answer.is_some() {
+                source = "guards";
+            }
+        }
+        if answer.is_some() {
+            SOURCES.with(|one| one.borrow_mut().insert(cfg::id(block), source));
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
