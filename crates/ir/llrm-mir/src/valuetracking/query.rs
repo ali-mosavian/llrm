@@ -12,7 +12,7 @@ use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
 use crate::intrinsics::Intrinsic;
-use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Module, Operand, ValueDef};
+use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, MetadataNode, Module, Operand, ValueDef};
 use crate::opcode::Opcode;
 use crate::types::{Type, TypeId};
 
@@ -23,6 +23,8 @@ pub struct Query<'a> {
     /// The module's globals, which name the callees; empty where the caller has
     /// no module.
     pub globals: &'a [GlobalValue],
+    /// The module's metadata nodes, which an instruction's `!range` names.
+    pub metadata: &'a [MetadataNode],
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub dt: Option<&'a DominatorTree>,
@@ -40,6 +42,7 @@ impl<'a> Query<'a> {
         Self {
             context: &module.context,
             globals: &module.globals,
+            metadata: &module.metadata,
             function,
             layout,
             dt: None,
@@ -55,7 +58,7 @@ impl<'a> Query<'a> {
         function: &'a Function,
         layout: &'a DataLayout,
     ) -> Self {
-        Self { context, globals: &[], function, layout, dt: None, assumptions: None, cxt: None }
+        Self { context, globals: &[], metadata: &[], function, layout, dt: None, assumptions: None, cxt: None }
     }
 
     pub fn with_cxt(
