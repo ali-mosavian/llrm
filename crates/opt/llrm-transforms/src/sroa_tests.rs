@@ -277,3 +277,30 @@ j:
     assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
     assert!(after.contains("phi i32 [ %a, %t ], [ %b, %e ]"), "{after}");
 }
+
+/// The case SROA.cpp's `presplitLoadsAndStores` documents: an i64 loaded from
+/// two floats and stored over the next two floats. Without pre-splitting the
+/// i64 access straddles the partitions and the alloca stays; split, all three
+/// 4-byte parts are promoted.
+#[test]
+fn test_an_i64_load_and_store_pair_across_floats_is_presplit() {
+    let after = sroa(
+        "define float @f(float %x, float %y) {
+b0:
+  %a = alloca [12 x i8]
+  %g1 = getelementptr i8, ptr %a, i16 0
+  %g2 = getelementptr i8, ptr %a, i16 4
+  %g3 = getelementptr i8, ptr %a, i16 8
+  store float %x, ptr %g1
+  store float %y, ptr %g2
+  %v = load i64, ptr %g1
+  store i64 %v, ptr %g2
+  %f1 = load float, ptr %g2
+  %f2 = load float, ptr %g3
+  %r = fadd float %f1, %f2
+  ret float %r
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("load") && !after.contains("store"), "{after}");
+}

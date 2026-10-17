@@ -1414,7 +1414,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         slices: &mut AllocaSlices,
     ) -> bool {
         let mut changed = false;
-        // DEVIATE: no `presplitLoadsAndStores` (L4965).
+        // First try to pre-split loads and stores.
+        changed |= self.presplit_loads_and_stores(alloca, slices);
         let Opcode::Alloca { allocated, .. } = self.function().instruction(alloca).opcode else { return false };
         let alloca_size = self.unit.layout.alloc_size(&self.context().types, allocated);
         // We can split at the begin and end offsets of each slice, but only if
@@ -1465,6 +1466,345 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
         }
         changed
+    }
+
+    /// `SROA::presplitLoadsAndStores`: the splittable load and store pairs
+    /// broken at the partitions' edges before any rewriting. SROA.cpp#L4965
+    fn presplit_loads_and_stores(
+        &mut self,
+        alloca: InstId,
+        alloca_slices: &mut AllocaSlices,
+    ) -> bool {
+        #[derive(Default)]
+        struct SplitOffsets {
+            slice: usize,
+            splits: Vec<u64>,
+        }
+        let mut loads: Vec<InstId> = Vec::new();
+        let mut stores: Vec<InstId> = Vec::new();
+        let mut split_offsets: HashMap<InstId, SplitOffsets> = HashMap::default();
+        // Loads out of this alloca which cannot be pre-split, and so neither
+        // can the stores of them.
+        let mut unsplittable_loads: HashSet<InstId> = HashSet::default();
+        let value_load = |this: &Self, store: InstId| -> Option<InstId> {
+            let Operand::Value(value) = this.function().instruction(store).operands[0] else { return None };
+            match this.function().value(value).def {
+                llrm_mir::module::ValueDef::Instruction(def)
+                    if matches!(this.function().instruction(def).opcode, Opcode::Load { .. }) =>
+                {
+                    Some(def)
+                }
+                _ => None,
+            }
+        };
+        let is_simple = |this: &Self, inst: InstId| {
+            matches!(
+                this.function().instruction(inst).opcode,
+                Opcode::Load { volatile: false, .. } | Opcode::Store { volatile: false, .. }
+            )
+        };
+        let parts = partitions(&alloca_slices.slices);
+        for p in &parts {
+            for at in p.first..p.last {
+                let slice = alloca_slices.slices[at];
+                let used = slice.used.expect("a live slice");
+                let inst = used.user;
+                if !slice.splittable || slice.end <= p.end {
+                    // A load that cannot be pre-split, or a store of one.
+                    match self.function().instruction(inst).opcode {
+                        Opcode::Load { .. } => {
+                            unsplittable_loads.insert(inst);
+                        }
+                        Opcode::Store { .. } => {
+                            if let Some(load) = value_load(self, inst) {
+                                unsplittable_loads.insert(load);
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                match self.function().instruction(inst).opcode {
+                    Opcode::Load { .. } => {
+                        // The load must be used only to store, simply, into
+                        // other pointers.
+                        let result = self.function().instruction(inst).result.expect("a load");
+                        let simply_stored = self
+                            .function()
+                            .users(result)
+                            .iter()
+                            .all(
+                                |one| matches!(
+                                    self.function().instruction(one.user).opcode,
+                                    Opcode::Store { .. }
+                                )
+                                    && one.index == 0
+                                    && is_simple(self, one.user),
+                            );
+                        if !simply_stored {
+                            unsplittable_loads.insert(inst);
+                            continue;
+                        }
+                        loads.push(inst);
+                    }
+                    Opcode::Store { .. } => {
+                        // Skip stores of pointers.
+                        if used.index != 1 {
+                            continue;
+                        }
+                        let Some(stored) = value_load(self, inst) else { continue };
+                        if !is_simple(self, stored) {
+                            continue;
+                        }
+                        stores.push(inst);
+                    }
+                    // Other uses cannot be pre-split.
+                    _ => continue,
+                }
+                // Record the initial split.
+                let offsets = split_offsets.entry(inst).or_default();
+                offsets.slice = at;
+                offsets.splits.push(p.end - slice.begin);
+            }
+            // Add a split for each already split slice that is to be pre-split.
+            for &tail in &p.split_tails {
+                let inst = alloca_slices.slices[tail].used.expect("a live slice").user;
+                let Some(offsets) = split_offsets.get_mut(&inst) else { continue };
+                if alloca_slices.slices[tail].end > p.end {
+                    let base = alloca_slices.slices[offsets.slice].begin;
+                    offsets.splits.push(p.end - base);
+                }
+            }
+        }
+        // A split load with split stores can only be pre-split if the splits
+        // match exactly, relative to their start.
+        stores.retain(|&store| {
+            let load = value_load(self, store).expect("a store of a load");
+            if unsplittable_loads.contains(&load) {
+                return false;
+            }
+            let Some(load_offsets) = split_offsets.get(&load) else { return true };
+            let store_offsets = split_offsets.get(&store).expect("a candidate");
+            if load_offsets.splits == store_offsets.splits {
+                return true;
+            }
+            unsplittable_loads.insert(load);
+            false
+        });
+        // A later store may have made an earlier store's load unsplittable.
+        stores.retain(|&store| !unsplittable_loads.contains(&value_load(self, store).expect("a store of a load")));
+        loads.retain(|load| !unsplittable_loads.contains(load));
+        if loads.is_empty() && stores.is_empty() {
+            return false;
+        }
+        let layout = self.unit.layout;
+        let mut new_slices: Vec<Slice> = Vec::new();
+        let mut resplit_promotable: HashSet<InstId> = HashSet::default();
+        let load_align = |this: &Self, inst: InstId, offset: u64| -> u64 {
+            let instruction = this.function().instruction(inst);
+            let base = match instruction.opcode {
+                Opcode::Load { align: Some(align), .. } | Opcode::Store { align: Some(align), .. } => align,
+                _ => {
+                    let ty = match instruction.opcode {
+                        Opcode::Store { .. } => this.function().operand_type(this.context(), instruction.operands[0]),
+                        _ => Some(instruction.ty),
+                    };
+                    layout.align(&this.context().types, ty.expect("a typed access"))
+                }
+            };
+            common_alignment(base, offset)
+        };
+        let is_alloca = |this: &Self, operand: Operand| -> Option<InstId> {
+            let Operand::Value(value) = operand else { return None };
+            match this.function().value(value).def {
+                llrm_mir::module::ValueDef::Instruction(def)
+                    if matches!(this.function().instruction(def).opcode, Opcode::Alloca { .. }) =>
+                {
+                    Some(def)
+                }
+                _ => None,
+            }
+        };
+        // First, rewrite all of the split loads, building slices for them.
+        let mut split_loads_map: HashMap<InstId, Vec<InstId>> = HashMap::default();
+        for &load in &loads {
+            let offsets = split_offsets.get(&load).expect("a candidate");
+            let (slice_index, splits) = (offsets.slice, offsets.splits.clone());
+            let original = alloca_slices.slices[slice_index];
+            let slice_size = original.end - original.begin;
+            let base_offset = original.begin;
+            let base_ptr = self.function().instruction(load).operands[0];
+            let mut split_loads: Vec<InstId> = Vec::new();
+            let mut part_offset = 0_u64;
+            let mut part_size = splits[0];
+            let mut index = 0;
+            loop {
+                let part_ty = self.unit.context.types.int((part_size * 8) as u32);
+                let pointer = self.adjusted_ptr(load, base_ptr, part_offset);
+                let align = load_align(self, load, part_offset);
+                let name = self
+                    .function()
+                    .instruction(load)
+                    .result
+                    .and_then(|result| self.function().value(result).name.clone());
+                let part_load = self.build_inst(
+                    load,
+                    Opcode::Load { align: Some(align), volatile: false },
+                    part_ty,
+                    vec![pointer],
+                    name.as_deref(),
+                );
+                split_loads.push(part_load);
+                new_slices.push(Slice {
+                    begin: base_offset + part_offset,
+                    end: base_offset + part_offset + part_size,
+                    used: Some(Use { user: part_load, index: 0 }),
+                    splittable: false,
+                    kind: Kind::Memory,
+                });
+                if index >= splits.len() {
+                    break;
+                }
+                part_offset = splits[index];
+                index += 1;
+                part_size = (if index < splits.len() { splits[index] } else { slice_size }) - part_offset;
+            }
+            // Rewrite every store of the load as split stores, or save the
+            // split loads for a store that is split anyway.
+            let mut deferred = false;
+            let result = self.function().instruction(load).result.expect("a load");
+            let users: Vec<InstId> = self.function().users(result).iter().map(|one| one.user).collect();
+            for store in users {
+                if !stores.is_empty() && split_offsets.contains_key(&store) {
+                    deferred = true;
+                    continue;
+                }
+                let store_base = self.function().instruction(store).operands[1];
+                for (part_index, &part_load) in split_loads.iter().enumerate() {
+                    let part_offset = if part_index == 0 { 0 } else { splits[part_index - 1] };
+                    let pointer = self.adjusted_ptr(store, store_base, part_offset);
+                    let align = load_align(self, store, part_offset);
+                    let value = Operand::Value(self.function().instruction(part_load).result.expect("a load"));
+                    let void = self.unit.context.types.void();
+                    self.build(
+                        store,
+                        Opcode::Store { align: Some(align), volatile: false },
+                        void,
+                        vec![value, pointer],
+                        None,
+                    );
+                }
+                // Look again at any alloca this store reached.
+                if let Some(other) = is_alloca(self, store_base) {
+                    resplit_promotable.insert(other);
+                    if !self.worklist.contains(&other) {
+                        self.worklist.push(other);
+                    }
+                } else if let Some(other) = self.strip_in_bounds_offsets(store_base) {
+                    if !self.worklist.contains(&other) {
+                        self.worklist.push(other);
+                    }
+                }
+                self.dead_insts.push(store);
+            }
+            if deferred {
+                split_loads_map.insert(load, split_loads);
+            }
+            self.dead_insts.push(load);
+            alloca_slices.slices[slice_index].used = None;
+        }
+        // Second, rewrite the split stores: of a load already split, from its
+        // parts; of another, splitting that load first.
+        for &store in &stores {
+            let load = value_load(self, store).expect("a store of a load");
+            let offsets = split_offsets.get(&store).expect("a candidate");
+            let (slice_index, splits) = (offsets.slice, offsets.splits.clone());
+            let original = alloca_slices.slices[slice_index];
+            let ty = self.function().instruction(load).ty;
+            let store_size = u64::from(int_bits(self.context(), ty).expect("an integer load")) / 8;
+            let base_offset = original.begin;
+            let load_base = self.function().instruction(load).operands[0];
+            let store_base = self.function().instruction(store).operands[1];
+            let already = split_loads_map.get(&load).cloned();
+            let mut part_offset = 0_u64;
+            let mut part_size = splits[0];
+            let mut index = 0;
+            loop {
+                let part_ty = self.unit.context.types.int((part_size * 8) as u32);
+                let part_load = match &already {
+                    Some(parts) => parts[index],
+                    None => {
+                        let pointer = self.adjusted_ptr(load, load_base, part_offset);
+                        let align = load_align(self, load, part_offset);
+                        let name = self
+                            .function()
+                            .instruction(load)
+                            .result
+                            .and_then(|result| self.function().value(result).name.clone());
+                        self.build_inst(
+                            load,
+                            Opcode::Load { align: Some(align), volatile: false },
+                            part_ty,
+                            vec![pointer],
+                            name.as_deref(),
+                        )
+                    }
+                };
+                let pointer = self.adjusted_ptr(store, store_base, part_offset);
+                let align = load_align(self, store, part_offset);
+                let value = Operand::Value(self.function().instruction(part_load).result.expect("a load"));
+                let void = self.unit.context.types.void();
+                let part_store = self.build_inst(
+                    store,
+                    Opcode::Store { align: Some(align), volatile: false },
+                    void,
+                    vec![value, pointer],
+                    None,
+                );
+                new_slices.push(Slice {
+                    begin: base_offset + part_offset,
+                    end: base_offset + part_offset + part_size,
+                    used: Some(Use { user: part_store, index: 1 }),
+                    splittable: false,
+                    kind: Kind::Memory,
+                });
+                if index >= splits.len() {
+                    break;
+                }
+                part_offset = splits[index];
+                index += 1;
+                part_size = (if index < splits.len() { splits[index] } else { store_size }) - part_offset;
+            }
+            // Look again at the other alloca a load not already split reached.
+            if already.is_none() {
+                if let Some(other) = is_alloca(self, load_base) {
+                    resplit_promotable.insert(other);
+                    if !self.worklist.contains(&other) {
+                        self.worklist.push(other);
+                    }
+                } else if let Some(other) = self.strip_in_bounds_offsets(load_base) {
+                    if !self.worklist.contains(&other) {
+                        self.worklist.push(other);
+                    }
+                }
+            }
+            // The original load goes with its only user.
+            let load_result = self.function().instruction(load).result.expect("a load");
+            if self.function().users(load_result).len() == 1 {
+                self.dead_insts.push(load);
+            }
+            self.dead_insts.push(store);
+            alloca_slices.slices[slice_index].used = None;
+        }
+        // Remove the killed slices, merge the new ones into the sorted
+        // sequence.
+        alloca_slices.slices.retain(|one| one.used.is_some());
+        alloca_slices.slices.extend(new_slices);
+        alloca_slices.slices.sort_by(Slice::order);
+        // The allocas that need re-splitting are not promoted yet.
+        self.promotable_allocas.retain(|one| !resplit_promotable.contains(one));
+        let _ = alloca;
+        true
     }
 
     /// `selectPartitionType`. SROA.cpp#L5527
@@ -1687,6 +2027,20 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
 
     /// A new instruction before `at`, its result as an operand.
     /// The `IRBuilderTy IRB` (SROA.cpp#L2864) insertion at the user.
+    fn build_inst(
+        &mut self,
+        at: InstId,
+        opcode: Opcode,
+        ty: TypeId,
+        operands: Vec<Operand>,
+        name: Option<&str>,
+    ) -> InstId {
+        let created = self.unit.function.create_instruction(opcode, ty, operands, Flags::default(), name);
+        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+        created
+    }
+
+    /// `build_inst`, its result as an operand.
     fn build(
         &mut self,
         at: InstId,
@@ -1695,8 +2049,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         operands: Vec<Operand>,
         name: Option<&str>,
     ) -> Operand {
-        let created = self.unit.function.create_instruction(opcode, ty, operands, Flags::default(), name);
-        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+        let created = self.build_inst(at, opcode, ty, operands, name);
         match self.function().instruction(created).result {
             Some(result) => Operand::Value(result),
             None => Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Zero })),
