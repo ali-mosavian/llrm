@@ -361,6 +361,57 @@ impl Function {
         Ok(())
     }
 
+    /// `move_to` of each of `run` to `position`, in order, so that they end up
+    /// side by side in `run`'s order: each block is rewritten once rather than
+    /// once for each instruction (LLVM's range `splice`). A run moved one at a
+    /// time out of a block of n was k scans of it, O(kn). Where debug records
+    /// stand, or `position` names an instruction of the run, each is moved as
+    /// `move_to` moves it.
+    pub fn move_all(
+        &mut self,
+        run: &[InstId],
+        position: Position,
+    ) -> Result<(), String> {
+        if run.len() < 2 || !self.debug_records.is_empty() || run.iter().any(|&inst| position == Position::Before(inst))
+        {
+            return run.iter().try_for_each(|&inst| self.move_to(inst, position));
+        }
+        let mut moving = crate::dense::IdSet::<InstId>::new();
+        let mut froms = Vec::with_capacity(run.len());
+        for &inst in run {
+            if !moving.insert(inst) {
+                return Err(format!("instruction {} is moved twice", inst.0));
+            }
+            froms.push(self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?);
+        }
+        let mut sources = froms.clone();
+        sources.sort_unstable();
+        sources.dedup();
+        for &block in &sources {
+            let list = &mut self.blocks[block.0 as usize].instructions;
+            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            list.retain(|inst| !moving.contains(inst));
+        }
+        for &inst in run {
+            self.parent[inst.0 as usize] = None;
+        }
+        let (block, at) = self.slot(position)?;
+        if self.block(block).erased {
+            return Err(format!("block {} is erased", block.0));
+        }
+        SCANNED.with(|scanned| scanned.set(scanned.get() + self.blocks[block.0 as usize].instructions.len()));
+        self.blocks[block.0 as usize].instructions.splice(at..at, run.iter().copied());
+        let next = match position {
+            Position::End(_) => None,
+            Position::Before(next) => Some(next),
+        };
+        for (&inst, &from) in run.iter().zip(&froms) {
+            self.parent[inst.0 as usize] = Some(block);
+            self.log(Change::Moved { inst, block, next, from });
+        }
+        Ok(())
+    }
+
     /// Moves the placed instructions `run`, in order, to the end of `block`,
     /// and what the records say stands where it did: a record before an
     /// instruction of the run moves with it. (Moving them one by one with

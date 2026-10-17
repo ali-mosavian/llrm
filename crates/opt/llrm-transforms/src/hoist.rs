@@ -239,9 +239,7 @@ pub fn hoisted(
         if run.is_empty() {
             continue;
         }
-        for inst in run {
-            unit.function.move_to(inst, Position::Before(before)).expect("a placed instruction");
-        }
+        unit.function.move_all(&run, Position::Before(before)).expect("placed instructions");
         changed = true;
         moved = true;
         asked_after_moving = false;
@@ -318,9 +316,7 @@ fn _affordable(
     while !run.is_empty() {
         let moved = (!unpriced || cfg!(test)).then(|| {
             let mut hoisted = unit.function.clone();
-            for &inst in &run {
-                hoisted.move_to(inst, Position::Before(before)).expect("a placed instruction");
-            }
+            hoisted.move_all(&run, Position::Before(before)).expect("placed instructions");
             // The clone's log holds what the run made of it, and nothing else.
             let changes = hoisted.take_changes();
             (hoisted, changes)
