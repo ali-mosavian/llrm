@@ -452,8 +452,7 @@ pub fn _computation(
         );
     if unordered {
         // Any total order will do.
-        let order = |operand: &Operand| format!("{operand:?}");
-        if order(&named[0]) > order(&named[1]) {
+        if named[0] > named[1] {
             named.swap(0, 1);
         }
         if named[0] == named[1] {
