@@ -163,8 +163,10 @@ def ensure_dist(env: dict | None = None) -> Path:
 
 
 def require_space(where: Path, minimum_gb: float | None = None) -> None:
-    """A build here needs room: /home filled up on tinytim (858 MB free) and every session's build failed. LLRM_MIN_FREE_GB (default 100)."""
-    need = float(os.environ.get("LLRM_MIN_FREE_GB") or 100) if minimum_gb is None else minimum_gb
+    """A build here needs room: /home filled up on tinytim (858 MB free) and every session's build failed. LLRM_MIN_FREE_GB (default 100; none
+    on a hosted runner, a fresh VM with 78 GB free: #2109's bench shards failed on it)."""
+    hosted = os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+    need = float(os.environ.get("LLRM_MIN_FREE_GB") or (0 if hosted else 100)) if minimum_gb is None else minimum_gb
     probe = where
     while not probe.exists() and probe != probe.parent:
         probe = probe.parent

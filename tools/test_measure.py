@@ -806,3 +806,14 @@ def test_a_build_with_too_little_room_fails_with_the_free_space_and_the_limit(tm
         measure.require_space(tmp_path / "not" / "made" / "yet")
     monkeypatch.setenv("LLRM_MIN_FREE_GB", "4")
     measure.require_space(tmp_path)
+
+
+def test_a_hosted_runner_is_not_refused_for_its_78_gb(monkeypatch, tmp_path):
+    """#2109's bench shards on hosted runners: 'measure: 78 GB free under .../measure-build, 100 needed': the check is for the shared host, not a fresh VM."""
+    monkeypatch.delenv("LLRM_MIN_FREE_GB")
+    monkeypatch.setattr(measure.shutil, "disk_usage", lambda path: type("U", (), {"free": 78 * 2**30})())
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    measure.require_space(tmp_path)
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    with pytest.raises(SystemExit, match="78 GB free"):
+        measure.require_space(tmp_path)
