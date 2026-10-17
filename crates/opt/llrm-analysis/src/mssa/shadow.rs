@@ -13,18 +13,27 @@ use crate::cfg;
 use crate::memory::Unit;
 use crate::memoryssa::{self, Accesses, Kind as Old};
 
-pub fn effect_of<'a>(accesses: &'a Accesses) -> impl Fn(InstId) -> Effect + 'a {
+pub fn effect_of<'a>(
+    accesses: &'a Accesses,
+    function: &'a llrm_mir::module::Function,
+) -> impl Fn(InstId) -> Effect + 'a {
     move |inst| Effect {
         reads: accesses.reads(inst).is_none_or(|reads| !reads.is_empty()),
         writes: accesses.writes(inst).is_none_or(|writes| !writes.is_empty()),
-        ordered: false,
+        // `isOrdered`: a volatile access is a def, so it is ordered against the
+        // other defs.
+        ordered: matches!(
+            function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+                | llrm_mir::opcode::Opcode::Store { volatile: true, .. }
+        ),
     }
 }
 
 pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
     let accesses = Accesses::plain(unit, &Default::default());
     let shape = unit.shape();
-    let mssa = Mssa::build(unit.function, &shape.dominance, &effect_of(&accesses));
+    let mssa = Mssa::build(unit.function, &shape.dominance, &effect_of(&accesses, unit.function));
     (mssa, accesses)
 }
 
@@ -114,7 +123,14 @@ pub fn compare(unit: &Unit) -> Result<(), String> {
     let old = memoryssa::built(unit, &accesses);
     for (site, access) in &old.sites {
         let Some(new) = mssa.get_memory_access(*site) else { return Err(format!("no access for {site:?}")) };
-        if (mssa.access(new).kind == Kind::Def) != (access.kind == Old::Def) {
+        // Today's graph takes a volatile load for a use; LLVM's `isOrdered`
+        // makes it a def.
+        let volatile =
+            matches!(
+                unit.function.instruction(*site).opcode,
+                llrm_mir::opcode::Opcode::Load { volatile: true, .. }
+            );
+        if !volatile && (mssa.access(new).kind == Kind::Def) != (access.kind == Old::Def) {
             return Err(format!("{site:?} is a def in one graph and a use in the other"));
         }
         let defining = resolved(&mssa, mssa.access(new).defining.expect("a defining access"));

@@ -160,3 +160,27 @@ b5:
 ",
     );
 }
+
+/// A volatile load is ordered against the other defs, so it is a def, not a use
+/// (`isOrdered`,
+/// [`MemorySSA.cpp#L1748`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L1748)).
+/// Taken as a use it would move across a store.
+#[test]
+fn test_a_volatile_load_is_a_def() {
+    let parsed = Parsed::new(
+        "define i16 @f() {
+b0:
+  %a = load volatile i16, ptr getelementptr (i8, ptr @g, i16 32)
+  %b = load i16, ptr getelementptr (i8, ptr @g, i16 48)
+  ret i16 %b
+}
+",
+    );
+    let unit = parsed.unit();
+    let (mssa, _) = translated(&unit);
+    mssa.verify_memory_ssa(unit.function, Level::Full).unwrap();
+    let block = unit.function.layout()[0];
+    let insts = unit.function.block(block).instructions();
+    assert_eq!(mssa.access(mssa.get_memory_access(insts[0]).expect("an access")).kind, Kind::Def);
+    assert_eq!(mssa.access(mssa.get_memory_access(insts[1]).expect("an access")).kind, Kind::Use);
+}
