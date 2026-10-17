@@ -528,8 +528,9 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         else "tools/fmt.sh --check; rc=$?; [ $rc -le 1 ] || exit $rc; [ $rc = 0 ] || echo 'fmt: not enforced yet (tiers.toml [fmt])'",
         "rfmt-post": 'cargo test --release -q --manifest-path tools/rfmt-post/Cargo.toml --target-dir "${CARGO_TARGET_DIR:-target}/rfmt-post"',
         "pytest": cfg_pytest(skip_py + tuple(perf_files())),
-        # The tests that read hardware counters, alone: the one job that needs a runner with them (tiers.toml [requires]).
-        "pytest-perf": "PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
+        # The tests that read hardware counters, alone: the one job that needs a runner with them (tiers.toml [requires]). On the dist compiler,
+        # the build the cost gate measures (tools/measure.py).
+        "pytest-perf": "LLRM_BIN=$(python3 tools/measure.py dist) PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
         + " ".join(perf_files())
         + " -- -q -p no:cacheprovider -p pytest_cpulimit",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
