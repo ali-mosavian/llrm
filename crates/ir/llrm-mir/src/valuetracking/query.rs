@@ -349,3 +349,36 @@ impl DomConditionCache {
         self.affected.get(&value).map_or(&[], Vec::as_slice)
     }
 }
+
+/// What a pass builds once per function so that its queries find the
+/// assumptions and the dominating conditions of LLVM's `SimplifyQuery{DL, DT,
+/// AC}`.
+pub struct FunctionAnalyses {
+    layout: DataLayout,
+    dt: DominatorTree,
+    assumptions: AssumptionCache,
+}
+
+impl FunctionAnalyses {
+    pub fn new(
+        module: &Module,
+        function: &Function,
+    ) -> Self {
+        let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
+        Self { layout, dt: DominatorTree::new(function), assumptions: AssumptionCache::new(module, function) }
+    }
+
+    /// A query at `cxt` (`CxtI`), or at no instruction.
+    pub fn query<'a>(
+        &'a self,
+        module: &'a Module,
+        function: &'a Function,
+        cxt: Option<InstId>,
+    ) -> Query<'a> {
+        Query {
+            dt: Some(&self.dt),
+            assumptions: Some(&self.assumptions),
+            ..Query::new(module, function, &self.layout).with_cxt(cxt)
+        }
+    }
+}

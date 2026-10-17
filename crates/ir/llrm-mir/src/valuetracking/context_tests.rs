@@ -212,3 +212,42 @@ fn test_cond_context_known_bits_are_llvms() {
          null_cond cc i0 i1 1 a1 kb=????????????????????????????????????????????????????????????????\n";
     assert_eq!(cond_context_lines(include_str!("../../tests/vt/context/condctx.ll")), expected);
 }
+
+/// `FunctionAnalyses` hands a pass the dominator tree and the assumptions
+/// LLVM's `SimplifyQuery` carries: an `assume` bounds `%x` in the block after
+/// it.
+#[test]
+fn test_function_analyses_find_the_assume() {
+    use crate::module::Operand;
+    let module = crate::parse::module(
+        "declare void @llvm.assume(i1)\ndefine i32 @f(i32 %x) {\n  %c = icmp ult i32 %x, 16\n  call void @llvm.assume(i1 %c)\n  %y = add i32 %x, 1\n  ret i32 %y\n}\n",
+    )
+    .expect("parses");
+    let crate::module::GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else {
+        unreachable!()
+    };
+    let analyses = super::FunctionAnalyses::new(&module, function);
+    let add = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|inst| {
+            function.instruction(*inst).result.is_some()
+                && *inst != function.walk().next().expect("an instruction").1
+                && function.instruction(*inst).operands.len() == 2
+                && matches!(
+                    function.instruction(*inst).opcode,
+                    crate::opcode::Opcode::Binary(_)
+                )
+        })
+        .expect("the add");
+    let query = analyses.query(&module, function, Some(add));
+    let x = Operand::Value(function.parameters()[0]);
+    assert_eq!(super::known::compute_known_bits(&query, x, 0).count_min_leading_zeros(), 28, "x u< 16");
+    let layout = crate::datalayout::DataLayout::default();
+    let without = crate::valuetracking::Query::new(&module, function, &layout).with_cxt(Some(add));
+    assert_eq!(
+        super::known::compute_known_bits(&without, x, 0).count_min_leading_zeros(),
+        0,
+        "no assumptions, no fact"
+    );
+}

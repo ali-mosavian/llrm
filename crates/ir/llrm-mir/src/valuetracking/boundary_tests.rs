@@ -61,3 +61,34 @@ fn the_data_layout_has_no_preferred_alignment() {
     let source = include_str!("../datalayout.rs");
     assert!(!source.contains("fn preferred_align"), "translate Value::getPointerAlignment's preferred alignment");
 }
+
+/// No front end, pass or lowering of llrm builds a vector type, so
+/// `DemandedElts` is not translated. Fails the day one does: ValueTracking's
+/// vector cases are then owed.
+#[test]
+fn nothing_outside_mir_produces_a_vector_type() {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut found = Vec::new();
+    let mut directories = vec![crates];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).expect("a directory").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !matches!(
+                    path.file_name().and_then(|one| one.to_str()),
+                    Some("target" | "tests" | "fixtures")
+                ) {
+                    directories.push(path);
+                }
+            } else if path.extension().is_some_and(|one| one == "rs")
+                && !path.components().any(|part| part.as_os_str() == "llrm-mir")
+                && std::fs::read_to_string(&path).is_ok_and(|text| {
+                    text.split("#[cfg(test)]").next().unwrap_or_default().contains("intern(Type::Vector")
+                })
+            {
+                found.push(path.display().to_string());
+            }
+        }
+    }
+    assert!(found.is_empty(), "these build a vector type: {found:?}");
+}

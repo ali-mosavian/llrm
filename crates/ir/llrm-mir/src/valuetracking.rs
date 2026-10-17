@@ -31,7 +31,7 @@ mod nonzero_tests;
 #[cfg(test)]
 mod power2_tests;
 
-pub use query::{AssumptionCache, CondContext, DomConditionCache, Query};
+pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
 
 #[cfg(test)]
 mod range_tests;
