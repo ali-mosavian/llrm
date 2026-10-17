@@ -127,6 +127,12 @@ pub(crate) fn _folded(
     analyses: &mut Analyses,
     calls: &Calls,
 ) -> bool {
+    // With no float in the body there is nothing to fold: neither the solve
+    // nor the facts under it are asked for (d_faces -O2: 28 of 48 float
+    // solves, a third of what `fold` costs there).
+    if !floatfacts::touches(context, function) {
+        return false;
+    }
     let (facts, conversions) = {
         // The manager's solve, where it was of these writes.
         let solved = (*calls == manager::writes(context, layout, function, analyses))

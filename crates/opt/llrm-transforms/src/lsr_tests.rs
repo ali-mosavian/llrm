@@ -2461,3 +2461,32 @@ b4:
     let printed = same(text, &[&[1, 3], &[2, 3], &[5, -4], &[9, 0]]);
     assert!(readers(&printed, "%i").iter().all(|line| !line.contains("icmp")), "{printed}");
 }
+
+/// Sixteen loops one after another, each walking `@a` by an index it doubles.
+/// After each loop it changed, `lsr` swept the whole function for dead code:
+/// the function's size times the loops, 29% of `lsr` on the scaling `unrolled`
+/// axis (525 against 268 Minstr at 32 loops, slope 2.0 a doubling). Only what
+/// the loop stopped reading can have died.
+#[test]
+fn the_dead_code_after_a_loop_is_found_from_the_loop_not_the_function() {
+    let loops = 16;
+    let mut text =
+        String::from("@a = global [64 x i16] zeroinitializer\n\ndefine i16 @f(i16 %n) {\nentry:\n  br label %l0\n\n");
+    for k in 0..loops {
+        let (before, next) = (if k == 0 { "entry".to_owned() } else { format!("x{}", k - 1) }, format!("l{}", k + 1));
+        let sum = if k == 0 { "0".to_owned() } else { format!("%t{}", k - 1) };
+        text += &format!(
+            "l{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %b{k} ]\n  %s{k} = phi i16 [ {sum}, %{before} ], [ %m{k}, %b{k} ]\n  %c{k} = icmp slt i16 %i{k}, %n\n  br i1 %c{k}, label %b{k}, label %x{k}\n\nb{k}:\n  %o{k} = mul nsw i16 %i{k}, 2\n  %p{k} = getelementptr inbounds i8, ptr @a, i16 %o{k}\n  %v{k} = load i16, ptr %p{k}\n  %m{k} = add i16 %s{k}, %v{k}\n  %n{k} = add nsw i16 %i{k}, 1\n  br label %l{k}\n\nx{k}:\n  %t{k} = add i16 %s{k}, 0\n  br label %{next}\n\n",
+        );
+    }
+    text += &format!("l{loops}:\n  ret i16 %t{}\n}}\n", loops - 1);
+    let text = text.replace("br label %l0\n\nl0", "br label %l0\n\nl0");
+    crate::dead::SCANNED.with(|scanned| scanned.set(0));
+    let (_, printed) = reduced(&text);
+    let scanned = crate::dead::SCANNED.with(std::cell::Cell::get);
+    let size = printed.lines().filter(|line| line.contains(" = ")).count();
+    assert!(
+        scanned <= 4 * size,
+        "{loops} loops of a {size}-instruction function swept {scanned} instructions for dead code"
+    );
+}
