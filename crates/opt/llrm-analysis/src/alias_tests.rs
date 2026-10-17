@@ -1242,6 +1242,28 @@ fn initialized_solves_the_pointer_values_of_a_body_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
 }
 
+/// The escape phase walked the body four times (the stores, the calls, the
+/// instructions that publish, the ones the structure answers for): 286 K
+/// `Function::instruction` calls over d_faces at -O2 for 82 K instructions
+/// that mattered. It walks once, and then only the few that publish or are
+/// asked of.
+#[test]
+fn the_escape_phase_walks_a_body_once() {
+    let mut text = String::from(
+        "declare void @keep(ptr)\n\ndefine i16 @f(ptr %p, i16 %n) {\nb0:\n  %a = alloca i16\n  store i16 1, ptr %a\n",
+    );
+    for i in 0..60 {
+        text += &format!("  %v{i} = add i16 %n, {i}\n");
+    }
+    text += "  call void @keep(ptr %p)\n  ret i16 %n\n}\n";
+    let parsed = Parsed::new(&text);
+    let instructions = 64;
+    let before = crate::alias::escape_visits();
+    parsed.facts();
+    let visits = crate::alias::escape_visits() - before;
+    assert!(visits < 2 * instructions, "{visits} visits for {instructions} instructions");
+}
+
 /// `initialized` asked the escape phase twice more (with the call arguments,
 /// and plain) for provenance alone: `.values` of each is the value solve's, and
 /// 20 of d_faces' 252 escape phases at -O2 were these. It asks the one of

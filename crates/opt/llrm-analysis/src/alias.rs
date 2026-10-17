@@ -234,6 +234,15 @@ struct Inputs {
     order: Vec<Vec<Step>>,
 }
 
+/// An instruction of a block that can publish, or that the structure answers
+/// for.
+struct Entry {
+    inst: InstId,
+    call: bool,
+    candidate: bool,
+    asked: bool,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct Step {
     inst: InstId,
@@ -260,6 +269,13 @@ struct Built {
 thread_local! {
     static BEFORE_ANSWERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static STRUCTURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ESCAPE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many instruction visits the escape phase has made on this thread, for a
+/// test that a solve walks the body once.
+pub fn escape_visits() -> usize {
+    ESCAPE_VISITS.with(std::cell::Cell::get)
 }
 
 /// How many `EscapedBefore` structures this thread has built, for a test that a
@@ -3146,20 +3162,34 @@ fn escapes(
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
-    for (_, inst) in function.walk() {
-        let op = function.instruction(inst);
-        if !matches!(op.opcode, Opcode::Store { .. }) {
-            continue;
+    // The body is walked once: each block's instructions that can publish or
+    // are asked of, and the pointers its stores put into objects.
+    let mut entries: Vec<Vec<Entry>> = Vec::with_capacity(graph.len());
+    for block in &graph {
+        let mut here = Vec::new();
+        for &inst in instructions(block.at) {
+            ESCAPE_VISITS.with(|visits| visits.set(visits.get() + 1));
+            let op = function.instruction(inst);
+            let call = matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_));
+            let candidate = call || could_publish(unit, op);
+            let asked = call || matches!(op.opcode, Opcode::Load { .. } | Opcode::Store { .. });
+            if candidate || asked {
+                here.push(Entry { inst, call, candidate, asked });
+            }
+            if !matches!(op.opcode, Opcode::Store { .. }) {
+                continue;
+            }
+            let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
+            let Some(reference) = MemRef::of(unit, inst) else { continue };
+            let targets = _resolved_reference(unit, &reference, &values)
+                .into_iter()
+                .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
+                .collect::<BTreeSet<_>>();
+            for target in targets {
+                pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
+            }
         }
-        let Some(source) = _operand(unit, op.operands[0], &values) else { continue };
-        let Some(reference) = MemRef::of(unit, inst) else { continue };
-        let targets = _resolved_reference(unit, &reference, &values)
-            .into_iter()
-            .flat_map(|provenance| provenance.slices.into_iter().map(|one| one.object))
-            .collect::<BTreeSet<_>>();
-        for target in targets {
-            pointer_fields.entry(target).or_default().extend(source.slices.iter().map(|one| one.object));
-        }
+        entries.push(here);
     }
 
     // Objects numbered once, so closures and unions compare indices instead
@@ -3231,7 +3261,6 @@ fn escapes(
     // What each instruction publishes does not depend on what reached it,
     // so it is found once; only the unions along edges iterate: the
     // gen/kill form of a forward dataflow.
-    let calls = call_sites(unit).into_iter().collect::<BTreeSet<_>>();
     let provenances = |operands: &[Operand], values: &IndexMap<ValueId, Provenance>| {
         operands
             .iter()
@@ -3241,21 +3270,21 @@ fn escapes(
     };
     let mut publishes: IndexMap<i64, HashMap<InstId, Vec<usize>>> = IndexMap::default();
     let mut during: IndexMap<InstId, Vec<usize>> = IndexMap::default();
-    for block in &graph {
+    for (block, here) in graph.iter().zip(&entries) {
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
-        for &inst in instructions(block.at) {
+        for &Entry { inst, call, candidate, .. } in here {
+            ESCAPE_VISITS.with(|visits| visits.set(visits.get() + 1));
+            if !candidate {
+                continue;
+            }
             let op = function.instruction(inst);
             // What publishes an object: a call, a return, a store of a pointer,
             // an integer made of a pointer, a pointer an
             // instruction takes and does not carry on, or a
             // constant that names a global. The rest holds the
             // state it had (`_lost` says which carry: loads, moves and joins).
-            let publishes_something = calls.contains(&inst) || could_publish(unit, op);
-            if !publishes_something {
-                continue;
-            }
             let mut newly = BTreeSet::new();
             // What a call reads a pointer out of, it may keep.
             let mut lent = BTreeSet::new();
@@ -3263,7 +3292,7 @@ fn escapes(
             // during the call, so it may read and write it, but
             // escapes no further.
             let mut passing = BTreeSet::new();
-            if calls.contains(&inst) {
+            if call {
                 if let Some(arguments) = arguments {
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     let kept = |index: usize| -> Result<bool, String> {
@@ -3332,7 +3361,7 @@ fn escapes(
             if !published.is_empty() {
                 mine.insert(inst, published);
             }
-            if calls.contains(&inst) {
+            if call {
                 during.insert(inst, initialized(pointees(passing)));
             }
         }
@@ -3345,9 +3374,11 @@ fn escapes(
     // of) is found when first asked.
     let mut every = Bits::new(width);
     let mut order: Vec<Vec<Step>> = Vec::with_capacity(graph.len());
-    for block in &graph {
+    for (block, here) in graph.iter().zip(&entries) {
         let mut steps = Vec::new();
-        for inst in instructions(block.at) {
+        for entry in here {
+            ESCAPE_VISITS.with(|visits| visits.set(visits.get() + 1));
+            let inst = &entry.inst;
             let publishes = publishes[&block.at]
                 .get(inst)
                 .map(
@@ -3358,13 +3389,8 @@ fn escapes(
                         sorted
                     },
                 );
-            let asked = calls.contains(inst)
-                || matches!(
-                    function.instruction(*inst).opcode,
-                    Opcode::Load { .. } | Opcode::Store { .. }
-                );
-            if publishes.is_some() || asked {
-                steps.push(Step { inst: *inst, publishes, asked });
+            if publishes.is_some() || entry.asked {
+                steps.push(Step { inst: *inst, publishes, asked: entry.asked });
             }
         }
         order.push(steps);
