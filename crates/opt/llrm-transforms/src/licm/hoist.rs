@@ -59,6 +59,10 @@ pub fn hoist_region(
             continue;
         }
         for inst in unit.function.block(block).instructions().to_vec() {
+            // Erased or sunk by `sinkRegion`.
+            if ctx.state.gone.borrow().contains(&inst) {
+                continue;
+            }
             // Try hoisting the instruction out to the preheader. We can only do
             // this if all of the operands of the instruction are loop invariant
             // and if it is safe to hoist the instruction.
@@ -66,7 +70,7 @@ pub fn hoist_region(
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
             {
-                ctx.local.borrow_mut().insert(inst, preheader);
+                ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push((inst, preheader));
             }
         }

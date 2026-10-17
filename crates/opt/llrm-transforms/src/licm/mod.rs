@@ -10,6 +10,7 @@
 mod calls;
 mod hoist;
 mod safety;
+mod sink;
 #[cfg(test)]
 mod tests;
 
@@ -90,18 +91,24 @@ impl Flags {
     }
 }
 
+/// What the decisions so far have done to the function: where the
+/// instructions moved now stand, and which are gone from the loops they were
+/// in (erased as dead, or sunk).
+#[derive(Default)]
+pub struct State {
+    pub moved: std::cell::RefCell<IdMap<InstId, BlockId>>,
+    pub gone: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
+}
+
 /// One loop, as `hoistRegion` sees it: its blocks, the loops in it, and where
-/// the instructions the pass has hoisted stand.
+/// the instructions the pass has moved stand.
 pub struct LoopCtx<'a> {
     pub function: &'a Function,
     pub shape: &'a Shape,
     pub loop_: &'a Loop,
     /// Each block's innermost loop, an index in `shape.loops`.
     pub innermost: &'a IdMap<BlockId, usize>,
-    /// Where each hoisted instruction stands now: the preheader it went to.
-    pub moved: &'a IdMap<InstId, BlockId>,
-    /// What this loop has hoisted so far.
-    pub local: std::cell::RefCell<IdMap<InstId, BlockId>>,
+    pub state: &'a State,
 }
 
 impl LoopCtx<'_> {
@@ -118,13 +125,7 @@ impl LoopCtx<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        let block = self
-            .local
-            .borrow()
-            .get(&inst)
-            .copied()
-            .or_else(|| self.moved.get(&inst).copied())
-            .or_else(|| self.function.parent(inst));
+        let block = self.state.moved.borrow().get(&inst).copied().or_else(|| self.function.parent(inst));
         block.is_some_and(|block| self.contains_block(block))
     }
 
@@ -172,6 +173,9 @@ pub struct Hoisted {
 #[derive(Clone, Debug, Default)]
 pub struct Decisions {
     pub hoisted: Vec<Hoisted>,
+    /// `NumSunk`, and what `isInstructionTriviallyDead` erases.
+    pub sunk: Vec<Hoisted>,
+    pub erased: Vec<Hoisted>,
     /// `NumMovedLoads` and `NumMovedCalls`.
     pub moved_loads: usize,
     pub moved_calls: usize,
@@ -203,36 +207,37 @@ pub fn decide(
             innermost.insert(cfg::block(block), at);
         }
     }
-    let mut moved: IdMap<InstId, BlockId> = IdMap::new();
+    let state = State::default();
     for (at, one) in shape.loops.iter().enumerate() {
-        let ctx = LoopCtx {
-            function: unit.function,
-            shape: &shape,
-            loop_: one,
-            innermost: &innermost,
-            moved: &moved,
-            local: Default::default(),
-        };
-        let found = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
         let _ = at;
-        for (inst, preheader) in &found {
-            decisions.hoisted.push(Hoisted { function: unit.id, header: cfg::block(one.header), inst: *inst });
-            match unit.function.instruction(*inst).opcode {
-                llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
-                llrm_mir::opcode::Opcode::Call(_) => decisions.moved_calls += 1,
-                _ => {}
+        let ctx = LoopCtx { function: unit.function, shape: &shape, loop_: one, innermost: &innermost, state: &state };
+        let (sunk, hoisted) = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
+        let header = cfg::block(one.header);
+        let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
+            llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
+            llrm_mir::opcode::Opcode::Call(_) => decisions.moved_calls += 1,
+            _ => {}
+        };
+        for (inst, how) in sunk {
+            match how {
+                sink::Sinking::Erased => decisions.erased.push(Hoisted { function: unit.id, header, inst }),
+                sink::Sinking::Sunk => {
+                    decisions.sunk.push(Hoisted { function: unit.id, header, inst });
+                    count(inst, &mut decisions);
+                }
             }
-            let _ = preheader;
         }
-        for (inst, preheader) in found {
-            moved.insert(inst, preheader);
+        for (inst, _) in hoisted {
+            decisions.hoisted.push(Hoisted { function: unit.id, header, inst });
+            count(inst, &mut decisions);
         }
     }
     decisions
 }
 
-/// `runOnLoop` for the hoisting: the instructions hoisted, each with the
-/// preheader it goes to.
+/// `runOnLoop`: the sinking, then the hoisting, as decisions: what is erased or
+/// sunk, and what is hoisted with the preheader it goes to.
+#[allow(clippy::type_complexity)]
 fn run_on_loop(
     unit: &passes::Unit,
     outer: &llrm_mir::passes::Outer,
@@ -240,18 +245,38 @@ fn run_on_loop(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> Vec<(InstId, BlockId)> {
+) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>) {
     use llrm_analysis::cfg::Around;
-    let Some(preheader) = ctx.loop_.preheader(unit.function).map(cfg::block) else { return Vec::new() };
+    let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(
         LICM_MSSA_OPT_CAP,
         LICM_MSSA_NO_ACC_FOR_PROMOTION_CAP,
-        false,
+        true,
         ctx.loop_.body.iter().map(|&at| cfg::block(at)),
         mssa,
     );
     let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape);
-    hoist::hoist_region(unit, outer, ctx, preheader, mssa, aa, &mut flags, &safety)
+    let sunk = if has_dedicated_exits(ctx) {
+        sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
+    } else {
+        Vec::new()
+    };
+    flags.set_is_sink(false);
+    let hoisted = match preheader {
+        Some(preheader) => hoist::hoist_region(unit, outer, ctx, preheader, mssa, aa, &mut flags, &safety),
+        None => Vec::new(),
+    };
+    (sunk, hoisted)
+}
+
+/// `Loop::hasDedicatedExits`: every exit block has only predecessors in the
+/// loop.
+fn has_dedicated_exits(ctx: &LoopCtx) -> bool {
+    ctx.loop_.body.iter().all(|&at| {
+        ctx.function.successors(cfg::block(at)).into_iter().all(|exit| {
+            ctx.contains_block(exit) || ctx.function.predecessors(exit).into_iter().all(|pred| ctx.contains_block(pred))
+        })
+    })
 }
 
 /// The hoisting decisions as a pass that moves nothing: it counts what it
@@ -281,6 +306,8 @@ impl FunctionPass for Licm {
         DECIDED.with(|all| {
             let mut all = all.borrow_mut();
             all.hoisted.extend(found.hoisted);
+            all.sunk.extend(found.sunk);
+            all.erased.extend(found.erased);
             all.moved_loads += found.moved_loads;
             all.moved_calls += found.moved_calls;
         });

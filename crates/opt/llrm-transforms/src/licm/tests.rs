@@ -6,6 +6,18 @@ use crate::testing::parsed;
 
 /// The names of what `Licm` hoists in `text`, in the order it decides.
 fn decided(text: &str) -> Vec<String> {
+    named(text, |all| all.hoisted.clone())
+}
+
+/// The names of what it sinks, and of what it erases as dead.
+fn sunk_and_erased(text: &str) -> (Vec<String>, Vec<String>) {
+    (named(text, |all| all.sunk.clone()), named(text, |all| all.erased.clone()))
+}
+
+fn named(
+    text: &str,
+    pick: impl Fn(&Decisions) -> Vec<super::Hoisted>,
+) -> Vec<String> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
@@ -14,7 +26,7 @@ fn decided(text: &str) -> Vec<String> {
         .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    let hoisted = DECIDED.with(|all| all.borrow().hoisted.clone());
+    let hoisted = DECIDED.with(|all| pick(&all.borrow()));
     hoisted
         .iter()
         .map(|one| {
@@ -98,4 +110,59 @@ fn test_a_call_that_may_throw_stays() {
     };
     assert_eq!(decided(&call(" readnone")), Vec::<String>::new());
     assert_eq!(decided(&call(" nounwind readnone")), ["v"]);
+}
+
+/// An exit's LCSSA phi reading `body`'s `%v` out of a loop that counts `%i` up
+/// to `%n`: the value is read only after the loop.
+fn sinking(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 0
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+{body}  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = phi i16 [ %v, %b1 ]
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// A value only the code after the loop reads is computed there: sunk from the
+/// loop, as the exit's phi reads it. Read in the loop too, it stays.
+#[test]
+fn test_a_value_only_read_after_the_loop_is_sunk() {
+    let (sunk, erased) = sunk_and_erased(&sinking("  %v = mul i16 %i, 3\n"));
+    assert_eq!((sunk, erased), (vec!["v".to_owned()], Vec::<String>::new()));
+    let used = sinking("  %v = mul i16 %i, 3\n  %w = add i16 %v, 1\n  store i16 %w, ptr @h\n");
+    assert_eq!(sunk_and_erased(&used).0, Vec::<String>::new());
+}
+
+/// A value nothing reads is erased, not sunk.
+#[test]
+fn test_a_value_nothing_reads_is_erased() {
+    let (sunk, erased) = sunk_and_erased(&sinking("  %v = mul i16 %i, 3\n  %dead = add i16 %i, 7\n"));
+    assert_eq!((sunk, erased), (vec!["v".to_owned()], vec!["dead".to_owned()]));
+}
+
+/// A load goes after the loop only where the loop has no def before it: a store
+/// anywhere in the loop (here to another global) keeps it
+/// (`pointerInvalidatedByLoop` for sinking checks every def, the walker is not
+/// asked).
+#[test]
+fn test_a_load_is_sunk_only_from_a_loop_with_no_defs() {
+    assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n")).0, ["v"]);
+    assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n  store i16 %i, ptr @h\n")).0, Vec::<String>::new());
 }
