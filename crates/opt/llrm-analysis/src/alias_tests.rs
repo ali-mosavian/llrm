@@ -1242,6 +1242,43 @@ fn initialized_solves_the_pointer_values_of_a_body_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "initialized solved the pointer values again");
 }
 
+/// The escape phase walked the body four times (the stores, the calls, the
+/// instructions that publish, the ones the structure answers for): 286 K
+/// `Function::instruction` calls over d_faces at -O2 for 82 K instructions
+/// that mattered. It walks once, and then only the few that publish or are
+/// asked of.
+#[test]
+fn the_escape_phase_walks_a_body_once() {
+    let mut text = String::from(
+        "declare void @keep(ptr)\n\ndefine i16 @f(ptr %p, i16 %n) {\nb0:\n  %a = alloca i16\n  store i16 1, ptr %a\n",
+    );
+    for i in 0..60 {
+        text += &format!("  %v{i} = add i16 %n, {i}\n");
+    }
+    text += "  call void @keep(ptr %p)\n  ret i16 %n\n}\n";
+    let parsed = Parsed::new(&text);
+    let instructions = 64;
+    let before = crate::alias::escape_visits();
+    parsed.facts();
+    let visits = crate::alias::escape_visits() - before;
+    assert!(visits < 2 * instructions, "{visits} visits for {instructions} instructions");
+}
+
+/// `initialized` asked the escape phase twice more (with the call arguments,
+/// and plain) for provenance alone: `.values` of each is the value solve's, and
+/// 20 of d_faces' 252 escape phases at -O2 were these. It asks the one of
+/// `calls_annotated`, whose effects it reads.
+#[test]
+fn initialized_asks_no_escape_phase_of_its_own() {
+    let parsed = Parsed::new(
+        "declare void @g(ptr)\n\ndefine void @f(ptr %p) {\nb0:\n  store i16 0, ptr %p\n  call void @g(ptr %p)\n  ret void\n}\n",
+    );
+    let unit = parsed.unit();
+    let before = crate::alias::escape_solves();
+    initialized(&Procedure::of(unit), &IndexMap::default()).unwrap();
+    assert_eq!(crate::alias::escape_solves() - before, 1, "initialized asked for what escapes for its own use");
+}
+
 /// A loop the shape does not know of: the shape was taken before a copy loop
 /// was spliced in, so its dominance says no block dominates a latch and no back
 /// edge widens the pointers that walk it. Each round adds an offset to them
@@ -1551,6 +1588,33 @@ b0:
     assert_eq!(crate::alias::before_answers() - before, 1, "an answer was worked out twice");
     let a = parsed.object("a");
     assert!(first.contains(&a), "a kept argument has escaped by the call that keeps it: {first:?}");
+}
+
+/// `apart` found what escaped before the instruction (the block-entry dataflow
+/// of the whole body) before it looked at the two references: 4,503 asks over
+/// d_faces -O2, nearly all of an access that reaches more than what escaped.
+/// It asks only for an access that reaches only what escaped, to a frame cell,
+/// and then once.
+#[test]
+fn apart_builds_what_escaped_only_for_an_access_that_reaches_only_what_escaped() {
+    let parsed = Parsed::new(
+        "define void @f(ptr %p) {\nb0:\n  %a = alloca i16\n  store i16 1, ptr %a\n  store i16 2, ptr %p\n  ret void\n}\n",
+    );
+    let facts = parsed.facts();
+    let unit = parsed.unit();
+    let stores = parsed.all(|op| matches!(op, Opcode::Store { .. }));
+    let held = |store| {
+        let reference = MemRef::of(&unit, store).expect("a store");
+        MemRef { provenance: facts.reference(&unit, &reference), ..reference }
+    };
+    let (own, through) = (held(stores[0]), MemRef::of(&unit, stores[1]).expect("a store"));
+    assert!(own.provenance.is_some() && through.provenance.is_none(), "premise");
+    let before = crate::alias::structures_built();
+    assert!(!facts.escaped_before.apart(stores[1], &own, &own), "an access to a frame object reaches it");
+    assert_eq!(crate::alias::structures_built() - before, 0, "built for an access that reaches more");
+    assert!(facts.escaped_before.apart(stores[1], &through, &own), "an unplaced pointer cannot reach a frame cell");
+    assert!(facts.escaped_before.apart(stores[1], &through, &own));
+    assert_eq!(crate::alias::structures_built() - before, 1, "built once, when asked");
 }
 
 /// An access was held for each version of its function, and a type tag
