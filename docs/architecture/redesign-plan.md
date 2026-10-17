@@ -8,7 +8,7 @@
 
 ## Status
 
-As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are simplifycfg-poc (after #2046 and #2050 merge). Unchanged: keep-analyses (facts-per-query), gate-dist-build, plan-upkeep-rows.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). Unchanged: keep-analyses (facts-per-query) and plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
@@ -25,6 +25,8 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | dse POC | dse-poc | measured | 13x LLVM per IR instruction; fact set plus walk step 3,440 instructions against a target of about 300 |
 | lsr probe | indvars-decide-poc | KILLED | forecast kept; DEVIATE, 425 objects differ |
 | mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
+| valuetracking-port | valuetracking-port | starting; fold-poc writes the API stub first | translation of `ValueTracking.cpp`, `KnownBits`, `ConstantRange`; consumers: InstSimplify gaps, EarlyCSE, InstCombine, SCCP, LVI, CVP, SCEV |
+| oracle triage | facts-per-query | running | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); [#2110] is held by the user (no row trade) |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
@@ -1097,6 +1099,8 @@ Checklist: the shared list.
 
 ## 4. Cross-step guards
 
+**Translate, do not paraphrase.** Every LLVM-mirroring pass or file is a translation of LLVM's C++ at `d1106deb71cc`, read from a local checkout and not from memory or docs. The Rust follows the C++ structure: its functions, worklists, caps and thresholds with the `cl::opt` defaults, and the order of the checks. Each function carries a one-line permalink comment. Anything not translated is a `DEVIATE` with the reason and a number in the PR; the PR's `LLVM structure` line names files and lines; review reads the two side by side.
+
 **Mirror LLVM's structure by default.** Every design page and every structural PR carries a `LLVM structure` line: LLVM's structure (name and permalink at `d1106deb71cc`), ours, and `MIRROR` or `DEVIATE` with the reason. The default is to mirror. A deviation needs a reason (our MIR or LIR differs; output would change and the rows rule applies; measured not better) and a number. The mapping so far:
 
 | LLVM structure | ours | status |
@@ -1356,10 +1360,14 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2072]: https://github.com/ali-mosavian/llrm/pull/2072
 [#2067]: https://github.com/ali-mosavian/llrm/pull/2067
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2094]: https://github.com/ali-mosavian/llrm/pull/2094
+[#2110]: https://github.com/ali-mosavian/llrm/pull/2110
+[#2111]: https://github.com/ali-mosavian/llrm/pull/2111
+[#2112]: https://github.com/ali-mosavian/llrm/pull/2112
+[#2113]: https://github.com/ali-mosavian/llrm/pull/2113
 [#2076]: https://github.com/ali-mosavian/llrm/pull/2076
 [#2100]: https://github.com/ali-mosavian/llrm/pull/2100
 [#2106]: https://github.com/ali-mosavian/llrm/pull/2106
-[#2110]: https://github.com/ali-mosavian/llrm/pull/2110
 [#2119]: https://github.com/ali-mosavian/llrm/pull/2119
 [#2122]: https://github.com/ali-mosavian/llrm/pull/2122
 [#2068]: https://github.com/ali-mosavian/llrm/pull/2068
