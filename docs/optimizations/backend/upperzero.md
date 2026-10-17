@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/upperzero.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/upperzero.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:a0735aff6be5598c6af4fc0ac77066ddbb782c309790e520d8828b10d0a8a4bc -->
+<!-- src: crates/backend/llrm-core/src/backend/upperzero.rs sha256:5edf217f1822df7f90ea7083adafbab594e31a53616e444623b990d7701e1bce -->
 
 # upperzero
 
@@ -58,8 +58,11 @@ esp-relative later) and no instruction reads it whole by name.
 
 ## Provides
 `before`, the zero roots before each instruction, keyed by instruction
-identity. `preheaded` places `movzx` in loop preheaders for roots a caller
-asks for.
+identity. The answer is kept between asks and brought up to date from the
+blocks that changed ([`crate::backend::incremental`](incremental.md));
+`LLRM_CHECK_ZEROROOTS=1` solves the body from scratch after every answer and
+asserts they agree. `preheaded` places `movzx` in loop preheaders for roots
+a caller asks for.
 
 ## Runs
 `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when
