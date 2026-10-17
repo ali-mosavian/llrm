@@ -286,6 +286,21 @@ impl<K: Dense, V> IdMap<K, V> {
         self.get(key).is_some()
     }
 
+    /// Only the entries `keep` says to.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(K, &mut V) -> bool,
+    ) {
+        for (at, slot) in self.slots.iter_mut().enumerate() {
+            if let Some(value) = slot
+                && !keep(K::at(at), value)
+            {
+                *slot = None;
+                self.len -= 1;
+            }
+        }
+    }
+
     /// The value `key` had.
     pub fn insert(
         &mut self,
@@ -419,6 +434,45 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
+
+    /// Block addresses stand in for the B-trees of them (`BTreeSet<i64>`,
+    /// `BTreeMap<i64, _>`): the same members in the same ascending order,
+    /// and the set operations the passes used on them.
+    #[test]
+    fn test_a_set_of_block_addresses_agrees_with_the_btree_it_replaces() {
+        let (a, b): (Vec<i64>, Vec<i64>) =
+            ((0..300).filter(|n| n % 3 != 0).collect(), (0..300).filter(|n| n % 2 == 0).collect());
+        let (set_a, set_b): (IdSet<i64>, IdSet<i64>) = (a.iter().copied().collect(), b.iter().copied().collect());
+        let (tree_a, tree_b): (BTreeSet<i64>, BTreeSet<i64>) =
+            (a.iter().copied().collect(), b.iter().copied().collect());
+        assert_eq!(set_a.iter().collect::<Vec<_>>(), tree_a.iter().copied().collect::<Vec<_>>());
+        assert_eq!(
+            set_a.difference(&set_b).collect::<Vec<_>>(),
+            tree_a.difference(&tree_b).copied().collect::<Vec<_>>()
+        );
+        assert_eq!(set_a.is_subset(&set_b), tree_a.is_subset(&tree_b));
+        assert!(IdSet::<i64>::from_iter([2, 4]).is_subset(&set_b) && !set_a.is_subset(&set_b));
+        assert_eq!(set_a.is_disjoint(&set_b), tree_a.is_disjoint(&tree_b));
+        let mut joined = set_a.clone();
+        assert!(joined.union_with(&set_b) && !joined.union_with(&set_b));
+        assert_eq!(joined.iter().collect::<Vec<_>>(), tree_a.union(&tree_b).copied().collect::<Vec<_>>());
+        assert_eq!(joined.len(), tree_a.union(&tree_b).count());
+        let mut queue = set_a.clone();
+        let mut tree = tree_a.clone();
+        while let Some(first) = tree.pop_first() {
+            assert_eq!(queue.pop_first(), Some(first));
+        }
+        assert_eq!((queue.pop_first(), queue.len()), (None, 0));
+    }
+
+    /// A map keeps what `retain` says to, ascending, and counts it.
+    #[test]
+    fn test_a_map_of_block_addresses_retains_and_counts() {
+        let mut map: IdMap<i64, i64> = (0..10).map(|n| (n, n * n)).collect();
+        map.retain(|at, _| at % 3 == 0);
+        assert_eq!(map.iter().map(|(at, value)| (at, *value)).collect::<Vec<_>>(), [(0, 0), (3, 9), (6, 36), (9, 81)]);
+        assert_eq!(map.len(), 4);
+    }
 
     /// A set agrees with a `BTreeSet` of the same inserts and removes:
     /// membership, count, ascending order, what each call returns.
