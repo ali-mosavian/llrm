@@ -1,16 +1,17 @@
-//! What `MemorySSA.cpp` asks of `AliasAnalysis`, answered per query from the syntactic references
-//! of `Accesses::plain`: nothing is built for the whole function. `AAQueryInfo`'s cache
+//! What `MemorySSA.cpp` asks of `AliasAnalysis`, answered per query from the
+//! syntactic references of `Accesses::plain`: nothing is built for the whole
+//! function. `AAQueryInfo`'s cache
 //! ([`AliasAnalysis.h#L239`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/AliasAnalysis.h#L239))
 //! is the `(def, location)` map here.
 //!
-//! DEVIATE: LLVM's `MemoryLocation` is `{Ptr, Size, AAInfo}`; here a location is a `MemRef`
-//! (the pointer decomposed, with its type lineage) and a flag for a size made unknown
-//! (`LocationSize::beforeOrAfterPointer`).
+//! DEVIATE: LLVM's `MemoryLocation` is `{Ptr, Size, AAInfo}`; here a location
+//! is a `MemRef` (the pointer decomposed, with its type lineage) and a flag for
+//! a size made unknown (`LocationSize::beforeOrAfterPointer`).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::Opcode;
 
@@ -23,20 +24,26 @@ pub struct Location {
     /// The number of this location among those the query has made.
     pub id: u32,
     pub reference: MemRef,
-    /// `LocationSize::beforeOrAfterPointer`: any access before or after the pointer clobbers.
+    /// `LocationSize::beforeOrAfterPointer`: any access before or after the
+    /// pointer clobbers.
     pub unbounded: bool,
-    /// What an overlap test is asked of: the reference, its width made large when unbounded.
+    /// What an overlap test is asked of: the reference, its width made large
+    /// when unbounded.
     effective: MemRef,
+    /// This location with its size made unknown, made once.
+    wider: std::cell::OnceCell<Rc<Location>>,
 }
 
 /// `AAResults` / `BatchAAResults` as MemorySSA uses them.
 pub struct AliasQuery<'a> {
     unit: &'a Unit<'a>,
     accesses: &'a Accesses,
-    locations: RefCell<HashMap<(MemRef, bool), Rc<Location>>>,
-    by_instruction: RefCell<HashMap<InstId, Option<Rc<Location>>>>,
-    /// `AAQueryInfo::AliasCache`.
-    cache: RefCell<HashMap<(InstId, u32), bool>>,
+    next_id: std::cell::Cell<u32>,
+    by_instruction: RefCell<IdMap<InstId, Option<Rc<Location>>>>,
+    /// `AAQueryInfo::AliasCache`: per def, the answer for each location asked.
+    cache: RefCell<IdMap<InstId, Vec<(u32, bool)>>>,
+    /// Questions asked of `mod_set_loc`, and those it had to work out.
+    asked: std::cell::Cell<(usize, usize)>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -47,33 +54,53 @@ impl<'a> AliasQuery<'a> {
         unit: &'a Unit<'a>,
         accesses: &'a Accesses,
     ) -> Self {
-        Self { unit, accesses, locations: Default::default(), by_instruction: Default::default(), cache: Default::default() }
+        Self {
+            unit,
+            accesses,
+            next_id: Default::default(),
+            by_instruction: Default::default(),
+            cache: Default::default(),
+            asked: Default::default(),
+        }
+    }
+
+    /// How many `mod_set_loc` questions were asked and how many were worked out
+    /// (the rest were in the cache).
+    pub fn questions(&self) -> (usize, usize) {
+        self.asked.get()
     }
 
     pub fn unit(&self) -> &Unit<'a> {
         self.unit
     }
 
-    /// A location for `reference`, the same one for the same reference and size flag.
-    pub fn intern(
+    /// A new location for `reference`; a location is told apart from another by
+    /// its number, so no `MemRef` is hashed.
+    pub fn location_for(
         &self,
         reference: &MemRef,
         unbounded: bool,
     ) -> Rc<Location> {
-        let mut locations = self.locations.borrow_mut();
-        let next = locations.len() as u32;
-        locations
-            .entry((reference.clone(), unbounded))
-            .or_insert_with(|| {
-                let effective =
-                    if unbounded { MemRef { width: UNBOUNDED_WIDTH, ..reference.clone() } } else { reference.clone() };
-                Rc::new(Location { id: next, reference: reference.clone(), unbounded, effective })
-            })
-            .clone()
+        let id = self.next_id.get();
+        self.next_id.set(id + 1);
+        let effective =
+            if unbounded { MemRef { width: UNBOUNDED_WIDTH, ..reference.clone() } } else { reference.clone() };
+        Rc::new(Location { id, reference: reference.clone(), unbounded, effective, wider: Default::default() })
     }
 
-    /// `MemoryLocation::get(Inst)`: none where the instruction has no single location (a call, a
-    /// fence), and where the references hold none.
+    /// `getWithNewSize(LocationSize::beforeOrAfterPointer())`.
+    pub fn widened(
+        &self,
+        loc: &Rc<Location>,
+    ) -> Rc<Location> {
+        if loc.unbounded {
+            return Rc::clone(loc);
+        }
+        Rc::clone(loc.wider.get_or_init(|| self.location_for(&loc.reference, true)))
+    }
+
+    /// `MemoryLocation::get(Inst)`: none where the instruction has no single
+    /// location (a call, a fence), and where the references hold none.
     pub fn location_of(
         &self,
         inst: InstId,
@@ -83,7 +110,7 @@ impl<'a> AliasQuery<'a> {
         }
         let made = match self.unit.function.instruction(inst).opcode {
             Opcode::Load { .. } | Opcode::Store { .. } => {
-                self.accesses.references.get(&inst).map(|reference| self.intern(reference, false))
+                self.accesses.references.get(&inst).map(|reference| self.location_for(reference, false))
             }
             _ => None,
         };
@@ -91,25 +118,31 @@ impl<'a> AliasQuery<'a> {
         made
     }
 
-    /// `isModSet(AA.getModRefInfo(DefInst, UseLoc))`: whether `def` may write a byte of `loc`.
+    /// `isModSet(AA.getModRefInfo(DefInst, UseLoc))`: whether `def` may write a
+    /// byte of `loc`.
     pub fn mod_set_loc(
         &self,
         def: InstId,
         loc: &Location,
     ) -> bool {
-        if let Some(known) = self.cache.borrow().get(&(def, loc.id)) {
-            return *known;
+        let (asked, worked) = self.asked.get();
+        self.asked.set((asked + 1, worked));
+        if let Some(&(_, known)) =
+            self.cache.borrow().get(&def).and_then(|asked| asked.iter().find(|(id, _)| *id == loc.id))
+        {
+            return known;
         }
+        self.asked.set((asked + 1, worked + 1));
         let writes = self.accesses.writes(def);
         let found = memoryssa::changes(&loc.effective, false, writes, |written| {
             memoryssa::may_clobber(self.unit, None, &loc.effective, written)
         });
-        self.cache.borrow_mut().insert((def, loc.id), found);
+        self.cache.borrow_mut().get_or_insert_with(def, Vec::new).push((loc.id, found));
         found
     }
 
-    /// `isModSet(AA.getModRefInfo(DefInst, CB))`: whether `def` may write a byte `call` reads or
-    /// writes.
+    /// `isModSet(AA.getModRefInfo(DefInst, CB))`: whether `def` may write a
+    /// byte `call` reads or writes.
     pub fn mod_set_call(
         &self,
         def: InstId,
@@ -147,8 +180,13 @@ impl<'a> AliasQuery<'a> {
         used: InstId,
         may_clobber: InstId,
     ) -> bool {
-        let volatile = |inst: InstId| matches!(self.unit.function.instruction(inst).opcode, Opcode::Load { volatile: true, .. });
-        // Volatile operations may never be reordered with other volatile operations.
+        let volatile =
+            |inst: InstId| matches!(
+                self.unit.function.instruction(inst).opcode,
+                Opcode::Load { volatile: true, .. }
+            );
+        // Volatile operations may never be reordered with other volatile
+        // operations.
         !(volatile(used) && volatile(may_clobber))
     }
 }

@@ -53,8 +53,8 @@ pub struct MemoryAccess {
     pub defining: Option<AccessId>,
     /// `MemoryPhi`: `(getIncomingBlock(i), getIncomingValue(i))`.
     pub incoming: Vec<(BlockId, AccessId)>,
-    /// A def's optimized access (operand 1), none for a use (whose optimized access is its
-    /// defining access).
+    /// A def's optimized access (operand 1), none for a use (whose optimized
+    /// access is its defining access).
     pub optimized: Option<AccessId>,
     /// `OptimizedID`: the id of the access this one was optimized to.
     pub optimized_id: Option<u32>,
@@ -176,8 +176,8 @@ impl Mssa {
         }
     }
 
-    /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets operand 0 (the defining
-    /// access); for a def, operand 1.
+    /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets
+    /// operand 0 (the defining access); for a def, operand 1.
     pub(crate) fn set_optimized(
         &mut self,
         access: AccessId,

@@ -1,11 +1,13 @@
-//! The clobber walker of `MemorySSA.cpp`: `ClobberWalker`, `ClobberWalkerBase`, `CachingWalker`
-//! and `SkipSelfWalker`, with `upward_defs_iterator` from `MemorySSA.h`. Caps stand at their
-//! `cl::opt` defaults.
+//! The clobber walker of `MemorySSA.cpp`: `ClobberWalker`, `ClobberWalkerBase`,
+//! `CachingWalker` and `SkipSelfWalker`, with `upward_defs_iterator` from
+//! `MemorySSA.h`. Caps stand at their `cl::opt` defaults.
 //!
-//! DEVIATE: no `invariant.group` (MIR has none: `getInvariantGroupClobberingInstruction` is
-//! omitted), no fence-like instructions (MIR has no fence opcode), and no `PHITransAddr`: a
-//! location crossing a phi keeps its pointer and, unless the pointer is guaranteed loop
-//! invariant, its size becomes unknown, which is LLVM's own result when the translation fails.
+//! DEVIATE: no `invariant.group` (MIR has none:
+//! `getInvariantGroupClobberingInstruction` is omitted), no fence-like
+//! instructions (MIR has no fence opcode), and no `PHITransAddr`: a
+//! location crossing a phi keeps its pointer and, unless the pointer is
+//! guaranteed loop invariant, its size becomes unknown, which is LLVM's own
+//! result when the translation fails.
 
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -55,7 +57,10 @@ impl UpwardsMemoryQuery {
         inst: InstId,
         access: AccessId,
     ) -> Self {
-        let is_call = matches!(aa.unit().function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_));
+        let is_call = matches!(
+            aa.unit().function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        );
         Self {
             is_call,
             starting_loc: if is_call { None } else { aa.location_of(inst) },
@@ -78,7 +83,10 @@ pub fn instruction_clobbers_query(
     let def_inst = mssa.access(md).inst.expect("defining instruction not actually an instruction");
     let function = aa.unit().function;
     if let Some(use_inst) = use_inst {
-        if matches!(function.instruction(use_inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+        if matches!(
+            function.instruction(use_inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
             return aa.mod_set_call(def_inst, use_inst);
         }
         if matches!(function.instruction(def_inst).opcode, Opcode::Load { .. })
@@ -95,8 +103,9 @@ pub fn instruction_clobbers_query(
 }
 
 /// [`upward_defs_iterator::IsGuaranteedLoopInvariant`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L2642):
-/// the pointer refers to one location during the whole function: a base that is not an
-/// instruction or an alloca, or an instruction in the entry block, with constant indices.
+/// the pointer refers to one location during the whole function: a base that is
+/// not an instruction or an alloca, or an instruction in the entry block, with
+/// constant indices.
 fn is_guaranteed_loop_invariant(
     aa: &AliasQuery,
     loc: &Location,
@@ -129,8 +138,8 @@ fn is_guaranteed_loop_invariant(
 }
 
 /// [`upward_defs_begin`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/MemorySSA.h#L1226):
-/// the defs one step above `elem`, with the location carried across a phi, and the phi's
-/// argument block.
+/// the defs one step above `elem`, with the location carried across a phi, and
+/// the phi's argument block.
 fn upward_defs(
     mssa: &Mssa,
     aa: &AliasQuery,
@@ -139,17 +148,22 @@ fn upward_defs(
     let access = mssa.access(elem.access);
     let walking_phi = access.kind == Kind::Phi;
     let step = |above: AccessId, block: Option<BlockId>| {
-        let mut out = UpwardDefsElem { access: above, loc: elem.loc.clone(), may_be_cross_iteration: elem.may_be_cross_iteration };
-        // No need for phi translation or handling of cross-iteration dependences if we're not
-        // walking past a phi.
+        let mut out = UpwardDefsElem {
+            access: above,
+            loc: elem.loc.clone(),
+            may_be_cross_iteration: elem.may_be_cross_iteration,
+        };
+        // No need for phi translation or handling of cross-iteration
+        // dependences if we're not walking past a phi.
         if walking_phi {
             match &elem.loc {
-                // Mark size as unknown, if the location is not guaranteed to be loop-invariant
-                // for any possible loop in the function.
-                Some(loc) if !is_guaranteed_loop_invariant(aa, loc) => out.loc = Some(aa.intern(&loc.reference, true)),
+                // Mark size as unknown, if the location is not guaranteed to be
+                // loop-invariant for any possible loop in the function.
+                Some(loc) if !is_guaranteed_loop_invariant(aa, loc) => out.loc = Some(aa.widened(loc)),
                 Some(_) => {}
-                // We can't easily analyze invariance for calls, so conservatively assume they may
-                // be introducing cross-iteration dependences for any phi translation.
+                // We can't easily analyze invariance for calls, so
+                // conservatively assume they may be introducing cross-iteration
+                // dependences for any phi translation.
                 None => out.may_be_cross_iteration = true,
             }
         }
@@ -162,8 +176,8 @@ fn upward_defs(
     }
 }
 
-/// `def_chain`: `start`, then the defining access of each def, stopping at a phi and at live on
-/// entry.
+/// `def_chain`: `start`, then the defining access of each def, stopping at a
+/// phi and at live on entry.
 fn defining_of(
     mssa: &Mssa,
     access: AccessId,
@@ -175,8 +189,8 @@ fn defining_of(
 #[derive(Clone)]
 struct DefPath {
     loc: Option<Rc<Location>>,
-    /// Because we always walk in reverse, `last` is where the walk has reached (`First` of the
-    /// C++ is never read and is not kept).
+    /// Because we always walk in reverse, `last` is where the walk has reached
+    /// (`First` of the C++ is never read and is not kept).
     last: AccessId,
     previous: Option<usize>,
     may_be_cross_iteration: bool,
@@ -218,7 +232,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         instruction_clobbers_query(self.mssa, self.aa, md, loc, self.query.inst)
     }
 
-    /// `getWalkTarget`: the nearest def or phi that `from` can legally be optimized to.
+    /// `getWalkTarget`: the nearest def or phi that `from` can legally be
+    /// optimized to.
     fn get_walk_target(
         &self,
         from: AccessId,
@@ -234,8 +249,9 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         LIVE_ON_ENTRY
     }
 
-    /// `walkToPhiOrClobber`: walk to the next phi or clobber in the def chain starting at
-    /// `desc.last`, updating `desc.last`, optionally stopping at `stop_at` or `skip_stop_at`.
+    /// `walkToPhiOrClobber`: walk to the next phi or clobber in the def chain
+    /// starting at `desc.last`, updating `desc.last`, optionally stopping
+    /// at `stop_at` or `skip_stop_at`.
     fn walk_to_phi_or_clobber(
         &mut self,
         desc: &mut DefPath,
@@ -243,9 +259,10 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         skip_stop_at: Option<AccessId>,
     ) -> UpwardsWalkResult {
         let mut limit_already_reached = false;
-        // `upward_walk_limit` may be 0 here, due to the loop in tryOptimizePhi. Set it to 1: this
-        // does no alias calls; it either returns in the first iteration or is set back to 0 if
-        // all def chains are free of MemoryDefs.
+        // `upward_walk_limit` may be 0 here, due to the loop in tryOptimizePhi.
+        // Set it to 1: this does no alias calls; it either returns in
+        // the first iteration or is set back to 0 if all def chains are
+        // free of MemoryDefs.
         if self.upward_walk_limit == 0 {
             self.upward_walk_limit = 1;
             limit_already_reached = true;
@@ -285,11 +302,7 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         prior_node: usize,
         may_be_cross_iteration: bool,
     ) {
-        let elem = UpwardDefsElem {
-            access: phi,
-            loc: self.paths[prior_node].loc.clone(),
-            may_be_cross_iteration,
-        };
+        let elem = UpwardDefsElem { access: phi, loc: self.paths[prior_node].loc.clone(), may_be_cross_iteration };
         for (e, _) in upward_defs(self.mssa, self.aa, &elem) {
             paused_searches.push(self.paths.len());
             self.paths.push(DefPath {
@@ -301,7 +314,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         }
     }
 
-    /// `getBlockingAccess`: an access that keeps us from optimizing to `stop_where`.
+    /// `getBlockingAccess`: an access that keeps us from optimizing to
+    /// `stop_where`.
     fn get_blocking_access(
         &mut self,
         stop_where: AccessId,
@@ -310,12 +324,14 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         terminated: &mut Vec<TerminatedPath>,
     ) -> Option<TerminatedPath> {
         assert!(!paused_searches.is_empty(), "no searches to continue?");
-        // BFS vs DFS really doesn't make a difference here, so just do a DFS with
-        // `paused_searches` as our stack.
+        // BFS vs DFS really doesn't make a difference here, so just do a DFS
+        // with `paused_searches` as our stack.
         while let Some(path_index) = paused_searches.pop() {
             let mut node = self.paths[path_index].clone();
-            // If we've already visited this path with this location, we don't need to do so again.
-            if !self.visited_phis.insert((node.last, node.loc.as_ref().map(|loc| loc.id), node.may_be_cross_iteration)) {
+            // If we've already visited this path with this location, we don't
+            // need to do so again.
+            if !self.visited_phis.insert((node.last, node.loc.as_ref().map(|loc| loc.id), node.may_be_cross_iteration))
+            {
                 continue;
             }
             let skip_stop_where = if self.query.skip_self_access
@@ -333,7 +349,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
             self.paths[path_index] = node.clone();
             if res.is_known_clobber {
                 assert!(Some(res.result) != Some(stop_where) && Some(res.result) != skip_stop_where);
-                // If this wasn't a cache hit, we hit a clobber when walking. That's a failure.
+                // If this wasn't a cache hit, we hit a clobber when walking.
+                // That's a failure.
                 let term = TerminatedPath { clobber: res.result, last_node: path_index };
                 if !self.mssa.dominates(res.result, stop_where) {
                     return Some(term);
@@ -343,8 +360,9 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                 continue;
             }
             if res.result == stop_where || Some(res.result) == skip_stop_where {
-                // We've hit our target. Save this path off for if we want to continue walking. If
-                // we are skipping the original access and have reached back to it, do not save the
+                // We've hit our target. Save this path off for if we want to
+                // continue walking. If we are skipping the
+                // original access and have reached back to it, do not save the
                 // path: we've just looped back to self.
                 if Some(res.result) != skip_stop_where {
                     new_paused.push(path_index);
@@ -383,8 +401,9 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
     ) -> OptznResult {
         assert!(self.paths.is_empty() && self.visited_phis.is_empty(), "reset the optimization state");
         self.paths.push(DefPath { loc, last: phi, previous: None, may_be_cross_iteration: false });
-        // How many 'valid' optimization nodes we had prior to calling addSearches /
-        // getBlockingAccess. Necessary for caching if we had a blocker.
+        // How many 'valid' optimization nodes we had prior to calling
+        // addSearches / getBlockingAccess. Necessary for caching if we
+        // had a blocker.
         let mut prior_paths_size = self.paths.len();
         let mut paused_searches: Vec<usize> = Vec::new();
         let mut new_paused: Vec<usize> = Vec::new();
@@ -394,14 +413,15 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         loop {
             assert!(!self.mssa.is_live_on_entry_def(current), "liveOnEntry wasn't treated as a clobber?");
             let target = self.get_walk_target(current);
-            // If a TerminatedPath doesn't dominate the target, then it wasn't a legal optimization
-            // for the prior phi.
+            // If a TerminatedPath doesn't dominate the target, then it wasn't a
+            // legal optimization for the prior phi.
             debug_assert!(terminated_paths.iter().all(|p| self.mssa.dominates(p.clobber, target)));
             if let Some(blocker) =
                 self.get_blocking_access(target, &mut paused_searches, &mut new_paused, &mut terminated_paths)
             {
-                // Find the node we started at. We can't search based on `last`, since we may have
-                // gone around a loop with a different location.
+                // Find the node we started at. We can't search based on `last`,
+                // since we may have gone around a loop with a
+                // different location.
                 let mut index = Some(blocker.last_node);
                 let found = loop {
                     let at = index.expect("a path from the blocker to a node before the search");
@@ -417,8 +437,9 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                     other_clobbers: Vec::new(),
                 };
             }
-            // If there's nothing left to search, then all paths led to valid clobbers that we got
-            // from our cache; pick the nearest to the start, and allow the rest to be cached back.
+            // If there's nothing left to search, then all paths led to valid
+            // clobbers that we got from our cache; pick the nearest
+            // to the start, and allow the rest to be cached back.
             if new_paused.is_empty() {
                 self.move_dominated_path_to_end(&mut terminated_paths);
                 let result = terminated_paths.pop().expect("a terminated path");
@@ -438,7 +459,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                 }
             }
             if !terminated_paths.is_empty() {
-                // If we couldn't find the dominating phi/liveOnEntry in the above loop, do it now.
+                // If we couldn't find the dominating phi/liveOnEntry in the
+                // above loop, do it now.
                 if def_chain_end.is_none() {
                     let mut at = target;
                     while let Some(next) = defining_of(self.mssa, at) {
@@ -447,15 +469,16 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                     def_chain_end = Some(at);
                 }
                 let chain_bb = self.mssa.access(def_chain_end.expect("a chain end")).block;
-                // Because we know the chain end is as 'high' as we can go, block dominance is
-                // sufficient.
+                // Because we know the chain end is as 'high' as we can go,
+                // block dominance is sufficient.
                 for tp in &terminated_paths {
                     if self.mssa.dominance.dominates(cfg::id(chain_bb), cfg::id(self.mssa.access(tp.clobber).block)) {
                         clobbers.push(*tp);
                     }
                 }
             }
-            // If we have clobbers in the def chain, find the one closest to `current` and quit.
+            // If we have clobbers in the def chain, find the one closest to
+            // `current` and quit.
             if !clobbers.is_empty() {
                 self.move_dominated_path_to_end(&mut clobbers);
                 let result = clobbers.pop().expect("a clobber");
@@ -475,7 +498,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
         }
     }
 
-    /// `findClobber`: the nearest clobber for the query, optimizing phis if possible.
+    /// `findClobber`: the nearest clobber for the query, optimizing phis if
+    /// possible.
     fn find_clobber(
         &mut self,
         start: AccessId,
@@ -489,7 +513,8 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
             self.upward_walk_limit += 1;
         }
         let mut current = start;
-        // This walker pretends uses don't exist. If we're handed one, silently grab its def.
+        // This walker pretends uses don't exist. If we're handed one, silently
+        // grab its def.
         if self.mssa.access(start).kind == Kind::Use {
             current = self.mssa.access(start).defining.expect("a use has a defining access");
         }
@@ -499,13 +524,16 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
             previous: None,
             may_be_cross_iteration: false,
         };
-        // Fast path for the overly-common case (no crazy phi optimization necessary).
+        // Fast path for the overly-common case (no crazy phi optimization
+        // necessary).
         let walk = self.walk_to_phi_or_clobber(&mut first, None, None);
         let result = if walk.is_known_clobber {
             walk.result
         } else {
             let opt = self.try_optimize_phi(first.last, self.query.starting_loc.clone());
-            debug_assert!(opt.other_clobbers.iter().all(|p| self.mssa.dominates(p.clobber, opt.primary_clobber.clobber)));
+            debug_assert!(
+                opt.other_clobbers.iter().all(|p| self.mssa.dominates(p.clobber, opt.primary_clobber.clobber))
+            );
             self.paths.clear();
             self.visited_phis.clear();
             opt.primary_clobber.clobber
@@ -537,9 +565,9 @@ impl Mssa {
     }
 
     /// [`ClobberWalkerBase::getClobberingMemoryAccessBase`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L2530)
-    /// (`UseInvariantGroup` is false): the clobbering access of the instruction of `ma`, the
-    /// result stored in the access as its optimized access. `CachingWalker` is `skip_self` false,
-    /// `SkipSelfWalker` true.
+    /// (`UseInvariantGroup` is false): the clobbering access of the instruction
+    /// of `ma`, the result stored in the access as its optimized access.
+    /// `CachingWalker` is `skip_self` false, `SkipSelfWalker` true.
     pub fn get_clobbering_memory_access_base(
         &mut self,
         aa: &AliasQuery,
@@ -553,7 +581,8 @@ impl Mssa {
             return ma;
         }
         let mut is_optimized = false;
-        // If this is an already optimized use or def, return the optimized result.
+        // If this is an already optimized use or def, return the optimized
+        // result.
         if self.is_optimized(ma) {
             if !skip_self || self.access(ma).kind != Kind::Def {
                 return self.get_optimized(ma).expect("an optimized access");
@@ -574,8 +603,8 @@ impl Mssa {
         if !is_optimized {
             // Start with the thing we already think clobbers this location.
             let defining = self.access(ma).defining.expect("a defining access");
-            // At this point, the defining access may be the live on entry def. If it is, we will
-            // not get a better result.
+            // At this point, the defining access may be the live on entry def.
+            // If it is, we will not get a better result.
             if self.is_live_on_entry_def(defining) {
                 self.set_optimized(ma, defining);
                 return defining;
@@ -585,11 +614,7 @@ impl Mssa {
         } else {
             optimized = self.get_optimized(ma).expect("an optimized access");
         }
-        if skip_self
-            && self.access(optimized).kind == Kind::Phi
-            && self.access(ma).kind == Kind::Def
-            && *limit > 0
-        {
+        if skip_self && self.access(optimized).kind == Kind::Phi && self.access(ma).kind == Kind::Def && *limit > 0 {
             let mut skipping = query;
             skipping.skip_self_access = true;
             return self.walker(aa).find_clobber(optimized, skipping, limit);
@@ -598,7 +623,8 @@ impl Mssa {
     }
 
     /// [`ClobberWalkerBase::getClobberingMemoryAccessBase`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L2452)
-    /// for a location: the access that clobbers `loc`, walking up from `starting`.
+    /// for a location: the access that clobbers `loc`, walking up from
+    /// `starting`.
     pub fn get_clobbering_memory_access_for_location(
         &self,
         aa: &AliasQuery,
@@ -617,8 +643,8 @@ impl Mssa {
             original_access: Some(starting),
             skip_self_access: false,
         };
-        // Unlike the other function, do not walk to the def of a def: we are handed something we
-        // already believe is the clobbering access.
+        // Unlike the other function, do not walk to the def of a def: we are
+        // handed something we already believe is the clobbering access.
         self.walker(aa).find_clobber(starting, query, limit)
     }
 
@@ -653,7 +679,8 @@ impl Mssa {
     }
 
     /// [`checkClobberSanity`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSA.cpp#L390):
-    /// `clobber_at` is a clobber for `start`, and nothing between them clobbers `start`.
+    /// `clobber_at` is a clobber for `start`, and nothing between them clobbers
+    /// `start`.
     pub fn check_clobber_sanity(
         &self,
         aa: &AliasQuery,
@@ -666,13 +693,18 @@ impl Mssa {
             return Err("clobber doesn't dominate start?".to_owned());
         }
         if self.is_live_on_entry_def(start) {
-            return if self.is_live_on_entry_def(clobber_at) { Ok(()) } else { Err("liveOnEntry must clobber itself".to_owned()) };
+            return if self.is_live_on_entry_def(clobber_at) {
+                Ok(())
+            } else {
+                Err("liveOnEntry must clobber itself".to_owned())
+            };
         }
         let mut found_clobber = false;
         let mut visited: HashSet<(AccessId, Option<u32>, bool)> = HashSet::new();
         let mut worklist: Vec<UpwardDefsElem> =
             vec![UpwardDefsElem { access: start, loc: start_loc.cloned(), may_be_cross_iteration: false }];
-        // Walk all paths from `start` to `clobber_at`, while looking for clobbers.
+        // Walk all paths from `start` to `clobber_at`, while looking for
+        // clobbers.
         while let Some(map) = worklist.pop() {
             if !visited.insert(map.key()) {
                 continue;
@@ -702,7 +734,15 @@ impl Mssa {
                         }
                     }
                     Kind::Phi => {
-                        for (e, block) in upward_defs(self, aa, &UpwardDefsElem { access: ma, loc: map.loc.clone(), may_be_cross_iteration: map.may_be_cross_iteration }) {
+                        for (e, block) in upward_defs(
+                            self,
+                            aa,
+                            &UpwardDefsElem {
+                                access: ma,
+                                loc: map.loc.clone(),
+                                may_be_cross_iteration: map.may_be_cross_iteration,
+                            },
+                        ) {
                             if block.is_none_or(|b| self.dominance.reachable(cfg::id(b))) {
                                 worklist.push(e);
                             }
@@ -712,8 +752,9 @@ impl Mssa {
                 at = if self.access(ma).kind == Kind::Phi { None } else { self.access(ma).defining };
             }
         }
-        // If `clobber_at` is a MemoryPhi, we can assume something above it acted as a clobber.
-        // Otherwise it should have acted as a clobber at some point.
+        // If `clobber_at` is a MemoryPhi, we can assume something above it
+        // acted as a clobber. Otherwise it should have acted as a
+        // clobber at some point.
         if self.access(clobber_at).kind == Kind::Phi || found_clobber {
             Ok(())
         } else {

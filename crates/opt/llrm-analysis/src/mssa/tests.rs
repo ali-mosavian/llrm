@@ -161,8 +161,9 @@ b5:
     );
 }
 
-/// The clobbering access of each memory instruction of `body`'s `@f` that has a location, by the
-/// translated walker at its default caps, each checked with `check_clobber_sanity`.
+/// The clobbering access of each memory instruction of `body`'s `@f` that has a
+/// location, by the translated walker at its default caps, each checked with
+/// `check_clobber_sanity`.
 fn clobbers_of(body: &str) -> Vec<(llrm_mir::module::InstId, Option<llrm_mir::module::InstId>, Kind)> {
     use super::alias::AliasQuery;
     let parsed = Parsed::new(body);
@@ -179,10 +180,17 @@ fn clobbers_of(body: &str) -> Vec<(llrm_mir::module::InstId, Option<llrm_mir::mo
         let Some(loc) = aa.location_of(inst) else { continue };
         let clobber = mssa.get_clobbering_memory_access(&aa, access);
         let start = mssa.get_defining_access(access).expect("a defining access");
-        // A use's optimized access is its defining access now; the walk started from the one it had.
+        // A use's optimized access is its defining access now; the walk started
+        // from the one it had.
         let _ = start;
-        mssa.check_clobber_sanity(&aa, mssa.access(access).defining.expect("defining"), clobber, Some(&loc), Some(inst))
-            .unwrap_or_else(|why| panic!("{inst:?}: {why}"));
+        mssa.check_clobber_sanity(
+            &aa,
+            mssa.access(access).defining.expect("defining"),
+            clobber,
+            Some(&loc),
+            Some(inst),
+        )
+        .unwrap_or_else(|why| panic!("{inst:?}: {why}"));
         out.push((inst, mssa.access(clobber).inst, mssa.access(clobber).kind));
     }
     out
@@ -197,7 +205,8 @@ b0:
 }
 ";
 
-/// The walk skips the store to another cell and stops at the store to the load's own.
+/// The walk skips the store to another cell and stops at the store to the
+/// load's own.
 #[test]
 fn test_a_load_is_clobbered_by_the_store_of_its_cell_not_by_another_cells() {
     let found = clobbers_of(SAME_CELL_AFTER_OTHER_STORE);
@@ -241,15 +250,16 @@ b3:
 }
 ";
 
-/// Both arms store to another cell: the phi at the join is optimized away and the store above the
-/// diamond clobbers the load.
+/// Both arms store to another cell: the phi at the join is optimized away and
+/// the store above the diamond clobbers the load.
 #[test]
 fn test_a_phi_is_optimized_away_when_no_arm_writes_the_cell() {
     let found = clobbers_of(DIAMOND_OF_OTHER_CELL);
     assert_eq!(found.last().expect("the load").1, Some(found[0].0), "{found:?}");
 }
 
-/// Both arms store to the load's cell: the phi stays the clobber (no instruction).
+/// Both arms store to the load's cell: the phi stays the clobber (no
+/// instruction).
 #[test]
 fn test_a_join_of_two_stores_to_the_cell_is_clobbered_by_its_phi() {
     let found = clobbers_of(
