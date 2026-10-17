@@ -627,6 +627,8 @@ pub fn names(one: &Insn) -> impl Iterator<Item = u32> + '_ {
 pub struct Changes {
     pub gone: Vec<Arc<Insn>>,
     pub added: Vec<Arc<Insn>>,
+    /// Where each of `added` stands in the body after: block, then position.
+    pub added_at: Vec<Place>,
     pub touched: crate::support::hash::HashSet<u32>,
 }
 
@@ -641,8 +643,8 @@ pub fn changes(
     {
         return None;
     }
-    let mut found = Changes { gone: Vec::new(), added: Vec::new(), touched: Default::default() };
-    for (one, two) in before.blocks.iter().zip(&after.blocks) {
+    let mut found = Changes { gone: Vec::new(), added: Vec::new(), added_at: Vec::new(), touched: Default::default() };
+    for (block, (one, two)) in before.blocks.iter().zip(&after.blocks).enumerate() {
         if one.insns.same_insns(&two.insns) {
             continue;
         }
@@ -650,10 +652,12 @@ pub fn changes(
             Some(alike) => {
                 found.gone.extend(alike.gone.iter().map(|at| Arc::clone(&one.insns[*at])));
                 found.added.extend(alike.added.iter().map(|at| Arc::clone(&two.insns[*at])));
+                found.added_at.extend(alike.added.iter().map(|at| (block, *at)));
             }
             None => {
                 found.gone.extend(one.insns.iter().cloned());
                 found.added.extend(two.insns.iter().cloned());
+                found.added_at.extend((0..two.insns.len()).map(|at| (block, at)));
             }
         }
     }
@@ -1231,6 +1235,48 @@ pub(crate) fn worked_among(
     });
     if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
         found.check_against_scan(body, &|value| only.contains(&value));
+    }
+    found.intervals(body, index, busy)
+}
+
+/// `worked_among` of the values `only` holds, where an edit produced `only`:
+/// the values it created (`fresh`) take their occurrences from the
+/// instructions it added, the others from the postings.
+pub(crate) fn worked_among_edit(
+    body: &LirBody,
+    index: &Indexes,
+    busy: &Frequency,
+    only: &crate::support::hash::HashSet<u32>,
+    fresh: &crate::support::hash::HashSet<u32>,
+    changes: &Changes,
+) -> (IndexMap<u32, Interval>, IndexMap<u32, f64>) {
+    if body.blocks.iter().any(|block| !block.phis.is_empty()) || llrm_support::env_flag!("LLRM_WALK_ALL") {
+        return worked_out_with_totals(body, index, busy, &|value| only.contains(&value));
+    }
+    body.facts.0.bump("intervals-by-occurrences");
+    let made =
+        crate::analysis::occurrences::Occurrences::fresh(changes.added_at.iter().copied().zip(&changes.added), fresh);
+    let wanted: BTreeSet<u32> = only.iter().copied().filter(|value| !fresh.contains(value)).collect();
+    let found = if wanted.is_empty() {
+        made
+    } else {
+        let old = crate::backend::postings::following(body, |postings| {
+            crate::analysis::occurrences::Occurrences::of(postings, &wanted)
+        });
+        old.with(made)
+    };
+    if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
+        // The created values are named by no instruction the edit did not add.
+        let all = crate::backend::postings::following(body, |postings| {
+            crate::analysis::occurrences::Occurrences::of(postings, &fresh.iter().copied().collect())
+        });
+        for value in fresh {
+            assert!(
+                all.named(*value) == found.named(*value),
+                "{}: value#{value} is named by an instruction the edit did not add",
+                body.name
+            );
+        }
     }
     found.intervals(body, index, busy)
 }

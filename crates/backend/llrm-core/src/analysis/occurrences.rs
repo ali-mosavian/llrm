@@ -83,6 +83,60 @@ impl Occurrences {
         found
     }
 
+    /// From the instructions an edit added, of the values it created: a value
+    /// the edit created is named by no instruction it did not add, so these
+    /// are all its occurrences and the postings need not be asked (LLVM's
+    /// `LiveRangeEdit` hands the new registers' references to the next step
+    /// the same way). `added` is in body order.
+    pub fn fresh<'a>(
+        added: impl Iterator<Item = (Place, &'a Arc<Insn>)>,
+        fresh: &crate::support::hash::HashSet<u32>,
+    ) -> Self {
+        let mut found = Self::default();
+        let mut named: Vec<Named> = Vec::new();
+        let mut values: Vec<u32> = Vec::new();
+        for (place, one) in added {
+            named.clear();
+            values.clear();
+            for (value, defined) in
+                one.defines.iter().map(|value| (value, true)).chain(one.uses.iter().map(|value| (value, false)))
+            {
+                if !fresh.contains(value) {
+                    continue;
+                }
+                match values.iter().position(|seen| seen == value) {
+                    Some(at) => {
+                        named[at].defined |= defined;
+                        named[at].used |= !defined;
+                        named[at].mentions += 1;
+                    }
+                    None => {
+                        values.push(*value);
+                        named.push(Named { place, defined, used: !defined, mentions: 1 });
+                    }
+                }
+            }
+            for (value, made) in values.iter().zip(&named) {
+                found.by_value.entry(*value).or_default().push(*made);
+            }
+            if one.requires.iter().any(|(held, _)| fresh.contains(&held.value)) {
+                found.required.insert(place);
+            }
+        }
+        found
+    }
+
+    /// Everything `other` holds, added to this: the occurrences of the values
+    /// of two sets of a body.
+    pub fn with(
+        mut self,
+        other: Self,
+    ) -> Self {
+        self.by_value.extend(other.by_value);
+        self.required.extend(other.required);
+        self
+    }
+
     /// From a plan: the instructions that will name values, as (block,
     /// position, values defined, values read), in the order the body holds
     /// them. For values the body does not hold yet (the spiller's homes), whose

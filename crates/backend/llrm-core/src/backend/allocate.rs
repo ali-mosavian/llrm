@@ -1679,7 +1679,24 @@ impl Facts {
                 );
             match kept {
                 Some(((_, changes, _), held)) => {
-                    let (again, totals) = ranges::worked_among(body, &index, busy, &changes.touched);
+                    // The values the rewrite made take their occurrences from
+                    // the instructions it added (LiveRangeEdit's rule).
+                    let (again, totals) = if llrm_support::env_flag!("LLRM_NO_FRESH") {
+                        ranges::worked_among(body, &index, busy, &changes.touched)
+                    } else {
+                        let fresh: crate::support::hash::HashSet<u32> =
+                            changes.touched.iter().copied().filter(|value| !held.contains_key(value)).collect();
+                        if std::env::var_os("LLRM_PROBE_FRESH").is_some() {
+                            eprintln!(
+                                "FRESH touched={} fresh={} added={} gone={}",
+                                changes.touched.len(),
+                                fresh.len(),
+                                changes.added.len(),
+                                changes.gone.len()
+                            );
+                        }
+                        ranges::worked_among_edit(body, &index, busy, &changes.touched, &fresh, changes)
+                    };
                     held.edit(&changes.touched, again, totals, Arc::clone(&index))
                 }
                 None => {
