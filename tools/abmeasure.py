@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Two commits' llrm-c, built the way CI builds them and compared on deterministic counts: the one way to quote a compile-cost delta.
+
+    tools/abmeasure.py PARENT HEAD [--profile dist|release] [--levels O1 O2 Os] [--programs d_faces lru bintree] [--cycles N] [--cache]
+
+Each commit gets a worktree and a target directory of its own under $LLRM_AB_DIR (default ~/.cache/llrm/ab), built with
+`CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile dist --bin llrm-c`, the compiler the cost gate measures (tools/measure.py): `release`
+re-partitions its 16 codegen units when one file changes and flips the inlining of unrelated functions (the same PR read +0.46..0.61% on the gate's
+shapes in release, +0.01..0.04% in dist), and its `incremental = true` makes a 6% heavier llrm-c with the opposite sign (#2077: +0.24%
+incremental, -0.58% CI mode). `--profile release` measures the old way. Prints per program and level `perf stat` instructions:u of both, and with --cycles N the min and
+median of cycles:u over N alternated runs (a loaded host's cycles are noise: instructions are the claim), with --cache callgrind's
+Ir, D1 and last-level misses. d_faces needs QCPORT (QCport's src) and is left out without it.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+import shutil
+import argparse
+import statistics
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CACHE = Path(os.environ.get("LLRM_AB_DIR") or Path.home() / ".cache/llrm/ab")
+KEYWORDS = "far huge near pascal cdecl __far _far __near _near"
+
+
+def build_env(target: Path) -> dict[str, str]:
+    """The build environment of the gate (tools/measure.py MEASURE_BUILDS): no RUSTFLAGS, no incremental."""
+    env = {k: v for k, v in os.environ.items() if k != "RUSTFLAGS"}
+    return {**env, "CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(target)}
+
+
+def build(sha: str, root: Path = ROOT, cache: Path = CACHE, profile: str = "dist") -> Path:
+    """The `profile` directory of `sha` built in CI mode (reused when the commit was built before)."""
+    full = subprocess.run(["git", "rev-parse", sha], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    tree, target = cache / f"tree-{full[:12]}", cache / f"target-{profile}-{full[:12]}"
+    if not tree.exists():
+        cache.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "worktree", "add", "-q", "--detach", str(tree), full], cwd=root, check=True)
+    if not (target / profile / "llrm-c").is_file():
+        flags = ["--profile", "dist"] if profile == "dist" else ["--release"]
+        done = subprocess.run(["cargo", "build", *flags, "-q", "--bin", "llrm-c"], cwd=tree, env=build_env(target))
+        if done.returncode:
+            raise SystemExit(f"abmeasure: {full[:12]} does not build")
+    return target / profile
+
+
+def programs(root: Path, names: list[str], qcport: str | None, work: Path) -> dict[str, tuple[Path, list[str]]]:
+    """name -> (source, arguments before the level): d_faces wrapped as vsgcc does, bench programs as bench.py compiles them."""
+    out = {}
+    for name in names:
+        if name == "d_faces":
+            if not qcport:
+                print("abmeasure: d_faces left out: QCPORT is not set", file=sys.stderr)
+                continue
+            src = Path(qcport)
+            wrapped = work / "d_faces_flat.c"
+            wrapped.write_text("".join(f"#define {k}\n" for k in KEYWORDS.split()) + f'#include "{src}/render/d_faces.c"\n')
+            out[name] = (wrapped, ["-m32", "-mabi=sysv", "-march=i486", *(f for d in ("", "render", "game", "host", "qgl") for f in ("-I", str(src / d)))])
+        else:
+            out[name] = (root / "bench" / name / f"{name}.c", ["-m32", "-mabi=sysv", "-march=i486", "-I", str(root / "bench"), "-I", str(root / "bench" / name)])
+    return out
+
+
+def counted(binary: Path, source: Path, arguments: list[str], level: str, events: str = "instructions:u") -> dict[str, int]:
+    """perf stat's counts of one compile, by event name (cycles and instructions)."""
+    done = subprocess.run(["perf", "stat", "-x,", "-e", events, str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True)
+    return {name: int(n) for n, name in re.findall(r"^(\d+),,(\w+)", done.stderr, re.M)}
+
+
+def change(was: float, now: float) -> str:
+    return f"{100 * (now / was - 1):+.2f}%"
+
+
+def callgrind(binary: Path, source: Path, arguments: list[str], level: str) -> dict[str, int]:
+    """Ir, D1 misses (read, write) and last-level misses of one compile under callgrind's cache simulation."""
+    done = subprocess.run(
+        ["valgrind", "--tool=callgrind", "--cache-sim=yes", "--callgrind-out-file=/dev/null", str(binary), *arguments, f"-{level}", "-o", "/dev/null", str(source)], capture_output=True, text=True
+    )
+    text = done.stderr
+    num = lambda pattern: int(re.search(pattern, text).group(1).replace(",", ""))  # noqa: E731
+    return {
+        "Ir": num(r"I\s+refs:\s+([\d,]+)"),
+        "D1mr": num(r"D1\s+misses:\s+[\d,]+\s+\(\s*([\d,]+) rd"),
+        "D1mw": num(r"D1\s+misses:\s+[\d,]+\s+\(\s*[\d,]+ rd \+\s*([\d,]+) wr"),
+        "LL": num(r"LL misses:\s+([\d,]+)"),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("parent")
+    parser.add_argument("head")
+    parser.add_argument("--profile", choices=["dist", "release"], default="dist")
+    parser.add_argument("--levels", nargs="+", default=["O1", "O2", "Os"])
+    parser.add_argument("--programs", nargs="+", default=["d_faces", "lru", "bintree"])
+    parser.add_argument("--cycles", type=int, default=0, metavar="N", help="also cycles:u, min and median of N alternated runs")
+    parser.add_argument("--cache", action="store_true", help="also callgrind's cache simulation (slow)")
+    args = parser.parse_args()
+    a, b = build(args.parent, profile=args.profile) / "llrm-c", build(args.head, profile=args.profile) / "llrm-c"
+    work = CACHE / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    print(f"parent {args.parent} -> {a}\nhead   {args.head} -> {b}\nbuild: CARGO_INCREMENTAL=0 env -u RUSTFLAGS cargo build --profile {args.profile} --bin llrm-c; load {open('/proc/loadavg').read().split()[0]}")
+    for name, (source, flags) in programs(ROOT, args.programs, os.environ.get("QCPORT") or os.environ.get("DFACES_SRC"), work).items():
+        for level in args.levels:
+            ia, ib = counted(a, source, flags, level)["instructions"], counted(b, source, flags, level)["instructions"]
+            line = f"{name:8} -{level:2} instructions {ia / 1e6:9.1f}M -> {ib / 1e6:9.1f}M ({change(ia, ib)})"
+            if args.cycles:
+                ca, cb = [], []
+                for k in range(args.cycles):
+                    for binary, sink in ((a, ca), (b, cb)) if k % 2 == 0 else ((b, cb), (a, ca)):
+                        sink.append(counted(binary, source, flags, level, "cycles:u")["cycles"])
+                line += f"  cycles min {change(min(ca), min(cb))} median {change(statistics.median(ca), statistics.median(cb))}"
+            if args.cache:
+                x, y = callgrind(a, source, flags, level), callgrind(b, source, flags, level)
+                line += "  " + " ".join(f"{k} {change(x[k], y[k])}" for k in x)
+            print(line, flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
