@@ -64,6 +64,8 @@ mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
 #[cfg(test)]
+mod knownbits_tests;
+#[cfg(test)]
 mod lint_tests;
 #[cfg(test)]
 mod pass_tests;
