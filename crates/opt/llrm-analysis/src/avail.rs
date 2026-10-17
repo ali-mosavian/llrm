@@ -252,6 +252,12 @@ struct Stored {
     pieces: RefCell<Vec<Option<Rc<Bits>>>>,
 }
 
+/// Past this many cells a dead-store solve finds what an access reaches by the
+/// bytes it names; below, by the buckets of its object, which build nothing
+/// first. Measured on d_faces `-O2` (195 cells at most): the index costs more
+/// than the buckets until a few hundred cells, the ladder's 402 it wins by 4x.
+const SPARSE_CELLS: usize = 256;
+
 /// The cells in one object: all of them, and by the first byte each names, as
 /// `CellMap`'s spans keep them.
 #[derive(Default)]
@@ -311,9 +317,10 @@ pub fn reached_cells() -> usize {
     REACHED.with(std::cell::Cell::get)
 }
 
-/// A set of cells: all of them, or the sorted ones named.
+/// A set of cells: all of them, a bit set over them, or the sorted ones named.
 enum CellSet {
     All,
+    Bits(Bits),
     Some(Vec<usize>),
 }
 
@@ -325,6 +332,7 @@ impl CellSet {
     ) -> usize {
         match self {
             CellSet::All => cells,
+            CellSet::Bits(held) => held.iter().count(),
             CellSet::Some(held) => held.len(),
         }
     }
@@ -335,6 +343,7 @@ impl CellSet {
     ) -> bool {
         match self {
             CellSet::All => !live.is_empty(),
+            CellSet::Bits(held) => held.intersects(live),
             CellSet::Some(cells) => cells.iter().any(|&at| live.contains(at)),
         }
     }
@@ -346,6 +355,11 @@ impl CellSet {
     ) -> Vec<usize> {
         match self {
             CellSet::All => live.iter().collect(),
+            CellSet::Bits(held) => {
+                let mut both = held.clone();
+                both.intersect_with(live);
+                both.iter().collect()
+            }
             CellSet::Some(cells) => cells.iter().copied().filter(|&at| live.contains(at)).collect(),
         }
     }
@@ -429,7 +443,8 @@ impl Stored {
         }
         let mut by_object: HashMap<ObjectRef, ObjectCells> = HashMap::default();
         let mut classes: HashMap<AliasClass, Vec<ObjectRef>> = HashMap::default();
-        for (at, cell) in cells.iter().enumerate() {
+        let sparse = size > SPARSE_CELLS;
+        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
             // The cells `overlap_bucket` puts in an object's bucket: those of
             // one slice.
             let Some(provenance) = cell.provenance.as_ref().filter(|provenance| provenance.slices.len() == 1) else {
@@ -442,7 +457,7 @@ impl Stored {
             by_object.entry(slice.object).or_default().add(at, slice_bytes(slice));
         }
         let mut by_frame: HashMap<Frame, FrameCells> = HashMap::default();
-        for (at, cell) in cells.iter().enumerate() {
+        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
             let Some(frame) = overlap_frame(cell) else { continue };
             let held = by_frame.entry(frame).or_default();
             match displaced_span(cell) {
@@ -714,14 +729,22 @@ impl Solve<'_, '_> {
                 });
                 let all = if each.iter().any(|cells| matches!(cells, CellSet::All)) {
                     CellSet::All
+                } else if each.iter().all(|cells| matches!(cells, CellSet::Bits(_))) {
+                    let mut all = self.stored.none();
+                    for cells in &each {
+                        if let CellSet::Bits(held) = cells {
+                            all.union_with(held);
+                        }
+                    }
+                    CellSet::Bits(all)
                 } else {
                     let mut all: Vec<usize> = each
                         .iter()
                         .flat_map(|cells| match cells {
-                            CellSet::Some(cells) => cells.as_slice(),
-                            CellSet::All => &[],
+                            CellSet::Some(cells) => cells.clone(),
+                            CellSet::Bits(held) => held.iter().collect(),
+                            CellSet::All => Vec::new(),
                         })
-                        .copied()
                         .collect();
                     all.sort_unstable();
                     all.dedup();
@@ -744,6 +767,18 @@ impl Solve<'_, '_> {
     ) -> CellSet {
         let stored = &self.stored;
         let Some(provenance) = reference.provenance.as_ref() else { return CellSet::All };
+        if stored.cells.len() <= SPARSE_CELLS {
+            let mut cells = stored.none();
+            match overlap_buckets(reference, &stored.index.parts) {
+                None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(|at| cells.insert(*at)),
+                Some(buckets) => buckets
+                    .iter()
+                    .filter_map(|bucket| stored.index.buckets.get(bucket))
+                    .flat_map(IndexMap::keys)
+                    .for_each(|at| cells.insert(*at)),
+            }
+            return CellSet::Bits(cells);
+        }
         let mut cells: Vec<usize> = Vec::new();
         for bucket in &stored.index.parts.objectless {
             cells.extend(stored.index.buckets.get(bucket).into_iter().flat_map(IndexMap::keys).copied());
@@ -784,6 +819,25 @@ impl Solve<'_, '_> {
         CellSet::Some(cells)
     }
 
+    /// The cells in the buckets `overlap_buckets` picks for `reference`, in
+    /// order; none where it names none (every cell).
+    fn in_buckets(
+        &self,
+        reference: &MemRef,
+    ) -> Option<Vec<usize>> {
+        let stored = &self.stored;
+        let buckets = overlap_buckets(reference, &stored.index.parts)?;
+        let mut cells: Vec<usize> = buckets
+            .iter()
+            .filter_map(|bucket| stored.index.buckets.get(bucket))
+            .flat_map(IndexMap::keys)
+            .copied()
+            .collect();
+        cells.sort_unstable();
+        cells.dedup();
+        Some(cells)
+    }
+
     /// `LLRM_CHECK_REACHED`: every cell the buckets of `overlap_buckets` hold
     /// for `reference` and `found` leaves out is one `reaches` rules out.
     fn checked_reaching(
@@ -793,18 +847,11 @@ impl Solve<'_, '_> {
         found: &CellSet,
     ) {
         let stored = &self.stored;
-        let dense: Vec<usize> = match overlap_buckets(reference, &stored.index.parts) {
-            None => (0..stored.cells.len()).collect(),
-            Some(buckets) => buckets
-                .iter()
-                .filter_map(|bucket| stored.index.buckets.get(bucket))
-                .flat_map(IndexMap::keys)
-                .copied()
-                .collect(),
-        };
+        let dense: Vec<usize> = self.in_buckets(reference).unwrap_or_else(|| (0..stored.cells.len()).collect());
         for at in dense {
             let held = match found {
                 CellSet::All => true,
+                CellSet::Bits(held) => held.contains(at),
                 CellSet::Some(cells) => cells.binary_search(&at).is_ok(),
             };
             assert!(
@@ -833,11 +880,22 @@ impl Solve<'_, '_> {
         if !reached.intersects(overwritten) {
             return;
         }
-        for at in reached.live(overwritten) {
+        let forget = |overwritten: &mut Bits, at: usize| {
             if self.within(inst, reference, at, unnamed)
                 && may_clobber(self.unit, None, &self.stored.cells[at], reference)
             {
                 overwritten.remove(at);
+            }
+        };
+        if let CellSet::Bits(held) = reached {
+            let mut live = held.clone();
+            live.intersect_with(overwritten);
+            for at in live.iter() {
+                forget(overwritten, at);
+            }
+        } else {
+            for at in reached.live(overwritten) {
+                forget(overwritten, at);
             }
         }
     }

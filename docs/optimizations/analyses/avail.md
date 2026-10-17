@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/avail.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/avail.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:59366d0d2a65a1bf2de6affe80d1130f7f882a39573250bb18b8f61076902b71 -->
+<!-- src: crates/opt/llrm-analysis/src/avail.rs sha256:5d1d071f263545e28a3cf43a627c1ce5ecb39aafa2ca0fd28b3fb867777fe712 -->
 
 # avail
 
@@ -44,7 +44,11 @@ cells overwritten before any read. Walking a block backward:
   bytes the overwritten cells together write (`pieced`), is dead; the cell
   then joins the set;
 - an instruction that reads or writes anything else removes the cells it may
-  touch (`clobber`, using `may_clobber` and `EscapedBefore` where given);
+  touch (`clobber`, using `may_clobber` and `EscapedBefore` where given),
+  asked of the cells `reaching` names: those of its own object or frame
+  whose bytes meet its own, by a sorted index of bytes, not every cell of
+  the object (`LLRM_CHECK_REACHED` asserts a cell it leaves out is ruled
+  out);
 - a fill (what a call writes before it reads) adds its cells.
 
 At a join the state is the intersection over the successors, computed per
