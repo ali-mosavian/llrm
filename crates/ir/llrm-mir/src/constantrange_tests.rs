@@ -400,5 +400,5 @@ fn test_every_operation_agrees_with_llvm() {
 fn test_print_names_the_full_and_empty_sets() {
     assert_eq!(CR::full(8).print(), "full-set");
     assert_eq!(CR::empty(8).print(), "empty-set");
-    assert_eq!(CR::new(8, 250, 5).print(), "[250,5)");
+    assert_eq!(CR::new(8, 250, 5).print(), "[-6,5)", "bounds print signed, as LLVM's APInt does");
 }

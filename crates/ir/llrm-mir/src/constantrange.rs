@@ -2353,7 +2353,7 @@ impl ConstantRange {
         } else if self.is_empty_set() {
             "empty-set".to_owned()
         } else {
-            format!("[{},{})", self.lower, self.upper)
+            format!("[{},{})", signed(self.lower, self.width), signed(self.upper, self.width))
         }
     }
 
