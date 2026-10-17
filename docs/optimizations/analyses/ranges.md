@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:bfa32a3f2739a794fd7a8f7208a3733f60c0c5ddcd05fb0d029b43dcb4104600 -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:dc13702c5dfff08914df310b45eb200f5691191947123983ec8b97427915227d -->
 
 # ranges
 
@@ -39,7 +39,14 @@ operations are then swept to a fixed point in the scope of each block,
 narrowed by the edges inside the loop and above its header. Header phis with
 no counted proof that stay inside a box `[-2^k, 2^k)` on every entry and
 latch are given the box, grown by powers of two until the latches stay in
-it. Two loops whose facts contradict at a block make it `unreachable`.
+it. Two loops whose facts contradict at a block make it `unreachable`. Where
+a nest's work (blocks times instructions, summed over its loops) is above
+`CAP_WORK`, the loops with two or more around them get no box search and the
+facts of their header alone in their blocks (`capped_from`): a block's scope
+was made once per loop around it, each walking the dominator chain to the
+block. `Bounds` records the decision, and an update works from a solve made
+under the same one. `LLRM_CHECK_CAP` holds a capped solve to containing the
+uncapped facts.
 `Bounds` holds the result: facts from the loops (`within`) over those from
 the edges. A change re-solves only the loops it reaches (`loops_reached`). A
 loop with no counted proof and no phi to box (`box_candidates`) is left

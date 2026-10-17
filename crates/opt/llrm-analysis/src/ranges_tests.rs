@@ -1543,3 +1543,34 @@ out:
     assert_eq!(crate::induction::proved() - proved, 2, "premise: each loop is proved once");
     assert_eq!(crate::alias::congruences_found() - found, 1, "the body's congruences found once for both");
 }
+
+/// A block's scope was made for each loop around it, and the dominator chain
+/// walked to it each time: queens -O3 had one solve of 119 blocks and 7 loops
+/// at 58 M instructions, and a nest of twelve loops makes 156 scopes for 26
+/// blocks. Above a nest's work budget the loops from depth 2 are given the
+/// facts of their header alone, so a block has at most two.
+#[test]
+fn a_deep_nest_makes_a_scope_for_a_block_in_at_most_two_loops() {
+    let depth = 12;
+    let mut text = String::from("define i16 @f(i16 %n) {\nentry:\n  br label %h1\n");
+    for k in 1..=depth {
+        let before = if k == 1 { "entry".to_owned() } else { format!("h{}", k - 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{before} ], [ %n{k}, %l{k} ]\n  %a{k} = add i16 %i{k}, %n\n");
+        text += &format!("  %b{k} = mul i16 %a{k}, 3\n  %e{k} = sub i16 %b{k}, %i{k}\n");
+        text += &if k < depth { format!("  br label %h{}\n", k + 1) } else { format!("  br label %l{k}\n") };
+    }
+    for k in (1..=depth).rev() {
+        let out = if k == 1 { "exit".to_owned() } else { format!("l{}", k - 1) };
+        text += &format!(
+            "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp slt i16 %n{k}, 10\n  br i1 %c{k}, label %h{k}, label %{out}\n"
+        );
+    }
+    text += "exit:\n  ret i16 %n\n}\n";
+    let parsed = Parsed::new(&text);
+    let blocks = 2 * depth + 2;
+    let before = super::scopes_made();
+    let known = bounded(&parsed.unit()).unwrap();
+    let made = super::scopes_made() - before;
+    assert!(known.get(&cfg::id(parsed.block("h12"))).is_some(), "premise: the innermost loop was solved");
+    assert!(made <= 2 * blocks, "{made} scopes for {blocks} blocks in {depth} loops");
+}

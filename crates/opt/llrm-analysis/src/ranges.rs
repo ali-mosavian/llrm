@@ -34,7 +34,14 @@
 //! narrowed by the edges inside the loop and above its header. Header phis with
 //! no counted proof that stay inside a box `[-2^k, 2^k)` on every entry and
 //! latch are given the box, grown by powers of two until the latches stay in
-//! it. Two loops whose facts contradict at a block make it `unreachable`.
+//! it. Two loops whose facts contradict at a block make it `unreachable`. Where
+//! a nest's work (blocks times instructions, summed over its loops) is above
+//! `CAP_WORK`, the loops with two or more around them get no box search and the
+//! facts of their header alone in their blocks (`capped_from`): a block's scope
+//! was made once per loop around it, each walking the dominator chain to the
+//! block. `Bounds` records the decision, and an update works from a solve made
+//! under the same one. `LLRM_CHECK_CAP` holds a capped solve to containing the
+//! uncapped facts.
 //! `Bounds` holds the result: facts from the loops (`within`) over those from
 //! the edges. A change re-solves only the loops it reaches (`loops_reached`). A
 //! loop with no counted proof and no phi to box (`box_candidates`) is left
@@ -1348,6 +1355,10 @@ pub struct Bounds {
     /// The blocks two loops' facts contradict each other at: none executes
     /// them.
     dead: BTreeSet<i64>,
+    /// From what nest depth the loops were given the facts of their header
+    /// alone (`capped_from`): an update works from a solve made under the
+    /// same decision.
+    capped: Option<usize>,
 }
 
 impl Bounds {
@@ -1517,6 +1528,51 @@ pub fn loops_reached(
     }
 }
 
+/// The work above which a function's nest is capped, in (blocks x instructions)
+/// summed over its loops, and the depth from which its loops are then given the
+/// facts of their header alone. Every block of every loop was given the edges
+/// that narrow it, and the dominator chain walked to each, so the cost grows
+/// with the loops around a block: on queens -O3 one solve of 119 blocks and 7
+/// loops was 58 M instructions.
+const CAP_WORK: usize = 4096;
+const CAP_DEPTH: usize = 2;
+
+/// The nest depth from which `bounded_solved` gives its loops header facts
+/// alone, where the nest's work is above `CAP_WORK`. A function of this
+/// structure decides it, so a solve brought up to date makes the decision a
+/// fresh one would.
+fn capped_from(
+    function: &llrm_mir::module::Function,
+    nest: &[&loops::Loop],
+) -> Option<usize> {
+    let work: usize = nest
+        .iter()
+        .map(|one| {
+            one.body.len()
+                * one.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum::<usize>()
+        })
+        .sum();
+    (work > CAP_WORK).then_some(CAP_DEPTH)
+}
+
+/// How many loops hold `loop_`.
+fn depth_in(
+    all: &[loops::Loop],
+    loop_: &loops::Loop,
+) -> usize {
+    all.iter().filter(|one| one.header != loop_.header && one.body.contains(&loop_.header)).count()
+}
+
+thread_local! {
+    static SCOPES_MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many (loop, block) scopes this thread has materialized, for a test
+/// that a deep nest does not make one for every loop around a block.
+pub fn scopes_made() -> usize {
+    SCOPES_MADE.with(std::cell::Cell::get)
+}
+
 thread_local! {
     static LOOPS_SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LOOPS_SWEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -1558,6 +1614,33 @@ pub fn bounded_solved(
     facts: &IndexMap<ValueId, Known>,
     prior: Option<(&Bounds, &BTreeSet<i64>)>,
     lazy: bool,
+) -> Result<Bounds, String> {
+    let found = bounded_solved_under(unit, facts, prior, lazy, true)?;
+    // A capped solve is a coarser one: where the solve with no cap has a fact,
+    // the capped has one that holds it (`LLRM_CHECK_CAP`).
+    if found.capped.is_some() && llrm_support::env_set("LLRM_CHECK_CAP") {
+        let whole = bounded_solved_under(unit, facts, None, lazy, false)?;
+        for (at, scope) in &whole.within {
+            for (value, interval) in scope.iter() {
+                let held = found.within.get(at).and_then(|capped| capped.get(&value));
+                if let Some(held) = held.filter(|held| held.width == interval.width) {
+                    assert!(
+                        held.low <= interval.low && held.high >= interval.high,
+                        "the capped facts of {value:?} at b{at} do not hold the uncapped"
+                    );
+                }
+            }
+        }
+    }
+    Ok(found)
+}
+
+fn bounded_solved_under(
+    unit: &Unit,
+    facts: &IndexMap<ValueId, Known>,
+    prior: Option<(&Bounds, &BTreeSet<i64>)>,
+    lazy: bool,
+    cap: bool,
 ) -> Result<Bounds, String> {
     let function = unit.function;
     // Every loop's proof, outer loops first, found once and sharing what the
@@ -1606,24 +1689,26 @@ pub fn bounded_solved(
     // them.
     let mut nest: Vec<_> = shape.loops.iter().collect();
     nest.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
-    let mut result: IndexMap<i64, Scope> = match prior.filter(|(held, _)| held.headers == headers) {
-        // The blocks of a loop to be worked again start from nothing: what its
-        // loops narrow is put in anew.
-        Some((held, dirty)) => {
-            let redone: BTreeSet<i64> = nest
-                .iter()
-                .filter(|one| dirty.contains(&one.header))
-                .flat_map(|one| one.body.iter().copied())
-                .collect();
-            held.within
-                .iter()
-                .filter(|(at, _)| !redone.contains(at))
-                .map(|(at, scope)| (*at, Rc::clone(scope)))
-                .collect()
-        }
-        None => IndexMap::default(),
-    };
-    let prior = prior.filter(|(held, _)| held.headers == headers);
+    let capped = if cap { capped_from(function, &nest) } else { None };
+    let mut result: IndexMap<i64, Scope> =
+        match prior.filter(|(held, _)| held.headers == headers && held.capped == capped) {
+            // The blocks of a loop to be worked again start from nothing: what
+            // its loops narrow is put in anew.
+            Some((held, dirty)) => {
+                let redone: BTreeSet<i64> = nest
+                    .iter()
+                    .filter(|one| dirty.contains(&one.header))
+                    .flat_map(|one| one.body.iter().copied())
+                    .collect();
+                held.within
+                    .iter()
+                    .filter(|(at, _)| !redone.contains(at))
+                    .map(|(at, scope)| (*at, Rc::clone(scope)))
+                    .collect()
+            }
+            None => IndexMap::default(),
+        };
+    let prior = prior.filter(|(held, _)| held.headers == headers && held.capped == capped);
     let mut dead: BTreeSet<i64> = match prior {
         Some((held, dirty)) => {
             let redone: BTreeSet<i64> = nest
@@ -1640,6 +1725,7 @@ pub fn bounded_solved(
             continue;
         }
         LOOPS_SOLVED.with(|count| count.set(count.get() + 1));
+        let beyond = capped.is_some_and(|from| depth_in(&shape.loops, loop_) >= from);
         let proofs = induction::counted_unless_stopped(unit, &loop_, Some(facts), false);
         // A header that tests before the trip also sees the exit value; one
         // tested after it sees only the trip's.
@@ -1955,6 +2041,7 @@ pub fn bounded_solved(
             }))
         };
         let scope_at = |at: i64, known: &Intervals, id: u64, every_block: bool| -> Result<Rc<Intervals>, String> {
+            SCOPES_MADE.with(|count| count.set(count.get() + 1));
             let mut scoped = known.clone();
             // The edges into a block with no other way in, from a block that
             // dominates `at`: those of the dominator chain of `at`,
@@ -2209,7 +2296,11 @@ pub fn bounded_solved(
             &loop_.body,
             &above,
         );
-        let boxes = inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?;
+        let boxes = if beyond {
+            Intervals::default()
+        } else {
+            inductive_boxes(unit, loop_, facts, &known, &candidates, &closed, &scope_at, &context)?
+        };
         if !counted && boxes.is_empty() {
             continue;
         }
@@ -2227,7 +2318,10 @@ pub fn bounded_solved(
         let known = closed(known);
         let known_id = fresh_known();
         for &at in &inside {
-            let scoped = scope_at(at, &known, known_id, true)?;
+            // Beyond the cap a block has what the loop holds throughout, not
+            // what the edges to it narrow that to.
+            let scoped = if beyond { None } else { Some(scope_at(at, &known, known_id, true)?) };
+            let scoped = scoped.as_deref().unwrap_or(&known);
             let destination = Rc::make_mut(result.entry(at).or_default());
             for (value, interval) in scoped.iter() {
                 if narrow_to(destination, value, interval) {
@@ -2252,6 +2346,7 @@ pub fn bounded_solved(
         lazy: unit.edges.filter(|_| ranger.is_some()).cloned(),
         within: result,
         dead,
+        capped,
     })
 }
 
