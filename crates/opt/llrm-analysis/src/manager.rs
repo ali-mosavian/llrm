@@ -10,12 +10,17 @@
 //! - A pass returns the `PreservedAnalyses` it left true. An entry not named is
 //!   dropped, unless `READS_OUTER` is false (it reads only the function, as
 //!   `DemandedBits` and `Shape`) and the function is unchanged.
-//! - `SKIPS` with `depends`: the entry is kept past an invalidation if the
-//!   change log cannot have altered it. `Depends` names the instructions the
-//!   result models, those it keys entries by, and the users a change flows
-//!   through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
-//!   `Writes` model pointers, aggregates and calls only, so a change to integer
-//!   arithmetic leaves them standing.
+//! - `depends`: the entry is kept past an invalidation if the change log cannot
+//!   have altered it. `Depends` names the instructions the result models, those
+//!   it keys entries by, and the users a change flows through. `ExposedFrames`,
+//!   `PointerValues`, `Pointers`, `CallEffects` and `Writes` model pointers,
+//!   aggregates and calls only, so a change to integer arithmetic leaves them
+//!   standing. `LLRM_WHY` says, for each result derived again that was held,
+//!   the change that blocked it (`Depends::blocker`).
+//! - A result that read module facts stands while the parts it read
+//!   (`read::CALLEES`, `DECLARATIONS`, ...) are as they were: the proxy
+//!   versions each part, so a moved declaration drops what read declarations
+//!   only.
 //! - `INCREMENTAL` with `update`: the entry is brought up to date from the
 //!   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
 //!   or loops `Touched::reach` the changes (a change to a terminator or to the
@@ -33,7 +38,7 @@
 //!   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
 //!   q1["<b>entry named?</b>"]:::mid
 //!   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
-//!   q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+//!   q3["<b>depends declared and</b><br/><small>.unaffected(changes)?</small>"]:::mid
 //!   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
 //!   kept["<b>kept</b>"]:::opt
 //!   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt
@@ -1062,7 +1067,6 @@ pub struct ExposedFrames;
 impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
-    const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
     }
@@ -1088,7 +1092,6 @@ pub struct PointerValues;
 impl Analysis for PointerValues {
     type Result = Result<alias::PointValues, String>;
     const NAME: &'static str = "pointer-values";
-    const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
@@ -1109,7 +1112,6 @@ impl Analysis for PointerValues {
 impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
-    const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }
@@ -1181,7 +1183,6 @@ pub struct CallEffects;
 impl Analysis for CallEffects {
     type Result = Result<IndexMap<InstId, Effect>, String>;
     const NAME: &'static str = "call-effects";
-    const SKIPS: bool = true;
     const SOUND: bool = true;
     /// Its references name the pointers of the call's arguments: past a
     /// substitution they would name a value the edit erased.
@@ -1587,7 +1588,6 @@ pub struct Writes;
 impl Analysis for Writes {
     type Result = Result<Calls, String>;
     const NAME: &'static str = "writes";
-    const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_wide, keyed: calls_only, flows: Some(stops_at) })
     }

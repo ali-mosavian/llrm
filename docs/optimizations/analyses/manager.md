@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:8a0f1ab2f5988672daf31886fd664211e729571cde4cd009ffdda28cb7248bc3 -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:37843dbdd1452011f54ce26cfc16ddcbf2bdc944276439f0ac8537af353e8f42 -->
 
 # manager
 
@@ -15,12 +15,17 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
 - A pass returns the `PreservedAnalyses` it left true. An entry not named is
   dropped, unless `READS_OUTER` is false (it reads only the function, as
   `DemandedBits` and `Shape`) and the function is unchanged.
-- `SKIPS` with `depends`: the entry is kept past an invalidation if the
-  change log cannot have altered it. `Depends` names the instructions the
-  result models, those it keys entries by, and the users a change flows
-  through. `ExposedFrames`, `PointerValues`, `Pointers`, `CallEffects` and
-  `Writes` model pointers, aggregates and calls only, so a change to integer
-  arithmetic leaves them standing.
+- `depends`: the entry is kept past an invalidation if the change log cannot
+  have altered it. `Depends` names the instructions the result models, those
+  it keys entries by, and the users a change flows through. `ExposedFrames`,
+  `PointerValues`, `Pointers`, `CallEffects` and `Writes` model pointers,
+  aggregates and calls only, so a change to integer arithmetic leaves them
+  standing. `LLRM_WHY` says, for each result derived again that was held,
+  the change that blocked it (`Depends::blocker`).
+- A result that read module facts stands while the parts it read
+  (`read::CALLEES`, `DECLARATIONS`, ...) are as they were: the proxy
+  versions each part, so a moved declaration drops what read declarations
+  only.
 - `INCREMENTAL` with `update`: the entry is brought up to date from the
   change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
   or loops `Touched::reach` the changes (a change to a terminator or to the
@@ -38,7 +43,7 @@ flowchart TB
   run["<b>pass runs</b><br/><small>PreservedAnalyses</small>"]:::mid
   q1["<b>entry named?</b>"]:::mid
   q2["<b>READS_OUTER=false and</b><br/><small>function unchanged?</small>"]:::mid
-  q3["<b>SKIPS and depends</b><br/><small>.unaffected(changes)?</small>"]:::mid
+  q3["<b>depends declared and</b><br/><small>.unaffected(changes)?</small>"]:::mid
   q4["<b>INCREMENTAL and</b><br/><small>update(previous, changes)?</small>"]:::mid
   kept["<b>kept</b>"]:::opt
   kept2["<b>kept, stands again</b><br/><small>if changes undone</small>"]:::opt

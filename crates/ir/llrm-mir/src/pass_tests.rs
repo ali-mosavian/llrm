@@ -199,7 +199,10 @@ struct Steady;
 impl Analysis for Steady {
     type Result = usize;
     const NAME: &'static str = "steady";
-    const SKIPS: bool = true;
+    /// Declared so that it is kept; `unaffected` below says.
+    fn depends() -> Option<crate::depends::Depends> {
+        Some(crate::depends::Depends { models: |_, _, _| true, keyed: |_, _, _| true, flows: None })
+    }
     fn run(
         _: &Context,
         _: &DataLayout,
@@ -423,6 +426,72 @@ fn a_change_to_what_an_analysis_read_of_the_module_drops_it() {
     passes.add(Ask);
     passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
     assert_eq!(SEEN.take(), [false, true]);
+}
+
+thread_local! {
+    static SILENT_RUNS: Cell<[usize; 2]> = const { Cell::new([0; 2]) };
+}
+
+/// Declares it reads no instruction, so it is kept past any edit, and reads of
+/// the module's facts only what `READS_G` says: nothing, or @g's declaration.
+struct Silent<const READS_G: bool>;
+
+impl<const READS_G: bool> Analysis for Silent<READS_G> {
+    type Result = usize;
+    const NAME: &'static str = "silent";
+    fn depends() -> Option<crate::depends::Depends> {
+        Some(crate::depends::Depends { models: |_, _, _| false, keyed: |_, _, _| false, flows: None })
+    }
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> usize {
+        SILENT_RUNS.with(|runs| {
+            let mut now = runs.get();
+            now[usize::from(READS_G)] += 1;
+            runs.set(now);
+        });
+        if READS_G {
+            analyses.outer().globals.iter().find(|one| one.name.as_deref() == Some("g")).expect("@g");
+        }
+        function.layout().len()
+    }
+}
+
+struct AskSilent;
+
+impl FunctionPass for AskSilent {
+    fn name(&self) -> &'static str {
+        "ask-silent"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        analyses.get::<Silent<false>>(unit.context, unit.layout, unit.function);
+        analyses.get::<Silent<true>>(unit.context, unit.layout, unit.function);
+        PreservedAnalyses::none()
+    }
+}
+
+/// A declaration of the module moving drops what read declarations, not what
+/// read none of the module's facts: a pass changing one function's attributes
+/// recomputed every unchanged function's results whatever they read.
+#[test]
+fn a_declaration_that_moved_drops_only_what_read_declarations() {
+    let text = "declare i16 @g()\n\ndefine i16 @f() {\nentry:\n  %x = call i16 @g()\n  ret i16 %x\n}\n";
+    let mut module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    SILENT_RUNS.set([0; 2]);
+    let mut passes = PassManager::default();
+    passes.add(AskSilent);
+    passes.add_module(MarkReadonly);
+    passes.add(AskSilent);
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    assert_eq!(SILENT_RUNS.get(), [1, 2], "[reads none of the facts, reads @g's declaration]");
 }
 
 thread_local! {
@@ -1112,4 +1181,42 @@ fn the_attributes_are_hashed_once_per_invalidation_not_once_per_result() {
     analyses.get::<ReadsOuter>(&module.context, &layout, function);
     analyses.invalidate(function, &PreservedAnalyses::none());
     assert!(crate::module::attribute_stamps() - before <= 2, "{}", crate::module::attribute_stamps() - before);
+}
+
+/// `LLRM_WHY` names what stopped a held result standing: the edit that touched
+/// what it models, the one that reached it through a value, the one that erased
+/// what it keys.
+#[test]
+fn a_footprint_names_the_change_that_blocks_it() {
+    use crate::depends::{Blocker, Depends};
+    let text = "define void @f(ptr %p, i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  store i32 %a, ptr %p\n  %b = add i32 %x, 2\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let find = |name: &str| {
+        function.walk().map(|(_, inst)| inst).find(|&inst| {
+            function.instruction(inst).result.is_some_and(|value| function.value(value).name.as_deref() == Some(name))
+        })
+    };
+    let (a, b) = (find("a").unwrap(), find("b").unwrap());
+    let store = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            function.instruction(inst).opcode,
+            crate::opcode::Opcode::Store { .. }
+        ))
+        .unwrap();
+    let stores = Depends {
+        models: |_, function, inst| matches!(
+            function.instruction(inst).opcode,
+            crate::opcode::Opcode::Store { .. }
+        ),
+        keyed: |_, _, _| false,
+        flows: Some(|_| false),
+    };
+    let blocker = |changes: &[Change]| stores.blocker(changes, &module.context, function);
+    assert_eq!(blocker(&[Change::Rewritten(b)]), None, "an add nothing stores is nothing to it");
+    assert_eq!(blocker(&[Change::Rewritten(store)]), Some(Blocker::Changed(store)));
+    assert_eq!(blocker(&[Change::Rewritten(a)]), Some(Blocker::Reaches { changed: a, modelled: store }));
+    assert_eq!(blocker(&[Change::Parameters]), Some(Blocker::Shape));
 }
