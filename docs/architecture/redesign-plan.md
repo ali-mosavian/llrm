@@ -111,7 +111,7 @@ Sum check: llrm 2,170.0 grouped plus 0.1 ungrouped is 2,170.1 whole; clang 44.8 
 
 | llrm pass | clang pass | runs | IR instructions | llrm per unit | clang per unit | ratio | llrm M | clang M | proposed owner |
 |---|---|---|---|--:|--:|--:|--:|--:|---|
-| gvn | GVN | 35 / 11 | 7,979 / 1,250 | 23,863 | 25,680 | 0.93x | 190.4 | 32.1 | fold-poc (EarlyCSE and GVN translation tables first, llvm-difftest) |
+| gvn | GVN | 35 / 11 | 7,979 / 1,250 | 23,863 | 25,680 | 0.93x | 190.4 | 32.1 | open (GVN.cpp's translation needs an owner other than fold-poc, whose queue is InstSimplify consumers, the worklist and builder folds; the gap is volume, 35 runs against 11, which llvm-order-poc's order reduces; GVN's natural dependency is the MemorySSA walker, on memoryssa-port's client turn-on list: LICM, DSE, GVN) |
 | fold + algebraic | InstCombine | 92 / 88 | 18,212 / 9,719 | 13,612 | 4,064 | 3.35x | 247.9 | 39.5 | fold-poc |
 | sroa + promote | SROA | 47 / 44 | 10,561 / 6,839 | 9,450 | 1,433 | 6.59x | 99.8 | 9.8 | llvm-order-poc |
 | hoist + loopmotion | LICM | 81 / 70 | 18,145 / 9,472 | 8,129 | 771 | 10.55x | 147.5 | 7.3 | memoryssa-port (LICM translation plugs into it) |
