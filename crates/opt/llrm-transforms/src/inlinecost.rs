@@ -113,6 +113,18 @@ pub struct InlineParams {
     /// `ComputeFullInlineCost`: the whole cost, past the threshold too (an
     /// optimisation remark asks for it).
     pub compute_full_inline_cost: bool,
+    /// Which target's answers `getInstructionCost` and its kin give (D2).
+    pub tti: Tti,
+}
+
+/// The cost model of the target (D2): the generic one is what `opt` has
+/// without a triple, the oracle of this translation; `Basic` is
+/// `BasicTTIImpl`'s, which every real target extends.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Tti {
+    #[default]
+    Generic,
+    Basic,
 }
 
 impl InlineParams {
@@ -129,6 +141,7 @@ impl InlineParams {
             opt_min_size_threshold: OPT_MIN_SIZE_THRESHOLD,
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
+            tti: Tti::Generic,
         }
     }
 
@@ -320,6 +333,8 @@ enum Simple {
     /// A float of the kind, by its IEEE bits (an x87 extended one by the
     /// double nearest it).
     Float(FloatKind, u64),
+    /// A pointer constant by its address: `null`, an `inttoptr` of a constant.
+    Pointer(u128),
     Const(ConstantId),
     Caller(Operand),
 }
@@ -427,6 +442,7 @@ impl<'a> Analyzer<'a> {
                     Type::Int(width) => Simple::Int(*width, bits),
                     _ => Simple::Const(id),
                 },
+                ConstantKind::Null => Simple::Pointer(0),
                 ConstantKind::Float(bits) => match self.context.types.get(self.context.get(id).ty) {
                     Type::Float(kind) => Simple::Float(*kind, bits),
                     _ => Simple::Const(id),
@@ -436,6 +452,7 @@ impl<'a> Analyzer<'a> {
             Operand::Value(value) => match self.simplified.get(&value) {
                 Some(Simple::Int(width, bits)) => Some(Simple::Int(*width, *bits)),
                 Some(Simple::Float(kind, bits)) => Some(Simple::Float(*kind, *bits)),
+                Some(Simple::Pointer(bits)) => Some(Simple::Pointer(*bits)),
                 Some(Simple::Const(id)) => Some(Simple::Const(*id)),
                 _ => None,
             },
@@ -660,9 +677,17 @@ impl<'a> Analyzer<'a> {
                     Type::Float(kind) => Some(*kind),
                     _ => None,
                 };
+                let null = match operands.first().copied().flatten() {
+                    Some(Simple::Pointer(bits)) => Some(bits),
+                    _ => None,
+                };
                 match (op, int(0), float(0), to, to_float) {
+                    (CastOp::PtrToInt, _, _, Some(to), _) if null.is_some() => {
+                        Some(Simple::Int(to, mask(to, null.unwrap_or(0))))
+                    }
                     (CastOp::Trunc, Some((_, bits)), _, Some(to), _) => Some(Simple::Int(to, mask(to, bits))),
                     (CastOp::ZExt, Some((_, bits)), _, Some(to), _) => Some(Simple::Int(to, bits)),
+                    (CastOp::IntToPtr, Some((_, bits)), _, _, _) => Some(Simple::Pointer(bits)),
                     (CastOp::SExt, Some((from, bits)), _, Some(to), _) => {
                         Some(Simple::Int(to, mask(to, signed(from, bits) as u128)))
                     }
@@ -707,7 +732,6 @@ impl<'a> Analyzer<'a> {
         let operation = self.callee.instruction(inst);
         let layout = self.site.layout;
         let types = &self.context.types;
-        let pointer_bits = layout.pointer(0).bits as u32;
         match &operation.opcode {
             Opcode::Freeze | Opcode::ExtractValue(_) => true,
             Opcode::GetElementPtr { .. } => self.gep_free(inst),
@@ -718,8 +742,10 @@ impl<'a> Analyzer<'a> {
                     layout.size_bits(types, operation.ty) as u32,
                 );
                 match op {
-                    CastOp::IntToPtr => layout.legal_integer(source) && source <= pointer_bits,
-                    CastOp::PtrToInt => layout.legal_integer(target) && target >= pointer_bits,
+                    CastOp::IntToPtr => layout.legal_integer(source) && source <= self.pointer_bits_of(operation.ty),
+                    CastOp::PtrToInt => {
+                        layout.legal_integer(target) && from.is_some_and(|ty| target >= self.pointer_bits_of(ty))
+                    }
                     CastOp::BitCast => {
                         from == Some(operation.ty)
                             || (matches!(types.get(operation.ty), Type::Pointer(_))
@@ -734,6 +760,17 @@ impl<'a> Analyzer<'a> {
                 target.is_some_and(|one| free_intrinsic(self.site.module.global(one).name.as_deref()))
             }
             _ => false,
+        }
+    }
+
+    /// The bits of a pointer of type `ty`: its address space's.
+    fn pointer_bits_of(
+        &self,
+        ty: llrm_mir::types::TypeId,
+    ) -> u32 {
+        match self.context.types.get(ty) {
+            Type::Pointer(space) => self.site.layout.pointer(*space).bits as u32,
+            _ => 0,
         }
     }
 
@@ -775,7 +812,7 @@ impl<'a> Analyzer<'a> {
             Opcode::Alloca { .. } => self.visit_alloca(inst),
             Opcode::Phi => self.visit_phi(inst),
             Opcode::GetElementPtr { .. } => self.visit_gep(inst),
-            Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => self.visit_bitcast(inst),
+            Opcode::Cast(CastOp::BitCast) => self.visit_bitcast(inst),
             Opcode::Cast(CastOp::PtrToInt) => self.visit_ptr_to_int(inst),
             Opcode::Cast(CastOp::IntToPtr) => self.visit_int_to_ptr(inst),
             Opcode::Cast(_) => self.visit_cast(inst),
@@ -988,7 +1025,8 @@ impl<'a> Analyzer<'a> {
             Type::Int(width) => *width,
             _ => 0,
         };
-        if width == self.site.layout.pointer(0).bits {
+        let source_bits = self.operand_type(operation.operands[0]).map_or(0, |ty| self.pointer_bits_of(ty));
+        if width == source_bits {
             if let Operand::Value(source) = operation.operands[0]
                 && let Some(pointer) = self.offsets.get(&source).copied()
             {
@@ -1392,8 +1430,11 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
-        let (clusters, table) =
-            case_clusters(&cases, self.site.layout.pointer(0).bits, self.site.caller_size != CallerSize::Speed);
+        let (clusters, table) = if self.params.tti == Tti::Generic {
+            (cases.len() as u64, 0)
+        } else {
+            case_clusters(&cases, self.site.layout.pointer(0).bits, self.site.caller_size != CallerSize::Speed)
+        };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
                 .callee
@@ -1471,6 +1512,7 @@ impl<'a> Analyzer<'a> {
             {
                 continue;
             }
+            let before = self.cost;
             self.instructions += 1;
             if matches!(
                 self.context.types.get(self.callee.instruction(inst).ty),
@@ -1481,6 +1523,20 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
+            }
+            if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
+                eprintln!(
+                    "[inlinetrace] {} {} {}",
+                    self.site.module.global(self.site.callee_id).name.as_deref().unwrap_or("?"),
+                    match llrm_mir::memory::callee(self.context, self.callee, inst) {
+                        Some(target) => format!(
+                            "call:{}",
+                            self.site.module.global(target).name.as_deref().unwrap_or("?").trim_matches('"')
+                        ),
+                        None => self.callee.instruction(inst).opcode.mnemonic().to_owned(),
+                    },
+                    self.cost - before
+                );
             }
             if self.recursive_call {
                 return Err("recursive".into());
@@ -1603,6 +1659,13 @@ impl<'a> Analyzer<'a> {
 
     /// `analyze` (:2916) and `finalizeAnalysis` (:1080).
     fn analyze(&mut self) -> Result<(), String> {
+        if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
+            eprintln!(
+                "[inlinetrace-start] {} <- {}",
+                self.site.module.global(self.site.callee_id).name.as_deref().unwrap_or("?"),
+                self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or("?")
+            );
+        }
         self.start()?;
         if self.callee.layout().is_empty() {
             return Ok(());
