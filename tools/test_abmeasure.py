@@ -2,6 +2,8 @@ import sys
 import subprocess
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 import abmeasure  # noqa: E402
@@ -36,3 +38,29 @@ def test_a_change_is_signed_and_in_percent():
 def test_d_faces_is_left_out_without_qcport(tmp_path, capsys):
     got = abmeasure.programs(tmp_path, ["d_faces", "lru"], None, tmp_path)
     assert list(got) == ["lru"] and "QCPORT is not set" in capsys.readouterr().err
+
+
+def test_a_compile_that_failed_is_not_a_row_8_1m_instructions_for_d_faces(monkeypatch):
+    """QCPORT without the game headers: wccq stops at "Unable to open 'world.h'" after ~8 M instructions, perf stat counted them, and the d_faces row read
+    8.1 M where the compile is ~2 G (fold-poc ran the binaries by hand)."""
+    err = "llrm-c: wccq failed on d_faces_flat.c:\nd_sky.h(4): Error! E1055: Unable to open 'world.h'\n8100000,,instructions:u,1,100.00,,\n"
+    monkeypatch.setattr(abmeasure.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, stdout="", stderr=err))
+    with pytest.raises(SystemExit, match="failed.*world.h"):
+        abmeasure.counted(Path("c"), Path("d_faces_flat.c"), [], "O2")
+    with pytest.raises(SystemExit, match="failed"):
+        abmeasure.callgrind(Path("c"), Path("d_faces_flat.c"), [], "O2")
+
+
+def test_a_d_faces_count_under_its_floor_fails_the_run():
+    with pytest.raises(SystemExit, match="did not compile"):
+        abmeasure.floored("d_faces", 8_100_000)
+    abmeasure.floored("d_faces", 2_043_000_000)
+    abmeasure.floored("lru", 1)
+
+
+def test_a_binary_whose_target_is_gone_names_the_missing_wccq(monkeypatch):
+    """The dist binary embeds its wccq's path inside its target dir; copied out of a deleted target it fails at ~2.8 M instructions with the path in the message."""
+    err = "llrm-c: wccq failed on x.c:\n/gone/target/dist/build/wccq: No such file or directory (os error 2)\n2800000,,instructions:u,1,100.00,,\n"
+    monkeypatch.setattr(abmeasure.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, stdout="", stderr=err))
+    with pytest.raises(SystemExit, match="/gone/target/dist/build/wccq"):
+        abmeasure.counted(Path("c"), Path("x.c"), [], "O2")
