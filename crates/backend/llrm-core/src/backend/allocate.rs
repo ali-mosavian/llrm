@@ -2197,38 +2197,29 @@ fn _allocated(
                     );
                 }
             }
-            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
+            let analysed = llrm_support::debug::timed("split spread", || splitkit::Split::of(&body, value, &live_sets));
+            let spread = analysed.live_blocks();
             let occupied = splitkit::Occupied::of(&union, &facts.live, value, &facts.masks);
             let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
             let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || {
-                splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)
+                analysed.local(&facts.index, &order, &occupied, width)
             }) {
                 Some(found) => vec![found],
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
-                        splitkit::placed(
-                            &body,
-                            value,
-                            &facts.index,
-                            sets,
-                            &bundles,
-                            &order,
-                            &occupied,
-                            width,
-                            &_held_saving,
-                        )
+                        analysed.placed(&facts.index, sets, &bundles, &order, &occupied, width, &_held_saving)
                     });
                     if placed.is_empty() {
-                        llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets))
+                        llrm_support::debug::timed("split per block", || analysed.per_block())
                     } else {
                         placed
                     }
                 }
             };
             let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || {
-                regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets, &_held_saving)).collect()
+                regions.into_iter().filter(|region| analysed.pays(region, sets, &_held_saving)).collect()
             });
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
@@ -2906,6 +2897,31 @@ pub struct Masks {
     added: Option<Vec<Arc<Mask>>>,
 }
 
+/// The points that destroy one register, as `Masks::destroyed_within` asks.
+pub struct Destroyers<'a> {
+    lists: [&'a [i64]; 3],
+}
+
+impl Destroyers<'_> {
+    /// The first and last point in `lo..hi`.
+    pub fn within(
+        &self,
+        lo: i64,
+        hi: i64,
+    ) -> Option<(i64, i64)> {
+        let mut found: Option<(i64, i64)> = None;
+        for list in self.lists {
+            let from = list.partition_point(|slot| *slot < lo);
+            let to = from + list[from..].partition_point(|slot| *slot < hi);
+            if from < to {
+                let (first, last) = (list[from], list[to - 1]);
+                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
+            }
+        }
+        found
+    }
+}
+
 /// Where one register is destroyed, sorted: before the point's own reads
 /// (`read`), during it (`during`), or only its high half (`high`).
 #[derive(Clone, Default)]
@@ -3100,22 +3116,20 @@ impl Masks {
         lo: i64,
         hi: i64,
     ) -> Option<(i64, i64)> {
-        let reaching = self.reaching(register)?;
-        let lists: &[&Vec<i64>] = if width > 2 {
-            &[&reaching.read, &reaching.during, &reaching.high]
-        } else {
-            &[&reaching.read, &reaching.during]
-        };
-        let mut found: Option<(i64, i64)> = None;
-        for list in lists {
-            let from = list.partition_point(|slot| *slot < lo);
-            let to = list.partition_point(|slot| *slot < hi);
-            if from < to {
-                let (first, last) = (list[from], list[to - 1]);
-                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
-            }
+        self.destroyers(register, width).within(lo, hi)
+    }
+
+    /// Where `register` is destroyed, found once for the many spans a
+    /// candidate asks of it.
+    pub fn destroyers(
+        &self,
+        register: RegId,
+        width: u32,
+    ) -> Destroyers<'_> {
+        match self.reaching(register) {
+            Some(one) => Destroyers { lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }] },
+            None => Destroyers { lists: [&[], &[], &[]] },
         }
-        found
     }
 
     fn reaching(
