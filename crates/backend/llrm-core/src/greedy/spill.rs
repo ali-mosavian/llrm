@@ -34,6 +34,7 @@ use crate::model::lir::Insn;
 pub struct SimpleSpiller {
     pub reloads: usize,
     pub stores: usize,
+    pub folded: usize,
 }
 
 impl Spiller for SimpleSpiller {
@@ -58,6 +59,27 @@ impl Spiller for SimpleSpiller {
         for (instr, reads, writes) in instrs {
             let index = lis.indexes.get_instruction_index(instr);
             let block = lis.indexes.get_mbb_from_index(&index);
+            // A read of a parallel copy is a load from the slot into its
+            // destination (a folded reload: `foldMemoryOperand`):
+            // no register holds it, as all the reads of a copy
+            // would otherwise be live together.
+            if reads && !writes && lis.instr(instr).group.is_some() {
+                let mut folded = (**lis.instr(instr)).clone();
+                folded.uses.retain(|value| *value != reg);
+                lis.rewrite_instr(block, instr, Arc::new(folded));
+                self.folded += 1;
+                continue;
+            }
+            // And a write of a parallel copy is a store of its source (a folded
+            // spill): its destinations would otherwise all be defined, and
+            // live, at the copy's one index.
+            if writes && !reads && lis.instr(instr).group.is_some() {
+                let mut folded = (**lis.instr(instr)).clone();
+                folded.defines.retain(|value| *value != reg);
+                lis.rewrite_instr(block, instr, Arc::new(folded));
+                self.folded += 1;
+                continue;
+            }
             let new_reg = lis.create_virtual_register();
             vrm.set_is_split_from_reg(new_reg, reg);
             // The instruction names the new register where it named the old

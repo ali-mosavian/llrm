@@ -531,7 +531,9 @@ impl<'a> RAGreedy<'a> {
                                     usize::MAX,
                                 ));
                             }
-                            eprintln!("    {reg:?}: {kind:?} {holders:?}");
+                            let shown: Vec<String> =
+                                holders.iter().map(|h| format!("{}", self.lis.interval_rc(*h))).collect();
+                            eprintln!("    {reg:?}: {kind:?} {}", shown.join(" | "));
                         }
                     }
                 }
