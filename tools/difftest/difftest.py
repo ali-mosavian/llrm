@@ -31,13 +31,14 @@ INPUTS = Path(os.environ.get("LLRM_DIFFTEST_INPUTS") or Path.home() / "scratch/r
 LLVM_BIN = Path(os.environ.get("LLVM_BIN") or (Path.home() / "scratch/llvm-build/bin" if (Path.home() / "scratch/llvm-build/bin/opt").is_file() else "/usr/lib/llvm-20/bin"))
 
 # llrm pass -> the opt pipeline that does its work. Many to one where llrm splits what LLVM does in one (instcombine = fold + algebraic + phiopt);
-# a pass with no counterpart is listed, not compared.
+# a pass with no counterpart is listed, not compared. instcombine runs without its fixpoint check: an input llrm's passes left in a form it takes two
+# iterations to settle is LLVM's to settle here, not an error of the harness.
 COUNTERPART = {
     "sroa": "sroa",
     "promote": "mem2reg",
-    "fold": "instcombine",
-    "algebraic": "instcombine",
-    "phiopt": "instcombine",
+    "fold": "instcombine<no-verify-fixpoint>",
+    "algebraic": "instcombine<no-verify-fixpoint>",
+    "phiopt": "instcombine<no-verify-fixpoint>",
     "gvn": "gvn",
     "earlycse": "early-cse<memssa>",
     "dse": "dse",
