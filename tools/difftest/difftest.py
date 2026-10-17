@@ -57,10 +57,48 @@ COUNTERPART = {
 }
 
 
+# The C++ each counterpart is, under llvm/lib at d1106deb71cc: a difference belongs to the function of that file that does the work.
+SOURCE = {
+    "sroa": "Transforms/Scalar/SROA.cpp",
+    "mem2reg": "Transforms/Utils/Mem2Reg.cpp",
+    "instcombine<no-verify-fixpoint>": "Transforms/InstCombine/InstructionCombining.cpp",
+    "gvn": "Transforms/Scalar/GVN.cpp",
+    "early-cse<memssa>": "Transforms/Scalar/EarlyCSE.cpp",
+    "dse": "Transforms/Scalar/DeadStoreElimination.cpp",
+    "loop-mssa(licm)": "Transforms/Scalar/LICM.cpp",
+    "lcssa": "Transforms/Utils/LCSSA.cpp",
+    "loop-simplify": "Transforms/Utils/LoopSimplify.cpp",
+    "indvars": "Transforms/Scalar/IndVarSimplify.cpp",
+    "loop(loop-unroll-full)": "Transforms/Scalar/LoopUnrollPass.cpp",
+    "loop-unroll<peeling>": "Transforms/Scalar/LoopUnrollPass.cpp",
+    "simplifycfg": "Transforms/Utils/SimplifyCFG.cpp",
+    "loop-mssa(simple-loop-unswitch<no-nontrivial>)": "Transforms/Scalar/SimpleLoopUnswitch.cpp",
+    "adce": "Transforms/Scalar/ADCE.cpp",
+    "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
+    "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
+}
+LLVM_COMMIT = "d1106deb71cc"
+
+
+def source_link(passes: str) -> str:
+    path = SOURCE.get(passes)
+    return f"[{path.rsplit('/', 1)[1]}](https://github.com/llvm/llvm-project/blob/{LLVM_COMMIT}/llvm/lib/{path})" if path else "-"
+
+
+LLRM_CONVENTIONS = re.compile(r"(?<![\w@%$.\"-])(?:watcallcc|sysvcc|ia16cc|regparm3cc|regparm3popcc|cc[0-9]+)(?![\w$.\"-]) ?")
+DECLARED_INTERNAL = re.compile(r"^declare internal ")
+
+
 def normalise(text: str) -> str:
-    """llrm's text in the dialect LLVM reads: the calling-convention words (`watcallcc`, `sysvcc`, `cc1000`) and `internal` on a declaration are llrm's."""
-    text = re.sub(r"\b(?:watcallcc|sysvcc|ia16cc|regparm3cc|regparm3popcc|cc[0-9]+) ?", "", text)
-    return re.sub(r"^declare internal ", "declare ", text, flags=re.M)
+    """llrm's text in the dialect LLVM reads: its calling-convention words (`watcallcc`, `sysvcc`, `cc1000`) and `internal` on a declaration. Only
+    those tokens, in code: not a name that contains one, not a string, not a comment."""
+    out = []
+    for line in text.splitlines(keepends=True):
+        parts = re.split(r'("(?:[^"\\]|\\.)*"|;.*$)', line.rstrip("\n"), flags=re.M)
+        code = [p if i % 2 else LLRM_CONVENTIONS.sub("", p) for i, p in enumerate(parts)]
+        line = "".join(code) + ("\n" if line.endswith("\n") else "")
+        out.append(DECLARED_INTERNAL.sub("declare ", line))
+    return "".join(out)
 
 
 def opt(passes: str, text: str) -> subprocess.CompletedProcess:
@@ -82,36 +120,78 @@ def functions(text: str) -> dict[str, list[str]]:
     return found
 
 
-def canonical(lines: list[str]) -> list[str]:
-    """The body with its local names numbered by first appearance, and what is not the code left out: comments, blank lines, the function's
-    attributes, `align` (LLVM infers it, llrm leaves it), metadata attachments (their numbers are the module's), and the order of a phi's
-    incoming pairs. Two bodies that differ only in those read alike."""
-    names: dict[str, str] = {}
+def trimmed(lines: list[str]) -> list[str]:
+    """The lines without what is not the code: comments, blank lines, `align`, metadata attachments (their numbers are the module's)."""
     out = []
     for line in lines:
         line = line.split(";", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if line.startswith("define "):  # what the function is called and takes, not how LLVM or llrm annotate it
-            header = re.match(r"^define\s+(?:\w+\s+)*?([\w.]+(?:\s*\*)?)\s+@([\w.$-]+)\((.*)\)[^()]*(?:\([^()]*\)[^()]*)*\{$", line)
-            params = re.findall(r"%[\w.$-]+", header[3]) if header else []
-            for one in params:
-                names.setdefault(one[1:], f"v{len(names)}")
-            out.append(f"define @{header[2]} params={len(params)} {{" if header else line)
-            continue
-        line = re.sub(r", align \d+", "", line)
-        line = re.sub(r", !\w+ !\d+", "", line)
+        if line.strip():
+            out.append(re.sub(r", !\w+ !\d+", "", re.sub(r", align \d+", "", line)))
+    return out
+
+
+def blocks_in_order(body: list[str]) -> list[list[str]]:
+    """The blocks of a function body, each as its lines (the label first), in the order a walk of the control flow from the entry meets them
+    (successors in the order the terminator names them), the unreachable after in file order: two layouts of one CFG read alike."""
+    blocks: dict[str, list[str]] = {}
+    current = "entry"
+    blocks[current] = [current + ":"]
+    for line in body:
         label = re.match(r"^([\w.$-]+):", line)
         if label:
-            names.setdefault(label[1], f"b{len(names)}")
-            line = names[label[1]] + ":"
-        line = re.sub(r"%([\w.$-]+)", lambda m: "%" + names.setdefault(m[1], f"v{len(names)}"), line)
-        if " = phi " in line:
-            head, _, rest = line.partition(" = phi ")
-            kind, _, pairs = rest.partition(" ")
-            line = f"{head} = phi {kind} " + ", ".join(sorted(re.findall(r"\[[^\]]*\]", pairs)))
-        out.append(line)
-    return out
+            current = label[1]
+            blocks.setdefault(current, [])
+            blocks[current] = [line]
+        else:
+            blocks[current].append(line)
+    names = list(blocks)
+    if len(blocks["entry"]) == 1 and len(names) > 1:  # an entry block that has a label of its own
+        del blocks["entry"]
+        names = list(blocks)
+    seen: list[str] = []
+    stack = [names[0]]
+    while stack:
+        name = stack.pop()
+        if name in seen or name not in blocks:
+            continue
+        seen.append(name)
+        stack.extend(reversed(re.findall(r"label %([\w.$-]+)", blocks[name][-1])))
+    return [blocks[name] for name in seen + [n for n in names if n not in seen]]
+
+
+def canonical(lines: list[str]) -> list[str]:
+    """The function with its blocks in control-flow order, its local names numbered by first appearance, and what is not the code left out
+    (comments, function and parameter attributes, `align`, metadata attachments, the order of a phi's incoming pairs). Two bodies that differ
+    only in those read alike."""
+    lines = trimmed(lines)
+    names: dict[str, str] = {}
+    out = []
+    head = next((n for n, line in enumerate(lines) if line.startswith("define ")), None)
+    if head is not None:
+        line = lines[head]
+        header = re.match(r"^define\s+.*?@([\w.$-]+)\((.*)\)[^()]*(?:\([^()]*\)[^()]*)*\{$", line)
+        params = re.findall(r"%[\w.$-]+", header[2]) if header else []
+        for one in params:
+            names.setdefault(one[1:], f"v{len(names)}")
+        out.append(f"define @{header[1]} params={len(params)} {{" if header else line)
+        body = [x for x in lines[head + 1 :] if x != "}"]
+    else:
+        body = lines
+    order = blocks_in_order(body)
+    for number, block in enumerate(order):
+        names.setdefault(re.match(r"^([\w.$-]+):", block[0])[1], f"b{number}")
+    for block in order:
+        for line in block:
+            line = re.sub(r"%([\w.$-]+)", lambda m: "%" + names.setdefault(m[1], f"v{len(names)}"), line)
+            label = re.match(r"^([\w.$-]+):", line)
+            if label and not line.startswith("%"):
+                line = names.get(label[1], label[1]) + ":"
+            if " = phi " in line:
+                head_, _, rest = line.partition(" = phi ")
+                kind, _, pairs = rest.partition(" ")
+                line = f"{head_} = phi {kind} " + ", ".join(sorted(re.findall(r"\[[^\]]*\]", pairs)))
+            out.append(line)
+    return out + (["}"] if head is not None else [])
 
 
 def opcode(line: str) -> str | None:
@@ -189,19 +269,39 @@ def dump_pairs(directory: Path, name: str) -> list[tuple[dict, Path]]:
     return out
 
 
-def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8) -> dict:
-    """The report of pass `name` over `todo`."""
+def level_of(config: str) -> str:
+    """The -O level a config name ends in (d_faces-O1), -O2 for the ladders."""
+    found = re.search(r"-(O\d|Os|Oz|Omax)$", config)
+    return "-" + (found[1] if found else "O2")
+
+
+def isolated(replay: Path, row: dict, source: Path) -> str:
+    """llrm's answer to the input alone: `llrm-pass` runs the one pass PASS once on `source`."""
+    done = subprocess.run([str(replay), level_of(row["config"]), row["pass"], str(source)], capture_output=True, text=True)
+    if done.returncode:
+        raise RuntimeError("llrm-pass " + row["pass"] + ": " + (done.stderr.strip().splitlines() or ["failed"])[0])
+    return done.stdout
+
+
+def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8, replay: Path | None = None) -> dict:
+    """The report of pass `name` over `todo`. With `replay` (llrm-pass) llrm's answer is the pass run alone on the input; without, the next step's
+    input, which is the pass's answer only if nothing but the pass ran between (the report counts, with `replay`, where the two differ)."""
     passes = COUNTERPART[name]
 
-    def one(item: tuple[dict, Path]) -> tuple[dict, dict]:
+    def one(item: tuple[dict, Path]) -> tuple[dict, dict, bool]:
         row, answer = item
         source = Path(row["file"]) if Path(row["file"]).is_absolute() else root / row["file"]
-        return row, compare(source.read_text(), answer.read_text(), passes)
+        proxy = answer.read_text()
+        try:
+            ours = isolated(replay, row, source) if replay else proxy
+        except RuntimeError as error:
+            return row, {"error": str(error)}, False
+        return row, compare(source.read_text(), ours, passes), ours == proxy
 
     with ThreadPoolExecutor(jobs) as pool:
         done = list(pool.map(one, todo))
-    failures = [(r, c["error"]) for r, c in done if "error" in c]
-    compared = [(r, c) for r, c in done if "error" not in c]
+    failures = [(r, c["error"]) for r, c, _ in done if "error" in c]
+    compared = [(r, c) for r, c, _ in done if "error" not in c]
     judged = [(r, fn, v) for r, c in compared for fn, v in c.items()]
     changed = [x for x in judged if not x[2]["unchanged_by_llrm"] or not x[2]["unchanged_by_llvm"]]
     llrm_only, llvm_only = collections.Counter(), collections.Counter()
@@ -211,6 +311,9 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8)
     return {
         "pass": name,
         "counterpart": passes,
+        "source": source_link(passes),
+        "answer": "the pass run alone (llrm-pass)" if replay else "next-input proxy",
+        "proxy_equals_isolated": sum(1 for _, c, same in done if same and "error" not in c) if replay else None,
         "inputs": len(todo),
         "parse_failures": len(failures),
         "first_failures": [{"file": r["file"], "error": e} for r, e in failures[:5]],
@@ -226,9 +329,11 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8)
 def table(report: dict) -> str:
     """The report as the markdown a comment on #1994 holds."""
     rows = [
-        f"### {report['pass']} against `opt -passes={report['counterpart']}`",
+        f"### {report['pass']} against `opt -passes={report['counterpart']}` ({report['source']})",
         "",
-        f"inputs {report['inputs']}; LLVM could not read or run {report['parse_failures']}; functions compared {report['functions']}; "
+        f"llrm's answer: {report['answer']}"
+        + (f"; the next input equals it on {report['proxy_equals_isolated']} of {report['inputs']}" if report["proxy_equals_isolated"] is not None else "")
+        + f"; inputs {report['inputs']}; failed (LLVM or llrm) {report['parse_failures']}; functions compared {report['functions']}; "
         f"where either side changed the function: {report['acted_on']}, identical {report['identical']}",
         "",
         "| opcode | only in llrm's answer | only in LLVM's |",
@@ -252,11 +357,13 @@ def main() -> int:
     run.add_argument("--config", nargs="*")
     run.add_argument("--limit", type=int, default=0)
     run.add_argument("--json", type=Path)
+    run.add_argument("--llrm-pass", type=Path, help="llrm-pass (src/bin/llrm-pass.rs): llrm's answer is the pass run alone on the input, not the next input")
     dumps = sub.add_parser("dumps")
     dumps.add_argument("pass_name", metavar="PASS")
     dumps.add_argument("directory", type=Path, nargs="+")
     dumps.add_argument("--limit", type=int, default=0)
     dumps.add_argument("--json", type=Path)
+    dumps.add_argument("--llrm-pass", type=Path, help="the llrm-pass of the tree that made the dumps")
     pair = sub.add_parser("pair")
     pair.add_argument("input", type=Path)
     pair.add_argument("llrm_out", type=Path)
@@ -273,7 +380,7 @@ def main() -> int:
     todo = pairs(manifest(root, args.config), args.pass_name, root) if args.command == "run" else [x for d in args.directory for x in dump_pairs(d, args.pass_name)]
     if args.limit:
         todo = todo[: args.limit]
-    report = analyse(todo, root, args.pass_name)
+    report = analyse(todo, root, args.pass_name, replay=args.llrm_pass)
     version = subprocess.run([str(LLVM_BIN / "opt"), "--version"], capture_output=True, text=True).stdout.split("\n")[1].strip()
     print(f"opt: {LLVM_BIN / 'opt'} ({version})")
     print(table(report))

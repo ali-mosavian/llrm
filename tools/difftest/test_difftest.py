@@ -77,3 +77,78 @@ def test_a_step_file_is_the_answer_of_its_step_and_its_input_is_the_nearest_slot
 def test_a_pass_without_a_counterpart_is_refused_by_name(capsys, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["difftest.py", "run", "ports"])
     assert difftest.main() == 2 and "ports has no counterpart" in capsys.readouterr().err
+
+
+def test_the_rewrites_change_only_llrms_convention_words_and_internal_on_a_declaration():
+    """The words are llrm's only as tokens of the code: not a name that contains one, a string, a comment, or `internal` on a definition."""
+    text = (
+        'declare internal watcallcc i32 @g(i32) ; the word watcallcc stays\n'
+        'define internal cc1000 i32 @watcallcc_fn(i32 %x) {\n'
+        '  %r = call sysvcc i32 @g(i32 %x), !note !"cc1000 sysvcc"\n'
+        '  ret i32 %r\n'
+        '}\n'
+        '@s = constant [9 x i8] c"watcallcc"\n'
+    )
+    assert difftest.normalise(text) == (
+        'declare i32 @g(i32) ; the word watcallcc stays\n'
+        'define internal i32 @watcallcc_fn(i32 %x) {\n'
+        '  %r = call i32 @g(i32 %x), !note !"cc1000 sysvcc"\n'
+        '  ret i32 %r\n'
+        '}\n'
+        '@s = constant [9 x i8] c"watcallcc"\n'
+    )
+
+
+def test_two_layouts_of_one_control_flow_graph_are_identical():
+    """A pass that moves blocks showed as a large hunk with equal histograms."""
+    one = "define i32 @f(i1 %c) {\ne:\n  br i1 %c, label %a, label %b\na:\n  br label %m\nb:\n  br label %m\nm:\n  ret i32 1\n}\n"
+    other = "define i32 @f(i1 %c) {\ne:\n  br i1 %c, label %a, label %b\nm:\n  ret i32 1\nb:\n  br label %m\na:\n  br label %m\n}\n"
+    assert difftest.canonical(difftest.functions(one)["f"]) == difftest.canonical(difftest.functions(other)["f"])
+    different = one.replace("br label %m\nb:", "br label %b\nb:")
+    assert difftest.canonical(difftest.functions(one)["f"]) != difftest.canonical(difftest.functions(different)["f"])
+
+
+@needs_opt
+def test_llrms_answer_is_the_pass_run_alone_not_what_the_next_step_made_of_it(tmp_path):
+    """The proxy (the next step's input) holds every pass that ran in between: with the replay the answer is the runner's output, whatever the next input is."""
+    source = tmp_path / "in.ll"
+    source.write_text(INPUT)
+    runner = tmp_path / "llrm-pass"
+    runner.write_text(f"#!/bin/bash\ncat <<'EOF'\n{AGREES}EOF\n")
+    runner.chmod(0o755)
+    leaked = tmp_path / "next.ll"
+    leaked.write_text(INPUT.replace("mul i32 %a, %b", "mul i32 %a, 7"))  # a pass after gvn changed the body further
+    row = {"config": "c-O2", "fn": "f", "pass": "gvn", "run": 1, "file": str(source)}
+    proxy = difftest.analyse([(row, leaked)], tmp_path, "gvn")
+    alone = difftest.analyse([(row, leaked)], tmp_path, "gvn", replay=runner)
+    assert proxy["identical"] == 0 and alone["identical"] == 1, "the leak of the later pass is what the proxy compares"
+    assert alone["proxy_equals_isolated"] == 0 and alone["answer"].startswith("the pass run alone") and proxy["answer"] == "next-input proxy"
+
+
+def test_a_counterpart_names_the_cplusplus_it_is_translated_from():
+    assert "GVN.cpp" in difftest.source_link("gvn") and "d1106deb71cc/llvm/lib/Transforms/Scalar/GVN.cpp" in difftest.source_link("gvn")
+    assert all(passes in difftest.SOURCE for passes in set(difftest.COUNTERPART.values()))
+
+
+def llrm_pass():
+    import os
+
+    for base in (os.environ.get("LLRM_BIN"), os.environ.get("CARGO_TARGET_DIR") and os.environ["CARGO_TARGET_DIR"] + "/release"):
+        if base and (Path(base) / "llrm-pass").is_file():
+            return Path(base) / "llrm-pass"
+    return None
+
+
+@pytest.mark.skipif(llrm_pass() is None, reason="llrm-pass is not built")
+def test_llrm_pass_runs_the_one_pass_it_is_asked_for_and_no_other(tmp_path):
+    """gvn takes the second add; fold would take `mul x, 1`: only the first happens when gvn is asked for."""
+    import subprocess
+
+    source = tmp_path / "in.mir"
+    source.write_text(
+        "define i32 @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  %b = add i32 %x, 1\n  %c = mul i32 %a, 1\n  %d = add i32 %b, %c\n  ret i32 %d\n}\n"
+    )
+    out = subprocess.run([str(llrm_pass()), "-O2", "gvn", str(source)], capture_output=True, text=True, check=True).stdout
+    assert out.count(" add i32 %") == 2 and "mul i32" in out, out
+    refused = subprocess.run([str(llrm_pass()), "-O2", "nosuch", str(source)], capture_output=True, text=True)
+    assert refused.returncode == 2 and "no pass named nosuch" in refused.stderr
