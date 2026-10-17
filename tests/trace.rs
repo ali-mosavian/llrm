@@ -40,13 +40,32 @@ fn test_each_compile_appends_its_lines_with_its_file_name_and_off_writes_nothing
     assert!(lines.iter().all(|one| one.starts_with("{\"file\":\"") && one.ends_with('}')), "{text}");
     for name in ["first.c", "second.c"] {
         assert!(
-            lines.iter().any(|one| one.contains(&format!("/{name}@O2\",\"ev\":\"run\""))),
+            lines.iter().any(|one| one.contains(&format!("/{name}@O2\",")) && one.contains("\"ev\":\"run\"")),
             "no run line for {name}"
         );
     }
-    for event in ["run", "ask", "edits"] {
+    for event in ["run", "ask", "edit", "clone"] {
         assert!(lines.iter().any(|one| one.contains(&format!("\"ev\":\"{event}\""))), "no {event} line");
     }
+    // An ask says how it was answered, and what a compute cost; the lines are
+    // numbered, and an ask is numbered when it starts.
+    let asks: Vec<&&str> = lines.iter().filter(|one| one.contains("\"ev\":\"ask\"")).collect();
+    for how in ["hit", "recomputed"] {
+        assert!(asks.iter().any(|one| one.contains(&format!("\"how\":\"{how}\""))), "no ask answered {how}");
+    }
+    assert!(
+        asks.iter().any(|one| one.contains("\"how\":\"recomputed\"") && !one.contains("\"instr\":0,")),
+        "a compute cost nothing"
+    );
+    let seqs: Vec<u64> = lines
+        .iter()
+        .filter(|one| one.contains("first.c@O2"))
+        .map(|one| one.split("\"seq\":").nth(1).unwrap().split(',').next().unwrap().parse().unwrap())
+        .collect();
+    assert!(
+        seqs.windows(2).filter(|pair| pair[0] > pair[1]).count() < seqs.len() / 4,
+        "the sequence numbers do not order the lines"
+    );
     let run = lines.iter().find(|one| one.contains("\"ev\":\"run\"")).unwrap();
     assert!(run.contains("\"insts\":") && run.contains("\"blocks\":") && run.contains("\"stage\":"), "{run}");
 }

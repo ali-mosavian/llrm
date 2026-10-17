@@ -172,7 +172,6 @@ pub fn analysis(
 ) {
     // The row last found for a literal's address, by a few bits of it: a scan
     // of every name per lookup was most of the cost.
-    crate::trace::ask(name, hit);
     let slot = (name.as_ptr() as usize >> 3) & (SLOTS - 1);
     ANALYSES.with(|rows| {
         let mut rows = rows.borrow_mut();

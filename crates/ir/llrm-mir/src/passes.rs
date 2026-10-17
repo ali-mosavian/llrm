@@ -1306,9 +1306,12 @@ impl Analyses {
                 read::note(entry.bits);
             }
             counted(A::NAME, true);
+            crate::trace::ask_held(A::NAME, function);
             return Rc::clone(&entry.result);
         }
         counted(A::NAME, false);
+        let traced = crate::trace::ask_begin(function);
+        let how = std::cell::Cell::new("recomputed");
         let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
         let mut old_reads = 0;
@@ -1355,6 +1358,7 @@ impl Analyses {
                 }
                 self.soft.insert(key);
                 self.tainted = true;
+                how.set("kept");
                 return Some(Rc::clone(&result));
             }
             // Asking of a long log again and again is more than the run it
@@ -1396,6 +1400,7 @@ impl Analyses {
                             .collect::<Vec<_>>()
                     );
                 }
+                how.set("kept");
                 return Some(Rc::clone(&result));
             }
             let made =
@@ -1410,6 +1415,7 @@ impl Analyses {
                     A::NAME
                 );
             }
+            how.set("updated");
             Some(Rc::new(made))
         });
         let replayed = updated.is_some();
@@ -1453,6 +1459,7 @@ impl Analyses {
             };
             record("fn", A::NAME, class);
         }
+        crate::trace::ask_end(traced, A::NAME, how.get(), function);
         let stamp = self.attributes_of(function);
         self.cache.insert(
             key,
@@ -2459,7 +2466,7 @@ impl PassManager {
                     })
                 });
                 drop(running);
-                crate::trace::edits(name, function, before);
+                crate::trace::end(function);
                 let preserved = preserved.unless_unchanged(function, before);
                 kept.retain(|one| preserved.keeps(*one));
                 spanned("invalidate", || cache.invalidate(function, &preserved));

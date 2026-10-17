@@ -26,6 +26,7 @@ fn main() {
         .next_back()
         .unwrap_or_default();
     let level = argv.iter().rfind(|one| one.starts_with("-O")).map_or("-O2", String::as_str);
+    llrm_mir::trace::count_work_with(llrm_core::support::debug::work);
     llrm_mir::trace::start(&format!("{source}@{}", &level[1..]));
     let code = llrm_core::support::debug::run_main(|| llrm_c::compile::main(&argv));
     llrm_mir::trace::flush();

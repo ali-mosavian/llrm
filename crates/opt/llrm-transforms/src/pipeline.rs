@@ -1329,7 +1329,7 @@ impl Run {
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
         drop(running);
-        llrm_mir::trace::edits(name, unit.function, before);
+        llrm_mir::trace::end(unit.function);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);
