@@ -2300,3 +2300,41 @@ fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
     }
     assert!(checked > 10, "premise: only {checked} bodies had counts to compare");
 }
+
+/// twoaddr asked the whole graph of every value a swap and its copy neighbours
+/// name (a row of bits per value for each block they are live in: `joins` 1024,
+/// 3.7 G of 6 G of the pass). The pairs a swap compares are asked one by one,
+/// from the values' live segments, and are the graph's answers.
+#[test]
+fn test_two_values_interfere_as_the_graph_says_asked_of_the_pair_alone() {
+    use crate::analysis::intervals::intervals;
+    use crate::backend::coalesce::_interference;
+    use crate::backend::interferes::among_pairs;
+    let mut answered = 0;
+    let mut yes = 0;
+    for seed in 0..200u64 {
+        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
+        let values: Vec<u32> = intervals(&plain, None).keys().copied().collect();
+        let pairs: std::collections::BTreeSet<(u32, u32)> = values
+            .iter()
+            .enumerate()
+            .flat_map(|(at, one)| values[at + 1..].iter().step_by(2).map(move |other| (*one, *other)))
+            .collect();
+        let Some(found) = among_pairs(&plain, &pairs) else { continue };
+        let whole = _interference(&plain);
+        for &(one, other) in &pairs {
+            let graph = whole.get(&one).is_some_and(|near| near.contains(&other));
+            assert_eq!(
+                found.contains(&(one.min(other), one.max(other))),
+                graph,
+                "seed {seed}: values {one} and {other}"
+            );
+            answered += 1;
+            yes += usize::from(graph);
+        }
+    }
+    assert!(
+        answered > 0 && yes > 0 && yes < answered,
+        "premise: pairs both interfere and do not ({yes} of {answered})"
+    );
+}

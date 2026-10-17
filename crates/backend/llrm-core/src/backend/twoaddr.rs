@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use crate::analysis::intervals as ranges;
 use crate::backend::allocate::LiveAt;
-use crate::backend::{allocate, coalesce, spiller};
+use crate::backend::{allocate, coalesce, interferes, spiller};
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -93,7 +93,10 @@ impl LIRTransform for TwoAddress {
 
 /// `body` with every tied instruction reading what it writes.
 pub fn tied(body: &LirBody) -> LirBody {
-    let reused = _reused(body);
+    // The rows of the body as it comes: `_reused` reads them, and so does the
+    // rest when it changed nothing.
+    let first = allocate::live_rows(body);
+    let (reused, rebuilt) = _reused(body, &first);
     let body = &reused;
     let mut changed = false;
     let mut counter = spiller::_next_value(body);
@@ -105,7 +108,7 @@ pub fn tied(body: &LirBody) -> LirBody {
     // What is live at each block's end is read from the rows of bits and what
     // the block's own instructions change laid over them: a set of every live
     // value copied for each block was quadratic in the values live at once.
-    let rows = allocate::live_rows(body);
+    let rows = if rebuilt { allocate::live_rows(body) } else { first };
     let copies = _copy_destinations(body);
     // Of each swap's two sources, those live after it: all `_commuted` reads of
     // liveness.
@@ -136,34 +139,40 @@ pub fn tied(body: &LirBody) -> LirBody {
         })
         .collect();
     // `_commuted` compares a swap's two sources with the copy neighbours of its
-    // destination, when neither source lives on: the interference among those
-    // values is all it asks of, not every pair live together (quadratic in the
-    // values live at once), and none where no swap asks.
-    let asked: BTreeSet<u32> = body
-        .blocks
-        .iter()
-        .zip(&lives)
-        .flat_map(|(block, live_after)| block.insns.iter().map(move |one| (one, live_after.get(&ranges::key(one)))))
-        .filter(|(_, alive)| alive.is_some_and(BTreeSet::is_empty))
-        .filter_map(|(one, _)| _swappable(one))
-        .filter_map(|(into, first, second)| {
-            let neighbours = copies.get(&into)?;
-            Some(neighbours.iter().copied().chain([into, first, second]))
-        })
-        .flatten()
-        .collect();
-    let interference =
-        if asked.is_empty() { IndexMap::default() } else { coalesce::_interference_among(body, Some(&asked)) };
-    if llrm_support::env_flag!("LLRM_CHECK_TWOADDR") {
-        let whole = coalesce::_interference(body);
-        for &one in &asked {
-            for &other in &asked {
-                assert_eq!(
-                    interference.get(&one).is_some_and(|found| found.contains(&other)),
-                    whole.get(&one).is_some_and(|found| found.contains(&other)),
-                    "LLRM_CHECK_TWOADDR: values {one} and {other} interfere differently among the asked values than in the whole graph"
-                );
+    // destination, when neither source lives on: whether those pairs of values
+    // interfere is all it asks of, and only where a swap asks.
+    let mut pairs: BTreeSet<(u32, u32)> = BTreeSet::new();
+    for (block, live_after) in body.blocks.iter().zip(&lives) {
+        for one in &block.insns {
+            if !live_after.get(&ranges::key(one)).is_some_and(BTreeSet::is_empty) {
+                continue;
             }
+            let Some((into, first, second)) = _swappable(one) else { continue };
+            let Some(neighbours) = copies.get(&into) else { continue };
+            for source in [first, second] {
+                for other in neighbours.iter().copied().chain([into]) {
+                    pairs.insert((source.min(other), source.max(other)));
+                }
+            }
+        }
+    }
+    let interfering = if pairs.is_empty() { Some(BTreeSet::new()) } else { interferes::among_pairs(body, &pairs) };
+    let whole = interfering
+        .is_none()
+        .then(|| coalesce::_interference_among(body, Some(&pairs.iter().flat_map(|(a, b)| [*a, *b]).collect())));
+    let meets = |a: u32, b: u32| match (&interfering, &whole) {
+        (Some(found), _) => found.contains(&(a.min(b), a.max(b))),
+        (None, Some(graph)) => graph.get(&a).is_some_and(|near| near.contains(&b)),
+        (None, None) => unreachable!("one of the two answers"),
+    };
+    if llrm_support::env_flag!("LLRM_CHECK_TWOADDR") {
+        let graph = coalesce::_interference(body);
+        for &(one, other) in &pairs {
+            assert_eq!(
+                meets(one, other),
+                graph.get(&one).is_some_and(|found| found.contains(&other)),
+                "LLRM_CHECK_TWOADDR: values {one} and {other} interfere differently asked of the pair than in the whole graph"
+            );
         }
     }
     let mut blocks = Vec::new();
@@ -172,12 +181,9 @@ pub fn tied(body: &LirBody) -> LirBody {
         let mut insns: Vec<Arc<Insn>> = Vec::new();
         for one in &block.insns {
             let mut one = Arc::clone(one);
-            if let Some(chosen) = _commuted(
-                &one,
-                live_after.get(&ranges::key(&one)).unwrap_or(&nothing),
-                Some(&copies),
-                Some(&interference),
-            ) {
+            if let Some(chosen) =
+                _commuted(&one, live_after.get(&ranges::key(&one)).unwrap_or(&nothing), Some(&copies), Some(&meets))
+            {
                 changed = true;
                 one = chosen;
             }
@@ -196,14 +202,16 @@ pub fn tied(body: &LirBody) -> LirBody {
 /// An update in place: `c := a + b` then `a := c`, with `a` dead between,
 /// is `a := a + b`. `c` is defined once and read only by that copy, so the
 /// copy the coalescer may refuse is gone and no interval grows.
-fn _reused(body: &LirBody) -> LirBody {
+fn _reused(
+    body: &LirBody,
+    rows: &allocate::LiveRows,
+) -> (LirBody, bool) {
     let mut defined: IndexMap<u32, usize> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             *defined.entry(*value).or_insert(0) += 1;
         }
     }
-    let rows = allocate::live_rows(body);
     let mut changed = false;
     let mut blocks = Vec::new();
     for block in &body.blocks {
@@ -287,7 +295,7 @@ fn _reused(body: &LirBody) -> LirBody {
         }
         blocks.push(block.with_insns(insns));
     }
-    if changed { body.with_blocks(blocks) } else { body.clone() }
+    if changed { (body.with_blocks(blocks), true) } else { (body.clone(), false) }
 }
 
 /// Which values each value is copied to or from.
@@ -373,7 +381,7 @@ fn _commuted(
     one: &Insn,
     alive: &BTreeSet<u32>,
     copies: Option<&IndexMap<u32, BTreeSet<u32>>>,
-    interference: Option<&coalesce::Graph>,
+    interferes: Option<&dyn Fn(u32, u32) -> bool>,
 ) -> Option<Arc<Insn>> {
     let what = one.what.as_ref()?;
     let (into, first, second) = _swappable_held(one)?;
@@ -385,9 +393,8 @@ fn _commuted(
     // The copy into the destination of a tied source that interferes with it
     // stays, so that source counts as blocked too.
     let blocked = |source: u32| -> usize {
-        let found = interference.and_then(|graph| graph.get(&source));
-        affinities.iter().filter(|other| found.is_some_and(|found| found.contains(other))).count()
-            + usize::from(found.is_some_and(|found| found.contains(&into.value)))
+        let meets = |other: u32| interferes.is_some_and(|interferes| interferes(source, other));
+        affinities.iter().filter(|other| meets(**other)).count() + usize::from(meets(into.value))
     };
 
     let reusable = !alive.contains(&first.value)
@@ -779,12 +786,10 @@ mod tests {
     fn test_crc32_ties_the_operand_that_can_join_its_loop_phi() {
         let one = addition("xor");
         let copies = graph(&[(3, &[4]), (4, &[3])]);
-        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[4]), (4, &[1])])
-            .into_iter()
-            .map(|(value, near)| (value, near.into_iter().collect()))
-            .collect();
+        let interference = graph(&[(1, &[4]), (4, &[1])]);
+        let meets = |a: u32, b: u32| interference.get(&a).is_some_and(|near| near.contains(&b));
 
-        let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&interference)).expect("swapped");
+        let chosen = _commuted(&one, &BTreeSet::from([3]), Some(&copies), Some(&meets)).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
     }
@@ -795,14 +800,54 @@ mod tests {
     fn test_a_source_that_interferes_with_the_destination_is_not_the_one_tied() {
         let one = addition("xor");
         let copies = graph(&[(3, &[1, 2])]);
-        let interference: crate::backend::coalesce::Graph = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])])
-            .into_iter()
-            .map(|(value, near)| (value, near.into_iter().collect()))
-            .collect();
+        let interference = graph(&[(1, &[2, 3]), (2, &[1]), (3, &[1])]);
+        let meets = |a: u32, b: u32| interference.get(&a).is_some_and(|near| near.contains(&b));
 
-        let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&interference)).expect("swapped");
+        let chosen = _commuted(&one, &BTreeSet::new(), Some(&copies), Some(&meets)).expect("swapped");
 
         assert_eq!(sources(&chosen), reversed(&one));
+    }
+
+    /// A swap's pairs were answered from the interference graph of every value
+    /// they name (`joins` 1024: 3.7 G of the pass). They are asked one by one,
+    /// and no graph is built.
+    #[test]
+    fn test_a_swap_asks_of_its_pairs_and_builds_no_interference_graph() {
+        let mov = |id, dest: u32, source: Option<u32>| {
+            let what = Semantics {
+                name: Some("mov".to_owned()),
+                dests: vec![held(dest, 4)],
+                sources: vec![
+                    source.map_or(Loc::Imm(Imm { value: 1, width: 4, address: None }), |source| held(source, 4)),
+                ],
+                ..Semantics::new(Operation::Move)
+            };
+            Insn::new(id, Some((id as i64, id as i64)), Some(what), vec![dest], source.into_iter().collect())
+        };
+        let insns = vec![
+            Arc::new(mov(0, 1, None)),
+            Arc::new(mov(1, 2, None)),
+            Arc::new(addition("add")),
+            Arc::new(mov(3, 4, Some(3))),
+            Arc::new(Insn::new(4, Some((4, 4)), None, vec![], vec![4])),
+        ];
+        let input = LirBody::new(
+            "swap",
+            0,
+            vec![LirBlock { succ: vec![0].into(), ..LirBlock::new(0, insns) }.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let (graphs, pairs) = (crate::backend::coalesce::graphs_built(), crate::backend::interferes::pairs_asked());
+
+        tied(&input);
+
+        assert!(crate::backend::interferes::pairs_asked() > pairs, "premise: the swap asked of a pair");
+        assert_eq!(
+            crate::backend::coalesce::graphs_built(),
+            graphs,
+            "an interference graph was built to answer a swap's pairs"
+        );
     }
 
     // ------------------------------------------------------ tests/test_lir.py
