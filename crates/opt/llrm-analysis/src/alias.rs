@@ -311,7 +311,7 @@ impl Inputs {
     ) -> Built {
         STRUCTURES.with(|built| built.set(built.get() + 1));
         let graph: Vec<cfg::Block> =
-            self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone() }).collect();
+            self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone().into() }).collect();
         let predecessors = loops::predecessors(&graph);
         let none: &[i64] = &[];
         let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
@@ -3371,7 +3371,7 @@ fn escapes(
     }
     let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     let escaped = named(&every);
-    let inputs = Inputs { blocks: graph.iter().map(|block| (block.at, block.succ.clone())).collect(), order };
+    let inputs = Inputs { blocks: graph.iter().map(|block| (block.at, block.succ.to_vec())).collect(), order };
     let escaped_before = EscapedBefore {
         objects: Rc::new(objects),
         inputs: Rc::new(inputs),

@@ -161,8 +161,13 @@ impl Canonical {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block {
     pub at: i64,
-    pub succ: Vec<i64>,
+    /// One or two ids for nearly every block, held in the block: a `Vec` for
+    /// each was 117,763 of a d_faces -O2 compile's 2.9 M allocations.
+    pub succ: Successors,
 }
+
+/// A block's successors' ids; two are inline (a branch).
+pub type Successors = llrm_mir::inline::InlineVec<i64, 2>;
 
 impl Node for Block {
     fn at(&self) -> i64 {
@@ -197,7 +202,7 @@ pub fn graph(function: &Function) -> Vec<Block> {
 pub fn successors_of(
     function: &Function,
     at: i64,
-) -> Vec<i64> {
+) -> Successors {
     function.successors(block(at)).into_iter().map(id).collect()
 }
 
@@ -663,10 +668,10 @@ dead:
         assert_eq!(
             graph(function),
             [
-                Block { at: b1, succ: vec![b2, b3] },
-                Block { at: b2, succ: vec![] },
-                Block { at: b3, succ: vec![] },
-                Block { at: dead, succ: vec![b2] },
+                Block { at: b1, succ: vec![b2, b3].into() },
+                Block { at: b2, succ: vec![].into() },
+                Block { at: b3, succ: vec![].into() },
+                Block { at: dead, succ: vec![b2].into() },
             ]
         );
     }
