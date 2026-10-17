@@ -193,7 +193,7 @@ pub fn exposed_allocas(
 ) -> BTreeSet<ValueId> {
     let mut exposing = vec![false; function.value_count()];
     // The values a value moves into, reversed: who feeds each.
-    let mut feeds: Vec<Vec<ValueId>> = vec![Vec::new(); function.value_count()];
+    let mut feeds: Vec<llrm_mir::inline::InlineVec<ValueId, 3>> = vec![Default::default(); function.value_count()];
     let mut allocas = Vec::new();
     for (_, inst) in function.walk() {
         let instruction = function.instruction(inst);
