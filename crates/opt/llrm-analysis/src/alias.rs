@@ -3535,33 +3535,54 @@ pub fn congruences_of(
     }
     let function = unit.function;
     let mut result = Congruences::default();
-    // The values reached by the operations that make a congruence, and the ones
-    // they stop at.
-    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
-    let mut work: Vec<ValueId> = match wanted {
-        Some(wanted) => wanted.to_vec(),
-        None => function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect(),
-    };
-    let mut operations: Vec<InstId> = Vec::new();
-    while let Some(value) = work.pop() {
-        if !reached.insert(value) {
-            continue;
-        }
-        let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
-        let op = function.instruction(inst);
-        if matches!(
+    let qualifies = |value: ValueId, op: &llrm_mir::module::Instruction| {
+        matches!(
             op.opcode,
             Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
         )
             && op.operands.len() == 2
             && unit.int_bits(Operand::Value(value)).is_some()
-        {
-            operations.push(inst);
-            work.extend(
-                op.operands
-                    .iter()
-                    .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
-            );
+    };
+    // The values reached by the operations that make a congruence, and the ones
+    // they stop at: for the whole body, every operation, in the body's order.
+    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
+    let mut operations: Vec<InstId> = Vec::new();
+    match wanted {
+        None => {
+            operations.extend(function.walk().map(|(_, inst)| inst).filter(|&inst| {
+                let op = function.instruction(inst);
+                op.result.is_some_and(|value| qualifies(value, op))
+            }));
+        }
+        Some(wanted) => {
+            let mut work: Vec<ValueId> = wanted.to_vec();
+            while let Some(value) = work.pop() {
+                if !reached.insert(value) {
+                    continue;
+                }
+                let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
+                let op = function.instruction(inst);
+                if qualifies(value, op) {
+                    operations.push(inst);
+                    work.extend(
+                        op.operands
+                            .iter()
+                            .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
+                    );
+                }
+            }
+            // In the body's order, round after round, as the whole body's goes.
+            let order: llrm_mir::dense::IdMap<InstId, usize> = {
+                let wanted: llrm_mir::dense::IdSet<InstId> = operations.iter().copied().collect();
+                function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .filter(|inst| wanted.contains(inst))
+                    .enumerate()
+                    .map(|(at, inst)| (inst, at))
+                    .collect()
+            };
+            operations.sort_by_key(|inst| order[inst]);
         }
     }
     let zero = BigInt::from(0);
@@ -3572,11 +3593,13 @@ pub fn congruences_of(
         _ => None,
     };
     for loop_ in &shape.loops {
-        if !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block))) {
+        if wanted.is_some()
+            && !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block)))
+        {
             continue;
         }
         for affine in induction::basics(unit, loop_).values() {
-            if !reached.contains(&affine.value) {
+            if wanted.is_some() && !reached.contains(&affine.value) {
                 continue;
             }
             let width = affine.start.width();
@@ -3591,18 +3614,6 @@ pub fn congruences_of(
             }
         }
     }
-    // In the body's order, round after round, as the whole body's goes.
-    let order: llrm_mir::dense::IdMap<InstId, usize> = {
-        let wanted: llrm_mir::dense::IdSet<InstId> = operations.iter().copied().collect();
-        function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|inst| wanted.contains(inst))
-            .enumerate()
-            .map(|(at, inst)| (inst, at))
-            .collect()
-    };
-    operations.sort_by_key(|inst| order[inst]);
     loop {
         let mut changed = false;
         for &inst in &operations {
