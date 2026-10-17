@@ -19,7 +19,7 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | S6 edit core | edit-rollback | measured; kill not met on `loop` only | `move_to` 925 M of 997.9 M primitives at N=1600 (4.32%) |
 | S7 caps and pricing | hoist-bounded, greedy-port | running | forecast 2.6% / 4.9% |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
-| 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
+| 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
@@ -122,7 +122,7 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | [#1965] allocator rewrites from a floor | UNOWNED | draft | -0.3% |
 | [#1972], [#1973] footprints by part | keep-analyses | draft | -0.02%, -0.07%; carries [parity] |
 | [#1945], [#1943] checkpoint and rollback, `Touched` per slot | edit-rollback | draft | +0.09%; 144 function clones at -O2 left |
-| [#1948] counted budgets as tests | attrs-budgets | draft | counter cost +0.04% |
+| [#1948] counted budgets as tests | attrs-budgets | draft | counter cost 0.03% (callgrind own-function sum); +0.13% by perf stat is noise; [#2076] recorder off: -0.003% / -0.010% / -0.011%, nothing measurable |
 | [#2036] | ssa-spill-m16 | docs, open | not-kept entries for spec section 8 |
 | [#2039] | keep-analyses | ready | `LLRM_CHECK_SAMEBYTES` read once through `env_flag!` (env fix) |
 
@@ -253,7 +253,7 @@ Eight spikes from the [architecture study](architecture-parity.md) run before th
 | S4 allocator attribution, then in-place spill | is the 415.5 M the representation or the decisions? | greedy-port, ssa-spill-m16 | whole-body work per edit under 1% of the compile, or step 1 cuts the cost per spill by under 3x | step 0 measured: see below |
 | S5 block-local post-RA dataflow | does LLVM's block-local copy propagation fit? | ssa-spill-m16 | under 15 M saved, or a row worse | KILLED ([#2043]): block-local saves 14.8 M but `d_faces` grows 8,068 to 8,097 bytes; a single-predecessor chain gives the same output (68% against an 80% bar) |
 | S6 edit core on the ladders | are the edit primitives a scaling term? | edit-rollback | edit primitives under 3% at N=1600 on every shape and no exponent | measured ([#1994]): the kill is not met on `loop` only (primitives 4.32% at N=1600, `move_to` 925 M, 4.0x per doubling, 8,001 calls from `hoist::hoisted`); the other four shapes are under 1.2% with no exponent. A6 is built beyond rollback only as far as `loop` goes: `Function::move_all(&[InstId], Position)` mirrors LLVM's range splice at the API; the intrusive order only if a slope remains |
-| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-contract-replay, re-taken non-incremental over the whole process in instructions:u: `d_faces` -O2 none 2,574.4 M, cap 6 -2.3%, cap 20 -1.4%, cap 100 -0.3%, objects identical in all four; `mem` N=1600 cap 6 -14.3% (an earlier -20.7% was the runs table's with-analyses metric, not the whole process), cap 100 +0.1%; rows for caps 6 and 20 are queued. In CI mode, walker-caps' [#2068] is +0.05% on `d_faces` (a safety bound) and [#2083] -11.2% on `mem` N=1600; facts-per-query's [#2073] takes unrolled-128 -6.6%. Inline storage ([#2077], CI mode): instructions -0.47% / -0.58% / -0.69% at -O1/-O2/-Os, D1 misses -2.5% to -3.3%, no RSS or cycles claim |
+| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-contract-replay, re-taken non-incremental over the whole process in instructions:u: `d_faces` -O2 none 2,574.4 M, cap 6 -2.3%, cap 20 -1.4%, cap 100 -0.3%, objects identical in all four; `mem` N=1600 cap 6 -14.3% (an earlier -20.7% was the runs table's with-analyses metric, not the whole process), cap 100 +0.1%; rows for caps 6 and 20 are queued. In CI mode, walker-caps' [#2068] is +0.05% on `d_faces` (a safety bound) and [#2083] -11.2% on `mem` N=1600; facts-per-query's [#2073] takes unrolled-128 -6.6%. Indvars registers brought up to date by the manager ([#2067]): -0.858% / -0.680% / -0.658%. Inline storage ([#2077], CI mode): instructions -0.47% / -0.58% / -0.69% at -O1/-O2/-Os, D1 misses -2.5% to -3.3%, no RSS or cycles claim |
 
 **S2 result** (pass-list-parity; llrm main `4f12e5818`, round 1 of `fold`, `algebraic`, `phiopt`, `dead` own work against `opt -passes='sroa,early-cse,instcombine'` minus `sroa,early-cse`; M instructions at N=200, then 1,600): `arith` 6.01 against 20.10 (0.30x) and 62.5 against 159.0 (0.39x); `mem` 6.14 against 8.08 (0.76x) and 80.6 against 65.5 (1.23x); `diamond` 5.06 against 6.35 (0.80x) and 35.6 against 41.7 (0.85x); `mixed` 8.59 against 8.35 (1.03x) and 67.0 against 61.3 (1.09x). The 2x line passes on every shape (worst 1.03x). The exponent from 200 to 1,600, llrm and LLVM: `arith` 1.14 and 1.01, `mem` 1.24 and 1.01, `diamond` 0.94 and 0.91, `mixed` 0.99 and 0.96; it trips on `arith` (`dead` 1.43, `algebraic` 1.12, being re-measured at N=400 and 800) and on `mem` (`fold` 1.41, whose cost is `Analyses::get::<ThroughMemory>`). Verdict: the rewriting is not the gap, the facts are; the superlinear passes are `gvn` (1.32 to 1.56) and `dse` (1.72 to 1.97), not the combine. The exponents come from two points, with analyses excluded from "own".
 
@@ -317,7 +317,7 @@ Checklist: the shared list. Its own metric boxes:
   - `whole_walks`.
 
   Plus a per-analysis, per-asking-pass count. This gives phase 3 the numbers it is judged by: today 2,742 function-level computes, 631 M own, 545 of them on a body version already computed (41.3 M, 1.4%) ([#1994]). The pass-run count behind 2.8 is from -O1 ([spec] 1.2) and is `unmeasured` at -O2.
-- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1%. [#1948]'s +0.04% was measured earlier on `d_faces` -O2: re-measure on current main before the PR is ready (a checklist box below).
+- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1%. [#1948]'s 0.03% is the callgrind own-function sum on `d_faces` -O2 (the perf-stat total is within the noise floor).
 - **(c) Gate:** none.
 - **(d) Exit:** M (identical output); `tools/test_budgets.py` green on main; computations per run printed by `LLRM_DEBUG=counts` at -O1/-O2/-Os.
 - **(e) Who:** attrs-budgets. Depends on 0.1. Touches `llrm_mir::counts`, `tools/budgets.toml`, `tools/test_budgets.py`.
@@ -1105,6 +1105,8 @@ These apply at -O1/-O2/-O3/-Os, m16 and m32. A row is never traded for compile t
 
 **Non-incremental builds on both sides.** A figure taken with `CARGO_INCREMENTAL=0` on both binaries (the CI mode) is the one this plan cites; an incremental-mode figure is re-checked against that rule before it is relied on, and the earlier incremental figures of this plan are not yet re-checked.
 
+**Noise floor.** Even clean builds carry about ±0.15% total-instruction noise for any unrelated edit (inlining shifts; callgrind-attributed on [#1948], the counters' own code is 0.03% of a +0.13% total). A delta under about 0.2% is not a claim in either mode; a claim under 1% cites callgrind own-function sums, with the unrelated-shift line reported.
+
 **Cycles, not just instructions.** An allocation or container change claims cycles, or it does not claim a win. The mimalloc entry points moved 2.3% of instructions and 0% of cycles ([spec 8]).
 
 **Doubt the measurement.** Errors this project has made, and the rule each left:
@@ -1290,7 +1292,9 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2056]: https://github.com/ali-mosavian/llrm/pull/2056
 [#2041]: https://github.com/ali-mosavian/llrm/pull/2041
 [#2072]: https://github.com/ali-mosavian/llrm/pull/2072
+[#2067]: https://github.com/ali-mosavian/llrm/pull/2067
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2076]: https://github.com/ali-mosavian/llrm/pull/2076
 [#2068]: https://github.com/ali-mosavian/llrm/pull/2068
 [#2077]: https://github.com/ali-mosavian/llrm/pull/2077
 [#2083]: https://github.com/ali-mosavian/llrm/pull/2083
