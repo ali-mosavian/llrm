@@ -94,3 +94,8 @@ fn integers_are_non_zero_as_llvm_says() {
         &[("casts", 10), ("casts", 16), ("intrinsics", 11), ("intrinsics", 17), ("phis", 11)],
     );
 }
+
+#[test]
+fn calls_guards_and_edges_are_non_null_as_llvm_says() {
+    check(include_str!("../../tests/vt/nonzero/calls.ll"), include_str!("../../tests/vt/nonzero/calls.expected"), &[]);
+}

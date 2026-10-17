@@ -6,9 +6,9 @@
 //! `isImpliedToBeAPowerOfTwoFromCond`), each function linking the line it
 //! translates. Scalars only. Where MIR lacks what the C++ reads, the case is
 //! skipped:
-//! - `Q.DC`, the dominating-condition cache (2790-2805): the query has none, as
+//! - `Q.DC`, the dominating-condition cache (2794-2810): the query has none, as
 //!   the `SimplifyQuery` of the oracle.
-//! - `read_register` and `read_volatile_register` (2951-2959): MIR keeps no
+//! - `read_register` and `read_volatile_register` (2958-2965): MIR keeps no
 //!   target triple.
 //!
 //! # Example

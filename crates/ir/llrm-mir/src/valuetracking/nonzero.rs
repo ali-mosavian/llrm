@@ -4,20 +4,20 @@
 //! A translation of LLVM `d1106deb71cc` `ValueTracking.cpp`
 //! (`isKnownNonZeroFromOperator` and the `isNonZero*` helpers,
 //! `isKnownNonNullFromDominatingCondition`, `isKnownNonEqual`), each function
-//! linking the line it translates. Scalars only: the `DemandedElts` argument is
-//! gone, and so are the vector cases of `isKnownNonZero` and
-//! `isKnownNonZeroFromOperator` (`insertelement`, `extractelement`,
-//! `shufflevector`, `vector_reverse`, the `vector_reduce_*` intrinsics; lines
-//! 3504-3548, 3873-3880, 3764-3770).
+//! linking the line it translates. Scalars only: the `DemandedElts` argument
+//! is gone, and so are the vector cases (`insertelement`, `extractelement`,
+//! `shufflevector`: 3587-3640; `vector_reverse` and `vector_reduce_*`:
+//! 3729-3741; constant vectors: 3855-3866).
 //!
 //! Where MIR lacks what the C++ reads, the case is skipped:
-//! - `ptrtoaddr` (3396-3399) and `ConstantPtrAuth` (3858-3860): MIR has
+//! - `ptrtoaddr` (3394-3398) and `ConstantPtrAuth` (3869-3870): MIR has
 //!   neither.
-//! - `isAbsoluteSymbolRef` (3868): MIR keeps no `!absolute_symbol`.
-//! - `Q.DC`, the dominating-condition cache (4219-4238): the query has none, as
+//! - `isAbsoluteSymbolRef` (3876-3877): MIR keeps no `!absolute_symbol`.
+//! - `Q.DC`, the dominating-condition cache (4223-4244): the query has none, as
 //!   the `SimplifyQuery` of the oracle.
-//! - `Operator` is an instruction or a `ConstantExpr` MIR has (`getelementptr`
-//!   and casts).
+//!
+//! `Operator` is an instruction or a `ConstantExpr` MIR has (`getelementptr`
+//! and casts).
 //!
 //! # Example
 //! `or i32 %x, 1` is non-zero.
