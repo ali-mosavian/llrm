@@ -828,6 +828,17 @@ const STEPS_PER_ACCESS: usize = 2;
 /// has gone up through a join.
 const LONG_CHAIN: u32 = 64;
 
+/// The most defs a read of one cell may be clobbered by that `sole_writer`
+/// asks.
+const SOLE_CANDIDATES: usize = 48;
+
+/// The joins a walk goes up through before it asks for the cell's sole writer.
+const JOINS_BEFORE_SOLE: usize = 8;
+
+/// The accesses a body has from which a cell's sole writer is looked for: in a
+/// body smaller the walks through its joins are short.
+const SOLE_BODY: usize = 1024;
+
 const OBJECT_BYTES: i128 = 1 << 24;
 /// The widest write or read an index of bytes holds.
 const WIDEST: i128 = 64;
@@ -865,6 +876,17 @@ struct FrameIndex {
     /// whether another of them may alias it (asked once per object).
     addressed: Vec<ObjectRef>,
     aliased: std::cell::RefCell<llrm_support::hash::HashMap<u32, bool>>,
+}
+
+/// The defs of a body that can reach a read, by what they write.
+struct Reachers {
+    /// No exact cell: anything may be written.
+    wild: Vec<usize>,
+    /// An exact cell of an object that may be addressed from elsewhere, by
+    /// object.
+    escaping: Vec<(ObjectRef, Vec<usize>)>,
+    /// An exact cell, by object.
+    own: llrm_support::hash::HashMap<u32, Vec<usize>>,
 }
 
 /// A def that writes an exact cell of an object, among that object's.
@@ -1107,6 +1129,12 @@ pub struct MemorySSA<'a> {
     /// over.
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
     taken: std::cell::Cell<usize>,
+    /// Every def a read could be clobbered by, listed once a walk has gone up
+    /// through enough joins to want them (`sole_writer`).
+    reachers: std::cell::OnceCell<Reachers>,
+    /// By cell: the one def that may clobber it anywhere in the function, if
+    /// there is one.
+    sole: std::cell::RefCell<llrm_support::hash::HashMap<usize, Option<usize>>>,
     /// What each pointer asked about is a constant byte offset from.
     offsets: std::cell::RefCell<llrm_mir::dense::IdMap<ValueId, Option<(Operand, i64)>>>,
     /// While a walk is bounded (`nearest_writes`): the most writes it collects
@@ -1573,6 +1601,87 @@ impl MemorySSA<'_> {
         None
     }
 
+    /// The defs that can reach a read of an exact cell or of one object.
+    fn listed_writers(&self) -> Reachers {
+        let mut writers = Reachers { wild: Vec::new(), escaping: Vec::new(), own: Default::default() };
+        for access in &self.accesses {
+            let Some(site) = access.site.filter(|_| access.kind == Kind::Def) else { continue };
+            match self.exacts.get(&site) {
+                Some((object, first, last)) if last - first <= WIDEST && *first >= 0 && *last <= OBJECT_BYTES => {
+                    writers.own.entry(object.id()).or_default().push(access.id);
+                    if object.addressed {
+                        match writers.escaping.iter_mut().find(|(one, _)| one.id() == object.id()) {
+                            Some((_, found)) => found.push(access.id),
+                            None => writers.escaping.push((*object, vec![access.id])),
+                        }
+                    }
+                }
+                _ => writers.wild.push(access.id),
+            }
+        }
+        writers
+    }
+
+    /// The one def that may clobber the cell anywhere in the body, if there is
+    /// one and the body has few enough defs that may reach it to ask them all:
+    /// a cell written once before a long run of joins (a parameter held in a
+    /// frame slot) is that store's wherever it is read after.
+    fn sole_writer(
+        &self,
+        memory: &MemRef,
+        exact: Option<(ObjectRef, i128, i128)>,
+        slot: usize,
+    ) -> Option<usize> {
+        if let Some(known) = self.sole.borrow().get(&slot) {
+            return *known;
+        }
+        let found = (|| {
+            let object = exact.map_or_else(|| single_object(memory), |(object, _, _)| Some(object))?;
+            let writers = self.reachers.get_or_init(|| self.listed_writers());
+            let own = writers.own.get(&object.id()).map_or(&[][..], Vec::as_slice);
+            // A write of an addressed object counts where it may alias the
+            // cell's object; the object's own writes are `own`.
+            let aliasing: Vec<usize> = writers
+                .escaping
+                .iter()
+                .filter(|(written, _)| {
+                    written.id() != object.id() && crate::memory::objects_may_alias(written, &object)
+                })
+                .flat_map(|(_, found)| found.iter().copied())
+                .collect();
+            if writers.wild.len() + aliasing.len() + own.len() > SOLE_CANDIDATES {
+                return None;
+            }
+            let mut sole = None;
+            for write in writers.wild.iter().copied().chain(aliasing.iter().copied()).chain(own.iter().copied()) {
+                let site = self.access(write).site.expect("a def has a site");
+                if changes(memory, false, self.written[&site].as_deref(), |_| self.clobbered(slot, memory, write, site))
+                    && sole.replace(write).is_some()
+                {
+                    return None;
+                }
+            }
+            sole
+        })();
+        self.sole.borrow_mut().insert(slot, found);
+        found
+    }
+
+    /// Whether the def `write` has run on every path to a read in `block` whose
+    /// memory state is `defining`.
+    fn runs_before(
+        &self,
+        write: usize,
+        block: Option<i64>,
+        defining: Option<usize>,
+    ) -> bool {
+        let (Some(read), Some(from)) = (block, self.access(write).block) else { return false };
+        if from == read {
+            return defining.is_some_and(|above| self.behind(above, write));
+        }
+        self.unit.shape.is_some_and(|shape| shape.dominance.dominates(from, read))
+    }
+
     /// The nearer of two accesses of a chain, if any.
     fn nearer(
         &self,
@@ -1812,6 +1921,7 @@ impl MemorySSA<'_> {
         stamps.1 += 1;
         let epoch = stamps.1;
         let mut found = BTreeSet::new();
+        let mut joins = 0usize;
         // Where no edge chooses, the chain of uses and untouching defs back
         // from an access is the same for every load of the cell: its
         // end is found once and jumped to (LLVM's walker caches its clobber the
@@ -1889,6 +1999,15 @@ impl MemorySSA<'_> {
                 }
                 Kind::Phi => {
                     ended(table, &mut chain, current);
+                    joins += 1;
+                    if joins == JOINS_BEFORE_SOLE
+                        && indexable
+                        && self.span.len() >= SOLE_BODY
+                        && let Some(write) = self.sole_writer(memory, memory_exact, slot)
+                        && self.runs_before(write, block, defining)
+                    {
+                        return BTreeSet::from([write]);
+                    }
                     for (_, value) in access
                         .incoming
                         .iter()
@@ -2011,6 +2130,8 @@ pub fn built<'a>(
         jumps: Default::default(),
         stamps: Default::default(),
         index: Default::default(),
+        reachers: Default::default(),
+        sole: Default::default(),
         taken: Default::default(),
         offsets: Default::default(),
         limit: Default::default(),

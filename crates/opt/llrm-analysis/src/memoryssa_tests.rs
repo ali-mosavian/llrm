@@ -1084,3 +1084,39 @@ fn test_a_read_of_a_parameters_object_steps_over_no_frame_write() {
     let steps = STEPS.with(std::cell::Cell::get) - before;
     assert!(steps <= 50, "{steps} accesses stepped over for 10 reads of p[i] past 300 frame stores");
 }
+
+/// A cell stored once at the entry and read after a run of K joins, each with a
+/// store of another cell in both arms: the read walked up through every join
+/// (K^2 over the reads of x, a and b in a chain of K ifs: the ladder's diamond
+/// was gvn 15% and ThroughMemory 7% of the compile at 1600). The one def that
+/// may clobber the cell, and runs before the read, is its answer after the
+/// eighth join.
+#[test]
+fn test_a_cell_stored_once_before_a_run_of_joins_is_read_without_walking_them() {
+    let joins = 100;
+    let mut text = String::from(
+        "@gg = global i16 0\n@hh = global i16 0\n\ndefine i16 @f(i1 %c) {\nb0:\n  store i16 7, ptr @gg\n  br i1 %c, label %t0, label %e0\n\n",
+    );
+    for k in 0..joins {
+        let next = if k + 1 < joins {
+            format!("br i1 %c, label %t{}, label %e{}", k + 1, k + 1)
+        } else {
+            "br label %out".to_owned()
+        };
+        text += &format!(
+            "t{k}:\n  store i16 1, ptr @hh\n  br label %j{k}\n\ne{k}:\n  store i16 2, ptr @hh\n  br label %j{k}\n\nj{k}:\n  {next}\n\n"
+        );
+    }
+    text += "out:\n  %v = load i16, ptr @gg\n  ret i16 %v\n}\n";
+    let parsed = Parsed::new(&text);
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    let load = site(&unit, "out", 0);
+    let store = site(&unit, "b0", 0);
+    let before = STEPS.with(std::cell::Cell::get);
+    let found = graph.clobbers(load, &accesses.references[&load]);
+    let steps = STEPS.with(std::cell::Cell::get) - before;
+    assert_eq!(found, BTreeSet::from([graph.at(store).id]), "the store at the entry is the one");
+    assert!(steps <= 60, "{steps} accesses stepped over for a read past {joins} joins");
+}
