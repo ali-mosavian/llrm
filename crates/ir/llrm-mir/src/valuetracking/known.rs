@@ -1295,7 +1295,7 @@ fn known_bits_of_call(
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1461>
 fn compute_known_bits_from_operator(
     q: &Query,
-    inst: InstId,
+    inst: Option<InstId>,
     instruction: &Instruction,
     known: &mut KnownBits,
     depth: u32,
@@ -1424,10 +1424,10 @@ fn compute_known_bits_from_operator(
             known_bits_of_get_element_ptr(q, instruction, *source, known, depth);
         }
         Opcode::Phi => {
-            known_bits_of_phi(q, inst, instruction, known, depth);
+            known_bits_of_phi(q, inst.expect("an instruction"), instruction, known, depth);
         }
         Opcode::Call(_) | Opcode::Invoke(_) => {
-            known_bits_of_call(q, inst, instruction, known, depth);
+            known_bits_of_call(q, inst.expect("an instruction"), instruction, known, depth);
         }
         Opcode::ExtractValue(indices) => {
             if let Some((ii, call)) = q.instruction_of(operand(0)).filter(|(inst, _)| is_intrinsic(q, *inst)) {
@@ -1457,6 +1457,25 @@ fn compute_known_bits_from_operator(
         }
         _ => {}
     }
+}
+
+/// A constant expression as the instruction it is (`isa<Operator>`).
+fn constant_expression(
+    q: &Query,
+    v: Operand,
+) -> Option<Instruction> {
+    let Operand::Constant(id) = v else { return None };
+    let constant = q.context().get(id);
+    let ConstantKind::Expr(expr) = &constant.kind else { return None };
+    let (opcode, operands, flags) = match expr {
+        ConstantExpr::Cast { op, value } => (Opcode::Cast(*op), vec![Operand::Constant(*value)], Flags::default()),
+        ConstantExpr::GetElementPtr { source, inbounds, operands } => (
+            Opcode::GetElementPtr { source: *source },
+            operands.iter().map(|operand| Operand::Constant(*operand)).collect(),
+            if *inbounds { Flags::INBOUNDS } else { Flags::default() },
+        ),
+    };
+    Some(Instruction { opcode, ty: constant.ty, operands, flags, result: None, metadata: Vec::new() })
 }
 
 /// `computeKnownBits(V, DemandedElts, Known, Q, Depth)`: `known` has the width
@@ -1504,7 +1523,9 @@ pub fn compute_known_bits_into(
     }
 
     if let Some((inst, instruction)) = q.instruction_of(v) {
-        compute_known_bits_from_operator(q, inst, instruction, known, depth);
+        compute_known_bits_from_operator(q, Some(inst), instruction, known, depth);
+    } else if let Some(operator) = constant_expression(q, v) {
+        compute_known_bits_from_operator(q, None, &operator, known, depth);
     }
 
     if q.is_pointer(v) {
