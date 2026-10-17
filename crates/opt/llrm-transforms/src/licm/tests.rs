@@ -381,5 +381,122 @@ b5:
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let (_, after) = applied(text, &inputs);
     assert_eq!(block_of(&after, "b0"), ["%k = mul i16 %a, 3", "br label %b1"], "{after}");
-    assert_eq!(DECIDED.with(|all| all.borrow().rebuilds), 2, "one graph, one more after the inner loop changed");
+    assert_eq!(DECIDED.with(|all| all.borrow().rebuilds), 3, "one graph, one more after each loop that changed");
+}
+
+/// A loop over a slot (a global) with the accesses `body` makes; the exit
+/// returns the slot.
+fn global_loop(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+{body}  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// A global read and written in the loop is one value there: loaded before it,
+/// stored once after, the loop's own loads and stores gone.
+#[test]
+fn test_a_global_read_and_written_in_a_loop_lives_in_a_register() {
+    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let (_, after) = applied(&text, &trips());
+    let body = block_of(&after, "b2");
+    assert!(!body.iter().any(|line| line.contains("@g")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+    assert!(
+        block_of(&after, "b3").iter().any(|line| line.starts_with("store i16") && line.contains("ptr @g")),
+        "{after}"
+    );
+}
+
+/// A store the loop makes whenever it is entered, and no load: nothing is
+/// loaded before the loop, the value stored last is stored once after it.
+#[test]
+fn test_a_global_only_written_in_a_loop_is_stored_once_after_it() {
+    let text = "@g = global i16 5
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  store i16 %i, ptr @g
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &trips());
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(!block_of(&after, "b0").iter().any(|line| line.contains("load")), "{after}");
+    assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
+}
+
+/// A store made only on some trips: the value before the loop is loaded first,
+/// so a loop that never stores leaves it as it was.
+#[test]
+fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
+    let text = global_loop("  store i16 %i, ptr @g\n");
+    let (_, after) = applied(&text, &trips());
+    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+}
+
+/// Two globals, one a load whose address is another's value: promoted in
+/// rounds. Stores to a global stay when the loop's other accesses may read it.
+#[test]
+fn test_a_slot_read_through_a_changing_pointer_keeps_its_stores() {
+    let text = "@g = global [4 x i16] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr @g
+  %q = getelementptr i16, ptr @g, i16 %i
+  %z = load i16, ptr %q
+  %y = add i16 %x, %z
+  store i16 %y, ptr @g
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &[vec![0], vec![1], vec![3]]);
+    assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
