@@ -1,6 +1,6 @@
 # The allocator on the LIR core: design for plan step 3.3
 
-TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. The decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78); the rounds cost 2.0 M each against LLVM's 150 K, and a fit over 300 allocations says about 75% of a round on the large function scales with the body's size. The sites I and greedy-port have measured add to about 55 M of new work beside the 57 M of #1958; the scaling fit says the whole-body share is much larger than those sites, so the page treats the sum of sites as a floor and the fit as the ceiling to test (section 1.1). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft after review, nothing built.
+TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. The decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78); the rounds cost 2.0 M each against LLVM's 150 K, and a fit over bodies of 191 to 4,664 instructions says a round costs 431 K plus 309 instructions per body instruction. The sites I and greedy-port have measured add to about 55 M of new work beside the 57 M of #1958; the fit says 57% of a round on the large function scales with the body and a fixed 431 K does not (section 1.1). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft after review, nothing built.
 
 ## 1. Where the 415.5 M goes
 
@@ -19,10 +19,21 @@ LLVM's greedy is 39.5 M for the same bodies. The cost per decision, not the numb
 
 ### 1.1 What scales with the body: a fit, and a hypothesis refuted
 
-Probe in a scratch tree (counters in `_allocated`, wall time of each allocation, min of 3 runs of each corpus file at -O2, 2,113 allocations, 300 with at least 8 rounds; the host was loaded, so the time is a ranking, not an absolute).
+Experiment (instructions, callgrind, deterministic): one function of K sequential copies of the same loop (24 statements over a shared array and two shared scalars, each copy its own accumulator), K = 1 to 32, so the decisions per copy stay about the same (rounds per copy 76, 95, 99, 87, 76, 63) and only the body grows.
 
-- Cost per round against body size: 88 microseconds plus 0.20 microseconds per instruction (R^2 0.51); the medians by size are 60, 89, 129, 191 and 321 microseconds per round for bodies of about 50, 100, 200, 500 and 1,800 instructions. On the large function the size-proportional share is about 72 to 80% of a round. If a round cost only its fixed part, the large function's rounds would cost about a quarter: the plan's exit, with the same rounds.
-- This is a ceiling for any editor that makes every site O(touched), reached only if all the sites do it together; the sites measured so far (facts 83.2 M, split path 180.4 M, spiller 38.8 M, colouring 36.6 M) are about 20 places of 3 to 10 M, each killed below 1% alone. The page's earlier reading, that the representation work cannot reach 150 M, summed the measured sites; the fit says the sum of sites is a floor.
+| copies | instructions | blocks | rounds | `_allocated` M | per round, K instr | `Facts::of` per round, K |
+|--:|--:|--:|--:|--:|--:|--:|
+| 1 | 191 | 6 | 76 | 37.2 | 490 | 119 |
+| 2 | 366 | 11 | 190 | 92.7 | 488 | 118 |
+| 4 | 685 | 21 | 395 | 236.1 | 598 | 138 |
+| 8 | 1,305 | 41 | 696 | 560.6 | 805 | 191 |
+| 16 | 2,452 | 81 | 1,221 | 1,441.7 | 1,181 | 260 |
+| 32 | 4,664 | 161 | 2,018 | 3,774.8 | 1,871 | 440 |
+
+- The kill (cost per round does not scale with the body at fixed decisions) is not met. The fit is linear: a round costs about 431 K instructions plus 309 per instruction of the body (R^2 above 0.99; at 8 and 16 copies the fit gives 834 K and 1,188 K against 805 K and 1,181 K).
+- At 1x to 2x the fixed part is 88% of a round, so the first doubling shows nothing; the scaling shows from about 700 instructions. At the 1,819 instructions of `d_faces`' large function the fit gives 993 K per round, 57% of it size-proportional; the real function costs about 2.0 M per round, twice the synthetic one at the same size: the difference is the split path (carves, `placed`), which the loop does not exercise.
+- So the fixed part is the larger surprise: 431 K instructions of every round, on a 191-instruction body, against LLVM's 150 K per decision. Editing O(touched) removes the size-proportional part (at most 57% of a round on the large function, by this fit); the fixed part needs its own attack (the same components at 1x: `Facts::of` 24%, `spilled_apart` 14%, the evict search 12%, the split path 7%, the carve 4.5%, and they keep their shares at 32x).
+- An earlier wall-time fit over the corpus (88 microseconds plus 0.20 per instruction, R^2 0.51, 300 allocations) is superseded: it put the size-proportional share at 72 to 80%, which this experiment does not support for the loop.
 - Knock-on unassignment is not the cause (a rewrite taking the register of an already-placed value): 104 of 7,694 rounds on the corpus (1.4%), none on `d_faces`. Assignments: 837 on `d_faces` (LLVM 815), evictions 67 (78), queue pops 1,267, requeues after a rewrite 371. The decisions are comparable; the cost of a decision is not.
 - Only two of the 11 `d_faces` allocations have rounds: 162 (1,819 instructions, 274 blocks) and 33 (164 instructions); the large one is 90% of the phase.
 
@@ -141,7 +152,7 @@ Per (register, union revision): the sorted holders of a register and the points 
 
 ### 4.6 The bound
 
-New work measured so far: section 3 about 25 M (1%) and this section about 30 M (1.1%), beside [#1958]'s 57 M already in the queue: about 112 M of the 265 M the plan asks for. The rest is the per-round structure: 206 rounds, each a body rewrite, a facts update that still reads tables the size of the function (340 K instructions an update, 220 per body instruction), a `Frequency`, a stamp and a `changes` comparison of the whole body, and a queue rebuild. Section 1.1's fit puts 72 to 80% of a large function's round in what scales with the body; that is why the sum of sites is a floor and why the vertical slices (3.0.1, 4.7) must be read as tests of the fit and not of one site: a slice that passes on its own site and leaves the round cost unchanged proves only that site. The in-place interval edit (3.4) is not the missing architecture: `LiveRangeEdit` and `SplitEditor` recompute the new vregs' ranges from their uses too, as `LiveRanges::edit` does.
+New work measured so far: section 3 about 25 M (1%) and this section about 30 M (1.1%), beside [#1958]'s 57 M already in the queue: about 112 M of the 265 M the plan asks for. The rest is the per-round structure: 206 rounds, each a body rewrite, a facts update that still reads tables the size of the function (340 K instructions an update, 220 per body instruction), a `Frequency`, a stamp and a `changes` comparison of the whole body, and a queue rebuild. Section 1.1's fit puts 57% of the large function's round in what scales with the body and 431 K per round in what does not: O(touched) editing removes at most the first, and the fixed part is a second problem; the vertical slices (3.0.1, 4.7) must be read as tests of the fit and not of one site: a slice that passes on its own site and leaves the round cost unchanged proves only that site. The in-place interval edit (3.4) is not the missing architecture: `LiveRangeEdit` and `SplitEditor` recompute the new vregs' ranges from their uses too, as `LiveRanges::edit` does.
 
 ### 4.7 The vertical slice before the full build
 
@@ -173,11 +184,11 @@ Reviewed by a second model (Opus), no code read beyond the page's own references
 - The unit: per round normalised by body size (section 1.1 does it).
 - The contract: spec 2.3's `Change` log and `touched_since`, not a bespoke record (3.1 now says so).
 - Order: 3.1 and 3.2 wait for the carve to edit through the log (4.4); 3.3 can go on the touched set the allocator has.
-- The central claim: the sum of sites guaranteed a small answer; the fit replaces it with a floor and a ceiling (1.1, 4.6).
+- The central claim: the sum of sites guaranteed a small answer; the experiment of 1.1 replaces it: a size-proportional part of at most 57% of a round, and a fixed part of 431 K.
 - Omitted: whole-body work per round besides the facts (`Frequency::of`, `Stamp::of`, `required_seen.differing`, `_next_value_following`, `ranges::changes`) is in the round and now in 4.6; knock-on unassignment measured and refuted (1.1).
 - Not answered: the number of candidates per split and `calcSplitConstraints` calls on both sides (section 4.5's claim that `placed` is not the slow shape rests on a count nobody made).
 
-The slice that would discriminate best is the fit itself on a body duplicated 1x, 2x and 4x with the same decisions per copy; the corpus fit above is a first answer.
+The experiment the review proposed (the same function at 1x, 2x and 4x and beyond, same decisions per copy) is in 1.1.
 
 [#2010]: https://github.com/ali-mosavian/llrm/pull/2010
 [#2021]: https://github.com/ali-mosavian/llrm/pull/2021
