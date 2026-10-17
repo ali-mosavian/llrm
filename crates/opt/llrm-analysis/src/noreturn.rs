@@ -85,6 +85,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::Defined;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::facts::Fact;
 use llrm_mir::module::{Function, InstId, Module, Operand};
 use llrm_mir::opcode::Opcode;
@@ -296,10 +297,10 @@ fn _returns(
 pub fn stranded(
     function: &Function,
     header: i64,
-) -> BTreeSet<i64> {
+) -> IdSet<i64> {
     let blocks = cfg::graph(function);
     let predecessors = crate::graph::loops::predecessors(&blocks);
-    let mut returning = BTreeSet::new();
+    let mut returning = IdSet::new();
     let mut pending =
         blocks.iter().map(|block| block.at).filter(|&at| _returns(function, at)).chain([header]).collect::<Vec<_>>();
     while let Some(at) = pending.pop() {
