@@ -55,7 +55,7 @@
 //! (`llvm/lib/Transforms/Utils/PromoteMemoryToRegister.cpp`)
 //! and gcc `execute_update_addresses_taken` for the same slots.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -170,9 +170,9 @@ fn ssa_reaching(
     // Only an exposed slot is written by what its address does not name.
     let smashes = cells.keys().any(|slot| exposed.contains(&slot));
     // The accesses of every slot loaded, in order, by block.
-    let mut by_block: BTreeMap<i64, Vec<Event>> = BTreeMap::new();
+    let mut by_block: IdMap<i64, Vec<Event>> = IdMap::new();
     for block in &graph {
-        let events = by_block.entry(block.at).or_default();
+        let events = by_block.get_or_insert_with(block.at, Vec::new);
         for &inst in function.block(cfg::block(block.at)).instructions() {
             let op = function.instruction(inst);
             match op.opcode {
@@ -236,8 +236,8 @@ fn ssa_reaching(
         return by_dataflow(unit, &by_block, &variables, &exposed_variables);
     }
     // The blocks that define each variable, to place its phis.
-    let mut defined: Vec<BTreeSet<i64>> = vec![BTreeSet::new(); variables.len()];
-    for (&at, events) in &by_block {
+    let mut defined: Vec<IdSet<i64>> = vec![IdSet::new(); variables.len()];
+    for (at, events) in by_block.iter() {
         for event in events {
             match event {
                 Event::Store { slot, cell, .. } => {
@@ -257,15 +257,15 @@ fn ssa_reaching(
     let entry = graph.first().map(|first| first.at);
     let frontiers = dominance.frontiers(function);
     // Phis at the iterated dominance frontier of the definitions and the entry.
-    let mut phis: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
+    let mut phis: IdMap<i64, Vec<usize>> = IdMap::new();
     for (variable, blocks) in defined.iter().enumerate() {
-        let mut work: Vec<i64> = blocks.iter().copied().chain(entry).collect();
-        let mut placed: BTreeSet<i64> = BTreeSet::new();
-        let mut seen: BTreeSet<i64> = work.iter().copied().collect();
+        let mut work: Vec<i64> = blocks.iter().chain(entry).collect();
+        let mut placed: IdSet<i64> = IdSet::new();
+        let mut seen: IdSet<i64> = work.iter().copied().collect();
         while let Some(at) = work.pop() {
             for &join in frontiers.get(&at).into_iter().flatten() {
                 if placed.insert(join) {
-                    phis.entry(join).or_default().push(variable);
+                    phis.get_or_insert_with(join, Vec::new).push(variable);
                     if seen.insert(join) {
                         work.push(join);
                     }
@@ -274,11 +274,11 @@ fn ssa_reaching(
         }
     }
     // Rename down the dominator tree.
-    let successors: HashMap<i64, &Vec<i64>> = graph.iter().map(|block| (block.at, &block.succ)).collect();
-    let mut children: BTreeMap<i64, Vec<i64>> = BTreeMap::new();
+    let successors: IdMap<i64, &Vec<i64>> = graph.iter().map(|block| (block.at, &block.succ)).collect();
+    let mut children: IdMap<i64, Vec<i64>> = IdMap::new();
     for block in &graph {
         if let Some(parent) = dominance.immediate(block.at) {
-            children.entry(parent).or_default().push(block.at);
+            children.get_or_insert_with(parent, Vec::new).push(block.at);
         }
     }
     let mut current: Vec<Token> = vec![Token::Nothing; variables.len()];
@@ -426,7 +426,7 @@ enum Held {
 /// their union.
 fn by_dataflow(
     unit: &Unit,
-    by_block: &BTreeMap<i64, Vec<Event>>,
+    by_block: &IdMap<i64, Vec<Event>>,
     variables: &[(ValueId, Cell)],
     exposed_variables: &[usize],
 ) -> IdMap<InstId, Vec<InstId>> {
@@ -435,7 +435,7 @@ fn by_dataflow(
     let overlaps = |one: Cell, other: Cell| one.0 < other.1 && other.0 < one.1;
     let mut found = IdMap::new();
     for (variable, &(slot, cell)) in variables.iter().enumerate() {
-        let mut out: HashMap<i64, Held> = graph.iter().map(|block| (block.at, Held::Unreached)).collect();
+        let mut out: IdMap<i64, Held> = graph.iter().map(|block| (block.at, Held::Unreached)).collect();
         let step = |held: &mut Held, event: &Event| match event {
             Event::Store { slot: written, cell: stored, inst } if *written == slot => {
                 if *stored == Some(cell) {
@@ -447,7 +447,7 @@ fn by_dataflow(
             Event::Smash if exposed_variables.contains(&variable) => *held = Held::Nothing,
             _ => {}
         };
-        let enter = |at: i64, out: &HashMap<i64, Held>| {
+        let enter = |at: i64, out: &IdMap<i64, Held>| {
             if graph.first().is_some_and(|first| first.at == at) {
                 return Held::Nothing;
             }

@@ -889,11 +889,11 @@ fn test_a_value_read_where_it_was_is_not_edited_in_the_live_sets() {
     use llrm_mir::dense::{IdMap, IdSet};
     let (a, b, c) = (ValueId(1), ValueId(2), ValueId(3));
     let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
-    let mut placed = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
+    let mut placed = IdMap::<ValueId, (IdSet<i64>, IdSet<i64>)>::new();
     for value in [a, b, c] {
         found.live_in.entry(0).or_default().insert(value);
         found.live_in.entry(1).or_default().insert(value);
-        placed.insert(value, ([0, 1].into(), BTreeSet::new()));
+        placed.insert(value, ([0, 1].into_iter().collect(), IdSet::new()));
     }
     let named: IdSet<ValueId> = [a, b, c].into_iter().collect();
     let range = |into: &[i64]| Range { into: into.to_vec(), out: Vec::new() };

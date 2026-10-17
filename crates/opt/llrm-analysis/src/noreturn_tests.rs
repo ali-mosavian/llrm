@@ -407,5 +407,8 @@ after:
     );
     let f = function(&module, "f");
     let header = id(block(f, "header"));
-    assert_eq!(stranded(f, header), ats(&module, "f", &["die"]));
+    assert_eq!(
+        stranded(f, header).iter().collect::<Vec<_>>(),
+        ats(&module, "f", &["die"]).into_iter().collect::<Vec<_>>()
+    );
 }

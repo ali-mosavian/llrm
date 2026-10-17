@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
 
-use crate::model::ir::{Addr, Held, Operation, Semantics, Space};
+use crate::model::ir::{Addr, Held, Loc, Operation, Semantics, Space};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
 
@@ -390,6 +390,82 @@ impl LirBody {
 }
 
 impl Insn {
+    /// This instruction with every value it names put through `rename`, and the
+    /// same allocation where none of them moves: a rewrite that renames a few
+    /// values paid for a copy of every instruction (`phielim` renamed 3,500
+    /// and 27 changed; coalescing 2,000 and 398; the spiller 2,500 and 846 in
+    /// d_faces), which then held the body twice and lost what it had worked
+    /// out (`effect`).
+    pub fn try_renamed<E>(
+        self: &Arc<Self>,
+        rename: &dyn Fn(u32) -> Result<u32, E>,
+    ) -> Result<Arc<Self>, E> {
+        let moves = |value: u32| -> Result<bool, E> { Ok(rename(value)? != value) };
+        let mut any = false;
+        for &value in self.defines.iter().chain(&self.uses) {
+            any |= moves(value)?;
+        }
+        for (held, _) in self.requires.iter().chain(&self.delivers) {
+            any |= moves(held.value)?;
+        }
+        for &(value, _) in &self.widths {
+            any |= moves(value)?;
+        }
+        if let Some(what) = &self.what {
+            for place in what.dests.iter().chain(&what.sources) {
+                for held in llrm_lir::values(place) {
+                    any |= moves(held.value)?;
+                }
+            }
+        }
+        if !any {
+            return Ok(Arc::clone(self));
+        }
+        let mut made = (**self).clone();
+        if let Some(what) = &self.what {
+            let settled = |place: &Loc| -> Result<Loc, E> {
+                let mut failed = None;
+                let out = llrm_lir::mapped(place, |held| match rename(held.value) {
+                    Ok(value) => Held { value, width: held.width },
+                    Err(error) => {
+                        failed.get_or_insert(error);
+                        *held
+                    }
+                });
+                failed.map_or(Ok(out), Err)
+            };
+            made.what = Some(Semantics {
+                dests: what.dests.iter().map(settled).collect::<Result<_, E>>()?,
+                sources: what.sources.iter().map(settled).collect::<Result<_, E>>()?,
+                ..what.clone()
+            });
+        }
+        let value = |value: &u32| rename(*value);
+        made.defines = self.defines.iter().map(value).collect::<Result<_, E>>()?;
+        made.uses = self.uses.iter().map(value).collect::<Result<_, E>>()?;
+        let wants = |side: &[(Held, RegId)]| -> Result<Vec<(Held, RegId)>, E> {
+            side.iter()
+                .map(|(held, register)| Ok((Held { value: rename(held.value)?, width: held.width }, *register)))
+                .collect()
+        };
+        made.requires = wants(&self.requires)?;
+        made.delivers = wants(&self.delivers)?;
+        made.widths = self.widths.iter().map(|&(v, width)| Ok((rename(v)?, width))).collect::<Result<_, E>>()?;
+        Ok(Arc::new(made))
+    }
+
+    /// `try_renamed` of a rename that cannot fail.
+    #[must_use]
+    pub fn renamed(
+        self: &Arc<Self>,
+        rename: &dyn Fn(u32) -> u32,
+    ) -> Arc<Self> {
+        match self.try_renamed(&|value| Ok::<u32, std::convert::Infallible>(rename(value))) {
+            Ok(made) => made,
+            Err(never) => match never {},
+        }
+    }
+
     /// The instruction at a function's entry that says which registers its
     /// arguments arrive in: it is no code, and anything placed at the entry
     /// goes after it, or it clobbers an argument.
@@ -1427,13 +1503,42 @@ mod tests {
     use std::sync::Arc;
 
     use super::{Insn, anchor, without};
-    use crate::model::ir::{Held, Operation, Semantics};
+    use crate::model::ir::{Held, Loc, Mem, Operation, Semantics};
 
     fn instruction(
         at: i64,
         covers: Option<(i64, i64)>,
     ) -> Arc<Insn> {
         Arc::new(Insn::new(at, covers, Some(Semantics::new(Operation::Move)), Vec::new(), Vec::new()))
+    }
+
+    /// A rename of a few values copied every instruction: phielim renamed 3,500
+    /// and 27 changed (d_faces -O2), and each copy held the body twice. One
+    /// that names nothing the rename moves is the same allocation; one that
+    /// does is another, renamed everywhere it names the value, a cell's
+    /// address too.
+    #[test]
+    fn test_a_rename_copies_only_the_instructions_that_name_a_moved_value() {
+        let mut untouched = (*instruction(0x10, None)).clone();
+        untouched.defines = vec![2];
+        untouched.uses = vec![1];
+        untouched.what.as_mut().unwrap().dests = vec![Loc::Held(Held { value: 2, width: 4 })];
+        let untouched = Arc::new(untouched);
+        let mut named = (*untouched).clone();
+        named.uses = vec![7];
+        named.what.as_mut().unwrap().sources =
+            vec![Loc::Mem(Mem { base: Some(Held { value: 7, width: 4 }), ..Mem::new(None, 4) })];
+        let named = Arc::new(named);
+        let to_nine = |value: u32| if value == 7 { 9 } else { value };
+        assert!(Arc::ptr_eq(&untouched.renamed(&to_nine), &untouched), "nothing it names moves");
+        let moved = named.renamed(&to_nine);
+        assert!(!Arc::ptr_eq(&moved, &named));
+        assert_eq!(moved.uses, vec![9]);
+        let Loc::Mem(cell) = &moved.what.as_ref().unwrap().sources[0] else { panic!("a cell") };
+        assert_eq!(cell.base.map(|held| held.value), Some(9), "the cell's address is renamed too");
+        assert_eq!(named.uses, vec![7], "the original stands");
+        let refused = named.try_renamed(&|value| if value == 7 { Err("cycle") } else { Ok(value) });
+        assert_eq!(refused.err(), Some("cycle"));
     }
 
     #[test]
