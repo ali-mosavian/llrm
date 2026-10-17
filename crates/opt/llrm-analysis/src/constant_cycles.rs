@@ -226,7 +226,7 @@ pub fn propagated(
     successors: Option<Successors<'_>>,
     only: Option<&llrm_mir::dense::IdSet<ValueId>>,
 ) -> IndexMap<ValueId, Known> {
-    if successors.is_none() && CHECKING.get() == 0 && llrm_support::env_set("LLRM_CHECK_CYCLES") {
+    if successors.is_none() && CHECKING.get() == 0 && llrm_support::env_flag!("LLRM_CHECK_CYCLES") {
         CHECKING.set(1);
         let found = propagated(unit, seeds.clone(), successors, only);
         CHECKING.set(2);
@@ -257,7 +257,7 @@ pub fn propagated(
     let unseeded = |(_, inst): &(_, InstId)| {
         is_phi(*inst) && consts::_defined(unit, *inst).is_some_and(|value| !seeds.contains_key(&value))
     };
-    if !relevant.iter().any(unseeded) && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
+    if !relevant.iter().any(unseeded) && !llrm_support::env_flag!("LLRM_CHECK_CYCLES") {
         return seeds;
     }
     let possible = (successors.is_none() && CHECKING.get() != 2)
@@ -276,7 +276,7 @@ pub fn propagated(
             |&(_, inst)| consts::_defined(unit, inst)
                 .is_some_and(|value| !seeds.contains_key(&value) && possible.is_none_or(|kept| kept.contains(&value))),
         );
-    if !open && !llrm_support::env_set("LLRM_CHECK_CYCLES") {
+    if !open && !llrm_support::env_flag!("LLRM_CHECK_CYCLES") {
         return seeds;
     }
     #[cfg(test)]
@@ -326,17 +326,19 @@ pub fn propagated(
     };
     let mut edges = BTreeSet::<(i64, i64)>::new();
     let mut pending = recipes.keys().copied().filter(|value| live.contains(&owners[value])).collect::<VecDeque<_>>();
-    let mut queued = pending.iter().copied().collect::<BTreeSet<_>>();
+    let mut queued = pending.iter().copied().collect::<llrm_mir::dense::IdSet<ValueId>>();
 
-    let enqueue =
-        |values: Vec<ValueId>, live: &PySet<i64>, pending: &mut VecDeque<ValueId>, queued: &mut BTreeSet<ValueId>| {
-            for value in values {
-                if !queued.contains(&value) && live.contains(&owners[&value]) {
-                    pending.push_back(value);
-                    queued.insert(value);
-                }
+    let enqueue = |values: Vec<ValueId>,
+                   live: &PySet<i64>,
+                   pending: &mut VecDeque<ValueId>,
+                   queued: &mut llrm_mir::dense::IdSet<ValueId>| {
+        for value in values {
+            if !queued.contains(&value) && live.contains(&owners[&value]) {
+                pending.push_back(value);
+                queued.insert(value);
             }
-        };
+        }
+    };
     let consumers_of = |value: &ValueId| {
         consumers.get(value).map(|users| users.iter().copied().collect::<Vec<_>>()).unwrap_or_default()
     };
@@ -354,7 +356,7 @@ pub fn propagated(
                     live: &mut PySet<i64>,
                     edges: &mut BTreeSet<(i64, i64)>,
                     pending: &mut VecDeque<ValueId>,
-                    queued: &mut BTreeSet<ValueId>,
+                    queued: &mut llrm_mir::dense::IdSet<ValueId>,
                     dirty: &mut BTreeSet<i64>,
                     fresh: &mut Vec<i64>| {
         if !blocks.contains_key(&target) || edges.contains(&(source, target)) {
@@ -500,13 +502,13 @@ pub fn propagated(
             // The evaluator is asked only where a value it reads changed: asked
             // of every live block now, it names no edge that is not
             // already there.
-            if llrm_support::env_set("LLRM_CHECK_CYCLES") {
+            if llrm_support::env_flag!("LLRM_CHECK_CYCLES") {
                 assert!(
                     recipes.keys().all(|value| !live.contains(&owners[value]) || states[value] != State::Pending),
                     "constant cycles: a live value was left with no state"
                 );
             }
-            if let (Some(successors), true) = (successors, llrm_support::env_set("LLRM_CHECK_CYCLES")) {
+            if let (Some(successors), true) = (successors, llrm_support::env_flag!("LLRM_CHECK_CYCLES")) {
                 for at in live.iter().copied() {
                     let reached = match (successors.choose)(at, &facts, &states) {
                         Some(selected) => selected,

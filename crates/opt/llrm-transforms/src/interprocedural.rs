@@ -278,7 +278,7 @@ fn placed(
 
 fn checking() -> bool {
     static CHECKING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *CHECKING.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CALLEES"))
+    *CHECKING.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CALLEES"))
 }
 
 /// What the step proved about the program.

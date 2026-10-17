@@ -294,6 +294,46 @@ high = 0.025         # a step needs this share of the compile's work to fail (th
 # A row names a prefix (`nest O1` is also its steps); the limits it gives replace the general ones for it. Tighten as the follow-up lands.
 
 [[measure.accepted]]
+row = "fjoins O1 analysis through-memory"
+step_rise = 2.0
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.90 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "fjoins O2 analysis through-memory"
+step_rise = 2.0
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.90 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "fjoins Os analysis through-memory"
+step_rise = 2.0
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.90 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "branches O1 analysis through-memory"
+step_rise = 1.6
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.55 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "branches O2 analysis through-memory"
+step_rise = 1.6
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.55 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "branches Os analysis through-memory"
+step_rise = 1.6
+why = "Time-limited (#1915, removal tracked in #1983): the passes that follow what is known read ThroughMemory for the body as it stands (#1909), derived once per body version instead of kept as sound, which doubles the solves; each solve is the walker's pre-existing cost (the memory-SSA structure built per solve, nearest_writes ~52 K per load). Measured x1.55 against the limit 1.5. Remove when the walker's per-load cost falls (R2)."
+
+[[measure.accepted]]
+row = "cases O2 memoryssa structure"
+pass_slack = 1.13
+why = "Time-limited (#1915, removal tracked in #1983): fold reads ThroughMemory for the body as it stands (#1909), derived again after each run that edited instead of kept as sound; the same curve at +10% (slope 2.127 per doubling against 2.130): more memory-SSA structure builds, 23 -> 26 builds at cases 256. Measured x1.109 against the limit 1.05. Remove with the exact derive, when fold asks facts.at per operand (lazy facts)."
+
+[[measure.accepted]]
+row = "cases Os memoryssa structure"
+pass_slack = 1.14
+why = "Time-limited (#1915, removal tracked in #1983): fold reads ThroughMemory for the body as it stands (#1909), derived again after each run that edited instead of kept as sound; the same curve at +10% (slope 2.127 per doubling against 2.130): more memory-SSA structure builds, 23 -> 26 builds at cases 256. Measured x1.124 against the limit 1.05. Remove with the exact derive, when fold asks facts.at per operand (lazy facts)."
+
+[[measure.accepted]]
 row = "qcport -O1"
 geomean = 1.0495
 worst = 1.3035

@@ -200,7 +200,7 @@ pub fn loops<N: Node>(
         |one, found| one.loops = Some(found),
         || {
             let named = named(&forest_of(blocks, entry));
-            if llrm_support::env_set("LLRM_CHECK_LOOPS") {
+            if llrm_support::env_flag!("LLRM_CHECK_LOOPS") {
                 assert!(
                     flat(&named) == flooded(blocks, entry),
                     "LLRM_CHECK_LOOPS: the forest's loops differ from a flood"

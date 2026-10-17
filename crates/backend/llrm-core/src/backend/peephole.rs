@@ -2776,7 +2776,7 @@ fn _sets_from(
 /// Which flag lanes something may read after each block's last instruction.
 pub fn _flags_live_out(body: &LirBody) -> std::rc::Rc<crate::backend::incremental::Solution<FlagLive>> {
     let solved = FLAGS.with(|kept| kept.ask(&FlagLive { regs: body.regs(), bits: body.bits }, body));
-    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             flags_from_scratch(body) == solved.entering,
             "{}: flag liveness brought up to date differs from one solved from scratch",

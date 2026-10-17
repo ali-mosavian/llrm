@@ -105,3 +105,10 @@ The step is the same and equally cheap; the cost is behind it. A dropped llrm re
 | `points-to`, `annotated`, `through-memory` | no counterpart (AAManager 44 builds) | 118 builds 48.0 M, 116 builds 78.9 M, 66 builds 75.4 M |
 
 Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`, 11 functions. LLVM: `valgrind --tool=callgrind` on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M; build counts and own M from `LLRM_DEBUG=time`.
+
+## Proposed change
+
+- **Files**: `crates/ir/llrm-mir/src/passes.rs` (`Analyses::get`, `drop_unpreserved`); the analyses whose rebuild is a whole-function map (`Annotated` in `manager.rs`, owned by keep-analyses).
+- **What**: bring an analysis up to date from the change log instead of rebuilding it, as `Registers` and `Counted` are; an exact `Annotated::update` from the `Substituted` entries (re-annotate only the accesses whose operands changed).
+- **Expected saving**: unmeasured. Bound: the rebuilds that return what was held were measured at 191 M of d_faces `-O2` by the analysis's average cost per build, and two cheap exact keeps (`Homes` reporting no change; a kept result with an empty change log despite a different `Outer`) saved 0.00% and 0.04%; the average overstated the cheap builds 20-fold. 94% of the `bounded` and `exposed-frames` reruns follow edits to a branch, phi, memory operation or gep.
+- **Status**: measured and not kept for the cheap keeps ([compile-time-spec section 8](../../architecture/compile-time-spec.md), "Analysis rebuilds that return what was held"); `Annotated::update` is a proposal with keep-analyses.

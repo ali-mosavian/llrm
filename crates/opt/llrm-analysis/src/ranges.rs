@@ -1132,7 +1132,7 @@ pub fn edges_solved(
     // A change that left the CFG as it was (`Touched::reach`) leaves the order
     // of the blocks as it was.
     let order = match before {
-        Some((states, _)) if !llrm_support::env_set("LLRM_CHECK_REPLAY") => states.order.clone(),
+        Some((states, _)) if !llrm_support::env_flag!("LLRM_CHECK_REPLAY") => states.order.clone(),
         _ => {
             ORDERS_FOUND.with(|count| count.set(count.get() + 1));
             loops::reverse_postorder(&cfg::graph(function), cfg::id(entry))
@@ -1267,7 +1267,7 @@ pub fn bounds<'u>(unit: &Unit<'u>) -> Result<std::borrow::Cow<'u, Bounds>, Strin
     let registers = unit.registers();
     match (unit.bounds, unit.registers) {
         (Some(held), Some(carried)) if std::ptr::eq(&*registers, carried) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 // The body's own intervals, or at a level without them (-O1:
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
@@ -1587,7 +1587,7 @@ pub fn bounded_solved(
     };
     let edges_above: IndexMap<i64, Scope> = match &ranger {
         Some(ranger) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 crate::ranger::check_against(ranger, unit, &edges_solved(unit, facts, None)?);
             }
             IndexMap::default()
@@ -2294,12 +2294,12 @@ pub(crate) fn replayed<R>(body: impl FnOnce() -> R) -> R {
 }
 
 fn replaying() -> bool {
-    check_scopes() || llrm_support::env_set("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
+    check_scopes() || llrm_support::env_flag!("LLRM_CHECK_REPLAY") || REPLAYING.with(std::cell::Cell::get)
 }
 
 fn check_scopes() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SCOPES"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_SCOPES"))
 }
 
 /// A header phi that may be boxed: its width, the hull of its entries'
