@@ -164,7 +164,7 @@ fn foreign(
     program: Option<&ProgramProxy>,
 ) -> Option<Slice> {
     let machine = &*program?.target;
-    let spaces = machine.spaces();
+    let spaces = program?.spaces;
     // A selector or offset is a word of the segment's size: none where the
     // target has no segments, unless it has one address space, where an
     // offset is the linear address, a 32-bit word, and there is no selector.
