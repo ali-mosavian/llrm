@@ -709,6 +709,8 @@ fn solved_dataflow(
     while changed {
         changed = false;
         for position in (0..count).rev() {
+            #[cfg(test)]
+            STEPS.with(|steps| steps.set(steps.get() + 1));
             scratch.fill(0);
             for &to in &successors[position] {
                 for word in 0..width {
