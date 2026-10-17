@@ -253,3 +253,23 @@ b3:
         assert_eq!(returned(&module, x), returned(&before, x), "{x}");
     }
 }
+
+/// k identities in one block of n, taken out one at a time, were k scans of the
+/// block (`identities` was 63 M instructions of `fold` on the `mem` ladder at
+/// N=1600, 610 erases).
+#[test]
+fn test_a_run_of_identities_takes_one_rewrite_of_its_block() {
+    let n = 200;
+    let mut text = String::from("define i32 @f(i32 %a) {\nb0:\n  %s0 = add i32 %a, 0\n");
+    for i in 1..n {
+        text += &format!("  %s{i} = add i32 %s{}, 0\n", i - 1);
+    }
+    text += &format!("  ret i32 %s{}\n}}\n", n - 1);
+    let mut module = crate::testing::parsed(&text);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = llrm_mir::edit::instructions_scanned();
+    assert!(identities(context, function));
+    let scanned = llrm_mir::edit::instructions_scanned() - before;
+    assert!(scanned <= 4 * n, "{n} identities of one block scanned {scanned} instructions");
+    assert_eq!(function.layout().iter().map(|&b| function.block(b).instructions().len()).sum::<usize>(), 1);
+}

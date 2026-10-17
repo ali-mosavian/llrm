@@ -310,3 +310,21 @@ b0:
     assert!(!text.contains("llvm.assume(i1 %") && !text.contains("slt i16 %x, 10"), "{text}");
     assert!(text.contains("icmp sgt i16 %x, 3"), "what else reads a compare stays:\n{text}");
 }
+
+/// k dead instructions in one block of n, taken out one at a time, were k scans
+/// of the block: the `sroa` step of the `arith` ladder was 190.9 M instructions
+/// at N=1600, 2.5x for every doubling, 61% of it `Function::erase`.
+#[test]
+fn test_a_run_of_dead_instructions_takes_one_rewrite_of_its_block() {
+    let n = 200;
+    let mut text = String::from("define i32 @f(i32 %a) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %x{i} = add i32 %a, {i}\n");
+    }
+    text += "  ret i32 %a\n}\n";
+    let mut module = parsed(&text);
+    let before = llrm_mir::edit::instructions_scanned();
+    assert!(deadened(&mut module));
+    let scanned = llrm_mir::edit::instructions_scanned() - before;
+    assert!(scanned <= 4 * n, "{n} dead instructions of one block scanned {scanned} instructions");
+}

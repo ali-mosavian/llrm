@@ -1035,9 +1035,7 @@ fn rewrite(
         }
         stack.extend(children.get(&at).into_iter().flatten().map(|&child| Visit::Enter(child)));
     }
-    for inst in dead {
-        function.erase(inst).expect("a promoted load has no users left");
-    }
+    function.erase_all(&dead).expect("a promoted load has no users left");
     // A phi no promoted load reached goes, and any input it had from a path
     // the cell was not stored on with it.
     ssa::pruned_phis(function, &existing);
