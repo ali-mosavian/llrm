@@ -8,6 +8,21 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+mod query;
+
+pub use query::{AssumptionCache, Query};
+
+/// One column of `examples/vtdump.rs`: ` name=answer`, empty for a column not
+/// translated yet.
+pub fn column(
+    query: &Query,
+    value: Operand,
+    name: &str,
+) -> String {
+    let _ = (query, value);
+    format!(" {name}=?")
+}
+
 /// Where each bit of a shift's or width change's result comes from: result bit
 /// `i` is operand bit `i + offset`, and a result bit with no such operand bit
 /// is a copy of the sign (`Fill::Sign`) or zero. One table, read forward by
