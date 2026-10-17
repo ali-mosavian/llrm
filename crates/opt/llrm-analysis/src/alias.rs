@@ -3591,6 +3591,141 @@ pub fn congruences_with(
     }
 }
 
+/// `congruences_with` of the values `wanted` alone: what they are congruent to
+/// is what the additions, subtractions, products and shifts they are computed
+/// from, and the loops' counters among them, give. The values nothing else
+/// reaches are not worked out (the whole body's, once for each version of a
+/// body of 128 loops, was 7.2 M and 3.9% of the compile).
+///
+/// The answer for each value asked is the one `congruences_with` gives: the
+/// values a value is computed from are visited in the body's order, as it
+/// does, so that one visited before its operand is given the operand's
+/// weaker answer in both.
+pub fn congruences_of(
+    unit: &Unit,
+    constants: &IndexMap<ValueId, Known>,
+    wanted: &[ValueId],
+) -> HashMap<ValueId, (BigInt, BigInt)> {
+    let function = unit.function;
+    let mut result: HashMap<ValueId, (BigInt, BigInt)> = HashMap::default();
+    // The values reached by the operations that make a congruence, and the ones
+    // they stop at.
+    let mut reached: HashSet<ValueId> = HashSet::default();
+    let mut work: Vec<ValueId> = wanted.to_vec();
+    let mut operations: Vec<InstId> = Vec::new();
+    while let Some(value) = work.pop() {
+        if !reached.insert(value) {
+            continue;
+        }
+        let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
+        let op = function.instruction(inst);
+        if matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+        )
+            && op.operands.len() == 2
+            && unit.int_bits(Operand::Value(value)).is_some()
+        {
+            operations.push(inst);
+            work.extend(
+                op.operands
+                    .iter()
+                    .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
+            );
+        }
+    }
+    let zero = BigInt::from(0);
+    // The loops' counters among the values reached.
+    let shape = unit.shape();
+    let block_of = |value: ValueId| match function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
+        _ => None,
+    };
+    for loop_ in &shape.loops {
+        if !reached.iter().any(|&value| block_of(value).is_some_and(|block| loop_.body.contains(&block))) {
+            continue;
+        }
+        for affine in induction::basics(unit, loop_).values() {
+            if !reached.contains(&affine.value) {
+                continue;
+            }
+            let width = affine.start.width();
+            let (Some(start), Some(step)) = (
+                induction::_signed(&affine.start, constants, width),
+                induction::_signed(&affine.step, constants, width),
+            ) else {
+                continue;
+            };
+            if step != zero {
+                result.insert(affine.value, reduced(step, start, width));
+            }
+        }
+    }
+    // In the body's order, round after round, as `congruences_with` goes.
+    let order: HashMap<InstId, usize> = {
+        let wanted: HashSet<InstId> = operations.iter().copied().collect();
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|inst| wanted.contains(inst))
+            .enumerate()
+            .map(|(at, inst)| (inst, at))
+            .collect()
+    };
+    operations.sort_by_key(|inst| order[inst]);
+    loop {
+        let mut changed = false;
+        for &inst in &operations {
+            let op = function.instruction(inst);
+            let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
+            let (Opcode::Binary(kind), [left, right], Some(width)) =
+                (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value)))
+            else {
+                continue;
+            };
+            let fact = |one: Operand| match one {
+                Operand::Value(source) => Some(
+                    result
+                        .get(&source)
+                        .cloned()
+                        .or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone())))
+                        .unwrap_or_else(|| (BigInt::from(1), BigInt::from(0))),
+                ),
+                _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
+            };
+            let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
+            let found = match kind {
+                BinaryOp::Add | BinaryOp::Sub => {
+                    let residue = if *kind == BinaryOp::Add { a.1 + b.1 } else { a.1 - b.1 };
+                    reduced(induction::gcd(a.0, b.0), residue, width)
+                }
+                BinaryOp::Mul => {
+                    if a.0 == zero {
+                        (a, b) = (b, a);
+                    }
+                    if b.0 != zero {
+                        continue;
+                    }
+                    reduced(&a.0 * &b.1, a.1 * b.1, width)
+                }
+                BinaryOp::Shl if b.0 == zero && zero <= b.1 && b.1 < BigInt::from(width) => {
+                    let factor = BigInt::from(1) << usize::try_from(&b.1).expect("a count below the width");
+                    reduced(&a.0 * &factor, a.1 * factor, width)
+                }
+                _ => continue,
+            };
+            if found.0 == BigInt::from(1) {
+                continue;
+            }
+            result.insert(value, found);
+            changed = true;
+        }
+        if !changed {
+            return result;
+        }
+    }
+}
+
 /// `residue (mod modulus)` of a `width`-bit value: the modulus cut to its
 /// greatest divisor of 2**width, 0 where that is the whole width's.
 fn reduced(
