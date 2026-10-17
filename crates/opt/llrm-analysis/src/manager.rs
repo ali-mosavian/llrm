@@ -2094,6 +2094,24 @@ impl Held {
         }
     }
 
+    /// `of` without the memory annotations and points-to (`PointerValues`,
+    /// `Annotated`): the loop facts and what is known without memory, for a
+    /// pass that decides from the values.
+    pub fn of_without_memory(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            values: None,
+            annotated: None,
+            counted: Some(analyses.get::<Counted>(context, layout, function)),
+            followers: Some(analyses.get::<Followers>(context, layout, function)),
+            ..Self::of(context, layout, function, analyses, false)
+        }
+    }
+
     /// Also what the counted loops bound: for a pass that asks it, so that it
     /// is the manager's, kept and brought up to date, and not a solve of
     /// the pass's own.
