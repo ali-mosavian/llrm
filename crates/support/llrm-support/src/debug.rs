@@ -5,17 +5,25 @@
 //! costs one cached lookup, and its message is never formatted.
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// Whether the compiler checks its own work between passes and phases
-/// (`LLRM_VERIFY`, any value but `0`): the module the frontend made is checked
-/// either way, as LLVM's release pipeline checks its input once; what each pass
-/// and each machine phase returned is checked when this is on. Tests, the gate,
-/// torture and the QCport run set it, so a phase that breaks an invariant is
-/// caught in every gate run and not in a user's compile.
+static REQUIRED: AtomicBool = AtomicBool::new(false);
+
+/// Turns the checks of `verifying` on for this process: `-fverify-ir`.
+pub fn require_verification() {
+    REQUIRED.store(true, Ordering::Relaxed);
+}
+
+/// Whether the compiler checks its own work (`LLRM_VERIFY`, any value but `0`,
+/// or `-fverify-ir`): the program a frontend made, what each pass returned and
+/// what each machine phase returned. Off in a user's compile, as LLVM's release
+/// builds leave the IR verifier off; tests, the gate, torture and the QCport
+/// run set it, so a frontend or a phase that breaks an invariant is caught in
+/// every gate run.
 pub fn verifying() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
+    REQUIRED.load(Ordering::Relaxed) || *ON.get_or_init(|| std::env::var("LLRM_VERIFY").is_ok_and(|value| value != "0"))
 }
 
 /// Whether `channel` is on.

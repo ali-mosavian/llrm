@@ -98,19 +98,73 @@ fn test_no_time_report_without_the_flag() {
 
 /// Every pass and every machine phase was verified in a user's compile: 22 LIR
 /// verifications and 8 of the MIR a function, 5% of a small program's compile
-/// time. LLVM's release pipeline verifies its input once; the tests, the gate
-/// and torture set `LLRM_VERIFY`.
+/// time; the frontend's HIR and MIR 30 M of d_faces' 3,354 M. LLVM's release
+/// builds leave the verifier off; the tests, the gate and torture set
+/// `LLRM_VERIFY`, and `-fverify-ir` asks for it.
 #[test]
 fn test_each_pass_and_phase_is_verified_only_when_asked() {
     let plain = compiled_checking(Some("time"), None);
-    for step in ["lir verify", "mir verify after pass", "lir owned bytes", "mir verify pipeline"] {
+    for step in [
+        "lir verify",
+        "mir verify after pass",
+        "lir owned bytes",
+        "mir verify pipeline",
+        "hir verify",
+        "mir verify frontend",
+    ] {
         assert!(!plain.contains(step), "`{step}` ran without LLRM_VERIFY:\n{plain}");
     }
-    assert!(plain.contains("mir verify frontend"), "the module the frontend made is verified either way:\n{plain}");
     let checked = compiled_checking(Some("time"), Some("1"));
-    for step in ["lir verify", "mir verify after pass", "lir owned bytes", "mir verify pipeline"] {
+    for step in [
+        "lir verify",
+        "mir verify after pass",
+        "lir owned bytes",
+        "mir verify pipeline",
+        "hir verify",
+        "mir verify frontend",
+    ] {
         assert!(checked.contains(step), "no `{step}` with LLRM_VERIFY=1:\n{checked}");
     }
     let off = compiled_checking(Some("time"), Some("0"));
     assert!(!off.contains("lir verify"), "LLRM_VERIFY=0 is off:\n{off}");
+}
+
+/// llrm-c's stderr on a small program with `LLRM_DEBUG=time`, given `flag` and
+/// the `LLRM_VERIFY` value.
+fn compiled_c(
+    flag: Option<&str>,
+    verify: Option<&str>,
+) -> String {
+    let directory = tempfile::tempdir().expect("a directory");
+    let source = directory.path().join("t.c");
+    std::fs::write(&source, "int f(int a) { return a * 3 + 1; }\n").expect("writes the source");
+    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")));
+    command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
+    command.args(flag);
+    command.arg(&source);
+    command.env_remove("LLRM_VERIFY").env("LLRM_DEBUG", "time").env("LLRM_TIME_TOP", "1000");
+    if let Some(verify) = verify {
+        command.env("LLRM_VERIFY", verify);
+    }
+    let done = command.output().expect("runs llrm-c");
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    String::from_utf8_lossy(&done.stderr).into_owned()
+}
+
+/// The frontend's program was verified in every user's compile (30 M
+/// instructions, 0.9% of d_faces -O2). It is checked under the check
+/// mode, which the gate sets, and under `-fverify-ir`.
+#[test]
+fn test_the_frontends_program_is_verified_under_the_check_mode_or_fverify_ir_only() {
+    let steps = ["hir verify", "mir verify frontend", "mir verify pipeline"];
+    let plain = compiled_c(None, None);
+    for step in steps {
+        assert!(!plain.contains(step), "`{step}` ran in a plain compile:\n{plain}");
+    }
+    for (flag, verify) in [(None, Some("1")), (Some("-fverify-ir"), None)] {
+        let checked = compiled_c(flag, verify);
+        for step in steps {
+            assert!(checked.contains(step), "no `{step}` with {flag:?} {verify:?}:\n{checked}");
+        }
+    }
 }

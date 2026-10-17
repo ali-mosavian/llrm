@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:4bc34b84c9f9bc351f9248abf607ef0fce61c9ff3e2cc8accb5fcbc1e055b89b -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:cc15f9897849173f145dea58bf53a50758b5190c23e06a2a2bb8d99e7f2be5b0 -->
 
 # gvn
 
@@ -41,8 +41,8 @@ load exactly and nothing rounds. Which floats are exact constants is
 
 What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
 `memoryssa::Accesses` says what each instruction reads and writes,
-`alias::PointsTo` what each pointer may point to, and a call's footprint is
-its `CallEffects` from `Summaries`; without `Summaries` every callee is
+`alias::PointValues` what each pointer may point to, and a call's footprint
+is its `CallEffects` from `Summaries`; without `Summaries` every callee is
 unknown. A call that may write the bytes, or a store that may overlap, ends
 the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 
@@ -125,7 +125,7 @@ runs once per body pass.
 
 ## Needs
 [`crate::transform`](transform.md), [`crate::loadjoins`](loadjoins.md), `memoryssa::Accesses`,
-`alias::PointsTo`, `Summaries`, registers and loop trips for pricing.
+`alias::PointValues`, `Summaries`, registers and loop trips for pricing.
 
 ## Keeps
 Dominators and loops, unless a join split an edge.
