@@ -33,6 +33,8 @@ struct Slot<F: Fact>(Option<(F::Inputs, Arc<F::Result>)>);
 #[derive(Default)]
 pub struct Facts {
     slots: Mutex<HashMap<TypeId, Box<dyn Any + Send>>>,
+    /// What `stash` holds: states of past bodies, which `end_phase` lets go.
+    stashes: Mutex<HashMap<TypeId, Box<dyn Any + Send>>>,
     runs: Mutex<HashMap<&'static str, usize>>,
 }
 
@@ -84,9 +86,19 @@ impl Facts {
         &self,
         change: impl FnOnce(&mut T) -> R,
     ) -> R {
-        let mut slots = self.slots.lock().expect("facts");
-        let slot = slots.entry(TypeId::of::<T>()).or_insert_with(|| Box::<T>::default());
+        let mut stashes = self.stashes.lock().expect("facts");
+        let slot = stashes.entry(TypeId::of::<T>()).or_insert_with(|| Box::<T>::default());
         change(slot.downcast_mut::<T>().expect("a stash is of its type"))
+    }
+
+    /// A phase is over: what the stashes remembered of the bodies it rewrote
+    /// is not asked of again by the next, whose first ask is of its own input,
+    /// and each kept a body of instructions alive (3.3 MB of d_faces -O2's 24
+    /// MB peak was the last answer of `intervals`), LLVM's invalidation of
+    /// the analyses a pass does not preserve.
+    pub fn end_phase(&self) {
+        let letting_go = std::mem::take(&mut *self.stashes.lock().expect("facts"));
+        drop(letting_go);
     }
 
     /// Counts what a test asserts was not done twice.

@@ -561,7 +561,7 @@ fn _control(
     // that goes nowhere ends the program, and any other way out must stop it:
     // the count holds whenever it goes on. (`successors` made a list for each
     // block, and a nest of loops asked it of every block of every loop.)
-    let mut elsewhere = BTreeSet::new();
+    let mut elsewhere = llrm_mir::dense::IdSet::<i64>::new();
     for &at in inside {
         let mut goes = false;
         if let Some(last) = function.terminator(cfg::block(at)) {

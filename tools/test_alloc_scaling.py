@@ -44,6 +44,12 @@ def steps(compiler: Path, source: Path, level: str = "-O1", *flags: str) -> dict
     return {name: float(own) for own, _, name in rows}
 
 
+def calls(compiler: Path, source: Path, level: str, step: str) -> int:
+    """How many times `LLRM_DEBUG=time` timed `step`."""
+    done = subprocess.run([str(compiler), "-m32", "-march=i486", level, "-o", os.devnull, str(source)], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    return int(re.search(rf"^\[instr\].*total\s+(\d+)x {re.escape(step)}$", done.stderr, re.M).group(1))
+
+
 def test_the_allocators_passes_grow_as_the_program_does():
     """lir coalesce took 23x as long for 4x the statements, regalloc base 54x and lir twoaddr 21x (#943): neighbour sets joined
     whole at each copy, every register's holders looked at for each value, a scan of the block for each tied instruction."""
@@ -540,3 +546,21 @@ def test_the_peephole_grows_as_a_loop_nest_does():
             spent[n] = steps(compiler, source, "-O2")["lir peephole"]
     grown = spent[64] / max(spent[16], 1e-9)
     assert grown < 5.2, f"a nest 4x as deep cost {grown:.2f} times as much in `lir peephole` (5.2 allowed; 6.29 before): {spent}"
+
+
+def test_a_split_by_region_costs_a_fraction_of_a_million_instructions_not_a_million():
+    """`split placed` built a Region and walked the value's blocks several times for each candidate register: 1.4 Minstr per split
+    on d_faces -O2 (spec budget 0.2) and 0.38 on `branches` at N=200 (50 splits). A candidate meets each live block once and only
+    the best builds a region: 0.21 on `branches`, 0.53 on d_faces."""
+    vsgcc = next((Path(__file__).resolve().parent.parent / "crates/target").glob("*/vsgcc"))
+    sys.path.insert(0, str(vsgcc))
+    import scaling
+    compiler = llrmbin.bin_dir() / "llrm-c"
+    with tempfile.TemporaryDirectory() as work:
+        source = Path(work) / "branches.c"
+        source.write_text(scaling.AXES["branches"](200))
+        run = steps(compiler, source, "-O2")
+        splits = calls(compiler, source, "-O2", "split placed")
+    assert splits >= 20, f"premise: branches N=200 -O2 made {splits} splits"
+    each = run["split placed"] / splits
+    assert each < 0.3, f"branches N=200 -O2: split placed cost {each:.3f} Minstr a split (0.3 allowed; 0.38 before)"

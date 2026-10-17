@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/splitkit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/splitkit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:75b29798a3b16527a7c52c5b9c5a52076b02ab460707f0f626f503f1edebb1c1 -->
+<!-- src: crates/backend/llrm-core/src/backend/splitkit.rs sha256:8decf20dc07891a21b5dcda469cafb1631b2023fb384dff54a3b40966aa3dd18 -->
 
 # splitkit
 
@@ -13,15 +13,22 @@ strategies choose where a piece holds the value, in order:
 - `local`: for a value live in one block, the longest run of references that
   some candidate register is free across, when that is at least two and not
   all of them (`tryLocalSplit`).
-- `placed`: by region (`tryRegionSplit`). The positions that name the value are
-  found once for all its candidates (`Blocks::names`) and the blocks' frequencies
-  are a fact of the function's shape (`spillplacement::Levels`). For each candidate register,
+- `placed`: by region (`tryRegionSplit`). For each candidate register,
   [`crate::backend::spillplacement`](spillplacement.md) settles which edge bundles hold the
   value in a register, weighting blocks by frequency against the
   interference of that register. The best candidate's region comes first,
   and the compact region the use clusters form takes the uses left over.
+  Each candidate meets a live block once: a dense table of the value's
+  blocks (`cost::Frame`, LLVM's `SplitAnalysis` block table) holds their
+  frequencies, references and neighbours, a candidate's interference is
+  asked per block when first needed, and a `Region` is built only for the
+  best candidate and the compact one. `LLRM_CHECK_SPLIT` holds the result to
+  the region-per-candidate scan (`placed_scan`).
 - `per_block`: if no region is found, each block naming the value at least
   twice holds it from its first reference to its last (`tryBlockSplit`).
+
+A `Split` finds the value's live blocks and references once for all of
+these strategies and `pays`.
 
 `pays` keeps a region only if the references it holds save more than the
 copies it adds. A reference saves what a reload would cost, less what its
