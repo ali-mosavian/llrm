@@ -165,7 +165,10 @@ impl GreedyEnv for BodyEnv {
 struct CallMasks {
     /// The reg slot of each instruction that destroys registers, ascending
     /// (`LIS->getRegMaskSlots()`), and the roots it destroys.
-    calls: Vec<(SlotIndex, Vec<RegId>)>,
+    calls: Vec<(SlotIndex, Vec<RegId>, Vec<RegId>)>,
+    /// The widest each value is named (bytes): a value wider than 2 loses the
+    /// high half of the roots in a call's third list.
+    widths: IndexMap<u32, u32>,
 }
 
 impl PhysInterference for CallMasks {
@@ -180,10 +183,11 @@ impl PhysInterference for CallMasks {
             return None;
         }
         let mut found: Option<Vec<RegId>> = None;
-        let mut at = self.calls.partition_point(|(slot, _)| *slot < li.begin_index());
+        let wide = self.widths.get(&li.reg()).copied().unwrap_or(0) > 2;
+        let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         let mut segment = 0usize;
         while at < self.calls.len() && segment < li.segments.len() {
-            let (slot, destroyed) = &self.calls[at];
+            let (slot, destroyed, high) = &self.calls[at];
             if li.segments[segment].end <= *slot {
                 segment = li.advance_to(segment, slot);
                 if segment == li.segments.len() {
@@ -194,7 +198,7 @@ impl PhysInterference for CallMasks {
             // Live across: defined before the call, read after it.
             if s.start < *slot && s.end > *slot {
                 let roots = found.get_or_insert_with(Vec::new);
-                for r in destroyed {
+                for r in destroyed.iter().chain(high.iter().filter(|_| wide)) {
                     if !roots.contains(r) {
                         roots.push(*r);
                     }
@@ -266,21 +270,16 @@ pub fn decide(
     let mut calls = Vec::new();
     for block in &body.blocks {
         for one in block.insns.iter() {
-            if !one.clobbers.is_empty() {
+            if !one.clobbers.is_empty() || !one.clobbers_high.is_empty() {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
-                calls.push((
-                    slot,
-                    one.clobbers
-                        .iter()
-                        .map(|r| crate::model::ir::root(*r))
-                        .collect::<BTreeSet<_>>()
-                        .into_iter()
-                        .collect(),
-                ));
+                let roots = |list: &BTreeSet<RegId>| -> Vec<RegId> {
+                    list.iter().map(|r| crate::model::ir::root(*r)).collect::<BTreeSet<_>>().into_iter().collect()
+                };
+                calls.push((slot, roots(&one.clobbers), roots(&one.clobbers_high)));
             }
         }
     }
-    let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls }));
+    let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls, widths: crate::backend::allocate::_widest(body) }));
     let spiller: Box<dyn super::greedy::Spiller> = if recording {
         Box::new(super::spill::RecordingSpiller::default())
     } else {
@@ -322,4 +321,42 @@ pub fn decide(
     let spilled = greedy.recorded_spills();
     let report = ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature };
     Some(Decided { report, placed, spilled })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::liveness::liverange::Segment;
+    use crate::liveness::slotindex::SlotIndexes;
+    use crate::model::lir::{Block, LirBlock};
+
+    /// A 16-bit callee that pushes and pops `si` keeps its low half and
+    /// destroys the high half (`clobbers_high`): a 32-bit value held in `esi`
+    /// across the call came back with a wrong high half (parity/loop at -O2:
+    /// printed -81, wanted 130991). A 16-bit value in `si` is unharmed.
+    #[test]
+    fn test_a_wide_value_does_not_live_in_a_register_whose_high_half_a_call_destroys() {
+        let insns: Vec<Arc<Insn>> = (0..10).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let masks = CallMasks { calls: vec![(at(5), vec![], vec![esi])], widths: IndexMap::from_iter([(1, 4), (2, 2)]) };
+        let across = |reg: u32| {
+            let mut li = LiveInterval::new(reg, 1.0);
+            let v = li.get_next_value(at(2));
+            li.add_segment(Segment::new(at(2), at(8), Some(v)));
+            li
+        };
+        assert_eq!(masks.reg_mask_clobbered(&across(1)), Some(vec![esi]));
+        assert_eq!(masks.reg_mask_clobbered(&across(2)), None);
+    }
 }
