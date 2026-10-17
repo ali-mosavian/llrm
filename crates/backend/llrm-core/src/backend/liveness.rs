@@ -27,9 +27,13 @@
 //! written as the last instruction of an exit block survives, and so does a
 //! parallel copy for a phi, which is written exactly at a block end.
 //! `dead_at_exit` is the complement, per block: the lanes nothing reads again.
-//! Its last answer is kept and reused while the body is the same instructions,
-//! because the peephole sub-passes ask in turn and most leave the body as it
-//! was.
+//!
+//! The answer is kept between asks and brought up to date from the blocks that
+//! changed (see [`crate::backend::incremental`]), because the peephole
+//! sub-passes ask in turn and each leaves most blocks as they were. A block's
+//! step is the lanes it reads before writing them and those it writes, kept
+//! while the block is the same. `LLRM_CHECK_LIVENESS=1` solves the whole body
+//! from scratch after every answer and asserts they agree.
 //!
 //! SI, DI and the frame register are not return inputs: their incoming values
 //! live in the prologue's saves, so a dead final write to one stays removable.
@@ -43,11 +47,12 @@
 //! `postrasink`, `exactaddress`, `upperzero`, `sharedstores`, `machinedce`),
 //! `loopslots`, and the peephole rule walker (`peep/walk`).
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
+use crate::backend::incremental::{Kept, Problem, Solution};
 use crate::backend::peephole::{_branch_reads, _flag_lanes, _lanes, _moved_lanes, _register_effects, Lane, Lanes};
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
@@ -317,35 +322,152 @@ pub fn _declared(
     Some((reads, writes))
 }
 
+/// Lane liveness as a [`Problem`]: what a block reads before it writes it and
+/// what it writes, flowing back from the blocks that follow.
+pub struct LaneLive {
+    regs: Regs,
+    bits: u32,
+    universe: std::cell::OnceCell<Lanes>,
+}
+
+/// What one block does to the lanes live: its instructions' effects, and as
+/// one step `(read, written)` where no instruction moves bytes by a shift.
+pub struct LaneStep {
+    effects: Vec<Option<Effect>>,
+    step: Option<(Lanes, Lanes)>,
+}
+
+impl LaneLive {
+    fn of(body: &LirBody) -> Self {
+        Self { regs: body.regs(), bits: body.bits, universe: std::cell::OnceCell::new() }
+    }
+
+    fn universe(&self) -> Lanes {
+        *self.universe.get_or_init(|| _universe(self.regs))
+    }
+}
+
+impl Problem for LaneLive {
+    type Summary = LaneStep;
+    type Value = Lanes;
+    const FORWARD: bool = false;
+
+    fn summarize(
+        &self,
+        _body: &LirBody,
+        block: &Block,
+    ) -> LaneStep {
+        let effects = _effects(self.regs, self.bits, block);
+        let step = summarized(&effects, &self.universe());
+        LaneStep { effects, step }
+    }
+
+    fn start(&self) -> Lanes {
+        Lanes::new()
+    }
+
+    /// Lanes live after a block: everything at an exit, which no later code
+    /// narrows, else what its successors read.
+    fn entering(
+        &self,
+        _at: i64,
+        _entry: i64,
+        present: &[Lanes],
+        _missing: usize,
+    ) -> Lanes {
+        if present.is_empty() { self.universe() } else { present.iter().fold(Lanes::new(), |all, next| all.or(next)) }
+    }
+
+    fn leaving(
+        &self,
+        summary: &LaneStep,
+        after: Lanes,
+    ) -> Lanes {
+        match &summary.step {
+            Some((read, written)) => after.minus(written).or(read),
+            None => _before(&summary.effects, after, &self.universe()),
+        }
+    }
+}
+
 thread_local! {
-    static VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static KEPT: Kept<LaneLive> = const { Kept::new() };
+    /// The exits of the answer last asked for, which `dead_at_exit` hands out.
+    static EXITS: std::cell::RefCell<Option<(Rc<Solution<LaneLive>>, Rc<IndexMap<i64, Lanes>>)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How many times this thread has solved a body's lanes from scratch (no block
+/// left as the last answer had it), brought a held answer up to date, and been
+/// asked of a body no pass changed, for a test that a clean-up does not solve
+/// a function again for each sub-pass.
+pub fn asks() -> [usize; 3] {
+    KEPT.with(Kept::asks)
+}
+
+/// How many answers this thread has worked out, whole or in part.
+pub fn exits_computed() -> usize {
+    let [whole, partly, _] = asks();
+    whole + partly
 }
 
 /// How many times this thread has worked out a block's lanes, for a test that a
 /// chain of blocks does not take a round of the body for each.
 pub fn visits() -> usize {
-    VISITS.with(std::cell::Cell::get)
+    KEPT.with(Kept::visits)
 }
 
-/// Per block, the lanes live on entry -- with its successors and the universe.
-pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
+/// The lane liveness of `body`: `leaving` is the lanes live on entry to each
+/// block, `entering` those live after it. See [`crate::backend::incremental`].
+pub fn lanewise(body: &LirBody) -> Rc<Solution<LaneLive>> {
+    let problem = LaneLive::of(body);
+    let solved = KEPT.with(|kept| kept.ask(&problem, body));
+    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+        assert!(
+            from_scratch(body) == solved.leaving,
+            "{}: lane liveness brought up to date differs from one solved from scratch",
+            body.name
+        );
+    }
+    solved
+}
+
+/// A block's effects as one step, `(read, written)`, so that the lanes live
+/// before it are `(after - written) | read`; None where a shift moves bytes,
+/// whose reads depend on what is live after it. An unknown instruction reads
+/// anything and so is a step that writes and reads everything.
+fn summarized(
+    effects: &[Option<Effect>],
+    universe: &Lanes,
+) -> Option<(Lanes, Lanes)> {
+    let (mut read, mut written) = (Lanes::new(), Lanes::new());
+    for one in effects.iter().rev() {
+        match one {
+            None => (read, written) = (*universe, *universe),
+            Some(one) if !one.moved.is_empty() => return None,
+            Some(one) => {
+                read = read.minus(&one.writes).or(&one.reads);
+                written = written.or(&one.writes);
+            }
+        }
+    }
+    Some((read, written))
+}
+
+/// The lanes live on entry to each block of `body`, solved from nothing held:
+/// one worklist over all the blocks. What `LLRM_CHECK_LIVENESS` compares an
+/// answer brought up to date with.
+fn from_scratch(body: &LirBody) -> IndexMap<i64, Lanes> {
     let regs = body.regs();
     let universe = _universe(regs);
     let at_of: crate::support::hash::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
+    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let successors: IndexMap<i64, Vec<i64>> = body
         .blocks
         .iter()
         .map(|block| (block.at, block.succ.iter().copied().filter(|at| at_of.contains(at)).collect()))
         .collect();
-    let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let mut into: IndexMap<i64, Lanes> = blocks.keys().map(|at| (*at, Lanes::new())).collect();
-    let effects: IndexMap<i64, Vec<Option<Effect>>> =
-        blocks.iter().map(|(at, block)| (*at, _effects(regs, body.bits, block))).collect();
-    // The least fixed point of a backward problem, found by a worklist that
-    // starts from the last block: a block is recomputed when a successor's
-    // lanes changed. Taken round the layout from the first block, each
-    // round carried a change one block back, and a chain of n blocks took n
-    // rounds.
     let mut predecessors: IndexMap<i64, Vec<i64>> = blocks.keys().map(|at| (*at, Vec::new())).collect();
     for (at, to) in &successors {
         for next in to {
@@ -355,14 +477,13 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
     let mut pending: Vec<i64> = blocks.keys().copied().collect();
     let mut queued: crate::support::hash::HashSet<i64> = pending.iter().copied().collect();
     while let Some(at) = pending.pop() {
-        VISITS.with(|visits| visits.set(visits.get() + 1));
         queued.remove(&at);
         let after = if successors[&at].is_empty() {
-            universe.clone()
+            universe
         } else {
-            successors[&at].iter().flat_map(|to| into[to].iter().copied()).collect()
+            successors[&at].iter().fold(Lanes::new(), |all, to| all.or(&into[to]))
         };
-        let before = _before(&effects[&at], after, &universe);
+        let before = _before(&_effects(regs, body.bits, blocks[&at]), after, &universe);
         if before != into[&at] {
             into.insert(at, before);
             for &pred in &predecessors[&at] {
@@ -372,65 +493,34 @@ pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64
             }
         }
     }
-    (into, successors, universe)
+    into
 }
 
-thread_local! {
-    /// The body `dead_at_exit` last answered for, and its answer.
-    static EXITS: std::cell::RefCell<Option<(LirBody, IndexMap<i64, Lanes>)>> = const { std::cell::RefCell::new(None) };
-    static EXITS_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+/// Per block, the lanes live on entry -- with its successors and the universe.
+pub fn live_into(body: &LirBody) -> (IndexMap<i64, Lanes>, IndexMap<i64, Vec<i64>>, Lanes) {
+    let solved = lanewise(body);
+    let at_of: crate::support::hash::HashSet<i64> = body.blocks.iter().map(|block| block.at).collect();
+    let successors = body
+        .blocks
+        .iter()
+        .map(|block| (block.at, block.succ.iter().copied().filter(|at| at_of.contains(at)).collect()))
+        .collect();
+    (solved.leaving.clone(), successors, LaneLive::of(body).universe())
 }
 
-/// How many times this thread has worked out a body's dead lanes at its blocks'
-/// exits, for a test that asking again of a body no pass changed does not.
-pub fn exits_computed() -> usize {
-    EXITS_COMPUTED.with(std::cell::Cell::get)
-}
-
-/// Whether `body` is `kept` over again: the same blocks of the same
-/// instructions, which are immutable.
-fn unchanged(
-    kept: &LirBody,
-    body: &LirBody,
-) -> bool {
-    kept.bits == body.bits
-        && kept.blocks.len() == body.blocks.len()
-        && kept.blocks.iter().zip(&body.blocks).all(|(one, other)| {
-            one.at == other.at
-                && one.succ == other.succ
-                && one.insns.len() == other.insns.len()
-                && one.insns.iter().zip(&other.insns).all(|(a, b)| Arc::ptr_eq(a, b))
-        })
-}
-
-/// Per block, the lanes nothing reads again after it. Ten passes of the
-/// peephole ask in turn, most leaving the body as it was (the same
-/// instructions, shared): the last answer stands for a body that is the same
-/// (#924: 500,000 decodes of 16,000 instructions in one module).
-pub fn dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
-    if let Some(answer) = EXITS
-        .with(|held| held.borrow().as_ref().filter(|(kept, _)| unchanged(kept, body)).map(|(_, answer)| answer.clone()))
-    {
-        return answer;
+/// Per block, the lanes nothing reads again after it.
+pub fn dead_at_exit(body: &LirBody) -> Rc<IndexMap<i64, Lanes>> {
+    let solved = lanewise(body);
+    if let Some(held) = EXITS.with(|held| {
+        held.borrow().as_ref().filter(|(of, _)| Rc::ptr_eq(of, &solved)).map(|(_, exits)| Rc::clone(exits))
+    }) {
+        return held;
     }
-    EXITS_COMPUTED.with(|count| count.set(count.get() + 1));
-    let answer = _dead_at_exit(body);
-    EXITS.with(|held| *held.borrow_mut() = Some((body.clone(), answer.clone())));
-    answer
-}
-
-fn _dead_at_exit(body: &LirBody) -> IndexMap<i64, Lanes> {
-    let (into, successors, universe) = live_into(body);
-    into.keys()
-        .map(|at| {
-            let live: Lanes = if successors[at].is_empty() {
-                universe.clone()
-            } else {
-                successors[at].iter().flat_map(|to| into[to].iter().copied()).collect()
-            };
-            (*at, universe.minus(&live))
-        })
-        .collect()
+    let universe = LaneLive::of(body).universe();
+    let exits: Rc<IndexMap<i64, Lanes>> =
+        Rc::new(solved.entering.iter().map(|(at, live)| (*at, universe.minus(live))).collect());
+    EXITS.with(|held| *held.borrow_mut() = Some((Rc::clone(&solved), Rc::clone(&exits))));
+    exits
 }
 
 #[cfg(test)]
@@ -439,7 +529,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::live_into;
+    use super::{asks, from_scratch, lanewise, live_into};
     use crate::backend::peephole::_lanes;
     use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
@@ -578,5 +668,62 @@ mod tests {
         assert!(_lanes(regs, RegId::SI).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::BP).is_disjoint(&into[&1]));
         assert!(_lanes(regs, RegId::DX).is_disjoint(&into[&1]));
+    }
+
+    /// A loop's header read AX each trip, which kept AX live round the loop;
+    /// the read goes. Solved again from the answer that was held, AX stayed
+    /// live round the loop on its own (a larger fixed point than the one
+    /// the body has), and everything that asked was told AX was in use.
+    #[test]
+    fn test_a_lane_kept_live_round_a_loop_by_a_read_that_is_gone_is_not_live() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let (bx, cx) = (Reg { register: RegId::BX, width: 2 }, Reg { register: RegId::CX, width: 2 });
+        let header = |reads: Reg| LirBlock {
+            succ: vec![2, 3].into(),
+            ..LirBlock::new(1, vec![_insn(1, Operation::Move, "mov", vec![Loc::Reg(cx)], vec![Loc::Reg(reads)])])
+        };
+        let trip = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(2, vec![_insn(2, Operation::Move, "mov", vec![Loc::Reg(DX)], vec![Loc::Reg(bx)])])
+        };
+        let leave = LirBlock::new(3, vec![_insn(3, Operation::Move, "mov", vec![Loc::Reg(AX)], vec![Loc::Reg(bx)])]);
+        let (trip, leave): (Block, Block) = (trip.into(), leave.into());
+        let body = |header: LirBlock| {
+            LirBody::new(
+                "f",
+                1,
+                vec![header.into(), trip.clone(), leave.clone()],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        let before = lanewise(&body(header(AX)));
+        assert!(_lanes(regs, RegId::AX).is_subset(&before.leaving[&2]), "premise: AX is live round the loop");
+        let after = lanewise(&body(header(bx)));
+        assert!(_lanes(regs, RegId::AX).is_disjoint(&after.leaving[&1]), "AX is live into the header");
+        assert!(_lanes(regs, RegId::AX).is_disjoint(&after.leaving[&2]), "AX is live into the loop's body");
+        assert!(after.leaving == from_scratch(&body(header(bx))));
+    }
+
+    /// Asked of a body whose blocks are the same instructions, nothing is
+    /// worked out; one block changed, the others' effects are kept.
+    #[test]
+    fn test_a_body_asked_again_is_answered_and_a_changed_block_is_the_only_one_worked_out() {
+        let (bx, cx) = (Reg { register: RegId::BX, width: 2 }, Reg { register: RegId::CX, width: 2 });
+        let mov =
+            |at: i64, to: Reg, from: Reg| _insn(at, Operation::Move, "mov", vec![Loc::Reg(to)], vec![Loc::Reg(from)]);
+        let first = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, vec![mov(1, cx, AX)]) };
+        let last = LirBlock::new(2, vec![mov(2, DX, cx)]);
+        let (first, last): (Block, Block) = (first.into(), last.into());
+        let body = |last: &Block| {
+            LirBody::new("f", 1, vec![first.clone(), last.clone()], IndexMap::default(), IndexMap::default())
+        };
+        let [whole, partly, same] = asks();
+        lanewise(&body(&last));
+        lanewise(&body(&last));
+        let changed: Block = LirBlock::new(2, vec![mov(2, DX, bx)]).into();
+        lanewise(&body(&changed));
+        let [whole_now, partly_now, same_now] = asks();
+        assert_eq!((whole_now - whole, partly_now - partly, same_now - same), (1, 1, 1));
     }
 }

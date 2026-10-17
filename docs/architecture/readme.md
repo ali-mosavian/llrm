@@ -6,7 +6,7 @@ which crate owns each step.
 Contents: [split](split.md), [source layout](source-layout.md),
 [HIR](hir/readme.md), [HIR model](hir/model.md), [MIR](rich-mir.md),
 [strong alias analysis](strong-alias.md), [call effects](modref.md),
-[points-to across edits](points-to-lifetime.md), [optimizer pipeline design](pipeline-design.md), [compile time against gcc and clang](compile-time-review.md), [compile-time architecture](compile-time-spec.md), [pass lists against clang](pass-parity.md), [LLVM measured](llvm-measured.md), [analyses gcc and LLVM do not compute](analysis-avoidance.md), [compile-cost gap by date](compile-gap-series.md), [output rows by date](rows-series.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526),
+[points-to across edits](points-to-lifetime.md), [optimizer pipeline design](pipeline-design.md), [compile time against gcc and clang](compile-time-review.md), [compile-time architecture](compile-time-spec.md), [pass lists against clang](pass-parity.md), [LLVM measured](llvm-measured.md), [LLVM's analysis manager against llrm's `Analyses`](llvm-compared-analysis-manager.md), [LLVM's MemorySSA walker against llrm's frontier walk](llvm-compared-memoryssa.md), [LLVM's BasicAA against llrm's `regions::overlapping`](llvm-compared-alias.md), [LLVM's LICM against llrm's `hoist`](llvm-compared-licm.md), [LLVM's SimplifyCFG against llrm's `decide`](llvm-compared-simplifycfg.md), [analyses gcc and LLVM do not compute](analysis-avoidance.md), [compile-cost gap by date](compile-gap-series.md), [output rows by date](rows-series.md), [packages design](https://github.com/ali-mosavian/llrm/issues/1526),
 [object model](../formats/object-model.md).
 
 Source frontends (QB, C through Open Watcom, Nib) produce HIR. HIR is emitted

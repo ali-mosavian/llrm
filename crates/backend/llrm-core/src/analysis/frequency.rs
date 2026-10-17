@@ -15,7 +15,7 @@ use llrm_analysis::branchprob;
 
 use crate::analysis::facts::Fact;
 use crate::analysis::loops;
-use crate::model::lir::{Block, LirBlock, LirBody};
+use crate::model::lir::{Block, Insns, LirBlock, LirBody};
 use crate::model::lir::{BlockFrequencies, BlockOdds};
 use crate::support::hash::IndexMap;
 
@@ -51,24 +51,80 @@ impl Cfg {
     }
 }
 
+/// Whether a block does nothing but jump on: no instruction that prints, but
+/// jumps.
+fn idle(block: &LirBlock) -> bool {
+    block
+        .insns
+        .iter()
+        .all(
+            |one| !crate::backend::masm::prints(one)
+                || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
+        )
+}
+
+/// What `Frequency::over` reads of the instructions: whether each block that
+/// can be a bridge (one successor, not the entry, not its own) only jumps on.
+/// A frequency worked out from the blocks alone (`Worked`) is good while these
+/// are as they were; one carried from a table (`Carried`) reads the blocks
+/// made since as bridges whatever is in them.
+pub struct Bridges(Vec<Option<std::sync::Mutex<(Insns, bool)>>>);
+
+impl Bridges {
+    fn of(body: &LirBody) -> Self {
+        Self(
+            body.blocks
+                .iter()
+                .map(|block| {
+                    (block.at != body.entry && block.succ.len() == 1 && block.succ[0] != block.at)
+                        .then(|| std::sync::Mutex::new((block.insns.clone(), idle(block))))
+                })
+                .collect(),
+        )
+    }
+
+    fn is_of(
+        &self,
+        body: &LirBody,
+    ) -> bool {
+        self.0
+            .iter()
+            .zip(&body.blocks)
+            .all(
+                |(kept, block)| {
+                    // Changed instructions that are idle as they were are
+                    // noted, so that the next ask looks at what changed since.
+                    kept.as_ref().is_none_or(|held| {
+                        let mut held = held.lock().expect("idle");
+                        held.0.same_as(&block.insns)
+                            || (held.1 == idle(block) && {
+                                held.0 = block.insns.clone();
+                                true
+                            })
+                    })
+                },
+            )
+    }
+}
+
 /// Block frequencies worked out from the blocks alone.
 pub struct Worked;
 
 impl Fact for Worked {
     type Result = Frequency;
-    type Inputs = Cfg;
+    type Inputs = (Cfg, Bridges);
     const NAME: &'static str = "frequency";
     fn run(body: &LirBody) -> Frequency {
         Frequency::over(body, &body.blocks)
     }
-    fn inputs(body: &LirBody) -> Cfg {
-        Cfg::of(body)
+    fn inputs(body: &LirBody) -> (Cfg, Bridges) {
+        (Cfg::of(body), Bridges::of(body))
     }
     fn held_by(
-        kept: &Cfg,
+        (cfg, bridges): &(Cfg, Bridges),
         body: &LirBody,
     ) -> bool {
-        kept.is_of(body)
+        cfg.is_of(body) && bridges.is_of(body)
     }
 }
 
@@ -270,14 +326,7 @@ impl Frequency {
         let by_at: IndexMap<i64, &Block> = blocks.iter().map(|block| (block.at, block)).collect();
         let bridge = |at: i64| -> Option<i64> {
             let one = by_at.get(&at)?;
-            let idle = one
-                .insns
-                .iter()
-                .all(
-                    |one| !crate::backend::masm::prints(one)
-                        || one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Jump),
-                );
-            (at != entry && idle && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
+            (at != entry && idle(one) && one.succ.len() == 1 && one.succ[0] != at).then(|| one.succ[0])
         };
         // Past the bridges, and the share of the edge that reaches there.
         let beyond = |mut at: i64| -> i64 {
@@ -509,6 +558,38 @@ mod tests {
         let body = body.with_blocks(blocks);
         let found = Frequency::of(&body);
         assert!((found.block(4) - found.block(3)).abs() < 1e-6, "{} against {}", found.block(4), found.block(3));
+    }
+
+    /// Whether a block is a bridge, and so left out of the loops' flow, is read
+    /// from its instructions. A bridge on a loop's back edge that took a
+    /// reload kept the frequencies worked out while it was one: the kept
+    /// `flow` had its edge and working it out again does not
+    /// (`LLRM_CHECK_FACTS` failed every regalloc fuzz test on main).
+    #[test]
+    fn test_a_bridge_that_takes_work_is_asked_again() {
+        let mut body = counted(Some(5), 124.0 / 128.0);
+        body.frequencies = None;
+        let mut split = body.clone();
+        split.odds.rerouted(2, &[2, 3], 2, &[(9, 1.0)]);
+        split.blocks[1].succ = vec![9, 3].into();
+        split.blocks.push(block(9, "jmp", Operation::Jump, vec![2]).into());
+        let bridge = Frequency::of(&split);
+        let worked = split.with_blocks(
+            split
+                .blocks
+                .iter()
+                .map(|one| {
+                    if one.at == 9 {
+                        one.with_insns(vec![insn(9, Operation::Move, "mov"), one.insns[0].clone()])
+                    } else {
+                        one.clone()
+                    }
+                })
+                .collect(),
+        );
+        let kept = Frequency::of(&worked);
+        let fresh = Frequency::over(&worked, &worked.blocks);
+        assert_eq!(*kept, fresh, "a block with work in it was still a bridge (bridge flow {:?})", bridge.table());
     }
 
     fn counted(
