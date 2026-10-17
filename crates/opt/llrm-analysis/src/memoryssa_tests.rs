@@ -965,3 +965,64 @@ fn a_walk_follows_the_chain_of_each_pointer_once() {
     assert!(found.len() >= arms, "premise: the walk met the writes of every arm: {found:?}");
     assert!(followed <= arms + 2, "{followed} chains followed for {} pointers", arms + 1);
 }
+
+/// A machine that counts how often it is asked for its address spaces.
+struct Counting;
+
+thread_local! {
+    static ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+impl llrm_mir::target::Machine for Counting {
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        ASKED.with(|asked| asked.set(asked.get() + 1));
+        llrm_mir::spaces::Spaces::FLAT
+    }
+
+    fn foreign_span(
+        &self,
+        _: (i64, i64),
+        _: (i64, i64),
+        _: i64,
+    ) -> Option<(i64, i64)> {
+        None
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        llrm_mir::target::OperationCosts::default()
+    }
+
+    fn registers(&self) -> i64 {
+        0
+    }
+
+    fn call_registers(&self) -> i64 {
+        0
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        llrm_mir::target::Neutral.address_forms()
+    }
+}
+
+/// `regions::foreign` asked the machine for its address spaces at every
+/// reference of every pair (a virtual call and a copy of the table: 16 M
+/// instructions, 0.45% of the d_faces -O2 compile); the program proxy holds
+/// them, asked once.
+#[test]
+fn overlap_asks_the_program_for_its_spaces_not_the_machine() {
+    let parsed = Parsed::new(&format!(
+        "define i16 @f(ptr %p, ptr %q) {{\nb0:\n  store i16 1, ptr %p\n  %x = load i16, ptr %q\n  ret i16 %x\n}}\n"
+    ));
+    let unit = parsed.unit();
+    let program = llrm_mir::program::Program::new(vec![parsed.module.clone()], std::rc::Rc::new(Counting)).unwrap();
+    let proxy = llrm_mir::program::ProgramAnalyses::default().proxy(&program, 0);
+    let (store, load) = (site(&unit, "b0", 0), site(&unit, "b0", 1));
+    let (written, read) = (cell(&unit, store), cell(&unit, load));
+    ASKED.with(|asked| asked.set(0));
+    for _ in 0..10 {
+        let _ = crate::regions::overlapping(&read, &written, None, None, Some(&proxy));
+    }
+    let asked = ASKED.with(std::cell::Cell::get);
+    assert_eq!(asked, 0, "the machine was asked for its spaces {asked} times in 10 pairs");
+}
