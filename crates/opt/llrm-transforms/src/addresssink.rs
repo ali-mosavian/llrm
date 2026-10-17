@@ -2,7 +2,7 @@
 //! `sinkCmpExpression` and address sinking, and GVNSink's merge of equal arms.
 //!
 //! # How it works
-//! Three rewrites, each on one function, none of which touches an edge.
+//! Four rewrites, each on one function, none of which touches an edge.
 //!
 //! A comparison (`icmp` or `fcmp`) read by a branch, select or other user in
 //! another block is made again at the top of that block (one copy per block);
@@ -11,6 +11,14 @@
 //! across the loop body (`sete`, a store of the byte, `cmp`, `jne`). This runs
 //! only where the target has a single condition register
 //! (`!target().multiple_condition_registers()`).
+//!
+//! An `and` that only compares of it with zero read (`x & mask == 0`), some in
+//! other blocks than its own, is made again before each of those compares,
+//! where the target makes one instruction of the pair
+//! (`OperationCosts::mask_test`) and the copy would not stretch two values read
+//! nowhere else (`sinkAndCmp0Expression`). Numbering made one value of the
+//! repeated tests of a bit; the compares sunk into the blocks that branch on it
+//! left the `and` held across all of them.
 //!
 //! A phi read only as an address (`spill::address_only`: loads, stores through
 //! it, and GEPs of up to three levels that are themselves only addresses) whose
@@ -82,14 +90,16 @@
 //! the exposed frame objects; value facts are recomputed.
 //!
 //! # See also
-//! LLVM `CodeGenPrepare::sinkCmpExpression` and `optimizeMemoryInst`; issue
+//! LLVM `CodeGenPrepare::sinkCmpExpression`, `sinkAndCmp0Expression` and
+//! `optimizeMemoryInst`; issue
 //! #386 (RGBLIGHTS `a(i) = ...` under an `IF`).
 
 use llrm_analysis::cfg;
 use llrm_analysis::manager::{AssumptionCache, ExposedFrames};
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::types::TypeId;
 
@@ -114,8 +124,10 @@ impl FunctionPass for AddressSink {
         // fold a phi into an addressing mode.
         let closed = trivial_phis(unit.function);
         // Blocks and edges are as they were.
-        let sunk_compares = !analyses.outer().target().multiple_condition_registers() && compares_sunk(unit.function);
-        if sunk(unit.function) || sunk_compares {
+        let one_flag = !analyses.outer().target().multiple_condition_registers();
+        let sunk_compares = one_flag && compares_sunk(unit.function);
+        let masks = one_flag && masks_sunk(unit.context, unit.function, &analyses.outer().target().costs());
+        if sunk(unit.function) || sunk_compares || masks {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
             // A phi's value is replaced by the one it equalled: the blocks and
@@ -298,6 +310,93 @@ fn compares_sunk(function: &mut Function) -> bool {
         }
         if function.users(result).is_empty() && !function.is_erased(compare) {
             function.erase(compare).expect("no one reads it");
+        }
+    }
+    changed
+}
+
+/// LLVM's `sinkAndCmp0Expression`: an `and` read only by compares of it with
+/// zero, some in other blocks, is made again before each of those compares
+/// that is not in its block, and the original goes once nothing reads it. It
+/// is `compares_sunk`'s other half: with the compare made in each block the
+/// `and` it reads was one value held from its block to the last of them (800
+/// diamonds held 31 such values across up to 30 diamonds: 419 stack operands
+/// where a test at each branch has none).
+///
+/// Only where the target makes one instruction of the pair
+/// (`OperationCosts::mask_test` under the price of the two), and not where
+/// both operands of the `and` are values read nowhere else, whose live ranges
+/// the copy would stretch to the compare (CodeGenPrepare.cpp:2224).
+fn masks_sunk(
+    context: &Context,
+    function: &mut Function,
+    costs: &llrm_mir::target::OperationCosts,
+) -> bool {
+    if costs.mask_test <= 0 || costs.mask_test >= 2 * costs.add {
+        return false;
+    }
+    let masks: Vec<(BlockId, InstId)> = function
+        .walk()
+        .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Binary(BinaryOp::And))
+        .collect();
+    let mut changed = false;
+    for (home, mask) in masks {
+        let Some(result) = function.instruction(mask).result else { continue };
+        let read_elsewhere = |operand: &Operand| match operand {
+            Operand::Value(value) => function.users(*value).len() > 1,
+            _ => true,
+        };
+        let operands = &function.instruction(mask).operands;
+        if !operands.iter().any(|operand| matches!(operand, Operand::Constant(_)) || read_elsewhere(operand)) {
+            continue;
+        }
+        let users = function.users(result).to_vec();
+        let against_zero = |user: &llrm_mir::module::Use| {
+            let one = function.instruction(user.user);
+            matches!(one.opcode, Opcode::ICmp(IntPredicate::Eq | IntPredicate::Ne))
+                && user.index == 0
+                && matches!(
+                    one.operands[1],
+                    Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(0))
+                )
+        };
+        if users.is_empty() || !users.iter().all(against_zero) {
+            continue;
+        }
+        let mut made: Vec<(BlockId, Operand)> = Vec::new();
+        for one in users {
+            let Some(there) = function.parent(one.user) else { continue };
+            if there == home {
+                continue;
+            }
+            let copy = match made.iter().find(|(block, _)| *block == there) {
+                Some((_, copy)) => *copy,
+                None => {
+                    // Before the first of this block's compares.
+                    let first = function
+                        .block(there)
+                        .instructions()
+                        .iter()
+                        .copied()
+                        .find(|&inst| function.users(result).iter().any(|user| user.user == inst))
+                        .expect("a compare in its block");
+                    let original = function.instruction(mask);
+                    let (opcode, ty, operands, flags) =
+                        (original.opcode.clone(), original.ty, original.operands.clone(), original.flags);
+                    let inserted = function.create_instruction(opcode, ty, operands, flags, None);
+                    function.insert(inserted, Position::Before(first)).expect("a placed instruction");
+                    let copy = Operand::Value(function.instruction(inserted).result.expect("a value"));
+                    made.push((there, copy));
+                    copy
+                }
+            };
+            let mut operands = function.instruction(one.user).operands.clone();
+            operands[one.index as usize] = copy;
+            function.set_operands(one.user, operands);
+            changed = true;
+        }
+        if function.users(result).is_empty() && !function.is_erased(mask) {
+            function.erase(mask).expect("no one reads it");
         }
     }
     changed
