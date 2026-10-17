@@ -1879,11 +1879,20 @@ fn _unit_maximum(
     ranged.into_iter().chain(bounded).min()
 }
 
+#[cfg(any(test, feature = "testing"))]
+thread_local! {
+    /// Loops `advances` was asked of: a pass that wants one value should not
+    /// ask every loop of the body.
+    pub static ADVANCES_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// How far each integer recurrence of the loop advances per iteration.
 pub fn advances(
     unit: &Unit,
     loop_: &Loop,
 ) -> IndexMap<ValueId, BigInt> {
+    #[cfg(any(test, feature = "testing"))]
+    ADVANCES_ASKED.with(|asked| asked.set(asked.get() + 1));
     let found = basics(unit, loop_);
     recurrences(unit, loop_, &found)
         .values
