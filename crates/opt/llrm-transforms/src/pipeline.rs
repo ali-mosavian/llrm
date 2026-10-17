@@ -1328,6 +1328,7 @@ impl Run {
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
         drop(running);
+        llrm_mir::counts::edited(name, stage, unit.function.changes_since(before).map_or(0, <[_]>::len));
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);

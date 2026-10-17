@@ -272,6 +272,13 @@ pub trait Analysis: 'static {
         analyses: &mut Analyses,
     ) -> Self::Result;
 
+    /// The result that claims nothing (no fact known), conservative and sound,
+    /// which the withholding instrument (`LLRM_WITHHOLD`) hands a pass in
+    /// place of the real one; none where there is no such result.
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        None
+    }
+
     /// Whether the result reads `analyses.outer()`, itself or through what
     /// it builds on. One that does not outlives a change to the module.
     const READS_OUTER: bool = true;
@@ -1299,6 +1306,13 @@ impl Analyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Rc<A::Result> {
+        if crate::counts::withholding()
+            && crate::counts::named(A::NAME)
+            && let Some(result) = A::withheld(function)
+        {
+            crate::counts::withheld(A::NAME);
+            return Rc::new(result);
+        }
         let key = TypeId::of::<A>();
         if let Some(entry) = self.cache.get(&key) {
             let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");

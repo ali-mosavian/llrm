@@ -121,6 +121,14 @@ pub fn pass_run_over(
     if !PER_PASS.load(Ordering::Relaxed) {
         return Running(None);
     }
+    if withholding() {
+        let key = (name, function.mark().lineage());
+        FIRST.with(|first| {
+            let mut seen = first.1.borrow_mut();
+            first.0.set(!seen.contains(&key));
+            seen.push(key);
+        });
+    }
     pass_run(name, function.layout().iter().map(|&block| function.block(block).instructions().len()).sum())
 }
 
@@ -142,6 +150,104 @@ pub fn per_pass() {
 }
 
 static PER_PASS: AtomicBool = AtomicBool::new(false);
+
+/// What `LLRM_WITHHOLD` names: `all`, or passes separated by commas, each with
+/// the facts to withhold from it after a colon, joined by plus (`fold:
+/// registers+through-memory,decide`). `LLRM_WITHHOLD_FIRST` withholds on a
+/// pass's first run only. A test instrument.
+struct Withhold {
+    all: bool,
+    passes: Vec<(String, Vec<String>)>,
+    first: bool,
+}
+
+fn spec() -> &'static Withhold {
+    static SPEC: std::sync::OnceLock<Withhold> = std::sync::OnceLock::new();
+    SPEC.get_or_init(|| {
+        let text = std::env::var("LLRM_WITHHOLD").unwrap_or_default();
+        let mut found = Withhold {
+            all: text == "all",
+            passes: Vec::new(),
+            first: std::env::var_os("LLRM_WITHHOLD_FIRST").is_some(),
+        };
+        if !found.all {
+            for part in text.split(',').filter(|part| !part.is_empty()) {
+                let (pass, facts) = part.split_once(':').unwrap_or((part, ""));
+                found
+                    .passes
+                    .push(
+                        (
+                            pass.to_owned(),
+                            facts.split('+').filter(|one| !one.is_empty()).map(str::to_owned).collect(),
+                        ),
+                    );
+            }
+        }
+        found
+    })
+}
+
+/// Whether the withholding instrument is on (`LLRM_WITHHOLD` set).
+pub fn withholding() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_WITHHOLD").is_some())
+}
+
+thread_local! {
+    /// (pass, fact, withheld): the results handed out in place of the real
+    /// ones. (whether the run in progress is its pass's first over its
+    /// function, the (pass, function) pairs run).
+    static FIRST: (Cell<bool>, RefCell<Vec<(&'static str, u64)>>) = const { (Cell::new(false), RefCell::new(Vec::new())) };
+    static WITHHELD: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
+    /// (pass, stage, edits): the changes logged by each run of each pass.
+    static EDITS: RefCell<Vec<(&'static str, String, u64)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether `fact` is to be withheld from the pass running now.
+pub fn named(fact: &'static str) -> bool {
+    let pass = ASKER.with(Cell::get);
+    if pass.is_empty() {
+        return false;
+    }
+    let spec = spec();
+    let named = spec.all
+        || spec
+            .passes
+            .iter()
+            .any(|(one, facts)| one == pass && (facts.is_empty() || facts.iter().any(|one| one == fact)));
+    // The pass's first run over this function (`LLRM_WITHHOLD_FIRST`).
+    named && (!spec.first || FIRST.with(|first| first.0.get()))
+}
+
+/// `fact` was withheld from the pass running now.
+pub fn withheld(fact: &'static str) {
+    let pass = ASKER.with(Cell::get);
+    WITHHELD.with(|rows| {
+        let mut rows = rows.borrow_mut();
+        match rows.iter_mut().find(|row| row.0 == pass && row.1 == fact) {
+            Some(row) => row.2 += 1,
+            None => rows.push((pass, fact, 1)),
+        }
+    });
+}
+
+/// The changes a run of `pass` in `stage` logged.
+pub fn edited(
+    pass: &'static str,
+    stage: &str,
+    edits: usize,
+) {
+    if !PER_PASS.load(Ordering::Relaxed) {
+        return;
+    }
+    EDITS.with(|rows| {
+        let mut rows = rows.borrow_mut();
+        match rows.iter_mut().find(|row| row.0 == pass && row.1 == stage) {
+            Some(row) => row.2 += edits as u64,
+            None => rows.push((pass, stage.to_owned(), edits as u64)),
+        }
+    });
+}
 
 fn asked(analysis: &'static str) {
     let pass = ASKER.with(Cell::get);
@@ -228,6 +334,18 @@ pub fn lines() -> Vec<String> {
             rows.iter().map(|(name, runs, instructions)| {
                 format!("[counts] pass {name} {runs} runs {instructions} instructions")
             }),
+        );
+    });
+    WITHHELD.with(|rows| {
+        let mut rows: Vec<_> = rows.borrow().iter().copied().collect();
+        rows.sort();
+        out.extend(rows.iter().map(|(pass, fact, n)| format!("[counts] withheld {pass} {fact} {n}")));
+    });
+    EDITS.with(|rows| {
+        let mut rows: Vec<_> = rows.borrow().iter().cloned().collect();
+        rows.sort();
+        out.extend(
+            rows.iter().map(|(pass, stage, n)| format!("[counts] edits {pass} {} {n}", stage.replace(' ', "_"))),
         );
     });
     ASKS.with(|rows| {

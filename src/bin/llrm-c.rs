@@ -12,7 +12,7 @@ fn main() {
         eprintln!("llrm-c: {why}");
         std::process::exit(2);
     }
-    if llrm_core::support::debug::enabled("counts") {
+    if llrm_core::support::debug::enabled("counts") || llrm_mir::counts::withholding() {
         llrm_mir::counts::per_pass();
     }
     let code = llrm_core::support::debug::run_main(|| llrm_c::compile::main(&argv));

@@ -1062,6 +1062,19 @@ pub struct ExposedFrames;
 impl Analysis for ExposedFrames {
     type Result = BTreeSet<ValueId>;
     const NAME: &'static str = "exposed-frames";
+    fn withheld(function: &Function) -> Option<Self::Result> {
+        // Every alloca's address may be taken: nothing is known of any.
+        Some(
+            function
+                .walk()
+                .filter_map(|(_, inst)| {
+                    matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
+                        .then(|| function.instruction(inst).result)
+                        .flatten()
+                })
+                .collect(),
+        )
+    }
     const SKIPS: bool = true;
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: allocas_only, flows: Some(stops_at) })
@@ -1140,6 +1153,9 @@ pub struct Annotated;
 impl Analysis for Annotated {
     type Result = Result<IndexMap<InstId, MemRef>, String>;
     const NAME: &'static str = "annotated";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(Ok(IndexMap::default()))
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -1343,6 +1359,9 @@ impl Analysis for TableLoads {
 impl Analysis for Registers {
     type Result = IndexMap<ValueId, Known>;
     const NAME: &'static str = "registers";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(IndexMap::default())
+    }
     const INCREMENTAL: bool = true;
 
     /// A fact is of the values its value is made from alone (the edges of the
@@ -1492,6 +1511,9 @@ pub struct Followers;
 impl Analysis for Followers {
     type Result = induction::LoopFollowers;
     const NAME: &'static str = "followers";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(induction::LoopFollowers::default())
+    }
 
     fn run(
         context: &Context,
@@ -1688,6 +1710,9 @@ pub fn float_solves() -> usize {
 impl Analysis for FloatFacts {
     type Result = floatfacts::Solved;
     const NAME: &'static str = "float-facts";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(floatfacts::Solved { integers: IndexMap::default(), facts: IndexMap::default() })
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -1728,6 +1753,9 @@ pub struct ThroughMemory;
 impl Analysis for ThroughMemory {
     type Result = Result<IndexMap<ValueId, Known>, String>;
     const NAME: &'static str = "through-memory";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(Ok(IndexMap::default()))
+    }
     const SOUND: bool = true;
     /// What it says of a live value is a number the value has, which edits
     /// that keep every value's meaning do not change; a fresh derivation may
@@ -1855,6 +1883,9 @@ pub struct Bounded;
 impl Analysis for Bounded {
     type Result = Result<ranges::Bounds, String>;
     const NAME: &'static str = "bounded";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(Ok(ranges::Bounds::default()))
+    }
     const INCREMENTAL: bool = true;
 
     fn run(
