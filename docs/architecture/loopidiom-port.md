@@ -110,7 +110,7 @@ For every stage that changes output: the number of rows worse than base for each
 
 ## 7a. L0 inputs
 
-Measured with the pinned `clang` 24.0.0git (`d1106deb71cc`, `~/scratch/llvm-build`), `-m32 -march=i486`, the 71 vsgcc programs, loop-idiom on against `-mllvm -disable-loop-idiom-all`, the calls it adds to the -O1 and -O2 IR:
+Measured with the pinned `clang` 24.0.0git (`d1106deb71cc`), `-m32 -march=i486`, the 71 vsgcc programs, loop-idiom on against `-mllvm -disable-loop-idiom-all`, the calls it adds to the -O1 and -O2 IR:
 
 | program | adds (-O1; -O2 where it differs) |
 |---|---|
@@ -126,7 +126,7 @@ No program adds `ctpop`, `ctlz` or `cttz` at `-march=i486` (`x_popcount` and `x_
 
 ## 8. Oracle
 
-Primary: the same IR into both. `tools/difftest` replays `opt -passes='loop(loop-idiom)'` of the pinned build (`~/scratch/llvm-build`, `d1106deb71cc`) on llrm's pass-input dumps, with the `LLRM_CHECK_*`/`LLRM_EXP_*` guard on, against the translated pass on the same module. Per function: the memset, memcpy, memmove and (later) ctlz/cttz/ctpop/strlen made, and the module where the two agree.
+Primary: the same IR into both. `tools/difftest` replays `opt -passes='loop(loop-idiom)'` of the pinned build (`d1106deb71cc`) on llrm's pass-input dumps, with the `LLRM_CHECK_*`/`LLRM_EXP_*` guard on, against the translated pass on the same module. Per function: the memset, memcpy, memmove and (later) ctlz/cttz/ctpop/strlen made, and the module where the two agree.
 
 First measurement, 112 `fill` runs of the replay corpus (all configs): LLVM's loop-idiom adds no memory intrinsic, ctpop, ctlz, cttz or strlen call, and `fill`'s answer adds none. A synthetic `for (i < n) a[i] = 0` makes LLVM emit `llvm.memset`, so the instrument works; the corpus has no such loop in a function it dumps. That also puts `fill`'s 17.1 M cycles on `d_faces` -O2 at no use there; where it earns its keep is the bench programs of section 5, L0.
 
