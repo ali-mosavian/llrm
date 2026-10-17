@@ -25,6 +25,9 @@ SizeAndLatency`. One trait, `Tti`, with a profile each (`Generic`, `X86 { cpu }`
 - `arithmetic_cost(opcode, ty, kind, op1_info, op2_info, args)`, `cast_cost(opcode, dst, src, context, kind)`,
   `cmp_sel_cost(opcode, value_ty, cond_ty, predicate, kind)`, `memory_op_cost(opcode, ty, align, space, kind)`,
   `cf_instr_cost(opcode, kind)`, `int_imm_cost(imm, ty)`, `int_imm_cost_inst(opcode, idx, imm, ty, kind)`.
+- `is_truncate_free(from, to)`. Constants are passed as `(bits: u128, width: u32)`; the SCEV expander
+  (ScalarEvolutionExpander.cpp L1965-2223) reads `is_truncate_free`, `cast_cost`, `arithmetic_cost` (default operand
+  infos), `cmp_sel_cost`, `cf_instr_cost(PHI)` and `int_imm_cost_inst`, with kind `RecipThroughput` or `CodeSize`.
 - `is_legal_addressing_mode(ty, base_gv, base_offset, has_base_reg, scale, space)`, `scaling_factor_cost(...)`,
   `is_lsr_cost_less(a, b)`, `can_macro_fuse_cmp()`.
 - `inline_call_penalty(caller, call)`, `are_inline_compatible(caller, callee)`, `is_lowered_to_call(callee)`.
