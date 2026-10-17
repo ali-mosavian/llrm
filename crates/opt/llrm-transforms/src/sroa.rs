@@ -3,22 +3,23 @@
 //! access straddles, each partition becomes an alloca of its own (or the old
 //! one), the accesses are rewritten onto it, and what is then only loaded and
 //! stored whole is promoted to registers. A translation of `SROA.cpp` at
-//! d1106deb71cc (step 2: loads, stores and aggregate loads and stores).
+//! d1106deb71cc (loads, stores, aggregate loads and stores, memset, memcpy and
+//! lifetime intrinsics, phis and selects of pointers, pre-splitting).
 //!
 //! DEVIATE, each with its reason (line numbers are SROA.cpp's):
-//! - memset, memcpy and other intrinsics (`visitMemSetInst` L1177,
-//!   `visitMemTransferInst` L1194, `visitIntrinsicInst` L1266, the rewriter's
-//!   L3771-L4204), `presplitLoadsAndStores` (L4965): the next step. A call
-//!   using the alloca escapes it, so those allocas stay.
-//! - PHI and select of pointers (`visitPHINodeOrSelectInst` L1338, the
-//!   speculation L1583-L2036, the rewriter's L4204-L4262): a use by a phi or
-//!   select that has users aborts the alloca.
+//! - The mode is `sroa<preserve-cfg>` (`PreserveCFG`, L174): a select whose
+//!   load is not speculatable, a store through a select, and a store through a
+//!   phi on a critical edge are not rewritten (they need
+//!   `SplitBlockAndInsertIfThenElse` or `SplitBlockPredecessors`), and the
+//!   alloca is left. LLVM's early and late `sroa` of -O2 run with CFG
+//!   modification allowed.
 //! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
 //!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
 //!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
 //!   registers, and `AggregateToVector` is off at -O2.
 //! - `propagateStoredValuesToLoads` (L6200), reached when a pointer only
-//!   escapes read-only: such an alloca is left as it is.
+//!   escapes read-only (it needs `SSAUpdater` and `LoadAndStorePromoter`): such
+//!   an alloca is left as it is.
 //! - Calls and invokes escape a pointer whatever their attributes
 //!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
 //! - Address-space casts abort; pointers in a space that is a selector and an
@@ -26,12 +27,24 @@
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
 //!   L6066): an alloca a `Declare` names is left alone.
 //! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
+//! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
+//!   an alloca or a sized argument, no alignment, no global, no "a load of it
+//!   already dominates" proof. `mayWriteToMemory` (L1613) counts any call as a
+//!   writer.
+//! - `fixLoadStoreAlign` (L4180): MIR cannot rewrite a load's alignment in
+//!   place, so the loads and stores through a rewritten phi or select keep
+//!   theirs.
+//! - A memset or memcpy keeps no alignment or alias metadata of its own
+//!   (`setDestAlignment`, `setAAMetadata`); a memmove split to a memcpy keeps
+//!   its callee (`CreateMemCpy`, L4020); a lifetime marker names its size, as
+//!   MIR's does.
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
 //! - Offsets are `i128` and do not wrap at the index width; an offset below
 //!   zero is outside the alloca.
 //! - `IRBuilder` here makes what it is told and does not fold constants
-//!   (`ConstantFolder`); `fold` does that after.
+//!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
+//!   after.
 //! - Metadata: an access keeps its metadata where the type and offset are
 //!   unchanged, and loses it otherwise (`adjustForAccess`).
 
@@ -2797,6 +2810,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
 
     /// Where a pointer made for a phi or select goes: at the old pointer,
     /// which dominates it (after the phis of its block, where it is one).
+    /// AllocaSliceRewriter::visitPHINode. SROA.cpp#L4204
     fn place_for_old_pointer(
         &self,
         old: Operand,
