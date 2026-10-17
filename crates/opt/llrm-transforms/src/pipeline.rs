@@ -1285,7 +1285,10 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
-            if !history.insert(print::fingerprint(unit.function)) {
+            // A list that runs once (LLVM's order) may end where it began:
+            // EarlyCSE drops the LCSSA phis that `lcssa` makes
+            // again.
+            if self.rounds > 1 && !history.insert(print::fingerprint(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }
