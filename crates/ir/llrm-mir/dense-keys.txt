@@ -31,6 +31,7 @@ crates/opt/llrm-analysis/src/noreturn.rs	6
 crates/opt/llrm-analysis/src/parameter_ranges.rs	2
 crates/opt/llrm-analysis/src/peelsize.rs	6
 crates/opt/llrm-analysis/src/ranges.rs	60
+crates/opt/llrm-analysis/src/ranges_scopes.rs	1
 crates/opt/llrm-analysis/src/regions.rs	10
 crates/opt/llrm-analysis/src/ssa.rs	9
 crates/opt/llrm-transforms/src/algebraic.rs	5

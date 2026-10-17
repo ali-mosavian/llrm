@@ -274,7 +274,7 @@ pub fn stamp(
                     // loops' facts contradict each other under
                     // the assumption the block is not reached, and a call in it
                     // passes nothing.
-                    if scoped.unreachable(cfg::id(block)) {
+                    if scoped.unreachable(&unit, cfg::id(block)) {
                         continue;
                     }
                     let scope = scoped.scope(&unit, cfg::id(block));

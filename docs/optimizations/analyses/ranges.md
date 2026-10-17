@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:dc13702c5dfff08914df310b45eb200f5691191947123983ec8b97427915227d -->
+<!-- src: crates/opt/llrm-analysis/src/ranges.rs sha256:fbd030eebd6908b5961c9cb751a0c8ef08b98983637613ff46629e7e5fd56b3d -->
 
 # ranges
 
@@ -47,6 +47,15 @@ was made once per loop around it, each walking the dominator chain to the
 block. `Bounds` records the decision, and an update works from a solve made
 under the same one. `LLRM_CHECK_CAP` holds a capped solve to containing the
 uncapped facts.
+
+Scopes. A loop's scope at a block is made from the loop's `known` by the
+edges that narrow it there (`scopes::LoopScope::scope_at`), the loops around
+the block narrowing one another outermost first. The solve keeps each loop
+(`Lazy`) and makes a block's scope when it is first asked (`Bounds::force`,
+from the unit the consumer asks with) or when a loop inside needs the
+scope of a block outside it; a solve that is not lazy makes them all.
+`LLRM_CHECK_LAZY` holds the scopes made when asked to those of a solve that
+makes them all.
 `Bounds` holds the result: facts from the loops (`within`) over those from
 the edges. A change re-solves only the loops it reaches (`loops_reached`). A
 loop with no counted proof and no phi to box (`box_candidates`) is left

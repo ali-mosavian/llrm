@@ -3649,6 +3649,7 @@ pub fn annotated_with(
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
                 // body's.
+                held.force_all(unit);
                 let facts = held.loops_facts();
                 assert!(
                     (!unit.loop_intervals && facts.is_empty())
