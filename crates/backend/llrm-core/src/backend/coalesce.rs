@@ -219,6 +219,236 @@ fn _find(
     root
 }
 
+/// `coalesceLocals` ([`RegisterCoalescer.cpp#L4086`]): the local copies, the
+/// deferred ones to the global list.
+fn _coalesce_locals(
+    webs: &mut Webs,
+    local_list: &mut Vec<Arc<Insn>>,
+) -> Vec<Arc<Insn>> {
+    webs.work(local_list);
+    std::mem::take(local_list)
+}
+
+/// `isLocalCopy` ([`RegisterCoalescer.cpp#L4080`]): the copy uses or defines a
+/// value that lives in one block.
+fn _is_local(
+    webs: &Webs,
+    pair: (u32, u32),
+) -> bool {
+    let one_block = |value: u32| {
+        webs.live
+            .get(&value)
+            .is_some_and(
+                |interval| {
+                    let blocks: BTreeSet<i64> = interval
+                        .segments
+                        .iter()
+                        .flat_map(|segment| {
+                            webs.index
+                                .span
+                                .iter()
+                                .filter(move |(_, (first, last))| segment.start < *last && *first < segment.end)
+                                .map(|(at, _)| *at)
+                        })
+                        .collect();
+                    blocks.len() <= 1
+                },
+            )
+    };
+    one_block(pair.0) || one_block(pair.1)
+}
+
+/// `applyTerminalRule` ([`RegisterCoalescer.cpp#L4150`]): the copy's
+/// destination has no other copy, and would meet another copy of its source in
+/// the block, whose other end has copies of its own: it goes last.
+fn _terminal_rule(
+    webs: &mut Webs,
+    block: &Block,
+    copy: &Arc<Insn>,
+    pair: (u32, u32),
+    affinity: &IndexMap<u32, u32>,
+) -> bool {
+    let (destination, source) = pair;
+    let terminal = |value: u32| affinity.get(&value).copied().unwrap_or(0) <= 1;
+    if !terminal(destination) {
+        return false;
+    }
+    let destination_node = webs.node(destination);
+    let Some(destination_live) = webs.live.get(&destination_node).cloned() else {
+        return false;
+    };
+    for other in &block.insns {
+        if Arc::ptr_eq(other, copy) {
+            continue;
+        }
+        let Some((into, out_of)) = _copy(other) else { continue };
+        let other_end = if into == source {
+            out_of
+        } else if out_of == source {
+            into
+        } else {
+            continue;
+        };
+        if terminal(other_end) {
+            continue;
+        }
+        let node = webs.node(other_end);
+        if webs.live.get(&node).is_some_and(|interval| interval.overlaps(&destination_live)) {
+            return true;
+        }
+    }
+    false
+}
+
+/// What `RegisterCoalescer::joinCopy` made of a copy
+/// ([`RegisterCoalescer.cpp#L2054`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Joined {
+    Yes,
+    /// Never: pinned apart, no register in common, or none left after the
+    /// clobbers.
+    Rejected,
+    /// The live ranges meet: a later join may remove what they meet at (LLVM's
+    /// `JoinResult::Deferred`).
+    Deferred,
+}
+
+/// The webs `joined` makes: what `RegisterCoalescer` keeps in `LiveIntervals`
+/// and the register classes.
+struct Webs {
+    live: IndexMap<u32, Interval>,
+    widths: IndexMap<u32, u32>,
+    widths_of_values: IndexMap<u32, u32>,
+    palette: IndexMap<u32, BTreeSet<RegId>>,
+    held: IndexMap<u32, RegId>,
+    parent: IndexMap<u32, u32>,
+    node_of: IndexMap<u32, u32>,
+    writes: IndexMap<u32, Vec<(i64, u32)>>,
+    masks: allocate::Masks,
+    index: ranges::Indexes,
+}
+
+impl Webs {
+    fn node(
+        &mut self,
+        value: u32,
+    ) -> u32 {
+        let root = _find(&mut self.parent, value);
+        self.node_of.get(&root).copied().unwrap_or(root)
+    }
+
+    /// `joinCopy`:
+    /// [`RegisterCoalescer.cpp#L2054`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2054).
+    fn join(
+        &mut self,
+        one: &Arc<Insn>,
+    ) -> Joined {
+        let Some(pair) = _copy(one) else {
+            return Joined::Rejected;
+        };
+        let (mut here, mut there) = (_find(&mut self.parent, pair.0), _find(&mut self.parent, pair.1));
+        if here == there {
+            return Joined::Yes;
+        }
+        let (mut mine_node, mut theirs_node) = (self.node(pair.0), self.node(pair.1));
+        // Two pinned to different registers are two registers.
+        let (mine_pin, theirs_pin) = (self.held.get(&mine_node).copied(), self.held.get(&theirs_node).copied());
+        if matches!(
+            (mine_pin, theirs_pin),
+            (Some(mine), Some(theirs)) if mine != theirs
+        ) {
+            return Joined::Rejected;
+        }
+        let (Some(mine), Some(theirs)) = (self.live.get(&mine_node), self.live.get(&theirs_node)) else {
+            return Joined::Rejected;
+        };
+        // Two live ranges that share no point leave the live count of every
+        // point as it was: the join is refused only where they meet. A
+        // copy of the same width is the one meeting that is no clash.
+        if mine.overlaps(theirs) {
+            let same_width = self.widths_of_values.get(&pair.0) == self.widths_of_values.get(&pair.1);
+            if !same_width
+                || !_same_value_where_they_meet(
+                    mine,
+                    theirs,
+                    one,
+                    pair.0,
+                    &self.index,
+                    &self.writes,
+                    mine_node,
+                    theirs_node,
+                )
+            {
+                return Joined::Deferred;
+            }
+        }
+        let allowed: BTreeSet<RegId> = self
+            .palette
+            .get(&mine_node)
+            .into_iter()
+            .flatten()
+            .filter(|register| self.palette.get(&theirs_node).is_some_and(|other| other.contains(register)))
+            .copied()
+            .collect();
+        if allowed.is_empty() {
+            return Joined::Rejected;
+        }
+        let merged = _merged(mine, theirs);
+        let width = self
+            .widths
+            .get(&mine_node)
+            .copied()
+            .unwrap_or(0)
+            .max(self.widths.get(&theirs_node).copied().unwrap_or(0))
+            .max(1);
+        let allowed: BTreeSet<RegId> = allowed
+            .into_iter()
+            .filter(|register| !allocate::_clobbered(&merged, *register, &self.masks, width))
+            .collect();
+        if allowed.is_empty() || [mine_pin, theirs_pin].into_iter().flatten().any(|pin| !allowed.contains(&pin)) {
+            return Joined::Rejected;
+        }
+        // The pinned web is the one that stays, so that the survivor is the
+        // value the allocator was told of.
+        if mine_pin.is_some() && theirs_pin.is_none() {
+            std::mem::swap(&mut here, &mut there);
+            std::mem::swap(&mut mine_node, &mut theirs_node);
+        }
+        self.parent.insert(here, there);
+        self.node_of.insert(there, mine_node);
+        self.live.insert(mine_node, merged);
+        self.live.swap_remove(&theirs_node);
+        let theirs_writes = self.writes.swap_remove(&theirs_node).unwrap_or_default();
+        self.writes.entry(mine_node).or_default().extend(theirs_writes);
+        self.widths.insert(mine_node, width);
+        self.palette.insert(mine_node, allowed);
+        self.palette.swap_remove(&theirs_node);
+        self.held.swap_remove(&theirs_node);
+        if let Some(register) = mine_pin.or(theirs_pin) {
+            self.held.insert(mine_node, register);
+        }
+        Joined::Yes
+    }
+
+    /// `copyCoalesceWorkList`: the copies of `list` that are deferred stay;
+    /// whether any joined.
+    fn work(
+        &mut self,
+        list: &mut Vec<Arc<Insn>>,
+    ) -> bool {
+        let mut progress = false;
+        list.retain(|one| match self.join(one) {
+            Joined::Yes => {
+                progress = true;
+                false
+            }
+            Joined::Rejected => false,
+            Joined::Deferred => true,
+        });
+        progress
+    }
+}
+
 /// `body` with every copy this can prove unnecessary removed.
 pub fn joined(
     body: &LirBody,
@@ -231,10 +461,9 @@ pub fn joined(
     let pinned: IndexMap<u32, RegId> = every.into_iter().map(|(value, register)| (value, ir::root(register))).collect();
 
     let index = ranges::indexed(body);
-    let mut live = ranges::intervals(body, Some(&index));
+    let live = ranges::intervals(body, Some(&index));
     let masks = allocate::_masks(body, &index, segments);
-    let mut widths = allocate::_widest(body);
-    let widths_of_values = widths.clone();
+    let widths = allocate::_widest(body);
     let where_of = regclass::classes(body, &BTreeSet::new(), segments, classes);
     let everything: BTreeSet<RegId> = classes.available.iter().copied().collect();
     // Where each web is written: two live ranges that meet are one value there,
@@ -261,100 +490,81 @@ pub fn joined(
             palette.insert(*value, BTreeSet::from([*register]));
         }
     }
-    let mut held: IndexMap<u32, RegId> = pinned.clone();
-    let mut parent: IndexMap<u32, u32> = IndexMap::default();
-    // The web a root's values are kept as.
-    let mut node_of: IndexMap<u32, u32> = IndexMap::default();
+    let mut webs = Webs {
+        live,
+        widths_of_values: widths.clone(),
+        widths,
+        palette,
+        held: pinned.clone(),
+        parent: IndexMap::default(),
+        node_of: IndexMap::default(),
+        writes,
+        masks,
+        index,
+    };
 
-    // The deepest loops first, as LLVM's `RegisterCoalescer` orders its
-    // worklist, and in a loop the blocks that run most often: of two joins
-    // that clash the first stays.
-    let busy = crate::analysis::frequency::Frequency::of(body);
-    let mut blocks: Vec<&Block> = body.blocks.iter().collect();
-    let depth = ranges::depths_shared(body);
-    blocks.sort_by(|a, b| {
-        let (a_depth, b_depth) = (depth.get(&a.at).copied().unwrap_or(0), depth.get(&b.at).copied().unwrap_or(0));
-        b_depth
-            .cmp(&a_depth)
-            .then_with(
-                || if a_depth == 0 { std::cmp::Ordering::Equal } else { busy.block(b.at).total_cmp(&busy.block(a.at)) },
-            )
-    });
-    for block in blocks {
+    // How many copies name each value: a value no other copy names is a
+    // terminal node.
+    let mut affinity: IndexMap<u32, u32> = IndexMap::default();
+    for block in &body.blocks {
         for one in &block.insns {
-            let Some(pair) = _copy(one) else {
-                continue;
-            };
-            let (mut here, mut there) = (_find(&mut parent, pair.0), _find(&mut parent, pair.1));
-            if here == there {
-                continue;
-            }
-            let (mut mine_node, mut theirs_node) =
-                (node_of.get(&here).copied().unwrap_or(here), node_of.get(&there).copied().unwrap_or(there));
-            // Two pinned to different registers are two registers.
-            let (mine_pin, theirs_pin) = (held.get(&mine_node).copied(), held.get(&theirs_node).copied());
-            if matches!(
-                (mine_pin, theirs_pin),
-                (Some(mine), Some(theirs)) if mine != theirs
-            ) {
-                continue;
-            }
-            let (Some(mine), Some(theirs)) = (live.get(&mine_node), live.get(&theirs_node)) else {
-                continue;
-            };
-            // Two live ranges that share no point leave the live count of every
-            // point as it was: the join is refused only where they
-            // meet. A copy of the same width is the one meeting that is no
-            // clash.
-            if mine.overlaps(theirs) {
-                let same_width = widths_of_values.get(&pair.0) == widths_of_values.get(&pair.1);
-                if !same_width
-                    || !_same_value_where_they_meet(mine, theirs, one, pair.0, &index, &writes, mine_node, theirs_node)
-                {
-                    continue;
-                }
-            }
-            let allowed: BTreeSet<RegId> = palette
-                .get(&mine_node)
-                .into_iter()
-                .flatten()
-                .filter(|register| palette.get(&theirs_node).is_some_and(|other| other.contains(register)))
-                .copied()
-                .collect();
-            if allowed.is_empty() {
-                continue;
-            }
-            let merged = _merged(mine, theirs);
-            let width =
-                widths.get(&mine_node).copied().unwrap_or(0).max(widths.get(&theirs_node).copied().unwrap_or(0)).max(1);
-            let allowed: BTreeSet<RegId> = allowed
-                .into_iter()
-                .filter(|register| !allocate::_clobbered(&merged, *register, &masks, width))
-                .collect();
-            if allowed.is_empty() || [mine_pin, theirs_pin].into_iter().flatten().any(|pin| !allowed.contains(&pin)) {
-                continue;
-            }
-            // The pinned web is the one that stays, so that the survivor is the
-            // value the allocator was told of.
-            if mine_pin.is_some() && theirs_pin.is_none() {
-                std::mem::swap(&mut here, &mut there);
-                std::mem::swap(&mut mine_node, &mut theirs_node);
-            }
-            parent.insert(here, there);
-            node_of.insert(there, mine_node);
-            live.insert(mine_node, merged);
-            live.swap_remove(&theirs_node);
-            let theirs_writes = writes.swap_remove(&theirs_node).unwrap_or_default();
-            writes.entry(mine_node).or_default().extend(theirs_writes);
-            widths.insert(mine_node, width);
-            palette.insert(mine_node, allowed);
-            palette.swap_remove(&theirs_node);
-            held.swap_remove(&theirs_node);
-            if let Some(register) = mine_pin.or(theirs_pin) {
-                held.insert(mine_node, register);
+            if let Some((into, out_of)) = _copy(one) {
+                *affinity.entry(into).or_default() += 1;
+                *affinity.entry(out_of).or_default() += 1;
             }
         }
     }
+    let predecessors = |block: &Block| body.blocks.iter().filter(|other| other.succ.contains(&block.at)).count();
+    let depth = ranges::depths_shared(body);
+    let mut blocks: Vec<&Block> = body.blocks.iter().collect();
+    // `compareMBBPriority` ([`RegisterCoalescer.cpp#L4058`]): deeper loops
+    // first, then the blocks more connected in the CFG, then the block's
+    // number. DEVIATE: no `IsSplit` key (off by default there).
+    blocks.sort_by_cached_key(|block| {
+        (
+            std::cmp::Reverse(depth.get(&block.at).copied().unwrap_or(0)),
+            std::cmp::Reverse(predecessors(block) + block.succ.len()),
+            block.at,
+        )
+    });
+    let mut local_list: Vec<Arc<Insn>> = Vec::new();
+    let mut work_list: Vec<Arc<Insn>> = Vec::new();
+    let mut current_depth = u32::MAX;
+    for block in blocks {
+        // Try coalescing the collected local copies for deeper loops.
+        let here_depth = depth.get(&block.at).copied().unwrap_or(0);
+        if here_depth < current_depth {
+            work_list.extend(_coalesce_locals(&mut webs, &mut local_list));
+            current_depth = here_depth;
+        }
+        // `copyCoalesceInMBB` ([`RegisterCoalescer.cpp#L4200`]): the copies of
+        // the block, those the terminal rule evicts last.
+        let (mut local_terminals, mut global_terminals): (Vec<Arc<Insn>>, Vec<Arc<Insn>>) = (Vec::new(), Vec::new());
+        let before = work_list.len();
+        for one in &block.insns {
+            let Some(pair) = _copy(one) else { continue };
+            let terminal = _terminal_rule(&mut webs, block, one, pair, &affinity);
+            let local = _is_local(&webs, pair);
+            match (local, terminal) {
+                (true, true) => local_terminals.push(Arc::clone(one)),
+                (true, false) => local_list.push(Arc::clone(one)),
+                (false, true) => global_terminals.push(Arc::clone(one)),
+                (false, false) => work_list.push(Arc::clone(one)),
+            }
+        }
+        local_list.extend(local_terminals);
+        work_list.extend(global_terminals);
+        // Try coalescing the collected copies immediately: most are joinable on
+        // the first attempt.
+        let mut current: Vec<Arc<Insn>> = work_list.split_off(before);
+        webs.work(&mut current);
+        work_list.extend(current);
+    }
+    work_list.extend(_coalesce_locals(&mut webs, &mut local_list));
+    // Joining intervals can allow other intervals to be joined: until no
+    // progress.
+    while webs.work(&mut work_list) {}
+    let Webs { mut parent, .. } = webs;
 
     // No early return where nothing joined: `_kept` also removes what was
     // already an identity.
