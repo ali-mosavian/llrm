@@ -20,6 +20,7 @@ Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (cl
 | [fold, hoist, decide, front end](fold-hoist-decide.md) | why `fold` is 12x per run on `d_faces`: one function, floats; the `mixed` ladder shape |
 | [synthesis](synthesis.md) | every cause of the gap, ranked, with status and the LLVM mechanism |
 | [LIR clean-up](lir-cleanup.md) | the peephole and x87 passes against DAG combine and the stackifier |
+| [LIR jumps and coalescing](lir-jumps-coalesce.md) | `jumps` and the coalescer against BranchFolding, block placement and RegisterCoalescer |
 | [runs that change nothing](idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
 | [proposals](proposals.md) | every proposed change, ranked, with owner and PR |
 | [flat profile](profile.md) | top functions by instructions and by L1d misses, both compilers |
