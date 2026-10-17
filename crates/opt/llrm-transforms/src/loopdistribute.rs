@@ -289,7 +289,8 @@ fn with_idioms(
     let before = cfg::Shape::of(unit.function).loops.iter().map(|loop_| loop_.header).collect::<BTreeSet<_>>();
     let mut unit_of = |function: &mut Function| {
         let outer = std::rc::Rc::clone(analyses.outer());
-        let registers = analyses.fresh().get::<Registers>(unit.context, unit.layout, function);
+        let mut fresh = analyses.fresh();
+        let registers = fresh.get::<Registers>(unit.context, unit.layout, function);
         let (callees, declared) = (outer.callees(), &mut *unit.declared);
         crate::fill::filled_with(
             unit.context,
@@ -299,7 +300,7 @@ fn with_idioms(
             &outer,
             declared,
             false,
-            &mut llrm_analysis::memory::Standing::held(&registers),
+            &mut llrm_analysis::memory::Standing::held(&registers, llrm_analysis::manager::renewal(&mut fresh)),
             &|loop_| !before.contains(&loop_.header) || loop_.header == split.shape.loop_.header,
         )
     };

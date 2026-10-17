@@ -168,15 +168,16 @@ impl FunctionPass for Fill {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
+        let outer = std::rc::Rc::clone(analyses.outer());
         let changed = filled_with(
             unit.context,
             unit.layout,
-            analyses.outer().callees(),
+            outer.callees(),
             unit.function,
-            analyses.outer(),
+            &outer,
             unit.declared,
             self.size,
-            &mut llrm_analysis::memory::Standing::held(&registers),
+            &mut llrm_analysis::memory::Standing::held(&registers, llrm_analysis::manager::renewal(analyses)),
             &|_| true,
         );
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
@@ -573,19 +574,20 @@ pub fn filled(
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
-    outer: &Outer,
+    analyses: &mut Analyses,
     declared: &mut Declared,
     size: bool,
 ) -> bool {
+    let outer = std::rc::Rc::clone(analyses.outer());
     filled_with(
         context,
         layout,
         callees,
         function,
-        outer,
+        &outer,
         declared,
         size,
-        &mut llrm_analysis::memory::Standing::underived(),
+        &mut llrm_analysis::memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
         &|_| true,
     )
 }

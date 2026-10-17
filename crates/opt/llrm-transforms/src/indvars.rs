@@ -200,20 +200,12 @@ impl FunctionPass for IndVars {
         // Once the body has changed, the manager brings what it holds up to
         // date from the changes logged, where `Standing` would derive
         // it again (13 times at d_faces -O2, 25 M).
+        let renew = llrm_analysis::manager::renewal(analyses);
         let mut standing = match bounded.as_deref() {
-            Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds),
-            _ => llrm_analysis::memory::Standing::held(&held),
+            Some(Ok(bounds)) => llrm_analysis::memory::Standing::held_with(&held, bounds, renew),
+            _ => llrm_analysis::memory::Standing::held(&held, renew),
         }
-        .with_shape(shape)
-        .renewing(|context, layout, function, reshaped| {
-            let kept = if reshaped {
-                PreservedAnalyses::none()
-            } else {
-                PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
-            };
-            analyses.invalidate(function, &kept);
-            analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
-        });
+        .with_shape(shape);
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -562,11 +554,20 @@ pub fn rewound(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
-    analyses: &Analyses,
+    analyses: &mut Analyses,
     registers: i64,
     costs: &OperationCosts,
 ) -> bool {
-    rewound_with(context, layout, function, analyses.outer(), &mut memory::Standing::underived(), registers, costs)
+    let outer = std::rc::Rc::clone(analyses.outer());
+    rewound_with(
+        context,
+        layout,
+        function,
+        &outer,
+        &mut memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
+        registers,
+        costs,
+    )
 }
 
 /// `rewound`, what is known of the body as `standing` says: the manager's
@@ -782,9 +783,17 @@ pub fn widened(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
-    outer: &passes::Outer,
+    analyses: &mut Analyses,
 ) -> bool {
-    widened_with(context, layout, function, outer, &mut llrm_analysis::memory::Standing::underived(), None)
+    let outer = std::rc::Rc::clone(analyses.outer());
+    widened_with(
+        context,
+        layout,
+        function,
+        &outer,
+        &mut llrm_analysis::memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
+        None,
+    )
 }
 
 /// `widened`, what is known of the body without memory given as `standing`

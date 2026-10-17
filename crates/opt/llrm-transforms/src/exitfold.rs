@@ -113,7 +113,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::passes::Outer;
+use llrm_mir::passes::{Analyses, Outer};
 
 use crate::counting;
 use crate::expand::{self, Expander};
@@ -146,9 +146,16 @@ pub fn folded(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
-    outer: &Outer,
+    analyses: &mut Analyses,
 ) -> bool {
-    folded_with(context, layout, function, outer, &mut memory::Standing::underived())
+    let outer = std::rc::Rc::clone(analyses.outer());
+    folded_with(
+        context,
+        layout,
+        function,
+        &outer,
+        &mut memory::Standing::unheld(llrm_analysis::manager::renewal(analyses)),
+    )
 }
 
 /// `folded`, what is known of the body without memory given as `standing` says.

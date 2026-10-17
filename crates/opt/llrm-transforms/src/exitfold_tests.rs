@@ -18,8 +18,7 @@ impl FunctionPass for Folded {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let outer = std::rc::Rc::clone(analyses.outer());
-        if super::folded(unit.context, unit.layout, unit.function, &outer) {
+        if super::folded(unit.context, unit.layout, unit.function, analyses) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
