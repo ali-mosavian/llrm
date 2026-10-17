@@ -1,6 +1,7 @@
 // Writes one hash per ConstantRange operation over every range of widths 1..4 and a sample of widths 6, 8, 16, 64:
 // the golden file crates/ir/llrm-mir/src/constantrange_golden.txt, which `constantrange_tests.rs` recomputes.
 //   tools/llvmport/constantrange_dump.sh > crates/ir/llrm-mir/src/constantrange_golden.txt
+#include "llvm/Config/llvm-config.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/IR/ConstantRange.h"
 #include "llvm/IR/Instructions.h"
@@ -113,7 +114,12 @@ static std::vector<CR> ranges(unsigned W) {
   return v;
 }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--version") {
+    printf("LLVM %s\n", LLVM_VERSION_STRING);
+    return 0;
+  }
+
   std::vector<std::pair<std::string, Bin>> bins;
   auto B = [&](const std::string &n, Bin f) { bins.push_back({n, f}); };
   B("add", [](const CR &a, const CR &b) { return a.add(b); });

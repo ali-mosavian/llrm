@@ -5,6 +5,7 @@
 // `sp` is matchSelectPattern of a select: flavor/NaN behaviour/ordered/cast/LHS/RHS (`-` on anything else).
 // `ov` is computeOverflowFor* of an add, sub or mul, as letters M(ay) L(ow) H(igh) N(ever): add u/s(AddOperator)/s(operands), sub u/s, mul u/s.
 // `tools/llvmport/vtcompare.py` runs it beside the Rust `vtdump` example and compares the lines.
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/SimplifyQuery.h"
 #include "llvm/Analysis/ValueTracking.h"
@@ -104,6 +105,10 @@ static std::string ov(Value *V, const SimplifyQuery &Q) {
 }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--version") {
+    printf("LLVM %s\n", LLVM_VERSION_STRING);
+    return 0;
+  }
   if (argc < 3) return 2;
   std::set<std::string> cols = split(argv[1]);
   LLVMContext Ctx;

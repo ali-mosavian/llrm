@@ -2,6 +2,7 @@
 // the golden file crates/ir/llrm-mir/src/knownbits_golden.txt, which `knownbits_tests.rs` recomputes.
 // Build against the LLVM of d1106deb71cc:
 //   tools/llvmport/knownbits_dump.sh > crates/ir/llrm-mir/src/knownbits_golden.txt
+#include "llvm/Config/llvm-config.h"
 #include "llvm/ADT/APInt.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/Support/KnownBits.h"
@@ -95,7 +96,12 @@ static std::vector<KnownBits> inputs(unsigned W) {
 
 static void line(const char *name, unsigned W) { printf("%s %u %016llx\n", name, W, (unsigned long long)H); H = 0xcbf29ce484222325ULL; }
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--version") {
+    printf("LLVM %s\n", LLVM_VERSION_STRING);
+    return 0;
+  }
+
   H = 0xcbf29ce484222325ULL;
   std::vector<std::pair<std::string, Bin>> bins;
 #define B(NAME, EXPR) bins.push_back({NAME, [](const KnownBits &L, const KnownBits &R) { return EXPR; }});

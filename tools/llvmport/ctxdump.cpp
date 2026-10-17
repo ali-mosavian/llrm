@@ -9,6 +9,7 @@
 //   <f> valid <a> i<I> <dt> <r> isValidAssumeForContext, with (dt=1) or without a DominatorTree
 // Values are named a<k> (argument), i<k> (k-th instruction of the function), @name or ?.
 // usage: ctxdump FILE.ll...   `tools/llvmport/ctxdump.sh` runs it; examples/ctxdump.rs prints the same lines.
+#include "llvm/Config/llvm-config.h"
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/DomConditionCache.h"
 #include "llvm/Analysis/SimplifyQuery.h"
@@ -31,6 +32,10 @@ using namespace llvm;
 static const char *tri(std::optional<bool> r) { return r ? (*r ? "T" : "F") : "-"; }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string(argv[1]) == "--version") {
+    printf("LLVM %s\n", LLVM_VERSION_STRING);
+    return 0;
+  }
   if (argc < 2) return 2;
   LLVMContext Ctx;
   for (int a = 1; a < argc; ++a) {
