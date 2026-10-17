@@ -66,6 +66,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::memory;
+use llrm_analysis::memory::MemRef;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{avail, cfg, ssa};
 use llrm_mir::context::Context;
@@ -77,7 +78,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::program::ProgramProxy;
 use llrm_mir::types::TypeId;
-use llrm_support::hash::IndexMap;
+use llrm_support::hash::{HashMap, IndexMap};
 
 use crate::edges;
 use crate::lcssa::{arms, from_arms};
@@ -259,6 +260,16 @@ pub fn _floating(opcode: &Opcode) -> bool {
     )
 }
 
+/// How far past a load the writes were looked at when a later load of the same
+/// bytes was found equal to it: the next such load looks at the rest, not at
+/// the whole stretch again (a block of N loads of one cell with a store
+/// between each was N^2/2 asks).
+struct Verified {
+    upto: usize,
+    read: MemRef,
+    stored: bool,
+}
+
 /// One operation where two computed the same thing from the same values;
 /// whether any went.
 ///
@@ -278,6 +289,7 @@ pub fn subexpressions(
     // What a name is rewritten to, and so what it numbers as.
     let mut swap: BTreeMap<ValueId, Operand> = BTreeMap::new();
     let mut gone: BTreeSet<InstId> = BTreeSet::new();
+    let mut verified: HashMap<InstId, Verified> = HashMap::default();
     for block in dominators_first(function, &dominance) {
         let here = order[&block];
         let instructions = function.block(block).instructions();
@@ -297,22 +309,34 @@ pub fn subexpressions(
                 continue;
             };
             let loads = matches!(op.opcode, Opcode::Load { .. });
-            if loads && (at != here || !_undisturbed(inst, &instructions[where_ + 1..index], accesses, program)) {
+            if loads && at != here {
                 candidates.push((here, index, inst));
                 continue;
             }
-            if loads
-                && instructions[where_ + 1..index]
-                    .iter()
-                    .any(|&between| matches!(function.instruction(between).opcode, Opcode::Store { .. }))
-            {
-                // The one place `avoid_store_crossing` changes what is
-                // numbered: told, so a caller that runs this both
-                // ways can see when the second way is the first.
-                crossed.set(true);
-                if avoid_store_crossing {
+            if loads {
+                // The writes between the earlier load and this one: those up
+                // to the last load it served were looked at then.
+                let read = accesses.references.get(&inst);
+                let kept = verified.get(&earlier).filter(|kept| kept.upto <= index && Some(&kept.read) == read);
+                let (from, mut stored) = kept.map_or((where_ + 1, false), |kept| (kept.upto, kept.stored));
+                let between = &instructions[from..index];
+                if !_undisturbed(inst, between, accesses, program) {
                     candidates.push((here, index, inst));
                     continue;
+                }
+                stored |= between.iter().any(|&b| matches!(function.instruction(b).opcode, Opcode::Store { .. }));
+                if let Some(read) = read {
+                    verified.insert(earlier, Verified { upto: index, read: read.clone(), stored });
+                }
+                if stored {
+                    // The one place `avoid_store_crossing` changes what is
+                    // numbered: told, so a caller that runs this both
+                    // ways can see when the second way is the first.
+                    crossed.set(true);
+                    if avoid_store_crossing {
+                        candidates.push((here, index, inst));
+                        continue;
+                    }
                 }
             }
             let (Some(mine), Some(theirs)) = (op.result, function.instruction(earlier).result) else {
@@ -495,6 +519,13 @@ pub fn _reaches(
 
 thread_local! {
     static UNDISTURBED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many writes this thread has looked at for those asks, for a test that a
+/// stretch of a block is looked at once.
+pub fn undisturbed_looked() -> usize {
+    LOOKED.with(std::cell::Cell::get)
 }
 
 /// How many times this thread has asked whether a load is undisturbed by a set
@@ -516,6 +547,7 @@ pub fn _undisturbed(
     program: Option<&ProgramProxy>,
 ) -> bool {
     UNDISTURBED.with(|asked| asked.set(asked.get() + 1));
+    LOOKED.with(|looked| looked.set(looked.get() + between.len()));
     let Some(read) = accesses.references.get(&one) else {
         return false;
     };
@@ -591,8 +623,9 @@ pub fn forwarded(
         .iter()
         .map(|one| (function.instruction(one.at).result.expect("a load's value"), one.value))
         .collect::<BTreeMap<_, _>>();
-    for (&value, &with) in &replacements {
-        function.replace_value(value, ssa::provider(with, &replacements).map_err(|error| error.to_string())?);
+    let ends = ssa::providers(replacements.values().copied(), &replacements).map_err(|error| error.to_string())?;
+    for (&value, end) in replacements.keys().zip(ends) {
+        function.replace_value(value, end);
     }
     function.erase_all(&served.iter().map(|one| one.at).collect::<Vec<_>>())?;
     Ok(true)
@@ -1498,5 +1531,26 @@ b4:
                 );
             }
         }
+    }
+
+    /// A block of N loads of one slot with a store to another between each
+    /// looked at every store between the first load and each later one: N^2/2
+    /// looks, a third of gvn on 800 statements of a loop (`spares`, 7.4 M
+    /// calls). A stretch is looked at once.
+    #[test]
+    fn test_equal_loads_look_at_each_write_between_them_once() {
+        let mut text = String::from(
+            "define i16 @f(i16 %n) {\nb0:\n  %i = alloca i16\n  %s = alloca i16\n  store i16 0, ptr %i\n  br label %b1\n\nb1:\n",
+        );
+        for k in 0..40 {
+            text += &format!("  %l{k} = load i16, ptr %i\n  %m{k} = add i16 %l{k}, %n\n  store i16 %m{k}, ptr %s\n");
+        }
+        text += "  store i16 %n, ptr %i\n  %c = icmp slt i16 %n, 0\n  br i1 %c, label %b1, label %b2\n\nb2:\n  ret i16 %n\n}\n";
+        let mut module = parsed(&text);
+        let looked = super::undisturbed_looked();
+        subexpressions_of(&mut module);
+        let looked = super::undisturbed_looked() - looked;
+        assert_eq!(printed(&module).matches("load").count(), 1, "{}", printed(&module));
+        assert!(looked <= 4 * 40, "{looked} writes looked at for 40 loads");
     }
 }
