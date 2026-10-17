@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C source of `f` with about N statements in one of five shapes, for compile-cost ladders.
 
-    gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float
+    gen.py SHAPE N        SHAPE: arith | mem | loop | diamond | calls | float | mixed
 
 Same C89 text goes to every compiler (wccq takes no C99 declarations); unsigned arithmetic only, so there is no UB to
 fold differently. Every value reaches the return or a store, so none is dead.
@@ -11,7 +11,7 @@ from __future__ import annotations
 import random
 import sys
 
-SHAPES = ("arith", "mem", "loop", "diamond", "calls", "float")
+SHAPES = ("arith", "mem", "loop", "diamond", "calls", "float", "mixed")
 OPS = ("+", "-", "^")
 
 
@@ -67,6 +67,27 @@ def float(n: int, rnd: random.Random) -> str:
         x, y = rnd.randrange(4), rnd.randrange(4)
         out.append(f"  v[{i % 4}] = v[{x}] {rnd.choice(('+', '-', '*'))} (v[{y}] {rnd.choice(('+', '-'))} {rnd.randrange(1, 99)}.5);")
     out += ["  return v[0] + v[1] + v[2] + v[3];", "}"]
+    return "\n".join(out)
+
+
+def mixed(n: int, rnd: random.Random) -> str:
+    """Struct fields read and written through two pointer parameters in a loop, with diamonds, floats and calls
+    that may write memory: the mix of d_draw_faces."""
+    out = ["struct S { unsigned a[16]; double f[8]; unsigned n; };", "void ext(void);",
+           "double f(struct S *g, struct S *h, double x) {", "  double s = x;", "  unsigned k = 0, i;",
+           "  for (i = 0; i < g->n; i++) {"]
+    for j in range(n):
+        a, b, c = rnd.randrange(16), rnd.randrange(16), rnd.randrange(8)
+        kind = j % 8
+        if kind == 7:
+            out.append("    ext();")
+        elif kind in (2, 5):
+            out.append(f"    if (g->a[{a}] > k + {rnd.randrange(1, 9)}u) s -= h->f[{c}]; else k += h->a[{b}];")
+        elif kind in (1, 4):
+            out.append(f"    g->a[{a}] = k ^ h->a[{b}];")
+        else:
+            out.append(f"    s += g->f[{c}] * h->f[{rnd.randrange(8)}] + (double)(k + g->a[{b}]);")
+    out += ["  }", "  return s + (double)k;", "}"]
     return "\n".join(out)
 
 
