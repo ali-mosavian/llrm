@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loadjoins.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loadjoins.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loadjoins.rs sha256:362ab8c6104031b60b05a83acdf8151f573eb29c55f3a946ef15f6cc4fb1d5a4 -->
+<!-- src: crates/opt/llrm-transforms/src/loadjoins.rs sha256:da14aecccc4ed2bf7fdf9f5186142d5d5cf5213dbfd6291e5493f8b022dafcc8 -->
 
 # loadjoins
 
@@ -91,7 +91,7 @@ value numbering and join PRE, with `insert` set when `pre` is on (gcc's
 the same step as a function pass, for tests.
 
 ## Needs
-`memoryssa::Accesses` and the managed `Pointers` (a missing `Summaries`
+`memoryssa::Accesses` and the managed `PointerValues` (a missing `Summaries`
 means every call is unknown, so less is found), `cfg::Shape`.
 
 ## Keeps

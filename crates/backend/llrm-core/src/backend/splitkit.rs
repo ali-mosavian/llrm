@@ -328,7 +328,7 @@ impl Region {
             // block.
             let named: Vec<usize> =
                 graph.position.get(at).and_then(|place| names.get(place)).cloned().unwrap_or_default();
-            if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+            if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
                 let walked: Vec<usize> = (0..block.insns.len())
                     .filter(|at| block.insns[*at].defines.contains(&value) || block.insns[*at].uses.contains(&value))
                     .collect();
@@ -428,7 +428,7 @@ fn crossings_in(
         near.extend(graph.parents[position].iter().copied());
     }
     let found = crossings_among(blocks, value, region, live, near.iter());
-    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+    if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
         assert_eq!(
             found,
             crossings_among(blocks, value, region, live, 0..body.blocks.len()),
@@ -469,7 +469,7 @@ fn crossings_among(
             let named = names.get(&position).map_or(&[][..], Vec::as_slice);
             let before = |at: usize| {
                 let found = _live_before_at(block, named, value, exit, at);
-                if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+                if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
                     assert_eq!(
                         found,
                         _live_before(block, value, exit)[at],
@@ -688,7 +688,7 @@ pub fn carved_moving(
                 kept[position] = _renamed(&block.insns[position], &rename);
             }
         }
-        if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+        if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
             for position in 0..length {
                 if region.covers(block.at, position) && Arc::ptr_eq(&kept[position], &block.insns[position]) {
                     assert_eq!(
@@ -904,7 +904,7 @@ pub fn _next_value_following(body: &LirBody) -> u32 {
     let phis = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).max().unwrap_or(0);
     let found = crate::backend::postings::following(body, |postings| postings.largest()).max(phis) + 1;
     NEXT_VALUE_ASKS.with(|n| n.set(n.get() + 1));
-    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
         assert_eq!(found, _next_value(body), "{}: the next value from the postings differs from the walk", body.name);
     }
     found
@@ -959,7 +959,7 @@ fn analysed_in(
 ) -> Analysis {
     let body = blocks.body;
     let found = if blocks.plain { analysed_along(blocks, value, live) } else { analysed_scan(body, value, live) };
-    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+    if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
         assert_eq!(
             found,
             analysed_scan(body, value, live),
@@ -1058,7 +1058,7 @@ fn named_in(
         positions.dedup();
     }
     body.facts.0.bump_by("split-names", names.values().map(Vec::len).sum());
-    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
         let walked: std::collections::BTreeMap<usize, Vec<usize>> = body
             .blocks
             .iter()
@@ -1151,7 +1151,7 @@ impl Occupied<'_> {
         let held = self.held(whole, span);
         let destroyed = self.masks.destroyed_within(whole, width, span.0, span.1);
         let found = held.into_iter().chain(destroyed).reduce(|one, other| (one.0.min(other.0), one.1.max(other.1)));
-        if llrm_support::env_set("LLRM_CHECK_OCCUPIED") {
+        if llrm_support::env_flag!("LLRM_CHECK_OCCUPIED") {
             assert_eq!(found, self.interference_by_scan(whole, width, span), "interference in span {span:?}");
         }
         found
@@ -1277,7 +1277,7 @@ fn live_of(
     let found = crate::backend::postings::following(body, |postings| {
         crate::analysis::occurrences::Occurrences::of(postings, &only)
     });
-    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
         found.check_against_scan(body, &|one| one == value);
     }
     match found.rows(body) {
@@ -1511,7 +1511,7 @@ fn _held(
     found: &Blocks,
     analysis: &Analysis,
     through: &[i64],
-    live: &BTreeSet<usize>,
+    live: &llrm_mir::dense::IdSet<usize>,
     blocked: Blocked,
 ) -> Region {
     let borders = |block: i64, live_in: bool, live_out: bool| {
@@ -1598,7 +1598,7 @@ fn _whole_range(
     }
     let whole = |at: i64| region.spans.get(&at) == Some(&vec![(0, blocks.block(at).insns.len())]);
     let found = analysis.uses.iter().map(|one| one.block).chain(analysis.through.iter().copied()).all(whole);
-    if llrm_support::env_set("LLRM_CHECK_SPLIT") {
+    if llrm_support::env_flag!("LLRM_CHECK_SPLIT") {
         assert_eq!(
             found,
             _whole_range_scan(blocks.body, value, region, live),

@@ -53,8 +53,11 @@
 //!
 //! # Provides
 //! `before`, the zero roots before each instruction, keyed by instruction
-//! identity. `preheaded` places `movzx` in loop preheaders for roots a caller
-//! asks for.
+//! identity. The answer is kept between asks and brought up to date from the
+//! blocks that changed ([`crate::backend::incremental`]);
+//! `LLRM_CHECK_ZEROROOTS=1` solves the body from scratch after every answer and
+//! asserts they agree. `preheaded` places `movzx` in loop preheaders for roots
+//! a caller asks for.
 //!
 //! # Runs
 //! `established` is the last sub-pass of [`crate::backend::peephole`], run when
@@ -66,6 +69,7 @@
 //! [`crate::backend::exactaddress`] (`before`, `preheaded`), and the rewrite
 //! guards of the peephole (`upper_zero`).
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
@@ -73,6 +77,7 @@ use llrm_lir::registers::Regs;
 
 use crate::analysis::dataflow::{self, Direction};
 use crate::analysis::loops;
+use crate::backend::incremental::{Kept, Problem, Solution};
 use crate::backend::liveness;
 use crate::backend::peephole::{_register_effects, id};
 use crate::model::ir::{Loc, Operation, Reg, Semantics};
@@ -147,6 +152,42 @@ fn disturbed(
         .fold(0, |roots, (index, _)| roots | 1 << index)
 }
 
+/// What one instruction does to the roots known zero, worked out once from the
+/// instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Step {
+    disturbed: Roots,
+    zeroed: Roots,
+    /// `(into, from)` of a whole-register copy.
+    copy: Option<(Roots, Roots)>,
+    /// The two roots an `xchg` of whole registers swaps.
+    swap: Option<(Roots, Roots)>,
+}
+
+impl Step {
+    fn of(
+        regs: Regs,
+        bits: u32,
+        one: &Insn,
+    ) -> Self {
+        Self { disturbed: disturbed(regs, bits, one), zeroed: zeroing(one), copy: copy_of(one), swap: swap_of(one) }
+    }
+
+    /// The roots known zero after it, given those before it.
+    fn after(
+        &self,
+        zero: Roots,
+    ) -> Roots {
+        if let Some((left, right)) = self.swap {
+            let (had_left, had_right) = (zero & left != 0, zero & right != 0);
+            let rest = zero & !(left | right);
+            return rest | if had_right { left } else { 0 } | if had_left { right } else { 0 };
+        }
+        let copied = self.copy.map_or(0, |(into, from)| if zero & from != 0 { into } else { 0 });
+        (zero & !self.disturbed) | self.zeroed | copied
+    }
+}
+
 /// What `one` makes of `zero`, the roots known zero before it.
 pub fn after(
     regs: Regs,
@@ -154,19 +195,12 @@ pub fn after(
     one: &Insn,
     zero: Roots,
 ) -> Roots {
-    if let Some(swapped) = exchanged(one, zero) {
-        return swapped;
-    }
-    let zeroed = zeroing(one) | copied(one, zero);
-    (zero & !disturbed(regs, bits, one)) | zeroed
+    Step::of(regs, bits, one).after(zero)
 }
 
-/// `zero` after `xchg a, b` of two whole registers: each now holds the other's
-/// upper half.
-fn exchanged(
-    one: &Insn,
-    zero: Roots,
-) -> Option<Roots> {
+/// The two roots `xchg a, b` of two whole registers swaps: each now holds the
+/// other's upper half.
+fn swap_of(one: &Insn) -> Option<(Roots, Roots)> {
     let Some(Semantics { op: Operation::Exchange, dests, .. }) = &one.what else {
         return None;
     };
@@ -174,34 +208,139 @@ fn exchanged(
     else {
         return None;
     };
-    let (left, right) = (bit(*left)?, bit(*right)?);
-    let (had_left, had_right) = (zero & left != 0, zero & right != 0);
-    let rest = zero & !(left | right);
-    Some(rest | if had_right { left } else { 0 } | if had_left { right } else { 0 })
+    Some((bit(*left)?, bit(*right)?))
 }
 
-/// The root a whole-register copy writes, where the root it copies from has a
-/// zero upper half.
-fn copied(
-    one: &Insn,
-    zero: Roots,
-) -> Roots {
+/// The roots a whole-register copy writes and reads: the root written has a
+/// zero upper half where the root it copies from has.
+fn copy_of(one: &Insn) -> Option<(Roots, Roots)> {
     let Some(Semantics { op: Operation::Move, dests, sources, .. }) = &one.what else {
-        return 0;
+        return None;
     };
     match (dests.as_slice(), sources.as_slice()) {
         ([Loc::Reg(Reg { register: into, width: 4 })], [Loc::Reg(Reg { register: from, width: 4 })]) => {
-            match (bit(*into), bit(*from)) {
-                (Some(into), Some(from)) if zero & from != 0 => into,
-                _ => 0,
-            }
+            Some((bit(*into)?, bit(*from)?))
         }
-        _ => 0,
+        _ => None,
     }
 }
 
-/// Before each instruction, by `id`, the roots whose upper half is zero.
-pub fn before(body: &LirBody) -> HashMap<usize, Roots> {
+/// The roots zero above their word as a [`Problem`]: what a block does to them
+/// is the steps of its instructions, and they flow on, meeting by intersection.
+pub struct ZeroRoots;
+
+impl Problem for ZeroRoots {
+    type Summary = Vec<Step>;
+    type Value = Roots;
+    const FORWARD: bool = true;
+
+    fn summarize(
+        &self,
+        body: &LirBody,
+        block: &Block,
+    ) -> Vec<Step> {
+        let regs = body.regs();
+        block.insns.iter().map(|one| Step::of(regs, body.bits, one)).collect()
+    }
+
+    fn start(&self) -> Roots {
+        ALL
+    }
+
+    /// Nothing is known on entry to the body; elsewhere the roots every way in
+    /// leaves zero, and a block nothing leads to keeps them all.
+    fn entering(
+        &self,
+        at: i64,
+        entry: i64,
+        present: &[Roots],
+        _missing: usize,
+    ) -> Roots {
+        if at == entry { 0 } else { present.iter().fold(ALL, |all, next| all & next) }
+    }
+
+    fn leaving(
+        &self,
+        steps: &Vec<Step>,
+        zero: Roots,
+    ) -> Roots {
+        steps.iter().fold(zero, |zero, step| step.after(zero))
+    }
+}
+
+/// The answer last given: the solution it came from, what it says before each
+/// instruction, and which instructions it says it of, by block.
+struct Given {
+    solution: Rc<Solution<ZeroRoots>>,
+    result: Rc<HashMap<usize, Roots>>,
+    ids: IndexMap<i64, Vec<usize>>,
+}
+
+thread_local! {
+    static KEPT: Kept<ZeroRoots> = const { Kept::new() };
+    static GIVEN: std::cell::RefCell<Option<Given>> = const { std::cell::RefCell::new(None) };
+}
+
+/// How many times this thread has solved a body's zero roots from scratch (no
+/// block left as the last answer had it), brought a held answer up to date, and
+/// been asked of a body no pass changed.
+pub fn asks() -> [usize; 3] {
+    KEPT.with(Kept::asks)
+}
+
+/// Before each instruction, by `id`, the roots whose upper half is zero. See
+/// [`crate::backend::incremental`]: the problem is the greatest fixed point, so
+/// a component with a changed block is solved from every root zero.
+pub fn before(body: &LirBody) -> Rc<HashMap<usize, Roots>> {
+    let solution = KEPT.with(|kept| kept.ask(&ZeroRoots, body));
+    let given = GIVEN.with(|given| given.borrow_mut().take());
+    if let Some(same) = given.as_ref().filter(|given| Rc::ptr_eq(&given.solution, &solution)) {
+        let result = Rc::clone(&same.result);
+        GIVEN.with(|slot| *slot.borrow_mut() = given);
+        return result;
+    }
+    // What was said of the blocks that are gone or not as they were is taken
+    // back, and said again of the blocks that are not.
+    let (mut result, mut ids) = match given {
+        Some(given) => ((*given.result).clone(), given.ids),
+        None => (HashMap::default(), IndexMap::default()),
+    };
+    ids.retain(|at, was| {
+        let keep = solution.entering.contains_key(at) && !solution.refreshed.contains(at);
+        if !keep {
+            for one in was.iter() {
+                result.remove(one);
+            }
+        }
+        keep
+    });
+    for block in body.blocks.iter().filter(|block| solution.refreshed.contains(&block.at)) {
+        let mut zero = solution.entering[&block.at];
+        let mut said = Vec::with_capacity(block.insns.len());
+        for (one, step) in block.insns.iter().zip(solution.summaries[&block.at].iter()) {
+            result.insert(id(one), zero);
+            said.push(id(one));
+            zero = step.after(zero);
+        }
+        ids.insert(block.at, said);
+    }
+    let result = Rc::new(result);
+    if llrm_support::env_flag!("LLRM_CHECK_ZEROROOTS") {
+        assert!(
+            *result == from_scratch(body),
+            "{}: upper-half zeroes brought up to date differ from ones solved from scratch",
+            body.name
+        );
+    }
+    GIVEN.with(|slot| {
+        *slot.borrow_mut() = Some(Given { solution, result: Rc::clone(&result), ids });
+    });
+    result
+}
+
+/// `before`, solved from nothing held: what `LLRM_CHECK_ZEROROOTS` compares an
+/// answer brought up to date with.
+fn from_scratch(body: &LirBody) -> HashMap<usize, Roots> {
     let regs = body.regs();
     let graph = &body.blocks;
     let predecessors = loops::predecessors(&graph);
@@ -704,5 +843,71 @@ mod tests {
             |block: &Block| block.insns.iter().filter_map(|one| one.what.as_ref()?.name.clone()).collect::<Vec<_>>();
         assert_eq!(names(&after.blocks[0]), ["mov", "movzx", "jmp"]);
         assert_eq!(names(&after.blocks[1]), ["movzx", "add", "cmp", "jne"]);
+    }
+
+    /// A loop wrote ECX whole each trip, so ECX was not zero above its word
+    /// anywhere in it; the write goes. Solved again from the answer that was
+    /// held, ECX stayed not zero round the loop (the answer is the greatest
+    /// fixed point, and one started below it never rises), so the `movzx` the
+    /// loop's cells needed were put in again.
+    #[test]
+    fn test_a_root_a_loop_no_longer_disturbs_is_zero_round_it_again() {
+        let reg = |register| Loc::Reg(Reg { register, width: 4 });
+        let (ecx, edx, ebx) = (reg(RegId::ECX), reg(RegId::EDX), reg(RegId::EBX));
+        let word = Loc::Imm(Imm { value: 2, width: 4, address: None });
+        let entry = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(0, vec![one(0, Operation::Move, "mov", vec![ecx.clone()], vec![word], None)])
+        };
+        let trip = |dest: Loc| LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(1, vec![one(1, Operation::Move, "mov", vec![dest], vec![ebx.clone()], None)])
+        };
+        let exit = LirBlock::new(2, vec![one(2, Operation::Move, "mov", vec![edx.clone()], vec![ebx.clone()], None)]);
+        let (entry, exit): (Block, Block) = (entry.into(), exit.into());
+        let body = |trip: LirBlock| {
+            LirBody::new(
+                "f",
+                0,
+                vec![entry.clone(), trip.into(), exit.clone()],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        let ecx_bit = bit(RegId::ECX).unwrap();
+        let first = body(trip(ecx.clone()));
+        let before_first = before(&first);
+        assert_eq!(before_first[&crate::backend::peephole::id(&first.blocks[1].insns[0])] & ecx_bit, 0, "premise");
+        let second = body(trip(edx.clone()));
+        let after = before(&second);
+        let at = crate::backend::peephole::id(&second.blocks[1].insns[0]);
+        assert_ne!(after[&at] & ecx_bit, 0, "ECX is not zero at the loop's top");
+        assert!(*after == super::from_scratch(&second));
+    }
+
+    /// Asked of a body whose blocks are the same instructions, nothing is
+    /// worked out; one block changed, the others' steps are kept.
+    #[test]
+    fn test_a_body_asked_again_is_answered_and_a_changed_block_is_the_only_one_worked_out() {
+        let reg = |register| Loc::Reg(Reg { register, width: 4 });
+        let word = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let first = LirBlock {
+            succ: vec![1].into(),
+            ..LirBlock::new(0, vec![one(0, Operation::Move, "mov", vec![reg(RegId::ECX)], vec![word(2)], None)])
+        };
+        let last = |value| {
+            LirBlock::new(1, vec![one(1, Operation::Move, "mov", vec![reg(RegId::EDX)], vec![word(value)], None)])
+        };
+        let first: Block = first.into();
+        let body = |last: LirBlock| {
+            LirBody::new("f", 0, vec![first.clone(), last.into()], IndexMap::default(), IndexMap::default())
+        };
+        let kept = body(last(3));
+        let [whole, partly, same] = super::asks();
+        before(&kept);
+        before(&kept);
+        before(&body(last(0x12345)));
+        let [whole_now, partly_now, same_now] = super::asks();
+        assert_eq!((whole_now - whole, partly_now - partly, same_now - same), (1, 1, 1));
     }
 }

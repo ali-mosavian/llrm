@@ -361,7 +361,7 @@ impl Stored {
             asked.extend(self.groups[group].meeting(*low, *high));
         }
         asked.into_iter().for_each(&mut test);
-        if llrm_support::env_set("LLRM_CHECK_CLOBBERS") {
+        if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS") {
             let all =
                 (0..self.cells.len()).filter(|&one| related(&self.cells[at], &self.cells[one])).collect::<Vec<_>>();
             assert!(
@@ -830,6 +830,11 @@ fn memory_providers(
         .collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> =
         graph.sites.keys().filter_map(|&site| loaded_into(unit, accesses, site).map(|loaded| (site, loaded))).collect();
+    // Where each load is among them, which is the order of its block.
+    let mut load_of: llrm_mir::dense::IdMap<InstId, usize> = llrm_mir::dense::IdMap::new();
+    for (at, (site, _)) in loads.iter().enumerate() {
+        load_of.insert(*site, at);
+    }
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
         dominance.dominates(source_block, block) && (source_block != block || source_index < index)
@@ -927,10 +932,11 @@ fn memory_providers(
         // None for a site the entry does not reach: nothing is `available`
         // there.
         let reached = function.parent(site).filter(|&block| tree.is_reachable(block));
+        let below = load_of.get(&site).copied().unwrap_or(usize::MAX);
         let walk = || {
-            reached
-                .into_iter()
-                .flat_map(|block| nearest.dominating(tree, &keys.iter().collect::<Vec<_>>(), block).map(|(_, at)| at))
+            reached.into_iter().flat_map(|block| {
+                nearest.dominating_below(tree, &keys.iter().collect::<Vec<_>>(), block, below).map(|(_, at)| at)
+            })
         };
         // Nearest first (the order `dominating` yields), the first load that is
         // usable here: a write between it and the site is between every
@@ -944,7 +950,7 @@ fn memory_providers(
             available(*source, site) && serves(unit, Operand::Value(*value), result)
         };
         let nearest_usable = walk().filter(|&at| names(load_group[at])).find(|at| usable(at));
-        let checked = llrm_support::env_set("LLRM_CHECK_GROUPS");
+        let checked = llrm_support::env_flag!("LLRM_CHECK_GROUPS");
         let served = nearest_usable.filter(|&at| {
             let (source, (loaded, _)) = &loads[at];
             graph.unchanged(*source, site, loaded)

@@ -542,6 +542,9 @@ pub fn reduced(
     };
     let mut done = BTreeSet::<i64>::new();
     let mut changed = false;
+    // Whether the function is known to hold no dead code: after a loop's dead
+    // code is gone.
+    let mut clean = false;
     // What is true of the function as it stands, worked out once: each loop
     // reads from it (and takes its own instructions out of the traffic).
     let mut whole = Whole::default();
@@ -561,6 +564,7 @@ pub fn reduced(
             if let Some(rewrite) = _post_incremented(&view, &loop_).or_else(|| _stepped_before_test(&view, &loop_)) {
                 drop(facts);
                 _read_after_step(unit, rewrite);
+                clean = false;
                 analyses.invalidate(unit.function, &PreservedAnalyses::none());
                 whole = Whole::default();
                 changed = true;
@@ -598,6 +602,7 @@ pub fn reduced(
         }
         let saved = leaves.then(|| (unit.function.clone(), _function_price(unit, &*analyses, outer, &target)));
         let graph = _graph(unit.function);
+        let before = unit.function.mark();
         if let Some(first) = _applied(unit, &plan) {
             done.insert(cfg::id(first));
         }
@@ -612,8 +617,32 @@ pub fn reduced(
                 continue;
             }
         }
-        // What the loop no longer reads is no use for the loop around it.
-        dead::dead(unit.context, outer.callees(), unit.function);
+        // What the loop no longer reads is no use for the loop around it. Once
+        // a loop is changed the function holds no dead code, so what
+        // can have died is what the edit stopped reading; the first is
+        // found in the whole.
+        match unit.function.touched_since(before).filter(|_| clean) {
+            Some(touched) => {
+                let checking = llrm_support::env_flag!("LLRM_CHECK_DEAD_FROM");
+                let full = checking.then(|| {
+                    let mut copy = unit.function.clone();
+                    dead::dead(unit.context, outer.callees(), &mut copy);
+                    llrm_mir::print::body(unit.context, &copy)
+                });
+                dead::dead_from(unit.context, outer.callees(), unit.function, touched.named.iter());
+                if let Some(full) = full {
+                    assert_eq!(
+                        full,
+                        llrm_mir::print::body(unit.context, unit.function),
+                        "LLRM_CHECK_DEAD_FROM: the dead code found from the edit differs from the whole function's"
+                    );
+                }
+            }
+            None => {
+                dead::dead(unit.context, outer.callees(), unit.function);
+            }
+        }
+        clean = true;
         changed = true;
     }
     changed
@@ -621,7 +650,7 @@ pub fn reduced(
 
 /// The blocks of `function` and where each goes.
 fn _graph(function: &Function) -> Vec<(BlockId, Vec<BlockId>)> {
-    function.layout().iter().map(|&block| (block, function.successors(block))).collect()
+    function.layout().iter().map(|&block| (block, function.successors(block).into())).collect()
 }
 
 /// What an edit that left the blocks and their edges as `before` had them

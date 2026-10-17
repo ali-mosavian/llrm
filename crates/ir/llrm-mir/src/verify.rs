@@ -46,6 +46,49 @@ pub fn verify(module: &Module) -> Vec<String> {
     out
 }
 
+thread_local! {
+    static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many names of blocks and places this thread has written, for a test that
+/// a body that passes writes none: a name is text, and was built for every
+/// instruction checked (d_faces -Os: 15k strings).
+pub fn names_written() -> usize {
+    WRITTEN.with(std::cell::Cell::get)
+}
+
+/// A block as a message names it, written when the message is.
+struct BlockName<'f>(&'f Function, BlockId);
+
+impl std::fmt::Display for BlockName<'_> {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        WRITTEN.with(|written| written.set(written.get() + 1));
+        match &self.0.block(self.1).name {
+            Some(name) => write!(out, "%{name}"),
+            None => write!(out, "block {}", (self.1).0),
+        }
+    }
+}
+
+/// An instruction as a message names it: its mnemonic and its block.
+struct At<'f>(&'f Function, InstId);
+
+impl std::fmt::Display for At<'_> {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        let mnemonic = self.0.instruction(self.1).opcode.mnemonic();
+        match self.0.parent(self.1) {
+            Some(block) => write!(out, "{mnemonic} in {}", BlockName(self.0, block)),
+            None => write!(out, "{mnemonic} in ?"),
+        }
+    }
+}
+
 struct Checker<'a> {
     module: &'a Module,
     context: &'a Context,
@@ -96,20 +139,24 @@ impl Checker<'_> {
         global.name.as_deref().is_some_and(intrinsics::is_reserved).then_some(function.ty)
     }
 
-    fn at(
+    fn at<'f>(
         &self,
         inst: InstId,
-    ) -> String {
-        let block = self.function.parent(inst).map_or("?".to_owned(), |block| self.block_name(block));
-        let mnemonic = self.function.instruction(inst).opcode.mnemonic();
-        format!("{mnemonic} in {block}")
+    ) -> At<'f>
+    where
+        Self: 'f,
+    {
+        At(self.function, inst)
     }
 
-    fn block_name(
+    fn block_name<'f>(
         &self,
         block: BlockId,
-    ) -> String {
-        self.function.block(block).name.clone().map_or_else(|| format!("block {}", block.0), |name| format!("%{name}"))
+    ) -> BlockName<'f>
+    where
+        Self: 'f,
+    {
+        BlockName(self.function, block)
     }
 
     fn function(&mut self) {
@@ -475,7 +522,7 @@ impl Checker<'_> {
         &mut self,
         inst: InstId,
         source: TypeId,
-        at: &str,
+        at: &At<'_>,
     ) {
         let instruction = self.function.instruction(inst);
         let base = self.operand_type(instruction.operands[0]).expect("a value");
@@ -518,7 +565,7 @@ impl Checker<'_> {
     fn invoke(
         &mut self,
         inst: InstId,
-        at: &str,
+        at: &At<'_>,
     ) {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };

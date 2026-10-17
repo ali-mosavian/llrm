@@ -741,7 +741,7 @@ fn _available(
                     Some(cells) => cells.iter().copied().filter(|&at| available.contains(at)).collect(),
                     None => available.iter().collect(),
                 };
-                if llrm_support::env_set("LLRM_CHECK_PROMOTED") && near.is_some() {
+                if llrm_support::env_flag!("LLRM_CHECK_PROMOTED") && near.is_some() {
                     let asked: HashSet<usize> = asked.iter().copied().collect();
                     for at in available.iter().filter(|at| !asked.contains(at)) {
                         assert!(
@@ -905,7 +905,7 @@ fn rewrite(
         .map(|(_, inst)| function.instruction(inst))
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
-        .collect::<BTreeSet<_>>();
+        .collect::<llrm_mir::dense::IdSet<ValueId>>();
     let poison = plan
         .types
         .iter()

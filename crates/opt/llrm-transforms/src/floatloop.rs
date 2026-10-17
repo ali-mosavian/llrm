@@ -120,8 +120,6 @@
 //! No LLVM or GCC counterpart. IndVarSimplify rewrites exit values and SCCP
 //! folds the effects of a computable loop.
 
-use std::collections::BTreeSet;
-
 use llrm_analysis::consts::{self, Calls};
 use llrm_analysis::floatfacts::{self, LoopExit, Solved};
 use llrm_analysis::manager::{self, FloatFacts};
@@ -153,7 +151,7 @@ impl FunctionPass for FloatLoop {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        self.run_checking(unit, analyses, llrm_support::env_set("LLRM_CHECK_FLOATSKIP"))
+        self.run_checking(unit, analyses, llrm_support::env_flag!("LLRM_CHECK_FLOATSKIP"))
     }
 }
 
@@ -345,7 +343,7 @@ fn _planned(
     unit: &Unit,
     calls: &Calls,
     solved: &Solved,
-    alive: &BTreeSet<ValueId>,
+    alive: &llrm_mir::dense::IdSet<ValueId>,
     proof: &LoopExit,
 ) -> Option<_Plan> {
     let function = unit.function;

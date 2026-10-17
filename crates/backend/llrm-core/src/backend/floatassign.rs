@@ -661,7 +661,7 @@ fn _stacked(
         placement.add_links(&links);
         placement.scan();
         placement.iterate();
-        for bundle in placement.finish() {
+        for bundle in placement.finish().iter() {
             stacked.entry(bundle).or_default().insert(value);
         }
     }
@@ -2055,7 +2055,7 @@ pub fn assigned(
     // The blocks and edges are the body's whatever is spilled, so are the
     // bundles.
     let bundles = spillplacement::bundles(&body);
-    let (mut start, checking) = (0, llrm_support::env_set("LLRM_CHECK_CROWDED"));
+    let (mut start, checking) = (0, llrm_support::env_flag!("LLRM_CHECK_CROWDED"));
     loop {
         #[cfg(test)]
         {

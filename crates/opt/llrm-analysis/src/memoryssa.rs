@@ -126,7 +126,7 @@ use std::rc::Rc;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::stated;
-use llrm_mir::module::{Change, Function, GlobalValue, InstId, ValueId};
+use llrm_mir::module::{Change, Function, GlobalValue, InstId, Operand, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis};
 use llrm_support::hash::IndexMap;
@@ -445,7 +445,7 @@ impl Accesses {
         function: &Function,
     ) -> Self {
         let carried = Self { graph: self.graph.carried(function.mark()), ..self.clone() };
-        if llrm_support::env_set("LLRM_CHECK_CLOBBERS")
+        if llrm_support::env_flag!("LLRM_CHECK_CLOBBERS")
             && let Some((_, kept)) = &*carried.graph.0.borrow()
         {
             let fresh = structure_of(function, &carried);
@@ -660,27 +660,41 @@ pub fn may_clobber(
         && !(low < other_high && other_low < high)
     {
         assert!(
-            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store),
+            !check_clobbers() || !may_clobber_slowly(unit, known, cell, store, None),
             "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
         );
         return false;
     }
-    may_clobber_slowly(unit, known, cell, store)
+    may_clobber_slowly(unit, known, cell, store, None)
 }
 
+/// The full pair test. `remembered`, where given, answers what a pointer is a
+/// constant byte offset from: a walk asks of one cell against many writes, and
+/// the chain of a pointer is the same each time.
 fn may_clobber_slowly(
     unit: &Unit,
     known: Option<&BTreeMap<ValueId, Interval>>,
     cell: &MemRef,
     store: &MemRef,
+    remembered: Option<&dyn Fn(Operand) -> Option<(Operand, i64)>>,
 ) -> bool {
+    let relative = |pointer| match remembered {
+        Some(remembered) => remembered(pointer),
+        None => pointerfacts::offsets(unit.context, unit.layout, unit.function).relative(pointer),
+    };
     #[cfg(test)]
     SLOW_CLOBBERS.with(|asked| asked.set(asked.get() + 1));
-    let offsets = pointerfacts::offsets(unit.context, unit.layout, unit.function);
-    let apart = matches!(
-        (located(cell), located(store)),
-        (Some(one), Some(other)) if offsets.disjoint(one, other)
-    );
+    let apart = match (located(cell), located(store)) {
+        (Some(one), Some(other)) if one.bytes != 0 && other.bytes != 0 => {
+            match (relative(one.pointer), relative(other.pointer)) {
+                (Some(left), Some(right)) if left.0 == right.0 => {
+                    left.1 + one.bytes as i64 <= right.1 || right.1 + other.bytes as i64 <= left.1
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
     // An answer Rust cannot represent is taken to overlap.
     !apart && overlapping(cell, store, known, known, unit.program).unwrap_or(true)
 }
@@ -785,8 +799,7 @@ pub fn same_bytes(
     // it: the scalar a pass reads and writes through the same address, which
     // every load of N joins asks of every store that reaches it.
     if one.pointer.is_some() && one.pointer == other.pointer && one.width == other.width && one.disp == other.disp {
-        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SAMEBYTES")) {
+        if llrm_support::env_flag!("LLRM_CHECK_SAMEBYTES") {
             assert!(
                 covers(unit, one, other) && covers(unit, other, one),
                 "same_bytes: one pointer, width and displacement are not the same bytes: {one:?} {other:?}"
@@ -911,12 +924,12 @@ fn spans(accesses: &[Access]) -> Vec<(u32, u32)> {
 
 fn check_jumps() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_JUMPS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_JUMPS"))
 }
 
 fn check_clobbers() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERS"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CLOBBERS"))
 }
 
 #[cfg(test)]
@@ -995,6 +1008,8 @@ pub struct MemorySSA<'a> {
     /// over.
     index: std::cell::RefCell<Option<Rc<FrameIndex>>>,
     taken: std::cell::Cell<usize>,
+    /// What each pointer asked about is a constant byte offset from.
+    offsets: std::cell::RefCell<llrm_mir::dense::IdMap<ValueId, Option<(Operand, i64)>>>,
     /// While a walk is bounded (`nearest_writes`): the most writes it collects
     /// before it stops.
     limit: std::cell::Cell<Option<usize>>,
@@ -1135,7 +1150,7 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| may_clobber(&self.unit, self.known.as_ref(), cell, store));
+            let found = stores.iter().any(|store| self.may_clobber_cached(cell, store));
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -1156,6 +1171,50 @@ impl MemorySSA<'_> {
             );
         }
         asked[access] = 1 + u8::from(found);
+        found
+    }
+
+    /// `may_clobber`, with the offsets of the pointers remembered.
+    fn may_clobber_cached(
+        &self,
+        cell: &MemRef,
+        store: &MemRef,
+    ) -> bool {
+        // Two references of one frame at fixed displacements, their bytes
+        // apart.
+        if let (Some((frame, low, high)), Some((other_frame, other_low, other_high))) =
+            (crate::regions::displaced_span(cell), crate::regions::displaced_span(store))
+            && frame == other_frame
+            && !(low < other_high && other_low < high)
+        {
+            assert!(
+                !check_clobbers() || !may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, None),
+                "LLRM_CHECK_CLOBBERS: bytes apart in one frame were found to overlap"
+            );
+            return false;
+        }
+        let found =
+            may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, Some(&|pointer| self.relative(pointer)));
+        assert!(
+            !check_clobbers() || found == may_clobber_slowly(&self.unit, self.known.as_ref(), cell, store, None),
+            "LLRM_CHECK_CLOBBERS: the offsets remembered differ from the ones worked out"
+        );
+        found
+    }
+
+    /// `pointerfacts::Offsets::relative` of `pointer`, once for each.
+    fn relative(
+        &self,
+        pointer: Operand,
+    ) -> Option<(Operand, i64)> {
+        let Operand::Value(value) = pointer else {
+            return pointerfacts::offsets(self.unit.context, self.unit.layout, self.unit.function).relative(pointer);
+        };
+        if let Some(found) = self.offsets.borrow().get(&value) {
+            return *found;
+        }
+        let found = pointerfacts::offsets(self.unit.context, self.unit.layout, self.unit.function).relative(pointer);
+        self.offsets.borrow_mut().insert(value, found);
         found
     }
 
@@ -1623,6 +1682,7 @@ pub fn built<'a>(
         stamps: Default::default(),
         index: Default::default(),
         taken: Default::default(),
+        offsets: Default::default(),
         limit: Default::default(),
     }
 }

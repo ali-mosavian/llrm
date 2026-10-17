@@ -184,7 +184,7 @@ pub fn checked(
     let stage = if phase.name().is_empty() { phase.class_name().to_owned() } else { phase.name().to_owned() };
     // The invariance instrument, LLVM's `-g` rule: stripped of meta
     // instructions, every phase must make the same code.
-    let body = if llrm_support::env_set("LLRM_STRIP_META") { without_meta(body) } else { body };
+    let body = if llrm_support::env_flag!("LLRM_STRIP_META") { without_meta(body) } else { body };
     let verifying = crate::support::debug::verifying();
     let owned =
         if verifying { crate::support::debug::timed("lir owned bytes", || body.owned_bytes()) } else { Vec::new() };

@@ -7,6 +7,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [testing](testing.md) | Running the tests |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
 | [ci](ci.md) | CI as the gate: parity with `gate.py run`, private tools, instruction counters |
+| [pgo](pgo.md) | the profile-guided llrm-c: how it is built, when its profile is renewed, how to measure with it |
 | [debugging](debugging.md) | Finding a miscompile in a DOS program, the debug socket and debug symbols |
 | [measurement](measurement/readme.md) | How we measure, the instruments, compile time, comparison with gcc |
 | [fragility](fragility.md) | What broke, or hid a break, and what guards it |

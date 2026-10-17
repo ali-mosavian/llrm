@@ -12,15 +12,16 @@
 //!  in(B)    = after(B) - phis(B)
 //! ```
 //!
-//! Rather than iterate bit sets over every value, `solved` follows each value
-//! from where it is read back to where it is made: a worklist of `Out(block,
-//! value)` and `After(block, value)` facts. A value reaching its defining
-//! block's ordinary operations stops there; one reaching its defining phi
-//! continues along each predecessor edge with that edge's arm. The work is the
-//! size of the live sets, not blocks times values. gcc's
-//! `calculate_live_on_exit` and LLVM's `LiveVariables` walk from each use too.
-//! A phi's arm is live out of the predecessor it comes from, not in the phi's
-//! block.
+//! `solved` is that fixed point on rows of bits, one row per block and a bit
+//! for each value a block boundary can carry (a value read in a block it is
+//! not made in, or taken by a phi): `out` is a union of the successors' rows
+//! and `after` two word-wise operations, passes over the blocks from the last
+//! until nothing changes. The work is the blocks times the words of a row times
+//! the passes; following each value from its reads back to its definition (a
+//! map lookup and a set insert for each value in each block it is live in, the
+//! solver that stood here, kept as the oracle `LLRM_CHECK_LIVENESS` holds it
+//! to) cost ~670 instructions a pair on `joins`. A phi's arm is live out of the
+//! predecessor it comes from, not in the phi's block.
 //!
 //! `live_of` follows only the values it is given (a manager analysis brought up
 //! to date for what a change named), from their reads, and gives their sets
@@ -139,7 +140,7 @@ fn arm(
 fn _defines(
     function: &Function,
     block: BlockId,
-) -> BTreeSet<ValueId> {
+) -> IdSet<ValueId> {
     function.block(block).instructions().iter().filter_map(|&one| function.instruction(one).result).collect()
 }
 
@@ -147,8 +148,8 @@ fn _defines(
 fn _exposed(
     function: &Function,
     block: BlockId,
-) -> BTreeSet<ValueId> {
-    let mut live = BTreeSet::new();
+) -> IdSet<ValueId> {
+    let mut live = IdSet::new();
     for op in split(function, block).1.into_iter().rev() {
         if let Some(one) = op.result {
             live.remove(&one);
@@ -159,10 +160,20 @@ fn _exposed(
 }
 
 /// Values the caller supplied: used somewhere, defined by nothing here.
-pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
-    let defined: BTreeSet<ValueId> = function.layout().iter().flat_map(|&block| _defines(function, block)).collect();
-    let used: BTreeSet<ValueId> = function.walk().flat_map(|(_, one)| reads(function.instruction(one))).collect();
-    used.difference(&defined).copied().collect()
+pub fn entry_values(function: &Function) -> IdSet<ValueId> {
+    let mut defined = IdSet::new();
+    for &block in function.layout() {
+        defined.extend(_defines(function, block).iter());
+    }
+    let mut arriving = IdSet::new();
+    for (_, one) in function.walk() {
+        for value in reads(function.instruction(one)) {
+            if !defined.contains(&value) {
+                arriving.insert(value);
+            }
+        }
+    }
+    arriving
 }
 
 /// The most values live at once -- anywhere, or in `inside`.
@@ -367,11 +378,8 @@ thread_local! {
 
 /// What is live at each block's entry and exit: the least solution of
 /// `out(B) = U in(S) + arms of S's live phis`, `after(B) = out(B) - defs(B) +
-/// exposed(B)`, `in(B) = after(B) - phis(B)`. Each value is followed from
-/// where it is read back to where it is made, so the work is the size of the
-/// live sets and not the blocks times the values (bit sets over all of them:
-/// 4.3x a doubling on `branches`). gcc's `calculate_live_on_exit` and LLVM's
-/// `LiveVariables` both walk from each use.
+/// exposed(B)`, `in(B) = after(B) - phis(B)`, on rows of bits over the values a
+/// block boundary can carry (the module header).
 pub fn live(function: &Function) -> Liveness {
     let found = solved(function, &|_| true);
     #[cfg(test)]
@@ -527,7 +535,7 @@ pub fn ranges_of(
                 if !(read || settled(result, home)) {
                     continue;
                 }
-                for from in before.get_or_insert_with(home, || function.predecessors(home)).clone() {
+                for from in before.get_or_insert_with(home, || function.predecessors(home).into()).clone() {
                     if arm(phi, from) == Some(value) {
                         pending.push(Reach::Out(from, value));
                     }
@@ -576,7 +584,7 @@ pub fn ranges_of(
                         continue;
                     }
                     found.get_or_insert_with(value, Range::default).into.push(id(block));
-                    let from = before.get_or_insert_with(block, || function.predecessors(block));
+                    let from = before.get_or_insert_with(block, || function.predecessors(block).into());
                     pending.extend(from.iter().map(|&from| Reach::Out(from, value)));
                 }
             }
@@ -594,6 +602,185 @@ fn solved(
     wanted: &dyn Fn(ValueId) -> bool,
 ) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
+    let found = solved_dataflow(function, wanted);
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
+        assert!(
+            found == solved_by_reach(function, wanted),
+            "the word-parallel liveness is not the one followed from the uses"
+        );
+    }
+    found
+}
+
+/// `solved` as a dataflow over rows of bits, a bit for each value a block
+/// boundary can carry (a value read in a block it is not made in, or taken by a
+/// phi): a block is a union of its successors' rows, so the work is the blocks
+/// times the words of a row times the passes to a fixed point, not a step for
+/// each value in each block it is live in.
+fn solved_dataflow(
+    function: &Function,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> Liveness {
+    let layout = function.layout();
+    let count = layout.len();
+    let mut at_index = IdMap::<BlockId, usize>::new();
+    for (position, &block) in layout.iter().enumerate() {
+        at_index.insert(block, position);
+    }
+    let blocks: Vec<(Vec<&Instruction>, Vec<&Instruction>)> =
+        layout.iter().map(|&block| split(function, block)).collect();
+    let arriving = entry_values(function);
+    let mut successors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (position, &block) in layout.iter().enumerate() {
+        for successor in function.successors(block) {
+            if let Some(&to) = at_index.get(&successor) {
+                if !successors[position].contains(&to) {
+                    successors[position].push(to);
+                }
+            }
+        }
+    }
+    // The values a boundary can carry, each with a slot.
+    let mut slots = IdMap::<ValueId, usize>::new();
+    let mut values: Vec<ValueId> = Vec::new();
+    let mut slot = |value: ValueId, slots: &mut IdMap<ValueId, usize>| -> usize {
+        if let Some(&at) = slots.get(&value) {
+            return at;
+        }
+        values.push(value);
+        slots.insert(value, values.len() - 1);
+        values.len() - 1
+    };
+    let mut used: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (position, &block) in layout.iter().enumerate() {
+        for value in _exposed(function, block).iter() {
+            if wanted(value) && (position != 0 || !arriving.contains(&value)) {
+                used[position].push(slot(value, &mut slots));
+            }
+        }
+    }
+    // Per block, its phis: the slot of the result when it can be live, and each
+    // predecessor's arm.
+    struct Taken {
+        result: Option<usize>,
+        arms: Vec<(usize, usize)>,
+    }
+    let mut taken: Vec<Vec<Taken>> = Vec::new();
+    let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); count];
+    for (from, to) in successors.iter().enumerate().flat_map(|(from, tos)| tos.iter().map(move |&to| (from, to))) {
+        predecessors[to].push(from);
+    }
+    for (position, (phis, _)) in blocks.iter().enumerate() {
+        let mut here = Vec::new();
+        for phi in phis {
+            let result = phi.result.filter(|value| wanted(*value)).map(|value| slot(value, &mut slots));
+            let mut arms = Vec::new();
+            for &from in &predecessors[position] {
+                if let Some(value) = arm(phi, layout[from]).filter(|value| wanted(*value)) {
+                    arms.push((from, slot(value, &mut slots)));
+                }
+            }
+            here.push(Taken { result, arms });
+        }
+        taken.push(here);
+    }
+    let width = values.len().div_ceil(64).max(1);
+    let row = |rows: &Vec<u64>, at: usize| -> std::ops::Range<usize> {
+        let _ = rows;
+        at * width..(at + 1) * width
+    };
+    let mut uses = vec![0u64; count * width];
+    let mut made = vec![0u64; count * width];
+    let mut phi_results = vec![0u64; count * width];
+    for position in 0..count {
+        for &at in &used[position] {
+            uses[position * width + at / 64] |= 1 << (at % 64);
+        }
+        for op in &blocks[position].1 {
+            if let Some(&at) = op.result.and_then(|result| slots.get(&result)) {
+                made[position * width + at / 64] |= 1 << (at % 64);
+            }
+        }
+        for phi in &taken[position] {
+            if let Some(at) = phi.result {
+                phi_results[position * width + at / 64] |= 1 << (at % 64);
+            }
+        }
+    }
+    for value in arriving.iter() {
+        if let Some(&at) = slots.get(&value) {
+            made[at / 64] |= 1 << (at % 64);
+        }
+    }
+    let mut after = vec![0u64; count * width];
+    let mut out = vec![0u64; count * width];
+    let mut scratch = vec![0u64; width];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for position in (0..count).rev() {
+            #[cfg(test)]
+            STEPS.with(|steps| steps.set(steps.get() + 1));
+            scratch.fill(0);
+            for &to in &successors[position] {
+                for word in 0..width {
+                    scratch[word] |= after[to * width + word] & !phi_results[to * width + word];
+                }
+                for phi in &taken[to] {
+                    let Some(result) = phi.result else { continue };
+                    if after[to * width + result / 64] & (1 << (result % 64)) == 0 {
+                        continue;
+                    }
+                    for &(from, at) in &phi.arms {
+                        if from == position {
+                            scratch[at / 64] |= 1 << (at % 64);
+                        }
+                    }
+                }
+            }
+            let range = row(&out, position);
+            if out[range.clone()] != scratch[..] {
+                out[range].copy_from_slice(&scratch);
+                changed = true;
+            }
+            for word in 0..width {
+                let now = uses[position * width + word] | (scratch[word] & !made[position * width + word]);
+                if after[position * width + word] != now {
+                    after[position * width + word] = now;
+                    changed = true;
+                }
+            }
+        }
+    }
+    let make = |rows: &Vec<u64>, position: usize, drop: &[u64]| -> IdSet<ValueId> {
+        let mut set = IdSet::new();
+        for word in 0..width {
+            let mut left = rows[position * width + word] & !drop[word];
+            while left != 0 {
+                let bit = left.trailing_zeros() as usize;
+                left &= left - 1;
+                set.insert(values[word * 64 + bit]);
+            }
+        }
+        set
+    };
+    let none = vec![0u64; width];
+    let mut found = Liveness { live_in: BTreeMap::new(), live_out: BTreeMap::new() };
+    for (position, &block) in layout.iter().enumerate() {
+        let dropped = &phi_results[position * width..(position + 1) * width];
+        found.live_in.insert(id(block), make(&after, position, dropped));
+        found.live_out.insert(id(block), make(&out, position, &none));
+    }
+    found
+}
+
+/// `solved` followed from the uses, each value back to where it is made: the
+/// oracle of `solved_dataflow` (`LLRM_CHECK_LIVENESS`), and cheap where the
+/// live sets are small against blocks times values.
+fn solved_by_reach(
+    function: &Function,
+    wanted: &dyn Fn(ValueId) -> bool,
+) -> Liveness {
     let layout = function.layout();
     let mut at_index = IdMap::<BlockId, usize>::new();
     for (position, &block) in layout.iter().enumerate() {
@@ -612,7 +799,7 @@ fn solved(
         }
     }
     let arriving = entry_values(function);
-    for &value in &arriving {
+    for value in arriving.iter() {
         made.insert(value, (0, false));
     }
     let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); layout.len()];
@@ -637,7 +824,7 @@ fn solved(
     }
     let mut pending = Vec::new();
     for (position, &block) in layout.iter().enumerate() {
-        for value in _exposed(function, block) {
+        for value in _exposed(function, block).iter() {
             if wanted(value) && (position != 0 || !arriving.contains(&value)) {
                 pending.push(Reach::After(position, value));
             }
@@ -720,9 +907,9 @@ pub(crate) fn live_dense(function: &Function) -> Liveness {
         blocks.iter().map(|(_, ops)| bits(&mut ops.iter().filter_map(|op| op.result))).collect();
     let phi_defines: Vec<Bits> =
         blocks.iter().map(|(phis, _)| bits(&mut phis.iter().filter_map(|phi| phi.result))).collect();
-    let mut exposed: Vec<Bits> = layout.iter().map(|&block| bits(&mut _exposed(function, block).into_iter())).collect();
+    let mut exposed: Vec<Bits> = layout.iter().map(|&block| bits(&mut _exposed(function, block).iter())).collect();
     if !layout.is_empty() {
-        let arriving = bits(&mut entry_values(function).into_iter());
+        let arriving = bits(&mut entry_values(function).iter());
         op_defines[0].union_with(&arriving);
         exposed[0].subtract(&arriving);
     }
@@ -1079,7 +1266,7 @@ top:
 ",
         );
         let f = function(&module, "f");
-        assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
+        assert_eq!(entry_values(f), [value(f, "read")].into_iter().collect::<IdSet<_>>());
     }
 
     /// The bit-set fixed point made every block's sets as wide as the

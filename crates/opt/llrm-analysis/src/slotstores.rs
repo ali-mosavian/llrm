@@ -106,7 +106,7 @@ pub fn reaching(
     loads: &IdSet<InstId>,
 ) -> IdMap<InstId, Vec<InstId>> {
     let found = ssa_reaching(unit, loads, false);
-    if llrm_support::env_set("LLRM_CHECK_SLOTS") {
+    if llrm_support::env_flag!("LLRM_CHECK_SLOTS") {
         let by_dataflow = ssa_reaching(unit, loads, true);
         assert!(
             found == by_dataflow,

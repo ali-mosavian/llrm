@@ -1552,7 +1552,7 @@ impl Pressure {
         });
         let mut touched = BTreeSet::<i64>::new();
         renewed(&mut found, &mut placed, &named, computed, &mut touched);
-        if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
             let fresh = Pressure::of(context, function, scales);
             let flat = |sets: &BTreeMap<i64, IdSet<ValueId>>| {
                 sets.iter()
@@ -1579,7 +1579,7 @@ impl Pressure {
                 made.stepped = stepped;
             }
         }
-        if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
+        if llrm_support::env_flag!("LLRM_CHECK_PRESSURE") {
             for (at, kept) in made.points.0.borrow().iter() {
                 let block = cfg::block(*at);
                 let fresh = liveness::live_points(function, &made.found, block);
