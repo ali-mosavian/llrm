@@ -223,7 +223,8 @@ pub fn decide(
         }
     }
     let state = State::default();
-    let exposed = llrm_analysis::memory::exposed_frames(&memory);
+    let exposed: llrm_mir::dense::IdSet<llrm_mir::module::ValueId> =
+        llrm_analysis::memory::exposed_frames(&memory).into_iter().collect();
     for (at, one) in shape.loops.iter().enumerate() {
         let _ = at;
         let ctx = LoopCtx { function: unit.function, shape: &shape, loop_: one, innermost: &innermost, state: &state };
@@ -283,7 +284,7 @@ fn run_on_loop(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-    exposed: &std::collections::BTreeSet<llrm_mir::module::ValueId>,
+    exposed: &llrm_mir::dense::IdSet<llrm_mir::module::ValueId>,
 ) -> LoopDecisions {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);

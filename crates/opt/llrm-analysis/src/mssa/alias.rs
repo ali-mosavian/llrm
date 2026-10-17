@@ -93,7 +93,7 @@ pub struct AliasQuery<'a> {
     /// for the test that holds the cost linear.
     cache_steps: std::cell::Cell<u64>,
     /// The allocas whose address is exposed, found when first asked.
-    exposed: std::cell::OnceCell<std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+    exposed: std::cell::OnceCell<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -268,7 +268,7 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
-        !self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit)).contains(&alloca)
+        !self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit).into_iter().collect()).contains(&alloca)
     }
 
     /// Whether `pointer` is derived only from objects other than the alloca
@@ -315,7 +315,7 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
-        let exposed = self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit));
+        let exposed = self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit).into_iter().collect());
         if exposed.contains(&alloca) {
             return false;
         }

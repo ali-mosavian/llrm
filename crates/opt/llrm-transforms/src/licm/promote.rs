@@ -1,7 +1,6 @@
 //! `collectPromotionCandidates` and `promoteLoopAccessesToScalars`
 //! (`LICM.cpp`): the decisions only, nothing is rewritten.
 
-use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use llrm_analysis::aliassets::AliasSetTracker;
@@ -9,6 +8,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{self, Outer};
@@ -111,7 +111,7 @@ fn stores_with_invariant_aa_tags(
     ctx: &LoopCtx,
     mssa: &Mssa,
     aa: &AliasQuery,
-) -> BTreeSet<InstId> {
+) -> IdSet<InstId> {
     let mut by_location: Vec<(Rc<Location>, Vec<InstId>)> = Vec::new();
     for inst in memory_accesses(ctx, mssa) {
         if !matches!(unit.function.instruction(inst).opcode, Opcode::Store { .. })
@@ -133,7 +133,7 @@ fn stores_with_invariant_aa_tags(
     }
     // This only looks at explicit exiting blocks.
     let exiting = exiting_blocks(ctx);
-    let mut found = BTreeSet::new();
+    let mut found = IdSet::new();
     for (_, stores) in &by_location {
         if exiting.iter().all(|&exiting| {
             stores
@@ -145,7 +145,9 @@ fn stores_with_invariant_aa_tags(
                     },
                 )
         }) {
-            found.extend(stores.iter().copied());
+            for &store in stores {
+                found.insert(store);
+            }
         }
     }
     found
@@ -169,9 +171,9 @@ pub fn collect_promotion_candidates(
     let mut tracker = AliasSetTracker::new(aa);
     // Only conditionally executed stores need this, so compute it on demand to
     // keep the common case free.
-    let mut invariant_tags: Option<BTreeSet<InstId>> = None;
+    let mut invariant_tags: Option<IdSet<InstId>> = None;
     // Populate AST with potentially promotable accesses.
-    let mut attempting: BTreeSet<InstId> = BTreeSet::new();
+    let mut attempting: IdSet<InstId> = IdSet::new();
     let accesses = memory_accesses(ctx, mssa);
     for &inst in &accesses {
         if !is_potentially_promotable(unit, ctx, inst) {
@@ -263,7 +265,7 @@ fn is_alloca(
 /// function. DEVIATE: `PointerMayBeCapturedBefore` asks only before the loop
 /// header; this asks of the whole function, which captures more.
 fn is_captured(
-    exposed: &BTreeSet<ValueId>,
+    exposed: &IdSet<ValueId>,
     object: Operand,
 ) -> bool {
     match object {
@@ -276,7 +278,7 @@ fn is_captured(
 /// unwind occurs inside the loop (an alloca whose address is not captured).
 fn is_not_visible_on_unwind_in_loop(
     unit: &passes::Unit,
-    exposed: &BTreeSet<ValueId>,
+    exposed: &IdSet<ValueId>,
     object: Operand,
 ) -> bool {
     is_alloca(unit, object) && !is_captured(exposed, object)
@@ -322,7 +324,7 @@ pub fn promote_loop_accesses_to_scalars(
     outer: &Outer,
     ctx: &LoopCtx,
     safety: &LoopSafety,
-    exposed: &BTreeSet<ValueId>,
+    exposed: &IdSet<ValueId>,
     exit_blocks: &[BlockId],
     pointers: &[Operand],
     has_reads_outside_set: bool,
