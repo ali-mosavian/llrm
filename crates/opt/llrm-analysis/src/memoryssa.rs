@@ -799,8 +799,7 @@ pub fn same_bytes(
     // it: the scalar a pass reads and writes through the same address, which
     // every load of N joins asks of every store that reaches it.
     if one.pointer.is_some() && one.pointer == other.pointer && one.width == other.width && one.disp == other.disp {
-        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SAMEBYTES")) {
+        if llrm_support::env_flag!("LLRM_CHECK_SAMEBYTES") {
             assert!(
                 covers(unit, one, other) && covers(unit, other, one),
                 "same_bytes: one pointer, width and displacement are not the same bytes: {one:?} {other:?}"
@@ -1291,7 +1290,7 @@ impl MemorySSA<'_> {
                                 for byte in *first..*last {
                                     map.insert(key(object.id(), byte), child);
                                 }
-                                if object.addressed {
+                                if object.addressed() {
                                     escaping = Some(child);
                                     if seen_addressed.insert(object.id()) {
                                         index.addressed.push(*object);
@@ -1424,7 +1423,7 @@ impl MemorySSA<'_> {
                 .filter_map(|byte| version.get(&key(object.id(), byte)).copied())
                 .max_by_key(|found| self.span[*found].0);
             let root = index.root[above];
-            let reaches_others = object.addressed && {
+            let reaches_others = object.addressed() && {
                 let known = index.aliased.borrow().get(&object.id()).copied();
                 known.unwrap_or_else(|| {
                     let found = index
