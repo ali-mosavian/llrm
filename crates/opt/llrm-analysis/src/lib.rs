@@ -97,6 +97,7 @@ pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
+pub mod constraints;
 pub mod consts;
 #[cfg(test)]
 mod corpus_tests;

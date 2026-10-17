@@ -284,7 +284,7 @@ fn _implied(
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
-fn _jump(
+pub(crate) fn _jump(
     function: &mut Function,
     last: InstId,
     target: BlockId,

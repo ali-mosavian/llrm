@@ -719,6 +719,9 @@ fn llvm_order(
                 phiopt("phiopt@690"),
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
             ]);
+            if std::env::var_os("LLRM_EXP_CE").is_some() {
+                list.push(slot("constraint-elim@697", Box::new(crate::constraint_elim::ConstraintElimination)));
+            }
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),

@@ -94,6 +94,7 @@ pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
 mod deadargs_tests;
+pub mod constraint_elim;
 pub mod decide;
 pub mod dse;
 pub mod earlycse;
