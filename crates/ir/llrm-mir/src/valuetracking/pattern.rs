@@ -281,3 +281,25 @@ pub fn match_simple_recurrence<'a>(
     }
     None
 }
+
+/// `m_LogicalAnd(m_Value(), m_Value())`: `v` is `a & b` or `select a, b,
+/// false` on `i1`: the two operands.
+pub fn logical_and(
+    q: &Query,
+    v: Operand,
+) -> Option<(Operand, Operand)> {
+    let (_, instruction) = q.instruction_of(v)?;
+    let one_bit = |ty| q.context.types.int_bits(ty) == Some(1);
+    if !one_bit(instruction.ty) {
+        return None;
+    }
+    match instruction.opcode {
+        Opcode::Binary(BinaryOp::And) => Some((instruction.operands[0], instruction.operands[1])),
+        Opcode::Select => {
+            let (cond, true_value, false_value) =
+                (instruction.operands[0], instruction.operands[1], instruction.operands[2]);
+            (q.type_of(cond) == Some(instruction.ty) && zero(q, false_value)).then_some((cond, true_value))
+        }
+        _ => None,
+    }
+}
