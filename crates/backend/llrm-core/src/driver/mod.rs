@@ -161,6 +161,13 @@ pub fn compiled(
                 &*options.arch,
             )
         })?;
+        // What a frontend asks the linker for though nothing names it.
+        for name in &hir.requests {
+            assembled.requests.insert(name.clone());
+            if !assembled.externs.iter().any(|(one, _)| one == name) {
+                assembled.externs.push((name.clone(), "near".to_owned()));
+            }
+        }
         if let Some(debug) = assembled.debug.as_mut() {
             debug.format = options.debug_format;
             debug.cfa = options.cfa_locations();
@@ -172,6 +179,7 @@ pub fn compiled(
                 module,
                 mir.segments.data_space,
                 program.constant_segment.as_deref(),
+                &program.bracketed_segments,
                 options.machine.far_bss,
                 options.machine.bss_begin,
                 options.arch.layout().segment_bytes(),
@@ -264,7 +272,9 @@ pub fn emitted(
     options: &Options,
 ) -> Result<(Program, Vec<HashMap<i64, GlobalId>>), String> {
     // Whichever frontend made it, a program is checked before it is lowered.
-    crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
+    if llrm_support::debug::verifying() {
+        crate::support::debug::timed("hir verify", || llrm_hir::verify::verify(program)).map_err(|why| why.0)?;
+    }
     let emitted = timed("hir to mir", || llrm_hir::mir::emit(program, &options.arch.layout()));
     if let Some((name, why)) = emitted.iter().find_map(|one| one.refused.first()) {
         return Err(format!("@{name}: {why}"));
@@ -299,7 +309,9 @@ pub fn linked(
     target: std::rc::Rc<dyn llrm_mir::target::Machine>,
 ) -> Result<Program, String> {
     let program = Program::new(modules, target)?.with_runtime(runtime)?;
-    timed("mir verify frontend", || verified(&program, "the frontend"))?;
+    if llrm_support::debug::verifying() {
+        timed("mir verify frontend", || verified(&program, "the frontend"))?;
+    }
     Ok(program)
 }
 

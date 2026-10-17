@@ -210,7 +210,7 @@ fn _numbers(
         // With no loop to leave the answer is the manager's, where it was of
         // these writes.
         let shared = (exits.is_empty() && *calls == manager::writes(context, layout, function, analyses))
-            .then(|| analyses.get::<manager::ThroughMemory>(context, layout, function));
+            .then(|| analyses.get_exact::<manager::ThroughMemory>(context, layout, function));
         let facts = match shared.as_deref() {
             Some(Ok(through)) => through.clone(),
             _ => consts::known_walked_over(&unit, calls, &exits),
@@ -300,17 +300,20 @@ fn _folded_phi_edges(
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let successors = graph.iter().map(|block| (block.at, &block.succ)).collect::<IndexMap<_, _>>();
-    let none = BTreeSet::new();
+    let none: &[i64] = &[];
     for &block in function.layout() {
         let at = cfg::id(block);
-        let parents = predecessors.get(&at).unwrap_or(&none);
+        let parents = predecessors.get(&at).unwrap_or(none);
         if parents.len() < 2 {
             continue;
         }
         let phis = edges::phis(function, block)
             .into_iter()
             .filter(|&phi| {
-                arms(function, phi).iter().map(|&(_, from)| cfg::id(from)).collect::<BTreeSet<_>>() == *parents
+                let mut arms: Vec<i64> = arms(function, phi).iter().map(|&(_, from)| cfg::id(from)).collect();
+                arms.sort_unstable();
+                arms.dedup();
+                arms == *parents
             })
             .collect::<Vec<_>>();
         let Some(&first) = phis.first() else {
@@ -322,9 +325,7 @@ fn _folded_phi_edges(
 
         let mut corridor = vec![at];
         while let [next] = successors[corridor.last().expect("nonempty")][..] {
-            if corridor.contains(&next)
-                || predecessors.get(&next) != Some(&BTreeSet::from([*corridor.last().expect("nonempty")]))
-            {
+            if corridor.contains(&next) || !predecessors.are(&next, &[*corridor.last().expect("nonempty")]) {
                 break;
             }
             corridor.push(next);

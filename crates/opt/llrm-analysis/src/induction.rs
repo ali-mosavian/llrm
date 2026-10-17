@@ -561,7 +561,7 @@ fn _control(
     // that goes nowhere ends the program, and any other way out must stop it:
     // the count holds whenever it goes on. (`successors` made a list for each
     // block, and a nest of loops asked it of every block of every loop.)
-    let mut elsewhere = BTreeSet::new();
+    let mut elsewhere = llrm_mir::dense::IdSet::<i64>::new();
     for &at in inside {
         let mut goes = false;
         if let Some(last) = function.terminator(cfg::block(at)) {
@@ -703,7 +703,7 @@ pub fn counted_unless_stopped(
     if let (false, Some(held), Some(registers)) = (inbounds, unit.counted, unit.registers) {
         if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
             if let Some(found) = held.get(&loop_.header) {
-                if llrm_support::env_set("LLRM_CHECK_COUNTED") {
+                if llrm_support::env_flag!("LLRM_CHECK_COUNTED") {
                     assert!(
                         *found == _counted_unless_stopped(unit, loop_, registers, false, false),
                         "the counted proofs a unit carries are not those of the body it stands over: stale"

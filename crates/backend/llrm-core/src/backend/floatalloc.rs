@@ -1014,8 +1014,8 @@ fn _converted(
         None => (std::borrow::Cow::Borrowed(body), live_in, live_out, bundles),
     };
     let body = &*body;
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
-        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    let floats = |set: &llrm_mir::dense::IdSet<u32>| -> BTreeSet<u32> {
+        set.iter().filter(|value| floating.contains(value)).collect()
     };
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     for block in &body.blocks {
@@ -1120,8 +1120,8 @@ fn _split_for_the_stack(
     (live_in, live_out): (&Live, &Live),
     bundles: &spillplacement::Bundles,
 ) -> Option<LirBody> {
-    let floats = |set: &BTreeSet<u32>| -> BTreeSet<u32> {
-        set.iter().copied().filter(|value| floating.contains(value)).collect()
+    let floats = |set: &llrm_mir::dense::IdSet<u32>| -> BTreeSet<u32> {
+        set.iter().filter(|value| floating.contains(value)).collect()
     };
     let mut held: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
     let mut entries: IndexMap<i64, usize> = IndexMap::default();

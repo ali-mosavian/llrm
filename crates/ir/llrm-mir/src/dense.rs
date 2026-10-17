@@ -32,6 +32,16 @@ impl Dense for usize {
     }
 }
 
+/// A block's address (`cfg::id`): its position in the function, never negative.
+impl Dense for i64 {
+    fn index(self) -> usize {
+        usize::try_from(self).expect("a dense address is not negative")
+    }
+    fn at(index: usize) -> Self {
+        i64::try_from(index).expect("an id fits i64")
+    }
+}
+
 /// A set of ids, a bit each.
 #[derive(Clone)]
 pub struct IdSet<K> {
@@ -99,6 +109,79 @@ impl<K: Dense> IdSet<K> {
     pub fn clear(&mut self) {
         self.words.fill(0);
         self.len = 0;
+    }
+
+    /// Whether every member of this set is in `other`.
+    pub fn is_subset(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.words.iter().enumerate().all(|(at, word)| word & !other.words.get(at).copied().unwrap_or(0) == 0)
+    }
+
+    /// Whether no member is in both.
+    pub fn is_disjoint(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.words.iter().zip(&other.words).all(|(one, two)| one & two == 0)
+    }
+
+    /// Removes and returns the least member.
+    pub fn pop_first(&mut self) -> Option<K> {
+        let (at, word) = self.words.iter_mut().enumerate().find(|(_, word)| **word != 0)?;
+        let bit = word.trailing_zeros() as usize;
+        *word &= *word - 1;
+        self.len -= 1;
+        Some(K::at(at * 64 + bit))
+    }
+
+    /// Takes the greatest member out (a worklist that works from the top, as
+    /// `BTreeSet::pop_last`).
+    pub fn pop_last(&mut self) -> Option<K> {
+        let (at, word) = self.words.iter().enumerate().rfind(|(_, word)| **word != 0)?;
+        let bit = 63 - word.leading_zeros() as usize;
+        self.words[at] &= !(1 << bit);
+        self.len -= 1;
+        Some(K::at(at * 64 + bit))
+    }
+
+    /// The members not in `other`, ascending.
+    pub fn difference<'a>(
+        &'a self,
+        other: &'a Self,
+    ) -> impl Iterator<Item = K> + 'a {
+        self.iter().filter(|key| !other.contains(key))
+    }
+
+    /// Adds every member of `other`; whether any was new.
+    pub fn union_with(
+        &mut self,
+        other: &Self,
+    ) -> bool {
+        if self.words.len() < other.words.len() {
+            self.words.resize(other.words.len(), 0);
+        }
+        let mut len = 0;
+        for (at, word) in self.words.iter_mut().enumerate() {
+            *word |= other.words.get(at).copied().unwrap_or(0);
+            len += word.count_ones() as usize;
+        }
+        let grew = len != self.len;
+        self.len = len;
+        grew
+    }
+
+    /// Only the members `keep` says to.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(K) -> bool,
+    ) {
+        for key in self.iter().collect::<Vec<_>>() {
+            if !keep(key) {
+                self.remove(&key);
+            }
+        }
     }
 
     /// The members, ascending.
@@ -211,6 +294,21 @@ impl<K: Dense, V> IdMap<K, V> {
         key: &K,
     ) -> bool {
         self.get(key).is_some()
+    }
+
+    /// Only the entries `keep` says to.
+    pub fn retain(
+        &mut self,
+        mut keep: impl FnMut(K, &mut V) -> bool,
+    ) {
+        for (at, slot) in self.slots.iter_mut().enumerate() {
+            if let Some(value) = slot
+                && !keep(K::at(at), value)
+            {
+                *slot = None;
+                self.len -= 1;
+            }
+        }
     }
 
     /// The value `key` had.
@@ -346,6 +444,45 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
+
+    /// Block addresses stand in for the B-trees of them (`BTreeSet<i64>`,
+    /// `BTreeMap<i64, _>`): the same members in the same ascending order,
+    /// and the set operations the passes used on them.
+    #[test]
+    fn test_a_set_of_block_addresses_agrees_with_the_btree_it_replaces() {
+        let (a, b): (Vec<i64>, Vec<i64>) =
+            ((0..300).filter(|n| n % 3 != 0).collect(), (0..300).filter(|n| n % 2 == 0).collect());
+        let (set_a, set_b): (IdSet<i64>, IdSet<i64>) = (a.iter().copied().collect(), b.iter().copied().collect());
+        let (tree_a, tree_b): (BTreeSet<i64>, BTreeSet<i64>) =
+            (a.iter().copied().collect(), b.iter().copied().collect());
+        assert_eq!(set_a.iter().collect::<Vec<_>>(), tree_a.iter().copied().collect::<Vec<_>>());
+        assert_eq!(
+            set_a.difference(&set_b).collect::<Vec<_>>(),
+            tree_a.difference(&tree_b).copied().collect::<Vec<_>>()
+        );
+        assert_eq!(set_a.is_subset(&set_b), tree_a.is_subset(&tree_b));
+        assert!(IdSet::<i64>::from_iter([2, 4]).is_subset(&set_b) && !set_a.is_subset(&set_b));
+        assert_eq!(set_a.is_disjoint(&set_b), tree_a.is_disjoint(&tree_b));
+        let mut joined = set_a.clone();
+        assert!(joined.union_with(&set_b) && !joined.union_with(&set_b));
+        assert_eq!(joined.iter().collect::<Vec<_>>(), tree_a.union(&tree_b).copied().collect::<Vec<_>>());
+        assert_eq!(joined.len(), tree_a.union(&tree_b).count());
+        let mut queue = set_a.clone();
+        let mut tree = tree_a.clone();
+        while let Some(first) = tree.pop_first() {
+            assert_eq!(queue.pop_first(), Some(first));
+        }
+        assert_eq!((queue.pop_first(), queue.len()), (None, 0));
+    }
+
+    /// A map keeps what `retain` says to, ascending, and counts it.
+    #[test]
+    fn test_a_map_of_block_addresses_retains_and_counts() {
+        let mut map: IdMap<i64, i64> = (0..10).map(|n| (n, n * n)).collect();
+        map.retain(|at, _| at % 3 == 0);
+        assert_eq!(map.iter().map(|(at, value)| (at, *value)).collect::<Vec<_>>(), [(0, 0), (3, 9), (6, 36), (9, 81)]);
+        assert_eq!(map.len(), 4);
+    }
 
     /// A set agrees with a `BTreeSet` of the same inserts and removes:
     /// membership, count, ascending order, what each call returns.
@@ -858,5 +995,30 @@ mod share_tests {
         one.insert(3, 99);
         assert!(!one.same(&two));
         assert_eq!(std::thread::spawn(move || two.get(&3).copied()).join().unwrap(), Some(3));
+    }
+
+    /// A worklist that works from the top takes the greatest id out each time,
+    /// as `BTreeSet::pop_last` does, and allocates nothing once the set is
+    /// sized.
+    #[test]
+    fn pop_last_takes_the_greatest_member_out_as_a_btree_set_does() {
+        use super::IdSet;
+        let ids = [3_usize, 64, 65, 500, 7, 4095];
+        let mut set: IdSet<usize> = ids.iter().copied().collect();
+        let mut tree: std::collections::BTreeSet<usize> = ids.iter().copied().collect();
+        loop {
+            let (one, other) = (set.pop_last(), tree.pop_last());
+            assert_eq!(one, other);
+            assert_eq!(set.len(), tree.len());
+            if one.is_none() {
+                break;
+            }
+            // Pushing back below the top keeps both in step.
+            if tree.len() == 3 {
+                set.insert(10);
+                tree.insert(10);
+            }
+        }
+        assert!(set.is_empty() && IdSet::<usize>::new().pop_last().is_none());
     }
 }

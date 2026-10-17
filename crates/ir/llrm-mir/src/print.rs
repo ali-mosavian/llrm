@@ -92,6 +92,158 @@ pub fn body(
     Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
+/// A 128-bit digest (not a cryptographic one) of what `body` prints, without
+/// printing it: the same for two bodies that print alike (up to value and block
+/// numbering), and, but for a collision of 2^-128, different for two that do
+/// not. The fixed point keeps one of every state it has been in to know a
+/// cycle, and a printed body (formatted a line at a time, then held and
+/// compared) was 1.4% of a d_faces compile.
+pub fn fingerprint(function: &Function) -> u128 {
+    use std::hash::{Hash, Hasher};
+
+    /// Two multiply-and-rotate hashes (rustc's Fx) with different salts and
+    /// multipliers, both fed what the other is: not keyed, for input no one
+    /// chooses against it.
+    struct Wide(u64, u64);
+    impl Wide {
+        fn add(
+            &mut self,
+            word: u64,
+        ) {
+            self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+            self.1 = (self.1.rotate_left(23) ^ word).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        }
+    }
+    impl Hasher for Wide {
+        fn write(
+            &mut self,
+            bytes: &[u8],
+        ) {
+            let mut chunks = bytes.chunks_exact(8);
+            for chunk in &mut chunks {
+                self.add(u64::from_le_bytes(chunk.try_into().expect("eight bytes")));
+            }
+            for &byte in chunks.remainder() {
+                self.add(u64::from(byte));
+            }
+        }
+
+        fn write_u8(
+            &mut self,
+            word: u8,
+        ) {
+            self.add(u64::from(word));
+        }
+
+        fn write_u32(
+            &mut self,
+            word: u32,
+        ) {
+            self.add(u64::from(word));
+        }
+
+        fn write_u64(
+            &mut self,
+            word: u64,
+        ) {
+            self.add(word);
+        }
+
+        fn write_usize(
+            &mut self,
+            word: usize,
+        ) {
+            self.add(word as u64);
+        }
+
+        fn finish(&self) -> u64 {
+            self.0
+        }
+    }
+    let mut digest = Wide(0, 0x2545_f491_4f6c_dd1d);
+    // The slots `Slots` gives: parameters, then each block and its results in
+    // layout order, a name where there is one, else the next number; what is
+    // hashed is the slot where the text shows it, not where it is made.
+    let mut values = crate::dense::IdMap::<ValueId, (Option<&str>, u32)>::new();
+    let mut blocks = crate::dense::IdMap::<BlockId, (Option<&str>, u32)>::new();
+    let mut next = 0u32;
+    fn slot<'f>(
+        next: &mut u32,
+        given: &'f Option<String>,
+    ) -> (Option<&'f str>, u32) {
+        let number = *next;
+        *next += u32::from(given.is_none());
+        (given.as_deref(), number)
+    }
+    for &parameter in &function.parameters {
+        values.insert(parameter, slot(&mut next, &function.value(parameter).name));
+    }
+    for &block in &function.layout {
+        blocks.insert(block, slot(&mut next, &function.block(block).name));
+        for &inst in &function.block(block).instructions {
+            if let Some(result) = function.instruction(inst).result {
+                values.insert(result, slot(&mut next, &function.value(result).name));
+            }
+        }
+    }
+    fn shown<'a>(
+        slot: Option<&(Option<&'a str>, u32)>,
+        raw: u32,
+    ) -> (u8, &'a str, u32) {
+        match slot {
+            Some((Some(name), _)) => (1, name, 0),
+            Some((None, number)) => (2, "", *number),
+            None => (3, "", raw),
+        }
+    }
+    let operand = |digest: &mut Wide, operand: Operand| match operand {
+        Operand::Value(id) => (0u8, shown(values.get(&id), id.0)).hash(digest),
+        Operand::Constant(id) => (1u8, id).hash(digest),
+        Operand::Block(id) => (2u8, shown(blocks.get(&id), id.0)).hash(digest),
+    };
+    let mut records = crate::dense::IdMap::<InstId, Vec<&crate::module::DebugRecord>>::new();
+    for record in function.debug_records() {
+        records.get_or_insert_with(record.before, Vec::new).push(record);
+    }
+    for (index, &block) in function.layout.iter().enumerate() {
+        digest.write_u8(0xb);
+        if index > 0 || function.block(block).name.is_some() {
+            shown(blocks.get(&block), block.0).hash(&mut digest);
+        }
+        for &inst in &function.block(block).instructions {
+            for record in records.get(&inst).into_iter().flatten() {
+                record.variable.hash(&mut digest);
+                match record.what {
+                    DebugWhat::Declare(at) => {
+                        digest.write_u8(1);
+                        operand(&mut digest, at);
+                    }
+                    DebugWhat::Value(at) => {
+                        digest.write_u8(2);
+                        operand(&mut digest, at);
+                    }
+                    DebugWhat::Piece { value, offset, bytes } => {
+                        digest.write_u8(3);
+                        operand(&mut digest, value);
+                        (offset, bytes).hash(&mut digest);
+                    }
+                    DebugWhat::GonePiece { offset, bytes } => (4u8, offset, bytes).hash(&mut digest),
+                    DebugWhat::Gone => digest.write_u8(5),
+                }
+            }
+            let instruction = function.instruction(inst);
+            instruction.opcode.hash(&mut digest);
+            (instruction.ty, instruction.flags, instruction.operands.len()).hash(&mut digest);
+            for &one in &instruction.operands {
+                operand(&mut digest, one);
+            }
+            instruction.result.map(|result| shown(values.get(&result), result.0)).hash(&mut digest);
+            instruction.metadata.hash(&mut digest);
+        }
+    }
+    u128::from(digest.0) << 64 | u128::from(digest.1)
+}
+
 /// Lines under a blank line, when there are any.
 fn section(
     out: &mut String,

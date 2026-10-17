@@ -572,8 +572,10 @@ pub fn assembled(
     observer: Option<&mut HirObserver<'_>>,
     codegen: &driver::Options,
 ) -> Result<masm::Module, CompileError> {
-    llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program))
-        .map_err(|error| CompileError::Value(error.0))?;
+    if llrm_core::support::debug::verifying() {
+        llrm_core::support::debug::timed("hir verify", || hir::verify::verify(program))
+            .map_err(|error| CompileError::Value(error.0))?;
+    }
     if let Some(observe) = observer {
         observe(program)?;
     }

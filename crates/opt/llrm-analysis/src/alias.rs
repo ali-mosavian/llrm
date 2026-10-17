@@ -320,6 +320,47 @@ impl EscapedBefore {
     }
 }
 
+/// What gives an access its provenance: the pointer values' objects, whether
+/// the solve went on to find what escapes (`PointsTo`) or not (`PointValues`).
+pub trait Resolves {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance>;
+}
+
+impl PointValues {
+    /// Canonical bytes reached by an access through an analysed pointer.
+    pub fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        _resolved_reference(unit, reference, &self.values)
+    }
+}
+
+impl Resolves for PointValues {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        PointValues::reference(self, unit, reference)
+    }
+}
+
+impl Resolves for PointsTo {
+    fn reference(
+        &self,
+        unit: &Unit,
+        reference: &MemRef,
+    ) -> Option<Provenance> {
+        PointsTo::reference(self, unit, reference)
+    }
+}
+
 impl PointsTo {
     /// Canonical bytes reached by an access through an analysed pointer.
     pub fn reference(
@@ -1657,7 +1698,7 @@ pub fn summaries_updating<B: Bodies + ?Sized>(
                     }
                     called_back.as_ref().and_then(CalledBack::summary)
                 });
-                if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+                if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
                     let fresh = procedures.globals().and_then(|globals| callbacks_over(globals, &result));
                     assert!(now == fresh, "the callbacks folded in are not what adding the entries up again gives");
                 }
@@ -2091,7 +2132,7 @@ pub fn calls_annotated(
     let computed;
     let callbacks = match procedure.unit.callbacks() {
         Some(held) => {
-            if llrm_support::env_set("LLRM_CHECK_CALLBACKS") {
+            if llrm_support::env_flag!("LLRM_CHECK_CALLBACKS") {
                 assert!(
                     *held == _callbacks(&procedure.unit, known),
                     "the held callbacks are not what adding the entries up gives"
@@ -2327,7 +2368,7 @@ pub fn initialized(
                 Opcode::Store { volatile: false, .. } | Opcode::Call(_) | Opcode::Invoke(_)
             )
         });
-    if !pointers && !llrm_support::env_set("LLRM_CHECK_INITIALIZED") {
+    if !pointers && !llrm_support::env_flag!("LLRM_CHECK_INITIALIZED") {
         return Ok(vec![Vec::new(); count]);
     }
     // The three solves below differ in the call arguments and captures they
@@ -2618,6 +2659,7 @@ pub struct PointValues {
 
 thread_local! {
     static VALUE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ESCAPE_SOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VALUE_ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static LIMIT_COLLAPSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -2642,6 +2684,12 @@ pub fn limit_collapses() -> usize {
 /// not know of) and never settles; past the limit it settles at the objects'
 /// whole extents.
 pub const MAX_FIELDS_FOR_FIELD_SENSITIVE: usize = 100;
+
+/// How many escape solves (`points_to`'s second phase) this thread has made,
+/// for a test that what reads only the pointer values does not ask one.
+pub fn escape_solves() -> usize {
+    ESCAPE_SOLVES.with(std::cell::Cell::get)
+}
 
 /// How many value solves this thread has made, for a test that two analyses of
 /// one body ask one.
@@ -2942,7 +2990,7 @@ pub fn points_to(
 ) -> Result<PointsTo, String> {
     let solved = match unit.point_values {
         Some(held) => {
-            if llrm_support::env_set("LLRM_CHECK_POINTVALUES") {
+            if llrm_support::env_flag!("LLRM_CHECK_POINTVALUES") {
                 assert!(*held == point_values(unit)?, "the held point values are not what solving again gives");
             }
             std::borrow::Cow::Borrowed(held)
@@ -2959,10 +3007,11 @@ fn escapes(
     arguments: Option<&llrm_support::hash::SparseIdMap<InstId, Vec<Actual>>>,
     captures: Option<&llrm_support::hash::SparseIdMap<InstId, Option<BTreeSet<Option<Identity>>>>>,
 ) -> Result<PointsTo, String> {
+    ESCAPE_SOLVES.with(|solves| solves.set(solves.get() + 1));
     let function = unit.function;
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
-    let none = BTreeSet::new();
+    let none: &[i64] = &[];
     let values = &solved.values;
     let instructions = |at: i64| function.block(cfg::block(at)).instructions();
     // Escape is flow-sensitive separately from pointer contents. A pointer
@@ -3195,7 +3244,7 @@ fn escapes(
     let parents: Vec<Vec<usize>> = graph
         .iter()
         .map(|block| {
-            predecessors.get(&block.at).unwrap_or(&none).iter().filter_map(|one| index.get(one).copied()).collect()
+            predecessors.get(&block.at).unwrap_or(none).iter().filter_map(|one| index.get(one).copied()).collect()
         })
         .collect();
     let (component, cyclic) = llrm_mir::callgraph::strong_components(&parents);
@@ -3590,12 +3639,12 @@ impl Bounded<'_> {
 
 pub fn annotated_with(
     unit: &Unit,
-    facts: &PointsTo,
+    facts: &impl Resolves,
     known: &IndexMap<ValueId, Known>,
 ) -> Result<IndexMap<InstId, MemRef>, String> {
     let bounded = match (unit.bounds, unit.registers) {
         (Some(held), Some(registers)) if std::ptr::eq(known, registers) => {
-            if llrm_support::env_set("LLRM_CHECK_REPLAY") {
+            if llrm_support::env_flag!("LLRM_CHECK_REPLAY") {
                 // The body's own intervals, or at a level without them (-O1:
                 // `Outer::loop_intervals`) none: a unit made for alias carries
                 // none there, one made for an induction variable's range the
@@ -3611,7 +3660,8 @@ pub fn annotated_with(
         }
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
-    let strides = congruences_with(unit, known);
+    // Only an access with a variable index asks: 4,185 lookups in 123 solves.
+    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
@@ -3683,6 +3733,12 @@ pub fn annotated_with(
 
     let mut out = IndexMap::default();
     for (block, inst) in unit.function.walk() {
+        if !matches!(
+            unit.function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Store { .. } | Opcode::Call(_) | Opcode::Invoke(_)
+        ) {
+            continue;
+        }
         if let Some(reference) = MemRef::of(unit, inst).or_else(|| MemRef::filled(unit, inst)) {
             out.insert(inst, tag(&reference, cfg::id(block))?);
         }

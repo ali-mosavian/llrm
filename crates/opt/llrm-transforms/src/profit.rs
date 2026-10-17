@@ -573,6 +573,67 @@ pub fn spill_forecast(
     Some(spill::View::of(context, layout, function, room, across).forecast(costs, frequency))
 }
 
+/// `spill_forecast` of a function that `changes` made of the one `base` is of,
+/// its liveness solved again for the values they name alone. `LLRM_CHECK_VIEW`
+/// holds it to the forecast of the function on its own.
+#[allow(clippy::too_many_arguments)]
+pub fn spill_forecast_after(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    base: &std::rc::Rc<spill::Pressure>,
+    changes: &[llrm_mir::module::Change],
+    costs: &OperationCosts,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    frequency: &BTreeMap<i64, i64>,
+) -> Option<spill::Forecast<llrm_mir::dense::IdSet<ValueId>>> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
+    if !room.priced() {
+        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
+    }
+    let Some(pressure) =
+        spill::Pressure::updated(std::rc::Rc::clone(base), changes, context, function, room.index_scales)
+    else {
+        return spill_forecast(context, layout, function, costs, room, across, frequency);
+    };
+    let found = spill::View::over(&pressure, context, layout, function, room, across).forecast(costs, frequency);
+    if llrm_support::env_flag!("LLRM_CHECK_VIEW") {
+        let whole = spill::View::of(context, layout, function, room, across).forecast(costs, frequency);
+        let spilled =
+            |forecast: &spill::Forecast<llrm_mir::dense::IdSet<ValueId>>| forecast.spilled.iter().collect::<Vec<_>>();
+        assert!(
+            found.cost == whole.cost && found.peak == whole.peak && spilled(&found) == spilled(&whole),
+            "the forecast of a function from its base's liveness is not its own: cost {} vs {}, peak {} vs {}",
+            found.cost,
+            whole.cost,
+            found.peak,
+            whole.peak
+        );
+    }
+    Some(found)
+}
+
+/// `spill_forecast` over the `pressure` of `function` itself.
+pub fn spill_forecast_over(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pressure: &spill::Pressure,
+    costs: &OperationCosts,
+    room: Room,
+    across: &dyn Fn(InstId) -> i64,
+    frequency: &BTreeMap<i64, i64>,
+) -> Option<spill::Forecast<llrm_mir::dense::IdSet<ValueId>>> {
+    #[cfg(test)]
+    PRICED.with(|count| count.set((count.get().0, count.get().1 + 1)));
+    if !room.priced() {
+        return Some(spill::Forecast { cost: 0, spilled: Default::default(), peak: 0 });
+    }
+    Some(spill::View::over(pressure, context, layout, function, room, across).forecast(costs, frequency))
+}
+
 /// Semantic work plus finite-capacity whole-range spill traffic.
 #[allow(clippy::too_many_arguments)]
 pub fn pressure_adjusted(

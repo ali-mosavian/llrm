@@ -1920,13 +1920,26 @@ fn test_a_counter_stepped_before_other_work_still_tests_its_own_flags() {
 
 #[test]
 fn test_a_dividend_two_instructions_require_is_copied_into_its_register_once() {
-    // `cdq` and `idiv` each took their own copy of i \ 5's dividend in EAX,
-    // so the extended value sat in EDI across both and one of stride's three
-    // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`.
-    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
+    // `cdq` and `idiv` each took their own copy of i \ d's dividend in EAX,
+    // so the extended value sat in EDI across both and one of the three
+    // recurrences spilled: `mov ax, [bp-2]` and `add word ptr [bp-2], 5`. A
+    // divisor read from memory stays a division; a constant is a reciprocal.
+    let source = "DEFINT A-Z\nDIM b(200), d(1)\nDIM i, t\nd(0) = 5 + INT(RND * 1)\nt = 0\nFOR i = 0 TO 100 STEP 5\n    b(i) = i \\ d(0)\n    t = t + b(i)\nNEXT i\nPRINT \"T=\"; t\n";
+    let basic = std::env::temp_dir().join(format!("stride_variable_divisor_{}.bas", std::process::id()));
+    std::fs::write(&basic, source).expect("writes the program");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let body = backward_loop(&listing(&program));
     assert!(!body.contains("[bp") && body.contains("cdq") && body.matches("idiv").count() == 1, "{body}");
+}
+
+#[test]
+fn test_a_constant_divisor_of_a_non_negative_counter_is_a_reciprocal_without_a_spill() {
+    // stride's `i \ 5` was `cdq; idiv` and spilled one of three recurrences;
+    // `i` is DEFINT and counts up from 0, so it is `mul` by the reciprocal.
+    let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/run/qb/stride.bas");
+    let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
+    let body = backward_loop(&listing(&program));
+    assert!(!body.contains("[bp") && !body.contains("idiv") && body.matches("mul").count() == 1, "{body}");
 }
 
 #[test]

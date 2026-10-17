@@ -1,7 +1,10 @@
 //! `sunk` over loops the interpreter runs before and after, over trip
 //! counts 0, 1 and more.
 
-use super::sunk;
+use llrm_analysis::cfg::Shape;
+use llrm_mir::module::Function;
+
+use super::sunk as sunk_with;
 use crate::testing::{f, parsed, printed, results};
 
 /// A post-tested loop whose `%last = LAST` the exit reads.
@@ -27,6 +30,12 @@ b2:
 }}
 "
     )
+}
+
+/// `function` sunk, its shape found for it.
+fn sunk(function: &mut Function) -> bool {
+    let shape = Shape::of(function);
+    sunk_with(function, &shape)
 }
 
 /// `text` sunk, printed, where it computes what it did.

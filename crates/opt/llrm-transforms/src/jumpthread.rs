@@ -232,14 +232,15 @@ impl FunctionPass for JumpThread {
         }
         // What the copies know of their state: a product by a constant, a
         // compare of one. Only where something was copied.
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
         for pass in [
             &mut crate::fold::Fold as &mut dyn FunctionPass,
             &mut crate::algebraic::Algebraic { size: false },
             &mut crate::decide::Decide,
             &mut crate::dead::Dead,
         ] {
-            analyses.invalidate(unit.function, &PreservedAnalyses::none());
-            pass.run(unit, analyses);
+            let kept = pass.run(unit, analyses);
+            analyses.invalidate(unit.function, &kept);
         }
         PreservedAnalyses::none()
     }
@@ -563,7 +564,7 @@ fn compared_again(
     }
     // Reached from one of them by going back from `at`.
     let mut seen = std::collections::BTreeSet::new();
-    let mut stack = function.predecessors(at);
+    let mut stack: Vec<BlockId> = function.predecessors(at).into();
     while let Some(block) = stack.pop() {
         if !seen.insert(block) {
             continue;

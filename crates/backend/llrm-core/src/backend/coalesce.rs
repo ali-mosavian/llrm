@@ -106,7 +106,7 @@ use crate::backend::classes::RegisterClasses;
 use crate::backend::neighbours::Neighbours;
 use crate::backend::target::{self, Segments};
 use crate::backend::{allocate, regclass};
-use crate::model::ir::{self, Held, Loc, Operation, Semantics};
+use crate::model::ir::{self, Held, Loc, Operation};
 use crate::model::lir::{self, Block, Insn, LirBlock, LirBody, Phi};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashMap, IndexMap};
@@ -206,7 +206,7 @@ pub fn joined(
     // join costs the smaller's neighbours.
     let mut node_of: IndexMap<u32, u32> = IndexMap::default();
     webs.begin(_interference(body), &held);
-    let checking = llrm_support::env_set("LLRM_CHECK_COALESCE");
+    let checking = llrm_support::env_flag!("LLRM_CHECK_COALESCE");
 
     // A join is kept, and the first of two that clash is the one that stays:
     // the deepest loops first, as LLVM's `RegisterCoalescer` orders its
@@ -1277,27 +1277,7 @@ pub(crate) fn _renamed(
     one: &Arc<Insn>,
     swap: &dyn Fn(u32) -> u32,
 ) -> Arc<Insn> {
-    let mut made = (**one).clone();
-    if let Some(what) = &one.what {
-        made.what = Some(Semantics {
-            dests: what.dests.iter().map(|x| _settled(x, swap)).collect(),
-            sources: what.sources.iter().map(|x| _settled(x, swap)).collect(),
-            ..what.clone()
-        });
-    }
-    made.defines = one.defines.iter().map(|v| swap(*v)).collect();
-    made.uses = one.uses.iter().map(|v| swap(*v)).collect();
-    made.requires = _wants(&one.requires, swap);
-    made.delivers = _wants(&one.delivers, swap);
-    made.widths = one.widths.iter().map(|(v, w)| (swap(*v), *w)).collect();
-    Arc::new(made)
-}
-
-fn _settled(
-    place: &Loc,
-    swap: &dyn Fn(u32) -> u32,
-) -> Loc {
-    ir::mapped(place, |value| Held { value: swap(value.value), width: value.width })
+    one.renamed(swap)
 }
 
 #[cfg(test)]

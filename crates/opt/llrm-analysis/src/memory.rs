@@ -1285,7 +1285,7 @@ impl<'a> Unit<'a> {
     pub fn registers(&self) -> Cow<'a, IndexMap<ValueId, Known>> {
         match self.registers {
             Some(registers) => {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     let fresh = crate::consts::known(&Unit { registers: None, ..*self });
                     assert!(
                         *registers == fresh,
@@ -1319,7 +1319,7 @@ impl<'a> Unit<'a> {
     pub fn shape(&self) -> Cow<'a, Shape> {
         match self.shape {
             Some(shape) => {
-                if llrm_support::env_set("LLRM_CHECK_SHAPE") {
+                if llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
                     assert!(
                         *shape == Shape::of(self.function),
                         "the shape a unit carries is not that of the body it stands over: stale"
@@ -1401,11 +1401,35 @@ impl<'a> Unit<'a> {
         operand: Operand,
     ) -> Option<(InstId, &'a llrm_mir::module::Instruction)> {
         let Operand::Value(value) = operand else { return None };
+        DEFINITIONS_READ.with(|read| {
+            if let Some(read) = read.borrow_mut().as_mut() {
+                read.push(value);
+            }
+        });
         match self.function.value(value).def {
             ValueDef::Instruction(inst) => Some((inst, self.function.instruction(inst))),
             ValueDef::Argument(_) => None,
         }
     }
+}
+
+thread_local! {
+    /// The values whose defining instruction a decomposition is reading, while
+    /// one is (`reading`).
+    static DEFINITIONS_READ: std::cell::RefCell<Option<Vec<ValueId>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// `work`, and every value whose defining instruction it asked of
+/// `Unit::defining`: the values an edit would have to touch to change what
+/// `work` made, however far from the pointer the helper that read it was (a
+/// far pointer's selector is the operand of the cast two instructions back).
+fn reading<T>(work: impl FnOnce() -> T) -> (T, Vec<ValueId>) {
+    let outer = DEFINITIONS_READ.with(|read| read.replace(Some(Vec::new())));
+    let made = work();
+    let mut mine = DEFINITIONS_READ.with(|read| read.replace(outer)).unwrap_or_default();
+    mine.sort_unstable_by_key(|value| value.0);
+    mine.dedup();
+    (made, mine)
 }
 
 /// Whether `inst` marks an object's lifetime, which names it without handing
@@ -1433,12 +1457,15 @@ pub struct Standing<'h> {
     /// the caller has it.
     bounds: Option<&'h crate::ranges::Bounds>,
     derived: Option<Knowns>,
+    /// The blocks, edges and loops of the body, as `held` has them or derived
+    /// once: they stand while the body's blocks and edges do (`reshaped`).
+    shape: Option<std::rc::Rc<crate::cfg::Shape>>,
 }
 
 impl<'h> Standing<'h> {
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None }
+        Self { held: Some(registers), bounds: None, derived: None, shape: None }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1446,12 +1473,36 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None }
+        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None }
+        Self { held: None, bounds: None, derived: None, shape: None }
+    }
+
+    /// `self`, the shape of the body as the manager found it.
+    pub fn with_shape(
+        mut self,
+        shape: std::rc::Rc<crate::cfg::Shape>,
+    ) -> Self {
+        self.shape = Some(shape);
+        self
+    }
+
+    /// The shape of `function`, found once while its blocks and edges stand.
+    pub fn shape(
+        &mut self,
+        function: &Function,
+    ) -> std::rc::Rc<crate::cfg::Shape> {
+        std::rc::Rc::clone(self.shape.get_or_insert_with(|| std::rc::Rc::new(crate::cfg::Shape::of(function))))
+    }
+
+    /// The body's blocks or edges changed: its shape, and with it what was
+    /// found of it, no longer holds.
+    pub fn reshaped(&mut self) {
+        self.shape = None;
+        self.changed();
     }
 
     /// The body changed: what was found of it no longer holds.
@@ -1625,12 +1676,20 @@ pub struct MemRef {
 /// The accesses worked out for a version of a function, and which version.
 struct Held {
     key: (llrm_mir::module::Mark, llrm_mir::spaces::Spaces),
-    seen: std::rc::Rc<std::cell::RefCell<llrm_mir::dense::IdMap<InstId, Option<MemRef>>>>,
+    seen: std::rc::Rc<std::cell::RefCell<llrm_support::hash::SparseIdMap<InstId, Option<std::rc::Rc<MemRef>>>>>,
 }
 
 /// The most versions kept: the analyses of one function ask in a run, and a
 /// call summary asks of its callees in between.
 const ACCESS_VERSIONS: usize = 8;
+
+/// How many cells the held versions of accesses take, for a test that asking
+/// of one instruction in a large body takes one: a slot for every id below its
+/// own cost 56.6 M of the 5.9 G instructions of a d_faces -O2 compile.
+#[cfg(test)]
+pub(crate) fn held_cells() -> usize {
+    ACCESSES.with(|held| held.borrow().iter().map(|one| one.seen.borrow().len()).sum())
+}
 
 thread_local! {
     static ACCESSES: std::cell::RefCell<Vec<Held>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -1780,7 +1839,7 @@ impl MemRef {
         let key = (unit.function.mark(), unit.spaces());
         let held = ACCESSES.with(|held| {
             let held = held.borrow();
-            held.iter().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
+            held.iter().rev().find(|one| one.key == key).map(|one| std::rc::Rc::clone(&one.seen))
         });
         let seen = match held {
             Some(seen) => seen,
@@ -1789,24 +1848,26 @@ impl MemRef {
                 if held.len() >= ACCESS_VERSIONS {
                     held.remove(0);
                 }
-                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_mir::dense::IdMap::new()));
+                let seen = std::rc::Rc::new(std::cell::RefCell::new(llrm_support::hash::SparseIdMap::default()));
                 held.push(Held { key, seen: std::rc::Rc::clone(&seen) });
                 seen
             }),
         };
         let found = seen.borrow().get(&inst).cloned();
-        let Some(mut found) = found else {
-            let made = crate::references::of(unit, inst).map(|one| (*one).clone());
+        let Some(found) = found else {
+            let made = crate::references::of(unit, inst);
             seen.borrow_mut().insert(inst, made.clone());
-            return made;
+            return made.map(|one| (*one).clone());
         };
         // Metadata is attached without a change logged: the type is asked
         // again.
+        let mut found = found.map(|one| (*one).clone());
         if let Some(access) = &mut found {
             access.typed = typed(unit, inst);
             access.lineage = lineage(unit, inst);
         }
-        if llrm_support::env_set("LLRM_CHECK_ACCESSES") {
+        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *CHECKED.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_ACCESSES")) {
             assert!(
                 found == Self::derived(unit, inst),
                 "the held access of {inst:?} is not what deriving it again gives"
@@ -1838,12 +1899,9 @@ impl MemRef {
             _ => return None,
         };
         let width = unit.layout.store_size(&unit.context.types, ty) as u32;
-        Some(Self {
-            typed: typed(unit, inst),
-            lineage: lineage(unit, inst),
-            volatile,
-            ..Self::at_tracing(unit, pointer, width, Some(chain))
-        })
+        let (made, read) = reading(|| Self::at_tracing(unit, pointer, width, Some(&mut *chain)));
+        chain.extend(read);
+        Some(Self { typed: typed(unit, inst), lineage: lineage(unit, inst), volatile, ..made })
     }
 
     /// Whether the access names its bytes outright rather than reaching

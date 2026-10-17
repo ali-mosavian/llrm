@@ -392,7 +392,7 @@ pub fn _group_start(
     first
 }
 
-pub type Live = IndexMap<i64, BTreeSet<u32>>;
+pub type Live = IndexMap<i64, llrm_mir::dense::IdSet<u32>>;
 
 /// What is live at each block's entry and exit, to a fixed point.
 ///
@@ -852,7 +852,7 @@ pub fn live_rows_by(
     // `LiveVariables`). A body with phis is solved over the rows.
     // Under the check every body is followed, so that the walk is held to the
     // rows on all of them.
-    let checking = llrm_support::env_set("LLRM_CHECK_LIVE");
+    let checking = llrm_support::env_flag!("LLRM_CHECK_LIVE");
     let mut numbered = None;
     if checking || body.blocks.len() >= WEB_BLOCKS {
         let values = numbered_by(body, &keep);
@@ -879,7 +879,7 @@ pub fn live_rows_by(
             };
             if let Some(web) = web {
                 let found = LiveRows(Found::Web(web));
-                if llrm_support::env_set("LLRM_CHECK_LIVE") {
+                if llrm_support::env_flag!("LLRM_CHECK_LIVE") {
                     let walk = live_rows_dense(body, &keep);
                     for block in &body.blocks {
                         assert!(
@@ -1185,7 +1185,7 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
         }
     }
     let numbered = &numbered;
-    let values = |set: &[u64]| -> BTreeSet<u32> {
+    let values = |set: &[u64]| -> llrm_mir::dense::IdSet<u32> {
         set.iter()
             .enumerate()
             .flat_map(|(word, bits)| {
@@ -1587,6 +1587,11 @@ struct Facts {
     /// from it.
     scan: crate::backend::regclass::Scan,
     siblings: Siblings,
+    /// The values that may not be spilled, and how many unspillable and
+    /// protected values they were made of: both only grow within a body's
+    /// allocation, so the same counts are the same set.
+    pinned: Arc<llrm_mir::dense::IdSet<u32>>,
+    pinned_from: (usize, usize),
     /// The values whose class moved since the facts these were carried from.
     reclassed: Option<Vec<u32>>,
 }
@@ -1601,6 +1606,8 @@ struct Carried {
     index: Arc<Indexes>,
     siblings: Siblings,
     folds: Arc<IndexMap<u32, f64>>,
+    scan: crate::backend::regclass::Scan,
+    masks: Masks,
     epoch: u64,
     /// The slots the instructions the rewrite removed had.
     gone: IndexMap<usize, i64>,
@@ -1619,7 +1626,7 @@ impl Facts {
         carried: Option<Carried>,
     ) -> Self {
         let (mut carried_hints, mut carried_widths, mut carried_live, mut carried_index) = (None, None, None, None);
-        let (mut carried_siblings, mut carried_folds) = (None, None);
+        let (mut carried_siblings, mut carried_folds, mut carried_scan, mut carried_masks) = (None, None, None, None);
         let mut old_epoch = None;
         let mut gone_slots = IndexMap::default();
         if let Some(one) = carried {
@@ -1629,6 +1636,8 @@ impl Facts {
             carried_index = Some(one.index);
             carried_siblings = Some(one.siblings);
             carried_folds = Some(one.folds);
+            carried_scan = Some(one.scan);
+            carried_masks = Some(one.masks);
             old_epoch = Some(one.epoch);
             gone_slots = one.gone;
         }
@@ -1644,7 +1653,7 @@ impl Facts {
                     },
                 );
             if let Some(found) = &patched {
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     let whole = ranges::indexed_consecutive(body);
                     for (insn, slot) in &found.at {
                         assert_eq!(found.uniform(*slot), whole.at[insn], "{}: an instruction's slot", body.name);
@@ -1700,10 +1709,22 @@ impl Facts {
             _ => Arc::new(_fold_free(body, profile, busy)),
         });
         // A spiller product lives for one use: a spill gains nothing.
-        let pinned: BTreeSet<u32> = unspillable.iter().chain(protected).copied().collect();
-        let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), pinned));
+        let pinned_from = (unspillable.len(), protected.len());
+        let pinned = match prior {
+            Some((before, _, _)) if before.pinned_from == pinned_from => {
+                body.facts.0.bump("pinned set kept");
+                Arc::clone(&before.pinned)
+            }
+            _ => Arc::new(unspillable.iter().chain(protected).copied().collect()),
+        };
+        if prior.is_some() && llrm_support::env_flag!("LLRM_CHECK_FACTS") {
+            let whole: llrm_mir::dense::IdSet<u32> = unspillable.iter().chain(protected).copied().collect();
+            assert!(*pinned == whole, "{}: the pinned set kept from the body before differs", body.name);
+        }
+        body.facts.0.bump("allocator facts built");
+        let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), Arc::clone(&pinned)));
         crate::backend::live::hold(body, &live);
-        if llrm_support::env_set("LLRM_CHECK_FACTS") {
+        if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
             let (base, _) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
             let (mut whole, _) = _sibling_priced(body, base, busy, &index);
             whole = _fold_priced(body, whole, profile, busy, &index);
@@ -1726,12 +1747,16 @@ impl Facts {
         }
         let masks = llrm_support::debug::timed("facts masks", || {
             let found = match prior {
-                Some((before, changes, _)) if same_numbering(&index) => {
-                    Masks::after(&before.masks, &gone_slots, &index, segments, changes)
-                }
+                Some((_, changes, _)) if same_numbering(&index) => Masks::after(
+                    carried_masks.take().expect("carried with the prior facts"),
+                    &gone_slots,
+                    &index,
+                    segments,
+                    changes,
+                ),
                 _ => None,
             };
-            if let (Some(found), true) = (&found, llrm_support::env_set("LLRM_CHECK_FACTS")) {
+            if let (Some(found), true) = (&found, llrm_support::env_flag!("LLRM_CHECK_FACTS")) {
                 let whole = _masks(body, &index, segments);
                 assert!(
                     found.same_points(&whole),
@@ -1746,7 +1771,7 @@ impl Facts {
                 let _ = before;
                 let found =
                     _widest_after(carried_widths.take().expect("carried with the prior facts"), body, &changes.touched);
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     assert!(found == _widest(body), "{}: the widths kept from the body before differ", body.name);
                 }
                 found
@@ -1756,12 +1781,17 @@ impl Facts {
         let (scan, confined) = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let scan = llrm_support::debug::timed("classes scan", || match prior {
-                Some((before, changes, _)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
+                Some((_, changes, _)) => carried_scan.take().expect("carried with the prior facts").after(
+                    &changes.gone,
+                    &changes.added,
+                    registers,
+                    segments,
+                ),
                 None => crate::backend::regclass::Scan::of(body, registers, segments),
             });
             let found = scan.classes(body, protected, segments, registers, &given);
-            if llrm_support::env_set("LLRM_CHECK_CLASSES")
-                || (prior.is_some() && llrm_support::env_set("LLRM_CHECK_FACTS"))
+            if llrm_support::env_flag!("LLRM_CHECK_CLASSES")
+                || (prior.is_some() && llrm_support::env_flag!("LLRM_CHECK_FACTS"))
             {
                 let whole = crate::backend::regclass::classes_given(body, protected, segments, registers, &given);
                 assert!(found == whole, "{}: classes from the counts kept from the body before differ", body.name);
@@ -1776,7 +1806,7 @@ impl Facts {
                     body,
                     &changes.touched,
                 );
-                if llrm_support::env_set("LLRM_CHECK_FACTS") {
+                if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
                     assert!(found == _copy_hints(body), "{}: the hints kept from the body before differ", body.name);
                 }
                 found
@@ -1794,7 +1824,7 @@ impl Facts {
                 .chain(before.confined.keys().copied().filter(|value| !confined.contains_key(value)))
                 .collect::<Vec<u32>>()
         });
-        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, reclassed }
+        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, pinned, pinned_from, reclassed }
     }
 }
 
@@ -1806,7 +1836,7 @@ fn _overlapping(
     facts: &Facts,
 ) -> BTreeSet<u32> {
     let found = _overlapping_by_start(union, r#where, facts);
-    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+    if llrm_support::env_flag!("LLRM_CHECK_OVERLAPPING") {
         assert!(
             found == _overlapping_reference(union, r#where, facts),
             "values sharing a register found by start differ from the pairwise look"
@@ -2185,7 +2215,7 @@ fn _allocated(
             let _split = llrm_support::debug::span("regalloc split");
             let bundles = spillplacement::edge_bundles(&body);
             let live_sets = IntervalLive { live: &facts.live, index: &facts.index };
-            if llrm_support::env_set("LLRM_CHECK_PLACING") {
+            if llrm_support::env_flag!("LLRM_CHECK_PLACING") {
                 let rows = live_rows_by(&body, |one| one == value);
                 for block in &body.blocks {
                     assert!(
@@ -2197,38 +2227,29 @@ fn _allocated(
                     );
                 }
             }
-            let spread = llrm_support::debug::timed("split spread", || splitkit::live_blocks(&body, value, &live_sets));
+            let analysed = llrm_support::debug::timed("split spread", || splitkit::Split::of(&body, value, &live_sets));
+            let spread = analysed.live_blocks();
             let occupied = splitkit::Occupied::of(&union, &facts.live, value, &facts.masks);
             let sets: &dyn LiveAt = &live_sets;
             // A range in one block splits locally; any other by region, and
             // failing that block by block. Only a piece that pays is carved.
             let regions: Vec<splitkit::Region> = match llrm_support::debug::timed("split local", || {
-                splitkit::local(&body, value, &facts.index, sets, &order, &occupied, width)
+                analysed.local(&facts.index, &order, &occupied, width)
             }) {
                 Some(found) => vec![found],
                 None => {
                     let placed = llrm_support::debug::timed("split placed", || {
-                        splitkit::placed(
-                            &body,
-                            value,
-                            &facts.index,
-                            sets,
-                            &bundles,
-                            &order,
-                            &occupied,
-                            width,
-                            &_held_saving,
-                        )
+                        analysed.placed(&facts.index, sets, &bundles, &order, &occupied, width, &_held_saving)
                     });
                     if placed.is_empty() {
-                        llrm_support::debug::timed("split per block", || splitkit::per_block(&body, value, sets))
+                        llrm_support::debug::timed("split per block", || analysed.per_block())
                     } else {
                         placed
                     }
                 }
             };
             let regions: Vec<splitkit::Region> = llrm_support::debug::timed("split pays", || {
-                regions.into_iter().filter(|region| splitkit::pays(&body, value, region, sets, &_held_saving)).collect()
+                regions.into_iter().filter(|region| analysed.pays(region, sets, &_held_saving)).collect()
             });
             for region in &regions {
                 llrm_support::debug!("split", "{}: split {value} at {:?}", body.name, region.spans);
@@ -2422,6 +2443,8 @@ fn _allocated(
                     index: std::mem::replace(&mut facts.index, Arc::new(Indexes::plain())),
                     siblings: std::mem::take(&mut facts.siblings),
                     folds: std::mem::take(&mut facts.folds),
+                    scan: std::mem::take(&mut facts.scan),
+                    masks: std::mem::take(&mut facts.masks),
                 },
             );
         facts = Facts::of(
@@ -2455,7 +2478,7 @@ fn _allocated(
                 }
                 None => constrain::required(&body, classes),
             };
-            if changed.is_some() && llrm_support::env_set("LLRM_CHECK_REQUIRED") {
+            if changed.is_some() && llrm_support::env_flag!("LLRM_CHECK_REQUIRED") {
                 let mut whole = fixed.clone();
                 for (one, register) in constrain::required(&body, classes) {
                     whole.entry(one).or_insert(register);
@@ -2474,7 +2497,7 @@ fn _allocated(
         llrm_support::debug::timed("after wanted", || {
             walk.update(&facts.hints, &fixed, changes.as_ref().map(|changes| &changes.touched));
         });
-        if llrm_support::env_set("LLRM_CHECK_WANTED") {
+        if llrm_support::env_flag!("LLRM_CHECK_WANTED") {
             let whole = crate::backend::hintwalk::HintWalk::fresh(&facts.hints, &fixed, HINT_DEPTH);
             assert!(
                 walk.wanted() == whole.wanted(),
@@ -2491,7 +2514,7 @@ fn _allocated(
                     before_ranges.as_ref().expect("taken with the changes"),
                     &*facts.live,
                 );
-                if llrm_support::env_set("LLRM_CHECK_HOLDERS") {
+                if llrm_support::env_flag!("LLRM_CHECK_HOLDERS") {
                     union.check_index(&facts.live);
                 }
             }
@@ -2503,7 +2526,7 @@ fn _allocated(
             match (&changes, facts.masks.added(), &facts.reclassed) {
                 (Some(changes), Some(added), Some(reclassed)) => {
                     let found = _overlapping_after(&union, &r#where, &facts, &changes.touched, reclassed, added);
-                    if llrm_support::env_set("LLRM_CHECK_OVERLAPPING") {
+                    if llrm_support::env_flag!("LLRM_CHECK_OVERLAPPING") {
                         let whole = _overlapping(&union, &r#where, &facts);
                         assert!(
                             found == whole,
@@ -2566,7 +2589,7 @@ fn _allocated(
                 Some(looked) => looked.iter().copied().filter(|one| again(one, &waiting)).collect(),
                 None => facts.live.keys().copied().filter(|one| again(one, &waiting)).collect(),
             };
-            if llrm_support::env_set("LLRM_CHECK_IDLE") {
+            if llrm_support::env_flag!("LLRM_CHECK_IDLE") {
                 let whole: Vec<u32> = facts.live.keys().copied().filter(|one| again(one, &waiting)).collect();
                 assert!(
                     found.iter().copied().collect::<BTreeSet<_>>() == whole.iter().copied().collect::<BTreeSet<_>>(),
@@ -2749,7 +2772,7 @@ fn _named_among(
             .collect()
     });
     body.facts.0.bump_by("named-among", wanted.len());
-    if llrm_support::env_set("LLRM_CHECK_POSTINGS") {
+    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
         let walked: BTreeSet<u32> = _values(body).into_iter().filter(|one| wanted.contains(one)).collect();
         assert!(found == walked, "{}: the values still named, from the postings, differ from the walk", body.name);
     }
@@ -2906,6 +2929,31 @@ pub struct Masks {
     added: Option<Vec<Arc<Mask>>>,
 }
 
+/// The points that destroy one register, as `Masks::destroyed_within` asks.
+pub struct Destroyers<'a> {
+    lists: [&'a [i64]; 3],
+}
+
+impl Destroyers<'_> {
+    /// The first and last point in `lo..hi`.
+    pub fn within(
+        &self,
+        lo: i64,
+        hi: i64,
+    ) -> Option<(i64, i64)> {
+        let mut found: Option<(i64, i64)> = None;
+        for list in self.lists {
+            let from = list.partition_point(|slot| *slot < lo);
+            let to = from + list[from..].partition_point(|slot| *slot < hi);
+            if from < to {
+                let (first, last) = (list[from], list[to - 1]);
+                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
+            }
+        }
+        found
+    }
+}
+
 /// Where one register is destroyed, sorted: before the point's own reads
 /// (`read`), during it (`during`), or only its high half (`high`).
 #[derive(Clone, Default)]
@@ -2932,7 +2980,7 @@ impl Masks {
     /// keep an instruction's index across an edit. None where `before` did
     /// not come from a body.
     pub fn after(
-        before: &Masks,
+        before: Masks,
         gone_slots: &IndexMap<usize, i64>,
         index: &Indexes,
         segments: &Segments,
@@ -2941,6 +2989,7 @@ impl Masks {
         if before.owners.len() != before.list.len() {
             return None;
         }
+        let Masks { mut list, mut owners, reaching, .. } = before;
         let owner_of = |slot: i64, owner: usize, list: &[Arc<Mask>], owners: &[usize]| -> Option<usize> {
             let from = list.partition_point(|mask| mask.slot < slot);
             (from..list.len()).take_while(|at| list[*at].slot == slot).find(|at| owners[*at] == owner)
@@ -2948,7 +2997,7 @@ impl Masks {
         let mut removed: Vec<usize> = Vec::new();
         for one in &changes.gone {
             let Some(slot) = gone_slots.get(&ranges::key(one)) else { continue };
-            if let Some(at) = owner_of(*slot, ranges::key(one), &before.list, &before.owners) {
+            if let Some(at) = owner_of(*slot, ranges::key(one), &list, &owners) {
                 removed.push(at);
             }
         }
@@ -2961,24 +3010,20 @@ impl Masks {
         }
         added.sort_by_key(|(slot, owner, _)| (*slot, *owner));
         let put: Vec<Arc<Mask>> = added.iter().map(|(_, _, mask)| Arc::clone(mask)).collect();
-        let mut list = Vec::with_capacity(before.list.len() + added.len());
-        let mut owners = Vec::with_capacity(before.list.len() + added.len());
-        let (mut gone, mut new) = (removed.iter().peekable(), added.into_iter().peekable());
-        for (at, mask) in before.list.iter().enumerate() {
-            if gone.peek() == Some(&&at) {
-                gone.next();
-                continue;
-            }
-            while let Some((_, owner, put)) = new.next_if(|(slot, _, _)| *slot < mask.slot) {
-                list.push(put);
-                owners.push(owner);
-            }
-            list.push(Arc::clone(mask));
-            owners.push(before.owners[at]);
+        // The points are edited where they stand: the ones the rewrite removed
+        // go, the ones it added go in after the points of their slot, and the
+        // rest are not touched, where a copy of the list cost a look at every
+        // point at each of a function's rewrites.
+        let mut taken: Vec<Arc<Mask>> = Vec::with_capacity(removed.len());
+        for at in removed.iter().rev() {
+            owners.remove(*at);
+            taken.push(list.remove(*at));
         }
-        for (_, owner, put) in new {
-            list.push(put);
-            owners.push(owner);
+        taken.reverse();
+        for (slot, owner, mask) in added {
+            let at = list.partition_point(|point| point.slot <= slot);
+            list.insert(at, mask);
+            owners.insert(at, owner);
         }
         let found = Masks {
             list,
@@ -2987,10 +3032,9 @@ impl Masks {
             reaching: std::cell::OnceCell::new(),
             added: Some(put.clone()),
         };
-        if let Some(mine) = before.reaching.get() {
-            let mut reaching = mine.clone();
-            for at in &removed {
-                Self::unreach(&mut reaching, &before.list[*at]);
+        if let Some(mut reaching) = reaching.into_inner() {
+            for mask in &taken {
+                Self::unreach(&mut reaching, mask);
             }
             for mask in &put {
                 Self::reach(&mut reaching, mask);
@@ -3079,6 +3123,22 @@ impl Masks {
         mine == theirs && reached(self) == reached(other)
     }
 
+    /// Room for `more` points, and the room there is, for a test that `after`
+    /// edits the list it is given and does not build another.
+    #[cfg(test)]
+    pub fn reserve_points(
+        &mut self,
+        more: usize,
+    ) {
+        self.list.reserve(more);
+        self.owners.reserve(more);
+    }
+
+    #[cfg(test)]
+    pub fn point_capacity(&self) -> usize {
+        self.list.capacity().min(self.owners.capacity())
+    }
+
     /// How many points `iter` has handed out.
     pub fn walked(&self) -> usize {
         self.walked.get()
@@ -3100,22 +3160,20 @@ impl Masks {
         lo: i64,
         hi: i64,
     ) -> Option<(i64, i64)> {
-        let reaching = self.reaching(register)?;
-        let lists: &[&Vec<i64>] = if width > 2 {
-            &[&reaching.read, &reaching.during, &reaching.high]
-        } else {
-            &[&reaching.read, &reaching.during]
-        };
-        let mut found: Option<(i64, i64)> = None;
-        for list in lists {
-            let from = list.partition_point(|slot| *slot < lo);
-            let to = list.partition_point(|slot| *slot < hi);
-            if from < to {
-                let (first, last) = (list[from], list[to - 1]);
-                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
-            }
+        self.destroyers(register, width).within(lo, hi)
+    }
+
+    /// Where `register` is destroyed, found once for the many spans a
+    /// candidate asks of it.
+    pub fn destroyers(
+        &self,
+        register: RegId,
+        width: u32,
+    ) -> Destroyers<'_> {
+        match self.reaching(register) {
+            Some(one) => Destroyers { lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }] },
+            None => Destroyers { lists: [&[], &[], &[]] },
         }
-        found
     }
 
     fn reaching(
@@ -3209,7 +3267,7 @@ pub fn _clobbered(
 
 fn check_clobbered() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_CHECK_CLOBBERED"))
+    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CLOBBERED"))
 }
 
 /// `_clobbered`, from where each register is destroyed: a segment meets a point
@@ -3618,7 +3676,7 @@ impl Coloring<'_> {
         if depth >= Self::DEPTH {
             return false;
         }
-        if depth == 0 && llrm_support::env_set("LLRM_CHECK_CROWDED") {
+        if depth == 0 && llrm_support::env_flag!("LLRM_CHECK_CROWDED") {
             assert_eq!(
                 self.crowded(value),
                 self.crowded_reference(value),
@@ -3626,7 +3684,7 @@ impl Coloring<'_> {
             );
         }
         if depth == 0 && self.crowded(value) {
-            if llrm_support::env_set("LLRM_CHECK_RECOLOR") {
+            if llrm_support::env_flag!("LLRM_CHECK_RECOLOR") {
                 let mut again = Coloring {
                     union: &mut *self.union,
                     r#where: &mut *self.r#where,
@@ -4631,7 +4689,7 @@ fn _fold_free(
     busy: &Frequency,
 ) -> IndexMap<u32, f64> {
     let discounts = FoldDiscounts::of(profile);
-    let check = llrm_support::env_set("LLRM_CHECK_FOLDS");
+    let check = llrm_support::env_flag!("LLRM_CHECK_FOLDS");
     let mut free: IndexMap<u32, f64> = IndexMap::default();
     for block in &body.blocks {
         let each = busy.block(block.at);

@@ -647,6 +647,45 @@ fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own()
     assert_eq!(found, forecast, "{found} traffics for {forecast} forecasts");
 }
 
+/// Each forecast of a clone solved the whole function's liveness again, 354 of
+/// the 560 M instructions the spill model took on d_faces at -Os; the clone's
+/// is the base's with the values the run moved solved again.
+#[test]
+fn test_a_motion_is_priced_without_solving_the_clone_s_liveness_whole() {
+    let text = two_inner_loops();
+    let mut after = parsed(&text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    let solved = llrm_analysis::liveness::solves();
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let solved = llrm_analysis::liveness::solves() - solved;
+    let (_, forecast) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(forecast >= 3, "{forecast} forecasts");
+    assert!(solved < forecast, "{solved} liveness solves for {forecast} forecasts");
+}
+
+/// The cached pressure was the function's before the pass moved anything, so
+/// the loop after an accepted motion priced its clone from a base that lacked
+/// it (`LLRM_CHECK_VIEW`: x_life -O2, forecast cost 669951 vs 1003142). Under
+/// test `_affordable` asserts its base is the function's own.
+#[test]
+fn test_a_clone_is_priced_from_the_pressure_of_the_function_after_a_motion() {
+    let mut after = parsed(&two_inner_loops());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.require::<Summaries>();
+    passes.add(super::Hoist { size: true });
+    crate::profit::PRICED.with(|count| count.set((0, 0)));
+    passes
+        .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let (priced, _) = crate::profit::PRICED.with(std::cell::Cell::get);
+    assert!(priced >= 2, "{priced} loops priced: none after a motion");
+}
+
 /// The invariant `double` loads of a loop, hoisted: how many are in the
 /// preheader when `count` globals are summed each trip, on a target whose
 /// floating load costs `load`, `folded` where the add takes it from memory,
@@ -767,4 +806,45 @@ fn test_a_486_keeps_loads_in_a_loop_that_its_adds_take_from_memory() {
     assert_eq!(invariant_floats_on_a_486(1), 0, "a load the add folds saves nothing a trip");
     let held = invariant_floats_on_a_486(16);
     assert!(held < 8, "{held} of 16 loads hoisted onto a stack of 8");
+}
+
+/// `hoist` made the body's accesses, ran the invariant run and priced it for
+/// every loop, 22 calls on d_faces -O2 with loops, 13 of them with a loop none
+/// of whose instructions reads only what is outside it. With no such
+/// instruction nothing can move, and nothing is asked.
+#[test]
+fn a_loop_with_no_instruction_to_start_a_run_asks_for_no_accesses() {
+    let loop_of = |body: &str, step: &str| {
+        format!(
+            "define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+{body}  %j = add i16 %i, {step}
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %j
+}}
+"
+        )
+    };
+    let accesses = |text: &str| {
+        llrm_mir::passes::trace_recomputes(true);
+        let (_, after) = hoisted(text);
+        let built: usize =
+            llrm_mir::passes::recomputes().iter().filter(|(name, ..)| *name == "accesses").map(|(.., n)| n).sum();
+        llrm_mir::passes::trace_recomputes(false);
+        (built, printed(&after))
+    };
+    let (none, _) = accesses(&loop_of("", "1"));
+    assert_eq!(none, 0, "accesses made for a loop with nothing to move");
+    let (some, text) = accesses(&loop_of("  %k = mul i16 %n, 3\n", "%k"));
+    assert!(
+        some > 0 && text.find("%k = mul").unwrap() < text.find("b1:").unwrap(),
+        "premise: an invariant moves\n{text}"
+    );
 }

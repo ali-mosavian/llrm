@@ -36,6 +36,7 @@ sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "t
 import cpulimit  # noqa: E402
 import benchlist  # noqa: E402
 import basecounts  # noqa: E402
+import shards  # noqa: E402
 import maps  # noqa: E402
 import corpus  # noqa: E402
 import sizes  # noqa: E402
@@ -183,26 +184,62 @@ def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | 
     return counted, sized
 
 
+def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
+    """The flags the harness gives the compiler for `variant` at -`opt`: the kernel stays a call (inlined into main it has no entry to
+    count from), a C one by the volatile pointer in `kept_a_call` or else the flag, a BASIC one (a private SUB called once) by turning
+    called-once inlining off too. LLRM_BENCH_FLAGS: more flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it."""
+    flags = [f"-{opt}", *([] if kept else ["-fno-inline-functions"]), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
+        flags.append("-fno-inline-functions-called-once")
+    return flags
+
+
+def nib_flags() -> list[str]:
+    """What nib-build.sh is given for a Nib benchmark's compile."""
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+
+
+def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
+    """Every compile of llrm's own the harness makes of `variant` at -`opt`, as (tool, arguments, object): what `build` runs, from the same
+    flags, for whatever must compile the bench's programs as the bench does (tools/identical.py). The Nib program's compile is what
+    nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
+    obj = work / f"{stem}.obj"
+    if variant.language == "nib":
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+    if variant.language == FLAT:
+        source = qbbuild.flat_source(variant.source)
+        return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
+    tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
+    arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
+    if variant.language in OURS_BASIC:
+        arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
+    extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
+    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    if variant.language == "c":
+        extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
+    flags = compile_flags(variant, opt, kept is not None)
+    out = [(tool, [str(kept[1] if kept else variant.source), *arguments, *extra, *flags, "-o", str(obj)], obj)]
+    if kept:
+        counted = work / f"{stem}.counted.obj"
+        out.append((tool, [str(kept[0]), *arguments, *extra, *flags, "-o", str(counted)], counted))
+    return out
+
+
 def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | None = None) -> tuple[Path, Path] | str:
     """(exe, linker map) of the variant at -`opt`, or why it did not build. BASIC is only compiled here: LINK runs in DOSBox."""
     obj, listing = work / f"{stem}.obj", work / f"{stem}.map"
     # The kernel stays a call: inlined into main it has no entry to count from.
-    # LLRM_BENCH_FLAGS: more compiler flags for a measurement, `-fsanitize=stack`'s overhead; the gate fails on it.
-    more = os.environ.get("LLRM_BENCH_FLAGS", "").split()
-    flags = [f"-{opt}", "-fno-inline-functions", *more]
     source, counted = variant.source, None
-    if variant.language == "c" and (kept := kept_a_call(variant, work, stem)) is not None:
-        flags.remove("-fno-inline-functions")
+    kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
+    flags = compile_flags(variant, opt, kept is not None)
+    if kept is not None:
         counted, source = kept
-    # A BASIC kernel is a private SUB called once from main: it stays a call only where called-once inlining is off (a C one is public).
-    if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC):
-        flags.append("-fno-inline-functions-called-once")
     try:
         if variant.language == "nib":
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(["-fno-inline-functions", "-fno-inline-functions-called-once", *more])})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -769,7 +806,7 @@ def standing(measured: dict, selected: list[str], opts: list[str]) -> list[str]:
     return lines
 
 
-def base_rows(args) -> tuple[dict, set[str], str]:
+def base_rows(args, only: list[str] | None = None) -> tuple[dict, set[str], str]:
     """(the base's rows of ours, the programs the base and this tree have alike, the base's commit): the base is the merge-base with
     origin/main, built and measured by its own tree (basecounts.py), once per tree."""
     import measure
@@ -778,10 +815,41 @@ def base_rows(args) -> tuple[dict, set[str], str]:
     base_sha = measure.base_of(head, os.environ.get("LLRM_BENCH_BASE_REF", "origin/main"))
     with measure.locked(f"bench-base-{measure.tree_of(base_sha) or base_sha}"):
         base, was = basecounts.base_counts(
-            base_sha, args.opt, basecounts.compiler_key, measure.built, lambda directory, opts: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time), args.time
+            base_sha, args.opt, basecounts.compiler_key, measure.built, lambda directory, opts, names=None: basecounts.measure_in_subprocess(directory, opts, args.work / "base", args.time, names), args.time, only=only
         )
     now = basecounts.programs(ROOT)
     return base, {name for name in now if was.get(name) == now[name]}, base_sha
+
+
+def merge(folder: Path, count: int, opts: list[str], record: bool) -> int:
+    """The verdict of the `count` shard files in `folder` (bench.py --shard writes them): the lines the whole run prints that a shard
+    cannot (the standing against each reference, the waivers nothing needed, the problems last), and with `record` the head's counts as
+    the base of the next pull requests. A missing shard is a failure, named: its rows were not judged."""
+    files = sorted(folder.glob("shard-*.json"))
+    have = {int(one.stem.split("-")[1]) for one in files}
+    if missing := sorted(set(range(1, count + 1)) - have):
+        print(f"FAIL BASE: no result from bench shard {' '.join(map(str, missing))} of {count}: its rows were not judged")
+        return 1
+    measured, base, same, problems, heads = {}, {}, set(), [], set()
+    for one in files:
+        data = json.loads(one.read_text())
+        measured |= basecounts.rows_of(data["measured"])
+        base |= basecounts.rows_of(data["base"])
+        same |= set(data["same"])
+        problems += data["problems"]
+        heads.add(data["base_sha"])
+    stale = basecounts.judge(measured, base, basecounts.waivers(), same)[2]
+    print(*standing(measured, [], opts), sep="\n")
+    print(f"BASE {' '.join(sorted(h[:9] for h in heads))}: {len(base)} rows")
+    print(*basecounts.stale_summary(stale), sep="\n")
+    if record:
+        import measure
+
+        print("recorded", basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD"))))
+    for one in problems:
+        print("FAIL", one)
+    print(f"{len(measured)} measurements: {len(problems)} problems")
+    return 1 if problems else 0
 
 
 def main() -> int:
@@ -793,16 +861,29 @@ def main() -> int:
     parser.add_argument("--bless", action="store_true", help="record the references' counts (with --references): the compiler's own are judged against the base, never recorded")
     parser.add_argument("--reason", default="")
     parser.add_argument("--no-judge", action="store_true", help="measure, write --json and stop: the base's counts are made this way")
+    parser.add_argument("--record", action="store_true", help="measure the head and keep its counts as the base of the next pull requests (a main push); no base, no judging")
+    parser.add_argument("--shard", metavar="I/N", help="only shard I of N of the benchmarks (shards.toml), judged alone; --json then writes shard-I.json for --merge")
+    parser.add_argument("--merge", nargs=2, metavar=("DIR", "N"), help="judge nothing: print the verdict of the N shard-*.json in DIR (add --record on a main push)")
     parser.add_argument("--json", type=Path)
     parser.add_argument("--work", type=Path, default=llrmbin.target_dir() / "bench")
     args = parser.parse_args()
+    if args.merge:
+        return merge(Path(args.merge[0]), int(args.merge[1]), args.opt, args.record)
+    if args.shard:
+        index, count = map(int, args.shard.split("/"))
+        args.select = shards.of(index, count)
     if args.bless and not (args.reason and args.references):
         parser.error("--bless records the references, so it needs --references and --reason: every change to expected.toml says why")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     if args.references:
         measured |= measure_references(args.select, args.opt, args.work, args.time)
-    if args.json:
+    if args.json and not args.shard:
         args.json.write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
+    if args.record:
+        import measure
+
+        print("recorded", basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD"))))
+        return 0
     if args.no_judge:
         return 0
     if args.bless:
@@ -818,16 +899,23 @@ def main() -> int:
         print(f"blessed {len({key[0] for key in references})} benchmarks, {changed} files changed")
         print(*standing(measured, args.select, args.opt), sep="\n")
         return 0
-    if os.environ.get("LLRM_BENCH_RECORD") and not args.select:  # a main push: these counts are the next pull requests' base
-        import measure
-
-        basecounts.record(measured, basecounts.CACHE, basecounts.compiler_key(measure.git("rev-parse", "HEAD")))
     try:
-        base, same, base_sha = base_rows(args)
+        base, same, base_sha = base_rows(args, args.select) if args.shard else base_rows(args)
     except BaseException as why:  # noqa: BLE001: the reason is the line the gate prints
         print("FAIL BASE: the base could not be measured: " + type(why).__name__ + ": " + " ".join(str(why).split())[-400:])
         return 1
     problems = judge(measured, args.select, args.opt, base, same)
+    if args.shard:  # the rest of the verdict needs every shard: --merge
+        for one in problems:
+            print("FAIL", one)
+        print(f"shard {args.shard}: {len(measured)} measurements: {len(problems)} problems")
+        if args.json:
+            args.json.mkdir(parents=True, exist_ok=True)
+            mine = {"/".join(key): value for key, value in measured.items()}
+            (args.json / f"shard-{index}.json").write_text(
+                json.dumps({"measured": mine, "base": {"/".join(key): value for key, value in base.items() if key[0] in args.select}, "same": sorted(same), "problems": problems, "base_sha": base_sha})
+            )
+        return 1 if problems else 0
     for why in sorted({value["skip"] for value in measured.values() if "skip" in value}):
         print("SKIP", why)
     print(*standing(measured, args.select, args.opt), sep="\n")

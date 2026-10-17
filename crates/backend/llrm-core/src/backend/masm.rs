@@ -117,8 +117,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
-use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, RegSet};
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -589,6 +589,15 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
+/// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
+/// it saves are then all pushed at the entry, and the return sets SP from the
+/// frame register.
+fn moves_stack(body: &crate::model::lir::LirBody) -> bool {
+    body.insns().iter().any(|one| {
+        one.call.as_ref().is_some_and(|call| call.disturbs.iter().any(|one| ir::root(*one) == ir::root(STACK)))
+    })
+}
+
 /// The registers `procedure` keeps for its caller: each one it names, or a call
 /// it makes disturbs by its convention, that this convention leaves to the
 /// callee, by its low half. A call to a routine whose convention disturbs more
@@ -618,6 +627,9 @@ fn wrap_of(
     frame: bool,
     stack_addressed: bool,
 ) -> Option<crate::backend::shrinkwrap::Wrap> {
+    if moves_stack(body) {
+        return None;
+    }
     let lows = saved_of(procedure);
     let kept: BTreeSet<RegId> =
         procedure.registers.saved.iter().filter(|(_, low)| lows.contains(low)).map(|(whole, _)| *whole).collect();
@@ -713,8 +725,16 @@ fn parts(
     let framed = framed_by(reserve);
     let reserve = held(reserve);
     let (bp, sp) = (reg(FRAME), reg(STACK));
-    let mut leave: Vec<Semantics> =
-        saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])).collect();
+    // Inline code that moves SP (`alloca`) leaves the saved registers below an
+    // unknown distance: SP is set from the frame register first.
+    let moved = !omit && framed && moves_stack(&procedure.body);
+    let mut leave: Vec<Semantics> = Vec::new();
+    if moved {
+        let below = reserve + slot * saved.len() as i64;
+        let from = ir::Mem { through: FRAME, offset: -below, disp_width: 2, ..ir::Mem::new(None, 2) };
+        leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
+    }
+    leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
     if omit && reserve != 0 {
         leave.push(semantics(
             Operation::Binary,
@@ -1645,8 +1665,8 @@ pub fn _falls_to(
 fn _roots_of_values(
     body: &lir::LirBody,
     pointer: RegId,
-) -> BTreeSet<RegId> {
-    let mut found = BTreeSet::new();
+) -> RegSet {
+    let mut found = RegSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         for r#where in what.dests.iter().chain(&what.sources) {
@@ -1669,8 +1689,8 @@ fn _roots_of_values(
     found
 }
 
-pub fn _roots(body: &lir::LirBody) -> BTreeSet<RegId> {
-    let mut found = BTreeSet::new();
+pub fn _roots(body: &lir::LirBody) -> RegSet {
+    let mut found = RegSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         for r#where in what.dests.iter().chain(&what.sources) {

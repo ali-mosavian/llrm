@@ -88,6 +88,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -156,17 +157,16 @@ pub fn use_index(
 /// Whether any went.
 pub fn pruned_phis(
     function: &mut Function,
-    roots: &BTreeSet<ValueId>,
+    roots: &IdSet<ValueId>,
 ) -> bool {
-    let mut needed: BTreeSet<ValueId> = roots.clone();
+    let mut needed: IdSet<ValueId> = roots.clone();
     for (_, _, op) in operations(function) {
         needed.extend(reads(op));
     }
-    let found: BTreeMap<ValueId, InstId> =
-        phis(function).filter_map(|(inst, _, phi)| Some((phi.result?, inst))).collect();
-    let mut pending: Vec<ValueId> = needed.iter().filter(|value| found.contains_key(value)).copied().collect();
+    let found: IdMap<ValueId, InstId> = phis(function).filter_map(|(inst, _, phi)| Some((phi.result?, inst))).collect();
+    let mut pending: Vec<ValueId> = needed.iter().filter(|value| found.contains_key(value)).collect();
     while let Some(next) = pending.pop() {
-        let incoming: BTreeSet<ValueId> =
+        let incoming: Vec<ValueId> =
             reads(function.instruction(found[&next])).filter(|value| !needed.contains(value)).collect();
         needed.extend(incoming.iter().copied());
         pending.extend(incoming.into_iter().filter(|value| found.contains_key(value)));
@@ -181,6 +181,16 @@ pub fn pruned_phis(
         function.erase(inst).expect("only dead phis read a dead phi");
     }
     !removed.is_empty()
+}
+
+thread_local! {
+    static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many substitutions this thread has followed, for a test that a chain is
+/// followed once.
+pub fn provider_steps() -> usize {
+    STEPS.with(std::cell::Cell::get)
 }
 
 /// Follow a substitution until its provider is unchanged.
@@ -199,9 +209,49 @@ pub fn provider(
         if !seen.insert(id) {
             return Err(SubstitutionError::CyclicValueSubstitution);
         }
+        STEPS.with(|steps| steps.set(steps.get() + 1));
         value = replacement;
     }
     Ok(value)
+}
+
+/// `provider` for many values of one `swap`: where a chain was followed once,
+/// its values are known to end where it did (a chain of N served loads was
+/// N^2/2 steps).
+pub fn providers(
+    values: impl IntoIterator<Item = Operand>,
+    swap: impl Fn(ValueId) -> Option<Operand>,
+) -> Result<Vec<Operand>, SubstitutionError> {
+    // Where a value's chain ends, and in which walk it was last passed.
+    let mut ended: IdMap<ValueId, Operand> = IdMap::new();
+    let mut passed: IdMap<ValueId, usize> = IdMap::new();
+    let mut out = Vec::new();
+    for (walk, start) in values.into_iter().enumerate() {
+        let mut path = Vec::new();
+        let mut value = start;
+        while let Operand::Value(id) = value
+            && let Some(replacement) = swap(id)
+        {
+            if let Some(&known) = ended.get(&id) {
+                value = known;
+                break;
+            }
+            if replacement == value {
+                break;
+            }
+            if passed.insert(id, walk) == Some(walk) {
+                return Err(SubstitutionError::CyclicValueSubstitution);
+            }
+            path.push(id);
+            STEPS.with(|steps| steps.set(steps.get() + 1));
+            value = replacement;
+        }
+        for id in path {
+            ended.insert(id, value);
+        }
+        out.push(value);
+    }
+    Ok(out)
 }
 
 /// An instruction's operands with each value read through `swap`.
@@ -413,6 +463,7 @@ impl SsaUpdater {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use llrm_mir::dense::IdSet;
     use llrm_mir::module::Use;
     use llrm_mir::module::{Operand, ValueId};
 
@@ -447,9 +498,9 @@ b2:
 "
             ));
             let roots = if reader == "root" {
-                BTreeSet::from([value(function(&module, "f"), "first")])
+                IdSet::from_iter([value(function(&module, "f"), "first")])
             } else {
-                BTreeSet::new()
+                IdSet::new()
             };
             let f = module.function_mut("f").unwrap().1;
             let changed = pruned_phis(f, &roots);
@@ -601,7 +652,7 @@ b2:
 ",
         );
         let f = module.function_mut("f").unwrap().1;
-        assert!(pruned_phis(f, &BTreeSet::new()));
+        assert!(pruned_phis(f, &IdSet::new()));
         let names = phis(f).map(|(_, _, phi)| f.value(phi.result.unwrap()).name.clone().unwrap()).collect::<Vec<_>>();
         assert_eq!(names, ["inner", "outer"]);
         assert!(f.check_uses().is_empty());
@@ -619,7 +670,7 @@ b0:
         );
         let f = module.function_mut("f").unwrap().1;
         let before = f.clone();
-        assert!(!pruned_phis(f, &BTreeSet::new()));
+        assert!(!pruned_phis(f, &IdSet::new()));
         assert_eq!(*f, before);
     }
 
@@ -801,5 +852,29 @@ b2:
         );
         assert_eq!(placed, 0);
         assert!(text.contains("%e = phi i16 [ %a, %b1 ], [ %x, %b0 ]"), "{text}");
+    }
+
+    /// A chain of N values each served by the next, every one asked for: N^2/2
+    /// steps one `provider` at a time, 584 M instructions of the 1,746 M that
+    /// `forwarded` took on 800 statements of a loop. Each is followed once, and
+    /// to the end `provider` finds.
+    #[test]
+    fn test_a_chain_of_substitutions_is_followed_once() {
+        let n = 300u32;
+        let mut swap = BTreeMap::new();
+        for k in 0..n {
+            swap.insert(ValueId(k), Operand::Value(ValueId(k + 1)));
+        }
+        swap.insert(ValueId(n + 5), Operand::Value(ValueId(n + 5)));
+        let starts: Vec<Operand> =
+            (0..=n).map(|k| Operand::Value(ValueId(k))).chain([Operand::Value(ValueId(n + 5))]).collect();
+        let before = super::provider_steps();
+        let ends = super::providers(starts.iter().copied(), |id| swap.get(&id).copied()).unwrap();
+        let steps = super::provider_steps() - before;
+        let alone: Vec<Operand> = starts.iter().map(|&one| provider(one, &swap).unwrap()).collect();
+        assert_eq!(ends, alone);
+        assert!(steps <= 2 * n as usize, "{steps} steps for a chain of {n}");
+        swap.insert(ValueId(n), Operand::Value(ValueId(0)));
+        assert!(super::providers(starts.iter().copied(), |id| swap.get(&id).copied()).is_err());
     }
 }

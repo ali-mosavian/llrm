@@ -164,7 +164,7 @@ fn foreign(
     program: Option<&ProgramProxy>,
 ) -> Option<Slice> {
     let machine = &*program?.target;
-    let spaces = machine.spaces();
+    let spaces = program?.spaces;
     // A selector or offset is a word of the segment's size: none where the
     // target has no segments, unless it has one address space, where an
     // offset is the linear address, a 32-bit word, and there is no selector.
@@ -263,10 +263,12 @@ fn same_typed_start(
 }
 
 /// Whether the address analysis has the two accesses in one object at bytes
-/// that overlap: each names one start in a single object, and their widths
-/// reach one another. Type-based alias analysis only tells accesses apart that
-/// the address analysis cannot (as LLVM asks it of MayAlias alone); it does not
-/// unsay an overlap that is known.
+/// that overlap: each names starts in a single object, and the widths from
+/// every start of one reach every start of the other. A fact that is coarser
+/// than the access (starts 0 to 7 of a 4-byte read of an 8-byte cell) still
+/// has them overlap wherever the access lies. Type-based alias analysis only
+/// tells accesses apart that the address analysis cannot (as LLVM asks it of
+/// MayAlias alone); it does not unsay an overlap that is known.
 fn provably_overlap(
     one: &MemRef,
     other: &MemRef,
@@ -280,13 +282,13 @@ fn provably_overlap(
     ) else {
         return false;
     };
-    let exact = |slice: &Slice| slice.stride == 1 && slice.high == slice.low + 1 && slice.low != FLOOR;
+    let bounded = |slice: &Slice| slice.low != FLOOR && slice.low < slice.high;
     let (one_width, other_width) = (i64::from(one.width.max(1)), i64::from(other.width.max(1)));
     first.object == second.object
-        && exact(first)
-        && exact(second)
-        && first.low < second.low + other_width
-        && second.low < first.low + one_width
+        && bounded(first)
+        && bounded(second)
+        && first.high - 1 < second.low + other_width
+        && second.high - 1 < first.low + one_width
 }
 
 /// Python `typed_apart`: accesses of different `!tbaa` types cannot alias
@@ -909,6 +911,32 @@ b0:
         // 2-5.
         assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 1, 2))));
         assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, 2, 3))));
+    }
+
+    /// What the address analysis has of an access may be coarser than the
+    /// access (a kept fact, starts 0 and 1 of a 4-byte read): where the bytes
+    /// meet at every start it allows, the types still do not tell them apart.
+    #[test]
+    fn a_coarse_access_that_meets_the_other_at_every_start_outranks_the_types() {
+        let module = module(&format!(
+            "define void @f(ptr %p, ptr %q) {{
+b0:
+  store i16 1, ptr %p, !tbaa !3
+  store i32 4, ptr %q, !tbaa !4
+  ret void
+}}
+
+{TAGS}"
+        ));
+        let dl = layout(&module);
+        let [short, wide] = &accesses(&module, &dl)[..] else { panic!() };
+        let object = global(1, Some(8));
+        // The short is bytes 0-1; the wide at -1 is bytes -1 to 2, at 0 bytes
+        // 0-3, at 1 bytes 1-4.
+        assert!(!typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, -1, 2))));
+        // At 2 it is bytes 2-5: it may miss the short, and the types say it
+        // does.
+        assert!(typed_apart(&with(short, one(&object, 0, 1)), &with(wide, one(&object, -1, 3))));
     }
 
     const C_TAGS: &str = "!0 = !{!\"Simple C/C++ TBAA\"}
