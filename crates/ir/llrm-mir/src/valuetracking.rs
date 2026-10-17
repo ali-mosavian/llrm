@@ -8,19 +8,34 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+pub mod context;
+pub mod guarantee;
+pub mod known;
+pub mod nonzero;
+pub mod pattern;
+pub mod power2;
 mod query;
+pub mod range;
+pub mod signbits;
 
 pub use query::{AssumptionCache, Query};
 
-/// One column of `examples/vtdump.rs`: ` name=answer`, empty for a column not
-/// translated yet.
+/// One column of `examples/vtdump.rs`: ` name=answer`.
 pub fn column(
     query: &Query,
     value: Operand,
     name: &str,
 ) -> String {
-    let _ = (query, value);
-    format!(" {name}=?")
+    match name {
+        "kb" => known::column(query, value),
+        "sb" => signbits::column(query, value),
+        "nz" => nonzero::column(query, value),
+        "p2" => power2::column(query, value, false),
+        "p2z" => power2::column(query, value, true),
+        "cru" => range::column(query, value, false),
+        "crs" => range::column(query, value, true),
+        other => format!(" {other}=?"),
+    }
 }
 
 /// Where each bit of a shift's or width change's result comes from: result bit

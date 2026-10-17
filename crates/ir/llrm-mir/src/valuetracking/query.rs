@@ -12,14 +12,17 @@ use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
 use crate::dominators::DominatorTree;
 use crate::intrinsics::Intrinsic;
-use crate::module::{Function, GlobalKind, InstId, Instruction, Module, Operand, ValueDef};
+use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Module, Operand, ValueDef};
 use crate::opcode::Opcode;
 use crate::types::{Type, TypeId};
 
 /// `SimplifyQuery`.
 #[derive(Clone, Copy)]
 pub struct Query<'a> {
-    pub module: &'a Module,
+    pub context: &'a Context,
+    /// The module's globals, which name the callees; empty where the caller has
+    /// no module.
+    pub globals: &'a [GlobalValue],
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub dt: Option<&'a DominatorTree>,
@@ -34,7 +37,25 @@ impl<'a> Query<'a> {
         function: &'a Function,
         layout: &'a DataLayout,
     ) -> Self {
-        Self { module, function, layout, dt: None, assumptions: None, cxt: None }
+        Self {
+            context: &module.context,
+            globals: &module.globals,
+            function,
+            layout,
+            dt: None,
+            assumptions: None,
+            cxt: None,
+        }
+    }
+
+    /// A query without a module: no callee has a name, so every call is
+    /// unknown.
+    pub fn bare(
+        context: &'a Context,
+        function: &'a Function,
+        layout: &'a DataLayout,
+    ) -> Self {
+        Self { context, globals: &[], function, layout, dt: None, assumptions: None, cxt: None }
     }
 
     pub fn with_cxt(
@@ -45,7 +66,28 @@ impl<'a> Query<'a> {
     }
 
     pub fn context(&self) -> &'a Context {
-        &self.module.context
+        self.context
+    }
+
+    /// The block `inst` is in.
+    pub fn block_of(
+        &self,
+        inst: InstId,
+    ) -> Option<crate::module::BlockId> {
+        self.function.parent(inst)
+    }
+
+    /// Whether `a` is before `b` in their one block
+    /// (`Instruction::comesBefore`).
+    pub fn comes_before(
+        &self,
+        a: InstId,
+        b: InstId,
+    ) -> bool {
+        let Some(block) = self.block_of(a).filter(|block| Some(*block) == self.block_of(b)) else { return false };
+        let instructions = self.function.block(block).instructions();
+        let at = |inst: InstId| instructions.iter().position(|one| *one == inst);
+        matches!((at(a), at(b)), (Some(x), Some(y)) if x < y)
     }
 
     pub fn type_of(
@@ -111,8 +153,9 @@ impl<'a> Query<'a> {
         let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
         let Operand::Constant(id) = *instruction.operands.last()? else { return None };
         let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
-        match &self.module.global(global).kind {
-            GlobalKind::Function(_) => self.module.global(global).name.as_deref(),
+        let global = self.globals.get(global.0 as usize)?;
+        match &global.kind {
+            GlobalKind::Function(_) => global.name.as_deref(),
             GlobalKind::Variable(_) => None,
         }
     }
