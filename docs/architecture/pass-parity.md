@@ -160,7 +160,7 @@ Levers at -O2, own instructions against the clang counterpart's share of its opt
 | `lir` (`peephole` 106, `jumps` 64, ...) | 366 | ~35 | ~330 (10.5%) |
 | module analyses with no timer of their own (`mir pipeline`: `Summaries`, `GlobalsAA`) | 81 | none | 81 (2.6%) |
 
-The ceilings of the rows above the analyses sum to 1,569 M of 3,147: reaching every one leaves 1,578 M, 2.8x clang's 557 (distro; 3.8x the pinned clang 24's 415.5 M), and taking half of the analyses' 701 as well leaves 1,228 M, 2.2x (3.0x the pinned). The rest of the gap is not in a pass of the list: it is the 385 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 100 M of summaries and `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
+The ceilings of the rows above the analyses sum to 1,569 M of 3,147: reaching every one leaves 1,578 M, 2.8x clang's 557 (distro; 3.8x the pinned clang 24's 415.5 M: derived, not measured, as llrm's 1,578 M is not re-taken on the pinned build), and taking half of the analyses' 701 as well leaves 1,228 M, 2.2x (3.0x the pinned: derived, not measured). The rest of the gap is not in a pass of the list: it is the 385 M of the other `mir` steps (`fold`, `algebraic`, `dse`, `promote`, ...), the 100 M of summaries and `memoryssa`, and the cost of each visit of a step that finds nothing; the per-pass levers alone do not reach clang.
 
 An earlier version of this table read inclusive times (`annotated` 37 ms is its 8 ms plus the analyses it asks for) as if own; the rows above do not overlap.
 
