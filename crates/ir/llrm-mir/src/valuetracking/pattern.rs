@@ -369,93 +369,6 @@ pub fn fneg(
 
 // guarantee.rs
 
-/// The LLVM intrinsics ValueTracking names that MIR does not enumerate in
-/// `Intrinsic`, as `llvm.<name>` without the type suffix.
-pub const INTRINSIC_NAMES: &[&str] = &[
-    "sadd.with.overflow",
-    "ssub.with.overflow",
-    "smul.with.overflow",
-    "uadd.with.overflow",
-    "usub.with.overflow",
-    "umul.with.overflow",
-    "ctpop",
-    "ctlz",
-    "cttz",
-    "abs",
-    "smax",
-    "smin",
-    "umax",
-    "umin",
-    "scmp",
-    "ucmp",
-    "is.fpclass",
-    "ptrmask",
-    "bitreverse",
-    "bswap",
-    "sadd.sat",
-    "ssub.sat",
-    "sshl.sat",
-    "uadd.sat",
-    "usub.sat",
-    "ushl.sat",
-    "smul.fix",
-    "smul.fix.sat",
-    "umul.fix",
-    "umul.fix.sat",
-    "pow",
-    "powi",
-    "sin",
-    "sinh",
-    "cos",
-    "cosh",
-    "sincos",
-    "sincospi",
-    "tan",
-    "tanh",
-    "asin",
-    "acos",
-    "atan",
-    "atan2",
-    "canonicalize",
-    "sqrt",
-    "exp",
-    "exp2",
-    "exp10",
-    "log",
-    "log2",
-    "log10",
-    "modf",
-    "floor",
-    "ceil",
-    "trunc",
-    "rint",
-    "nearbyint",
-    "round",
-    "roundeven",
-    "lrint",
-    "llrint",
-    "fshl",
-    "fshr",
-    "frexp",
-    "get.active.lane.mask",
-    "matrix.column.major.load",
-    "matrix.column.major.store",
-];
-
-/// The entry of [`INTRINSIC_NAMES`] a call to an `llvm.` function reaches: the
-/// longest one the callee's name is, before its type suffix.
-pub fn intrinsic_name(
-    q: &Query,
-    inst: InstId,
-) -> Option<&'static str> {
-    let name = q.callee_name(inst)?.strip_prefix("llvm.")?;
-    INTRINSIC_NAMES
-        .iter()
-        .filter(|one| name.strip_prefix(**one).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-        .max_by_key(|one| one.len())
-        .copied()
-}
-
 /// `m_ExtractValue(m_Value())`: `v` is an `extractvalue`: its instruction and
 /// the aggregate it reads.
 pub fn extract_value<'a>(
@@ -476,4 +389,127 @@ pub fn with_overflow_inst<'a>(
         q.intrinsic(inst),
         Some(crate::intrinsics::Intrinsic::WithOverflow { .. })
     ).then_some((inst, instruction))
+}
+
+// ---- the intrinsics ValueTracking reads by name ----
+
+macro_rules! intrinsics {
+    ($($variant:ident => $name:literal,)*) => {
+        /// `Intrinsic::ID` of the intrinsics ValueTracking asks about; MIR
+        /// enumerates few of them, so they are found by callee name.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum IntrinsicId {
+            $($variant,)*
+        }
+
+        const INTRINSIC_NAMES: &[(&str, IntrinsicId)] = &[$(($name, IntrinsicId::$variant),)*];
+    };
+}
+
+intrinsics! {
+    SaddWithOverflow => "sadd.with.overflow",
+    SsubWithOverflow => "ssub.with.overflow",
+    SmulWithOverflow => "smul.with.overflow",
+    UaddWithOverflow => "uadd.with.overflow",
+    UsubWithOverflow => "usub.with.overflow",
+    UmulWithOverflow => "umul.with.overflow",
+    Ctpop => "ctpop",
+    Ctlz => "ctlz",
+    Cttz => "cttz",
+    Abs => "abs",
+    Smax => "smax",
+    Smin => "smin",
+    Umax => "umax",
+    Umin => "umin",
+    Scmp => "scmp",
+    Ucmp => "ucmp",
+    IsFpclass => "is.fpclass",
+    Ptrmask => "ptrmask",
+    Bitreverse => "bitreverse",
+    Bswap => "bswap",
+    SaddSat => "sadd.sat",
+    SsubSat => "ssub.sat",
+    SshlSat => "sshl.sat",
+    UaddSat => "uadd.sat",
+    UsubSat => "usub.sat",
+    UshlSat => "ushl.sat",
+    SmulFix => "smul.fix",
+    SmulFixSat => "smul.fix.sat",
+    UmulFix => "umul.fix",
+    UmulFixSat => "umul.fix.sat",
+    Pow => "pow",
+    Powi => "powi",
+    Sin => "sin",
+    Sinh => "sinh",
+    Cos => "cos",
+    Cosh => "cosh",
+    Sincos => "sincos",
+    Sincospi => "sincospi",
+    Tan => "tan",
+    Tanh => "tanh",
+    Asin => "asin",
+    Acos => "acos",
+    Atan => "atan",
+    Atan2 => "atan2",
+    Canonicalize => "canonicalize",
+    Sqrt => "sqrt",
+    Exp => "exp",
+    Exp2 => "exp2",
+    Exp10 => "exp10",
+    Log => "log",
+    Log2 => "log2",
+    Log10 => "log10",
+    Modf => "modf",
+    Floor => "floor",
+    Ceil => "ceil",
+    Trunc => "trunc",
+    Rint => "rint",
+    Nearbyint => "nearbyint",
+    Round => "round",
+    Roundeven => "roundeven",
+    Lrint => "lrint",
+    Llrint => "llrint",
+    Fshl => "fshl",
+    Fshr => "fshr",
+    Frexp => "frexp",
+    GetActiveLaneMask => "get.active.lane.mask",
+    MatrixColumnMajorLoad => "matrix.column.major.load",
+    MatrixColumnMajorStore => "matrix.column.major.store",
+    Assume => "assume",
+    Vscale => "vscale",
+    LaunderInvariantGroup => "launder.invariant.group",
+    Aarch64Irg => "aarch64.irg",
+    Aarch64Tagp => "aarch64.tagp",
+    AmdgcnMakeBufferRsrc => "amdgcn.make.buffer.rsrc",
+    ThreadlocalAddress => "threadlocal.address",
+    ExperimentalGuard => "experimental.guard",
+    ExperimentalGetVectorLength => "experimental.get.vector.length",
+    RiscvVsetvlimax => "riscv.vsetvlimax",
+    Minnum => "minnum",
+    Maxnum => "maxnum",
+    Minimum => "minimum",
+    Maximum => "maximum",
+    Minimumnum => "minimumnum",
+    Maximumnum => "maximumnum",
+}
+
+/// `Function::getIntrinsicID` of the function named `name` (`llvm.smax.i32`),
+/// for the intrinsics of [`IntrinsicId`]: the longest name that is the callee's
+/// before its type suffix.
+pub fn intrinsic_id_of_name(name: &str) -> Option<IntrinsicId> {
+    let name = name.strip_prefix("llvm.")?;
+    INTRINSIC_NAMES
+        .iter()
+        .filter(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+        .max_by_key(|(base, _)| base.len())
+        .map(|(_, id)| *id)
+}
+
+/// `IntrinsicInst::getIntrinsicID` of a call: `inst` calls one of
+/// [`IntrinsicId`].
+pub fn intrinsic_id(
+    q: &Query,
+    inst: InstId,
+) -> Option<IntrinsicId> {
+    intrinsic_id_of_name(q.callee_name(inst)?)
 }

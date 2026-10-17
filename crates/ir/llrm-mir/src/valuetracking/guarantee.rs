@@ -28,7 +28,7 @@
 //! # Example
 //! A `freeze` is never undef or poison.
 
-use super::pattern;
+use super::pattern::{self, IntrinsicId};
 use super::query::Query;
 use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
@@ -217,11 +217,11 @@ fn is_volatile(
             let one_at = |at: usize| {
                 instruction.operands.get(at).and_then(|op| q.int_constant(*op)).is_some_and(|(bits, _)| bits != 0)
             };
-            match (q.intrinsic(inst), pattern::intrinsic_name(q, inst)) {
+            match (q.intrinsic(inst), pattern::intrinsic_id(q, inst)) {
                 (Some(crate::intrinsics::Intrinsic::MemCpy | crate::intrinsics::Intrinsic::MemMove), _)
                 | (Some(crate::intrinsics::Intrinsic::MemSet), _) => one_at(3),
-                (_, Some("matrix.column.major.load")) => one_at(2),
-                (_, Some("matrix.column.major.store")) => one_at(3),
+                (_, Some(IntrinsicId::MatrixColumnMajorLoad)) => one_at(2),
+                (_, Some(IntrinsicId::MatrixColumnMajorStore)) => one_at(3),
                 _ => false,
             }
         }
@@ -352,8 +352,8 @@ fn has_poison_generating_flags(
         opcode => {
             if matches!(opcode, Opcode::Call(_))
                 && matches!(
-                    pattern::intrinsic_name(q, inst),
-                    Some("ctlz" | "cttz" | "abs")
+                    pattern::intrinsic_id(q, inst),
+                    Some(IntrinsicId::Ctlz | IntrinsicId::Cttz | IntrinsicId::Abs)
                 )
             {
                 return instruction
@@ -458,9 +458,9 @@ fn can_create_undef_or_poison_kind(
         }
         Opcode::Cast(CastOp::FPToSI | CastOp::FPToUI) => true,
         Opcode::Call(_) => {
-            match pattern::intrinsic_name(q, inst) {
-                Some("ctlz" | "cttz" | "abs") => return false,
-                Some("sshl.sat" | "ushl.sat") => {
+            match pattern::intrinsic_id(q, inst) {
+                Some(IntrinsicId::Ctlz | IntrinsicId::Cttz | IntrinsicId::Abs) => return false,
+                Some(IntrinsicId::SshlSat | IntrinsicId::UshlSat) => {
                     if !includes_poison(kind) || shift_amount_known_in_range(q, instruction.operands[1]) {
                         return false;
                     }
@@ -991,74 +991,74 @@ pub fn intrinsic_propagates_poison(
         return true;
     }
     matches!(
-        pattern::intrinsic_name(q, inst),
+        pattern::intrinsic_id(q, inst),
         Some(
-            "sadd.with.overflow"
-                | "ssub.with.overflow"
-                | "smul.with.overflow"
-                | "uadd.with.overflow"
-                | "usub.with.overflow"
-                | "umul.with.overflow"
-                | "ctpop"
-                | "ctlz"
-                | "cttz"
-                | "abs"
-                | "smax"
-                | "smin"
-                | "umax"
-                | "umin"
-                | "scmp"
-                | "is.fpclass"
-                | "ptrmask"
-                | "ucmp"
-                | "bitreverse"
-                | "bswap"
-                | "sadd.sat"
-                | "ssub.sat"
-                | "sshl.sat"
-                | "uadd.sat"
-                | "usub.sat"
-                | "ushl.sat"
-                | "smul.fix"
-                | "smul.fix.sat"
-                | "umul.fix"
-                | "umul.fix.sat"
-                | "pow"
-                | "powi"
-                | "sin"
-                | "sinh"
-                | "cos"
-                | "cosh"
-                | "sincos"
-                | "sincospi"
-                | "tan"
-                | "tanh"
-                | "asin"
-                | "acos"
-                | "atan"
-                | "atan2"
-                | "canonicalize"
-                | "sqrt"
-                | "exp"
-                | "exp2"
-                | "exp10"
-                | "log"
-                | "log2"
-                | "log10"
-                | "modf"
-                | "floor"
-                | "ceil"
-                | "trunc"
-                | "rint"
-                | "nearbyint"
-                | "round"
-                | "roundeven"
-                | "lrint"
-                | "llrint"
-                | "fshl"
-                | "fshr"
-                | "frexp"
-                | "get.active.lane.mask"
+            IntrinsicId::SaddWithOverflow
+                | IntrinsicId::SsubWithOverflow
+                | IntrinsicId::SmulWithOverflow
+                | IntrinsicId::UaddWithOverflow
+                | IntrinsicId::UsubWithOverflow
+                | IntrinsicId::UmulWithOverflow
+                | IntrinsicId::Ctpop
+                | IntrinsicId::Ctlz
+                | IntrinsicId::Cttz
+                | IntrinsicId::Abs
+                | IntrinsicId::Smax
+                | IntrinsicId::Smin
+                | IntrinsicId::Umax
+                | IntrinsicId::Umin
+                | IntrinsicId::Scmp
+                | IntrinsicId::IsFpclass
+                | IntrinsicId::Ptrmask
+                | IntrinsicId::Ucmp
+                | IntrinsicId::Bitreverse
+                | IntrinsicId::Bswap
+                | IntrinsicId::SaddSat
+                | IntrinsicId::SsubSat
+                | IntrinsicId::SshlSat
+                | IntrinsicId::UaddSat
+                | IntrinsicId::UsubSat
+                | IntrinsicId::UshlSat
+                | IntrinsicId::SmulFix
+                | IntrinsicId::SmulFixSat
+                | IntrinsicId::UmulFix
+                | IntrinsicId::UmulFixSat
+                | IntrinsicId::Pow
+                | IntrinsicId::Powi
+                | IntrinsicId::Sin
+                | IntrinsicId::Sinh
+                | IntrinsicId::Cos
+                | IntrinsicId::Cosh
+                | IntrinsicId::Sincos
+                | IntrinsicId::Sincospi
+                | IntrinsicId::Tan
+                | IntrinsicId::Tanh
+                | IntrinsicId::Asin
+                | IntrinsicId::Acos
+                | IntrinsicId::Atan
+                | IntrinsicId::Atan2
+                | IntrinsicId::Canonicalize
+                | IntrinsicId::Sqrt
+                | IntrinsicId::Exp
+                | IntrinsicId::Exp2
+                | IntrinsicId::Exp10
+                | IntrinsicId::Log
+                | IntrinsicId::Log2
+                | IntrinsicId::Log10
+                | IntrinsicId::Modf
+                | IntrinsicId::Floor
+                | IntrinsicId::Ceil
+                | IntrinsicId::Trunc
+                | IntrinsicId::Rint
+                | IntrinsicId::Nearbyint
+                | IntrinsicId::Round
+                | IntrinsicId::Roundeven
+                | IntrinsicId::Lrint
+                | IntrinsicId::Llrint
+                | IntrinsicId::Fshl
+                | IntrinsicId::Fshr
+                | IntrinsicId::Frexp
+                | IntrinsicId::GetActiveLaneMask
         )
     )
 }
