@@ -198,4 +198,12 @@ Inclusive D1 misses (analyses a pass asks for are inside it):
 
 By structure, self misses added up: allocator and copying 23.7% (10.1 M), memory-fact tables (`alias`, `memory`, `memoryssa`, `avail`, `regions`, `pointerfacts`) 13.6%, register-allocation tables 8.7%, IR walks (`Function::successors`, `Graph::of`, dominators, `Opcode::eq`) 7.1%, `hir::verify` 2.2%. No LL miss problem: 0.67 M LL misses against 0.25 M; the working set fits the last level, so the cost is L1 and L2 traffic.
 
+## Proposed change
+
+1. Allocation and copying (518 M, 18.0% of instructions): the three changes on the [allocation page](llvm-compared-allocation.md#proposed-change).
+2. Alias and memory-SSA queries at the top of the profile: `alias::escapes` 61.2 M self, `MemRef::of` 51.6 M, `MemorySSA::walked_from` 49.6 M, `memoryssa::structure_of` 26.6 M, `exposed_frames` 21.3 M. Answer them from per-body-version tables built on first use (lazy memory facts, keep-analyses) and the walker tables (greedy-port). Saving: unmeasured; bound 210 M, 7.3%, before the callers' own work.
+3. Bookkeeping: the printed-body history is replaced by a digest in [#1931](https://github.com/ali-mosavian/llrm/pull/1931) (merged); the environment lookup per step (`env_set`, 11.4 M) in [#2007](https://github.com/ali-mosavian/llrm/pull/2007) (open); `Stamp` (49.1 M, 1.7%) and the verifiers (22 M) have no change proposed yet.
+
+Ranked list: [proposals](llvm-compared-proposals.md).
+
 Open: which of the memory-fact tables can be dense ids or bit sets, and what that saves in misses ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

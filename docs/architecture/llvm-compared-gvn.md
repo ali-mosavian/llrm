@@ -95,8 +95,8 @@ One pass, `gvn`, owns value numbering, load forwarding, join PRE and load PRE. W
 ```rust
 //! What serves a load is a MemorySSA walk (`avail::forwardable_walk`).
 //! `memoryssa::Accesses` says what each instruction reads and writes,
-//! `alias::PointsTo` what each pointer may point to, and a call's footprint is
-//! its `CallEffects` from `Summaries`; without `Summaries` every callee is
+//! `alias::PointValues` what each pointer may point to, and a call's footprint
+//! is its `CallEffects` from `Summaries`; without `Summaries` every callee is
 //! unknown. A call that may write the bytes, or a store that may overlap, ends
 //! the walk, and a walk past `MAX_NEAREST_WRITES` (100) writes gives up.
 //!
@@ -194,5 +194,14 @@ Superlinear in llrm, none in LLVM: M instructions of `LLRM_DEBUG=time` totals, m
 | 1600 | 1,829 | 1,186 | 1,205 | 1,106 |
 
 From 800 to 1600 the work grows 3.9x (`dse`), 2.9x, 3.6x and 3.7x for a doubled body; LLVM's whole optimizer grows 2.0x ([the ladder](llvm-compared.md#the-ladder)).
+
+## Proposed change
+
+1. Linear `gvn`: [#1999](https://github.com/ali-mosavian/llrm/pull/1999) (greedy-port, open) removes two quadratic loops in `transform::subexpressions`; reported on `loop` N=1600: 31,766 M to 27,311 M, exponent 1.41 to 1.34, `d_faces` unchanged. The `mem` shape's `gvn` (exponent 1.5 above) after it: unmeasured.
+2. Sparse reached set for `dse` (edit-rollback, PR coming): `dse` is 1,829 M of 5,577 M at `mem` N=1600 and doubles to 4.0x. LLVM bounds the same pass: [`dse-memoryssa-scanlimit` 150 and the step limits](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/DeadStoreElimination.cpp#L127-L160). Saving on `d_faces`: unmeasured.
+3. A generation-counter pass before `dse` and `gvn`. A new `FunctionPass` named `earlycse`, inserted in the `every` list [after `fold`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L485), shaped as [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066): one walk in dominator order, a table of available loads keyed by pointer value and type, a generation number bumped by any instruction that may write memory, and a memory-SSA query only when the generations differ, at most 500 a function. Target: the first `gvn` run (59.7 M, 2,941 to 761 instructions on `mem 200`) and the idle `dse` before it (35.5 M). Saving: unmeasured. The tracker records moving `gvn` before `dse` as measured and not the lever; this is a different, cheaper pass.
+4. Lazy memory facts (keep-analyses, design): the analyses a `gvn`, `fold` or `decide` run asks for first (`r01-fold` 2.4 M own, 27.5 M with analyses).
+
+Ranked list: [proposals](llvm-compared-proposals.md).
 
 Open: what each of these four does per query that costs the whole body ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

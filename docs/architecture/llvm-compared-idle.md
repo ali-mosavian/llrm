@@ -114,4 +114,12 @@ By pass (llrm, idle runs then changing runs, M with analyses):
 
 The 722 itemised runs are 24 fewer than the 746 the pass counter reports; the steps without a name in the log are left out.
 
+## Proposed change
+
+1. Find out why an idle run was not skipped. In [`Fixed::fixed`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L1026), when a pass runs and returns unchanged, log the edit classes that `run.reached_since(stretches)` reported against its `reads()`; one `LLRM_DEBUG=runs` line per idle run. Measurement only; no saving claimed.
+2. Narrow `reads()` for the costliest idle passes, from that log: `promote` (29 idle runs, 45.2 M), `hoist` (30, 44.7 M), `decide` (32, 39.1 M), `sroa` (12, 35.6 M), `fold` (25, 32.4 M), `fill` (26, 29.0 M). Upper bound 226 M of the 361 M; saving: unmeasured.
+3. Check for work before asking for analyses, as [`InstCombinePass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L6258) asks last-run tracking first. `sroa` idle runs cost 3.0 M each, `decide` 0.47 M own against 13.0 M with analyses: a cheap scan for a candidate (a promotable alloca, a foldable branch) ahead of the analysis request. Saving: unmeasured.
+
+Ranked list: [proposals](llvm-compared-proposals.md).
+
 Open: why most idle runs are not skipped, and whether the `reads()` footprints are too coarse ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

@@ -12,11 +12,7 @@ Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (cl
 | [allocation and layout](llvm-compared-allocation.md) | 3.77 M allocations against 62,881; memory per IR instruction |
 | [GVN and its neighbours](llvm-compared-gvn.md) | EarlyCSE, GVN, DSE and order against `gvn`; the quadratic passes |
 | [runs that change nothing](llvm-compared-idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
-| [analysis manager](llvm-compared-analysis-manager.md) | preserved analyses and invalidation against `Analyses` |
-| [memory SSA](llvm-compared-memoryssa.md) | walker caps against `avail::forwardable_walk` |
-| [alias analysis](llvm-compared-alias.md) | depth-limited BasicAA against `regions` and `may_alias` |
-| [LICM](llvm-compared-licm.md) | LICM against `hoist` |
-| [SimplifyCFG](llvm-compared-simplifycfg.md) | SimplifyCFG against `decide` |
+| [proposals](llvm-compared-proposals.md) | every proposed change, ranked, with owner and PR |
 | [flat profile](llvm-compared-profile.md) | top functions by instructions and by L1d misses, both compilers |
 
 ## The ladder
@@ -108,25 +104,29 @@ llrm retires more instructions per cycle (2.2 against 1.6 on `d_faces`), so the 
 
 ## Bookkeeping with no counterpart in LLVM
 
-llrm prints the whole body to a `String` after every round of the pass loop and keeps the strings in a set, to catch two bodies that alternate:
+At main `21f5c9fc8` llrm printed the whole body to a `String` after every round of the pass loop and kept the strings in a set, to catch two bodies that alternate (since replaced by a digest of the body, [#1931](https://github.com/ali-mosavian/llrm/pull/1931)):
 
 [`pipeline.rs#L1007-L1009`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L1007-L1009)
 
 ```rust
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::body(unit.context, unit.function)]);
+        let mut history = BTreeSet::from([print::fingerprint(unit.function)]);
 ```
 
 [`pipeline.rs#L1064-L1066`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L1064-L1066)
 
 ```rust
-            if !history.insert(print::body(unit.context, unit.function)) {
+            if !history.insert(print::fingerprint(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
 ```
 
 On `d_faces` `Printer::instruction` is 46 M (1.6%), `Stamp` 49 M (1.7%), the HIR and MIR verifiers 22 M, `env_set` (an environment lookup per step) 11 M: about 4% of the compile. LLVM's function pipeline is a fixed list run once per function; there is no body history to keep.
+
+## Where LLVM's mechanisms are written up
+
+Five more pages compare a mechanism each, from the same measurements: analysis manager and preserved analyses, memory SSA walker caps, alias analysis depth limits, LICM, SimplifyCFG (`llvm-compared-analysis-manager.md`, `-memoryssa.md`, `-alias.md`, `-licm.md`, `-simplifycfg.md`).
 
 ## Reproduce
 

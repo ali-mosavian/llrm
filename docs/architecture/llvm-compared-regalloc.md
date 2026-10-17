@@ -176,4 +176,12 @@ Input `tools/ladder/gen.py diamond 800`, `clang -O2 -m32 -march=i486`; LLVM `llc
 | register coalescing | 76 | 108 |
 | peephole | no single counterpart | 122 |
 
-Open: does llrm re-form a flag test at each branch rather than hold the merged `and` across blocks, as LLVM's selector does, and what does that save in splits and in code size ([#1994](https://github.com/ali-mosavian/llrm/issues/1994))?
+## Proposed change
+
+1. Make the repeated mask test at each branch instead of holding it across blocks. This is [#2010](https://github.com/ali-mosavian/llrm/pull/2010) (ssa-spill-m16, open): `addresssink::masks_sunk` makes again an `and` that only `== 0` and `!= 0` compares read, before the first such compare of each block; LLVM does it in CodeGenPrepare ([`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341), [`sinkCmpExpression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1924)). Reported in the PR on this input: 79 splits gone, 419 stack operands to 0, compile 1,995 M to 1,075 M. Re-measure the table above after it lands; the changes below are for what the allocator still costs per attempt.
+2. Build the block table once per split round: [`Blocks::of(body)`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L596) runs in `carved_moving` and again in [`placed`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L1648) for each attempt; construct it in `allocate.rs` before `splitkit::local` and pass `&Blocks`. Bound before #2010: `split placed` 221 M and `split carving` 148 M of 2,014 M on `diamond 800`. Saving: unmeasured.
+3. Carve without copying the block list: [`let mut out: Vec<Block> = body.blocks.clone()`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/splitkit.rs#L670) copies every block's `Vec<Arc<Insn>>` for a change to `touched` blocks only; hold blocks behind `Arc<Block>` in `LirBody` so a carve copies the touched ones (structural sharing of LIR rewrites, ssa-spill-m16). Saving: unmeasured.
+
+Ranked list of all proposals: [proposals](llvm-compared-proposals.md).
+
+Open: what the allocator still costs per attempt once the mask test is made at the branch ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

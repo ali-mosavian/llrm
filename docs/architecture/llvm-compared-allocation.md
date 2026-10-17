@@ -70,12 +70,12 @@ pub struct Instruction {
     pub fn successors(
         &self,
         block: BlockId,
-    ) -> Vec<BlockId> {
+    ) -> crate::blocklist::BlockList {
         let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
-        let mut out = Vec::new();
+        let mut out = crate::blocklist::BlockList::new();
         for operand in operands {
             if let Operand::Block(target) = operand
                 && !out.contains(target)
@@ -126,5 +126,14 @@ Allocations by owner in llrm-c (first matching frame of the DHAT stack, so each 
 | `gvn` | 172,936 | 4.6% | 27 |
 | `fold` and `consts` | 102,622 | 2.7% | 27 |
 | instruction selection | 100,049 | 2.7% | 18 |
+
+## Proposed change
+
+1. `Function::successors` as an iterator. Replace [`pub fn successors(&self, block: BlockId) -> Vec<BlockId>`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/module.rs#L548) by `pub fn successors(&self, block: BlockId) -> impl Iterator<Item = BlockId> + '_` over the terminator's `Operand::Block` operands, skipping a target already yielded (at most `SCAN` operands are compared, the existing switch path keeps its `IdSet`); callers that need a list collect it. Callers by allocations: [`cfg::graph`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-analysis/src/cfg.rs#L186) 108,796, `DominatorTree::new` 34,406, `LoopInfo::new` 30,876, [`cfg::natural`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-analysis/src/cfg.rs#L425) 30,346. Bound: 258,958 allocations (6.9%). Saving in instructions and misses: unmeasured. LLVM: [`Instruction::successors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1462).
+2. Presize the 4-byte-id vectors: 515,831 allocations are one `RawVec::grow_one` shared by every `Vec` of `BlockId`, `ValueId`, `InstId` and `TypeId`, and `finish_grow` is 49.9 M self instructions in the flat profile. `Vec::with_capacity(known length)` at the collecting sites in `cfg::graph`, `LoopInfo::new`, `forest::forest`. Saving: unmeasured; bound 49.9 M plus the copies in `memcpy` that follow a `realloc` (2.0 M of 3.9 M D1 misses).
+3. Build the CFG tables once per body version: `cfg::graph`, `DominatorTree::new`, `LoopInfo::new` and `cfg::natural` each walk the successors; the allocation in CFG, loop and dominator builders is 523,311 (13.9%). Share the successor lists of `cfg::Shape`. Saving: unmeasured.
+4. Dense memory-SSA tables: `memoryssa::structure_of` allocates 36,340 blocks, 28.9 MB; see lazy memory facts in the proposals.
+
+Ranked list: [proposals](llvm-compared-proposals.md).
 
 Open: what holds 8 to 18 KB per IR instruction, and whether `successors` as an iterator saves the 259 k allocations and their misses ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).
