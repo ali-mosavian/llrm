@@ -36,10 +36,13 @@ KNOWN_RUN = 97
 KNOWN_BENCH = 120
 BENCH_LEVELS = ("O2", "Os", "O3")
 MODULES = ("host", "render", "model", "game", "sound", "ui")
-# Oracles the corpus run does not set (each needs inputs the corpus lacks): the list only shrinks. Every other LLRM_CHECK_ oracle in the
-# source is set by the run, and a new one needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle
-# conflicted with the others on it.
-NOT_RUN = frozenset("CACHES CALLBACKS CLASSES CLOBBERED CLOBBERS COALESCE COLORS COUNTED CYCLES DATAFLOW EFFECT FACTS FOLDS FRAME INITIALIZED INTERVALS MODULES NEEDS OCCURRENCES POINTVALUES RANGES REQUIRED SCOPES SHAPE SIMULATION STALE THRASH UNCHANGED".split())
+# Oracles the corpus run does not set: the list only shrinks. Every other LLRM_CHECK_ oracle in the source is set by the run, and a new one
+# needs no edit here: CHECKS was a list each PR appended to, and every PR that added an oracle conflicted with the others on it. An oracle
+# here is a gap the next dependency bug falls through (qcport/triggers -O1 sat behind one of the others for weeks): each of these fails on
+# the corpus on main today, and leaves with the fix named.
+#   COLORS, FRAME, SCOPES: fail on the corpus (634, 21 and 102 of 1,323 programs and modules; 0 with the oracle off).
+#   STALE: a pass that says it adds no memory operation outlives a frozen globals-aa (#2094).
+NOT_RUN = frozenset("COLORS FRAME SCOPES STALE".split())
 
 
 def checks(root: Path = ROOT) -> tuple[str, ...]:
