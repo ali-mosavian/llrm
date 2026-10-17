@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod alias;
+pub mod apint;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
@@ -59,6 +60,8 @@ pub use types::{FloatKind, Type, TypeId, Types};
 
 #[cfg(test)]
 mod build_tests;
+#[cfg(test)]
+mod constantrange_tests;
 #[cfg(test)]
 mod edit_tests;
 #[cfg(test)]
