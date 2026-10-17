@@ -1916,6 +1916,32 @@ fn simplify_icmp_with_zero(
     }
 }
 
+/// `simplifyGEPInst`
+/// ([:5302](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L5302)):
+/// no index, all indices zero, a poison pointer or index. DEVIATE: the
+/// zero-size element (`getTypeAllocSize`), the `ptrtoint` difference forms and
+/// the constant `getelementptr` expression need the data layout or constant
+/// expressions.
+fn simplify_gep(
+    q: &mut Query,
+    ptr: Operand,
+    indices: &[Operand],
+) -> Option<Operand> {
+    if indices.is_empty() {
+        return Some(ptr);
+    }
+    // gep P, 0, 0... -> P
+    if indices.iter().all(|&index| q.is_zero(index)) {
+        return Some(ptr);
+    }
+    // gep poison, ... / gep P, poison -> poison
+    if q.is_poison(ptr) || indices.iter().any(|&index| q.is_poison(index)) {
+        let ty = q.ty(ptr);
+        return Some(q.poison(ty));
+    }
+    None
+}
+
 /// `simplifyInstruction`
 /// ([:7741](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7741),
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
@@ -1943,6 +1969,7 @@ pub fn simplify_instruction(
         }
         Opcode::Cast(op) => simplify_cast(&mut q, *op, operands[0], instruction.ty, RECURSION_LIMIT),
         Opcode::Phi => simplify_phi(&mut q, inst),
+        Opcode::GetElementPtr { .. } => simplify_gep(&mut q, operands[0], &operands[1..]),
         _ => None,
     }
 }

@@ -163,3 +163,86 @@ fn simplify_cases() {
     }
     std::fs::write(output, lines).expect("out");
 }
+
+/// `instsimplify` on the body `pipeline.body` of each module in a list, as
+/// LLVM's pass does it (delete the trivially dead, replace what simplifies,
+/// until nothing does), then the opcodes left: the differential on real pass
+/// inputs. `LLRM_SIMPLIFY_FILES=list.txt LLRM_SIMPLIFY_OUT=out.tsv cargo test
+/// -p llrm-mir --lib simplify_dumps -- --ignored`.
+#[test]
+#[ignore]
+fn simplify_dumps() {
+    let (Some(list), Some(output)) = (std::env::var_os("LLRM_SIMPLIFY_FILES"), std::env::var_os("LLRM_SIMPLIFY_OUT"))
+    else {
+        return;
+    };
+    let mut lines = String::new();
+    for path in std::fs::read_to_string(list).expect("list").lines() {
+        let text = std::fs::read_to_string(path).expect("module");
+        let Ok(mut module) = parse::module(&text) else {
+            lines += &format!("{path}\tunparsed\n");
+            continue;
+        };
+        let Some((context, function)) = module.function_mut("pipeline.body") else {
+            lines += &format!("{path}\tno body\n");
+            continue;
+        };
+        loop {
+            let mut changed = false;
+            for inst in function.walk().map(|(_, inst)| inst).collect::<Vec<_>>() {
+                if function.parent(inst).is_none() {
+                    continue;
+                }
+                let instruction = function.instruction(inst);
+                let Some(result) = instruction.result else { continue };
+                let unused = function.users(result).is_empty();
+                use crate::opcode::Opcode;
+                let pure = matches!(
+                    instruction.opcode,
+                    Opcode::Binary(_)
+                        | Opcode::Cast(_)
+                        | Opcode::ICmp(_)
+                        | Opcode::FCmp(_)
+                        | Opcode::Select
+                        | Opcode::Phi
+                        | Opcode::GetElementPtr { .. }
+                        | Opcode::Alloca { .. }
+                        | Opcode::FNeg
+                        | Opcode::Freeze
+                ) || matches!(instruction.opcode, Opcode::Load { volatile: false, .. });
+                if unused && pure {
+                    function.erase(inst).expect("unused");
+                    changed = true;
+                    continue;
+                }
+                if let Some(found) = simplify::simplify_instruction(context, function, inst)
+                    && found != Operand::Value(result)
+                {
+                    function.replace_value(result, found);
+                    function.erase(inst).expect("replaced");
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let mut counts = std::collections::BTreeMap::<&str, usize>::new();
+        for (_, inst) in function.walk() {
+            *counts.entry(function.instruction(inst).opcode.mnemonic()).or_default() += 1;
+        }
+        lines += &format!(
+            "{path}\t{}\n",
+            counts.iter().map(|(name, count)| format!("{name}={count}")).collect::<Vec<_>>().join(",")
+        );
+    }
+    std::fs::write(output, lines).expect("out");
+}
+
+#[test]
+fn address_with_only_zero_indices_is_its_pointer() {
+    let text = "define ptr @f(ptr %p, i16 %i) {\nb0:\n  %z = getelementptr i16, ptr %p, i16 0\n  %w = getelementptr [4 x i16], ptr %p, i16 0, i16 0\n  %v = getelementptr i16, ptr %p, i16 %i\n  ret ptr %z\n}\n";
+    assert_eq!(simplified(text, "z").as_deref(), Some("%p"));
+    assert_eq!(simplified(text, "w").as_deref(), Some("%p"));
+    assert_eq!(simplified(text, "v"), None);
+}

@@ -166,3 +166,64 @@ fn the_builder_folds_as_the_constant_folder_does_at_the_edges() {
     assert!(matches!(kept, Operand::Value(_)));
     b.ret(Some(kept));
 }
+
+/// A float cast of a constant was an instruction for a later pass to fold
+/// (`sitofp`, `fptrunc`: 12 instructions LLVM's instsimplify removed from 6
+/// real pass inputs). The builder folds the casts `ConstantFoldCastInstruction`
+/// does, at the rounding `APFloat` uses, and leaves an `x86_fp80` or a NaN
+/// alone.
+#[test]
+fn the_builder_folds_float_casts_of_numbers() {
+    use crate::context::{Constant, ConstantKind};
+    use crate::opcode::CastOp;
+    use crate::types::FloatKind;
+    let mut module = Module::default();
+    let (float, double, x87) = (
+        module.context.types.intern(Type::Float(FloatKind::Float)),
+        module.context.types.intern(Type::Float(FloatKind::Double)),
+        module.context.types.intern(Type::Float(FloatKind::X86Fp80)),
+    );
+    let (i32, i8) = (module.context.types.int(32), module.context.types.int(8));
+    let unary = module.context.types.intern(Type::Function { returns: i32, parameters: vec![], variadic: false });
+    let f = module.add_function("f", unary, Linkage::External).unwrap();
+    let mut b = module.builder(f);
+    let entry = b.block("entry");
+    b.position(entry);
+    let constant = |b: &mut crate::build::Builder, ty, bits: u64| {
+        Operand::Constant(b.context.constant(Constant { ty, kind: ConstantKind::Float(bits) }))
+    };
+    let bits_of = |b: &crate::build::Builder, operand: Operand| match operand {
+        Operand::Constant(id) => match b.context.get(id).kind {
+            ConstantKind::Float(bits) => Some(bits),
+            ConstantKind::Int(bits) => Some(bits as u64),
+            ConstantKind::Poison => Some(u64::MAX),
+            _ => None,
+        },
+        _ => None,
+    };
+    let seven = b.int(32, 7);
+    let from_int = b.cast(CastOp::SIToFP, seven, float, "a");
+    assert_eq!(bits_of(&b, from_int), Some(u64::from(7.0f32.to_bits())));
+    let one_and_a_half = constant(&mut b, double, 1.5f64.to_bits());
+    let narrowed = b.cast(CastOp::FPTrunc, one_and_a_half, float, "b");
+    assert_eq!(bits_of(&b, narrowed), Some(u64::from(1.5f32.to_bits())));
+    let widened = b.cast(CastOp::FPExt, narrowed, double, "c");
+    assert_eq!(bits_of(&b, widened), Some(1.5f64.to_bits()));
+    // Truncation toward zero; out of range is poison.
+    let three_and_a_half = constant(&mut b, double, 3.5f64.to_bits());
+    let to_int = b.cast(CastOp::FPToSI, three_and_a_half, i32, "d");
+    assert_eq!(bits_of(&b, to_int), Some(3));
+    let big = constant(&mut b, double, 1.0e10f64.to_bits());
+    let overflow = b.cast(CastOp::FPToSI, big, i32, "e");
+    assert_eq!(bits_of(&b, overflow), Some(u64::MAX));
+    let negative = constant(&mut b, double, (-1.0f64).to_bits());
+    let unsigned = b.cast(CastOp::FPToUI, negative, i8, "g");
+    assert_eq!(bits_of(&b, unsigned), Some(u64::MAX));
+    // An x87 constant and a NaN stay instructions.
+    let extended = constant(&mut b, x87, 2.0f64.to_bits());
+    assert!(matches!(b.cast(CastOp::FPTrunc, extended, double, "h"), Operand::Value(_)));
+    let nan = constant(&mut b, double, f64::NAN.to_bits());
+    assert!(matches!(b.cast(CastOp::FPTrunc, nan, float, "i"), Operand::Value(_)));
+    let zero = b.int(32, 0);
+    b.ret(Some(zero));
+}
