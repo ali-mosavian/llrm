@@ -33,9 +33,9 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 | 2.9 Vec growth by site | unowned | to do | about 15 M |
 | 3.1 facts from the change log | edit-rollback, keep-analyses | design, starts now | family 403 M own (12.8%) |
 | 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0 |
-| 3.3 allocator on the LIR core | greedy-port, ssa-spill-m16 | design, starts now | `regalloc` 415.5 M |
+| 3.3 allocator on the LIR core | greedy-port, ssa-spill-m16 | design page [#2042] (draft), starts now | `regalloc` 415.5 M |
 | 3.4 LIR clean-up | ssa-spill-m16 | probe done (96.5% idle); per-visit probe next | 290 M; realistic recoverable about 40 M |
-| 3.5 pricing in the back end | greedy-port, ssa-spill-m16, hoist-bounded | after 3.3 | forecast 1.39% |
+| 3.5 pricing (`hoist`, `lsr` forecast) | hoist-bounded, greedy-port | probe next | forecast 2.6% (-O2), 4.9% (-Os) |
 
 ## 1. TL;DR
 
@@ -194,7 +194,7 @@ The exit method M and the bars it uses are defined once in section 4.
 | 3.2 one pipeline pass | the combine alone about 0; the round drop is the effect and the risk (see 3.2) | a vsgcc row newly above min(gcc, clang), or an enabler the combine cannot absorb | pass-list-parity, hoist-bounded | design |
 | 3.3 allocator on the LIR core | `regalloc` 415.5 M on main with [#2010], [#2021], [#2027], [#2032] (444 M is older) to 100 M or less | whole-body work per edit below 1% | greedy-port, ssa-spill-m16 | design |
 | 3.4 LIR clean-up | about 290 M on the merged tree to 250 M (idle ceiling about 76 M net, realistic about 40 M) | idle block visits below 30% of clean-up: not met (96.5% idle on `d_faces`, 97.1% on the corpus) | ssa-spill-m16 | per-visit probe next |
-| 3.5 pricing in the back end | -1.4% (-O2) to -2.5% (-Os) | forecast and pressure below 1% at both levels | greedy-port, ssa-spill-m16, hoist-bounded | after 3.3 |
+| 3.5 pricing: `hoist` and `lsr` forecast | the forecast is 2.6% at -O2 and 4.9% at -Os (`hoist` 1.4% / 3.7%, `lsr` 1.2%); `gvn` is 0.04%; the saving is `unmeasured` | forecast below 1% at both levels: not met | hoist-bounded, greedy-port | probe next |
 | B3 re-baseline | the phase-3 row measured | n/a | llvm-compare | after 3.x |
 | 4.1 per-pass budgets | each pass 300 instructions or fewer per IR instruction per run | a pass already within budget | each pass's owner | measure first |
 | 4.2 budgets from clang | spec 1.3 re-derived per job from clang | n/a (measurement) | llvm-compare | to do |
@@ -855,7 +855,7 @@ Checklist: the shared list. Its own metric boxes:
 
   Moves [synthesis] row 3.
 - **(b) Early:** spec 6 counters on `d_faces` -O2: `full_interval_builds`, allocator `visited` per spill or split, body copies per carve ([#1309]). Kill (re-rank against 3.4) if whole-body work per edit is below 1% of the compile.
-- **(c) Gate:** a design page (spec 2.1 and 4.1 for LIR) with a big-picture review; the edit contract of spec 2.3 for LIR.
+- **(c) Gate:** a design page (spec 2.1 and 4.1 for LIR) with a big-picture review; the edit contract of spec 2.3 for LIR. The page is [#2042] (ssa-spill-m16 with greedy-port, draft).
 - **(d) Exit:** M; counted `full_interval_builds = 1` and allocator `visited` at most 40 × edited range + 4 × blocks touched; identical output (spec stage 2 is identical). Pass: `regalloc` 150 M or less at -O2.
 - **(e) Who:** greedy-port (allocator), ssa-spill-m16 (LIR model). Starts now: gated by its early probe and design review, not by B2; it uses 2.4's A' and 3.3's own interval buffers. Touches `model/lir.rs`, `allocate.rs`, `splitkit.rs`, `intervals.rs`, `postings.rs`.
 
@@ -893,11 +893,11 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 3.5 Pricing where LLVM puts it (R5 of [parity])
 
-- **(a) Effect:** the spill forecast is 1.39% of -O2 and 2.52% of -Os ([decision-dependencies]), against "gvn pricing ~5%" in [parity]. Step 0 reconciles the two. The back end gains rematerialization, sinking, and a pressure-aware LIR hoist per loop path; gvn and hoist then drop whole-function pricing. Moves [synthesis] row 4.
-- **(b) Early:** step 0: callgrind inclusive of `View::forecast`, `Pressure::of` and `profit::weighted` under gvn and hoist at -O2 and -Os on main. Kill if their sum is below 1% at both levels.
+- **(a) Effect:** reconciled by ssa-spill-m16 (callgrind inclusive, main plus [#2010], [#2021], [#2027], [#2032]). -O2 (2,612 M): `spill::View::forecast` 67.6 M (17 calls), 2.6%, of it `Pressure::updated` 41.8 M; callers `hoist` 36.6 M and `profit`/`lsr` 31.0 M (`lsr::_plan` 109.5 M inclusive); `profit::weighted` 1.9 M. -Os (2,699 M): `forecast` 130.9 M, 4.9%; `hoist` 99.9 M (3.7%), `lsr` 31.0 M; `weighted` 3.2 M. `gvn`'s pricing is about 1 M (0.04%): the "about 5%" of [parity] is not `gvn`; the share is `hoist` (1.4% at -O2, 3.7% at -Os) and `lsr` (1.2%), through `View::forecast` and `Pressure::updated`. `spill.rs` is MIR, so the back end is not on this path. [decision-dependencies] reads 1.39% and 2.52% because it counted a different part of the forecast; both are recorded here. The back end's gain (rematerialization, sinking, a pressure-aware LIR hoist per loop path) is a separate question and `unmeasured`. Moves [synthesis] row 4.
+- **(b) Early:** done (above): the sum is 2.6% at -O2 and 4.9% at -Os, so the kill (below 1% at both levels) is not met and the step stays alive. The next probe is `hoist`'s and `lsr`'s use of `Pressure::updated` (41.8 M) per call site.
 - **(c) Gate:** a design page with a review; any row that falls below min(gcc, clang) blocks the pass's drop of pricing ([parity]).
 - **(d) Exit:** M; counted `spill forecasts per pass run = 0` in the mid-end; the rows rule of [spec] 4.3. Pass: 60% or more of the probe, with rows held.
-- **(e) Who:** greedy-port and ssa-spill-m16 (back end), hoist-bounded (gvn and hoist). Depends on 3.3 and 2.7. Touches `gvn.rs`, `hoist.rs`, `profit.rs`, `spill.rs`, the LIR hoist.
+- **(e) Who:** hoist-bounded (`hoist`) and greedy-port (`lsr`, [#2008]); the back end only for its separate unmeasured part. Depends on 2.7 for pricing on the live function. Touches `hoist.rs`, `lsr.rs`, `profit.rs`, `spill.rs`.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -1199,3 +1199,4 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2037]: https://github.com/ali-mosavian/llrm/pull/2037
 [#2038]: https://github.com/ali-mosavian/llrm/pull/2038
 [#2039]: https://github.com/ali-mosavian/llrm/pull/2039
+[#2042]: https://github.com/ali-mosavian/llrm/pull/2042
