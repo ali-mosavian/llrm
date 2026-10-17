@@ -356,6 +356,10 @@ fn unrolled(
     let mut previous = facts.clone();
     for iteration in 0..count {
         let mut values = facts.clone();
+        // The queries made of `values` for the iteration's stores, and the
+        // values changed since they were.
+        let mut queries: Option<consts::_MemoryQueries> = None;
+        let mut changed = Vec::<ValueId>::new();
         let mut came = BTreeMap::<i64, Vec<i64>>::from([(loop_.header, Vec::new())]);
         for &at in order {
             let Some(from) = came.get(&at).cloned() else {
@@ -386,6 +390,7 @@ fn unrolled(
                     Some(known) => values.insert(result, known),
                     None => values.shift_remove(&result),
                 };
+                changed.push(result);
             }
             for &inst in function.block(block).instructions() {
                 let op = function.instruction(inst);
@@ -401,10 +406,12 @@ fn unrolled(
                 match (defined, defined.and_then(|_| consts::_result(unit, inst, &values, Some(&cells)))) {
                     (Some(value), Some(known)) => {
                         values.insert(value, known);
+                        changed.push(value);
                     }
                     _ => {
                         if let Some(value) = op.result {
                             values.shift_remove(&value);
+                            changed.push(value);
                         }
                         out.size += _size(unit, inst);
                     }
@@ -415,8 +422,17 @@ fn unrolled(
                 )
                     || memory::unmodeled_write(unit, inst)
                 {
-                    let mut queries = consts::memory_queries(*unit, &values);
-                    cells = consts::_kills(cells, inst, &values, &calls, None, None, false, &mut queries);
+                    let queries = match &mut queries {
+                        Some(queries) => {
+                            queries.advance(&values, changed.drain(..));
+                            queries
+                        }
+                        none => {
+                            changed.clear();
+                            none.insert(consts::memory_queries(*unit, &values))
+                        }
+                    };
+                    cells = consts::_kills(cells, inst, &values, &calls, None, None, false, queries);
                 }
             }
             let known = |operand: Operand| consts::_operand(unit, operand, &values, None);
