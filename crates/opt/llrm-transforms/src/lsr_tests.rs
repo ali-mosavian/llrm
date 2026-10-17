@@ -2427,6 +2427,88 @@ fn test_a_loops_blocks_are_walked_for_liveness_once_not_once_a_use() {
     assert!(walked <= 2, "{walked} block walks for a loop of one block and {uses} uses");
 }
 
+/// `fit` was handed every resident besides the cells at every step of a block:
+/// a loop of N uses, each a product and a rebuilt value, N^2 residents listed
+/// per forecast, 2,373 of lsr's 3,606 M inside `fit` on 800 statements. It is
+/// told what comes and what goes.
+#[test]
+fn test_a_forecast_is_told_of_each_resident_once_not_at_every_step() {
+    let uses = 16;
+    let mut text = format!(
+        "@a = global [{} x i32] zeroinitializer\n\ndefine i32 @f(i32 %n) {{\nb0:\n  br label %h\n\nh:\n  %i = phi i32 [ 0, %b0 ], [ %next, %h ]\n  %s0 = phi i32 [ 0, %b0 ], [ %t{}, %h ]\n",
+        64 * uses,
+        uses - 1
+    );
+    for k in 0..uses {
+        let prev = if k == 0 { "%s0".to_owned() } else { format!("%t{}", k - 1) };
+        text += &format!(
+            "  %m{k} = mul i32 %i, {}\n  %p{k} = getelementptr [{} x i32], ptr @a, i32 0, i32 %m{k}\n  %v{k} = load i32, ptr %p{k}\n  %t{k} = add i32 {prev}, %v{k}\n",
+            k + 2,
+            64 * uses
+        );
+    }
+    text += &format!(
+        "  %next = add nsw i32 %i, 1\n  %c = icmp slt i32 %next, 8\n  br i1 %c, label %h, label %end\n\nend:\n  ret i32 %t{}\n}}\n",
+        uses - 1
+    );
+    crate::spill::LISTED.with(|count| count.set((0, 0)));
+    let _ = reduced(&text);
+    let (told, steps) = crate::spill::LISTED.with(std::cell::Cell::get);
+    assert!(steps > 0, "no forecast was made");
+    assert!(told <= 2 * steps, "{told} residents listed over {steps} steps");
+}
+
+/// A value live from one block of a loop into the next was dropped from the
+/// forecast at the edge between them (told it went, and not that it stayed):
+/// d_alias at -O1 and jpeg at -O2 differed from the object before. The sweep is
+/// the forecast over the loop's points.
+#[test]
+fn test_a_value_live_across_a_blocks_edge_is_still_forecast_in_the_next() {
+    let text = "define i32 @_bench(i32 %0) {
+b1:
+  %1 = alloca [70 x i8]
+  %2 = alloca [70 x i8]
+  br label %b2
+
+b2:
+  %3 = phi i32 [ 0, %b1 ], [ %8, %b4 ]
+  %4 = icmp slt i32 %3, 70
+  br i1 %4, label %b4, label %b3
+
+b3:
+  %5 = and i32 %0, 63
+  br label %b5
+
+b4:
+  %6 = trunc i32 %3 to i8
+  %7 = getelementptr inbounds i8, ptr %1, i32 %3
+  store i8 %6, ptr %7
+  %8 = add nsw i32 %3, 1
+  br label %b2
+
+b5:
+  %9 = icmp sgt i32 %5, 0
+  br i1 %9, label %b7, label %b6
+
+b6:
+  %10 = getelementptr inbounds i8, ptr %2, i32 3
+  %11 = load i8, ptr %10
+  %12 = sext i8 %11 to i32
+  ret i32 %12
+
+b7:
+  %13 = getelementptr inbounds i8, ptr %1, i32 0
+  %14 = getelementptr inbounds i8, ptr %2, i32 0
+  call void @llvm.memcpy.p0.p0.i32(ptr %14, ptr %13, i32 %5, i1 false)
+  br label %b6
+}
+
+declare void @llvm.memcpy.p0.p0.i32(ptr nocapture writeonly, ptr nocapture readonly, i32, i1 immarg)
+";
+    let (_, printed) = reduced(text);
+    assert!(printed.contains("define"), "{printed}");
+}
+
 /// A latch test of the counter before its step, with the step live anyway (here
 /// it is summed), is the test of the step: `i == 1` is `i - 1 == 0`. Left on
 /// the counter, both are live through the trip: hanoi's nest (`-ftree-ch`, the
