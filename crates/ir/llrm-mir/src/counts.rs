@@ -411,3 +411,62 @@ mod tests {
         assert!(text.contains(&"[counts] ask - probe-analysis 1 misses".to_owned()), "outside a pass: {text:?}");
     }
 }
+
+
+thread_local! {
+    /// The step label (`r02-decide`) of the pass running now.
+    static STEP: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// The pipeline is about to run the step `stage`.
+pub fn step_begins(stage: &str) {
+    if placing() {
+        STEP.with(|step| {
+            let mut step = step.borrow_mut();
+            step.clear();
+            step.push_str(stage);
+        });
+    }
+}
+
+/// `LLRM_SOLVE_AT`: the step labels (or `all`) at which the whole-function facts named in `LLRM_PLACE_FACTS` are
+/// computed; at every other step a pass is handed the held result if there is one, else the conservative one. A test
+/// instrument (S1 step 1).
+struct Placement {
+    all: bool,
+    at: Vec<String>,
+    facts: Vec<String>,
+}
+
+fn placement() -> &'static Placement {
+    static SPEC: std::sync::OnceLock<Placement> = std::sync::OnceLock::new();
+    SPEC.get_or_init(|| {
+        let text = std::env::var("LLRM_SOLVE_AT").unwrap_or_default();
+        let facts = std::env::var("LLRM_PLACE_FACTS")
+            .unwrap_or_else(|_| "through-memory,bounded,registers,followers,annotated,exposed-frames".to_owned());
+        Placement {
+            all: text == "all",
+            at: text.split(',').filter(|one| !one.is_empty()).map(str::to_owned).collect(),
+            facts: facts.split(',').filter(|one| !one.is_empty()).map(str::to_owned).collect(),
+        }
+    })
+}
+
+/// Whether the placement instrument is on (`LLRM_SOLVE_AT` set).
+pub fn placing() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_SOLVE_AT").is_some())
+}
+
+/// Whether `fact` is to be solved only at the named steps, and this is not one.
+pub fn placed_away(fact: &'static str) -> bool {
+    let spec = placement();
+    if spec.all || !spec.facts.iter().any(|one| one == fact) {
+        return false;
+    }
+    STEP.with(|step| {
+        let step = step.borrow();
+        // A step with no label (a module pass, a stage outside the rounds) solves.
+        step.is_empty() || !spec.at.iter().any(|one| *one == *step || step.ends_with(&format!("-{one}")))
+    })
+}

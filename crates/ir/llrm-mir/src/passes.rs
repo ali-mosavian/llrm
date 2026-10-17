@@ -1306,6 +1306,14 @@ impl Analyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Rc<A::Result> {
+        if crate::counts::placing()
+            && crate::counts::placed_away(A::NAME)
+            && !self.cache.contains_key(&TypeId::of::<A>())
+            && let Some(result) = A::withheld(function)
+        {
+            crate::counts::withheld(A::NAME);
+            return Rc::new(result);
+        }
         if crate::counts::withholding()
             && crate::counts::named(A::NAME)
             && let Some(result) = A::withheld(function)

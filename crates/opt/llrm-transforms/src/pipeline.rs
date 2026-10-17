@@ -1324,6 +1324,7 @@ impl Run {
         let before = unit.function.mark();
         let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
+        llrm_mir::counts::step_begins(stage);
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
         let preserved =
             llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
