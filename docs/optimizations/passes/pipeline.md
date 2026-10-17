@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:00b0982bbee987fcf64c0ba458f483f9def7ab64f52c9fba02152cb0fb5d16ff -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6cec392f6955474e8faded34975409093a7a61e3d18fe5f09c4917286ca15e8b -->
 
 # pipeline
 
@@ -12,7 +12,7 @@ the per-body fixed point, and which options switch them off.
 every body, the whole-program [`crate::interprocedural`](../analyses/interprocedural.md) step, and loop and
 address passes that run once, after the program is settled. Every pass
 after `globalopt` is a function, module or program pass of the manager.
-With `LLRM_VERIFY` set (or `-fverify-ir`) the module is verified after each manager pass;
+With `LLRM_VERIFY` set the module is verified after each manager pass;
 with `Applied::dump` set each changed step of each body is written there.
 A body sent back through `Fixed` by a later stage starts only the passes
 that found nothing last time and read nothing that changed since
@@ -29,7 +29,7 @@ flowchart TB
   a["<b>A  once, whole module</b><br/><small>globalopt, ports (every body),<br/>stamp</small>"]:::mid
   subgraph g_b["B  EACH BODY, TO A FIXED POINT (FIXED, MIR PIPELINE)"]
     sroa["<b>sroa</b><br/><small>(boundary#59; also after a copy)</small>"]:::mid
-    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
+    rnd["<b>round, until no pass changes</b><br/><small>the body: fold ports simplifycfg<br/>decide phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead#59; unroll once<br/>per round (a change sends<br/>the copy to sroa)</small>"]:::mid
     peel["<b>peel</b><br/><small>while it removes loops:<br/>sroa, then B's rounds</small>"]:::mid
     unsw["<b>unswitch (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
     dist["<b>distribute (-O3, -Omax)</b><br/><small>candidate judged on a<br/>full pipeline</small>"]:::mid
@@ -109,7 +109,7 @@ counterpart of each limit, is
 | field | passes |
 |---|---|
 | `optimize` | all; off, only `available-externally` runs |
-| `lcssa`, `floatloop`, `fold`, `decide`, `dead` | the pass of that name |
+| `lcssa`, `floatloop`, `fold`, `simplifycfg`, `decide`, `dead` | the pass of that name |
 | `hoist` | `hoist`, `loopmotion` |
 | `forward` and `drop_loads` | `gvn`, `equalcalls` |
 | `drop_stores` | `dse` |
