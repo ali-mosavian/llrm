@@ -326,17 +326,19 @@ pub fn propagated(
     };
     let mut edges = BTreeSet::<(i64, i64)>::new();
     let mut pending = recipes.keys().copied().filter(|value| live.contains(&owners[value])).collect::<VecDeque<_>>();
-    let mut queued = pending.iter().copied().collect::<BTreeSet<_>>();
+    let mut queued = pending.iter().copied().collect::<llrm_mir::dense::IdSet<ValueId>>();
 
-    let enqueue =
-        |values: Vec<ValueId>, live: &PySet<i64>, pending: &mut VecDeque<ValueId>, queued: &mut BTreeSet<ValueId>| {
-            for value in values {
-                if !queued.contains(&value) && live.contains(&owners[&value]) {
-                    pending.push_back(value);
-                    queued.insert(value);
-                }
+    let enqueue = |values: Vec<ValueId>,
+                   live: &PySet<i64>,
+                   pending: &mut VecDeque<ValueId>,
+                   queued: &mut llrm_mir::dense::IdSet<ValueId>| {
+        for value in values {
+            if !queued.contains(&value) && live.contains(&owners[&value]) {
+                pending.push_back(value);
+                queued.insert(value);
             }
-        };
+        }
+    };
     let consumers_of = |value: &ValueId| {
         consumers.get(value).map(|users| users.iter().copied().collect::<Vec<_>>()).unwrap_or_default()
     };
@@ -354,7 +356,7 @@ pub fn propagated(
                     live: &mut PySet<i64>,
                     edges: &mut BTreeSet<(i64, i64)>,
                     pending: &mut VecDeque<ValueId>,
-                    queued: &mut BTreeSet<ValueId>,
+                    queued: &mut llrm_mir::dense::IdSet<ValueId>,
                     dirty: &mut BTreeSet<i64>,
                     fresh: &mut Vec<i64>| {
         if !blocks.contains_key(&target) || edges.contains(&(source, target)) {
