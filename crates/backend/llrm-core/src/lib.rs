@@ -7,6 +7,7 @@ pub mod driver;
 pub mod flow;
 pub mod frontends;
 pub mod hir;
+pub mod liveness;
 pub mod model;
 pub use llrm_omf as objectfile;
 pub use llrm_support as support;
