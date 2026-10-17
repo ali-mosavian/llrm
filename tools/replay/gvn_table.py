@@ -3,6 +3,7 @@
 every input of a gvn-input set. Each revision is built into its own target with CARGO_INCREMENTAL=0.
 
 usage: gvn_table.py INPUT_DIR REV [REV...]    (the first REV is the baseline)
+       gvn_table.py --split INPUT.ll REV [REV...]   (callgrind inclusive of gvn's parts, one input)
 """
 import glob, os, subprocess, sys
 
@@ -38,6 +39,41 @@ def measure(binary, path):
     hashed = sh([binary, path]).stdout.strip()
     return instructions(binary, path) - instructions(binary, path, "--parse-only"), hashed
 
+
+SYMBOLS = [
+    "gvn::optimized", "gvn::_numbered", "transform::forwarded", "transform::subexpressions",
+    "memoryssa::Accesses as llrm_mir::passes::Analysis>::run", "memoryssa::Accesses as llrm_mir::passes::Analysis>::update",
+    "manager::Annotated as llrm_mir::passes::Analysis>::run", "manager::CallEffects as llrm_mir::passes::Analysis>::run",
+    "manager::ThroughMemory as llrm_mir::passes::Analysis>::run", "MemorySSA>::walked_from", "branchprob::estimated",
+    "LoopInfo>::new", "DominatorTree>::new", "profit::spill_forecast", "Function>::erase_all", "Function>::erase(",
+    "Function>::replace_value", "Function>::set_operands", "Function>::insert(", "Function>::clone_instruction",
+]
+
+
+def split(binary, path):
+    """Inclusive instructions (callgrind) of the symbols above; the analyses nest, so the rows overlap."""
+    out = f"{ROOT}/callgrind.out"
+    subprocess.run(["valgrind", "--tool=callgrind", f"--callgrind-out-file={out}", binary, path], capture_output=True)
+    text = sh(["callgrind_annotate", "--inclusive=yes", "--threshold=100", out]).stdout
+    found = {}
+    for line in text.splitlines():
+        for sym in SYMBOLS:
+            if sym in line and sym not in found:
+                found[sym] = int(line.split()[0].replace(",", ""))
+    return found
+
+
+if sys.argv[1] == "--split":
+    path = sys.argv[2]
+    rows = {}
+    for rev in sys.argv[3:]:
+        sha, binary = build(rev)
+        rows[sha] = split(binary, path)
+    shas = list(rows)
+    print("symbol (inclusive, overlapping)".ljust(60), *[s.rjust(12) for s in shas])
+    for sym in SYMBOLS:
+        print(sym[:59].ljust(60), *[f"{rows[s].get(sym, 0) / 1e6:11.2f}M" for s in shas])
+    sys.exit()
 
 inputs = sorted(glob.glob(f"{sys.argv[1]}/*.in.ll"))
 rows = {}
