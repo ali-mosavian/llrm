@@ -85,3 +85,10 @@ LLVM's rule is the cheap syntactic one and the rest is left to other passes (Cor
 | decided, 421 compiles | n/a | 245 of about 22,000 visits (facts 142, ranges 52, implied 11, switches 40) |
 
 Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2` unless stated. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M; decision counts from a counter at each conditional terminator of `_decisions`.
+
+## Proposed change
+
+- **Files**: `crates/opt/llrm-transforms/src/decide.rs` (`_decided`, `_decisions`); the shared inputs `Held::of`, `loop_bounds` and `constant_cycles::propagated` in `crates/opt/llrm-analysis`.
+- **What**: build the memory facts only for a condition that holds a load and the cycles only for one that holds a phi.
+- **Expected saving**: none. On 531 compiles decide's cost rose 0.6% and the compile 0.03%: `fold` asks the facts first, and almost every condition holds a phi or a load. No load-derived fact decided a branch in the corpus (245 of about 22,000 visits decided). What remains of decide's 151 M at `d_faces` `-O2` sits in the shared tower (`Held::of` 81.5 M, `loop_bounds` 74.0 M), which keep-analyses is flattening.
+- **Status**: measured and not kept (branch `notkept/decide-lazy-memory`; [compile-time-spec section 8](../../architecture/compile-time-spec.md), "Decide's facts only where a branch needs them").
