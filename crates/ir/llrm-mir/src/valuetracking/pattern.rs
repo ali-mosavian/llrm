@@ -24,3 +24,72 @@ pub fn binary<'a>(
     (instruction.opcode == Opcode::Binary(op))
         .then(|| (inst, instruction, instruction.operands[0], instruction.operands[1]))
 }
+
+// ---- intrinsics by name
+
+/// `Intrinsic::ID` of the intrinsics ValueTracking tells apart. MIR has none
+/// of them but the min/max, with-overflow and assume ones, so a call is
+/// matched by its callee's name with the `.iN` type suffix dropped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IntrinsicId {
+    /// Not a call to an `llvm.*` function.
+    NotIntrinsic,
+    /// An intrinsic not listed here.
+    Other,
+    Assume,
+    Abs,
+    Ctlz,
+    Cttz,
+    Ctpop,
+    Frexp,
+    UAddSat,
+    SAddSat,
+    USubSat,
+    SSubSat,
+    UMin,
+    UMax,
+    SMin,
+    SMax,
+    MinNum,
+    MaxNum,
+    Minimum,
+    Maximum,
+    MinimumNum,
+    MaximumNum,
+    Vscale,
+}
+
+const INTRINSIC_NAMES: [(&str, IntrinsicId); 21] = [
+    ("llvm.assume", IntrinsicId::Assume),
+    ("llvm.abs", IntrinsicId::Abs),
+    ("llvm.ctlz", IntrinsicId::Ctlz),
+    ("llvm.cttz", IntrinsicId::Cttz),
+    ("llvm.ctpop", IntrinsicId::Ctpop),
+    ("llvm.frexp", IntrinsicId::Frexp),
+    ("llvm.uadd.sat", IntrinsicId::UAddSat),
+    ("llvm.sadd.sat", IntrinsicId::SAddSat),
+    ("llvm.usub.sat", IntrinsicId::USubSat),
+    ("llvm.ssub.sat", IntrinsicId::SSubSat),
+    ("llvm.umin", IntrinsicId::UMin),
+    ("llvm.umax", IntrinsicId::UMax),
+    ("llvm.smin", IntrinsicId::SMin),
+    ("llvm.smax", IntrinsicId::SMax),
+    ("llvm.minnum", IntrinsicId::MinNum),
+    ("llvm.maxnum", IntrinsicId::MaxNum),
+    ("llvm.minimum", IntrinsicId::Minimum),
+    ("llvm.maximum", IntrinsicId::Maximum),
+    ("llvm.minimumnum", IntrinsicId::MinimumNum),
+    ("llvm.maximumnum", IntrinsicId::MaximumNum),
+    ("llvm.vscale", IntrinsicId::Vscale),
+];
+
+/// `Function::getIntrinsicID` of the function named `name`.
+pub fn intrinsic_id(name: &str) -> IntrinsicId {
+    INTRINSIC_NAMES
+        .iter()
+        .find(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+        .map_or_else(
+            || if name.starts_with("llvm.") { IntrinsicId::Other } else { IntrinsicId::NotIntrinsic },
+            |(_, id)| *id,
+        )
+}
