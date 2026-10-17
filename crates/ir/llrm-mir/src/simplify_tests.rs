@@ -21,10 +21,12 @@ fn simplified(
             function.instruction(inst).result.is_some_and(|result| function.value(result).name.as_deref() == Some(name))
         })
         .expect("a named instruction");
+    let analyses = crate::valuetracking::FunctionAnalyses::new(&module, &function);
     let found = simplify::simplify_instruction_in(
         &mut module.context,
         &module.globals,
         &crate::datalayout::DataLayout::default(),
+        Some(&analyses),
         &function,
         inst,
     )?;
@@ -383,6 +385,98 @@ fn compare_with_min_max() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// Threading over selects and phis, the equality a dominating branch gives,
+/// and the facts a dominator tree and the context instruction add
+/// (`threadBinOpOverSelect`/`PHI`, `threadCmpOverSelect`/`PHI`,
+/// `simplifyByDomEq`, `isImpliedByDomCondition`, `valueDominatesPHI`).
+#[test]
+fn threading_and_dominating_conditions() {
+    let cases: &[(&str, Option<&str>)] = &[
+        ("b0:\n  %s = select i1 %c, i16 %x, i16 0\n  %r = or i16 %s, %x\n  ret void\n", Some("%x")),
+        (
+            "b0:\n  %a = and i16 %x, %y\n  %s = select i1 %c, i16 %x, i16 %a\n  %r = and i16 %s, %y\n  ret void\n",
+            Some("%a"),
+        ),
+        ("b0:\n  %s = select i1 %c, i16 1, i16 2\n  %r = icmp ule i16 %s, 3\n  ret void\n", Some("1")),
+        ("b0:\n  %s = select i1 %c, i16 5, i16 20\n  %r = icmp ult i16 %s, 10\n  ret void\n", Some("%c")),
+        ("b0:\n  %s = select i1 %c, i16 20, i16 5\n  %r = icmp ult i16 %s, 10\n  ret void\n", None),
+        ("b0:\n  %s = select i1 %c, i16 5, i16 20\n  %r = icmp ugt i16 %s, 10\n  ret void\n", None),
+        (
+            "b0:\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i16 [ %x, %a ], [ 0, %b ]\n  %r = or i16 %p, %x\n  ret void\n",
+            Some("%x"),
+        ),
+        (
+            "b0:\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i16 [ 1, %a ], [ 2, %b ]\n  %r = icmp ult i16 %p, 3\n  ret void\n",
+            Some("1"),
+        ),
+        (
+            "b0:\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi i16 [ 1, %a ], [ 2, %b ]\n  %r = icmp ult i16 %p, 2\n  ret void\n",
+            None,
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = sub i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = xor i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = udiv i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("1"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = urem i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = and i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("%y"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = or i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("%y"),
+        ),
+        (
+            "b0:\n  %e = icmp eq i16 %x, %y\n  br i1 %e, label %t, label %f\nf:\n  %r = sub i16 %x, %y\n  ret void\nt:\n  ret void\n",
+            None,
+        ),
+        (
+            "b0:\n  %e = icmp ult i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %r = icmp ule i16 %x, %y\n  ret void\nf:\n  ret void\n",
+            Some("1"),
+        ),
+        (
+            "b0:\n  %e = icmp ult i16 %x, %y\n  br i1 %e, label %t, label %f\nf:\n  %r = icmp ult i16 %x, %y\n  ret void\nt:\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %e = icmp ult i16 %x, %y\n  br i1 %e, label %t, label %f\nt:\n  %e2 = icmp ule i16 %x, %y\n  %r = select i1 %e2, i16 %x, i16 %y\n  ret void\nf:\n  ret void\n",
+            Some("%x"),
+        ),
+        ("b0:\n  %u = urem i16 %x, %y\n  %r = icmp ne i16 0, %y\n  ret void\n", Some("1")),
+        (
+            "b0:\n  %a = add i16 %x, %y\n  br i1 %c, label %p1, label %p2\np1:\n  br label %j\np2:\n  br label %j\nj:\n  %r = phi i16 [ %a, %p1 ], [ poison, %p2 ]\n  ret void\n",
+            Some("%a"),
+        ),
+        (
+            "b0:\n  br i1 %c, label %p1, label %j\np1:\n  %a = add i16 %x, %y\n  br label %j\nj:\n  %r = phi i16 [ %a, %p1 ], [ poison, %b0 ]\n  ret void\n",
+            None,
+        ),
+        (
+            "b0:\n  br label %j\nj:\n  %p = phi i16 [ %x, %b0 ], [ %n, %j ]\n  %n = add i16 %p, 1\n  %r = or i16 %p, %n\n  br label %j\n",
+            None,
+        ),
+    ];
+    let wrong: Vec<_> = cases
+        .iter()
+        .filter(|(body, expected)| {
+            let text = format!("define void @f(i16 %x, i16 %y, i1 %c) {{\n{body}}}\n");
+            simplified(&text, "r").as_deref() != *expected
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
@@ -406,10 +500,12 @@ fn simplify_cases() {
         }) else {
             continue;
         };
+        let analyses = crate::valuetracking::FunctionAnalyses::new(&module, &function);
         let found = simplify::simplify_instruction_in(
             &mut module.context,
             &module.globals,
             &crate::datalayout::DataLayout::default(),
+            Some(&analyses),
             &function,
             inst,
         )

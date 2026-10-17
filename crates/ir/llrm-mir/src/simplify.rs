@@ -20,16 +20,21 @@
 //!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset, except the
 //!   `llvm.smax` family, matched by `simplify_instruction_in`, whose caller
 //!   passes the module's globals; the other entry points know no callee.
-//! - The ValueTracking query is `Query::bare` over the body: no module (so no
-//!   intrinsic is known), no dominator tree, no assumptions, no context
-//!   instruction. `simplifyByDomEq`, `isImpliedByDomCondition`,
-//!   `valueDominatesPHI`, `simplifyICmpWithDominatingAssume` and the
-//!   `llvm.assume` facts of ValueTracking need the entry points to take a
-//!   `FunctionAnalyses`; their callers (`earlycse`, the combine worklist,
-//!   `gvn`, `fold`) would have to pass it.
-//! - `threadBinOpOverSelect` / `threadBinOpOverPHI`, `threadCmpOverSelect` /
-//!   `threadCmpOverPHI`, `simplifyAndOrOfCmps` and `simplifyAndOrWithICmpEq`:
-//!   not yet translated; ValueTracking is not what stops them.
+//! - The ValueTracking query is `Query::bare` over the body: no module, no
+//!   dominator tree, no assumptions, unless the caller uses
+//!   `simplify_instruction_in`, which takes the module's globals (so the
+//!   intrinsics are known) and a `FunctionAnalyses` (the dominator tree and the
+//!   assumptions). The other entry points (`simplify_binop_operands`...) pass
+//!   none and no context instruction: `simplifyByDomEq`,
+//!   `isImpliedByDomCondition` and `valueDominatesPHI` then find the facts that
+//!   need no tree (a single-predecessor branch needs only the context
+//!   instruction, which `simplify_instruction_in` sets). `earlycse`, the
+//!   combine worklist, `gvn` and `fold` would have to call
+//!   `simplify_instruction_in` with their `FunctionAnalyses`.
+//! - `simplifyAndOrOfCmps`, `simplifyAndOrWithICmpEq`,
+//!   `simplifySelectWithICmpCond`, `simplifySelectWithBitTest`,
+//!   `simplifyICmpWithDominatingAssume`: not yet translated; ValueTracking is
+//!   not what stops them.
 //! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! # Used by
@@ -44,7 +49,8 @@ use crate::module::{Function, GlobalValue, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
 use crate::valuetracking::{
-    Query as ValueQuery, context as conditions, known, nonzero, pattern, power2, range, signbits,
+    FunctionAnalyses, Query as ValueQuery, context as conditions, guarantee, known, nonzero, pattern, power2, range,
+    signbits,
 };
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
@@ -58,6 +64,10 @@ struct Query<'a> {
     /// The module's globals, which name the callees; empty where the caller has
     /// no module.
     globals: &'a [GlobalValue],
+    /// `SQ.DT` and `SQ.AC`, where the caller has them.
+    analyses: Option<&'a FunctionAnalyses>,
+    /// `SQ.CxtI`: the instruction the query is asked at.
+    cxt: Option<InstId>,
 }
 
 impl Query<'_> {
@@ -260,7 +270,13 @@ impl Query<'_> {
 
     /// A ValueTracking query over this body (`SimplifyQuery`).
     fn tracking(&self) -> ValueQuery<'_> {
-        ValueQuery { globals: self.globals, ..ValueQuery::bare(self.context, self.function, self.layout) }
+        ValueQuery {
+            globals: self.globals,
+            dt: self.analyses.map(FunctionAnalyses::dominator_tree),
+            assumptions: self.analyses.map(FunctionAnalyses::assumption_cache),
+            cxt: self.cxt,
+            ..ValueQuery::bare(self.context, self.function, self.layout)
+        }
     }
 
     /// `computeKnownBits(V, Q)`.
@@ -340,6 +356,54 @@ impl Query<'_> {
                     flags.contains(Flags::NUW).then_some((x, shifted, amount, y))
                 },
             )
+    }
+
+    /// `dyn_cast<SelectInst>`: the condition and the two arms.
+    fn select_arms(
+        &self,
+        operand: Operand,
+    ) -> Option<(Operand, Operand, Operand)> {
+        let instruction = self.function.instruction(self.definition(operand)?);
+        let (Opcode::Select, [cond, if_true, if_false]) = (&instruction.opcode, &instruction.operands[..]) else {
+            return None;
+        };
+        Some((*cond, *if_true, *if_false))
+    }
+
+    /// `isa<SelectInst>`.
+    fn is_select(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.select_arms(operand).is_some()
+    }
+
+    /// `isa<PHINode>`.
+    fn is_phi(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.definition(operand).is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Phi)
+    }
+
+    /// `valueDominatesPHI`
+    /// ([:176](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L176)):
+    /// whether `v` dominates the phi `phi`.
+    fn value_dominates_phi(
+        &self,
+        v: Operand,
+        phi: InstId,
+    ) -> bool {
+        // Arguments and constants dominate all instructions.
+        let Some(def) = self.definition(v) else { return true };
+        // If we have a DominatorTree then do a precise test.
+        if let Some(analyses) = self.analyses {
+            return analyses.dominator_tree().instruction_dominates(self.function, def, phi);
+        }
+        // Otherwise, if the instruction is in the entry block and is not an
+        // invoke, then it obviously dominates all phi nodes.
+        self.function.parent(def) == self.function.entry()
+            && !matches!(self.function.instruction(def).opcode, Opcode::Invoke(_))
     }
 
     /// `isKnownToBeAPowerOfTwo(V, DL, OrZero, ...)`.
@@ -446,6 +510,325 @@ fn expand_commutative_bin_op(
         return Some(v);
     }
     expand_bin_op(q, opcode, r, l, opcode_to_expand, max_recurse)
+}
+
+/// `threadBinOpOverSelect`
+/// ([:354](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L354)):
+/// `lhs op rhs` where one is a select, by evaluating it on both arms.
+fn thread_bin_op_over_select(
+    q: &mut Query,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+    mut max_recurse: u32,
+) -> Option<Operand> {
+    // Recursion is always used, so bail out at once if we already hit the
+    // limit.
+    if max_recurse == 0 {
+        return None;
+    }
+    max_recurse -= 1;
+    let si = if q.is_select(lhs) { lhs } else { rhs };
+    let (_, true_val, false_val) = q.select_arms(si)?;
+    // Evaluate the BinOp on the true and false branches of the select.
+    let (tv, fv) = if si == lhs {
+        (simplify_binop(q, opcode, true_val, rhs, max_recurse), simplify_binop(q, opcode, false_val, rhs, max_recurse))
+    } else {
+        (simplify_binop(q, opcode, lhs, true_val, max_recurse), simplify_binop(q, opcode, lhs, false_val, max_recurse))
+    };
+    // If they simplified to the same value, then return the common value. If
+    // they both failed to simplify then return null.
+    if tv == fv {
+        return tv;
+    }
+    // If applying the operation did not change the true and false select
+    // values, then the result of the binop is the select itself.
+    if tv == Some(true_val) && fv == Some(false_val) {
+        return Some(si);
+    }
+    // If one branch simplified and the other did not, and the simplified value
+    // is equal to the unsimplified one, return the simplified value. For
+    // example, select (cond, X, X & Z) & Z -> X & Z.
+    if tv.is_some() != fv.is_some() {
+        let simplified = fv.or(tv)?;
+        // The simplified value has the form "X op Y", `op` as the original
+        // operation, and no poison-generating flag.
+        let (op, a, b, flags) = q.binary(simplified)?;
+        let poison_generating = [Flags::NUW, Flags::NSW, Flags::EXACT, Flags::DISJOINT];
+        if op == opcode && !poison_generating.iter().any(|&flag| flags.contains(flag)) {
+            // The value that didn't simplify is "UnsimplifiedLHS op
+            // UnsimplifiedRHS".
+            let unsimplified_branch = if fv.is_some() { true_val } else { false_val };
+            let unsimplified_lhs = if si == lhs { unsimplified_branch } else { lhs };
+            let unsimplified_rhs = if si == lhs { rhs } else { unsimplified_branch };
+            if a == unsimplified_lhs && b == unsimplified_rhs {
+                return Some(simplified);
+            }
+            if is_commutative(op) && b == unsimplified_lhs && a == unsimplified_rhs {
+                return Some(simplified);
+            }
+        }
+    }
+    None
+}
+
+/// `isSameCompare`
+/// ([:98](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L98)):
+/// whether `v` is the compare `lhs pred rhs`.
+fn is_same_compare(
+    q: &Query,
+    v: Operand,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> bool {
+    let Some(inst) = q.definition(v) else { return false };
+    let cmp = q.function.instruction(inst);
+    let Opcode::ICmp(cmp_pred) = cmp.opcode else { return false };
+    let [cmp_lhs, cmp_rhs] = cmp.operands[..] else { return false };
+    (cmp_pred == pred && cmp_lhs == lhs && cmp_rhs == rhs)
+        || (cmp_pred == swapped(pred) && cmp_lhs == rhs && cmp_rhs == lhs)
+}
+
+/// `simplifyCmpSelCase`
+/// ([:111](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L111)),
+/// with `simplifyCmpSelTrueCase` and `simplifyCmpSelFalseCase`
+/// (`true_or_false` is their constant).
+fn simplify_cmp_sel_case(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+    cond: Operand,
+    max_recurse: u32,
+    true_or_false: bool,
+) -> Option<Operand> {
+    let simplified = simplify_icmp(q, pred, lhs, rhs, max_recurse);
+    if simplified == Some(cond) {
+        // %cmp simplified to the select condition (%cond).
+        let ty = q.ty(cond);
+        return Some(q.int(ty, u128::from(true_or_false)));
+    }
+    if simplified.is_none() && is_same_compare(q, cond, pred, lhs, rhs) {
+        // It didn't simplify. However, if composed comparison is equivalent to
+        // the select condition (%cond) then we can replace it.
+        let ty = q.ty(cond);
+        return Some(q.int(ty, u128::from(true_or_false)));
+    }
+    simplified
+}
+
+/// `handleOtherCmpSelSimplifications`
+/// ([:150](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L150)).
+fn handle_other_cmp_sel_simplifications(
+    q: &mut Query,
+    t_cmp: Operand,
+    f_cmp: Operand,
+    cond: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    // If the false value simplified to false, then the result of the compare
+    // is equal to "Cond && TCmp". Folding select to and/or isn't poison-safe in
+    // general; impliesPoison checks it does not convert a well-defined value
+    // into poison.
+    if q.is_zero(f_cmp)
+        && guarantee::implies_poison(&q.tracking(), t_cmp, cond)
+        && let Some(v) = simplify_and(q, cond, t_cmp, max_recurse)
+    {
+        return Some(v);
+    }
+    // If the true value simplified to true, then the result of the compare is
+    // equal to "Cond || FCmp".
+    if q.is_one(t_cmp)
+        && guarantee::implies_poison(&q.tracking(), f_cmp, cond)
+        && let Some(v) = simplify_or(q, cond, f_cmp, max_recurse)
+    {
+        return Some(v);
+    }
+    // Finally, if the false value simplified to true and the true value to
+    // false, then the result of the compare is equal to "!Cond".
+    if q.is_one(f_cmp) && q.is_zero(t_cmp) {
+        let ty = q.ty(cond);
+        let all_ones = q.all_ones(ty);
+        return simplify_xor(q, cond, all_ones, max_recurse);
+    }
+    None
+}
+
+/// `threadCmpOverSelect`
+/// ([:433](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L433)).
+fn thread_cmp_over_select(
+    q: &mut Query,
+    mut pred: IntPredicate,
+    mut lhs: Operand,
+    mut rhs: Operand,
+    mut max_recurse: u32,
+) -> Option<Operand> {
+    // Recursion is always used, so bail out at once if we already hit the
+    // limit.
+    if max_recurse == 0 {
+        return None;
+    }
+    max_recurse -= 1;
+    // Make sure the select is on the LHS.
+    if !q.is_select(lhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = swapped(pred);
+    }
+    let (cond, true_val, false_val) = q.select_arms(lhs)?;
+    // Now that we have "cmp select(Cond, TV, FV), RHS", analyse it. Does "cmp
+    // TV, RHS" simplify?
+    let t_cmp = simplify_cmp_sel_case(q, pred, true_val, rhs, cond, max_recurse, true)?;
+    // Does "cmp FV, RHS" simplify?
+    let f_cmp = simplify_cmp_sel_case(q, pred, false_val, rhs, cond, max_recurse, false)?;
+    // If both sides simplified to the same value, then use it as the result of
+    // the original comparison.
+    if t_cmp == f_cmp {
+        return Some(t_cmp);
+    }
+    handle_other_cmp_sel_simplifications(q, t_cmp, f_cmp, cond, max_recurse)
+}
+
+/// The incoming `(value, block terminator)` pairs of the phi `phi`.
+fn phi_incoming(
+    q: &Query,
+    phi: InstId,
+) -> Vec<(Operand, Option<InstId>)> {
+    q.function
+        .instruction(phi)
+        .operands
+        .chunks(2)
+        .map(|pair| {
+            let terminator = match pair[1] {
+                Operand::Block(block) => q.function.terminator(block),
+                _ => None,
+            };
+            (pair[0], terminator)
+        })
+        .collect()
+}
+
+/// `threadBinOpOverPHI`
+/// ([:478](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L478)).
+fn thread_bin_op_over_phi(
+    q: &mut Query,
+    opcode: BinaryOp,
+    lhs: Operand,
+    rhs: Operand,
+    mut max_recurse: u32,
+) -> Option<Operand> {
+    // Recursion is always used, so bail out at once if we already hit the
+    // limit.
+    if max_recurse == 0 {
+        return None;
+    }
+    max_recurse -= 1;
+    let pi = if q.is_phi(lhs) { lhs } else { rhs };
+    let phi = q.definition(pi)?;
+    // Bail out if the other operand and the phi may be mutually interdependent
+    // due to a loop.
+    if !q.value_dominates_phi(if pi == lhs { rhs } else { lhs }, phi) {
+        return None;
+    }
+    // Evaluate the BinOp on the incoming phi values.
+    let mut common_value = None;
+    for (incoming, terminator) in phi_incoming(q, phi) {
+        // If the incoming value is the phi node itself, it can safely be
+        // skipped.
+        if incoming == pi {
+            continue;
+        }
+        let saved = std::mem::replace(&mut q.cxt, terminator);
+        let v = if pi == lhs {
+            simplify_binop(q, opcode, incoming, rhs, max_recurse)
+        } else {
+            simplify_binop(q, opcode, lhs, incoming, max_recurse)
+        };
+        q.cxt = saved;
+        // If the operation failed to simplify, or simplified to a different
+        // value to previously, then give up.
+        let v = v?;
+        if common_value.is_some_and(|common| common != v) {
+            return None;
+        }
+        common_value = Some(v);
+    }
+    common_value
+}
+
+/// `threadCmpOverPHI`
+/// ([:525](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L525)).
+fn thread_cmp_over_phi(
+    q: &mut Query,
+    mut pred: IntPredicate,
+    mut lhs: Operand,
+    mut rhs: Operand,
+    mut max_recurse: u32,
+) -> Option<Operand> {
+    // Recursion is always used, so bail out at once if we already hit the
+    // limit.
+    if max_recurse == 0 {
+        return None;
+    }
+    max_recurse -= 1;
+    // Make sure the phi is on the LHS.
+    if !q.is_phi(lhs) {
+        std::mem::swap(&mut lhs, &mut rhs);
+        pred = swapped(pred);
+    }
+    let phi = q.definition(lhs)?;
+    // Bail out if RHS and the phi may be mutually interdependent due to a loop.
+    if !q.value_dominates_phi(rhs, phi) {
+        return None;
+    }
+    // Evaluate the compare on the incoming phi values.
+    let mut common_value = None;
+    for (incoming, terminator) in phi_incoming(q, phi) {
+        // If the incoming value is the phi node itself, it can safely be
+        // skipped.
+        if incoming == lhs {
+            continue;
+        }
+        // Change the context instruction to the "edge" that flows into the phi:
+        // that is where incoming is actually "evaluated".
+        let saved = std::mem::replace(&mut q.cxt, terminator);
+        let v = simplify_icmp(q, pred, incoming, rhs, max_recurse);
+        q.cxt = saved;
+        let v = v?;
+        if common_value.is_some_and(|common| common != v) {
+            return None;
+        }
+        common_value = Some(v);
+    }
+    common_value
+}
+
+/// `simplifyByDomEq`
+/// ([:712](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L712)):
+/// `op0 opcode op1` where a dominating condition says the operands are equal.
+fn simplify_by_dom_eq(
+    q: &mut Query,
+    opcode: BinaryOp,
+    op0: Operand,
+    op1: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    // Recursive run it can not get any benefit
+    if max_recurse != RECURSION_LIMIT {
+        return None;
+    }
+    let cxt = q.cxt?;
+    if conditions::is_implied_by_dom_condition(&q.tracking(), IntPredicate::Eq, op0, op1, cxt) != Some(true) {
+        return None;
+    }
+    let ty = q.ty(op0);
+    match opcode {
+        BinaryOp::Sub | BinaryOp::Xor | BinaryOp::URem | BinaryOp::SRem => Some(q.null(ty)),
+        BinaryOp::SDiv | BinaryOp::UDiv => Some(q.int(ty, 1)),
+        // Could be either one - choose Op1 since that's more likely a constant.
+        BinaryOp::And | BinaryOp::Or => Some(op1),
+        _ => None,
+    }
 }
 
 /// `simplifyAssociativeBinOp`
@@ -697,6 +1080,9 @@ fn simplify_sub(
     {
         return Some(v);
     }
+    if let Some(v) = simplify_by_dom_eq(q, BinaryOp::Sub, op0, op1, max_recurse) {
+        return Some(v);
+    }
     // (sub nuw C_Mask, (xor X, C_Mask)) -> X
     if nuw
         && let Some(x) = q.other_of(op1, BinaryOp::Xor, op0)
@@ -760,7 +1146,20 @@ fn simplify_mul(
         return Some(v);
     }
     // Mul distributes over Add. Try some generic simplifications based on this.
-    expand_commutative_bin_op(q, BinaryOp::Mul, op0, op1, BinaryOp::Add, max_recurse)
+    if let Some(v) = expand_commutative_bin_op(q, BinaryOp::Mul, op0, op1, BinaryOp::Add, max_recurse) {
+        return Some(v);
+    }
+    if (q.is_select(op0) || q.is_select(op1))
+        && let Some(v) = thread_bin_op_over_select(q, BinaryOp::Mul, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
+    if (q.is_phi(op0) || q.is_phi(op1))
+        && let Some(v) = thread_bin_op_over_phi(q, BinaryOp::Mul, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
+    None
 }
 
 /// `simplifyDivRem`
@@ -829,8 +1228,19 @@ fn simplify_div_rem(
     if is_div_zero(q, op0, op1, max_recurse, is_signed) {
         return Some(if is_div { q.null(ty) } else { op0 });
     }
-    // simplifyByDomEq, and the select and phi threading: DEVIATE (see the
-    // module header).
+    if let Some(v) = simplify_by_dom_eq(q, opcode, op0, op1, max_recurse) {
+        return Some(v);
+    }
+    if (q.is_select(op0) || q.is_select(op1))
+        && let Some(v) = thread_bin_op_over_select(q, opcode, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
+    if (q.is_phi(op0) || q.is_phi(op1))
+        && let Some(v) = thread_bin_op_over_phi(q, opcode, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
     None
 }
 
@@ -998,6 +1408,7 @@ fn simplify_shift(
     mut op0: Operand,
     mut op1: Operand,
     is_nsw: bool,
+    max_recurse: u32,
 ) -> Option<Operand> {
     if let Some(c) = fold_or_commute_constant(q, opcode, &mut op0, &mut op1) {
         return Some(c);
@@ -1026,6 +1437,18 @@ fn simplify_shift(
     {
         let ty = q.ty(op0);
         return Some(q.poison(ty));
+    }
+    // If the operation is with the result of a select or phi instruction,
+    // check whether operating on its branches always yields the same value.
+    if q.is_select(op0) || q.is_select(op1) {
+        if let Some(v) = thread_bin_op_over_select(q, opcode, op0, op1, max_recurse) {
+            return Some(v);
+        }
+    }
+    if q.is_phi(op0) || q.is_phi(op1) {
+        if let Some(v) = thread_bin_op_over_phi(q, opcode, op0, op1, max_recurse) {
+            return Some(v);
+        }
     }
     let width = q.width(op1)?;
     let known_amount = q.known(op1);
@@ -1064,8 +1487,9 @@ fn simplify_right_shift(
     op0: Operand,
     op1: Operand,
     is_exact: bool,
+    max_recurse: u32,
 ) -> Option<Operand> {
-    if let Some(v) = simplify_shift(q, opcode, op0, op1, false) {
+    if let Some(v) = simplify_shift(q, opcode, op0, op1, false, max_recurse) {
         return Some(v);
     }
     // X >> X -> 0
@@ -1088,8 +1512,9 @@ fn simplify_shl(
     op1: Operand,
     is_nsw: bool,
     is_nuw: bool,
+    max_recurse: u32,
 ) -> Option<Operand> {
-    if let Some(v) = simplify_shift(q, BinaryOp::Shl, op0, op1, is_nsw) {
+    if let Some(v) = simplify_shift(q, BinaryOp::Shl, op0, op1, is_nsw, max_recurse) {
         return Some(v);
     }
     let ty = q.ty(op0);
@@ -1126,8 +1551,9 @@ fn simplify_lshr(
     op0: Operand,
     op1: Operand,
     is_exact: bool,
+    max_recurse: u32,
 ) -> Option<Operand> {
-    if let Some(v) = simplify_right_shift(q, BinaryOp::LShr, op0, op1, is_exact) {
+    if let Some(v) = simplify_right_shift(q, BinaryOp::LShr, op0, op1, is_exact, max_recurse) {
         return Some(v);
     }
     // (X <<nuw Y) >> Y -> X
@@ -1156,8 +1582,9 @@ fn simplify_ashr(
     op0: Operand,
     op1: Operand,
     is_exact: bool,
+    max_recurse: u32,
 ) -> Option<Operand> {
-    if let Some(v) = simplify_right_shift(q, BinaryOp::AShr, op0, op1, is_exact) {
+    if let Some(v) = simplify_right_shift(q, BinaryOp::AShr, op0, op1, is_exact, max_recurse) {
         return Some(v);
     }
     // all ones >> X -> all ones; (all ones << X) >> X -> all ones
@@ -1359,6 +1786,25 @@ fn simplify_and(
     if let Some(v) = expand_commutative_bin_op(q, BinaryOp::And, op0, op1, BinaryOp::Xor, max_recurse) {
         return Some(v);
     }
+    if q.is_select(op0) || q.is_select(op1) {
+        if q.width(op0) == Some(1) {
+            // A & (A && B) -> A && B
+            if q.select_arms(op1).is_some_and(|(c, _, f)| c == op0 && q.is_zero(f)) {
+                return Some(op1);
+            }
+            if q.select_arms(op0).is_some_and(|(c, _, f)| c == op1 && q.is_zero(f)) {
+                return Some(op0);
+            }
+        }
+        if let Some(v) = thread_bin_op_over_select(q, BinaryOp::And, op0, op1, max_recurse) {
+            return Some(v);
+        }
+    }
+    if (q.is_phi(op0) || q.is_phi(op1))
+        && let Some(v) = thread_bin_op_over_phi(q, BinaryOp::And, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
     // ((X << A) | Y) & Mask -> Y, if Mask = ((1 << effective_width_of(Y)) - 1);
     // ((X << A) | Y) & Mask -> X << A, if Mask = ((1 << effective_width_of(X))
     // - 1) << A.
@@ -1399,6 +1845,9 @@ fn simplify_and(
         if let Some(implied) = q.implied(op1, op0, true) {
             return Some(if implied { op1 } else { q.null(q.ty(op1)) });
         }
+    }
+    if let Some(v) = simplify_by_dom_eq(q, BinaryOp::And, op0, op1, max_recurse) {
+        return Some(v);
     }
     None
 }
@@ -1496,6 +1945,20 @@ fn simplify_or(
     if let Some(v) = expand_commutative_bin_op(q, BinaryOp::Or, op0, op1, BinaryOp::And, max_recurse) {
         return Some(v);
     }
+    if q.is_select(op0) || q.is_select(op1) {
+        if q.width(op0) == Some(1) {
+            // A | (A || B) -> A || B
+            if q.select_arms(op1).is_some_and(|(c, t, _)| c == op0 && q.is_one(t)) {
+                return Some(op1);
+            }
+            if q.select_arms(op0).is_some_and(|(c, t, _)| c == op1 && q.is_one(t)) {
+                return Some(op0);
+            }
+        }
+        if let Some(v) = thread_bin_op_over_select(q, BinaryOp::Or, op0, op1, max_recurse) {
+            return Some(v);
+        }
+    }
     // (A & C1)|(B & C2)
     if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::And)
         && let Some((b, c2, _)) = q.binary_of(op1, BinaryOp::And)
@@ -1518,6 +1981,11 @@ fn simplify_or(
             return Some(b);
         }
     }
+    if (q.is_phi(op0) || q.is_phi(op1))
+        && let Some(v) = thread_bin_op_over_phi(q, BinaryOp::Or, op0, op1, max_recurse)
+    {
+        return Some(v);
+    }
     // (A ^ C1) | (A ^ ~C1) -> -1
     if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::Xor)
         && let Some((bits, width)) = q.number(c1)
@@ -1537,6 +2005,9 @@ fn simplify_or(
         if let Some(implied) = q.implied(op1, op0, false) {
             return Some(if implied { q.all_ones(q.ty(op1)) } else { op1 });
         }
+    }
+    if let Some(v) = simplify_by_dom_eq(q, BinaryOp::Or, op0, op1, max_recurse) {
+        return Some(v);
     }
     None
 }
@@ -1598,6 +2069,9 @@ fn simplify_xor(
     }
     // Try some generic simplifications for associative operations.
     if let Some(v) = simplify_associative(q, BinaryOp::Xor, op0, op1, max_recurse) {
+        return Some(v);
+    }
+    if let Some(v) = simplify_by_dom_eq(q, BinaryOp::Xor, op0, op1, max_recurse) {
         return Some(v);
     }
     // (xor (sub nuw C_Mask, X), C_Mask) -> X
@@ -1664,9 +2138,9 @@ fn simplify_binop_flags(
             simplify_rem(q, BinaryOp::SRem, lhs, rhs, max_recurse)
         }
         BinaryOp::URem => simplify_rem(q, BinaryOp::URem, lhs, rhs, max_recurse),
-        BinaryOp::Shl => simplify_shl(q, lhs, rhs, nsw, nuw),
-        BinaryOp::LShr => simplify_lshr(q, lhs, rhs, exact),
-        BinaryOp::AShr => simplify_ashr(q, lhs, rhs, exact),
+        BinaryOp::Shl => simplify_shl(q, lhs, rhs, nsw, nuw, max_recurse),
+        BinaryOp::LShr => simplify_lshr(q, lhs, rhs, exact, max_recurse),
+        BinaryOp::AShr => simplify_ashr(q, lhs, rhs, exact, max_recurse),
         BinaryOp::And => simplify_and(q, lhs, rhs, max_recurse),
         BinaryOp::Or => simplify_or(q, lhs, rhs, max_recurse),
         BinaryOp::Xor => simplify_xor(q, lhs, rhs, max_recurse),
@@ -1698,11 +2172,10 @@ fn simplify_phi(
         common = Some(incoming);
     }
     let Some(common) = common else { return Some(q.poison(ty)) };
-    // A value defined after the phi in the same loop does not dominate it:
-    // valueDominatesPHI (DEVIATE: dominators are an analysis). A constant or an
-    // argument always does; an instruction only where the phi is not its own
-    // user through a cycle, which `Some(incoming) == result` skipped above.
-    if has_poison && q.definition(common).is_some() {
+    // If we have a PHI node like phi(X, poison, X), where X is defined by some
+    // instruction, we cannot return X as the result of the PHI node unless it
+    // dominates the PHI block.
+    if has_poison && !q.value_dominates_phi(common, phi) {
         return None;
     }
     Some(common)
@@ -1814,6 +2287,11 @@ fn simplify_select(
     if q.is_poison(false_val) {
         return Some(true_val);
     }
+    if let Some(cxt) = q.cxt
+        && let Some(implied) = conditions::is_implied_by_dom_condition_cond(&q.tracking(), cond, cxt)
+    {
+        return Some(if implied { true_val } else { false_val });
+    }
     None
 }
 
@@ -1878,7 +2356,25 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
         return Some(v);
     }
-    simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs)
+    if let Some(v) = simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs) {
+        return Some(v);
+    }
+    if let Some(cxt) = q.cxt
+        && let Some(implied) = conditions::is_implied_by_dom_condition(&q.tracking(), pred, lhs, rhs, cxt)
+    {
+        return Some(q.int(i1, u128::from(implied)));
+    }
+    // If the comparison is with the result of a select or a phi instruction,
+    // check whether comparing with either branch always yields the same value.
+    if (q.is_select(lhs) || q.is_select(rhs))
+        && let Some(v) = thread_cmp_over_select(q, pred, lhs, rhs, max_recurse)
+    {
+        return Some(v);
+    }
+    if q.is_phi(lhs) || q.is_phi(rhs) {
+        return thread_cmp_over_phi(q, pred, lhs, rhs, max_recurse);
+    }
+    None
 }
 
 /// `CmpInst::getInversePredicate`.
@@ -2818,19 +3314,21 @@ pub fn simplify_instruction(
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
-    simplify_instruction_with(Query { context, function, layout, globals: &[] }, inst)
+    simplify_instruction_with(Query { context, function, layout, globals: &[], analyses: None, cxt: None }, inst)
 }
 
 /// `simplifyInstruction` for a module's function: `globals` name the callees,
-/// so the intrinsics (`llvm.smax`...) are known.
+/// so the intrinsics (`llvm.smax`...) are known, and `analyses` give the
+/// dominator tree and the assumptions.
 pub fn simplify_instruction_in(
     context: &mut Context,
     globals: &[GlobalValue],
     layout: &DataLayout,
+    analyses: Option<&FunctionAnalyses>,
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
-    simplify_instruction_with(Query { context, function, layout, globals }, inst)
+    simplify_instruction_with(Query { context, function, layout, globals, analyses, cxt: None }, inst)
 }
 
 fn simplify_instruction_with(
@@ -2838,6 +3336,7 @@ fn simplify_instruction_with(
     inst: InstId,
 ) -> Option<Operand> {
     let function = q.function;
+    q.cxt = Some(inst);
     let instruction = function.instruction(inst);
     let operands = instruction.operands.to_vec();
     let flags = instruction.flags;
@@ -2872,7 +3371,7 @@ pub fn simplify_binop_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[] };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
@@ -2885,7 +3384,7 @@ pub fn simplify_icmp_operands(
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[] };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
     simplify_icmp(&mut q, predicate, lhs, rhs, RECURSION_LIMIT)
 }
 
@@ -2898,7 +3397,7 @@ pub fn simplify_cast_operand(
     value: Operand,
     to: TypeId,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[] };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
     simplify_cast(&mut q, op, value, to, RECURSION_LIMIT)
 }
 
@@ -2911,7 +3410,7 @@ pub fn simplify_select_operands(
     if_true: Operand,
     if_false: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function, layout, globals: &[] };
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
     simplify_select(&mut q, condition, if_true, if_false)
 }
 
