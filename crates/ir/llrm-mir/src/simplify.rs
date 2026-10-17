@@ -281,13 +281,32 @@ impl Query<'_> {
         nonzero::is_known_non_zero(&self.tracking(), operand, 0)
     }
 
+    /// `isImpliedCondition(LHS, RHS, DL, LHSIsTrue)`.
+    fn implied(
+        &self,
+        lhs: Operand,
+        rhs: Operand,
+        lhs_is_true: bool,
+    ) -> Option<bool> {
+        conditions::is_implied_condition(&self.tracking(), lhs, rhs, lhs_is_true, 0)
+    }
+
     /// `isImpliedCondition(LHS, RHS, DL).value_or(false)`.
     fn is_implied(
         &self,
         lhs: Operand,
         rhs: Operand,
     ) -> bool {
-        conditions::is_implied_condition(&self.tracking(), lhs, rhs, true, 0).unwrap_or(false)
+        self.implied(lhs, rhs, true).unwrap_or(false)
+    }
+
+    /// `MaskedValueIsZero(V, Mask, Q)`.
+    fn masked_value_is_zero(
+        &self,
+        operand: Operand,
+        mask: u128,
+    ) -> bool {
+        known::masked_value_is_zero(&self.tracking(), operand, mask, 0)
     }
 
     /// `ComputeNumSignBits(V, DL, ...)`.
@@ -1364,6 +1383,16 @@ fn simplify_and(
         let ty = q.ty(op0);
         return Some(q.null(ty));
     }
+    if q.width(op0) == Some(1) {
+        if let Some(implied) = q.implied(op0, op1, true) {
+            // If Op0 is true implies Op1 is true, then Op0 is a subset of Op1.
+            // If it implies Op1 is false, then they are not true together.
+            return Some(if implied { op0 } else { q.null(q.ty(op0)) });
+        }
+        if let Some(implied) = q.implied(op1, op0, true) {
+            return Some(if implied { op1 } else { q.null(q.ty(op1)) });
+        }
+    }
     None
 }
 
@@ -1460,6 +1489,28 @@ fn simplify_or(
     if let Some(v) = expand_commutative_bin_op(q, BinaryOp::Or, op0, op1, BinaryOp::And, max_recurse) {
         return Some(v);
     }
+    // (A & C1)|(B & C2)
+    if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::And)
+        && let Some((b, c2, _)) = q.binary_of(op1, BinaryOp::And)
+        && let (Some((c1, width)), Some((c2, _))) = (q.number(c1), q.number(c2))
+        && c1 == !c2 & mask(width)
+    {
+        // If we have: ((V + N) & C1) | (V & C2) .. and C2 = ~C1 and C2 is 0+1+
+        // and (N & C2) == 0, replace with V+N. Add commutes, try both ways.
+        let is_mask = |bits: u128| bits != 0 && bits & bits.wrapping_add(1) == 0;
+        if is_mask(c2)
+            && let Some(n) = q.other_of(a, BinaryOp::Add, b)
+            && q.masked_value_is_zero(n, c2)
+        {
+            return Some(a);
+        }
+        if is_mask(c1)
+            && let Some(n) = q.other_of(b, BinaryOp::Add, a)
+            && q.masked_value_is_zero(n, c1)
+        {
+            return Some(b);
+        }
+    }
     // (A ^ C1) | (A ^ ~C1) -> -1
     if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::Xor)
         && let Some((bits, width)) = q.number(c1)
@@ -1469,6 +1520,16 @@ fn simplify_or(
     {
         let ty = q.ty(op0);
         return Some(q.all_ones(ty));
+    }
+    if q.width(op0) == Some(1) {
+        if let Some(implied) = q.implied(op0, op1, false) {
+            // If Op0 is false implies Op1 is false, then Op1 is a subset of
+            // Op0. If it implies Op1 is true, at least one is always true.
+            return Some(if implied { q.all_ones(q.ty(op0)) } else { op0 });
+        }
+        if let Some(implied) = q.implied(op1, op0, false) {
+            return Some(if implied { q.all_ones(q.ty(op1)) } else { op1 });
+        }
     }
     None
 }

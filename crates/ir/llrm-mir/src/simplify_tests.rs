@@ -219,6 +219,22 @@ fn ashr_of_all_sign_bits() {
     check("  %u = ashr i16 %x, 15\n  %v = select i1 %c, i16 %u, i16 0\n  %r = ashr i16 %v, %y\n", "r", Some("%v"));
 }
 
+/// `isImpliedCondition` closes `and`/`or` of bools, and `MaskedValueIsZero`
+/// merges `(V + N) & C1 | V & C2`.
+#[test]
+fn and_or_of_implied_bools_and_masked_adds() {
+    let b = "  %a = icmp ult i16 %x, %y\n  %b = icmp ule i16 %x, %y\n";
+    check(&format!("{b}  %r = and i1 %a, %b\n"), "r", Some("%a"));
+    check(&format!("{b}  %r = and i1 %b, %a\n"), "r", Some("%a"));
+    check("  %a = icmp ult i16 %x, %y\n  %b = icmp ugt i16 %x, %y\n  %r = and i1 %a, %b\n", "r", Some("0"));
+    check(&format!("{b}  %r = or i1 %a, %b\n"), "r", Some("%b"));
+    check(&format!("{b}  %r = or i1 %b, %a\n"), "r", Some("%b"));
+    check("  %a = icmp ult i16 %x, %y\n  %b = icmp uge i16 %x, %y\n  %r = or i1 %a, %b\n", "r", Some("1"));
+    let m = "  %n = shl i16 %y, 8\n  %p = add i16 %x, %n\n";
+    check(&format!("{m}  %a = and i16 %p, 65280\n  %b = and i16 %x, 255\n  %r = or i16 %a, %b\n"), "r", Some("%p"));
+    check(&format!("{m}  %a = and i16 %p, 255\n  %b = and i16 %x, 65280\n  %r = or i16 %a, %b\n"), "r", None);
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
