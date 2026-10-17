@@ -1,6 +1,6 @@
 # LoopIdiomRecognize as a translation of LLVM's: the plan
 
-TL;DR: `LoopIdiomRecognize.cpp` (3,881 lines at `d1106deb71cc`) is translated whole, as `loopidiom/`, and replaces `Fill` (the loop half of `fill.rs`). `fill` does the memset and memcpy idioms of the countable half and none of the noncountable half (popcount, ctlz/cttz, shift-until, strlen, CRC). It sits after `unroll` and `peel`; LLVM's sits before `IndVarSimplify` and full unroll. It costs 17.1 M of `d_faces` -O2 and acts on 0 of the 112 runs the replay corpus holds, so the corpus cannot judge it: the oracle's first stage is the inputs. The noncountable half needs MIR intrinsics (`ctlz`, `cttz`, `ctpop`) and `bsf`/`bsr` selection that do not exist yet. Nothing here is built before oversight answers section 6.
+TL;DR: `LoopIdiomRecognize.cpp` (3,881 lines at `d1106deb71cc`) is translated as `loopidiom/` and replaces `Fill` (the loop half of `fill.rs`). `fill` does the memset and memcpy idioms of the countable half and none of the noncountable half (popcount, ctlz/cttz, shift-until, strlen, CRC). Oversight's rulings: the slot is LLVM's (before `indvars` and full unroll); priority is low, behind LICM, InstCombine and LVI; the first PR moves `fill` to that slot and brings its cost (17.1 M of `d_faces` -O2) to LoopIdiomRecognize's on the same inputs; idiom-bearing inputs (L0) come before any further porting. `fill` acts on 0 of the 112 runs the replay corpus holds, so the corpus cannot judge it.
 
 Rule for the code: each Rust function is a translation of the C++ function named in its first comment (permalink), the `cl::opt` defaults stand, and anything not translated is a numbered DEVIATE with a reason and a number. None is taken without oversight's approval.
 
@@ -26,7 +26,7 @@ Level and position: on from -O1 (the user's decision of 2026-10-10, [levels](../
 
 ## 2. What LoopIdiomRecognize does
 
-Run on each loop, innermost first, in LLVM's `LPM2` ([`LoopIdiomRecognizePass` before `IndVarSimplifyPass`, L562 at -O1](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L562) and [L737 at -O2/-O3](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L737)): after `LoopRotate`, `LICM` and unswitch, before `LoopDeletion` and `LoopFullUnroll`. The listed order of the task says after `indvars`; the source says before. It is a loop-pass, so it sees loops not yet fully unrolled.
+Run on each loop, innermost first, in LLVM's `LPM2` ([`LoopIdiomRecognizePass` before `IndVarSimplifyPass`, L562 at -O1](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L562) and [L737 at -O2/-O3](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L737)): after `LoopRotate`, `LICM` and unswitch, before `LoopDeletion` and `LoopFullUnroll`. The source says before (an earlier note said after). It is a loop pass, so it sees loops not yet fully unrolled.
 
 | LLVM | does | llrm today |
 |---|---|---|
@@ -60,48 +60,69 @@ So the memset/memcpy half ports onto what exists. The noncountable half needs `c
 
 | LLVM | Rust (`loopidiom/`) | DEVIATE |
 |---|---|---|
-| `runOnLoop`, `runOnCountableLoop`, `runOnLoopBlock`, `collectStores`, `processLoopStores`, `processLoopMemIntrinsic`, `processLoopMemSet`, `processLoopMemCpy`, `processLoopStridedStore`, `processLoopStoreOfLoopLoad`, `avoidLIRForMultiBlockLoop` | `loopidiom::run_on_loop` and one function each | D1 to D5 below |
-| `mayLoopAccessLocation`, `getStartForNegStride`, `getNumBytes`, `getMemSetPatternValue`, `isSameByteValueStore`, `getStoreStride` | the same names | alias queries on the translated MemorySSA; `SCEV` replaced by `induction` (D6) |
-| `runOnNoncountableLoop` and the six recognizers with their `detect*` and `transform*` | the same names | gated by target hooks (D7); intrinsics first (section 3) |
-| `StrlenVerifier`, `recognizeAndInsertStrLen` | the same | emits a call only where the program's library holds it (D8) |
+| `runOnLoop`, `runOnCountableLoop`, `runOnLoopBlock`, `collectStores`, `processLoopStores`, `processLoopMemIntrinsic`, `processLoopMemSet`, `processLoopMemCpy`, `processLoopStridedStore`, `processLoopStoreOfLoopLoad`, `avoidLIRForMultiBlockLoop` | `loopidiom::run_on_loop` and one function each | D1 to D5 |
+| `mayLoopAccessLocation`, `getStartForNegStride`, `getNumBytes`, `getMemSetPatternValue`, `isSameByteValueStore`, `getStoreStride` | the same names | alias queries on the translated MemorySSA; `induction` in place of `SCEV` until SCEV exists (D6) |
+| `runOnNoncountableLoop` and the six recognizers with their `detect*` and `transform*` | the same names | target hooks (D7); intrinsics first (section 3) |
+| `StrlenVerifier`, `recognizeAndInsertStrLen` | the same | emits a call only where the program's library holds it, as LLVM |
 | `optimizeCRCLoop*`, `HashRecognize` | none | D9 |
 
-DEVIATEs, each awaiting oversight:
+DEVIATEs. A deviation is kept only where it rests on something MIR or the target lacks, with that fact. Status: approved (fact), dropped, pending.
 
-- D1. `memset.pattern` is emitted whenever `fill` finds a pattern, as MIR has the intrinsic and the back end expands it; LLVM only with `memset_pattern16` or the force option. Alternative: no pattern memset, rows measured.
-- D2. Tiling of adjacent same-byte fills (`fill.rs` `_tiled`; `lru` -O2 150 to 133 clocks). LLVM makes a memset per store and `MemCpyOpt` may merge adjacent ones. Alternative: drop it from the idiom pass and see whether the memcpyopt port recovers it.
-- D3. `llrm.forward`/`llrm.backward` on memmove: lowering needs the direction LLVM leaves to the call.
-- D4. Pricing `_pays`/`_cheaper_by` against the loop's cost, for patterns, copies and several fills. LLVM transforms without a price (its libcall is fast); here `rep movs` has a setup cost on the 486 (a few cells stay stores). Replaced by `profit` and the target's costs, kept as a hook.
-- D5. The loop is cut to one trip and its counters leave with `counting::Seeds` exit values. LLVM zaps the stores and the instructions feeding only them and leaves the empty loop, whole, to `LoopDeletion` and `IndVarSimplify`, which follow in the same loop pipeline. Alternative: do the same and port or reuse a loop deletion at that slot; needs the pass list's answer.
-- D6. No `ScalarEvolution`: strides, counts and exit values from `induction`/`counting`. Behaviour the same where `induction::counted` proves the count; a loop SCEV counts and `induction` does not stays.
-- D7. `getPopcntSupport` and the FFS cost are target hooks; x86 m16 and m32 answer "software" and the `bsf`/`bsr` cost, so popcount does not fire where LLVM's does not.
-- D8. `isLibFuncEmittable`: a program with no `strlen` in its library gets no call.
-- D9. CRC loops (`HashRecognize`, `Clmul`, table) are not translated: no carry-less multiply on any target here, and a table costs data. Needs a yes.
+- D1. `memset.pattern` whenever `fill` finds a pattern. LLVM: only with `memset_pattern16` or the force option; the target has no such libcall. Dropped; rows at S1 say what it cost, and it returns only with them.
+- D2. Tiling of adjacent same-byte fills (`fill.rs` `_tiled`; `lru` -O2 150 to 133 clocks). Dropped from the idiom pass: LLVM makes a memset per store. `memcpyopt`'s port owns merging adjacent memsets; `lru` is the row to watch.
+- D3. `llrm.forward`/`llrm.backward` on memmove. Approved: MIR's `memmove` carries no direction, and `rep movs` needs one (fact: the target's string move runs one way by the direction flag).
+- D4. Pricing (`_pays`, `_cheaper_by`) against the loop. Pending a number: LLVM has none beyond TTI. The number is the target's `rep stos`/`rep movs` setup and per-cell clocks (`timings.times`) against the loop's; if S1 cannot name it per target, the pricing goes and only the single constant-byte fill stays.
+- D5. The loop cut to one trip with `counting::Seeds` exit values, where LLVM zaps the stores and leaves the empty loop to `LoopDeletion` and `IndVarSimplify`. Approved until `LoopDeletion` is translated (fact: no loop deletion in the pipeline); then mirrored.
+- D6. No `ScalarEvolution`: strides, counts and exit values come from `induction`/`counting`. Not a deviation to live with: a project-level dependency, sized separately.
+- D7. `getPopcntSupport` and the FFS cost as target hooks. Approved: x86 has no fast popcount before Nehalem (fact: `PSK_FastHardware` never holds on 486/P5). `ctlz`/`cttz` need MIR intrinsics and `bsf`/`bsr` selection, which i386 and later have: a later representation item, not never.
+- D9. CRC loops (`HashRecognize`, `Clmul`, table): not translated. Pending: no carry-less multiply on any target here; the table strategy is open.
+
+(`isLibFuncEmittable` is LLVM's own rule, not a deviation: no `strlen` in the program's library, no call.)
 
 ## 5. Stages and gates
 
+Priority: low. No time is taken from LICM, InstCombine or LVI.
+
 | stage | content | gate |
 |---|---|---|
-| L0 | the instrument: `difftest` gains `fill -> loop(loop-idiom)`; the replay corpus gains inputs that hold idioms (`fill_tests.rs` cases, the bench C loops, `scroll`, `lru`, `sieve`, `x_transpose`, `x_radix`, `histo`, `x_hash`, `bintree`); LLVM's `LoopIdiomRecognizePass` timed on `d_faces` -O2 in instructions per IR instruction, as the LICM plan does | the oracle reports a nonzero number on the corpus; the 112 runs' zero is explained, not accepted |
-| L1 | decisions only, countable half: which stores become memset, memset.pattern, memcpy or memmove, on the dumped inputs, against `opt -passes='loop(loop-idiom)'` and against `Fill` | counts of each per function; every difference classified (another pass, a fact LLVM lacks, a gap) |
-| L2 | apply, countable half, in LLVM's slot (before `indvars` and `unroll`), `Fill`'s loop half removed; `fill::takes`, `_copy`, `How`, `copy_price` move to their users | rows (section 7); `d_faces` compile cycles of the pass no more than LLVM's per IR instruction times the budget the compile-time spec allows |
-| L3 | MIR `ctlz`/`cttz` (and `ctpop` behind the hook), interpreter, fold, `bsf`/`bsr` selection, lowering for zero-undefined | a unit test per layer; a function computing each runs the same under the interpreter and the emulator |
-| L4 | noncountable recognizers (FFS, shift-until x3, popcount behind its hook) | oracle counts; rows |
-| L5 | `strlen`/`wcslen` | measured gap first: #1491 found none against gcc and clang |
-| L6 | delete `Fill`; `Merge` and its helpers stay with `memcpyopt` | no use of the loop half left; `levels.md` and the pass docs regenerated |
+| S1 | the first PR: `Fill` moves to LLVM's slot (before `indvars` and full unroll, mirroring the pipeline) and its cost on the same inputs is brought to LoopIdiomRecognize's, per IR instruction. D4 gets its number or goes | rows (section 7); `d_faces` -O1/-O2/-Os cycles of the pass against LLVM's |
+| L0 | idiom-bearing inputs for the replay corpus, `difftest` gains `fill -> loop(loop-idiom)`; before any further port | the oracle reports a nonzero number; the 112 runs' zero is explained, not accepted |
+| L1 | decisions only, countable half, against `opt -passes='loop(loop-idiom)'` and against `Fill` | counts per function; every difference classified |
+| L2 | apply as `loopidiom/`, `Fill`'s loop half removed; `fill::takes`, `_copy`, `How`, `copy_price` move to their users | rows; compile cycles |
+| L3 | (later) MIR `ctlz`/`cttz`, interpreter, fold, `bsf`/`bsr` selection | a unit test per layer; interpreter and emulator agree |
+| L4 | noncountable recognizers | oracle counts; rows |
+| L5 | `strlen`/`wcslen` | measured gap first: #1491 found none |
+| L6 | delete `Fill`; `Merge` stays with `memcpyopt` | no use of the loop half left; docs regenerated |
 
-`fill` is deleted by the PR that moves its last use (L2 for the loop half: the last callers are `loopdistribute`, `inline` and `memcpyopt`, each re-pointed in that PR).
+`fill` is deleted by the PR that moves its last use (the loop half at L2: `loopdistribute`, `inline` and `memcpyopt` are re-pointed there).
 
-## 6. Questions for oversight
+## 6. Dependencies
 
-1. D1, D2, D4, D5: take or drop each? (D5 follows the pass list's loop deletion.) Each has a row behind it (D2: `lru`).
-2. The slot. `Fill` runs last in the fixed point, after unroll; LLVM's runs before. Moving it changes what `unroll` and `peel` see (a filled loop is no longer unrolled). The pass-list order belongs to `pass-list-parity` and `llvm-order-poc`; L2 waits for their position.
-3. CRC (D9): yes or no.
-4. ValueTracking: `isKnownNonZero`, `isDereferenceableAndAlignedPointer` of the recognizers come from `valuetracking-port`; until it lands the zero-input check of FFS is the existing `ranger` fact.
+- Position: `pass-list-parity` and `llvm-order-poc` own the loop slot; S1 follows their position.
+- SCEV (D6): sized separately by the coordinator.
+- ValueTracking (`isKnownNonZero`, `isDereferenceableAndAlignedPointer`): `valuetracking-port`; until it lands the FFS zero-input check is `ranger`'s fact.
+- `LoopDeletion` (D5).
+- MemorySSA ([memoryssa-port](memoryssa-port.md)) for `mayLoopAccessLocation`.
 
 ## 7. Rows
 
 For every stage that changes output: the number of rows worse than base for each of clocks, executed instructions, memory operands and code bytes at each level (-O1, -O2, -O3, -Os) on m16 and m32, then the geomean, then the worst row. Clang is the reference; gcc only where it measures better. No waived rows.
+
+## 7a. L0 inputs
+
+Measured with the pinned `clang` 24.0.0git (`d1106deb71cc`, `~/scratch/llvm-build`), `-m32 -march=i486`, the 71 vsgcc programs, loop-idiom on against `-mllvm -disable-loop-idiom-all`, the calls it adds to the -O1 and -O2 IR:
+
+| program | adds (-O1; -O2 where it differs) |
+|---|---|
+| `bintree`, `fpbench`, `histo`, `nbody_fixed`, `nbody_single`, `sieve`, `x_hash` | memset 2 |
+| `lru` | memset 4 (-O2: 8) |
+| `scroll` | memmove 4, memcpy 2 |
+| `x_mergesort` | memcpy 3 |
+| `x_radix` | memset 2, memcpy 2 (-O2: memset 6, memcpy 3) |
+| `x_transpose` | memcpy 2 |
+| `x_strlen` | strlen 2 |
+
+No program adds `ctpop`, `ctlz` or `cttz` at `-march=i486` (`x_popcount` and `x_isqrt` hold the shapes; popcount needs fast hardware, so L4 also runs the pinned `opt` for a target that has it as an oracle-only check). The L0 corpus is these programs' pass inputs at -O1, -O2 and -Os, dumped as `tools/mkinputs.sh` does, beside the `fill_tests.rs` cases.
 
 ## 8. Oracle
 
