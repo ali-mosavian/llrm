@@ -1075,7 +1075,7 @@ pub struct Unit<'a> {
     /// purpose.
     pub loop_intervals: bool,
     /// The congruences of this body under these registers
-    /// (`alias::congruences_with`), where a caller asking many times of one
+    /// (`alias::congruences_of`), where a caller asking many times of one
     /// body made a cell for them: each proof of a loop's trips asked of the
     /// whole function, once for each loop.
     pub congruent: Option<&'a std::cell::OnceCell<crate::alias::Congruences>>,

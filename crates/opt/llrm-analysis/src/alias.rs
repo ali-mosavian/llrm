@@ -3497,7 +3497,7 @@ fn mod_floor(
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> Congruences {
-    congruences_with(unit, &unit.registers())
+    congruences_of(unit, &unit.registers(), None)
 }
 
 /// Each value's (residue, modulus): what it is congruent to.
@@ -3513,105 +3513,35 @@ pub fn congruences_found() -> usize {
     CONGRUENCES.with(std::cell::Cell::get)
 }
 
-/// `congruences`, given what `consts::known` finds without memory.
-pub fn congruences_with(
-    unit: &Unit,
-    constants: &IndexMap<ValueId, Known>,
-) -> Congruences {
-    CONGRUENCES.with(|count| count.set(count.get() + 1));
-    let function = unit.function;
-    let mut result = Congruences::default();
-    let zero = BigInt::from(0);
-    for loop_ in &unit.shape().loops {
-        for affine in induction::basics(unit, loop_).values() {
-            let width = affine.start.width();
-            let (Some(start), Some(step)) = (
-                induction::_signed(&affine.start, &constants, width),
-                induction::_signed(&affine.step, &constants, width),
-            ) else {
-                continue;
-            };
-            if step != zero {
-                result.insert(affine.value, reduced(step, start, width));
-            }
-        }
-    }
-    loop {
-        let mut changed = false;
-        for (_, inst) in function.walk() {
-            let op = function.instruction(inst);
-            let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
-            let (Opcode::Binary(kind), [left, right], Some(width)) =
-                (&op.opcode, op.operands.as_slice(), unit.int_bits(Operand::Value(value)))
-            else {
-                continue;
-            };
-            // A value nothing is known of is a multiple of 1: `x << 1` is a
-            // multiple of 2 all the same.
-            let fact = |one: Operand| match one {
-                Operand::Value(source) => Some(
-                    result
-                        .get(&source)
-                        .cloned()
-                        .or_else(|| constants.get(&source).map(|known| (BigInt::from(0), known.n.clone())))
-                        .unwrap_or_else(|| (BigInt::from(1), BigInt::from(0))),
-                ),
-                _ => unit.int_constant(one).map(|n| (BigInt::from(0), BigInt::from(n))),
-            };
-            let (Some(mut a), Some(mut b)) = (fact(*left), fact(*right)) else { continue };
-            let found = match kind {
-                BinaryOp::Add | BinaryOp::Sub => {
-                    let residue = if *kind == BinaryOp::Add { a.1 + b.1 } else { a.1 - b.1 };
-                    reduced(induction::gcd(a.0, b.0), residue, width)
-                }
-                BinaryOp::Mul => {
-                    if a.0 == zero {
-                        (a, b) = (b, a);
-                    }
-                    if b.0 != zero {
-                        continue;
-                    }
-                    reduced(&a.0 * &b.1, a.1 * b.1, width)
-                }
-                BinaryOp::Shl if b.0 == zero && zero <= b.1 && b.1 < BigInt::from(width) => {
-                    let factor = BigInt::from(1) << usize::try_from(&b.1).expect("a count below the width");
-                    reduced(&a.0 * &factor, a.1 * factor, width)
-                }
-                _ => continue,
-            };
-            if found.0 == BigInt::from(1) {
-                continue;
-            }
-            result.insert(value, found);
-            changed = true;
-        }
-        if !changed {
-            return result;
-        }
-    }
-}
-
-/// `congruences_with` of the values `wanted` alone: what they are congruent to
-/// is what the additions, subtractions, products and shifts they are computed
-/// from, and the loops' counters among them, give. The values nothing else
-/// reaches are not worked out (the whole body's, once for each version of a
-/// body of 128 loops, was 7.2 M and 3.9% of the compile).
+/// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
+/// or of every value where none, given what `consts::known` finds without
+/// memory: what they are congruent to is what the additions, subtractions,
+/// products and shifts they are computed from, and the loops' counters among
+/// them, give. The values nothing else reaches are not worked out (the whole
+/// body's, once for each version of a body of 128 loops, was 7.2 M and 3.9% of
+/// the compile).
 ///
-/// The answer for each value asked is the one `congruences_with` gives: the
+/// The answer for each value asked is the one asked of every value gives: the
 /// values a value is computed from are visited in the body's order, as it
 /// does, so that one visited before its operand is given the operand's
 /// weaker answer in both.
 pub fn congruences_of(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
-    wanted: &[ValueId],
-) -> HashMap<ValueId, (BigInt, BigInt)> {
+    wanted: Option<&[ValueId]>,
+) -> Congruences {
+    if wanted.is_none() {
+        CONGRUENCES.with(|count| count.set(count.get() + 1));
+    }
     let function = unit.function;
-    let mut result: HashMap<ValueId, (BigInt, BigInt)> = HashMap::default();
+    let mut result = Congruences::default();
     // The values reached by the operations that make a congruence, and the ones
     // they stop at.
-    let mut reached: HashSet<ValueId> = HashSet::default();
-    let mut work: Vec<ValueId> = wanted.to_vec();
+    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
+    let mut work: Vec<ValueId> = match wanted {
+        Some(wanted) => wanted.to_vec(),
+        None => function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect(),
+    };
     let mut operations: Vec<InstId> = Vec::new();
     while let Some(value) = work.pop() {
         if !reached.insert(value) {
@@ -3642,7 +3572,7 @@ pub fn congruences_of(
         _ => None,
     };
     for loop_ in &shape.loops {
-        if !reached.iter().any(|&value| block_of(value).is_some_and(|block| loop_.body.contains(&block))) {
+        if !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block))) {
             continue;
         }
         for affine in induction::basics(unit, loop_).values() {
@@ -3661,9 +3591,9 @@ pub fn congruences_of(
             }
         }
     }
-    // In the body's order, round after round, as `congruences_with` goes.
-    let order: HashMap<InstId, usize> = {
-        let wanted: HashSet<InstId> = operations.iter().copied().collect();
+    // In the body's order, round after round, as the whole body's goes.
+    let order: llrm_mir::dense::IdMap<InstId, usize> = {
+        let wanted: llrm_mir::dense::IdSet<InstId> = operations.iter().copied().collect();
         function
             .walk()
             .map(|(_, inst)| inst)
@@ -3796,7 +3726,7 @@ pub fn annotated_with(
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
+    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {

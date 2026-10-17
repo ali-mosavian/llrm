@@ -902,7 +902,7 @@ fn test_annotated_does_not_solve_what_escapes() {
     assert_eq!(crate::alias::escape_solves() - before, 1, "Pointers solves what escapes once");
 }
 
-/// `Annotated` worked out every value's stride congruence (`congruences_with`,
+/// `Annotated` worked out every value's stride congruence (`congruences_of`,
 /// a pass over the loops' inductions) in every solve, for the accesses with a
 /// variable index alone to ask: 24.0 M of d_faces' 3,218 M at -O1, 123 solves
 /// for 4,185 asks. A body with none asks none.

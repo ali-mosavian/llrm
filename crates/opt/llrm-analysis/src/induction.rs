@@ -1688,9 +1688,9 @@ fn _low_bits_zero(
     let known = match unit.congruent.and_then(|cell| cell.get()) {
         Some(whole) => wanted.iter().filter_map(|value| whole.get(value).map(|fact| (*value, fact.clone()))).collect(),
         None => {
-            let found = crate::alias::congruences_of(unit, facts, &wanted);
+            let found = crate::alias::congruences_of(unit, facts, Some(&wanted));
             if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
-                let whole = crate::alias::congruences_with(unit, facts);
+                let whole = crate::alias::congruences_of(unit, facts, None);
                 for value in &wanted {
                     assert_eq!(
                         found.get(value),
