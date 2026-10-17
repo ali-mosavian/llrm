@@ -2,11 +2,13 @@
 
 **Scoreboard.** `d_faces` -O2 is 2,104 M instructions at main `9d50a350e` in a clean dist build, 5.1x clang 24's 413 M (section 2.0; the 2,253 M at `5e2e995ef` was not taken in the clean-build mode and is superseded; it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
 
+**Honest status.** The measured ceilings so far (keeps about 2%, updaters 0.5% to 3.5%, `ThroughMemory` cap 2.3%, `FloatFacts` 2% to 4%, algebraic 1% to 2%, allocator lanes about 8%) plus the queued PRs are well under half of the gap to 415 M. The rest is the architecture of 3.1/3.2 and the allocator rewrite, not constant factors.
+
 **Target.** Parity is clang 24 at `d1106deb71cc` (415 M instructions on `d_faces` -O2) with rows held against min(gcc, clang); the static clang 20.1.8 (462 M) is the secondary column. Phase 3 (structural) starts now, in parallel with phases 1 and 2: each step is gated by its early probe and its design review, not by B1 or B2.
 
 ## Status
 
-As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions were renamed on 2026-10-17: pass-list-parity is inline-storage-combine, ssa-spill-m16 regalloc-quadratics, hoist-bounded walker-caps, keep-analyses facts-per-query, objectref-identity identity-s0-done, greedy-port lsr-gvn-split, attrs-budgets trace-recorder, edit-rollback edit-contract-replay.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are simplifycfg-poc (after #2046 and #2050 merge). Unchanged: keep-analyses (facts-per-query), gate-dist-build, plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
@@ -18,8 +20,13 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | S5 block-local dataflow | ssa-spill-m16 | KILLED ([#2043]) | -14.8 M but +0.36% bytes |
 | S6 edit core | edit-rollback | measured; kill not met on `loop` only | `move_to` 925 M of 997.9 M primitives at N=1600 (4.32%) |
 | S7 caps and pricing | hoist-bounded, greedy-port | running | forecast 2.6% / 4.9% |
+| body-size factors per pass | indvars-decide-poc | measured ([#1994 comment](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237686443), [second](https://github.com/ali-mosavian/llrm/issues/1994#issuecomment-6237749851)) | per-pass factors against LLVM, see the comments |
+| fold numbers POC | fold-poc | measured | 19x to 10.1x of LLVM charged |
+| dse POC | dse-poc | measured | 13x LLVM per IR instruction; fact set plus walk step 3,440 instructions against a target of about 300 |
+| lsr probe | indvars-decide-poc | KILLED | forecast kept; DEVIATE, 425 objects differ |
+| mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
-| 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
+| 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
@@ -148,7 +155,7 @@ Reading. A clean main is 5.1x clang at -O2. The landing chain of the order branc
 | [#1965] allocator rewrites from a floor | UNOWNED | draft | -0.3% |
 | [#1972], [#1973] footprints by part | keep-analyses | draft | -0.02%, -0.07%; carries [parity] |
 | [#1945], [#1943] checkpoint and rollback, `Touched` per slot | edit-rollback | draft | +0.09%; 144 function clones at -O2 left |
-| [#1948] counted budgets as tests | attrs-budgets | draft | counter cost +0.04% |
+| [#1948] counted budgets as tests | attrs-budgets | draft | counter cost 0.03% (callgrind own-function sum); +0.13% by perf stat is noise; [#2076] recorder off: -0.003% / -0.010% / -0.011%, nothing measurable |
 | [#2036] | ssa-spill-m16 | docs, open | not-kept entries for spec section 8 |
 | [#2039] | keep-analyses | ready | `LLRM_CHECK_SAMEBYTES` read once through `env_flag!` (env fix) |
 
@@ -279,7 +286,7 @@ Eight spikes from the [architecture study](architecture-parity.md) run before th
 | S4 allocator attribution, then in-place spill | is the 415.5 M the representation or the decisions? | greedy-port, ssa-spill-m16 | whole-body work per edit under 1% of the compile, or step 1 cuts the cost per spill by under 3x | step 0 measured: see below |
 | S5 block-local post-RA dataflow | does LLVM's block-local copy propagation fit? | ssa-spill-m16 | under 15 M saved, or a row worse | KILLED ([#2043]): block-local saves 14.8 M but `d_faces` grows 8,068 to 8,097 bytes; a single-predecessor chain gives the same output (68% against an 80% bar) |
 | S6 edit core on the ladders | are the edit primitives a scaling term? | edit-rollback | edit primitives under 3% at N=1600 on every shape and no exponent | measured ([#1994]): the kill is not met on `loop` only (primitives 4.32% at N=1600, `move_to` 925 M, 4.0x per doubling, 8,001 calls from `hoist::hoisted`); the other four shapes are under 1.2% with no exponent. A6 is built beyond rollback only as far as `loop` goes: `Function::move_all(&[InstId], Position)` mirrors LLVM's range splice at the API; the intrusive order only if a slope remains |
-| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-contract-replay, re-taken non-incremental over the whole process in instructions:u: `d_faces` -O2 none 2,574.4 M, cap 6 -2.3%, cap 20 -1.4%, cap 100 -0.3%, objects identical in all four; `mem` N=1600 cap 6 -14.3% (an earlier -20.7% was the runs table's with-analyses metric, not the whole process), cap 100 +0.1%; rows for caps 6 and 20 are queued. In CI mode, walker-caps' [#2068] is +0.05% on `d_faces` (a safety bound) and [#2083] -11.2% on `mem` N=1600; facts-per-query's [#2073] takes unrolled-128 -6.6%. Inline storage ([#2077], CI mode): instructions -0.47% / -0.58% / -0.69% at -O1/-O2/-Os, D1 misses -2.5% to -3.3%, no RSS or cycles claim |
+| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-contract-replay, re-taken non-incremental over the whole process in instructions:u: `d_faces` -O2 none 2,574.4 M, cap 6 -2.3%, cap 20 -1.4%, cap 100 -0.3%, objects identical in all four; `mem` N=1600 cap 6 -14.3% (an earlier -20.7% was the runs table's with-analyses metric, not the whole process), cap 100 +0.1%; rows for caps 6 and 20 are queued. In CI mode, walker-caps' [#2068] is +0.05% on `d_faces` (a safety bound) and [#2083] -11.2% on `mem` N=1600; facts-per-query's [#2073] takes unrolled-128 -6.6%. Indvars registers brought up to date by the manager ([#2067]): -0.858% / -0.680% / -0.658%. Inline storage ([#2077], CI mode): instructions -0.47% / -0.58% / -0.69% at -O1/-O2/-Os, D1 misses -2.5% to -3.3%, no RSS or cycles claim |
 
 **S2 result** (pass-list-parity; llrm main `4f12e5818`, round 1 of `fold`, `algebraic`, `phiopt`, `dead` own work against `opt -passes='sroa,early-cse,instcombine'` minus `sroa,early-cse`; M instructions at N=200, then 1,600): `arith` 6.01 against 20.10 (0.30x) and 62.5 against 159.0 (0.39x); `mem` 6.14 against 8.08 (0.76x) and 80.6 against 65.5 (1.23x); `diamond` 5.06 against 6.35 (0.80x) and 35.6 against 41.7 (0.85x); `mixed` 8.59 against 8.35 (1.03x) and 67.0 against 61.3 (1.09x). The 2x line passes on every shape (worst 1.03x). The exponent from 200 to 1,600, llrm and LLVM: `arith` 1.14 and 1.01, `mem` 1.24 and 1.01, `diamond` 0.94 and 0.91, `mixed` 0.99 and 0.96; it trips on `arith` (`dead` 1.43, `algebraic` 1.12, being re-measured at N=400 and 800) and on `mem` (`fold` 1.41, whose cost is `Analyses::get::<ThroughMemory>`). Verdict: the rewriting is not the gap, the facts are; the superlinear passes are `gvn` (1.32 to 1.56) and `dse` (1.72 to 1.97), not the combine. The exponents come from two points, with analyses excluded from "own".
 
@@ -343,7 +350,7 @@ Checklist: the shared list. Its own metric boxes:
   - `whole_walks`.
 
   Plus a per-analysis, per-asking-pass count. This gives phase 3 the numbers it is judged by: today 2,742 function-level computes, 631 M own, 545 of them on a body version already computed (41.3 M, 1.4%) ([#1994]). The pass-run count behind 2.8 is from -O1 ([spec] 1.2) and is `unmeasured` at -O2.
-- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1%. [#1948]'s +0.04% was measured earlier on `d_faces` -O2: re-measure on current main before the PR is ready (a checklist box below).
+- **(b) Early:** counter cost on `d_faces` -O2. Kill if it is above 0.1%. [#1948]'s 0.03% is the callgrind own-function sum on `d_faces` -O2 (the perf-stat total is within the noise floor).
 - **(c) Gate:** none.
 - **(d) Exit:** M (identical output); `tools/test_budgets.py` green on main; computations per run printed by `LLRM_DEBUG=counts` at -O1/-O2/-Os.
 - **(e) Who:** attrs-budgets. Depends on 0.1. Touches `llrm_mir::counts`, `tools/budgets.toml`, `tools/test_budgets.py`.
@@ -1080,15 +1087,20 @@ Checklist: the shared list.
 | [`User` co-allocated operands](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137) | `Instruction.operands: Vec<Operand>` | DEVIATES: at most 2.7% of the blocks and 0.2% of instructions (measured, [#2022]) |
 | [`SlotIndexes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/SlotIndexes.h) and [`LiveRangeEdit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveRangeEdit.h) (in-place spill) | in-place `Vec<Insn>` arena spill (S4 step 1, 3.3) | in flight (design: [allocator on the LIR core](allocator-lir-core.md)) |
 | [`AnalysisManager` and `PreservedAnalyses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/PassManagerImpl.h#L80) (preserved sets, invalidate) | `Analyses` with keep and invalidate ([analysis-manager]) | partly mirrored ([#1922]); S1 decides how much more |
-| [InstCombine worklist](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L5780) | `fold`, `algebraic`, `phiopt`, `dead` in rounds | DEVIATES: a combine at today's positions measured about 0 (S2: the rewriting is 0.30x to 1.03x of InstCombine; the facts are the gap) |
+| [InstCombine worklist](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L5780) | `fold`, `algebraic`, `phiopt`, `dead` in rounds | DEVIATES, re-test after 3.1/3.2: a combine at today's positions measured about 0 (S2: the rewriting is 0.30x to 1.03x of InstCombine; the facts are the gap) |
 | [`RAGreedy` stage queue](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1975) | `allocate.rs` queue stages | DEVIATES: llrm adds a `recolor` stage greedy lacks (3.32 M per 1x); the decision-procedure page ([#2049]) decides |
 | [`CalcSpillWeights`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CalcSpillWeights.cpp#L221) (weight stored in the interval) | `LiveRanges::weight`, about 1 K instructions per call | not mirrored; a candidate of S4's fixed part |
 | [`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341) | `addresssink::masks_sunk` ([#2010]) | mirrored (merged) |
 | [LICM caps and MemorySSA walker caps](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L149) | structural gates of work (chain of 64 accesses, 1,024-instruction body, 8 joins; [#1999] and the stack) | mirrored in effect: counts of work, not a tuned cap |
-| [`LastRunTrackingAnalysis`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30) | the settled mark of `Fixed::fixed` | DEVIATES: an idle skip nets +0.6% ([spec 8]) |
-| [`MachineCopyPropagation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp) (block-local) | cross-block `copyprop` and `spillforward` | DEVIATES: block-local saves 14.8 M but grows `d_faces` by 0.36% in bytes (S5, [#2043]) |
-| [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066) (generation counters) | none | DEVIATES: measured, not kept (-3.1% to -3.4% kill-all, four rows worse; [spec 8]) |
+| [`LastRunTrackingAnalysis`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30) | the settled mark of `Fixed::fixed` | DEVIATES, re-test after 3.1/3.2: an idle skip nets +0.6% ([spec 8]) |
+| [`MachineCopyPropagation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCopyPropagation.cpp) (block-local) | cross-block `copyprop` and `spillforward` | DEVIATES, re-test after 3.1/3.2: block-local saves 14.8 M but grows `d_faces` by 0.36% in bytes (S5, [#2043]) |
+| [`EarlyCSE`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1066) (generation counters) | none | DEVIATES, re-test after 3.1/3.2: measured, not kept (-3.1% to -3.4% kill-all, four rows worse; [spec 8]) |
+| preserved analyses across `fold`'s `_numbers` | none | DEVIATES, re-test after 3.1/3.2: the premise failed in today's pipeline (a `MemRef` is made of operands, [#2031]) |
 | [`X86FPStackifier`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L81) | `floatassign` plus `floatalloc` | DEVIATES: llrm allocates the x87 registers as allocnos (IRA-like); the hand-off is 0.9%, ranks last |
+
+The "re-test after 3.1/3.2" rows were measured as pieces inside today's pipeline, which is not LLVM-shaped; their numbers show they do not pay today and are kept, but the rows are open until the pipeline is one pass with lazy facts.
+
+**Bundling.** Constant-factor PRs under 0.5% are bundled per area; slopes, soundness and architecture items are separate PRs.
 
 **Method M (every exit measurement).**
 
@@ -1134,6 +1146,8 @@ These apply at -O1/-O2/-O3/-Os, m16 and m32. A row is never traded for compile t
 - if it fixes correctness.
 
 **Non-incremental builds on both sides.** A figure taken with `CARGO_INCREMENTAL=0` on both binaries (the CI mode) is the one this plan cites; an incremental-mode figure is re-checked against that rule before it is relied on, and the earlier incremental figures of this plan are not yet re-checked.
+
+**Noise floor.** Even clean builds carry about ±0.15% total-instruction noise for any unrelated edit (inlining shifts; callgrind-attributed on [#1948], the counters' own code is 0.03% of a +0.13% total). A delta under about 0.2% is not a claim in either mode; a claim under 1% cites callgrind own-function sums, with the unrelated-shift line reported.
 
 **Cycles, not just instructions.** An allocation or container change claims cycles, or it does not claim a win. The mimalloc entry points moved 2.3% of instructions and 0% of cycles ([spec 8]).
 
@@ -1320,7 +1334,9 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2056]: https://github.com/ali-mosavian/llrm/pull/2056
 [#2041]: https://github.com/ali-mosavian/llrm/pull/2041
 [#2072]: https://github.com/ali-mosavian/llrm/pull/2072
+[#2067]: https://github.com/ali-mosavian/llrm/pull/2067
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2076]: https://github.com/ali-mosavian/llrm/pull/2076
 [#2100]: https://github.com/ali-mosavian/llrm/pull/2100
 [#2106]: https://github.com/ali-mosavian/llrm/pull/2106
 [#2110]: https://github.com/ali-mosavian/llrm/pull/2110
