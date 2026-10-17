@@ -1,0 +1,192 @@
+diff --git a/crates/ir/llrm-mir/src/module.rs b/crates/ir/llrm-mir/src/module.rs
+index 91d379c69..d23fdf66f 100644
+--- a/crates/ir/llrm-mir/src/module.rs
++++ b/crates/ir/llrm-mir/src/module.rs
+@@ -87,8 +87,27 @@ pub struct Block {
+     pub(crate) placed: bool,
+ }
+ 
++thread_local! {
++    static READS: std::cell::Cell<[u64; 3]> = const { std::cell::Cell::new([0; 3]) };
++}
++
++#[inline]
++fn read(kind: usize, n: usize) {
++    READS.with(|one| {
++        let mut all = one.get();
++        all[kind] += n as u64;
++        one.set(all);
++    });
++}
++
++/// Reads so far of kind 0 (instructions), 1 (operands), 2 (uses).
++pub fn reads(kind: usize) -> u64 {
++    READS.with(|one| one.get()[kind])
++}
++
+ impl Block {
+     pub fn instructions(&self) -> &[InstId] {
++        read(0, self.instructions.len());
+         &self.instructions
+     }
+ }
+@@ -481,7 +500,10 @@ impl Function {
+         &self,
+         id: InstId,
+     ) -> &Instruction {
+-        &self.instructions[id.0 as usize]
++        let one = &self.instructions[id.0 as usize];
++        read(0, 1);
++        read(1, one.operands.len());
++        one
+     }
+ 
+     pub fn block(
+@@ -526,7 +548,9 @@ impl Function {
+         &self,
+         value: ValueId,
+     ) -> &[Use] {
+-        &self.value_uses[value.0 as usize]
++        let uses = &self.value_uses[value.0 as usize];
++        read(2, uses.len());
++        uses
+     }
+ 
+     /// The operand slots naming `block`: terminators' and phis'.
+@@ -615,7 +639,12 @@ impl Function {
+ 
+     /// Instructions in layout order, with their block.
+     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
+-        self.layout.iter().flat_map(move |&block| self.block(block).instructions.iter().map(move |&one| (block, one)))
++        self.layout.iter().flat_map(move |&block| {
++            self.block(block).instructions.iter().map(move |&one| {
++                read(0, 1);
++                (block, one)
++            })
++        })
+     }
+ 
+     /// The log of changes since the last `take_changes`. They stay in the log,
+diff --git a/crates/opt/llrm-analysis/src/manager.rs b/crates/opt/llrm-analysis/src/manager.rs
+index 4833cfb85..0b031145f 100644
+--- a/crates/opt/llrm-analysis/src/manager.rs
++++ b/crates/opt/llrm-analysis/src/manager.rs
+@@ -1072,10 +1072,23 @@ impl Analysis for ExposedFrames {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return function.walk().filter_map(|(_, inst)| match function.instruction(inst).opcode { Opcode::Alloca { .. } => function.instruction(inst).result, _ => None }).collect();
++        }
+         crate::memory::exposed_frames(&Unit::within(context, layout, function, analyses.outer()))
+     }
+ }
+ 
++
++/// Local ablation switch: `LLRM_ABLATE=name,name` makes those analyses answer
++/// their coarse default.
++fn ablated(name: &str) -> bool {
++    static SET: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
++    SET.get_or_init(|| std::env::var("LLRM_ABLATE").map(|one| one.split(',').map(str::to_owned).collect()).unwrap_or_default())
++        .iter()
++        .any(|one| one == name)
++}
++
+ /// Every pointer's objects, with no caller context: `alias::pointers`.
+ pub struct Pointers;
+ 
+@@ -1098,6 +1111,9 @@ impl Analysis for PointerValues {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return Err("ablated".into());
++        }
+         let shape = analyses.get::<Shape>(context, layout, function);
+         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+         alias::point_values(
+@@ -1119,6 +1135,9 @@ impl Analysis for Pointers {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return Err("ablated".into());
++        }
+         let shape = analyses.get::<Shape>(context, layout, function);
+         let assumptions = analyses.get::<AssumptionCache>(context, layout, function);
+         let exposed = analyses.get::<ExposedFrames>(context, layout, function);
+@@ -1146,6 +1165,9 @@ impl Analysis for Annotated {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return Ok(IndexMap::default());
++        }
+         let pointers = analyses.get::<Pointers>(context, layout, function);
+         let registers = analyses.get::<Registers>(context, layout, function);
+         let pointers = Result::as_ref(&*pointers).map_err(String::clone)?;
+@@ -1694,6 +1716,9 @@ impl Analysis for FloatFacts {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return floatfacts::Solved { integers: Default::default(), facts: Default::default() };
++        }
+         FLOAT_SOLVES.with(|solves| solves.set(solves.get() + 1));
+         let calls = writes(context, layout, function, analyses);
+         let shape = analyses.get::<Shape>(context, layout, function);
+@@ -1755,6 +1780,9 @@ impl Analysis for ThroughMemory {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return Ok(IndexMap::default());
++        }
+         let calls = Result::as_ref(&*analyses.get::<Writes>(context, layout, function)).map_err(String::clone)?.clone();
+         let references = analyses.get::<Annotated>(context, layout, function);
+         let references = Result::as_ref(&*references).map_err(String::clone)?;
+@@ -1863,6 +1891,9 @@ impl Analysis for Bounded {
+         function: &Function,
+         analyses: &mut Analyses,
+     ) -> Self::Result {
++        if ablated(Self::NAME) {
++            return Err("ablated".into());
++        }
+         Self::solved(context, layout, function, analyses, None)
+     }
+ 
+diff --git a/crates/opt/llrm-transforms/src/pipeline.rs b/crates/opt/llrm-transforms/src/pipeline.rs
+index 320745b90..ceae68694 100644
+--- a/crates/opt/llrm-transforms/src/pipeline.rs
++++ b/crates/opt/llrm-transforms/src/pipeline.rs
+@@ -541,6 +541,7 @@ pub fn passes() -> Vec<&'static str> {
+ /// it computed.
+ pub fn timed() {
+     use llrm_support::debug;
++    let _ = debug::READS.set(llrm_mir::module::reads);
+     if !debug::enabled("time") && !debug::enabled("runs") {
+         return;
+     }
+diff --git a/crates/support/llrm-support/src/debug.rs b/crates/support/llrm-support/src/debug.rs
+index 0f7a23fd4..e527f6095 100644
+--- a/crates/support/llrm-support/src/debug.rs
++++ b/crates/support/llrm-support/src/debug.rs
+@@ -94,8 +94,18 @@ fn work_fd() -> i32 {
+     })
+ }
+ 
++pub static READS: OnceLock<fn(usize) -> u64> = OnceLock::new();
++
++fn read_kind() -> Option<usize> {
++    static KIND: OnceLock<Option<usize>> = OnceLock::new();
++    *KIND.get_or_init(|| std::env::var("LLRM_READS").ok().and_then(|one| one.parse().ok()))
++}
++
+ /// What the thread has done so far, in `work_unit`s.
+ fn work_now() -> u64 {
++    if let (Some(kind), Some(reads)) = (read_kind(), READS.get()) {
++        return reads(kind);
++    }
+     let fd = work_fd();
+     if fd >= 0 {
+         let mut count: u64 = 0;
