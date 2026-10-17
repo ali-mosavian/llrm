@@ -970,6 +970,66 @@ pub struct Structure {
 }
 
 #[derive(Clone)]
+/// A table by access number that holds a page of entries only where one was
+/// written: a cell asked about once, near one end of a long body, took an
+/// entry for every access of it (mem at N=1600: 180 of 248 MB at the peak).
+/// A body of at most `DENSE` accesses has one entry for each, as the table was.
+enum Paged<T> {
+    Whole(Vec<T>, usize),
+    Pages(Vec<Option<Box<[T; PAGE]>>>),
+}
+
+const DENSE: usize = 1024;
+const PAGE: usize = 64;
+
+impl<T: Copy + Default> Paged<T> {
+    fn new(accesses: usize) -> Self {
+        if accesses <= DENSE { Self::Whole(Vec::new(), accesses) } else { Self::Pages(Vec::new()) }
+    }
+
+    fn get(
+        &self,
+        at: usize,
+    ) -> T {
+        match self {
+            Self::Whole(entries, _) => entries.get(at).copied().unwrap_or_default(),
+            Self::Pages(pages) => {
+                pages.get(at / PAGE).and_then(Option::as_ref).map_or_else(T::default, |page| page[at % PAGE])
+            }
+        }
+    }
+
+    fn set(
+        &mut self,
+        at: usize,
+        value: T,
+    ) {
+        match self {
+            Self::Whole(entries, size) => {
+                if entries.len() <= at {
+                    entries.resize((*size).max(at + 1), T::default());
+                }
+                entries[at] = value;
+            }
+            Self::Pages(pages) => {
+                if pages.len() <= at / PAGE {
+                    pages.resize_with(at / PAGE + 1, || None);
+                }
+                pages[at / PAGE].get_or_insert_with(|| Box::new([T::default(); PAGE]))[at % PAGE] = value;
+            }
+        }
+    }
+
+    /// The entries held.
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        match self {
+            Self::Whole(entries, _) => entries.len(),
+            Self::Pages(pages) => pages.iter().flatten().count() * PAGE,
+        }
+    }
+}
+
 pub struct MemorySSA<'a> {
     structure: Rc<Structure>,
     unit: Unit<'a>,
@@ -980,7 +1040,7 @@ pub struct MemorySSA<'a> {
     /// of one address ask it of the same defs again and again.
     /// Keyed by the cell's slot (`slot`) and the def's access number: 0 not
     /// asked, 1 no, 2 yes.
-    clobbers: std::cell::RefCell<Vec<Vec<u8>>>,
+    clobbers: std::cell::RefCell<Vec<Paged<u8>>>,
     /// Each cell asked about, numbered in the order it was first asked: a walk
     /// hashes the cell once, not once a step.
     slots: std::cell::RefCell<llrm_support::hash::HashMap<MemRef, usize>>,
@@ -989,7 +1049,7 @@ pub struct MemorySSA<'a> {
     /// reaches before a clobber, a join, the live state or a boundary it was
     /// stopped at (plus one; 0: not known), by access number. A walk takes
     /// the jump instead of the steps, unless its own boundary lies between.
-    jumps: std::cell::RefCell<Vec<Option<Vec<u32>>>>,
+    jumps: std::cell::RefCell<Vec<Option<Paged<u32>>>>,
     /// Per access, the walk that last visited it, and the walks made.
     stamps: std::cell::RefCell<(Vec<u32>, u32)>,
     /// The last-write index, once made, and the accesses walks have stepped
@@ -1124,7 +1184,7 @@ impl MemorySSA<'_> {
         access: usize,
         site: InstId,
     ) -> bool {
-        let remembered = self.clobbers.borrow().get(slot).and_then(|asked| asked.get(access)).copied().unwrap_or(0);
+        let remembered = self.clobbers.borrow().get(slot).map_or(0, |asked| asked.get(access));
         if remembered != 0 && !check_clobbers() {
             return remembered == 2;
         }
@@ -1145,20 +1205,17 @@ impl MemorySSA<'_> {
         RUNS.with(|runs| runs.set(runs.get() + 1));
         let mut memo = self.clobbers.borrow_mut();
         if memo.len() <= slot {
-            memo.resize(slot + 1, Vec::new());
+            memo.resize_with(slot + 1, || Paged::new(self.span.len()));
         }
         let asked = &mut memo[slot];
-        if asked.len() <= access {
-            asked.resize(self.span.len().max(access + 1), 0);
-        }
-        if asked[access] != 0 {
+        if asked.get(access) != 0 {
             assert_eq!(
-                asked[access] == 2,
+                asked.get(access) == 2,
                 found,
                 "LLRM_CHECK_CLOBBERS: a remembered answer differs from the one worked out"
             );
         }
-        asked[access] = 1 + u8::from(found);
+        asked.set(access, 1 + u8::from(found));
         found
     }
 
@@ -1204,6 +1261,15 @@ impl MemorySSA<'_> {
         let found = pointerfacts::offsets(self.unit.context, self.unit.layout, self.unit.function).relative(pointer);
         self.offsets.borrow_mut().insert(value, found);
         found
+    }
+
+    /// The entries the remembered answers and jumps hold, for a test that they
+    /// follow the accesses walks passed, not the accesses of the body for each
+    /// cell.
+    #[cfg(test)]
+    pub(crate) fn table_entries(&self) -> usize {
+        self.clobbers.borrow().iter().map(Paged::held).sum::<usize>()
+            + self.jumps.borrow().iter().flatten().map(Paged::held).sum::<usize>()
     }
 
     /// `cell`'s number among the cells asked about; the cell is copied only the
@@ -1424,6 +1490,7 @@ impl MemorySSA<'_> {
             };
             let (mut wild, mut escaping) =
                 (index.wild[above], if reaches_others { index.escaping[above] } else { None });
+            let cell_slot = self.slot(memory);
             let mut hit = None;
             // The writes nearer than the exact one that may reach the cell,
             // nearest first: the walk asks each, as it asks any def.
@@ -1457,8 +1524,8 @@ impl MemorySSA<'_> {
                     continue;
                 }
                 let written = &self.written[&at];
-                let slot = self.slot(memory);
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(cell_slot, memory, candidate, at))
+                {
                     hit = Some(candidate);
                     break;
                 }
@@ -1496,22 +1563,22 @@ impl MemorySSA<'_> {
         let jumpable = jumping && edge.is_none() && edge_memory.is_none();
         let (slot, edge_slot) = (self.slot(memory), edge_memory.map(|one| self.slot(one)));
         let mut jumps = self.jumps.borrow_mut();
-        let none = &mut Vec::new();
+        let none = &mut Paged::new(0);
         let table = if jumpable {
             let at = slot * 2 + usize::from(invariant);
             if jumps.len() <= at {
-                jumps.resize(at + 1, None);
+                jumps.resize_with(at + 1, || None);
             }
-            jumps[at].get_or_insert_with(|| vec![0; self.span.len()])
+            jumps[at].get_or_insert_with(|| Paged::new(self.span.len()))
         } else {
             none
         };
         // Accesses passed that nothing on them touches the cell; a jump to `end
         // + 1` says the ones before `end` are clean.
         let mut chain: Vec<usize> = Vec::new();
-        let ended = |table: &mut Vec<u32>, chain: &mut Vec<usize>, end: usize| {
+        let ended = |table: &mut Paged<u32>, chain: &mut Vec<usize>, end: usize| {
             for &passed in chain.iter() {
-                table[passed] = end as u32 + 1;
+                table.set(passed, end as u32 + 1);
             }
             chain.clear();
         };
@@ -1526,9 +1593,9 @@ impl MemorySSA<'_> {
                 chain.clear();
                 continue;
             };
-            if jumpable && table[current] != 0 {
+            if jumpable && table.get(current) != 0 {
                 chain.clear();
-                let end = table[current] as usize - 1;
+                let end = table.get(current) as usize - 1;
                 // The boundary lies on the chain when it is behind `current`
                 // and `end` is behind it: the walk stops there.
                 match boundary {

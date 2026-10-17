@@ -1026,3 +1026,28 @@ fn overlap_asks_the_program_for_its_spaces_not_the_machine() {
     let asked = ASKED.with(std::cell::Cell::get);
     assert_eq!(asked, 0, "the machine was asked for its spaces {asked} times in 10 pairs");
 }
+
+/// Each cell asked about took a table of an entry for every access of the body
+/// for its remembered answers and another for its jumps: 700 cells over a body
+/// of 1,400 accesses held 2 million entries, mem at N=1600 held 180 of its 248
+/// MB at the peak. A table holds the pages walks wrote.
+#[test]
+fn test_a_cell_asked_about_holds_entries_for_the_accesses_its_walk_passed() {
+    let stores: String = (0..700)
+        .map(|at| format!("  %s{at} = getelementptr i8, ptr %p, i16 {}\n  store i8 {}, ptr %s{at}\n", at % 7, at % 100))
+        .collect();
+    let loads: String = (0..700)
+        .map(|at| format!("  %a{at} = getelementptr i8, ptr %p, i16 {}\n  %y{at} = load i8, ptr %a{at}\n", at % 7))
+        .collect();
+    let parsed = Parsed::new(&format!("define void @f(ptr %p) {{\nb0:\n{stores}{loads}  ret void\n}}\n"));
+    let unit = parsed.unit();
+    let accesses = Accesses::resolved(&unit, &IndexMap::default()).expect("resolved");
+    let graph = built(&unit, &accesses);
+    for at in 0..300 {
+        let load = site(&unit, "b0", 1400 + 2 * at + 1);
+        let _ = graph.nearest_writes(load, &accesses.references[&load]);
+    }
+    let held = graph.table_entries();
+
+    assert!(held <= 100_000, "{held} table entries for 700 loads of 7 cells over 1,400 accesses");
+}
