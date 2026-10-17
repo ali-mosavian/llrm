@@ -1678,7 +1678,30 @@ fn _low_bits_zero(
     bound: &AffineOperand,
     shift: u32,
 ) -> bool {
-    let known = _congruences(unit, || crate::alias::congruences_with(unit, facts));
+    // Only the two values' congruences are asked: the body's whole were found
+    // for each version of a body of loops (7.2 M, 255 times at 128 loops).
+    // A unit that carries the body's has them found already.
+    let wanted: Vec<ValueId> = [start, bound]
+        .into_iter()
+        .filter_map(|one| if let AffineOperand::Value(value, _) = one { Some(*value) } else { None })
+        .collect();
+    let known = match unit.congruent.and_then(|cell| cell.get()) {
+        Some(whole) => wanted.iter().filter_map(|value| whole.get(value).map(|fact| (*value, fact.clone()))).collect(),
+        None => {
+            let found = crate::alias::congruences_of(unit, facts, Some(&wanted));
+            if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
+                let whole = crate::alias::congruences_of(unit, facts, None);
+                for value in &wanted {
+                    assert_eq!(
+                        found.get(value),
+                        whole.get(value),
+                        "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
+                    );
+                }
+            }
+            found
+        }
+    };
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),
         AffineOperand::Value(value, _) => {
