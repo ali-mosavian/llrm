@@ -668,7 +668,7 @@ fn nuw_add_like_const(
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L9809>
-fn is_true_predicate(
+pub fn is_true_predicate(
     q: &Query,
     pred: IntPredicate,
     lhs: Side,

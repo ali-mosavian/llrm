@@ -513,3 +513,134 @@ pub fn intrinsic_id(
 ) -> Option<IntrinsicId> {
     intrinsic_id_of_name(q.callee_name(inst)?)
 }
+
+// ---- nonzero.rs ----
+
+/// `dyn_cast<IntrinsicInst>(I)->getIntrinsicID()` for a call (not an invoke).
+pub fn call_intrinsic(
+    q: &Query,
+    inst: InstId,
+) -> Option<IntrinsicId> {
+    matches!(q.function.instruction(inst).opcode, Opcode::Call(_)).then_some(())?;
+    intrinsic_id(q, inst)
+}
+
+/// `m_Intrinsic<ID>(args...)`: `v` is a call to `id`: its instruction and its
+/// arguments.
+pub fn intrinsic<'a>(
+    q: &Query<'a>,
+    v: Operand,
+    id: IntrinsicId,
+) -> Option<(InstId, &'a Instruction)> {
+    let (inst, instruction) = q.instruction_of(v)?;
+    (call_intrinsic(q, inst) == Some(id)).then_some((inst, instruction))
+}
+
+/// `m_APInt`: the integer constant `v` is, and its width.
+pub fn apint(
+    q: &Query,
+    v: Operand,
+) -> Option<(u128, u32)> {
+    q.int_constant(v)
+}
+
+/// `m_ZeroInt`.
+pub fn zero_int(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    matches!(apint(q, v), Some((0, _)))
+}
+
+/// `m_One`.
+pub fn one(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    matches!(apint(q, v), Some((1, _)))
+}
+
+/// `m_AllOnes`.
+pub fn all_ones(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    matches!(
+        apint(q, v),
+        Some((bits, width)) if bits == crate::context::mask(width)
+    )
+}
+
+/// `m_Power2OrZero`.
+pub fn power2_or_zero(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    matches!(
+        apint(q, v),
+        Some((bits, _)) if bits == 0 || bits.is_power_of_two()
+    )
+}
+
+/// `m_SignMask`.
+pub fn sign_mask(
+    q: &Query,
+    v: Operand,
+) -> bool {
+    matches!(
+        apint(q, v),
+        Some((bits, width)) if bits == 1_u128 << (width - 1)
+    )
+}
+
+/// `m_LowBitMask(C)`: the constant, when it is a non-zero run of low ones.
+pub fn low_bit_mask(
+    q: &Query,
+    v: Operand,
+) -> Option<(u128, u32)> {
+    apint(q, v).filter(|(bits, _)| *bits != 0 && bits & bits.wrapping_add(1) == 0)
+}
+
+/// `m_c_ICmp(Pred, m_Specific(x), m_Value(Y))`: the predicate with `x` on the
+/// left, and `Y`.
+pub fn c_icmp_specific(
+    q: &Query,
+    v: Operand,
+    x: Operand,
+) -> Option<(IntPredicate, Operand)> {
+    let (_, _, CmpPredicate { pred, .. }, lhs, rhs) = icmp(q, v)?;
+    if lhs == x {
+        Some((pred, rhs))
+    } else if rhs == x {
+        Some((pred.swapped(), lhs))
+    } else {
+        None
+    }
+}
+
+/// `matchSimpleRecurrence(PN, BO, Start, Step)`: the binary operator, the
+/// start value and the step.
+pub fn match_simple_recurrence<'a>(
+    q: &Query<'a>,
+    phi: InstId,
+) -> Option<(InstId, &'a Instruction, Operand, Operand)> {
+    let instruction = q.function.instruction(phi);
+    let result = Operand::Value(instruction.result?);
+    if instruction.operands.len() != 4 {
+        return None;
+    }
+    for i in 0..2 {
+        let incoming = instruction.operands[2 * i];
+        let Some((inst, operation)) = q.instruction_of(incoming) else { continue };
+        if !matches!(operation.opcode, Opcode::Binary(_)) {
+            continue;
+        }
+        let (lhs, rhs) = (operation.operands[0], operation.operands[1]);
+        if lhs != result && rhs != result {
+            continue;
+        }
+        let start = instruction.operands[2 * (1 - i)];
+        return Some((inst, operation, start, if lhs == result { rhs } else { lhs }));
+    }
+    None
+}
