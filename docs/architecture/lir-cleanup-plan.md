@@ -10,15 +10,17 @@ TL;DR: on `d_faces` `-O2` the LIR passes after selection cost 315.5 M against ab
 | `jumps` | 56.6 | BranchFolding 2.0 + MachineBlockPlacement 3.9 | 5.9 | 1 / 1 (+1 inside placement) | lir-cleanup-poc | each LLVM-absent extra is deleted unless a row needs it (see below) | merge-and-DCE fixed point with a second threading (23.0), baseline-vs-merged pricing choice (9.7), tail and return duplication (8.4), rotation (6.6): ~47.7 M of the 57.9 M; placement itself ~10 M |
 | `floatassign` + `floatalloc` | 38.8 + 20.5 | X86FloatingPoint (FPStackifier) | 1.6 | 1 / 1 on 4 of 11 functions | lir-cleanup-poc with regalloc-core | the x87 values are a register class of seven the allocator colours, and the stackifier is one forward walk per block | a whole IRA/LRA-style allocator for the stack (allocnos, spill placement, Belady victim rounds, rebuilt body per round), two liveness solves, `_modes` fixed points |
 | `coalesce` | 42.8 | RegisterCoalescer 7.0 + PHIElimination 2.1 + TwoAddress 1.0 | 10.1 | 1 / 1 | regalloc-core-poc | held: re-measured on the allocator core ([lir-jumps-coalesce.md](../comparison/llvm/lir-jumps-coalesce.md), #2110) | whole-function interference graph + Briggs/George (29.7 M before the first copy); joins by interval overlap in #2110 |
-| `phielim` | 12.1 | PHIElimination | 2.1 | 1 / 1 | regalloc-core-poc | with the allocator's `LiveIntervals` | edge prices, copies placed by cost |
+| `phielim` | 12.1† | PHIElimination | 2.1 | 1 / 1 | regalloc-core-poc | with the allocator's `LiveIntervals` | edge prices, copies placed by cost |
 | `shrink-wrap` / `prologue` | 11.2 | ShrinkWrap + PrologEpilogInserter | not measured | 1 / 1 | lir-cleanup-poc | measure LLVM's first | not read yet |
-| `parcopy` | 9.5 | (parallel copies resolved by the register rewriter and `TwoAddress`) | n/a | 1 / n/a | regalloc-core-poc | with the allocator's parallel-copy handling | cycle breaking priced per CPU |
-| `twoaddr` | 8.0 | TwoAddressInstructionPass | 1.0 | 1 / 1 | #2079 (pair queries), lir-cleanup-poc | #2079 lands: the graph is not built | builds a partial interference graph for commute candidates |
-| `pressuresink` | 7.8 | MachineSink (counted in the peephole row) | n/a | 1 / 1 | lir-cleanup-poc | folded into the `peephole` replacement | a load made where its reader is, before any value is placed |
-| `loopslots` | 7.2 | StackSlotColoring | 0.8 | 1 / 1 | lir-cleanup-poc | measure why 9x | which slots a loop still reaches |
-| `phiconst` / `floatfold` / `farcall` / `scheduler` | 1.9 / 0.9 / 0.2 / 0.0 | (MachineScheduler 9.2, no counterpart) | 9.2 | 1 / 1 | n/a | n/a | `scheduler` is nearly free here because it moves nothing; LLVM's 9.2 M buys code quality this table does not price |
+| `parcopy` | 9.5† | (parallel copies resolved by the register rewriter and `TwoAddress`) | n/a | 1 / n/a | regalloc-core-poc | with the allocator's parallel-copy handling | cycle breaking priced per CPU |
+| `twoaddr` | 8.0† | TwoAddressInstructionPass | 1.0 | 1 / 1 | #2079 (pair queries), lir-cleanup-poc | #2079 lands: the graph is not built | builds a partial interference graph for commute candidates |
+| `pressuresink` | 7.8† | MachineSink (counted in the peephole row) | n/a | 1 / 1 | lir-cleanup-poc | folded into the `peephole` replacement | a load made where its reader is, before any value is placed |
+| `loopslots` | 7.2† | StackSlotColoring | 0.8 | 1 / 1 | lir-cleanup-poc | measure why 9x | which slots a loop still reaches |
+| `phiconst` / `floatfold` / `farcall` / `scheduler` | 1.9† / 0.9† / 0.2† / 0.0† | (MachineScheduler 9.2, no counterpart) | 9.2 | 1 / 1 | n/a | n/a | `scheduler` is nearly free here because it moves nothing; LLVM's 9.2 M buys code quality this table does not price |
 
-LLVM figures: `llc -O2 -mtriple=i486-pc-linux-gnu` on the optimized IR of `d_faces.c`, callgrind inclusive of each pass's `runOnMachineFunction`, 216.6 M in all; the six functions, not the eleven ([#1994 body-size table](https://github.com/ali-mosavian/llrm/issues/1994)). The two columns are by purpose, not by identical work.
+† Not a pinned figure: my callgrind inclusive on a binary of main from 2026-10-17 (before the pinned run). The pinned ones (peephole, jumps, coalesce, the x87 pair, shrink-wrap) are the coordinator's table.
+
+LLVM figures: `llc -O2 -mtriple=i486-pc-linux-gnu` on the optimized IR of `d_faces.c`, callgrind inclusive of each pass's `runOnMachineFunction`, 216.6 M in all; the six functions, not the eleven ([#1994 body-size table](https://github.com/ali-mosavian/llrm/issues/1994)). The `llc` build used there is body-size-table's and its version string was not recorded in that comment; the C++ read for the translations is d1106deb71cc, and the local `llc-20` is Ubuntu LLVM 20.1.8, an optimized build (re-measure with it before a translation PR quotes a ratio). The two columns are by purpose, not by identical work.
 
 ## Order
 
