@@ -6,7 +6,9 @@
 
 ## Status
 
-As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refreshed at least every few merges by llvm-compare.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions were renamed on 2026-10-17: pass-list-parity is inline-storage-combine, ssa-spill-m16 regalloc-quadratics, hoist-bounded walker-caps, keep-analyses facts-per-query, objectref-identity identity-s0-done, greedy-port lsr-gvn-split, attrs-budgets trace-recorder, edit-rollback edit-contract-replay.
+
+Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
 | step | owner | state | last measured |
 |---|---|---|---|
@@ -20,27 +22,27 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
-| 1.1 slab | pass-list-parity | [#2022] open, ready | -4.2% instructions, -2.9% cycles |
-| 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971] merged; [#2032] open | -1.17%; -0.38% |
+| 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
+| 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged | -1.17%; -0.38% |
 | 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
-| 1.4 backend copies | ssa-spill-m16 | [#2027] merged; [#2021], [#2038] open | -0.56%, -0.52%; peak heap -15.4%, -13.9% |
+| 1.4 backend copies | ssa-spill-m16 | [#2027], [#2021], [#2038] merged | -0.56%, -0.52%; peak heap -15.4%, -13.9% (stacked peak: DHAT 18.7 MB at `5e2e995ef`) |
 | 1.5 mask test | ssa-spill-m16 | [#2010] merged | diamond 800: 1,995 to 1,075 M; `d_faces` identical |
 | 1.6 gvn, walker, lsr | greedy-port | [#1999], [#2017] merged; [#2012], [#2011], [#2020], [#2034], [#2008] open | `loop` N=1600 -65% stacked |
 | 1.7 dse | edit-rollback | [#2015] merged; [#2013] open | 2.0x per doubling (`arith`), 2.17x to 2.33x (`mem`) |
 | 1.8 deep nests | greedy-port | [#1977], [#1978] open | queens -O3 -23% |
 | 1.9 exact ThroughMemory | keep-analyses | [#1915] merged | +1.0% (correctness) |
-| 1.10 held PRs | greedy-port, attrs-budgets | [#1958] open, ready; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
+| 1.10 held PRs | greedy-port, attrs-budgets | [#1958] merged; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
 | 2.1 point_values | keep-analyses | stopped; 2.1b killed ([#2053]) | asked 87% / 60% / 63% of solved; repeats 13.6 M |
-| 2.2 Annotated per access | keep-analyses, edit-rollback | to do | pool 42.4 M |
+| 2.2 Annotated per access | keep-analyses, edit-rollback | closed, not built ([#2072]) | 96.5% of reruns re-derive an equal answer, but a sound dependency from the change log invalidates 74.7% of entries (kill over 30%) |
 | 2.3 persistent MemorySSA | hoist-bounded, keep-analyses | to do | `unmeasured` |
 | 2.4 split path | greedy-port | B' killed; A' alone | B' -0.03% |
 | 2.5 interval recompute | ssa-spill-m16 | closed | 0.25% realistic |
-| 2.6 `Frequencies` dense | attrs-budgets | to do, after pricing PRs | `unmeasured` |
+| 2.6 `Frequencies` dense | attrs-budgets | closed ([#2041]) | B-tree self cost at the sites 13.4 M, under the 15 M bar |
 | 2.7 rollback | edit-rollback | draft [#1945] | +0.09% |
 | 2.8 scaling shapes | hoist-bounded | to do | `unmeasured` |
 | 2.9 Vec growth by site | unowned | to do | about 15 M |
 | 3.1 facts from the change log | edit-rollback, keep-analyses | design, starts now | family 403 M own (12.8%) |
-| 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0 |
+| 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0; fold+algebraic 330 M is facts (290 of fold's 297 M: `FloatFacts` 136, `ThroughMemory` 72, `loop_exits` 30, alias tower 28, writes 23; rewriting about 7 M; 74 of algebraic's 101 M set-up) ([#2074]) |
 | 3.3 allocator on the LIR core | greedy-port, ssa-spill-m16 | design page [#2042] (draft), starts now | `regalloc` 415.5 M |
 | 3.4 LIR clean-up | ssa-spill-m16 | idle skip killed (10.4 M, [#2043]); solve-cost probe next | 290 M; exit about 250 M |
 | 3.5 pricing (`hoist`, `lsr` forecast) | hoist-bounded, greedy-port | probe next | forecast 2.6% (-O2), 4.9% (-Os) |
@@ -183,8 +185,8 @@ The exit method M and the bars it uses are defined once in section 4.
 | 0.2 counters as tests | computations per run and spec 6 counters in CI | counter cost above 0.1% | attrs-budgets | draft [#1948] |
 | 0.3 `ObjectRef` identity and its oracle (spike S0, answered) | the identity is not a cause; the PR is identity-excludes-facts plus the `LLRM_CHECK_INTERN` oracle (zero cost off) | n/a (answered) | objectref-identity | oracle PR |
 | 1.0 inline storage across the hot `Vec` sites | allocations removed as far as the probe says; instructions and cycles on `d_faces`; peak RSS | a site whose inline fraction does not fit, or whose struct growth is not justified | pass-list-parity | to do ([#1956] first instance) |
-| 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | ready [#2022] |
-| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971] merged, [#2032] ready |
+| 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | merged [#2022] |
+| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged |
 | 1.3 escape phase | -0.9% | below 0.5% together | keep-analyses | ready |
 | 1.4 backend copies | -1.1% instructions ([#2021] -0.56%, [#2038] -0.52%); peak heap -15.4% ([#2021]) and -13.9% ([#2027], merged), each against main alone, stacked peak unmeasured | below 0.5% and no heap change | ssa-spill-m16 | ready |
 | 1.5 mask at each branch | diamond 1,951 to 1,075 M; `d_faces` 0 | any object differs | ssa-spill-m16 | merged [#2010] |
@@ -1284,7 +1286,10 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2053]: https://github.com/ali-mosavian/llrm/pull/2053
 [#2054]: https://github.com/ali-mosavian/llrm/pull/2054
 [#2056]: https://github.com/ali-mosavian/llrm/pull/2056
+[#2041]: https://github.com/ali-mosavian/llrm/pull/2041
+[#2072]: https://github.com/ali-mosavian/llrm/pull/2072
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2074]: https://github.com/ali-mosavian/llrm/pull/2074
 [#2046]: https://github.com/ali-mosavian/llrm/pull/2046
 [#2049]: https://github.com/ali-mosavian/llrm/pull/2049
 [#2043]: https://github.com/ali-mosavian/llrm/pull/2043
