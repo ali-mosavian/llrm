@@ -163,6 +163,7 @@ pub mod framefree;
 pub mod globals;
 pub mod hintwalk;
 pub mod inline_asm;
+pub mod interferes;
 pub mod isel;
 
 /// Every target's peephole rules, as its definition directory is named.

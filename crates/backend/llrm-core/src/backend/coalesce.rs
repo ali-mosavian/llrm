@@ -803,6 +803,13 @@ thread_local! {
     static ASKED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     static NUMBERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GRAPHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many interference graphs this thread has built, for a test that a pass
+/// that asks of a few pairs builds none.
+pub fn graphs_built() -> usize {
+    GRAPHS.with(std::cell::Cell::get)
 }
 
 /// How many values the liveness rows of the last interference graph of this
@@ -871,6 +878,7 @@ pub fn _interference_among(
     only: Option<&BTreeSet<u32>>,
 ) -> Graph {
     ASKED.with(|asked| asked.set(only.map(BTreeSet::len)));
+    GRAPHS.with(|graphs| graphs.set(graphs.get() + 1));
     let wanted = |value: u32| only.is_none_or(|only| only.contains(&value));
     // Asked of a few values, the rows and widths come from where the values
     // occur, not from a walk of every instruction (in a body with no phis,
