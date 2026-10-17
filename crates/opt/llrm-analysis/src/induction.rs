@@ -672,7 +672,7 @@ pub fn counted_renewed(
     // One body under one set of facts: what is known of its congruences is
     // found once for the loops, not once for each proof (610 times, 585 of
     // 6,449 Minstr, on 32 loops).
-    let congruent = std::cell::OnceCell::new();
+    let congruent = std::cell::RefCell::new(crate::alias::CongruenceMemo::default());
     let unit = &Unit { congruent: Some(&congruent), ..*unit };
     // A proof asks the proofs of the loops around it (`_ranged`), each of which
     // asks those around it: the outer loops first, so that each is asked of
@@ -1659,18 +1659,6 @@ fn _solved(
 /// Whether `bound - start` is a multiple of `2**shift`, by what
 /// `congruences` know of each: a value is its residue modulo a modulus, an
 /// exact constant a modulus of 0.
-/// What `find` makes of the unit's congruences: its cell's, made once, where it
-/// carries one.
-fn _congruences<'a>(
-    unit: &Unit<'a>,
-    find: impl FnOnce() -> crate::alias::Congruences,
-) -> std::borrow::Cow<'a, crate::alias::Congruences> {
-    match unit.congruent {
-        Some(cell) => std::borrow::Cow::Borrowed(cell.get_or_init(find)),
-        None => std::borrow::Cow::Owned(find()),
-    }
-}
-
 fn _low_bits_zero(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
@@ -1685,22 +1673,19 @@ fn _low_bits_zero(
         .into_iter()
         .filter_map(|one| if let AffineOperand::Value(value, _) = one { Some(*value) } else { None })
         .collect();
-    let known = match unit.congruent.and_then(|cell| cell.get()) {
-        Some(whole) => wanted.iter().filter_map(|value| whole.get(value).map(|fact| (*value, fact.clone()))).collect(),
-        None => {
-            let found = crate::alias::congruences_of(unit, facts, Some(&wanted));
-            if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
-                let whole = crate::alias::congruences_of(unit, facts, None);
-                for value in &wanted {
-                    assert_eq!(
-                        found.get(value),
-                        whole.get(value),
-                        "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
-                    );
-                }
+    let known = {
+        let found = crate::alias::congruences_of(unit, facts, Some(&wanted), unit.congruent);
+        if llrm_support::env_flag!("LLRM_CHECK_CONGRUENCES") {
+            let whole = crate::alias::congruences_of(unit, facts, None, None);
+            for value in &wanted {
+                assert_eq!(
+                    found.get(value),
+                    whole.get(value),
+                    "LLRM_CHECK_CONGRUENCES: the congruence of {value:?} asked alone is not the body's"
+                );
             }
-            found
         }
+        found
     };
     let of = |one: &AffineOperand| match one {
         AffineOperand::Const(constant) => Some((BigInt::from(0), constant.n.clone())),

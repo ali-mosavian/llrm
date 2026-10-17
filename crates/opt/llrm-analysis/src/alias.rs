@@ -3594,7 +3594,7 @@ fn mod_floor(
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> Congruences {
-    congruences_of(unit, &unit.registers(), None)
+    congruences_of(unit, &unit.registers(), None, None)
 }
 
 /// Each value's (residue, modulus): what it is congruent to.
@@ -3608,6 +3608,17 @@ thread_local! {
 /// the proofs of one body share them.
 pub fn congruences_found() -> usize {
     CONGRUENCES.with(std::cell::Cell::get)
+}
+
+/// What the congruences of one body asked of by value have found: the answers,
+/// the body's order and each loop's counters, kept for the asks of one version
+/// of the body under one set of facts (an ask under others starts it again).
+#[derive(Default)]
+pub struct CongruenceMemo {
+    facts: usize,
+    order: Option<llrm_mir::dense::IdMap<InstId, usize>>,
+    counters: Vec<Option<Rc<Vec<induction::Affine>>>>,
+    answers: llrm_mir::dense::IdMap<ValueId, Option<(BigInt, BigInt)>>,
 }
 
 /// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
@@ -3626,6 +3637,7 @@ pub fn congruences_of(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
     wanted: Option<&[ValueId]>,
+    memo: Option<&std::cell::RefCell<CongruenceMemo>>,
 ) -> Congruences {
     if wanted.is_none() {
         CONGRUENCES.with(|count| count.set(count.get() + 1));
@@ -3640,6 +3652,15 @@ pub fn congruences_of(
             && op.operands.len() == 2
             && unit.int_bits(Operand::Value(value)).is_some()
     };
+    // Held answers are for these facts alone.
+    let memo = memo.filter(|_| wanted.is_some());
+    if let Some(memo) = memo {
+        let mut held = memo.borrow_mut();
+        let facts = std::ptr::from_ref(constants) as usize;
+        if held.facts != facts {
+            *held = CongruenceMemo { facts, ..CongruenceMemo::default() };
+        }
+    }
     // The values reached by the operations that make a congruence, and the ones
     // they stop at: for the whole body, every operation, in the body's order.
     let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
@@ -3657,6 +3678,14 @@ pub fn congruences_of(
                 if !reached.insert(value) {
                     continue;
                 }
+                // What is found of a value is found of what it is made of
+                // alone.
+                if let Some(held) = memo.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
+                    if let Some(fact) = held {
+                        result.insert(value, fact);
+                    }
+                    continue;
+                }
                 let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
                 let op = function.instruction(inst);
                 if qualifies(value, op) {
@@ -3669,17 +3698,25 @@ pub fn congruences_of(
                 }
             }
             // In the body's order, round after round, as the whole body's goes.
-            let order: llrm_mir::dense::IdMap<InstId, usize> = {
-                let wanted: llrm_mir::dense::IdSet<InstId> = operations.iter().copied().collect();
-                function
-                    .walk()
-                    .map(|(_, inst)| inst)
-                    .filter(|inst| wanted.contains(inst))
-                    .enumerate()
-                    .map(|(at, inst)| (inst, at))
-                    .collect()
+            let position = |inst: &InstId| -> usize {
+                let order = || -> llrm_mir::dense::IdMap<InstId, usize> {
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect()
+                };
+                match memo {
+                    Some(memo) => {
+                        let mut held = memo.borrow_mut();
+                        held.order.get_or_insert_with(order)[inst]
+                    }
+                    None => order()[inst],
+                }
             };
-            operations.sort_by_key(|inst| order[inst]);
+            if memo.is_some() {
+                operations.sort_by_key(position);
+            } else {
+                let order: llrm_mir::dense::IdMap<InstId, usize> =
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+                operations.sort_by_key(|inst| order[inst]);
+            }
         }
     }
     let zero = BigInt::from(0);
@@ -3689,14 +3726,33 @@ pub fn congruences_of(
         llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
         _ => None,
     };
-    for loop_ in &shape.loops {
+    for (at, loop_) in shape.loops.iter().enumerate() {
         if wanted.is_some()
             && !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block)))
         {
             continue;
         }
-        for affine in induction::basics(unit, loop_).values() {
+        let counters = match memo {
+            Some(memo) => {
+                let held = memo.borrow().counters.get(at).cloned().flatten();
+                held.unwrap_or_else(|| {
+                    let made = Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>());
+                    let mut held = memo.borrow_mut();
+                    if held.counters.len() <= at {
+                        held.counters.resize(at + 1, None);
+                    }
+                    held.counters[at] = Some(Rc::clone(&made));
+                    made
+                })
+            }
+            None => Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>()),
+        };
+        for affine in counters.iter() {
             if wanted.is_some() && !reached.contains(&affine.value) {
+                continue;
+            }
+            // A held answer is the last word.
+            if memo.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
                 continue;
             }
             let width = affine.start.width();
@@ -3759,6 +3815,12 @@ pub fn congruences_of(
             changed = true;
         }
         if !changed {
+            if let Some(memo) = memo {
+                let mut held = memo.borrow_mut();
+                for value in reached.iter() {
+                    held.answers.insert(value, result.get(&value).cloned());
+                }
+            }
             return result;
         }
     }
@@ -3834,7 +3896,7 @@ pub fn annotated_with(
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None));
+    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {
