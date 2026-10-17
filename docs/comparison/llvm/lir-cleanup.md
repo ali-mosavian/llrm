@@ -166,13 +166,28 @@ Inside `lir floatassign` (4 bodies with floats): `_allocnos` 18.1, `allocate::li
 
 Slope, `LLRM_DEBUG=time` (M instructions, N = 100, 400, 1600 statements): `lir peephole` `arith` 14.7, 59.7, 216.4; `mem` 10.9, 26.4, 107.0; `diamond` 12.4, 58.0, 254.7; `calls` 11.4, 39.8, 154.5 (exponent 0.9 to 1.0). The `float` shape of `tools/ladder/gen.py` (arithmetic on four `double`s): `floatassign` 4.9, 18.7, 69.0 and `floatalloc` 1.0, 4.6, 18.1, against LLVM's whole `llc` of 21, 92 and 455 M and its stackifier at 2.0 M (N=400). Linear too: the x87 passes are 11.6x the stackifier on straight-line floats at N=400, 17x on `d_faces`, where control flow makes the live rows bigger.
 
+## Facts the peephole derives, and what one table would remove
+
+Counted from the same callgrind run (11 bodies; the output has 1,835 instructions, so a count per instruction below is an upper bound on repeats, the input to the peephole being larger):
+
+| fact | derived by | derivations | cost (M) | derived once per body would cost |
+|---|---|---:|---:|---|
+| lanes an instruction reads and writes (per-`Insn` `OnceLock`) | `liveness::worked_out`, `spillforward::_transfer`, `copyprop::forwarded_inner`, `once` and four more | 8,140 (at most 4.4 per instruction) | 15.1 | at least 3.4 M: 1,835 derivations of the 8,140 |
+| lane liveness at block exits (`dead_at_exit`) | `machinedce` 27, `once` 23, `regthrash` 6 | 56 (5.1 per body) | 21.7 | 4.3 M: 11 solves of the 56 |
+| upper half of a register proven zero (`upper_zero`) | the `widened_moves`, `zero_extensions` and `narrowed_arithmetic` groups | 6 (under once per body) | 14.7 | 14.7 M: it is derived lazily and rarely; each derivation costs 2.45 M |
+| flag liveness (`_flags_dead_after`, `_flags_live_out`, `regthrash::_dead_after`) | `tested`, `zero_compares`, `regthrash` | 1,216 queries | 5.9 | per query, not per body |
+| whole-function live rows (`allocate::live`) | `once` | 11 (once per body) | 3.9 | 3.9 M: already once per body |
+
+The overlap between rows 1 and 2 is 5.7 M (`worked_out` is inside `dead_at_exit`), so the facts cost about 55.6 M, 43% of the peephole and 1.9% of `d_faces` -O2. One table that held each of the two repeated facts once per body would remove at most 11.7 M of lane effects and 17.4 M of block-exit liveness, 29 M in all: 22% of the peephole, 1.0% of `d_faces`. The rest of the fact cost is not repetition: `upper_zero` is derived fewer than once per body and costs 2.45 M a time. These are scaled from call counts and are not measured by running a shared table.
+
 ## Proposed change
 
 For the backend owner (ssa-spill-m16); none built here.
 
-1. Pass the live rows `regalloc` already solved to `floatassign` and `floatalloc` (or hold them on the body, as the roadmap's liveness owner does) instead of `live_rows_by` per call. Bound: 25.7 M (0.9% of `d_faces`). Saving: unmeasured.
+1. One owner for the peephole's lane and block-exit facts (rule 7): at most 29 M, 1.0% of `d_faces` (sizing above). Dropped by the coordinator as not worth a PR.
 2. Take the window as a slice: `taken` in [`windows`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/backend/llrm-core/src/backend/peep/walk.rs#L612) is a `Vec` built per instruction, 43,539 allocations. Bound: about 4 M at 100 instructions per allocation (2.8 M of allocator calls seen in `windows`). Saving: unmeasured.
 3. Gate the rule groups the way `needs` gates six sub-passes: `needs.rs` keeps one bit per candidate shape per block. The idle-skip experiment in the spec skipped 6% of MIR runs and lost 0.6% overall, because classifying costs; a bit per block set when an instruction of the shape is produced is cheaper than classifying edits. Bound: the sub-passes that find nothing; their number is not counted. Saving: unmeasured.
-4. Do at selection what the peephole does after allocation where the rewrite needs no physical register: LLVM's four combine runs cost 20.1 M for the same file. Design, not a patch; the sub-passes that need final registers (flags, lanes) stay.
+4. Pass the live rows `regalloc` already solved to `floatassign` and `floatalloc` (or hold them on the body) instead of `live_rows_by` per call. Bound: 25.7 M (0.9% of `d_faces`); ranks last. Saving: unmeasured.
+5. Do at selection what the peephole does after allocation where the rewrite needs no physical register: LLVM's four combine runs cost 20.1 M for the same file. Design, not a patch; the sub-passes that need final registers (flags, lanes) stay.
 
 Open: how many of the 35 sub-passes change nothing on a typical body, and what `upper_zero` (14.7 M, 6 calls) is computed for on a 32-bit target ([#1994](https://github.com/ali-mosavian/llrm/issues/1994)).

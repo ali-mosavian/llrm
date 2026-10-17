@@ -17,6 +17,8 @@ Measured against `llvmorg` commit `d1106deb71cc81016406a1917d0508d2df296266` (cl
 | [register allocation](regalloc.md) | greedy splitting against llrm's split step |
 | [allocation and layout](allocation.md) | 3.77 M allocations against 62,881; memory per IR instruction |
 | [GVN and its neighbours](gvn.md) | EarlyCSE, GVN, DSE and order against `gvn`; the quadratic passes |
+| [fold, hoist, decide, front end](fold-hoist-decide.md) | why `fold` is 12x per run on `d_faces`: one function, floats; the `mixed` ladder shape |
+| [synthesis](synthesis.md) | every cause of the gap, ranked, with status and the LLVM mechanism |
 | [LIR clean-up](lir-cleanup.md) | the peephole and x87 passes against DAG combine and the stackifier |
 | [runs that change nothing](idle.md) | last-run tracking against llrm's settled skip; 637 idle runs cost 361 M |
 | [proposals](proposals.md) | every proposed change, ranked, with owner and PR |

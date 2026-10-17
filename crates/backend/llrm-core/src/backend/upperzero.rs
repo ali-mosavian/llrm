@@ -325,7 +325,7 @@ pub fn before(body: &LirBody) -> Rc<HashMap<usize, Roots>> {
         ids.insert(block.at, said);
     }
     let result = Rc::new(result);
-    if llrm_support::env_set("LLRM_CHECK_ZEROROOTS") {
+    if llrm_support::env_flag!("LLRM_CHECK_ZEROROOTS") {
         assert!(
             *result == from_scratch(body),
             "{}: upper-half zeroes brought up to date differ from ones solved from scratch",
