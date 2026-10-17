@@ -1067,9 +1067,19 @@ fn record(
 ) {
     let pass = PASS.with(|p| p.get());
     RECOMPUTED.with(|r| *r.borrow_mut().entry((name, pass, how)).or_default() += 1);
-    if std::env::var_os("LLRM_WHY").is_some() {
+    if why_printed() {
         eprintln!("WHY {level} {name} {pass} {how}");
     }
+}
+
+fn why_printed() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_WHY").is_some())
+}
+
+fn check_modules() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
 }
 
 fn check_replay() -> bool {
@@ -1258,6 +1268,27 @@ impl Analyses {
                 stamp,
             }),
         );
+    }
+
+    /// `get` for a pass whose decisions follow what is known: the result for
+    /// `function` as it stands. One kept past edits as sound (`soft`) knows no
+    /// more than when it was derived, and what a fresh derivation knows is what
+    /// the body says, not when something first asked.
+    pub fn get_exact<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let key = TypeId::of::<A>();
+        if self.soft.remove(&key) {
+            self.cache.remove(&key);
+        }
+        // Held to be brought up to date as sound only (`SOUND`): derived again.
+        if A::SOUND && !A::INCREMENTAL {
+            self.kept.remove(&key);
+        }
+        self.get::<A>(context, layout, function)
     }
 
     /// `A`'s result for `function`, computed once until invalidated.
@@ -1838,7 +1869,7 @@ impl ModuleAnalyses {
             if (kind.unchanged)(module, self, &*old) {
                 counted(kind.name, true);
                 self.dropped.remove(&kind.id);
-                if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+                if check_modules() {
                     let fresh = (kind.run)(module, self);
                     assert!(
                         (kind.agree)(&*old, &*fresh),
@@ -1852,7 +1883,7 @@ impl ModuleAnalyses {
         }
         counted(kind.name, false);
         let fresh = (kind.run)(module, self);
-        if std::env::var_os("LLRM_CHECK_MODULES").is_some() {
+        if check_modules() {
             self.scratch = true;
             let again = (kind.run)(module, self);
             self.scratch = false;

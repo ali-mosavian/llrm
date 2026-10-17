@@ -107,3 +107,10 @@ The two buy the same ruling-out by opposite means: LLVM pays at the query (a bou
 | whole alias tower | AAManager 44 builds | `Annotated` 297.6 M inclusive (9.23%), `points_to` 150.5 M (4.67%) |
 
 Input `render/d_faces.c`, `-m32 -march=i486 -fno-inline-functions -O2`. LLVM: callgrind on `clang -cc1` of d1106deb71cc, total 415.4 M, calls summed over callers. llrm: callgrind on the release `llrm-c` of 21f5c9fc8, total 3,224 M.
+
+## Proposed change
+
+- **Files**: `crates/opt/llrm-analysis/src/avail.rs` (`Solve::reaching`, `Stored::related`), `crates/opt/llrm-analysis/src/regions.rs` (`overlap_frame`).
+- **What**: an access reaches the cells of its own object and frame whose bytes meet its own (a sorted byte index), not every cell of its object; and the cells of one address, which have the same byte keys, share the sets of what covers them.
+- **Expected saving**: `dse` on the ladder at N=1600: mem 1,907 to 179 M and the distinct-offset shape 3,395 to 162 M (reach sets), arith 818 to 52 M (twin cells); every shape goes from 3.5x-4.0x to 2.0x per doubling. On `d_faces` +0.19% instructions for the reach index at `-O2`, +0.01% to +0.03% for the twins; objects byte-identical.
+- **Status**: PR #2013 (reach sets) and PR #2015 (twin cells); `LLRM_CHECK_REACHED` and `LLRM_CHECK_CLOBBERS` hold them to the dense forms over the 1,583-object corpus. A cache of alias pairs (LLVM's `AliasCache`) is unmeasured: how many of the 104,236 `overlapping` queries repeat a pair was not counted.

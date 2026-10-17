@@ -36,9 +36,10 @@
 //! intervals an edge and an operation give.
 
 use std::cell::{OnceCell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{InstId, Operand, ValueId};
 use llrm_support::hash::{HashMap, IndexMap};
 
@@ -54,7 +55,7 @@ pub(super) struct Solve<'a, 'u> {
     pub facts: &'a IndexMap<ValueId, Known>,
     pub graph: &'a [cfg::Block],
     pub predecessors: &'a llrm_support::graph::Predecessors,
-    pub positions: &'a BTreeMap<i64, usize>,
+    pub positions: &'a IdMap<i64, usize>,
     pub shape: &'a cfg::Shape,
     pub assumed: &'a crate::assumptions::Assumptions,
 }

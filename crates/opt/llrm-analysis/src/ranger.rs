@@ -498,7 +498,7 @@ pub struct LoopContext<'a, 'u> {
     pub assumed: &'a crate::assumptions::Assumptions,
     pub graph: &'a [cfg::Block],
     pub predecessors: &'a llrm_support::graph::Predecessors,
-    pub positions: &'a std::collections::BTreeMap<i64, usize>,
+    pub positions: &'a llrm_mir::dense::IdMap<i64, usize>,
     /// The loop's operations that compute an interval.
     pub operations: &'a [InstId],
     /// The blocks of the loop.
@@ -517,7 +517,7 @@ impl<'a, 'u> LoopContext<'a, 'u> {
         assumed: &'a crate::assumptions::Assumptions,
         graph: &'a [cfg::Block],
         predecessors: &'a llrm_support::graph::Predecessors,
-        positions: &'a std::collections::BTreeMap<i64, usize>,
+        positions: &'a llrm_mir::dense::IdMap<i64, usize>,
         operations: &'a [InstId],
         body: &'a llrm_mir::forest::Body,
         above: &'a dyn Fn(ValueId) -> Option<Interval>,

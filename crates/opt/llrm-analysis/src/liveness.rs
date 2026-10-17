@@ -140,7 +140,7 @@ fn arm(
 fn _defines(
     function: &Function,
     block: BlockId,
-) -> BTreeSet<ValueId> {
+) -> IdSet<ValueId> {
     function.block(block).instructions().iter().filter_map(|&one| function.instruction(one).result).collect()
 }
 
@@ -148,8 +148,8 @@ fn _defines(
 fn _exposed(
     function: &Function,
     block: BlockId,
-) -> BTreeSet<ValueId> {
-    let mut live = BTreeSet::new();
+) -> IdSet<ValueId> {
+    let mut live = IdSet::new();
     for op in split(function, block).1.into_iter().rev() {
         if let Some(one) = op.result {
             live.remove(&one);
@@ -160,10 +160,20 @@ fn _exposed(
 }
 
 /// Values the caller supplied: used somewhere, defined by nothing here.
-pub fn entry_values(function: &Function) -> BTreeSet<ValueId> {
-    let defined: BTreeSet<ValueId> = function.layout().iter().flat_map(|&block| _defines(function, block)).collect();
-    let used: BTreeSet<ValueId> = function.walk().flat_map(|(_, one)| reads(function.instruction(one))).collect();
-    used.difference(&defined).copied().collect()
+pub fn entry_values(function: &Function) -> IdSet<ValueId> {
+    let mut defined = IdSet::new();
+    for &block in function.layout() {
+        defined.extend(_defines(function, block).iter());
+    }
+    let mut arriving = IdSet::new();
+    for (_, one) in function.walk() {
+        for value in reads(function.instruction(one)) {
+            if !defined.contains(&value) {
+                arriving.insert(value);
+            }
+        }
+    }
+    arriving
 }
 
 /// The most values live at once -- anywhere, or in `inside`.
@@ -593,7 +603,7 @@ fn solved(
 ) -> Liveness {
     SOLVES.with(|solves| solves.set(solves.get() + 1));
     let found = solved_dataflow(function, wanted);
-    if llrm_support::env_set("LLRM_CHECK_LIVENESS") {
+    if llrm_support::env_flag!("LLRM_CHECK_LIVENESS") {
         assert!(
             found == solved_by_reach(function, wanted),
             "the word-parallel liveness is not the one followed from the uses"
@@ -643,7 +653,7 @@ fn solved_dataflow(
     };
     let mut used: Vec<Vec<usize>> = vec![Vec::new(); count];
     for (position, &block) in layout.iter().enumerate() {
-        for value in _exposed(function, block) {
+        for value in _exposed(function, block).iter() {
             if wanted(value) && (position != 0 || !arriving.contains(&value)) {
                 used[position].push(slot(value, &mut slots));
             }
@@ -697,8 +707,8 @@ fn solved_dataflow(
             }
         }
     }
-    for value in &arriving {
-        if let Some(&at) = slots.get(value) {
+    for value in arriving.iter() {
+        if let Some(&at) = slots.get(&value) {
             made[at / 64] |= 1 << (at % 64);
         }
     }
@@ -789,7 +799,7 @@ fn solved_by_reach(
         }
     }
     let arriving = entry_values(function);
-    for &value in &arriving {
+    for value in arriving.iter() {
         made.insert(value, (0, false));
     }
     let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); layout.len()];
@@ -814,7 +824,7 @@ fn solved_by_reach(
     }
     let mut pending = Vec::new();
     for (position, &block) in layout.iter().enumerate() {
-        for value in _exposed(function, block) {
+        for value in _exposed(function, block).iter() {
             if wanted(value) && (position != 0 || !arriving.contains(&value)) {
                 pending.push(Reach::After(position, value));
             }
@@ -897,9 +907,9 @@ pub(crate) fn live_dense(function: &Function) -> Liveness {
         blocks.iter().map(|(_, ops)| bits(&mut ops.iter().filter_map(|op| op.result))).collect();
     let phi_defines: Vec<Bits> =
         blocks.iter().map(|(phis, _)| bits(&mut phis.iter().filter_map(|phi| phi.result))).collect();
-    let mut exposed: Vec<Bits> = layout.iter().map(|&block| bits(&mut _exposed(function, block).into_iter())).collect();
+    let mut exposed: Vec<Bits> = layout.iter().map(|&block| bits(&mut _exposed(function, block).iter())).collect();
     if !layout.is_empty() {
-        let arriving = bits(&mut entry_values(function).into_iter());
+        let arriving = bits(&mut entry_values(function).iter());
         op_defines[0].union_with(&arriving);
         exposed[0].subtract(&arriving);
     }
@@ -1256,7 +1266,7 @@ top:
 ",
         );
         let f = function(&module, "f");
-        assert_eq!(entry_values(f), BTreeSet::from([value(f, "read")]));
+        assert_eq!(entry_values(f), [value(f, "read")].into_iter().collect::<IdSet<_>>());
     }
 
     /// The bit-set fixed point made every block's sets as wide as the
