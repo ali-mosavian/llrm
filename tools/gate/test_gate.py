@@ -1377,3 +1377,9 @@ def test_a_change_to_the_setup_action_is_run_on_tinytim_before_it_merges():
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "setup-check:" in workflow and "runs-on: [self-hosted, tinytim]" in workflow.split("setup-check:")[1].split("static:")[0]
     assert "\\.github/actions/setup/" in workflow and "needs: [plan, static, build, gate, bench-merge, setup-check]" in workflow
+
+
+def test_a_push_to_main_makes_no_perf_or_cost_job():
+    """Every merge queued a perf and a cost job on the six tinytim runners: 16 of the 20 jobs waiting, and the pull requests' behind them."""
+    workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
+    assert "COMPILER: ${{ github.event_name == 'pull_request' && steps.plan.outputs.compiler || 'false' }}" in workflow
