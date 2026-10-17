@@ -1406,3 +1406,39 @@ x:
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
 }
+
+/// With `Options::llvm_order` a body goes through LLVM's early function
+/// pipeline, GlobalCleanup and function simplification once each, in that
+/// order, and `gvn` and `dse` run once; without it the rounds stand. The
+/// EarlyCSE in both of its places is the translated pass.
+#[test]
+fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translated_earlycse() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let off = Applied::default();
+    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
+    let simplify = names(pipeline::Phase::Simplify);
+    let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
+    assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
+    assert!(names(pipeline::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(pipeline::Phase::Early));
+}
+
+/// A body computes the same answer through LLVM's order.
+#[test]
+fn test_llvm_order_keeps_a_loop_computing_the_same() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  %p = alloca i16\n  store i16 0, ptr %p\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %s = load i16, ptr %p\n  %t = add i16 %s, %i\n  store i16 %t, ptr %p\n  %j = add i16 %i, 1\n  br label %h\nx:\n  %r = load i16, ptr %p\n  ret i16 %r\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let before = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    assert_eq!(format!("{before:?}"), format!("{after:?}"));
+    assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
