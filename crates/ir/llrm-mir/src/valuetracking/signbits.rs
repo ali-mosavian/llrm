@@ -15,16 +15,12 @@
 //! # Example
 //! `sext i16 %x to i32` has at least 17 sign bits.
 
-use super::known::compute_known_bits;
+use super::known::{compute_known_bits, is_signed_min_max_clamp, is_signed_min_max_intrinsic_clamp};
 use super::pattern::{IntrinsicId, apint, intrinsic_id};
 use super::query::Query;
-use super::range::{
-    SelectPatternFlavor, get_inverse_min_max_flavor, get_inverse_min_max_intrinsic, m_apint as select_apint,
-    match_select_pattern, match_select_pattern_cast,
-};
 use crate::apint::{countl_one, countl_zero, signed};
 use crate::context::mask;
-use crate::module::{Instruction, Operand};
+use crate::module::Operand;
 use crate::opcode::{BinaryOp, CastOp, Opcode};
 
 /// `APInt::getNumSignBits`.
@@ -57,56 +53,6 @@ fn ceil_log_base2(
     width: u32,
 ) -> u32 {
     width - countl_zero(value.wrapping_sub(1) & mask(width), width)
-}
-
-/// The input, the lower and the upper bound of a clamp, bounds as `(bits,
-/// width)`.
-pub(super) type Clamp = (Operand, (u128, u32), (u128, u32));
-
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1388>
-pub(super) fn is_signed_min_max_clamp(
-    q: &Query,
-    select: Operand,
-) -> Option<Clamp> {
-    let result = match_select_pattern(q, select);
-    let spf = result.flavor;
-    if spf != SelectPatternFlavor::SMax && spf != SelectPatternFlavor::SMin {
-        return None;
-    }
-    let (lhs, rhs) = (result.lhs?, result.rhs?);
-    let mut clow = select_apint(q, rhs)?;
-
-    let result2 = match_select_pattern_cast(q, lhs, false, 0);
-    if get_inverse_min_max_flavor(spf) != result2.flavor {
-        return None;
-    }
-    let (lhs2, rhs2) = (result2.lhs?, result2.rhs?);
-    let mut chigh = select_apint(q, rhs2)?;
-
-    if spf == SelectPatternFlavor::SMin {
-        std::mem::swap(&mut clow, &mut chigh);
-    }
-    (signed(clow.0, clow.1) <= signed(chigh.0, chigh.1)).then_some((lhs2.operand()?, clow, chigh))
-}
-
-/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1417>
-pub(super) fn is_signed_min_max_intrinsic_clamp(
-    q: &Query,
-    call: &Instruction,
-    id: IntrinsicId,
-) -> Option<((u128, u32), (u128, u32))> {
-    let inverse_id = get_inverse_min_max_intrinsic(id);
-    let (inner_inst, inner) = q.instruction_of(call.operands[0])?;
-    if intrinsic_id(q, inner_inst) != Some(inverse_id) {
-        return None;
-    }
-    let mut clow = apint(q, call.operands[1])?;
-    let mut chigh = apint(q, inner.operands[1])?;
-
-    if id == IntrinsicId::Smin {
-        std::mem::swap(&mut clow, &mut chigh);
-    }
-    (signed(clow.0, clow.1) <= signed(chigh.0, chigh.1)).then_some((clow, chigh))
 }
 
 /// `ComputeMaxSignificantBits(V, DL, AC, CxtI, DT, Depth)`.
@@ -213,7 +159,8 @@ fn compute_num_sign_bits_impl(
             }
             Opcode::Select => {
                 if let Some((_, clow, chigh)) = is_signed_min_max_clamp(q, v) {
-                    return num_sign_bits(clow.0, clow.1).min(num_sign_bits(chigh.0, chigh.1));
+                    let width = q.scalar_bits(v);
+                    return num_sign_bits(clow, width).min(num_sign_bits(chigh, width));
                 }
                 let tmp = signbits(op(1));
                 if tmp != 1 {
@@ -301,9 +248,10 @@ fn compute_num_sign_bits_impl(
                         return tmp - 1;
                     }
                 }
-                Some(id @ (IntrinsicId::Smin | IntrinsicId::Smax)) => {
-                    if let Some((clow, chigh)) = is_signed_min_max_intrinsic_clamp(q, u, id) {
-                        return num_sign_bits(clow.0, clow.1).min(num_sign_bits(chigh.0, chigh.1));
+                Some(IntrinsicId::Smin | IntrinsicId::Smax) => {
+                    if let Some((clow, chigh)) = is_signed_min_max_intrinsic_clamp(q, inst) {
+                        let width = q.scalar_bits(v);
+                        return num_sign_bits(clow, width).min(num_sign_bits(chigh, width));
                     }
                 }
                 _ => {}

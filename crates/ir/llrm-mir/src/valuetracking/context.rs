@@ -480,7 +480,7 @@ fn compute_known_bits_from_icmp_cond(
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1014>
-fn compute_known_bits_from_cond(
+pub fn compute_known_bits_from_cond(
     q: &Query,
     v: Operand,
     cond: Operand,

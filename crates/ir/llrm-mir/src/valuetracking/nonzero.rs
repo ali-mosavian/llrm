@@ -637,7 +637,8 @@ fn is_non_zero_recurrence(
     q: &Query,
     phi: InstId,
 ) -> bool {
-    let Some((_, bo, start, step)) = pattern::match_simple_recurrence(q, phi) else { return false };
+    let Some((bo, start, step)) = pattern::match_simple_recurrence(q, phi) else { return false };
+    let bo = q.function.instruction(bo);
     let Some((start_c, width)) = pattern::apint(q, start) else { return false };
     if start_c == 0 {
         return false;
@@ -1359,8 +1360,10 @@ fn get_invertible_operands(
             if q.block_of(pn1) != q.block_of(pn2) {
                 return None;
             }
-            let (bo1, bo1_instruction, start1, _) = pattern::match_simple_recurrence(q, pn1)?;
-            let (bo2, bo2_instruction, start2, _) = pattern::match_simple_recurrence(q, pn2)?;
+            let (bo1, start1, _) = pattern::match_simple_recurrence(q, pn1)?;
+            let bo1_instruction = q.function.instruction(bo1);
+            let (bo2, start2, _) = pattern::match_simple_recurrence(q, pn2)?;
+            let bo2_instruction = q.function.instruction(bo2);
 
             let values = get_invertible_operands(
                 q,

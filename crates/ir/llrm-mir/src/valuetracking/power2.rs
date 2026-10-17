@@ -29,7 +29,8 @@ fn is_power_of_two_recurrence(
     or_zero: bool,
     depth: u32,
 ) -> bool {
-    let Some((bo, bo_instruction, start, step)) = pattern::match_simple_recurrence(q, phi) else { return false };
+    let Some((bo, start, step)) = pattern::match_simple_recurrence(q, phi) else { return false };
+    let bo_instruction = q.function.instruction(bo);
 
     let incoming: Vec<_> = q.function.instruction(phi).operands.chunks(2).map(|one| (one[0], one[1])).collect();
     for (value, block) in incoming {

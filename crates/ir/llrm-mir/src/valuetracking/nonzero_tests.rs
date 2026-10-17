@@ -69,7 +69,6 @@ fn pointers_are_non_null_as_llvm_says() {
 }
 
 #[test]
-#[ignore = "needs computeKnownBits (vt/known)"]
 fn integers_are_non_zero_as_llvm_says() {
     check(include_str!("../../tests/vt/nonzero/ints.ll"), include_str!("../../tests/vt/nonzero/ints.expected"));
 }
