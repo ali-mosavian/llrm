@@ -1,48 +1,52 @@
 # Compile time at clang's level: the plan
 
+**Scoreboard.** `d_faces` -O2 is 2,253 M instructions at main `5e2e995ef`, 5.5x clang 24's 413 M (it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
+
 **Target.** Parity is clang 24 at `d1106deb71cc` (415 M instructions on `d_faces` -O2) with rows held against min(gcc, clang); the static clang 20.1.8 (462 M) is the secondary column. Phase 3 (structural) starts now, in parallel with phases 1 and 2: each step is gated by its early probe and its design review, not by B1 or B2.
 
 ## Status
 
-As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refreshed at least every few merges by llvm-compare.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions were renamed on 2026-10-17: pass-list-parity is inline-storage-combine, ssa-spill-m16 regalloc-quadratics, hoist-bounded walker-caps, keep-analyses facts-per-query, objectref-identity identity-s0-done, greedy-port lsr-gvn-split, attrs-budgets trace-recorder, edit-rollback edit-contract-replay.
+
+Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
 | step | owner | state | last measured |
 |---|---|---|---|
-| S1 fact placement | attrs-budgets, edit-rollback, keep-analyses | running | n/a |
+| S1 fact placement | attrs-budgets, edit-rollback, keep-analyses | step 0 measured ([#2054]) | `ThroughMemory` enables 24.8% of `fold`'s edits, 0 of `decide`'s; `Annotated` 0 of `fold`'s, 52% to 75% of `hoist`, `gvn`, `loopmotion` |
 | S2 fact-free run | pass-list-parity | measured: combine 0.30x to 1.03x of InstCombine at N=200 | exponent leaks: `dead` 1.43, `fold` on `mem` 1.41 (the `ThroughMemory` fact) |
 | S4 allocator attribution | greedy-port, ssa-spill-m16 | step 0 measured ([#2049]); kill not met | 431 K fixed plus 309 per body instruction per round |
 | S5 block-local dataflow | ssa-spill-m16 | KILLED ([#2043]) | -14.8 M but +0.36% bytes |
 | S6 edit core | edit-rollback | measured; kill not met on `loop` only | `move_to` 925 M of 997.9 M primitives at N=1600 (4.32%) |
 | S7 caps and pricing | hoist-bounded, greedy-port | running | forecast 2.6% / 4.9% |
-| 0.1 one baseline | llvm-compare | in progress | none yet |
+| 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
 | 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
-| 1.1 slab | pass-list-parity | [#2022] open, ready | -4.2% instructions, -2.9% cycles |
-| 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971] merged; [#2032] open | -1.17%; -0.38% |
+| 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
+| 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged | -1.17%; -0.38% |
 | 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
-| 1.4 backend copies | ssa-spill-m16 | [#2027] merged; [#2021], [#2038] open | -0.56%, -0.52%; peak heap -15.4%, -13.9% |
+| 1.4 backend copies | ssa-spill-m16 | [#2027], [#2021], [#2038] merged | -0.56%, -0.52%; peak heap -15.4%, -13.9% (stacked peak: DHAT 18.7 MB at `5e2e995ef`) |
 | 1.5 mask test | ssa-spill-m16 | [#2010] merged | diamond 800: 1,995 to 1,075 M; `d_faces` identical |
 | 1.6 gvn, walker, lsr | greedy-port | [#1999], [#2017] merged; [#2012], [#2011], [#2020], [#2034], [#2008] open | `loop` N=1600 -65% stacked |
 | 1.7 dse | edit-rollback | [#2015] merged; [#2013] open | 2.0x per doubling (`arith`), 2.17x to 2.33x (`mem`) |
 | 1.8 deep nests | greedy-port | [#1977], [#1978] open | queens -O3 -23% |
 | 1.9 exact ThroughMemory | keep-analyses | [#1915] merged | +1.0% (correctness) |
-| 1.10 held PRs | greedy-port, attrs-budgets | [#1958] open, ready; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
-| 2.1 point_values | keep-analyses | stop; 2.1b fixes the share key | asked 87% / 60% / 63% of solved; repeats 13.6 M |
-| 2.2 Annotated per access | keep-analyses, edit-rollback | to do | pool 42.4 M |
+| 1.10 held PRs | greedy-port, attrs-budgets | [#1958] merged; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
+| 2.1 point_values | keep-analyses | stopped; 2.1b killed ([#2053]) | asked 87% / 60% / 63% of solved; repeats 13.6 M |
+| 2.2 Annotated per access | keep-analyses, edit-rollback | closed, not built ([#2072]) | 96.5% of reruns re-derive an equal answer, but a sound dependency from the change log invalidates 74.7% of entries (kill over 30%) |
 | 2.3 persistent MemorySSA | hoist-bounded, keep-analyses | to do | `unmeasured` |
 | 2.4 split path | greedy-port | B' killed; A' alone | B' -0.03% |
 | 2.5 interval recompute | ssa-spill-m16 | closed | 0.25% realistic |
-| 2.6 `Frequencies` dense | attrs-budgets | to do, after pricing PRs | `unmeasured` |
+| 2.6 `Frequencies` dense | attrs-budgets | closed ([#2041]) | B-tree self cost at the sites 13.4 M, under the 15 M bar |
 | 2.7 rollback | edit-rollback | draft [#1945] | +0.09% |
 | 2.8 scaling shapes | hoist-bounded | to do | `unmeasured` |
 | 2.9 Vec growth by site | unowned | to do | about 15 M |
 | 3.1 facts from the change log | edit-rollback, keep-analyses | design, starts now | family 403 M own (12.8%) |
-| 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0 |
+| 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0; fold+algebraic 330 M is facts (290 of fold's 297 M: `FloatFacts` 136, `ThroughMemory` 72, `loop_exits` 30, alias tower 28, writes 23; rewriting about 7 M; 74 of algebraic's 101 M set-up) ([#2074]) |
 | 3.3 allocator on the LIR core | greedy-port, ssa-spill-m16 | design page [#2042] (draft), starts now | `regalloc` 415.5 M |
 | 3.4 LIR clean-up | ssa-spill-m16 | idle skip killed (10.4 M, [#2043]); solve-cost probe next | 290 M; exit about 250 M |
 | 3.5 pricing (`hoist`, `lsr` forecast) | hoist-bounded, greedy-port | probe next | forecast 2.6% (-O2), 4.9% (-Os) |
-| 3.6 code quality on pressure-heavy loops | greedy-port | study first | stack operands 2.3x to 3.6x clang |
+| 3.6 code quality on pressure-heavy loops | greedy-port | closed at parity; Reassociate row low priority (pass-list-parity) | 90 / 24 against clang 82 / 23 |
 
 ## 1. TL;DR
 
@@ -50,7 +54,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 
 | after | `d_faces` -O2, M instructions | over LLVM's 415 M | what that row counts |
 |---|--:|--:|---|
-| today | 2,903 | 6.8x | [synthesis], main `21f5c9fc8` |
+| today | 2,903 (`21f5c9fc8`); 2,253 at main `5e2e995ef` | 6.8x; 5.4x | [synthesis]; the baseline of 0.1 ([compile-gap-series]) |
 | phase 1 (the in-flight PRs that are ready) | about 2,660 | 6.4x | each PR's own measurement on its parent, multiplied: -8.3% |
 | phase 1 plus the held PRs and drafts | about 2,510 | 6.0x | also [#1958] (an open ready PR, measured on an old main) and the drafts [#1921], [#1962], [#1965] at their old numbers: -13.6%. [#1921] is to be closed (see 1.10) and [#1962] is bundled with 2.6, so this row is an upper bound |
 | phase 2 (open levers, each at its bound) | about 2,210 | 5.3x | point_values, Annotated, persistent MemorySSA, split path, interval recompute: -12% more |
@@ -60,7 +64,7 @@ As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refresh
 
 The pools overlap, so each product overstates what the steps save together. The phase 2 and 3 rows are the plan's original bounds: 2.4 and 2.5 have since shrunk or closed (see their blocks), 3.1's saving is `unmeasured` until a family is built, and the "held drafts" row includes [#1921], which is to be closed. B1 re-derives the rows.
 
-**Why the listed steps cannot close it.** The gap is not the number of pass runs (746 against 856). It is the cost of each run: a MIR pass run costs about 19 k instructions per IR instruction, against LLVM's 220 ([spec] 1.2). Every llrm pass sweeps the whole function with whole-function facts, recomputed 2.8 times per pass run; only 1.4% of the computes are on a body version already computed, so the ratio falls only by updating facts from the change log or asking them per query (step 3.1). An LLVM pass makes one worklist walk over a body that SROA and EarlyCSE have already shrunk. It asks per-query facts with caps, and 0.53 analysis computations per run ([spec] 1.2, [measured]). The in-flight set lowers constants: allocation, containers and quadratic loops. It does not change that shape.
+**Why the listed steps cannot close it.** The gap is not the number of pass runs (746 against 856). It is the cost of each run: a MIR pass run costs about 19 k instructions per IR instruction, against LLVM's several hundred (the "220" of [spec] 1.2 is not a per-pass floor: see 4.2). Every llrm pass sweeps the whole function with whole-function facts, recomputed 2.8 times per pass run; only 1.4% of the computes are on a body version already computed, so the ratio falls only by updating facts from the change log or asking them per query (step 3.1). An LLVM pass makes one worklist walk over a body that SROA and EarlyCSE have already shrunk. It asks per-query facts with caps, and 0.53 analysis computations per run ([spec] 1.2, [measured]). The in-flight set lowers constants: allocation, containers and quadratic loops. It does not change that shape.
 
 **Architecture is necessary, not sufficient.** The repo's bounds for each architectural invariant take `d_faces` -O2 to about 1,500 to 2,000 M (3.6x to 4.8x); parity needs each pass at a per-run budget derived from clang (step 4.2). The study is [architecture-parity](architecture-parity.md); its spikes S0 to S7 run first (Phase A).
 
@@ -181,8 +185,8 @@ The exit method M and the bars it uses are defined once in section 4.
 | 0.2 counters as tests | computations per run and spec 6 counters in CI | counter cost above 0.1% | attrs-budgets | draft [#1948] |
 | 0.3 `ObjectRef` identity and its oracle (spike S0, answered) | the identity is not a cause; the PR is identity-excludes-facts plus the `LLRM_CHECK_INTERN` oracle (zero cost off) | n/a (answered) | objectref-identity | oracle PR |
 | 1.0 inline storage across the hot `Vec` sites | allocations removed as far as the probe says; instructions and cycles on `d_faces`; peak RSS | a site whose inline fraction does not fit, or whose struct growth is not justified | pass-list-parity | to do ([#1956] first instance) |
-| 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | ready [#2022] |
-| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971] merged, [#2032] ready |
+| 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | merged [#2022] |
+| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged |
 | 1.3 escape phase | -0.9% | below 0.5% together | keep-analyses | ready |
 | 1.4 backend copies | -1.1% instructions ([#2021] -0.56%, [#2038] -0.52%); peak heap -15.4% ([#2021]) and -13.9% ([#2027], merged), each against main alone, stacked peak unmeasured | below 0.5% and no heap change | ssa-spill-m16 | ready |
 | 1.5 mask at each branch | diamond 1,951 to 1,075 M; `d_faces` 0 | any object differs | ssa-spill-m16 | merged [#2010] |
@@ -192,7 +196,7 @@ The exit method M and the bars it uses are defined once in section 4.
 | 1.9 exact ThroughMemory | fixes [#1909] at +1.0% | none (correctness) | keep-analyses | merged [#1915] |
 | 1.10 held PRs on main | -3% if they reproduce; [#1921] to be closed, [#1962] bundled with 2.6 | each one below 0.5% on main | greedy-port, attrs-budgets | [#1958] ready, [#1965] draft |
 | B1 re-baseline | the phase-1 row of the TL;DR measured | n/a | llvm-compare | after 1.x |
-| 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b repeats at most 0.45% (13.6 M), killed under 0.5% net | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
+| 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b killed ([#2053]): the exact key passes `LLRM_CHECK_PVSHARED` on all 1,583 objects with 61 hits of 209 solves, net +1.8 / +6.9 / +4.8 M at -O1/-O2/-Os, under 0.5% | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
 | 2.2 Annotated per access | up to -1.3% (the 57-of-116 held-result figure comes from [#1994] and is unverified; the pool is 42.4 M of edited rebuilds) | recoverable recomputes below 15 M | keep-analyses, edit-rollback | to do |
 | 2.3 persistent MemorySSA | -1.3% to -3.9% | probe below 1% | hoist-bounded, keep-analyses | to do |
 | 2.4 split path tables | B' built and killed (-0.03%); A' alone (`carved_moving` from allocator postings, 29 M, 1.0%, never built) | A' below 30 M | greedy-port | dies as written unless A' is kept alone |
@@ -243,17 +247,19 @@ Eight spikes from the [architecture study](architecture-parity.md) run before th
 | spike | question | owner | kill criterion | state and result |
 |---|---|---|---|---|
 | S0 `ObjectRef` identity (0.3) | does interning order change output? | objectref-identity | any object differs under scrambled ids | answered (PR [#2046], open): 0 of 1,583 moved |
-| S1 fact placement | do the tower's facts need to be fresh at every position of every round? | attrs-budgets (step 0), edit-rollback with keep-analyses (step 1) | step 0: under 90% of fact-enabled rewrites at three or fewer positions per function; step 1: under 10% of `d_faces` -O2, computes per run above 1.0, or a row crosses above min(gcc, clang) | running |
+| S1 fact placement | do the tower's facts need to be fresh at every position of every round? | attrs-budgets (step 0), edit-rollback with keep-analyses (step 1) | step 0: under 90% of fact-enabled rewrites at three or fewer positions per function; step 1: under 10% of `d_faces` -O2, computes per run above 1.0, or a row crosses above min(gcc, clang) | step 0 measured ([#2054], draft; attrs-budgets, `d_faces` -O2, 10,580 edits, object 8,068 bytes, control identical): `ThroughMemory` enables 24.8% of `fold`'s edits (`matmul` -O3 up to 97.7%) and 0 of `decide`'s (a 33 M cost, landed consequence: `decide`'s `ThroughMemory` dropped, net -1.8%, keep-analyses' PR coming); `Annotated` enables 0 of `fold` (73 M, 29.6% of `fold`) and 0 of `decide` (9.9 M), but 67.5% of `hoist`'s, 52.3% of `gvn`'s and 75% of `loopmotion`'s edits need it from their first run; `bounded` enables 0 in `fold`, `decide`, `hoist`, `gvn`, `promote` and `algebraic` at `d_faces` -O2 (`matmul` -O2 `algebraic` 5.5%). So the tower is needed at some passes and not at others: the placement is per pass, not per position |
 | S2 a fact-free run against InstCombine | once the tower is not asked, does a run cost what LLVM's costs? | pass-list-parity (llvm-compare supplies the LLVM column) | above 2x InstCombine per run at N=200, or exponent above 1.05 | measured: see below |
 | S3 one round with cleanup positions | can a cheap combine replace rounds 2 to 4 without losing rows? | pass-list-parity, hoist-bounded | a row crosses above min(gcc, clang) whose enabler is a global solve, or under 8% at -O2 | after S1 step 1 and S2 |
 | S4 allocator attribution, then in-place spill | is the 415.5 M the representation or the decisions? | greedy-port, ssa-spill-m16 | whole-body work per edit under 1% of the compile, or step 1 cuts the cost per spill by under 3x | step 0 measured: see below |
 | S5 block-local post-RA dataflow | does LLVM's block-local copy propagation fit? | ssa-spill-m16 | under 15 M saved, or a row worse | KILLED ([#2043]): block-local saves 14.8 M but `d_faces` grows 8,068 to 8,097 bytes; a single-predecessor chain gives the same output (68% against an 80% bar) |
 | S6 edit core on the ladders | are the edit primitives a scaling term? | edit-rollback | edit primitives under 3% at N=1600 on every shape and no exponent | measured ([#1994]): the kill is not met on `loop` only (primitives 4.32% at N=1600, `move_to` 925 M, 4.0x per doubling, 8,001 calls from `hoist::hoisted`); the other four shapes are under 1.2% with no exponent. A6 is built beyond rollback only as far as `loop` goes: `Function::move_all(&[InstId], Position)` mirrors LLVM's range splice at the API; the intrusive order only if a slope remains |
-| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming) |
+| S7 caps and pricing | are pricing and uncapped walks the cost? | hoist-bounded, greedy-port | pricing under 1% at both levels and no walk past 100 steps | not met: forecast 2.6% (-O2) and 4.9% (-Os); massif at `mem` N=1600 is 251 MB, 57% walker jump tables (fix coming); walks past 100 steps over the corpus at -O2 (1,175 files): about 42,000 per compile of the corpus, median 142 steps, p99 483, max 584, 0.6% above 500, asked by `ThroughMemory` `provider_of` 77%, `gvn` `forwardable_walk` 15% and `floatfacts` `solved_over` 6%: nothing runs away, a steps cap would be a safety bound and not a time lever. A cap per consumer (`fold` 6, the others 100, a safety bound of 1,000) is prototyped by edit-contract-replay, re-taken non-incremental over the whole process in instructions:u: `d_faces` -O2 none 2,574.4 M, cap 6 -2.3%, cap 20 -1.4%, cap 100 -0.3%, objects identical in all four; `mem` N=1600 cap 6 -14.3% (an earlier -20.7% was the runs table's with-analyses metric, not the whole process), cap 100 +0.1%; rows for caps 6 and 20 are queued. In CI mode, walker-caps' [#2068] is +0.05% on `d_faces` (a safety bound) and [#2083] -11.2% on `mem` N=1600; facts-per-query's [#2073] takes unrolled-128 -6.6%. Inline storage ([#2077], CI mode): instructions -0.47% / -0.58% / -0.69% at -O1/-O2/-Os, D1 misses -2.5% to -3.3%, no RSS or cycles claim |
 
 **S2 result** (pass-list-parity; llrm main `4f12e5818`, round 1 of `fold`, `algebraic`, `phiopt`, `dead` own work against `opt -passes='sroa,early-cse,instcombine'` minus `sroa,early-cse`; M instructions at N=200, then 1,600): `arith` 6.01 against 20.10 (0.30x) and 62.5 against 159.0 (0.39x); `mem` 6.14 against 8.08 (0.76x) and 80.6 against 65.5 (1.23x); `diamond` 5.06 against 6.35 (0.80x) and 35.6 against 41.7 (0.85x); `mixed` 8.59 against 8.35 (1.03x) and 67.0 against 61.3 (1.09x). The 2x line passes on every shape (worst 1.03x). The exponent from 200 to 1,600, llrm and LLVM: `arith` 1.14 and 1.01, `mem` 1.24 and 1.01, `diamond` 0.94 and 0.91, `mixed` 0.99 and 0.96; it trips on `arith` (`dead` 1.43, `algebraic` 1.12, being re-measured at N=400 and 800) and on `mem` (`fold` 1.41, whose cost is `Analyses::get::<ThroughMemory>`). Verdict: the rewriting is not the gap, the facts are; the superlinear passes are `gvn` (1.32 to 1.56) and `dse` (1.72 to 1.97), not the combine. The exponents come from two points, with analyses excluded from "own".
 
 **S4 step 0 result** (ssa-spill-m16, [allocator on the LIR core](allocator-lir-core.md), merged as [#2042] and [#2049]): one function of K sequential copies of a 24-statement loop, at about fixed decisions per copy: cost per allocator round 490, 488, 598, 805, 1,181 and 1,871 K at 1x to 32x (bodies 191 to 4,664 instructions); a round is about 431 K fixed plus 309 instructions per body instruction (R^2 above 0.99). The kill (cost per round does not scale with body size) is not met; at 191 instructions the fixed part is 88% of a round; at `d_faces`' large function (1,819 instructions) the fit gives 993 K per round, 57% size-proportional, while the real function costs about 2.0 M per round: the split path is the extra. Decisions on `d_faces`: 837 assignments (LLVM 815), 67 evictions (78); knock-on unassignment 104 of 7,694 corpus rounds (1.4%), 0 on `d_faces`. The fixed part at 1x (37.22 M, 490 K per round): `Facts::of` 9.04 M, `spilled_apart` 5.15, the evict search 4.41 (`movable` 2.51, `LiveRanges::weight` 1.35: LLVM stores the weight in the interval), `recolor` 3.32 (a stage greedy does not have), a `BTreeSet<RegId>` rebuilt per pop 1.94, split 2.56 and carve 1.68, the rest 8.3. Work on a fact that did not change is about 12.3 M (33%, prove-once candidates); decision work about 10.2 M (27%). The fixed 431 K per round is about 20 pieces of 10 to 100 K. greedy-port's measurement of LLVM greedy (on 20.1.8; a re-measure on the reference build is pending): per decision 13.3, 22.3 and 32.5 K at 191, 1,305 and 4,664 instructions and 29.9 K on `d_faces`; llrm per round 490, 805 and 1,871 K, 36 to 58x; LLVM is not flat either (x2.4 for x24, from interference queries).
+
+**S4 phase 1 result** (ssa-spill-m16; branch `alim/exp/in-place-spill` kept as the record): killed. "Created values from the edit record" saves about 0: per update 115.0 and 48.0 K with the new path against 113.7 and 46.7 K with the old at `chain-1`, 232.7 against 231.3 K at `chain-32`, `d_faces`' large function 344.3 against 342.6 K (+1%); 4.1 values are touched per update and 0.8 created, and LLVM's `LiveRangeEdit` also recomputes old ranges. The fixed 431 K per round is about 20 pieces of 10 to 100 K in three lanes: A (ssa-spill-m16) about 55 M, B the split path (greedy-port) about 110 M, C the decisions (the `movable` search, 218 M on `chain-32`) not yet sized. Prove-once is about 12% of `regalloc`. LLVM greedy per decision on the reference build (24.0.0git) agrees with the 20.1.8 figures within 5% (21.4 K on `chain-8`) and is not flat (x2.4).
 
 **What the study changes in this plan.**
 
@@ -289,11 +295,12 @@ Eight spikes from the [architecture study](architecture-parity.md) run before th
 
 Checklist: the shared list. Its own metric boxes:
 
-- [ ] phase table
-- [ ] gap table
-- [ ] ladder json
-- [ ] rows
-- [ ] computations per run
+- [x] phase table ([compile-gap-series], `5e2e995ef`)
+- [x] gap table (clang 24 and 20.1.8, four levels)
+- [x] ladder json (`tools/ladder/ladder-5e2e995ef.json`)
+- [x] rows (71 programs, m32, at `5e2e995ef`: clocks geomean 0.8875 / 0.9044 / 0.9021 / 0.9169 at -O1/-O2/-O3/-Os, worst 2.01 to 2.19; [compile-gap-series])
+- [x] computations per run (3.4 at -O2 by the `LLRM_WHY` count)
+- [x] allocations by DHAT and RSS
 
 | outcome | decision | next |
 |---|---|---|
@@ -361,7 +368,7 @@ All phase-1 steps run in parallel. Each is re-measured on main by M before merge
 3. Edit in place instead of copying: the allocator on the LIR core (3.3), rollback instead of 144 clones (2.7).
 4. Dense flat tables (1.2 and 2.6).
 5. Reuse scratch buffers across calls through the analysis manager.
-6. A per-pass-run arena: `unmeasured`, it fits the lifetime profile; size it as a probe after 1.0.
+6. A per-pass-run arena: measured, not built ([spec 8]): 30.7% of allocations are born and die in one pass step, 65.5% are born outside any step (inline storage's share), the bound is about 1.0% of instructions (about 0.7% with the slab).
 
 **What it buys in instructions.** After the slab, allocator work is about 15 instructions times 3.1 M, about 47 M (1.6%). Matching LLVM's count directly saves at most 2% to 3%; the rest of the 518 M bucket is filling and copying data, which (2) to (4) remove. The cache effect may be larger: allocation is 24% of L1d misses and the working set is 25x to 50x LLVM's ([allocation]).
 
@@ -772,7 +779,7 @@ Checklist: the shared list. Its own metric boxes:
 
 - **(a) Effect:**
   - queens -O3 after 1.8 at clang's (71 M) or gcc's (634 M) cost or less; measured by hoist-bounded: 1,478 M against gcc 628 M and clang 70 M, the lead cost `analysis bounded` 458 M (190 runs, 30%), which is step 1.8;
-  - the joins and unrolled axes no steeper than gcc's (1.81 and 1.80 against 1.41 and 1.04, [spec] 1.3);
+  - the joins and unrolled axes no steeper than gcc's. Re-measured on main `bd6e647f6`: the joins slope is 1.33 (gcc 1.38, clang 1.16), the plan's 1.81 did not reproduce; at N=2048 the superlinear rows are `lir coalesce` 2.02, `twoaddr` 2.16, `split placed` 1.80 and `gvn` 1.69 (owners ssa-spill-m16 and greedy-port). Unrolled (un64 to un128 x3.07): slope 1.53 against gcc and clang 1.07 (5.1x gcc at 128), with one root: `lsr::reduced` edits once per loop, 256 body versions, each re-asking whole-function analyses: `Pressure::updated` 3.58 G (7.6% of the compile, x4.05) and `Counted::update` 2.16 G (`congruences_with` 1.84 G, 255 solves of 7.2 M); LLVM's LSR keeps loop-local registers and SCEV answers per value with `forgetValue`;
   - the `mem` shape's resident set per IR instruction: 15.7 KB against clang's 0.30 KB (hoist-bounded; the 11.7 KB of [allocation] was the system allocator at N=1600), against 4.4 KB for `arith`; the massif at N=1600 is 251 MB, 57% of it the memory walker's jump tables (fix coming).
 - **(b) Early:** `scaling.py` on main and callgrind of the top three steps at 2N for each axis. Kill (fold into that step) if the lead cost belongs to a step already listed.
 - **(c) Gate:** none until a cause is named.
@@ -954,7 +961,7 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 3.6 Code quality on pressure-heavy loops
 
-- **(a) Effect:** stack operands are 2.3x to 3.6x clang's on pressure-heavy loops (83, 733 and 3,172 against 23, 315 and 1,218 at the three sizes of the `live` axis): llrm spills 51, 443 and 1,215 values where LLVM splits (9, 101 and 301 new virtual registers) and rematerializes. This is output quality, not compile time; it moves the rows rule of [spec] 4.3.
+- **(a) Effect:** closed at parity by greedy-port's study: with the `chain-1` source hand-factored to clang's form llrm has 90 instructions and 24 stack operands against clang's 82 and 23 (186 and 83 unfactored), and on six real bench functions llrm has fewer stack operands than clang (`jpeg_fixed` 156 of 1,076 against 581 of 2,331, and others). The difference is the source's factoring, which LLVM's Reassociate and InstCombine `FactorizeBinOp` do (`A*B+A*C` to `A*(B+C)`, `(x<<c1)+(x<<c2)` to `x*K`): a low-priority row for pass-list-parity, generator-shaped, a probe over the corpus first. Before the study: stack operands were 2.3x to 3.6x clang's on pressure-heavy loops (83, 733 and 3,172 against 23, 315 and 1,218 at the three sizes of the `live` axis): llrm spills 51, 443 and 1,215 values where LLVM splits (9, 101 and 301 new virtual registers) and rematerializes. This is output quality, not compile time; it moves the rows rule of [spec] 4.3.
 - **(b) Early:** a study before any build: what LLVM's `InlineSpiller` and `SplitEditor` do on the `live` shape that the spill path of llrm does not (split before spill; rematerialization of constants and cheap definitions).
 - **(c) Gate:** the study page with a review.
 - **(d) Exit:** stack operands within 1.5x of clang's on the `live` shapes; rows held.
@@ -1004,14 +1011,11 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 4.2 Budgets from clang
 
-- **(a) Effect:** [spec] 1.3's budgets are gcc-derived: 720 M at -O2, 1.7x LLVM. Re-derive them per job from clang's phases:
-  - front end 33 M;
-  - optimizer 178 M (clang 24) or 272 M (distro clang);
-  - codegen 196 to 220 M ([readme], [compile-gap-series]).
-- **(b) Early:** none (measurement).
-- **(c) Gate:** the user decides whether the per-level goal is clang 24's or the static clang 20.1.8's column.
+- **(a) Effect:** [spec] 1.3's budgets are gcc-derived (720 M at -O2, 1.7x LLVM). Re-derive them per job from clang's phases and passes. Measured by attrs-budgets on the reference build (24.0.0git `d1106deb71cc`; [#2056], head `a4375136d`; an older draft body read the clang 20 figures, 555 per IR instruction and 14x, and is stale): front end, optimizer and codegen at -O1 45 / 121 / 184 M, at -O2 45 / 178 / 193 M, at -Os 45 / 176 / 188 M; about 430 instructions per IR instruction per run in the optimizer at -O2 against llrm's 7,664 (18x). The "220 floor" of [spec] 1.2 is wrong: InstCombine is 4,061, GVN 25,649 and IndVarSimplify about 6 K instructions per IR instruction per run. The gap by role at -O2, M: `fold` plus `algebraic` +290, `gvn` +199, `hoist` +157, `lsr` +149, `decide` +119, `promote` plus `sroa` +116, `jumpthread` +108, `indvars` +60, `dse` +60, `lcssa` +24; sum 1,341 M, the mid-end scoreboard. Owners by row: pass-list-parity (`fold`, `algebraic`), greedy-port (`gvn`, `lsr`), hoist-bounded (`hoist`), keep-analyses (`decide`), attrs-budgets (`promote`, `sroa`, `jumpthread`, `indvars`), edit-rollback (`dse`, `lcssa`).
+- **(b) Early:** none (measurement); in progress as [#2056].
+- **(c) Gate:** the user decides whether the per-level goal is clang 24's or the static clang 20.1.8's column; the target is clang 24.
 - **(d) Exit:** a spec 1.3 table per level, and each pass's budget moved into `tools/budgets.toml`.
-- **(e) Who:** llvm-compare.
+- **(e) Who:** attrs-budgets with llvm-compare.
 
 Checklist: the shared list.
 
@@ -1098,6 +1102,8 @@ These apply at -O1/-O2/-O3/-Os, m16 and m32. A row is never traded for compile t
 - bundled with same-area changes that clear the bar together; or
 - if it moves a ladder exponent down by 0.05 or more at 0.15% or less on `d_faces`; or
 - if it fixes correctness.
+
+**Non-incremental builds on both sides.** A figure taken with `CARGO_INCREMENTAL=0` on both binaries (the CI mode) is the one this plan cites; an incremental-mode figure is re-checked against that rule before it is relied on, and the earlier incremental figures of this plan are not yet re-checked.
 
 **Cycles, not just instructions.** An allocation or container change claims cycles, or it does not claim a win. The mimalloc entry points moved 2.3% of instructions and 0% of cycles ([spec 8]).
 
@@ -1279,6 +1285,16 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2038]: https://github.com/ali-mosavian/llrm/pull/2038
 [#2039]: https://github.com/ali-mosavian/llrm/pull/2039
 [#2042]: https://github.com/ali-mosavian/llrm/pull/2042
+[#2053]: https://github.com/ali-mosavian/llrm/pull/2053
+[#2054]: https://github.com/ali-mosavian/llrm/pull/2054
+[#2056]: https://github.com/ali-mosavian/llrm/pull/2056
+[#2041]: https://github.com/ali-mosavian/llrm/pull/2041
+[#2072]: https://github.com/ali-mosavian/llrm/pull/2072
+[#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2068]: https://github.com/ali-mosavian/llrm/pull/2068
+[#2077]: https://github.com/ali-mosavian/llrm/pull/2077
+[#2083]: https://github.com/ali-mosavian/llrm/pull/2083
+[#2074]: https://github.com/ali-mosavian/llrm/pull/2074
 [#2046]: https://github.com/ali-mosavian/llrm/pull/2046
 [#2049]: https://github.com/ali-mosavian/llrm/pull/2049
 [#2043]: https://github.com/ali-mosavian/llrm/pull/2043
