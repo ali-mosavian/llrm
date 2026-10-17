@@ -506,6 +506,7 @@ fn machined_once(
     first_stage: Staged,
 ) -> Result<Machined, String> {
     MACHINED.with(|count| count.set(count.get() + 1));
+    llrm_mir::counts::bump(llrm_mir::counts::Event::Machinings);
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
@@ -986,6 +987,7 @@ fn staged(
     hole: i64,
 ) -> Result<Staged, String> {
     SELECTED.with(|count| count.set(count.get() + 1));
+    llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
     let selected = timed("isel", || {
         isel::selected_with(

@@ -532,6 +532,7 @@ impl Shape {
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {
         DERIVED.with(|count| count.set(count.get() + 1));
+        llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
         let dominance = Dominance::of(function);
         let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
         Self { dominance, loops, reaching: Reaching::default() }

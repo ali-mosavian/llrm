@@ -1455,6 +1455,7 @@ pub fn known_walked_over(
     exits: &[crate::floatfacts::LoopExit],
 ) -> IndexMap<ValueId, Known> {
     MEMORY_DERIVATIONS.with(|count| count.set(count.get() + 1));
+    llrm_mir::counts::bump(llrm_mir::counts::Event::Knowns);
     // What the caller did not bring, as `known` finds it.
     let exposed = unit.exposed.is_none().then(|| crate::memory::exposed_frames(unit));
     let unit = &exposed.as_ref().map_or(*unit, |table| unit.with_exposed(table));

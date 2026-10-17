@@ -7,6 +7,7 @@ pub mod blocklist;
 pub mod build;
 pub mod callgraph;
 pub mod context;
+pub mod counts;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dense;
