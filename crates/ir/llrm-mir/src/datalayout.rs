@@ -21,6 +21,9 @@ pub struct DataLayout {
     /// Integer widths with their ABI alignment in bytes.
     ints: BTreeMap<u32, u64>,
     floats: BTreeMap<u32, u64>,
+    /// The alignment a float object is given where it is placed, when the
+    /// layout states one past the ABI's (`f64:32:64`).
+    float_preferred: BTreeMap<u32, u64>,
     /// The integer widths the target computes natively: `n`.
     legal: Vec<u32>,
     aggregate_align: u64,
@@ -35,6 +38,7 @@ impl Default for DataLayout {
             pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, index_bits: 64 })]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
             floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
+            float_preferred: BTreeMap::new(),
             legal: Vec::new(),
             aggregate_align: 1,
             alloca_space: 0,
@@ -83,7 +87,12 @@ impl DataLayout {
                     let fields = numbers(rest)?;
                     match (head, fields.as_slice()) {
                         ("i", [size, abi, ..]) => drop(layout.ints.insert(*size as u32, bytes(*abi))),
-                        ("f", [size, abi, ..]) => drop(layout.floats.insert(*size as u32, bytes(*abi))),
+                        ("f", [size, abi, rest @ ..]) => {
+                            layout.floats.insert(*size as u32, bytes(*abi));
+                            if let Some(preferred) = rest.first() {
+                                layout.float_preferred.insert(*size as u32, bytes(*preferred));
+                            }
+                        }
                         ("a", [_, abi, ..]) | ("a", [abi]) => layout.aggregate_align = bytes(*abi).max(1),
                         _ => return Err(format!("`{spec}` in the datalayout")),
                     }
@@ -193,6 +202,26 @@ impl DataLayout {
             }
             Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 1,
         }
+    }
+
+    /// The alignment a data object of `size` bytes is placed at when its type
+    /// is not known (a front end hands over bytes): the largest power of two
+    /// that divides its size, up to the widest alignment the layout states of
+    /// a scalar. A float's preferred alignment counts: gcc puts a static
+    /// double on 8 on i386 where a struct member goes on 4.
+    pub fn object_align(
+        &self,
+        size: u64,
+    ) -> u64 {
+        let widest = self
+            .ints
+            .range(..=32)
+            .map(|(_, align)| *align)
+            .chain(self.float_preferred.values().copied())
+            .chain([self.pointer(0).align, self.floats[&32]])
+            .max()
+            .unwrap_or(1);
+        (size & size.wrapping_neg()).min(widest).max(1)
     }
 
     /// The bits a value of `ty` holds.

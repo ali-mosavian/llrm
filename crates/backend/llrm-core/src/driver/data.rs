@@ -110,7 +110,7 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
-                if let Some(to) = variable.align {
+                if let Some(to) = placed_at(module, variable) {
                     items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
                 }
                 for datum in globals::datums(module, global, &built.names)? {
@@ -144,7 +144,7 @@ impl Placed {
             let mut items = Vec::new();
             for global in objects {
                 if let GlobalKind::Variable(variable) = &module.global(global).kind
-                    && let Some(to) = variable.align
+                    && let Some(to) = placed_at(module, variable)
                 {
                     items.push(masm::Datum::Align(masm::Align { to: to as i64 }));
                 }
@@ -305,6 +305,25 @@ fn stored_zero(
 /// Whether the object format keeps no bytes for `segment`.
 fn uninitialized(segment: &str) -> bool {
     masm::SEGMENTS.get(segment) == Some(&".data?")
+}
+
+/// The alignment a variable is placed at: as stated, else flat code's object
+/// alignment from the layout, so a dword after a word is not an operand a 486
+/// charges 3 clocks for (Intel486 data sheet 240440-002, Table 2.1). A target
+/// whose layout states no float alignment (16-bit) keeps its objects packed.
+fn placed_at(
+    module: &Module,
+    variable: &llrm_mir::module::GlobalVariable,
+) -> Option<u64> {
+    variable
+        .align
+        .or_else(
+            || {
+                let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref()?).ok()?;
+                let size = layout.store_size(&module.context.types, variable.ty);
+                (layout.pointer(0).bits == 32).then_some(layout.object_align(size)).filter(|&to| to > 1)
+            },
+        )
 }
 
 #[cfg(test)]
