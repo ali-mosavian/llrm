@@ -6,8 +6,8 @@ Order: first by the share of `d_faces` the thing costs, then by slope where `d_f
 
 | # | change | bound on `d_faces` -O2 | slope | owner, PR, status |
 |---:|---|---|---|---|
-| 1 | lazy, per-version memory facts | analyses 651 M of 2,830 M (23%) in [LLVM measured](llvm-measured.md); self cost of `alias::escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames` 210 M (7.3%) | through-memory 3.7x per doubling | keep-analyses, design; walker tables greedy-port |
-| 2 | allocation and copying | 518 M (18.0%); 3,765,923 allocations; 24% of D1 misses | memory 8 to 18 KB per IR instruction | unassigned; none built |
+| 1 | allocation and copying | 518 M (18.0%, a bound: it includes 22.7 M of `memcmp`); 3,765,923 allocations against 62,881; 24% of D1 misses, the largest group | memory 8 to 18 KB per IR instruction | unassigned; none built |
+| 2 | lazy, per-version memory facts | analyses 651 M of 2,830 M (23%) in [LLVM measured](llvm-measured.md), overlapping #1 (memory SSA and alias facts are 19% of the allocations); self cost of `alias::escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames` 210 M (7.3%) | through-memory 3.7x per doubling | keep-analyses, design; walker tables greedy-port |
 | 3 | idle pass runs | 361 M (12.8%) in 637 runs | none | unassigned; none built |
 | 4 | mask test made at each branch | none on `d_faces` stated; `diamond 800`: 1,995 M to 1,075 M reported | removes 79 splits | ssa-spill-m16, [#2010](https://github.com/ali-mosavian/llrm/pull/2010), open |
 | 5 | quadratic `dse` | unmeasured on `d_faces`; 1,829 M of 5,577 M at `mem` N=1600 | 4.0x per doubling | edit-rollback, PR coming |
@@ -16,13 +16,13 @@ Order: first by the share of `d_faces` the thing costs, then by slope where `d_f
 | 8 | bookkeeping | 46 M printed-body history, 49 M `Stamp`, 22 M verifiers, 11 M `env_set`: about 4% | none | [#1931](https://github.com/ali-mosavian/llrm/pull/1931) merged; [#2007](https://github.com/ali-mosavian/llrm/pull/2007) open; `Stamp` and verifiers unassigned |
 | 9 | split step reads and copies the whole body | 369 M on `diamond 800` before #2010 (`split placed` 221, `split carving` 148); `d_faces`: unmeasured | none stated | ssa-spill-m16 (structural sharing of LIR rewrites), design |
 
-## 1. Lazy memory facts
-
-What: compute `through-memory`, `annotated`, `accesses`, `globals-aa` and `registers` per query on first use for the body version, not for the whole function after each change. In one compile of `mem` N=200 llrm computes them 7, 11, 15, 6 and 17 times (27.8, 42.9, 34, 16.6 and 16.5 M); LLVM computes `DominatorTree` 4 times, `AAManager` 3, `MemorySSA` 2 and keeps `BasicAA` stateless. Where: the analysis manager ([page](llvm-compared-analysis-manager.md), [LLVM `PassManagerImpl.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/PassManagerImpl.h#L80)), the walker ([page](llvm-compared-memoryssa.md)), alias ([page](llvm-compared-alias.md)). Also pages: [GVN](llvm-compared-gvn.md) (`r01-fold` 2.4 M own, 27.5 M with analyses), [profile](llvm-compared-profile.md).
-
-## 2. Allocation and copying
+## 1. Allocation and copying
 
 What: `Function::successors` as an iterator (258,958 allocations, 6.9%); presized 4-byte-id vectors (515,831 allocations from one `grow_one`); CFG tables built once per body version (523,311, 13.9%). Where: [`module.rs#L548`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/module.rs#L548), [`cfg.rs#L186`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-analysis/src/cfg.rs#L186), [`cfg.rs#L425`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-analysis/src/cfg.rs#L425); LLVM [`Instruction.cpp#L1462`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1462) and the co-allocated operands of [`User.cpp#L137`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/User.cpp#L137). Pages: [allocation](llvm-compared-allocation.md), [profile](llvm-compared-profile.md).
+
+## 2. Lazy memory facts
+
+What: compute `through-memory`, `annotated`, `accesses`, `globals-aa` and `registers` per query on first use for the body version, not for the whole function after each change. In one compile of `mem` N=200 llrm computes them 7, 11, 15, 6 and 17 times (27.8, 42.9, 34, 16.6 and 16.5 M); LLVM computes `DominatorTree` 4 times, `AAManager` 3, `MemorySSA` 2 and keeps `BasicAA` stateless. Where: the analysis manager ([page](llvm-compared-analysis-manager.md), [LLVM `PassManagerImpl.h`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/PassManagerImpl.h#L80)), the walker ([page](llvm-compared-memoryssa.md)), alias ([page](llvm-compared-alias.md)). Also pages: [GVN](llvm-compared-gvn.md) (`r01-fold` 2.4 M own, 27.5 M with analyses), [profile](llvm-compared-profile.md).
 
 ## 3. Idle pass runs
 
