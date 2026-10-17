@@ -1587,6 +1587,11 @@ struct Facts {
     /// from it.
     scan: crate::backend::regclass::Scan,
     siblings: Siblings,
+    /// The values that may not be spilled, and how many unspillable and
+    /// protected values they were made of: both only grow within a body's
+    /// allocation, so the same counts are the same set.
+    pinned: Arc<llrm_mir::dense::IdSet<u32>>,
+    pinned_from: (usize, usize),
     /// The values whose class moved since the facts these were carried from.
     reclassed: Option<Vec<u32>>,
 }
@@ -1601,6 +1606,8 @@ struct Carried {
     index: Arc<Indexes>,
     siblings: Siblings,
     folds: Arc<IndexMap<u32, f64>>,
+    scan: crate::backend::regclass::Scan,
+    masks: Masks,
     epoch: u64,
     /// The slots the instructions the rewrite removed had.
     gone: IndexMap<usize, i64>,
@@ -1619,7 +1626,7 @@ impl Facts {
         carried: Option<Carried>,
     ) -> Self {
         let (mut carried_hints, mut carried_widths, mut carried_live, mut carried_index) = (None, None, None, None);
-        let (mut carried_siblings, mut carried_folds) = (None, None);
+        let (mut carried_siblings, mut carried_folds, mut carried_scan, mut carried_masks) = (None, None, None, None);
         let mut old_epoch = None;
         let mut gone_slots = IndexMap::default();
         if let Some(one) = carried {
@@ -1629,6 +1636,8 @@ impl Facts {
             carried_index = Some(one.index);
             carried_siblings = Some(one.siblings);
             carried_folds = Some(one.folds);
+            carried_scan = Some(one.scan);
+            carried_masks = Some(one.masks);
             old_epoch = Some(one.epoch);
             gone_slots = one.gone;
         }
@@ -1700,8 +1709,20 @@ impl Facts {
             _ => Arc::new(_fold_free(body, profile, busy)),
         });
         // A spiller product lives for one use: a spill gains nothing.
-        let pinned: BTreeSet<u32> = unspillable.iter().chain(protected).copied().collect();
-        let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), pinned));
+        let pinned_from = (unspillable.len(), protected.len());
+        let pinned = match prior {
+            Some((before, _, _)) if before.pinned_from == pinned_from => {
+                body.facts.0.bump("pinned set kept");
+                Arc::clone(&before.pinned)
+            }
+            _ => Arc::new(unspillable.iter().chain(protected).copied().collect()),
+        };
+        if prior.is_some() && llrm_support::env_flag!("LLRM_CHECK_FACTS") {
+            let whole: llrm_mir::dense::IdSet<u32> = unspillable.iter().chain(protected).copied().collect();
+            assert!(*pinned == whole, "{}: the pinned set kept from the body before differs", body.name);
+        }
+        body.facts.0.bump("allocator facts built");
+        let live = Arc::new(live.priced(Arc::clone(&siblings.free), Arc::clone(&folds), Arc::clone(&pinned)));
         crate::backend::live::hold(body, &live);
         if llrm_support::env_flag!("LLRM_CHECK_FACTS") {
             let (base, _) = ranges::worked_out_with_totals(body, &index, busy, &|_| true);
@@ -1726,9 +1747,13 @@ impl Facts {
         }
         let masks = llrm_support::debug::timed("facts masks", || {
             let found = match prior {
-                Some((before, changes, _)) if same_numbering(&index) => {
-                    Masks::after(&before.masks, &gone_slots, &index, segments, changes)
-                }
+                Some((_, changes, _)) if same_numbering(&index) => Masks::after(
+                    carried_masks.take().expect("carried with the prior facts"),
+                    &gone_slots,
+                    &index,
+                    segments,
+                    changes,
+                ),
                 _ => None,
             };
             if let (Some(found), true) = (&found, llrm_support::env_flag!("LLRM_CHECK_FACTS")) {
@@ -1756,7 +1781,12 @@ impl Facts {
         let (scan, confined) = llrm_support::debug::timed("facts classes", || {
             let given = crate::backend::regclass::Found { live: &live, masks: &masks };
             let scan = llrm_support::debug::timed("classes scan", || match prior {
-                Some((before, changes, _)) => before.scan.after(&changes.gone, &changes.added, registers, segments),
+                Some((_, changes, _)) => carried_scan.take().expect("carried with the prior facts").after(
+                    &changes.gone,
+                    &changes.added,
+                    registers,
+                    segments,
+                ),
                 None => crate::backend::regclass::Scan::of(body, registers, segments),
             });
             let found = scan.classes(body, protected, segments, registers, &given);
@@ -1794,7 +1824,7 @@ impl Facts {
                 .chain(before.confined.keys().copied().filter(|value| !confined.contains_key(value)))
                 .collect::<Vec<u32>>()
         });
-        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, reclassed }
+        Self { index, live, folds, masks, widths, confined, hints, scan, siblings, pinned, pinned_from, reclassed }
     }
 }
 
@@ -2413,6 +2443,8 @@ fn _allocated(
                     index: std::mem::replace(&mut facts.index, Arc::new(Indexes::plain())),
                     siblings: std::mem::take(&mut facts.siblings),
                     folds: std::mem::take(&mut facts.folds),
+                    scan: std::mem::take(&mut facts.scan),
+                    masks: std::mem::take(&mut facts.masks),
                 },
             );
         facts = Facts::of(
@@ -2948,7 +2980,7 @@ impl Masks {
     /// keep an instruction's index across an edit. None where `before` did
     /// not come from a body.
     pub fn after(
-        before: &Masks,
+        before: Masks,
         gone_slots: &IndexMap<usize, i64>,
         index: &Indexes,
         segments: &Segments,
@@ -2957,6 +2989,7 @@ impl Masks {
         if before.owners.len() != before.list.len() {
             return None;
         }
+        let Masks { mut list, mut owners, reaching, .. } = before;
         let owner_of = |slot: i64, owner: usize, list: &[Arc<Mask>], owners: &[usize]| -> Option<usize> {
             let from = list.partition_point(|mask| mask.slot < slot);
             (from..list.len()).take_while(|at| list[*at].slot == slot).find(|at| owners[*at] == owner)
@@ -2964,7 +2997,7 @@ impl Masks {
         let mut removed: Vec<usize> = Vec::new();
         for one in &changes.gone {
             let Some(slot) = gone_slots.get(&ranges::key(one)) else { continue };
-            if let Some(at) = owner_of(*slot, ranges::key(one), &before.list, &before.owners) {
+            if let Some(at) = owner_of(*slot, ranges::key(one), &list, &owners) {
                 removed.push(at);
             }
         }
@@ -2977,24 +3010,20 @@ impl Masks {
         }
         added.sort_by_key(|(slot, owner, _)| (*slot, *owner));
         let put: Vec<Arc<Mask>> = added.iter().map(|(_, _, mask)| Arc::clone(mask)).collect();
-        let mut list = Vec::with_capacity(before.list.len() + added.len());
-        let mut owners = Vec::with_capacity(before.list.len() + added.len());
-        let (mut gone, mut new) = (removed.iter().peekable(), added.into_iter().peekable());
-        for (at, mask) in before.list.iter().enumerate() {
-            if gone.peek() == Some(&&at) {
-                gone.next();
-                continue;
-            }
-            while let Some((_, owner, put)) = new.next_if(|(slot, _, _)| *slot < mask.slot) {
-                list.push(put);
-                owners.push(owner);
-            }
-            list.push(Arc::clone(mask));
-            owners.push(before.owners[at]);
+        // The points are edited where they stand: the ones the rewrite removed
+        // go, the ones it added go in after the points of their slot, and the
+        // rest are not touched, where a copy of the list cost a look at every
+        // point at each of a function's rewrites.
+        let mut taken: Vec<Arc<Mask>> = Vec::with_capacity(removed.len());
+        for at in removed.iter().rev() {
+            owners.remove(*at);
+            taken.push(list.remove(*at));
         }
-        for (_, owner, put) in new {
-            list.push(put);
-            owners.push(owner);
+        taken.reverse();
+        for (slot, owner, mask) in added {
+            let at = list.partition_point(|point| point.slot <= slot);
+            list.insert(at, mask);
+            owners.insert(at, owner);
         }
         let found = Masks {
             list,
@@ -3003,10 +3032,9 @@ impl Masks {
             reaching: std::cell::OnceCell::new(),
             added: Some(put.clone()),
         };
-        if let Some(mine) = before.reaching.get() {
-            let mut reaching = mine.clone();
-            for at in &removed {
-                Self::unreach(&mut reaching, &before.list[*at]);
+        if let Some(mut reaching) = reaching.into_inner() {
+            for mask in &taken {
+                Self::unreach(&mut reaching, mask);
             }
             for mask in &put {
                 Self::reach(&mut reaching, mask);
@@ -3093,6 +3121,22 @@ impl Masks {
             all
         };
         mine == theirs && reached(self) == reached(other)
+    }
+
+    /// Room for `more` points, and the room there is, for a test that `after`
+    /// edits the list it is given and does not build another.
+    #[cfg(test)]
+    pub fn reserve_points(
+        &mut self,
+        more: usize,
+    ) {
+        self.list.reserve(more);
+        self.owners.reserve(more);
+    }
+
+    #[cfg(test)]
+    pub fn point_capacity(&self) -> usize {
+        self.list.capacity().min(self.owners.capacity())
     }
 
     /// How many points `iter` has handed out.
