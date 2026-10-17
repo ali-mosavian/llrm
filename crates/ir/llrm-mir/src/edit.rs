@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
-    Operand, Use, ValueData, ValueDef, ValueId,
+    Operand, Operands, Use, ValueData, ValueDef, ValueId,
 };
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
@@ -177,10 +177,11 @@ impl Function {
         &mut self,
         opcode: Opcode,
         ty: TypeId,
-        operands: Vec<Operand>,
+        operands: impl Into<Operands>,
         flags: Flags,
         name: Option<&str>,
     ) -> InstId {
+        let operands: Operands = operands.into();
         let id = InstId(self.instructions.len() as u32);
         let result = (ty != self.void).then(|| {
             let value = ValueId(self.values.len() as u32);
@@ -192,7 +193,7 @@ impl Function {
         for (index, &operand) in operands.iter().enumerate() {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
-        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new() });
+        self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Default::default() });
         self.parent.push(None);
         self.erased.push(false);
         id
@@ -403,8 +404,9 @@ impl Function {
     pub fn set_operands(
         &mut self,
         inst: InstId,
-        operands: Vec<Operand>,
+        operands: impl Into<Operands>,
     ) {
+        let operands: Operands = operands.into();
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
         if old.len() > 4 {
@@ -835,7 +837,7 @@ impl Function {
         with: &[Operand],
         function_type: TypeId,
     ) {
-        let mut operands = self.instructions[inst.0 as usize].operands.clone();
+        let mut operands = self.instructions[inst.0 as usize].operands.to_vec();
         operands.splice(at..=at, with.iter().copied());
         self.set_operands(inst, operands);
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };

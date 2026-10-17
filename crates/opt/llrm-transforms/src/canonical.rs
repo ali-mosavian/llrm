@@ -175,7 +175,7 @@ pub fn identities(
                 Opcode::ICmp(IntPredicate::Ugt) => IntPredicate::Ne,
                 _ => continue,
             };
-            let operands = instruction.operands.clone();
+            let operands = instruction.operands.to_vec();
             replaced(function, inst, Opcode::ICmp(predicate), operands);
             changed = true;
         }

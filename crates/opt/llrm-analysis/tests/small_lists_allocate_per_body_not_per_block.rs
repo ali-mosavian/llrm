@@ -45,3 +45,21 @@ fn test_the_exposed_allocas_of_a_body_allocate_per_body_not_per_value() {
     let (_, made) = counted(|| llrm_analysis::frameescape::exposed_allocas(function, |_| false));
     assert!(made <= 12, "{made} allocations for {blocks} values that each feed one");
 }
+
+/// Cloning a function made a `Vec` for the operands of every instruction: 31 K
+/// and 14 K of the d_faces -O2 compile's 2.8 M allocations. Up to two operands
+/// are held in the instruction.
+#[test]
+fn test_cloning_a_function_allocates_per_body_not_per_instruction() {
+    let n = 400;
+    let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n");
+    for at in 0..n {
+        text += &format!("  %{at} = add i32 %a, {at}\n");
+    }
+    text += "  ret i32 %a\n}\n";
+    let module = parsed(&text);
+    let function = module.named("f").and_then(|id| module.global(id).function()).expect("@f");
+    let (copy, made) = counted(|| function.clone());
+    assert_eq!(copy.layout().len(), function.layout().len());
+    assert!(made <= 40, "{made} allocations cloning {n} instructions of two operands");
+}

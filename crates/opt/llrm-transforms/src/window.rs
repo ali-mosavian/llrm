@@ -666,7 +666,7 @@ fn _split(
         function.set_operands(outer, vec![start, Operand::Block(found.preheader), ending, Operand::Block(next_window)]);
         if !walked.contains(&phi) {
             let arms = function.instruction(phi).operands.clone();
-            let arms = arms
+            let arms: Vec<Operand> = arms
                 .chunks(2)
                 .flat_map(|pair| {
                     if pair[1] == Operand::Block(found.preheader) {
@@ -841,7 +841,7 @@ fn _far(
     let step = counting::constant(context, &recurrence.step, far_index);
     let next = _placed(function, gep.clone(), far, vec![value, step], Position::Before(recurrence.stepping));
     let arms = function.instruction(recurrence.phi).operands.clone();
-    let operands = arms
+    let operands: Vec<Operand> = arms
         .chunks(2)
         .flat_map(|pair| {
             if function.parent(recurrence.stepping).is_some_and(|_| {

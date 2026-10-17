@@ -128,7 +128,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::loops::LoopInfo;
 use llrm_mir::memory;
-use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand, ValueDef};
+use llrm_mir::module::{GlobalKind, InstId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
@@ -359,7 +359,7 @@ fn applied(
     let (ty, first) = {
         let Module { context, globals, .. } = &mut *module;
         let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
-        let first: Vec<Vec<(String, MetadataId)>> =
+        let first: Vec<llrm_mir::module::InstructionMetadata> =
             plan.fields.iter().map(|one| function.instruction(one.loads[0]).metadata.clone()).collect();
         let made = function.insert_parameters(context, plan.parameter, &types);
         for (field, &held) in plan.fields.iter().zip(&made) {

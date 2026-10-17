@@ -937,7 +937,7 @@ fn rewrite(
                 }
                 let block = cfg::block(frontier);
                 let from = edges(function, block);
-                let operands = from.iter().flat_map(|&one| [poison[slot], Operand::Block(one)]).collect();
+                let operands: Vec<Operand> = from.iter().flat_map(|&one| [poison[slot], Operand::Block(one)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
                 let first = function.block(block).instructions().first().copied();
                 function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");

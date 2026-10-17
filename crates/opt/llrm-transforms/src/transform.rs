@@ -172,7 +172,7 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
                     function.set_operands(phi, Vec::new());
                     function.erase(phi)?;
                     changed = true;
-                } else if from_arms(&incoming) != function.instruction(phi).operands {
+                } else if function.instruction(phi).operands != from_arms(&incoming) {
                     function.set_operands(phi, from_arms(&incoming));
                 }
             }

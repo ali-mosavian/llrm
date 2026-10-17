@@ -131,7 +131,7 @@ pub fn split(
     function.insert(jump, Position::End(bridge))?;
     retarget(function, parent, target, bridge);
     for phi in phis(function, target) {
-        let operands = function
+        let operands: Vec<Operand> = function
             .instruction(phi)
             .operands
             .iter()

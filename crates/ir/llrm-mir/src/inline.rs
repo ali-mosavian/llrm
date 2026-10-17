@@ -55,6 +55,10 @@ impl Fill for InstId {
     const FILL: Self = InstId(0);
 }
 
+impl Fill for crate::module::Operand {
+    const FILL: Self = crate::module::Operand::Value(ValueId(0));
+}
+
 #[derive(Clone)]
 pub enum InlineVec<T: Fill, const N: usize> {
     Few(u8, [T; N]),

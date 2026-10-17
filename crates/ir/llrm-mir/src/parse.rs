@@ -1783,7 +1783,19 @@ impl Parser {
             local.function.values.push(ValueData { ty, name: None, def: ValueDef::Instruction(id) });
             Some(value)
         };
-        local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata });
+        local
+            .function
+            .instructions
+            .push(
+                Instruction {
+                    opcode,
+                    ty,
+                    operands: operands.into(),
+                    flags,
+                    result,
+                    metadata: metadata.into(),
+                },
+            );
         for (variable, what) in std::mem::take(&mut local.pending_records) {
             local.function.debug_records.push(DebugRecord { before: id, variable, what });
         }

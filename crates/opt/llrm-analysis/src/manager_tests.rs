@@ -255,7 +255,7 @@ b2:
                     .map(|(_, inst)| inst)
                     .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
                     .unwrap();
-                let operands = function.instruction(add).operands.iter().rev().copied().collect();
+                let operands: Vec<Operand> = function.instruction(add).operands.iter().rev().copied().collect();
                 function.set_operands(add, operands);
             },
             preserved,
@@ -1241,7 +1241,7 @@ fn pin_the_index() -> Step {
             let last = operands.len() - 1;
             let ty = unit.context.types.int(16);
             operands[last] = Operand::Constant(unit.context.int(ty, 1));
-            function.set_operands(gep, operands.into());
+            function.set_operands(gep, operands);
         },
         PreservedAnalyses::none(),
     )
@@ -1276,7 +1276,7 @@ fn a_registers_update_does_not_walk_the_body_for_its_table_loads() {
                 .map(|(_, inst)| inst)
                 .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
                 .unwrap();
-            let operands = function.instruction(add).operands.iter().rev().copied().collect();
+            let operands: Vec<Operand> = function.instruction(add).operands.iter().rev().copied().collect();
             function.set_operands(add, operands);
         },
         PreservedAnalyses::none(),

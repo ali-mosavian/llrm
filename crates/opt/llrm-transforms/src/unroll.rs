@@ -473,7 +473,8 @@ fn _expanded(
     let mut swap = initial.clone();
     let clone = |function: &mut Function, inst: InstId, swap: &mut HashMap<ValueId, Operand>| -> Result<(), String> {
         let copy = function.clone_instruction(inst);
-        let operands = function.instruction(inst).operands.iter().map(|&operand| _provided(operand, swap)).collect();
+        let operands: Vec<Operand> =
+            function.instruction(inst).operands.iter().map(|&operand| _provided(operand, swap)).collect();
         function.set_operands(copy, operands);
         function.insert(copy, Position::Before(jump))?;
         if let (Some(original), Some(fresh)) = (value(function, inst), value(function, copy)) {

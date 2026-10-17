@@ -480,7 +480,7 @@ fn _on_edge(
             _ => operands.push(operand),
         }
     }
-    Some(Instruction { operands, ..op.clone() })
+    Some(Instruction { operands: operands.into(), ..op.clone() })
 }
 
 /// Insert only on an unconditional edge, with available scalar inputs:
@@ -592,7 +592,7 @@ pub fn joined(
                 for &parent in parents {
                     let parent = cfg::block(parent);
                     let substituted = Instruction {
-                        operands: ssa::substituted(&op, &replacements).map_err(|error| error.to_string())?,
+                        operands: ssa::substituted(&op, &replacements).map_err(|error| error.to_string())?.into(),
                         ..op.clone()
                     };
                     let translated = _on_edge(function, &substituted, &edges::phis(function, block), parent);

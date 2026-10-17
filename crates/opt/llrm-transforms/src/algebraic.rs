@@ -479,7 +479,7 @@ fn _inverted_compare(
     };
     let Some(made) = _definition(function, compare).filter(|_| _single_use(function, compare)) else { return false };
     let Opcode::ICmp(predicate) = function.instruction(made).opcode else { return false };
-    let operands = function.instruction(made).operands.clone();
+    let operands = function.instruction(made).operands.to_vec();
     _replace(function, inst, Opcode::ICmp(predicate.inverse()), operands);
     true
 }
@@ -2067,7 +2067,7 @@ fn _unsigned_divisions(
         })
         .collect();
     for &(inst, op) in &made {
-        let operands = function.instruction(inst).operands.clone();
+        let operands = function.instruction(inst).operands.to_vec();
         _replace(function, inst, Opcode::Binary(op), operands);
     }
     !made.is_empty()

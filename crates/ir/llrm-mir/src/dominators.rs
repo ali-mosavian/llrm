@@ -59,7 +59,7 @@ impl DominatorTree {
         // the last.
         struct Touched {
             block: BlockId,
-            operands: Vec<Operand>,
+            operands: crate::module::Operands,
             inserted: bool,
         }
         let mut touched: crate::dense::IdMap<InstId, Touched> = crate::dense::IdMap::new();
@@ -112,7 +112,7 @@ impl DominatorTree {
                 }
                 Change::Operands { inst, was } => {
                     if let Some(one) = touched.get_mut(inst) {
-                        one.operands = was.to_vec();
+                        one.operands = was.iter().copied().collect();
                     }
                 }
                 _ => {}

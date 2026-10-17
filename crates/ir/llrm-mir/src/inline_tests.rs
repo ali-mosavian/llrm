@@ -67,3 +67,10 @@ fn test_the_size_of_the_common_instances() {
         std::mem::size_of::<InlineVec<u32, 4>>(),
     );
 }
+
+/// Two operands held inline made `Operands` 32 bytes, so every `Instruction`
+/// 104 against 96; the metadata list behind a pointer pays for it.
+#[test]
+fn an_instruction_is_no_larger_than_96_bytes_with_two_operands_inline() {
+    assert!(size_of::<crate::module::Instruction>() <= 96, "{} bytes", size_of::<crate::module::Instruction>());
+}

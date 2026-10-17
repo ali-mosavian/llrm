@@ -67,15 +67,102 @@ pub struct ValueData {
     pub def: ValueDef,
 }
 
+/// The `(kind, node)` pairs attached to an instruction: nearly always none, so
+/// the list is behind a pointer, 8 bytes in the instruction rather than a
+/// `Vec`'s 24 (LLVM keeps an instruction's metadata out of line too).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InstructionMetadata(Option<Box<Vec<(String, MetadataId)>>>);
+
+impl InstructionMetadata {
+    pub fn push(
+        &mut self,
+        pair: (String, MetadataId),
+    ) {
+        self.0.get_or_insert_with(Default::default).push(pair);
+    }
+
+    pub fn retain(
+        &mut self,
+        keep: impl FnMut(&(String, MetadataId)) -> bool,
+    ) {
+        if let Some(list) = &mut self.0 {
+            list.retain(keep);
+            if list.is_empty() {
+                self.0 = None;
+            }
+        }
+    }
+}
+
+impl std::ops::Deref for InstructionMetadata {
+    type Target = [(String, MetadataId)];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_deref().map_or(&[], |list| list.as_slice())
+    }
+}
+
+impl std::ops::DerefMut for InstructionMetadata {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_deref_mut().map_or(&mut [], |list| list.as_mut_slice())
+    }
+}
+
+impl std::hash::Hash for InstructionMetadata {
+    fn hash<H: std::hash::Hasher>(
+        &self,
+        state: &mut H,
+    ) {
+        (**self).hash(state)
+    }
+}
+
+impl IntoIterator for InstructionMetadata {
+    type Item = (String, MetadataId);
+    type IntoIter = std::vec::IntoIter<(String, MetadataId)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.map_or_else(Vec::new, |list| *list).into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a InstructionMetadata {
+    type Item = &'a (String, MetadataId);
+    type IntoIter = std::slice::Iter<'a, (String, MetadataId)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut InstructionMetadata {
+    type Item = &'a mut (String, MetadataId);
+    type IntoIter = std::slice::IterMut<'a, (String, MetadataId)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl From<Vec<(String, MetadataId)>> for InstructionMetadata {
+    fn from(list: Vec<(String, MetadataId)>) -> Self {
+        Self((!list.is_empty()).then(|| Box::new(list)))
+    }
+}
+
+/// An instruction's operands: two are held in the instruction (a load, a
+/// store, a binary operation, an unconditional branch), a `Vec` past them.
+pub type Operands = crate::inline::InlineVec<Operand, 2>;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
     pub opcode: Opcode,
     /// The result's type; `void` when there is none.
     pub ty: TypeId,
-    pub operands: Vec<Operand>,
+    pub operands: Operands,
     pub flags: Flags,
     pub result: Option<ValueId>,
-    pub metadata: Vec<(String, MetadataId)>,
+    pub metadata: InstructionMetadata,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

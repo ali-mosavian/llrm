@@ -432,11 +432,11 @@ impl Function {
         // terminator).
         // (A list by instruction, not a dense map: a map would be as long as
         // the function for the few terminators an edit touches.)
-        let mut thens: Vec<(u32, Vec<Operand>)> =
+        let mut thens: Vec<(u32, crate::module::Operands)> =
             terminators.iter().map(|&(inst, _)| (inst.0, self.instruction(inst).operands.clone())).collect();
         thens.sort_unstable_by_key(|one| one.0);
         if !thens.is_empty() {
-            let find = |thens: &mut Vec<(u32, Vec<Operand>)>, inst: InstId| {
+            let find = |thens: &mut Vec<(u32, crate::module::Operands)>, inst: InstId| {
                 thens.binary_search_by_key(&inst.0, |one| one.0).ok()
             };
             for change in changes.iter().rev() {
@@ -450,7 +450,7 @@ impl Function {
                     }
                     Change::Operands { inst, was } => {
                         if let Some(at) = find(&mut thens, *inst) {
-                            thens[at].1 = was.to_vec();
+                            thens[at].1 = was.iter().copied().collect();
                         }
                     }
                     _ => {}

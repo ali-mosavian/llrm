@@ -146,7 +146,7 @@ impl Assumption for Stride {
         copy: &LoopCopy,
     ) -> Result<(), String> {
         for (_, &inst) in copy.instructions.iter() {
-            let operands = function
+            let operands: Vec<Operand> = function
                 .instruction(inst)
                 .operands
                 .iter()

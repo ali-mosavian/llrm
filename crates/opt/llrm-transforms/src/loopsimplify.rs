@@ -252,12 +252,12 @@ pub fn grouped(
             values[0]
         } else {
             let ty = function.instruction(phi).ty;
-            let operands = grouped.iter().flat_map(|&(value, block)| [value, block]).collect();
+            let operands: Vec<Operand> = grouped.iter().flat_map(|&(value, block)| [value, block]).collect();
             let merged = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
             function.insert(merged, Position::End(bridge)).expect("a placed block");
             Operand::Value(function.instruction(merged).result.expect("a phi's value"))
         };
-        let operands = kept
+        let operands: llrm_mir::module::Operands = kept
             .into_iter()
             .chain([(result, Operand::Block(bridge))])
             .flat_map(|(value, block)| [value, block])

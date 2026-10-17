@@ -308,7 +308,7 @@ pub fn propagated(
     }
     let values = |inst: InstId| -> Vec<Operand> {
         let op = function.instruction(inst);
-        if is_phi(inst) { op.operands.iter().step_by(2).copied().collect() } else { op.operands.clone() }
+        if is_phi(inst) { op.operands.iter().step_by(2).copied().collect() } else { op.operands.to_vec() }
     };
     let mut consumers = IndexMap::<ValueId, IndexSet<ValueId>>::default();
     for (value, recipe) in &recipes {
