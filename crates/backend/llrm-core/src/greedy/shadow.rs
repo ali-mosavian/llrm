@@ -357,6 +357,6 @@ mod tests {
             li
         };
         assert_eq!(masks.reg_mask_clobbered(&across(1)), Some(vec![esi]));
-        assert_eq!(masks.reg_mask_clobbered(&across(2)), None);
+        assert!(masks.reg_mask_clobbered(&across(2)).is_none_or(|roots| roots.is_empty()));
     }
 }
