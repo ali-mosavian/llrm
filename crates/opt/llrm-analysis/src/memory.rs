@@ -260,19 +260,22 @@ impl Ord for MemoryObject {
 /// A `MemoryObject` as its module's interner numbered it: a small id compared,
 /// hashed and ordered as an integer, with the fields the passes ask of every
 /// slice beside it, so a slice is `Copy` and asking costs nothing. The rest
-/// (the identity, the generation) is `ObjectInterner::object`. Interned by
-/// every field, the facts too, so two spellings that differ in a fact are two
-/// objects here and a set keeps both (none was seen to differ in 1,700 programs
-/// and QCport). The order is the order of first interning in the module, which
-/// the same module always makes the same way; nothing may depend on it being
-/// `MemoryObject`'s.
+/// (the identity, the generation) is `ObjectInterner::object`. Interned by the
+/// object's identity (kind, identity, generation, extent) alone: the same
+/// object spelled with other facts (a frame slot whose address an edit
+/// stopped exposing) is the same number, so a result kept past the edit and
+/// one derived after it name it alike. The facts (`addressed`, `captured`,
+/// `constant`) are what the body that made the reference had of the object,
+/// read through the accessors; they are not its identity. The order is the
+/// order of first interning in the module, which the same module always makes
+/// the same way; nothing may depend on it being `MemoryObject`'s.
 #[derive(Clone, Copy, Debug)]
 pub struct ObjectRef {
     id: u32,
     pub kind: MemoryKind,
-    pub addressed: bool,
-    pub captured: bool,
-    pub constant: bool,
+    addressed: bool,
+    captured: bool,
+    constant: bool,
     pub extent: Option<i64>,
     /// The identity where it is a number, which is all the passes make: a name
     /// or a tuple (a test's, the linear region's) is `Other`, and
@@ -338,6 +341,22 @@ impl ObjectRef {
     pub fn id(self) -> u32 {
         self.id
     }
+
+    /// Some code computes its address, so a pointer of unknown origin may hold
+    /// it: as the state of the body that interned this reference had it.
+    pub fn addressed(self) -> bool {
+        self.addressed
+    }
+
+    /// Its address can be found from outside this activation.
+    pub fn captured(self) -> bool {
+        self.captured
+    }
+
+    /// Writing it is undefined.
+    pub fn constant(self) -> bool {
+        self.constant
+    }
 }
 
 impl PartialEq for ObjectRef {
@@ -386,9 +405,6 @@ impl PartialEq for Exact {
         other: &Self,
     ) -> bool {
         self.0 == other.0
-            && self.0.addressed == other.0.addressed
-            && self.0.captured == other.0.captured
-            && self.0.constant == other.0.constant
     }
 }
 
@@ -400,7 +416,6 @@ impl std::hash::Hash for Exact {
         state: &mut H,
     ) {
         self.0.hash(state);
-        (self.0.addressed, self.0.captured, self.0.constant).hash(state);
     }
 }
 
@@ -410,11 +425,42 @@ impl std::hash::Hash for Exact {
 pub struct ObjectInterner {
     held: std::cell::RefCell<(Vec<MemoryObject>, llrm_support::hash::HashMap<Exact, u32>)>,
     lookups: std::cell::Cell<u64>,
+    /// Where `LLRM_CHECK_INTERN` numbers objects by `scrambled`: the place of
+    /// each number in `held`.
+    places: std::cell::RefCell<llrm_support::hash::HashMap<u32, u32>>,
+}
+
+/// `LLRM_CHECK_INTERN=SEED` (any other value is seed 1): the numbers objects
+/// are given are a seeded permutation of the order they were first asked for
+/// in, so that a result that depends on the order analyses ran in (and
+/// interned in) differs from the run without it. The three objects every
+/// interner starts with keep their numbers.
+fn interning_seed() -> Option<u32> {
+    static SEED: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    if !llrm_support::env_flag!("LLRM_CHECK_INTERN") {
+        return None;
+    }
+    *SEED.get_or_init(|| {
+        let value = std::env::var("LLRM_CHECK_INTERN").ok();
+        Some(value.and_then(|value| value.parse().ok()).unwrap_or(1))
+    })
+}
+
+/// The number the `place`th object is given under `seed`: a bijection of the
+/// places onto 31 bits (an odd multiplier and an xor, both mod 2^31), above
+/// the numbers the constants hold.
+fn scrambled(
+    place: u32,
+    seed: u32,
+) -> u32 {
+    const MASK: u32 = 0x7fff_ffff;
+    let odd = (seed.wrapping_mul(0x9e37_79b1) | 1) & MASK;
+    0x8000_0000 | ((place.wrapping_mul(odd) ^ seed.wrapping_mul(0x85eb_ca6b)) & MASK)
 }
 
 impl Default for ObjectInterner {
     fn default() -> Self {
-        let interner = Self { held: Default::default(), lookups: Default::default() };
+        let interner = Self { held: Default::default(), lookups: Default::default(), places: Default::default() };
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Unknown)), ObjectRef::UNKNOWN);
         assert_eq!(interner.intern(MemoryObject::new(MemoryKind::Nonlocal)), ObjectRef::NONLOCAL);
         assert_eq!(
@@ -439,28 +485,25 @@ impl ObjectInterner {
         object: MemoryObject,
     ) -> ObjectRef {
         self.lookups.set(self.lookups.get() + 1);
+        let (addressed, captured, constant) = (object.addressed, object.captured, object.constant);
         let mut held = self.held.borrow_mut();
         let (objects, ids) = &mut *held;
         let key = Exact(object);
-        let id = match ids.get(&key) {
-            Some(&id) => id,
+        let place = match ids.get(&key) {
+            Some(&place) => place,
             None => {
-                let id = objects.len() as u32;
+                let place = objects.len() as u32;
                 objects.push(key.0.clone());
-                ids.insert(key, id);
-                id
+                ids.insert(key, place);
+                if let Some(seed) = interning_seed().filter(|_| place >= 3) {
+                    self.places.borrow_mut().insert(scrambled(place, seed), place);
+                }
+                place
             }
         };
-        let one = &objects[id as usize];
-        ObjectRef {
-            id,
-            kind: one.kind,
-            addressed: one.addressed,
-            captured: one.captured,
-            constant: one.constant,
-            extent: one.extent,
-            key: Key::of(&one.identity),
-        }
+        let one = &objects[place as usize];
+        let id = interning_seed().filter(|_| place >= 3).map_or(place, |seed| scrambled(place, seed));
+        ObjectRef { id, kind: one.kind, addressed, captured, constant, extent: one.extent, key: Key::of(&one.identity) }
     }
 
     /// How many times `intern` was asked: a cost counter, for tests that a hot
@@ -474,7 +517,12 @@ impl ObjectInterner {
         &self,
         one: ObjectRef,
     ) -> MemoryObject {
-        self.held.borrow().0[one.id as usize].clone()
+        MemoryObject {
+            addressed: one.addressed,
+            captured: one.captured,
+            constant: one.constant,
+            ..self.held.borrow().0[self.places.borrow().get(&one.id).map_or(one.id, |&place| place) as usize].clone()
+        }
     }
 }
 
@@ -1460,12 +1508,41 @@ pub struct Standing<'h> {
     /// The blocks, edges and loops of the body, as `held` has them or derived
     /// once: they stand while the body's blocks and edges do (`reshaped`).
     shape: Option<std::rc::Rc<crate::cfg::Shape>>,
+    /// Brings the facts the manager holds up to date with the body, asked once
+    /// the body changed and with whether its blocks and edges did: the
+    /// manager updates them from the changes logged, where deriving them again
+    /// walks the whole body.
+    renew: Option<Box<Renew<'h>>>,
+    renewed: Option<std::rc::Rc<Knowns>>,
+    reshaped: bool,
 }
 
+/// What `Standing::renewing` is given: the context, layout and function, and
+/// whether the blocks and edges changed.
+pub type Renew<'h> = dyn FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h;
+
 impl<'h> Standing<'h> {
+    /// `self`, asking `renew` for the facts of the body once it has changed,
+    /// where it would derive them.
+    pub fn renewing(
+        mut self,
+        renew: impl FnMut(&Context, &DataLayout, &Function, bool) -> std::rc::Rc<Knowns> + 'h,
+    ) -> Self {
+        self.renew = Some(Box::new(renew));
+        self
+    }
+
     /// The body is as `registers` were found of it.
     pub fn held(registers: &'h Knowns) -> Self {
-        Self { held: Some(registers), bounds: None, derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: None,
+            derived: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// `held`, and the bounds the manager found of the same body.
@@ -1473,12 +1550,20 @@ impl<'h> Standing<'h> {
         registers: &'h Knowns,
         bounds: &'h crate::ranges::Bounds,
     ) -> Self {
-        Self { held: Some(registers), bounds: Some(bounds), derived: None, shape: None }
+        Self {
+            held: Some(registers),
+            bounds: Some(bounds),
+            derived: None,
+            shape: None,
+            renew: None,
+            renewed: None,
+            reshaped: false,
+        }
     }
 
     /// No one has found them: derived when first asked.
     pub fn underived() -> Self {
-        Self { held: None, bounds: None, derived: None, shape: None }
+        Self { held: None, bounds: None, derived: None, shape: None, renew: None, renewed: None, reshaped: false }
     }
 
     /// `self`, the shape of the body as the manager found it.
@@ -1503,6 +1588,7 @@ impl<'h> Standing<'h> {
     pub fn reshaped(&mut self) {
         self.shape = None;
         self.changed();
+        self.reshaped = true;
     }
 
     /// The body changed: what was found of it no longer holds.
@@ -1510,6 +1596,7 @@ impl<'h> Standing<'h> {
         self.held = None;
         self.bounds = None;
         self.derived = None;
+        self.renewed = None;
     }
 
     /// `of`, and the manager's bounds of the body where it is still as they
@@ -1530,6 +1617,14 @@ impl<'h> Standing<'h> {
     ) -> &Knowns {
         if let Some(held) = self.held {
             return held;
+        }
+        if self.renewed.is_none()
+            && let Some(renew) = self.renew.as_mut()
+        {
+            self.renewed = Some(renew(unit.context, unit.layout, unit.function, self.reshaped));
+        }
+        if let Some(renewed) = &self.renewed {
+            return renewed;
         }
         self.derived.get_or_insert_with(|| crate::consts::known(&Unit { registers: None, ..*unit }))
     }
@@ -2412,6 +2507,34 @@ mod tests {
         assert!(Unit::of(&module, &layout, f).with_spaces(dos).spaces().is_fixed(4));
     }
 
+    /// An edit stopped exposing a frame slot and its object was a second
+    /// number: a result kept past the edit named it 15 (addressed), one
+    /// derived after it 17 (not), and a query between the two found two
+    /// objects that cannot alias (`i64_param_home.c` at -O2 -m32 lost the home
+    /// store of its i64 parameter). An object is one number whatever its
+    /// facts, each reference keeping the facts it was made with.
+    #[test]
+    fn an_object_is_one_number_whatever_facts_its_references_carry() {
+        let interner = super::ObjectInterner::default();
+        let slot = |exposed: bool| {
+            interner.intern(MemoryObject {
+                identity: Some(Identity::Value(1)),
+                extent: Some(8),
+                addressed: exposed,
+                captured: exposed,
+                ..MemoryObject::new(MemoryKind::Frame)
+            })
+        };
+        let (kept, fresh) = (slot(true), slot(false));
+        assert_eq!(kept, fresh);
+        assert_eq!(kept.id(), fresh.id());
+        assert!(kept.addressed() && kept.captured(), "each reference keeps the facts it was made with");
+        assert!(!fresh.addressed() && !fresh.captured());
+        assert!(super::objects_may_alias(&kept, &fresh), "the same object");
+        assert!(!interner.object(fresh).addressed, "and gives them back");
+        assert_eq!(Provenance::one(kept).union(&Provenance::one(fresh)).slices.len(), 1, "a set holds it once");
+    }
+
     /// A set of slices compared the objects' identities (strings, tuples) tree
     /// against tree at every step of every insert, and cloned them:
     /// `BTreeSet<Slice>` was 10% of host.c's compile, `MemoryObject::cmp` 8%,
@@ -2463,16 +2586,16 @@ mod tests {
         assert_eq!(some(&[1, 3]), one);
     }
 
-    /// Two spellings of an object that differ in a fact are two objects here,
-    /// and one spelling is one object however often it is interned.
+    /// One object is one object however often it is interned; another extent
+    /// is another object.
     #[test]
-    fn an_object_is_interned_by_every_field_once() {
+    fn an_object_is_interned_by_its_identity_once() {
         let global = MemoryObject { identity: Some(Identity::Global(9)), ..object(MemoryKind::Global) };
         let (one, again) = (super::ObjectRef::from(global.clone()), super::ObjectRef::from(global.clone()));
         assert_eq!(one, again);
         assert_eq!(one.id(), again.id());
-        let private = super::ObjectRef::from(MemoryObject { captured: false, ..global });
-        assert_ne!(one, private);
+        let longer = super::ObjectRef::from(MemoryObject { extent: Some(4), ..global });
+        assert_ne!(one, longer);
     }
 
     /// A process-wide interner numbered objects by everything interned before
