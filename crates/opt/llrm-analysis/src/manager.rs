@@ -1710,6 +1710,9 @@ pub fn float_solves() -> usize {
 impl Analysis for FloatFacts {
     type Result = floatfacts::Solved;
     const NAME: &'static str = "float-facts";
+    fn withheld(_function: &Function) -> Option<Self::Result> {
+        Some(floatfacts::Solved { integers: IndexMap::default(), facts: IndexMap::default() })
+    }
     fn run(
         context: &Context,
         layout: &DataLayout,

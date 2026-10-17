@@ -44,7 +44,7 @@ def compiled(llrm: str, level: str, source: str, extra: list[str], env: dict[str
         return {"edits": edits, "withheld": withheld}, obj.read_bytes(), instr
 
 
-FACTS = ("registers", "through-memory", "bounded", "followers", "annotated", "exposed-frames")
+FACTS = ("registers", "through-memory", "bounded", "followers", "annotated", "exposed-frames", "float-facts")
 
 
 def pass_work(llrm: str, level: str, source: str, extra: list[str]) -> dict[str, float]:
