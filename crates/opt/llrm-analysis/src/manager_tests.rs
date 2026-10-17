@@ -855,6 +855,30 @@ fn test_pointers_and_call_effects_of_a_body_solve_its_pointer_values_once() {
     assert_eq!(crate::alias::value_solves() - before, 1, "the value solve was made again");
 }
 
+/// A pass reports what it did not preserve, and an analysis asked after its
+/// last edit (or with no edit at all) was derived from the body as it stands:
+/// 383 of 2,248 results dropped at an invalidation over d_faces -O2 were that,
+/// 151 after `dead` alone. Dropped, each was derived again when next asked.
+#[test]
+fn test_a_result_derived_from_the_body_as_it_stands_survives_an_invalidation() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  call void @g(ptr %a)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    llrm_mir::passes::trace_recomputes(true);
+    analyses.get::<CallEffects>(context, &layout, f);
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    analyses.get::<CallEffects>(context, &layout, f);
+    let counts = llrm_mir::passes::recomputes();
+    llrm_mir::passes::trace_recomputes(false);
+    let of_effects: Vec<_> =
+        counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
+    assert_eq!(of_effects, vec![("first", 1)], "{counts:?}");
+}
+
 /// `Summaries` solved where every pointer points for the direct summary, for
 /// the calls' facts and for each summarized call: 4 to 5 value solves a body
 /// state, 11.0% of QCport's -O1 compile with the rest of the family. One a

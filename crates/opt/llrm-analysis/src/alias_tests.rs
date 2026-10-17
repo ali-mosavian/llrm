@@ -1568,3 +1568,31 @@ fn a_type_attached_after_the_access_was_first_asked_is_seen() {
     assert!(reference.typed.is_some(), "the type attached later was not seen");
     assert_eq!(reference.lineage.len(), 3);
 }
+
+/// The live sets of each instruction of a block were B-trees, a node for every
+/// eleven values live: a hundred values live at the top of a block cost twenty
+/// allocations, twice, for every instruction `live_points` listed (1.6% of the
+/// compile of d_faces in the tree's operations alone). They are bit sets: one
+/// allocation each.
+#[test]
+fn the_live_points_of_a_block_allocate_a_set_each_not_a_node_for_eleven_values() {
+    let values = 100;
+    let mut body = String::from("define i16 @f(i16 %a) {\nb0:\n");
+    for k in 0..values {
+        body += &format!("  %v{k} = add i16 %a, {}\n", k + 1);
+    }
+    body += "  %w0 = add i16 %v0, 1\n";
+    for k in 1..values {
+        body += &format!("  %w{k} = xor i16 %w{}, %v{k}\n", k - 1);
+    }
+    body += &format!("  ret i16 %w{}\n}}\n", values - 1);
+    let module = crate::testing::parsed(&body);
+    let function = crate::testing::function(&module, "f");
+    let found = crate::liveness::live(function);
+    let block = function.layout()[0];
+    let before = counted::made();
+    let points = crate::liveness::live_points(function, &found, block);
+    let made = counted::made() - before;
+    assert!(points.len() > 2 * values - 2);
+    assert!(made <= 4 * points.len(), "{} points of up to {values} live values made {made} allocations", points.len());
+}
