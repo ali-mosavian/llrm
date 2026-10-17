@@ -117,8 +117,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::{Arc, LazyLock};
 
-use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, RegSet};
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -1665,8 +1665,8 @@ pub fn _falls_to(
 fn _roots_of_values(
     body: &lir::LirBody,
     pointer: RegId,
-) -> BTreeSet<RegId> {
-    let mut found = BTreeSet::new();
+) -> RegSet {
+    let mut found = RegSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         for r#where in what.dests.iter().chain(&what.sources) {
@@ -1689,8 +1689,8 @@ fn _roots_of_values(
     found
 }
 
-pub fn _roots(body: &lir::LirBody) -> BTreeSet<RegId> {
-    let mut found = BTreeSet::new();
+pub fn _roots(body: &lir::LirBody) -> RegSet {
+    let mut found = RegSet::new();
     for one in body.insns() {
         let Some(what) = &one.what else { continue };
         for r#where in what.dests.iter().chain(&what.sources) {
