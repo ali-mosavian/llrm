@@ -21,6 +21,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import clangpin  # noqa: E402
+
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
 PASS_SYMBOL = re.compile(r"llvm::(\w+Pass)::run\(")
 LEGACY_SYMBOL = re.compile(r"^llvm::(\w+)::(?:runOnFunction|runOnLoop|runOnMachineFunction)\(")
@@ -91,9 +95,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("source", nargs="?")
     parser.add_argument("--levels", default="O1,O2,Os")
-    parser.add_argument("--clang", default="clang", help="the clang to measure (the plan's reference is ~/scratch/llvm-build/bin/clang)")
+    parser.add_argument("--clang", default=clangpin.default(), help="the clang to measure (default: the plan's reference, ~/scratch/llvm-build/bin/clang, when built)")
+    parser.add_argument("--allow-other-clang", action="store_true", help="measure a clang that is not the pinned one")
     parser.add_argument("--budget", type=float, default=220.0, help="LLVM's instructions per IR instruction per run (plan 4.1)")
     args = parser.parse_args()
+    clangpin.require_pinned(args.clang, args.allow_other_clang)
+    print(clangpin.header(args.clang))
     if args.source:
         source, extra = args.source, []
     else:
