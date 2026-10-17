@@ -442,3 +442,33 @@ Changes that were correct and measured, and did not pay on the main they were me
 - **A cache over the memory walker** (measured, not built). On d_faces -O2 the walker answers 4,787 frontier queries over 54 function versions at 133 M (2.5% of the compile, 27,750 instructions each): 4,471 `nearest_writes` (gvn's `memory_providers` 1,688, `ThroughMemory`/`FloatFacts` 2,783) and 316 `unchanged`/on-edge. Only 1,675 keys (site, cell, kind) are distinct: 65% of the queries repeat a key an earlier version asked, 76 M (1.4% of the compile), and 907 of the 949 repeated keys (95.6%) gave the same answer. `MemorySSA::clobbered` computes 46,976 (cell, def) pairs, none repeated within a version, 60% repeated across versions, all 9,709 repeated keys equal. LLVM pays nothing per query because `OptimizeUses` gives every use its clobbering def once at build (one top-down renaming pass) and keeps it in the access across edits; ours walks from scratch in every version, with per-instance caches (`clobbers`, `jumps`, `stamps`, `FrameIndex`) that die with it, and rebuilds the `Structure` (71 M, 1.3%) per version. All three clients of `nearest_writes` need the alias-aware set of nearest writes, not the defining access, so the defining access alone does not answer them. A cache keyed by (site, cell, kind) and kept across versions covers at most the 1.4% of repeats, less the 4.4% that change and every version in which a write, a call's effects or the CFG changed; a persistent (cell, def site) table covers about 0.9%. Both under the 2% bar and the key must be exact (cells, def sites, constants in `known`, `CallEffects`). The rest of the 3.7% ceiling is the structure build (1.3%, needs an `Accesses` update that bails too often) and first-time queries (1.0%).
 - **-O2 at two rounds** (measured on the placements of #1960, not built). Plain two rounds: d_faces -O2 3,075 M against 3,360 M at three, +1.0% executed clocks (rows: none lost on the 71 programs). Round three's chain is `fold` (a phi input folds to `true`), `decide` (the branch on that phi), `lcssa`, `gvn`, `dead`. A tail of `fold` and `decide` after `dead`, or `fold`, `decide`, `lcssa`, `dead`, changes nothing against plain two rounds; the tail with `gvn` reproduces the three-round listing at 3,372 M, the cost of the round it replaces. The third round is 211 M (6.3%): changed steps 117 M (`fold` 46.5, `decide` 38.2, `gvn` 24.9, `lcssa` 4.9, mostly the analyses they get after real edits), idle steps 94 M. Its `gvn` is 25 M, 43% of the body's instructions touched since the last run (round two's: 94% of 150 M), so a dirty-region `gvn` saves about 14 M. The lever is the analyses behind `fold` and `decide` after a small edit.
 - **`jumpthread` in the round** (rows lost). Moving it from stage E into the round list and deleting its cleaning sandwich (`fold`, `algebraic`, `decide`, `dead` after a thread): d_faces -O2 3,360 -> 3,265 M, but executed clocks +0.5% at -O2 and -O3, +0.4% and code +7.7% at -Os, the 71-program geomean -O2 0.9044 -> 0.9064 and -O3 0.9022 -> 0.9070 with `queens` newly below min(gcc, clang): the copies need the position after `lsr` and `rotate`. Invalidating by what each cleaning pass preserved instead of everything: -11 M (-0.3%), listing identical, not worth a PR alone.
+
+## 9. Container profile
+
+Where d_faces -O2 spends its container cost (callgrind, main 3dc0221a6, dist build, -m32, 3,353.6 M instructions), by class of the container code itself and by the site that calls it (`tools/leaf_sites.py`). Containers are 35% of the compile over 400 sites: the top 10 sites are 26% of that and the top 100 are 74%.
+
+| class | M | % |
+|---|---|---|
+| B-tree maps and sets | 351 | 10.5 |
+| allocator | 316 | 9.4 |
+| memcpy, memmove, memset, memcmp | 237 | 7.1 |
+| hash tables | 194 | 5.8 |
+| Vec growth | 131 | 3.9 |
+| drop glue, Rc/Arc clone | 48 | 1.4 |
+
+| site (before) | M | mostly |
+|---|---|---|
+| `MemRef::of` | 73.7 | copies and allocation of its slices |
+| `liveness::solved` | 55.3 | value sets as B-trees (bit sets in #1926) |
+| `Function::successors` | 29.0 | a `Vec` per call |
+| `memoryssa::structure_of` | 27.4 | mixed |
+| `allocate::_allocated` | 24.5 | hash, B-tree |
+| `String::write_str` | 22.8 | a `format!` in a hot path |
+| `alias::escapes` | 20.5 | the CFG rebuilt per call |
+| `constant_cycles::propagated` | 20.3 | hash, allocation |
+| `liveness::live_steps` | 19.7 | B-tree (bit sets in #1926) |
+| `graph::predecessors` | 19.5 | a map of sets per call (one sorted array now) |
+| `splitkit::analysed_in` | 17.4 | B-trees of block positions (bit sets now) |
+| `dominators::postorder` | 16.0 | hash (#1927) |
+
+The mechanism in each PR: ids that are dense are bit sets or arrays indexed by id, an answer that is a list is a slice, and a list that is built is built in a few allocations. Each lands with a test of the allocations it makes and with identical objects.
