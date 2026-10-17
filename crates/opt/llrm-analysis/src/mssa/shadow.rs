@@ -10,7 +10,6 @@ use super::build::Effect;
 use super::verify::Level;
 use super::{Kind, LIVE_ON_ENTRY, Mssa};
 use crate::cfg;
-use crate::consts::Calls;
 use crate::memory::Unit;
 use crate::memoryssa::{self, Accesses, Kind as Old};
 
@@ -23,7 +22,7 @@ pub fn effect_of<'a>(accesses: &'a Accesses) -> impl Fn(InstId) -> Effect + 'a {
 }
 
 pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
-    let accesses = Accesses::plain(unit, &Calls::default());
+    let accesses = Accesses::plain(unit, &Default::default());
     let shape = unit.shape();
     let mssa = Mssa::build(unit.function, &shape.dominance, &effect_of(&accesses));
     (mssa, accesses)

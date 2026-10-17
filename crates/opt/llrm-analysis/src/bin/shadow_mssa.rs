@@ -3,7 +3,6 @@
 //! translated graph and today's, verifies the first and compares the two
 //! (`SHADOW=new` builds only the translated one, `SHADOW=old` only today's).
 //! The instructions of a mode are the run's minus `--parse-only`'s.
-use llrm_analysis::consts::Calls;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::memoryssa::{self, Accesses};
 use llrm_analysis::mssa::shadow;
@@ -32,12 +31,12 @@ fn main() {
                 memory_ops += built.len();
             }
             "facts" => {
-                let accesses = Accesses::plain(&unit, &Calls::default());
+                let accesses = Accesses::plain(&unit, &Default::default());
                 let _ = unit.shape();
                 memory_ops += accesses.references.len();
             }
             "old" => {
-                let accesses = Accesses::plain(&unit, &Calls::default());
+                let accesses = Accesses::plain(&unit, &Default::default());
                 let old = memoryssa::built(&unit, &accesses);
                 memory_ops += old.sites.len();
             }
