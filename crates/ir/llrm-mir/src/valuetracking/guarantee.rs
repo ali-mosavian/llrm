@@ -42,3 +42,21 @@ pub fn is_guaranteed_to_transfer_execution_to_successor(
     let _ = (q, inst);
     false
 }
+
+/// `isGuaranteedToTransferExecutionToSuccessor(Range, ScanLimit)`.
+pub fn is_guaranteed_to_transfer_execution_to_successor_range(
+    q: &Query,
+    range: &[InstId],
+    mut scan_limit: u32,
+) -> bool {
+    for &inst in range {
+        scan_limit -= 1;
+        if scan_limit == 0 {
+            return false;
+        }
+        if !is_guaranteed_to_transfer_execution_to_successor(q, inst) {
+            return false;
+        }
+    }
+    true
+}
