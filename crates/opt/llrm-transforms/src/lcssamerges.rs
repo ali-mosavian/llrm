@@ -283,7 +283,7 @@ pub fn _merged(
                     _ => (incoming, parent),
                 })
                 .collect::<Vec<_>>();
-            if from_arms(&incoming) != function.instruction(phi).operands {
+            if function.instruction(phi).operands != from_arms(&incoming) {
                 function.set_operands(phi, from_arms(&incoming));
             }
         }
@@ -291,7 +291,7 @@ pub fn _merged(
             for inst in operations(function, block) {
                 let operands = ssa::substituted(function.instruction(inst), &swap(cfg::id(block)))
                     .map_err(|error| error.to_string())?;
-                if operands != function.instruction(inst).operands {
+                if function.instruction(inst).operands != operands {
                     function.set_operands(inst, operands);
                 }
             }

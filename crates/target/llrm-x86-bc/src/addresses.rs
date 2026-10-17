@@ -28,7 +28,7 @@ pub(crate) fn made(
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Instruction(inst) => {
                 let one = function.instruction(inst);
-                Some((one.opcode.clone(), one.operands.clone()))
+                Some((one.opcode.clone(), one.operands.to_vec()))
             }
             ValueDef::Argument(_) => None,
         },

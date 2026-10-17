@@ -589,7 +589,7 @@ b1:
         assert_eq!(function.instruction(add).result, Some(defined));
         let arms = substituted(phi, &swaps).unwrap();
         assert_eq!(arms, vec![Operand::Value(replacement), phi.operands[1]]);
-        assert_eq!(substituted(instruction, &BTreeMap::new()).unwrap(), instruction.operands);
+        assert_eq!(substituted(instruction, &BTreeMap::new()).unwrap(), instruction.operands.to_vec());
     }
 
     #[test]

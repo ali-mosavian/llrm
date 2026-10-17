@@ -129,7 +129,8 @@ pub fn splice_before(
     };
     let copies: Vec<InstId> = made.iter().map(|&(copy, _)| copy).collect();
     for (copy, inst) in made {
-        let operands = callee.instruction(inst).operands.iter().map(|&operand| mapped(operand)).collect();
+        let operands: crate::module::Operands =
+            callee.instruction(inst).operands.iter().map(|&operand| mapped(operand)).collect();
         function.set_operands(copy, operands);
     }
     let enter =
@@ -142,7 +143,8 @@ pub fn splice_before(
             [(value, _)] => value,
             _ => {
                 let ty = function.value(result).ty;
-                let operands = returned.iter().flat_map(|&(value, from)| [value, Operand::Block(from)]).collect();
+                let operands: crate::module::Operands =
+                    returned.iter().flat_map(|&(value, from)| [value, Operand::Block(from)]).collect();
                 let phi = function.create_instruction(Opcode::Phi, ty, operands, Flags::default(), None);
                 let head = function.block(rest).instructions()[0];
                 function.insert(phi, Position::Before(head)).expect("a placed block");

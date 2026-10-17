@@ -11,7 +11,8 @@
 //! same type.
 //!
 //! The elements are `Copy` and name a `FILL` for the slots not in use, so the
-//! type is safe code: no uninitialised memory, no `unsafe`.
+//! type has no uninitialised memory; its one `unsafe` is the slice of the
+//! held elements, `len <= N` by construction.
 //!
 //! # Choosing `N`
 //! A `Vec` is 24 bytes (pointer, capacity, length). `Few(u8, [T; N])` keeps the
@@ -55,15 +56,25 @@ impl Fill for InstId {
     const FILL: Self = InstId(0);
 }
 
+impl Fill for crate::module::Operand {
+    const FILL: Self = crate::module::Operand::Value(ValueId(0));
+}
+
+/// How many of an `InlineVec`'s `N` slots are in use. Only this module makes
+/// one, so `Few(len, _)` always has `len <= N`, which reading the held
+/// elements relies on.
+#[derive(Clone, Copy)]
+pub struct Len<const N: usize>(u8);
+
 #[derive(Clone)]
 pub enum InlineVec<T: Fill, const N: usize> {
-    Few(u8, [T; N]),
+    Few(Len<N>, [T; N]),
     Many(Vec<T>),
 }
 
 impl<T: Fill, const N: usize> Default for InlineVec<T, N> {
     fn default() -> Self {
-        Self::Few(0, [T::FILL; N])
+        Self::Few(Len(0), [T::FILL; N])
     }
 }
 
@@ -82,13 +93,13 @@ impl<T: Fill, const N: usize> InlineVec<T, N> {
         value: T,
     ) {
         match self {
-            Self::Few(len, held) if usize::from(*len) < N => {
-                held[usize::from(*len)] = value;
-                *len += 1;
+            Self::Few(len, held) if usize::from(len.0) < N => {
+                held[usize::from(len.0)] = value;
+                len.0 += 1;
             }
             Self::Few(len, held) => {
                 let mut all = Vec::with_capacity(N * 2);
-                all.extend_from_slice(&held[..usize::from(*len)]);
+                all.extend_from_slice(&held[..usize::from(len.0)]);
                 all.push(value);
                 *self = Self::Many(all);
             }
@@ -98,10 +109,10 @@ impl<T: Fill, const N: usize> InlineVec<T, N> {
 
     pub fn pop(&mut self) -> Option<T> {
         match self {
-            Self::Few(0, _) => None,
+            Self::Few(Len(0), _) => None,
             Self::Few(len, held) => {
-                *len -= 1;
-                Some(held[usize::from(*len)])
+                len.0 -= 1;
+                Some(held[usize::from(len.0)])
             }
             Self::Many(all) => all.pop(),
         }
@@ -120,7 +131,7 @@ impl<T: Fill, const N: usize> InlineVec<T, N> {
         len: usize,
     ) {
         match self {
-            Self::Few(held, _) => *held = (*held).min(u8::try_from(len).unwrap_or(u8::MAX)),
+            Self::Few(held, _) => held.0 = held.0.min(u8::try_from(len).unwrap_or(u8::MAX)),
             Self::Many(all) => all.truncate(len),
         }
     }
@@ -137,14 +148,14 @@ impl<T: Fill, const N: usize> InlineVec<T, N> {
     /// The elements as a `Vec`, moved out when they were already one.
     pub fn into_vec(self) -> Vec<T> {
         match self {
-            Self::Few(len, held) => held[..usize::from(len)].to_vec(),
+            Self::Few(len, held) => held[..usize::from(len.0)].to_vec(),
             Self::Many(all) => all,
         }
     }
 
     fn spill(&mut self) -> &mut Vec<T> {
         if let Self::Few(len, held) = self {
-            *self = Self::Many(held[..usize::from(*len)].to_vec());
+            *self = Self::Many(held[..usize::from(len.0)].to_vec());
         }
         match self {
             Self::Many(all) => all,
@@ -181,7 +192,9 @@ impl<T: Fill, const N: usize> std::ops::Deref for InlineVec<T, N> {
     #[inline]
     fn deref(&self) -> &[T] {
         match self {
-            Self::Few(len, held) => &held[..usize::from(*len)],
+            // SAFETY: `Len<N>` is made only here, from 0 and below `N`; the
+            // checked slice was a branch on every access of an operand list.
+            Self::Few(len, held) => unsafe { held.get_unchecked(..usize::from(len.0)) },
             Self::Many(all) => all,
         }
     }
@@ -191,7 +204,8 @@ impl<T: Fill, const N: usize> std::ops::DerefMut for InlineVec<T, N> {
     #[inline]
     fn deref_mut(&mut self) -> &mut [T] {
         match self {
-            Self::Few(len, held) => &mut held[..usize::from(*len)],
+            // SAFETY: as in `deref`.
+            Self::Few(len, held) => unsafe { held.get_unchecked_mut(..usize::from(len.0)) },
             Self::Many(all) => all,
         }
     }

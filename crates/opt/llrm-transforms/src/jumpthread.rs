@@ -851,7 +851,7 @@ fn copy(
                     continue;
                 }
                 let copy = function.clone_instruction(inst);
-                let operands = instruction.operands.iter().map(|&one| mapped(one, &map)).collect();
+                let operands: Vec<Operand> = instruction.operands.iter().map(|&one| mapped(one, &map)).collect();
                 function.set_operands(copy, operands);
                 function.insert(copy, Position::End(clone)).expect("a new block");
                 if let (Some(result), Some(made)) = (instruction.result, function.instruction(copy).result) {
@@ -875,7 +875,7 @@ fn copy(
                 function.insert(jump, Position::End(clone)).expect("a new block");
             } else {
                 let next = originals[index + 1];
-                let operands = terminator
+                let operands: llrm_mir::module::Operands = terminator
                     .operands
                     .iter()
                     .map(|&one| match one {
@@ -911,7 +911,7 @@ fn copy(
         // The way in is the copy's now: the first original's phis lose it.
         let first = originals[0];
         let entry = function.terminator(path.from).expect("a terminated block");
-        let redirected = function
+        let redirected: llrm_mir::module::Operands = function
             .instruction(entry)
             .operands
             .iter()
@@ -1225,7 +1225,7 @@ fn _split(
                     continue;
                 }
                 let copy = function.clone_instruction(inst);
-                let operands = original
+                let operands: Vec<Operand> = original
                     .operands
                     .iter()
                     .map(|&one| match one {
@@ -1303,7 +1303,7 @@ fn _split(
     for arm in 0..2 {
         for block in arms.regions[arm].iter() {
             for inst in function.block(block).instructions().to_vec() {
-                let operands = function
+                let operands: llrm_mir::module::Operands = function
                     .instruction(inst)
                     .operands
                     .iter()

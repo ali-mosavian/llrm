@@ -23,7 +23,7 @@ fn defined(
     let Operand::Value(value) = value else { return None };
     let ValueDef::Instruction(inst) = e.b.function.value(value).def else { return None };
     let one = e.b.function.instruction(inst);
-    Some((one.opcode.clone(), one.operands.clone()))
+    Some((one.opcode.clone(), one.operands.to_vec()))
 }
 
 /// The `i32` whose halves `low` and `high` are, where they are known to be

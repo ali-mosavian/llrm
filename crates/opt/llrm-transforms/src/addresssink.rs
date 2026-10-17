@@ -481,7 +481,7 @@ fn built(
     match plan {
         Merged::Shared(operand) => *operand,
         Merged::Made(opcode, ty, flags, operands) => {
-            let operands = operands.iter().map(|one| built(function, one, at)).collect();
+            let operands: Vec<Operand> = operands.iter().map(|one| built(function, one, at)).collect();
             let made = function.create_instruction(opcode.clone(), *ty, operands, *flags, None);
             function.insert(made, Position::Before(at)).expect("a placed instruction");
             Operand::Value(function.instruction(made).result.expect("a value"))

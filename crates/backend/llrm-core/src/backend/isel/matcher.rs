@@ -126,7 +126,7 @@ pub(crate) fn m16() -> &'static Compiled {
 pub struct Match<'a> {
     pub inst: InstId,
     pub at: i64,
-    pub ops: Vec<Operand>,
+    pub ops: llrm_mir::module::Operands,
     pub volatile: bool,
     pub block_at: &'a IndexMap<BlockId, i64>,
     pub convention: &'a Convention,

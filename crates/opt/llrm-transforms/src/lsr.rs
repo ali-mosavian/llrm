@@ -2861,7 +2861,7 @@ fn _applied(
                 };
                 function.insert(next, at).expect("a latch");
                 let next = Operand::Value(function.instruction(next).result.expect("a value"));
-                let operands = function
+                let operands: Vec<Operand> = function
                     .instruction(phi)
                     .operands
                     .chunks(2)
@@ -2933,7 +2933,10 @@ fn _applied(
                         function.insert(phi, Position::Before(first)).expect("an exit");
                         function.set_operands(
                             phi,
-                            preds.iter().flat_map(|&pred| [registers[*index], Operand::Block(pred)]).collect(),
+                            preds
+                                .iter()
+                                .flat_map(|&pred| [registers[*index], Operand::Block(pred)])
+                                .collect::<llrm_mir::module::Operands>(),
                         );
                         let one = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
                         leaving.insert((block, *index), one);

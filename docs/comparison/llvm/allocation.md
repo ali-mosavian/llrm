@@ -186,6 +186,8 @@ Each allocation cost about 71 instructions in mimalloc's `malloc` and `free`, an
 
 Second family: the per-block predecessor and successor lists of `forest` (`LoopInfo::new`) and the feeders of each value in `exposed_allocas` are `InlineVec<_, 3>` (24 bytes, a `Vec`'s own size) or `<_, 2>` in a temporary: d_faces -O2 allocations 2,660,870 to 2,532,780 (-4.8%, same probe on both builds).
 
+Third family: `Instruction::operands` is `Operands = InlineVec<Operand, 2>` (a load, store, binary operation or unconditional branch holds its operands; `Match::ops` in isel too) and `Instruction::metadata` is behind a pointer (`InstructionMetadata`, 8 bytes against a `Vec`'s 24; LLVM keeps it out of line too). Two operands held inline make the vector 32 bytes, not 24 (the `Operand` is 8 bytes), so the instruction would grow from 96 to 104; boxing the metadata makes it 88. d_faces -O2: allocations 2,532,780 to 2,498,903 (-1.3%), peak RSS 79.9 to 71.4 MB (-10.7%), cycles -2.8% (min of 15), instructions +0.47% (the tag test on every operand access; the cost the inline form pays).
+
 ### The same changes in Rust
 
 `Cargo.lock` has `indexmap` and `rustc-hash` and none of `smallvec`, `arrayvec`, `bumpalo` or `typed-arena`; llrm's own dense containers are `IdSet`, `IdMap` and `Bits` ([`dense.rs`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/ir/llrm-mir/src/dense.rs#L37)).

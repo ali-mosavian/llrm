@@ -45,7 +45,7 @@ fn test_pop_truncate_clear_insert_remove_and_retain_agree_with_a_vec() {
 #[test]
 fn test_a_list_of_up_to_n_is_not_on_the_heap_and_one_past_is() {
     let few: InlineVec<i64, 2> = [1, 2].into();
-    assert!(matches!(few, InlineVec::Few(2, _)));
+    assert!(matches!(few, InlineVec::Few(_, _)));
     let many: InlineVec<i64, 2> = [1, 2, 3].into();
     assert!(matches!(many, InlineVec::Many(_)));
     let mut grown = few.clone();
@@ -66,4 +66,11 @@ fn test_the_size_of_the_common_instances() {
         std::mem::size_of::<InlineVec<u32, 3>>(),
         std::mem::size_of::<InlineVec<u32, 4>>(),
     );
+}
+
+/// Two operands held inline made `Operands` 32 bytes, so every `Instruction`
+/// 104 against 96; the metadata list behind a pointer pays for it.
+#[test]
+fn an_instruction_is_no_larger_than_96_bytes_with_two_operands_inline() {
+    assert!(size_of::<crate::module::Instruction>() <= 96, "{} bytes", size_of::<crate::module::Instruction>());
 }

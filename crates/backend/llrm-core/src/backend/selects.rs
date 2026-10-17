@@ -149,7 +149,7 @@ fn _renamed_edges(
         .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
         .collect::<Vec<_>>();
     for phi in phis {
-        let operands = function
+        let operands: llrm_mir::module::Operands = function
             .instruction(phi)
             .operands
             .iter()

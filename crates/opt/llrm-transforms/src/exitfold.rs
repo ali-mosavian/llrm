@@ -267,7 +267,7 @@ pub fn folded_with(
             );
             function.insert(leaving, Position::End(current)).expect("a block");
             for phi in crate::edges::phis(function, one.header) {
-                let operands = function
+                let operands: Vec<Operand> = function
                     .instruction(phi)
                     .operands
                     .iter()
@@ -326,7 +326,7 @@ pub fn folded_with(
         );
         function.insert(leaving, Position::End(preheader)).expect("a block");
         for phi in crate::edges::phis(function, header) {
-            let operands = function
+            let operands: llrm_mir::module::Operands = function
                 .instruction(phi)
                 .operands
                 .iter()

@@ -108,7 +108,7 @@ impl Seeds<'_> {
             return AffineOperand::constant(arith(&left.n, &right.n), self.width);
         }
         let ty = self.context.types.int(self.width);
-        let operands = args.iter().map(|one| self.operand(one)).collect();
+        let operands: Vec<Operand> = args.iter().map(|one| self.operand(one)).collect();
         let inst = self.function.create_instruction(Opcode::Binary(kind), ty, operands, Flags::default(), None);
         self.function.insert(inst, Position::Before(self.at)).expect("`at` is placed");
         AffineOperand::Value(self.function.instruction(inst).result.expect("an integer result"), self.width)

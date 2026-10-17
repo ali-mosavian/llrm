@@ -308,8 +308,8 @@ pub fn underlying(
                 let ValueDef::Instruction(inst) = function.value(value).def else { break };
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::GetElementPtr { source } => (Some(source), instruction.operands.clone()),
-                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.clone()),
+                    Opcode::GetElementPtr { source } => (Some(source), instruction.operands.to_vec()),
+                    Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.to_vec()),
                     _ => break,
                 }
             }
@@ -366,8 +366,8 @@ pub fn alignment(
                 ValueDef::Instruction(inst) => {
                     let instruction = function.instruction(inst);
                     match instruction.opcode {
-                        Opcode::GetElementPtr { source } => (Some(source), instruction.operands.clone()),
-                        Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.clone()),
+                        Opcode::GetElementPtr { source } => (Some(source), instruction.operands.to_vec()),
+                        Opcode::Cast(CastOp::AddrSpaceCast) => (None, instruction.operands.to_vec()),
                         _ => return 1,
                     }
                 }

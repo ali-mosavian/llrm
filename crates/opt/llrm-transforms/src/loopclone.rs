@@ -403,7 +403,7 @@ fn wired(
             function.set_operands(cloned, from_arms(&incoming));
             continue;
         }
-        let operands = function
+        let operands: Vec<Operand> = function
             .instruction(original)
             .operands
             .iter()
