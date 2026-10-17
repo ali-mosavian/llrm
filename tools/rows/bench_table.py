@@ -4,7 +4,12 @@
 """
 import json
 import math
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import rowcheck  # noqa: E402
 
 
 def cells(path):
@@ -28,9 +33,11 @@ def compare(base, main):
     return groups, changed
 
 
-def render(base, main):
+def render(base, main, allow_failed=False):
+    line, bad = rowcheck.census({"base": base, "main": main}, counters=("instructions",))
+    lines = rowcheck.require(line, bad, allow_failed) + [""]
     groups, changed = compare(base, main)
-    lines = ["| language | level | cells | counters changed |", "|---|---|--:|--:|"]
+    lines += ["| language | level | cells | counters changed |", "|---|---|--:|--:|"]
     lines += [f"| {language} | {level} | {n} | {c} |" for (language, level), (n, c) in sorted(groups.items())]
     only = sorted(set(base) ^ set(main))
     lines.append(f"\ncells in one side only: {len(only)}")
@@ -39,4 +46,4 @@ def render(base, main):
 
 
 if __name__ == "__main__":
-    print(render(cells(sys.argv[1]), cells(sys.argv[2])))
+    print(render(cells(sys.argv[1]), cells(sys.argv[2]), "--allow-failed" in sys.argv))
