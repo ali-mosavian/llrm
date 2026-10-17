@@ -32,13 +32,35 @@ fn main() {
                 println!("{tag} {} {}", global.name.as_deref().unwrap_or("?"), name);
             }
         }
+        for one in &all.promoted {
+            let Some(id) = one.function else { continue };
+            let global = &module.globals[id.0 as usize];
+            let function = global.function().expect("a function");
+            let names: Vec<String> = one
+                .pointers
+                .iter()
+                .map(|pointer| match pointer {
+                    llrm_mir::module::Operand::Value(value) => function.value(*value).name.clone().unwrap_or_default(),
+                    llrm_mir::module::Operand::Constant(constant) => match module.context.get(*constant).kind {
+                        llrm_mir::context::ConstantKind::Global(g) => {
+                            module.globals[g.0 as usize].name.clone().unwrap_or_default()
+                        }
+                        _ => "constant".to_owned(),
+                    },
+                    llrm_mir::module::Operand::Block(_) => "block".to_owned(),
+                })
+                .collect();
+            println!("PROMOTE {} {} {}", global.name.as_deref().unwrap_or("?"), names.join(","), one.store_safe);
+        }
         println!(
-            "COUNTS {} {} {} {} {}",
+            "COUNTS {} {} {} {} {} {} {}",
             all.hoisted.len(),
             all.sunk.len(),
             all.erased.len(),
             all.moved_loads,
-            all.moved_calls
+            all.moved_calls,
+            all.promotion_candidates,
+            all.promoted.len()
         );
     });
 }

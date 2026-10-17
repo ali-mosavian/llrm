@@ -18,6 +18,51 @@ use llrm_mir::opcode::Opcode;
 use crate::memory::{MemRef, Unit};
 use crate::memoryssa::{self, Accesses};
 
+/// `AliasResult`, without the offset it carries.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AliasResult {
+    No,
+    May,
+    Partial,
+    Must,
+}
+
+/// `ModRefInfo`: whether an instruction may read, and may write.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ModRef {
+    pub reads: bool,
+    pub writes: bool,
+}
+
+impl ModRef {
+    pub const NONE: ModRef = ModRef { reads: false, writes: false };
+    pub const REF: ModRef = ModRef { reads: true, writes: false };
+    pub const MOD: ModRef = ModRef { reads: false, writes: true };
+
+    pub fn union(
+        self,
+        other: ModRef,
+    ) -> ModRef {
+        ModRef { reads: self.reads || other.reads, writes: self.writes || other.writes }
+    }
+
+    pub fn is_mod(self) -> bool {
+        self.writes
+    }
+
+    pub fn is_ref(self) -> bool {
+        self.reads
+    }
+
+    pub fn is_mod_or_ref(self) -> bool {
+        self.reads || self.writes
+    }
+
+    pub fn is_mod_and_ref(self) -> bool {
+        self.reads && self.writes
+    }
+}
+
 /// `MemoryLocation`.
 #[derive(Debug)]
 pub struct Location {
@@ -47,6 +92,8 @@ pub struct AliasQuery<'a> {
     /// Entries of the cache looked at to answer the questions: one a question,
     /// for the test that holds the cost linear.
     cache_steps: std::cell::Cell<u64>,
+    /// The allocas whose address is exposed, found when first asked.
+    exposed: std::cell::OnceCell<std::collections::BTreeSet<llrm_mir::module::ValueId>>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -65,6 +112,7 @@ impl<'a> AliasQuery<'a> {
             cache: Default::default(),
             asked: Default::default(),
             cache_steps: Default::default(),
+            exposed: Default::default(),
         }
     }
 
@@ -143,8 +191,13 @@ impl<'a> AliasQuery<'a> {
         }
         self.asked.set((asked + 1, worked + 1));
         let writes = self.accesses.writes(def);
-        let found =
-            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written));
+        // A write to anything does not reach an alloca no one holds the address
+        // of.
+        let found = if writes.is_none() && self.in_unexposed_alloca(&loc.reference) {
+            false
+        } else {
+            memoryssa::changes(&loc.effective, false, writes, |written| self.may_overlap(&loc.effective, written))
+        };
         self.cache.borrow_mut().insert(key, found);
         found
     }
@@ -167,6 +220,21 @@ impl<'a> AliasQuery<'a> {
         touched(self.accesses.reads(call)) || touched(self.accesses.writes(call))
     }
 
+    /// The object `reference` is rooted at: the root of an object's own
+    /// address, else what its pointer is derived from through geps and casts
+    /// (`getUnderlyingObject`).
+    fn base_of(
+        &self,
+        reference: &MemRef,
+    ) -> Option<llrm_mir::module::Operand> {
+        if reference.object {
+            reference.root
+        } else {
+            let unit = self.unit;
+            Some(llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, reference.pointer?).0)
+        }
+    }
+
     /// The identified object (a global or an alloca) `reference` points into:
     /// `getUnderlyingObject` and `isIdentifiedObject`.
     fn identified_object(
@@ -175,12 +243,7 @@ impl<'a> AliasQuery<'a> {
     ) -> Option<llrm_mir::module::Operand> {
         use llrm_mir::context::ConstantKind;
         use llrm_mir::module::{Operand, ValueDef};
-        let base = if reference.object {
-            reference.root?
-        } else {
-            let unit = self.unit;
-            llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, reference.pointer?).0
-        };
+        let base = self.base_of(reference)?;
         let identified = match base {
             Operand::Constant(id) => matches!(self.unit.context.get(id).kind, ConstantKind::Global(_)),
             Operand::Value(value) => match self.unit.function.value(value).def {
@@ -197,6 +260,68 @@ impl<'a> AliasQuery<'a> {
         identified.then_some(base)
     }
 
+    /// Whether `reference` is in an alloca whose address is never exposed:
+    /// nothing a call does by unknown means reaches it.
+    fn in_unexposed_alloca(
+        &self,
+        reference: &MemRef,
+    ) -> bool {
+        use llrm_mir::module::Operand;
+        let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
+        !self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit)).contains(&alloca)
+    }
+
+    /// Whether `pointer` is derived only from objects other than the alloca
+    /// `alloca`, whose address is never exposed: a pointer loaded from memory,
+    /// an argument, a call's result or an integer cannot hold that address, and
+    /// a phi or select holds it only if one of its incoming pointers does.
+    fn derived_from_elsewhere(
+        &self,
+        pointer: llrm_mir::module::Operand,
+        alloca: llrm_mir::module::ValueId,
+        depth: u32,
+    ) -> bool {
+        use llrm_mir::module::{Operand, ValueDef};
+        use llrm_mir::opcode::CastOp;
+        let unit = self.unit;
+        let (base, _) = llrm_mir::valuetracking::underlying(unit.context, unit.layout, unit.function, pointer);
+        let Operand::Value(value) = base else { return true };
+        let def = match unit.function.value(value).def {
+            ValueDef::Argument(_) => return true,
+            ValueDef::Instruction(def) => def,
+        };
+        let instruction = unit.function.instruction(def);
+        match &instruction.opcode {
+            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Cast(CastOp::IntToPtr) => true,
+            Opcode::Alloca { .. } => value != alloca,
+            Opcode::Phi if depth < 6 => {
+                instruction.operands.chunks(2).all(|pair| self.derived_from_elsewhere(pair[0], alloca, depth + 1))
+            }
+            Opcode::Select if depth < 6 => {
+                instruction.operands[1..].iter().all(|&one| self.derived_from_elsewhere(one, alloca, depth + 1))
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `local` is an alloca whose address is never exposed and `other`
+    /// is a pointer from elsewhere: nothing outside the function can hold the
+    /// alloca's address, so the two cannot overlap. The stand-in for capture
+    /// tracking, asked of the whole function.
+    fn unreachable_from(
+        &self,
+        local: &MemRef,
+        other: &MemRef,
+    ) -> bool {
+        use llrm_mir::module::Operand;
+        let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
+        let exposed = self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit));
+        if exposed.contains(&alloca) {
+            return false;
+        }
+        other.pointer.is_some_and(|pointer| self.derived_from_elsewhere(pointer, alloca, 0))
+    }
+
     /// `AliasAnalysis::alias` of two references, as far as the stand-in goes:
     /// two identified objects that differ do not overlap (BasicAA), else the
     /// overlap test of `may_clobber`.
@@ -211,7 +336,66 @@ impl<'a> AliasQuery<'a> {
         {
             return false;
         }
+        if self.unreachable_from(one, other) || self.unreachable_from(other, one) {
+            return false;
+        }
         memoryssa::may_clobber(self.unit, None, one, other)
+    }
+
+    /// `MemoryLocation::getWithoutAATags()`: the location with no `!tbaa` type.
+    pub fn without_aa_tags(
+        &self,
+        loc: &Rc<Location>,
+    ) -> Rc<Location> {
+        if loc.reference.typed.is_none() {
+            return Rc::clone(loc);
+        }
+        let reference = MemRef { typed: None, lineage: Rc::from(Vec::new()), ..loc.reference.clone() };
+        self.location_for(&reference, loc.unbounded)
+    }
+
+    /// `AA.alias(A, B)`, as far as the stand-in goes: no alias where the bytes
+    /// cannot overlap; must alias where both name the same bytes by the same
+    /// address; partial where the address is the same and the sizes differ.
+    pub fn alias(
+        &self,
+        one: &Location,
+        other: &Location,
+    ) -> AliasResult {
+        if !self.may_overlap(&one.effective, &other.effective) {
+            return AliasResult::No;
+        }
+        let (a, b) = (&one.reference, &other.reference);
+        let same_address = a.pointer.is_some()
+            && a.root == b.root
+            && a.disp == b.disp
+            && a.base == b.base
+            && a.scale == b.scale
+            && a.base_width == b.base_width
+            && a.segment == b.segment
+            && a.selector == b.selector
+            && a.origin == b.origin
+            && a.linear == b.linear
+            && a.object == b.object
+            && a.space == b.space;
+        if same_address && !one.unbounded && !other.unbounded {
+            return if a.width == b.width { AliasResult::Must } else { AliasResult::Partial };
+        }
+        AliasResult::May
+    }
+
+    /// `AA.getModRefInfo(I, Loc)` for a load, a store or a call: whether `inst`
+    /// may read and may write a byte of `loc`.
+    pub fn get_mod_ref_info(
+        &self,
+        inst: InstId,
+        loc: &Location,
+    ) -> ModRef {
+        let touches = |list: Option<&[MemRef]>| match list {
+            None => !self.in_unexposed_alloca(&loc.reference),
+            Some(list) => list.iter().any(|one| self.may_overlap(one, &loc.effective)),
+        };
+        ModRef { reads: touches(self.accesses.reads(inst)), writes: touches(self.accesses.writes(inst)) }
     }
 
     /// `AA.getMemoryEffects(CB)`: whether the call may read and may write

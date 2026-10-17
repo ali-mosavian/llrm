@@ -39,6 +39,38 @@ fn named(
         .collect()
 }
 
+/// The pointers `Licm` promotes out of `@f`'s loops (by name) and whether their
+/// stores leave too.
+fn promoted(text: &str) -> Vec<(Vec<String>, bool)> {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm);
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    DECIDED.with(|all| {
+        all.borrow()
+            .promoted
+            .iter()
+            .map(|one| {
+                let names = one
+                    .pointers
+                    .iter()
+                    .map(|pointer| match pointer {
+                        llrm_mir::module::Operand::Value(value) => {
+                            function.value(*value).name.clone().unwrap_or_default()
+                        }
+                        _ => "constant".to_owned(),
+                    })
+                    .collect();
+                (names, one.store_safe)
+            })
+            .collect()
+    })
+}
+
 /// `s += v` over `i < %n`, `v` computed by `body` in the loop's second block.
 fn looped(
     declared: &str,
@@ -165,4 +197,92 @@ fn test_a_value_nothing_reads_is_erased() {
 fn test_a_load_is_sunk_only_from_a_loop_with_no_defs() {
     assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n")).0, ["v"]);
     assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n  store i16 %i, ptr @h\n")).0, Vec::<String>::new());
+}
+
+/// A loop that reads and writes a local slot: `extra` goes in the loop before
+/// the read of the slot.
+fn slot_loop(
+    declared: &str,
+    extra: &str,
+    load: &str,
+) -> String {
+    format!(
+        "{declared}@g = global i16 5
+
+define i16 @f(i16 %n, ptr %p) {{
+b0:
+  %s = alloca i16
+  store i16 0, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+{extra}  %x = {load}
+  %y = add i16 %x, %i
+  store i16 %y, ptr %s
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr %s
+  ret i16 %r
+}}
+"
+    )
+}
+
+/// The loads and stores of a slot only the loop touches are one value in the
+/// loop: promoted, stores and all.
+#[test]
+fn test_a_slot_only_the_loop_touches_is_promoted_with_its_stores() {
+    assert_eq!(promoted(&slot_loop("", "", "load i16, ptr %s")), [(vec!["s".to_owned()], true)]);
+}
+
+/// A call that is handed the slot's address may read or write it: no promotion.
+#[test]
+fn test_a_slot_a_call_may_touch_is_not_promoted() {
+    let text = slot_loop("declare void @peek(ptr)\n\n", "  call void @peek(ptr %s)\n", "load i16, ptr %s");
+    assert_eq!(promoted(&text), Vec::<(Vec<String>, bool)>::new());
+}
+
+/// A volatile access cannot move to a register.
+#[test]
+fn test_a_volatile_slot_is_not_promoted() {
+    assert_eq!(promoted(&slot_loop("", "", "load volatile i16, ptr %s")), Vec::<(Vec<String>, bool)>::new());
+}
+
+/// A read of the same memory through a pointer that changes in the loop (it may
+/// be the global): the loads leave but the stores stay, as they must be seen in
+/// memory.
+#[test]
+fn test_a_read_outside_the_set_promotes_the_loads_only() {
+    let text = "@g = global i16 5
+
+define i16 @f(i16 %n, ptr %p) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr @g
+  %q = getelementptr i16, ptr %p, i16 %i
+  %z = load i16, ptr %q
+  %y = add i16 %x, %z
+  store i16 %y, ptr @g
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+";
+    assert_eq!(promoted(text), [(vec!["constant".to_owned()], false)]);
 }

@@ -467,3 +467,145 @@ fn test_an_alias_question_looks_at_one_cache_entry() {
         assert!(aa.cache_steps() <= asked as u64, "{n} locations: {} entries for {asked} questions", aa.cache_steps());
     }
 }
+
+/// A pointer read from memory cannot point into an alloca whose address is
+/// never taken, so a store through it does not clobber the alloca's load
+/// (`isNonEscapingLocalObject`). Without it every loop that stores through a
+/// pointer it loaded kept every load of a local (d_faces: 10 of LLVM's 88
+/// promotions missed).
+#[test]
+fn test_a_store_through_a_loaded_pointer_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f(ptr %p) {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  %q = load ptr, ptr %p
+  store i16 2, ptr %q
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    // found: the store to the slot, the load of the pointer, the store through
+    // it, the load of the slot.
+    assert_eq!(found[3].1, Some(found[0].0), "{found:?}");
+}
+
+/// The same through a phi of pointers loaded from memory (`aliasPHI`).
+#[test]
+fn test_a_store_through_a_phi_of_loaded_pointers_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f(ptr %p, ptr %r, i1 %c) {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  %q1 = load ptr, ptr %p
+  %q2 = load ptr, ptr %r
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %q = phi ptr [ %q1, %b1 ], [ %q2, %b2 ]
+  store i16 2, ptr %q
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    let (slot_store, load) = (found[0].0, found.last().expect("the load"));
+    assert_eq!(load.1, Some(slot_store), "{found:?}");
+}
+
+/// A call writes anything it can reach, not an alloca whose address was never
+/// given out.
+#[test]
+fn test_a_call_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f() {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  call void @anything()
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(found[1].1, Some(found[0].0), "{found:?}");
+}
+
+/// The alias sets of the loads and stores of `@f`, as (pointer count, must
+/// alias, mod, ref) of each live set.
+fn alias_sets_of(body: &str) -> Vec<(usize, bool, bool, bool)> {
+    use super::alias::AliasQuery;
+    use crate::aliassets::AliasSetTracker;
+    let parsed = Parsed::new(body);
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let mut tracker = AliasSetTracker::new(&aa);
+    for (_, inst) in unit.function.walk() {
+        let Some(loc) = aa.location_of(inst) else { continue };
+        if matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ) {
+            tracker.add_store(&loc);
+        } else {
+            tracker.add_load(&loc);
+        }
+    }
+    tracker
+        .alias_sets()
+        .map(|(_, set)| (set.get_pointers().len(), set.is_must_alias(), set.is_mod(), set.is_ref()))
+        .collect()
+}
+
+/// A load and a store through one pointer are one set that must alias; a
+/// pointer that may be either of two globals joins them into a set that may.
+#[test]
+fn test_alias_sets_join_what_may_alias_and_keep_what_must() {
+    let same = alias_sets_of(
+        "@h = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @h
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(same, [(1, true, true, true)]);
+    let apart = alias_sets_of(
+        "@h = global i16 0
+@k = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @k
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(apart, [(1, true, true, false), (1, true, false, true)]);
+    let joined = alias_sets_of(
+        "@h = global i16 0
+
+define i16 @f(ptr %p) {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(joined, [(2, false, true, true)]);
+}

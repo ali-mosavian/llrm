@@ -9,6 +9,7 @@
 
 mod calls;
 mod hoist;
+mod promote;
 mod safety;
 mod sink;
 #[cfg(test)]
@@ -169,10 +170,24 @@ pub struct Hoisted {
     pub inst: InstId,
 }
 
+/// A set of pointers whose loop accesses `promoteLoopAccessesToScalars` takes
+/// out of the loop headed by `header`.
+#[derive(Clone, Debug)]
+pub struct Promoted {
+    pub function: Option<llrm_mir::GlobalId>,
+    pub header: BlockId,
+    pub pointers: Vec<Operand>,
+    pub uses: Vec<InstId>,
+    pub store_safe: bool,
+}
+
 /// What the pass decided over a function.
 #[derive(Clone, Debug, Default)]
 pub struct Decisions {
     pub hoisted: Vec<Hoisted>,
+    /// `NumPromotionCandidates`, and the sets promoted.
+    pub promotion_candidates: usize,
+    pub promoted: Vec<Promoted>,
     /// `NumSunk`, and what `isInstructionTriviallyDead` erases.
     pub sunk: Vec<Hoisted>,
     pub erased: Vec<Hoisted>,
@@ -208,11 +223,27 @@ pub fn decide(
         }
     }
     let state = State::default();
+    let exposed = llrm_analysis::memory::exposed_frames(&memory);
     for (at, one) in shape.loops.iter().enumerate() {
         let _ = at;
         let ctx = LoopCtx { function: unit.function, shape: &shape, loop_: one, innermost: &innermost, state: &state };
-        let (sunk, hoisted) = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses);
+        let found = run_on_loop(unit, &outer, &ctx, &mut mssa, &aa, &accesses, &exposed);
+        let (sunk, hoisted) = (found.sunk, found.hoisted);
         let header = cfg::block(one.header);
+        decisions.promotion_candidates += found.candidates;
+        for one in found.promoted {
+            decisions
+                .promoted
+                .push(
+                    Promoted {
+                        function: unit.id,
+                        header,
+                        pointers: one.pointers,
+                        uses: one.uses,
+                        store_safe: one.store_safe,
+                    },
+                );
+        }
         let count = |inst: InstId, decisions: &mut Decisions| match unit.function.instruction(inst).opcode {
             llrm_mir::opcode::Opcode::Load { .. } => decisions.moved_loads += 1,
             llrm_mir::opcode::Opcode::Call(_) => decisions.moved_calls += 1,
@@ -235,9 +266,16 @@ pub fn decide(
     decisions
 }
 
-/// `runOnLoop`: the sinking, then the hoisting, as decisions: what is erased or
-/// sunk, and what is hoisted with the preheader it goes to.
-#[allow(clippy::type_complexity)]
+/// What `runOnLoop` decided for one loop.
+struct LoopDecisions {
+    sunk: Vec<(InstId, sink::Sinking)>,
+    hoisted: Vec<(InstId, BlockId)>,
+    candidates: usize,
+    promoted: Vec<promote::Promotion>,
+}
+
+/// `runOnLoop`: the sinking, then the hoisting, then the promotion, as
+/// decisions.
 fn run_on_loop(
     unit: &passes::Unit,
     outer: &llrm_mir::passes::Outer,
@@ -245,7 +283,8 @@ fn run_on_loop(
     mssa: &mut Mssa,
     aa: &AliasQuery,
     accesses: &Accesses,
-) -> (Vec<(InstId, sink::Sinking)>, Vec<(InstId, BlockId)>) {
+    exposed: &std::collections::BTreeSet<llrm_mir::module::ValueId>,
+) -> LoopDecisions {
     use llrm_analysis::cfg::Around;
     let preheader = ctx.loop_.preheader(unit.function).map(cfg::block);
     let mut flags = Flags::new(
@@ -256,7 +295,8 @@ fn run_on_loop(
         mssa,
     );
     let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape);
-    let sunk = if has_dedicated_exits(ctx) {
+    let dedicated = has_dedicated_exits(ctx);
+    let sunk = if dedicated {
         sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
     } else {
         Vec::new()
@@ -266,7 +306,42 @@ fn run_on_loop(
         Some(preheader) => hoist::hoist_region(unit, outer, ctx, preheader, mssa, aa, &mut flags, &safety),
         None => Vec::new(),
     };
-    (sunk, hoisted)
+    // Now that all loop invariants have been removed from the loop, promote any
+    // memory references to scalars that we can.
+    let mut candidates = 0;
+    let mut promoted = Vec::new();
+    if let Some(preheader) = preheader
+        && dedicated
+        && !flags.too_many_memory_accesses()
+    {
+        let exits = promote::unique_exit_blocks(ctx);
+        // Promoting one set of accesses may make the pointers for another set
+        // loop invariant, so run this in a loop.
+        loop {
+            let mut local_promoted = false;
+            for candidate in promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety) {
+                candidates += 1;
+                if let Some(found) = promote::promote_loop_accesses_to_scalars(
+                    unit,
+                    outer,
+                    ctx,
+                    &safety,
+                    exposed,
+                    &exits,
+                    &candidate.pointers,
+                    candidate.has_reads_outside_set,
+                ) {
+                    promote::take_out_of_loop(unit, ctx, preheader, &found);
+                    promoted.push(found);
+                    local_promoted = true;
+                }
+            }
+            if !local_promoted {
+                break;
+            }
+        }
+    }
+    LoopDecisions { sunk, hoisted, candidates, promoted }
 }
 
 /// `Loop::hasDedicatedExits`: every exit block has only predecessors in the
@@ -308,6 +383,8 @@ impl FunctionPass for Licm {
             all.hoisted.extend(found.hoisted);
             all.sunk.extend(found.sunk);
             all.erased.extend(found.erased);
+            all.promotion_candidates += found.promotion_candidates;
+            all.promoted.extend(found.promoted);
             all.moved_loads += found.moved_loads;
             all.moved_calls += found.moved_calls;
         });
