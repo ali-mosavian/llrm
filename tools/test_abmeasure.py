@@ -56,3 +56,11 @@ def test_a_d_faces_count_under_its_floor_fails_the_run():
         abmeasure.floored("d_faces", 8_100_000)
     abmeasure.floored("d_faces", 2_043_000_000)
     abmeasure.floored("lru", 1)
+
+
+def test_a_binary_whose_target_is_gone_names_the_missing_wccq(monkeypatch):
+    """The dist binary embeds its wccq's path inside its target dir; copied out of a deleted target it fails at ~2.8 M instructions with the path in the message."""
+    err = "llrm-c: wccq failed on x.c:\n/gone/target/dist/build/wccq: No such file or directory (os error 2)\n2800000,,instructions:u,1,100.00,,\n"
+    monkeypatch.setattr(abmeasure.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, stdout="", stderr=err))
+    with pytest.raises(SystemExit, match="/gone/target/dist/build/wccq"):
+        abmeasure.counted(Path("c"), Path("x.c"), [], "O2")

@@ -80,7 +80,10 @@ def checked(done: subprocess.CompletedProcess, source: Path) -> None:
     """SystemExit with the compiler's first message when the compile failed."""
     if done.returncode:
         lines = (done.stdout + done.stderr).splitlines()
-        first = next((line for line in lines if "Error!" in line or "error:" in line), lines[0] if lines else "no message")
+        # The dist binary embeds the path of its wccq (build.rs LLRM_WCCQ_DIR, inside its own target dir): a binary whose target is gone fails with
+        # "wccq failed ... No such file" after ~2.8 M instructions, and the message must name that path.
+        key = [line for line in lines if "Error!" in line or "error:" in line or "No such file" in line]
+        first = " | ".join(key[:2] or lines[:2]) or "no message"
         raise SystemExit(f"abmeasure: the compile of {source.name} failed (exit {done.returncode}): {first}")
 
 
