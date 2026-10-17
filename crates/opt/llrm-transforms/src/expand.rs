@@ -147,6 +147,15 @@ fn sum_of(
     if let Some(&one) = made.get(&(None, sum.clone(), ty)) {
         return one;
     }
+    // A value that is `x + c` is `x` and a constant, whatever flags its add or
+    // sub carries (the flags only say it does not wrap): `(n - 1) + 1` is `n`,
+    // as `ScalarEvolution::getAddExpr` makes it.
+    let over_bases = based(context, function, sum);
+    if over_bases != *sum {
+        let one = sum_of(context, function, &over_bases, at, made);
+        made.insert((None, sum.clone(), ty), one);
+        return one;
+    }
     let mut total: Option<Operand> = None;
     let mut negative = Vec::new();
     for (product, factor) in &sum.terms {
@@ -186,6 +195,65 @@ fn sum_of(
     };
     made.insert((None, sum.clone(), ty), result);
     result
+}
+
+/// `sum` with each unknown that is `x + c` or `x - c` (a constant `c`, one
+/// value `x` of the same width) put over `x`.
+fn based(
+    context: &Context,
+    function: &Function,
+    sum: &Scev,
+) -> Scev {
+    let mut out = sum.clone();
+    // The chain of offsets a loop leaves is short; stop at a bound.
+    for _ in 0..8 {
+        let mut changed = false;
+        for (product, factor) in out.terms.clone() {
+            let Some(value) = product.single() else { continue };
+            let llrm_mir::module::ValueDef::Instruction(def) = function.value(value).def else { continue };
+            let op = function.instruction(def);
+            let offset = |operand: Operand| match operand {
+                Operand::Constant(id) => match context.get(id).kind {
+                    llrm_mir::context::ConstantKind::Int(bits) => Some(BigInt::from(bits)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            let (base, by) = match (&op.opcode, &op.operands[..]) {
+                (Opcode::Binary(BinaryOp::Add), [Operand::Value(base), by])
+                | (Opcode::Binary(BinaryOp::Add), [by, Operand::Value(base)]) => (*base, offset(*by)),
+                (Opcode::Binary(BinaryOp::Sub), [Operand::Value(base), by]) => {
+                    (*base, offset(*by).map(|by| BigInt::from(0) - by))
+                }
+                _ => continue,
+            };
+            let Some(by) = by else { continue };
+            if context.types.int_bits(function.value(base).ty) != Some(sum.width) {
+                continue;
+            }
+            // `factor * value = factor * base + factor * c`.
+            let gone = Scev::monomial(product.clone(), factor.clone(), sum.width);
+            let moved = Scev::monomial(Monomial::of(base), factor.clone(), sum.width)
+                .plus(&Scev::constant(&factor * &by, sum.width));
+            let trial = out.minus(&gone).plus(&moved);
+            // Over its base only where that is a value already made: the
+            // sum is free. Any other rewrite builds from `x` where the
+            // offset value stood, and `x` stays live across the loop for it.
+            let free = trial.constant == BigInt::from(0)
+                && trial.terms.len() == 1
+                && trial.terms.values().all(|factor| *factor == BigInt::from(1));
+            if !free {
+                continue;
+            }
+            out = trial;
+            changed = true;
+            break;
+        }
+        if !changed {
+            break;
+        }
+    }
+    out
 }
 
 /// The unknowns of `product` multiplied once, a product of invariants in

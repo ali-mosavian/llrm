@@ -102,3 +102,60 @@ fn test_generated_recurrences_expand_to_what_the_loop_computes() {
     eprintln!("expanded values checked {checked}");
     assert!(checked > 0);
 }
+
+/// `(n - 1) + 1` expanded was `add (sub n, 1), 1`: lsr's start for a countdown
+/// loop read `n - 1` as an opaque value and added the bias to it, one
+/// instruction before the loop that SCEV's `getAddExpr` never makes (idioms#3,
+/// idioms#5, idiom_edges#2: +1 instruction at every level once nuw/nsw were on
+/// the `sub`). A sum over a value that is `x + c` is read over `x`.
+#[test]
+fn test_a_sum_over_an_offset_value_is_expanded_over_its_base() {
+    use llrm_analysis::induction::Monomial;
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  %m = sub nsw i16 %n, 1
+  br label %b1
+
+b1:
+  ret i16 %m
+}
+",
+    );
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (n, m) = (function.parameters()[0], llrm_analysis::testing::value(function, "m"));
+    let b0 = function.layout()[0];
+    let size = function.block(b0).instructions().len();
+    let mut expander = Expander::new(function.terminator(b0).expect("a branch"));
+    let sum = Scev::monomial(Monomial::of(m), llrm_analysis::num::Num::from(1), 16).plus(&Scev::constant(1, 16));
+    let got = expander.int(context, function, &sum);
+    assert_eq!(got, Operand::Value(n), "(n - 1) + 1 is n");
+    assert_eq!(function.block(b0).instructions().len(), size, "an instruction was made for it");
+}
+
+/// The value itself is the whole sum: expanding it over its base would make an
+/// instruction where the value is free.
+#[test]
+fn test_an_offset_value_alone_is_not_rebuilt_over_its_base() {
+    use llrm_analysis::induction::Monomial;
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %n) {
+b0:
+  %m = sub nsw i16 %n, 1
+  br label %b1
+
+b1:
+  ret i16 %m
+}
+",
+    );
+    let (context, function) = module.function_mut("f").expect("@f");
+    let m = llrm_analysis::testing::value(function, "m");
+    let b0 = function.layout()[0];
+    let size = function.block(b0).instructions().len();
+    let mut expander = Expander::new(function.terminator(b0).expect("a branch"));
+    let sum = Scev::monomial(Monomial::of(m), llrm_analysis::num::Num::from(1), 16);
+    let got = expander.int(context, function, &sum);
+    assert_eq!(got, Operand::Value(m), "the value is the sum");
+    assert_eq!(function.block(b0).instructions().len(), size);
+}
