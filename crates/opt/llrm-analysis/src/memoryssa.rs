@@ -799,8 +799,7 @@ pub fn same_bytes(
     // it: the scalar a pass reads and writes through the same address, which
     // every load of N joins asks of every store that reaches it.
     if one.pointer.is_some() && one.pointer == other.pointer && one.width == other.width && one.disp == other.disp {
-        static CHECKED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *CHECKED.get_or_init(|| llrm_support::env_set("LLRM_CHECK_SAMEBYTES")) {
+        if llrm_support::env_flag!("LLRM_CHECK_SAMEBYTES") {
             assert!(
                 covers(unit, one, other) && covers(unit, other, one),
                 "same_bytes: one pointer, width and displacement are not the same bytes: {one:?} {other:?}"
