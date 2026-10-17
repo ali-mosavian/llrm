@@ -332,7 +332,7 @@ impl Forest {
         &self,
         function: &Function,
     ) {
-        if cfg!(test) || llrm_support::env_set("LLRM_CHECK_SHAPE") {
+        if cfg!(test) || llrm_support::env_flag!("LLRM_CHECK_SHAPE") {
             let fresh = cfg::Shape::of(function).loops;
             assert!(
                 self.loops.as_ref() == Some(&fresh),

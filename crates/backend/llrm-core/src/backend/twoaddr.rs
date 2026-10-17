@@ -154,7 +154,7 @@ pub fn tied(body: &LirBody) -> LirBody {
         .collect();
     let interference =
         if asked.is_empty() { IndexMap::default() } else { coalesce::_interference_among(body, Some(&asked)) };
-    if llrm_support::env_set("LLRM_CHECK_TWOADDR") {
+    if llrm_support::env_flag!("LLRM_CHECK_TWOADDR") {
         let whole = coalesce::_interference(body);
         for &one in &asked {
             for &other in &asked {

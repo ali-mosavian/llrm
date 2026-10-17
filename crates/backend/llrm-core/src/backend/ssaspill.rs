@@ -1841,7 +1841,7 @@ fn simulated(
     }
     memo.keep(Walked { memory: memory.clone(), dropped: dropped.clone(), admit: admit.clone(), edits: edits.clone() });
     let result = Simulated { edits, across, left, stored, memory: memory.clone(), shared, moves };
-    if resumed > 0 && llrm_support::env_set("LLRM_CHECK_SIMULATION") {
+    if resumed > 0 && llrm_support::env_flag!("LLRM_CHECK_SIMULATION") {
         let afresh = simulated(
             body,
             flow,
