@@ -1,5 +1,42 @@
 # Compile time at clang's level: the plan
 
+**Target.** Parity is clang 24 at `d1106deb71cc` (415 M instructions on `d_faces` -O2) with rows held against min(gcc, clang); the static clang 20.1.8 (462 M) is the secondary column. Phase 3 (structural) starts now, in parallel with phases 1 and 2: each step is gated by its early probe and its design review, not by B1 or B2.
+
+## Status
+
+As of main `c37be2a9c` plus the merges since (states checked with `gh`). Refreshed at least every few merges by llvm-compare.
+
+| step | owner | state | last measured |
+|---|---|---|---|
+| 0.1 one baseline | llvm-compare | in progress | none yet |
+| 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost +0.04% (older main; re-measure) |
+| 0.3 `ObjectRef` identity | objectref-identity | testing (unresolved) | 131 of 1,583 differ with the skip prototype; 0 differ on main under `LLRM_CHECK_INTERN=SEED` |
+| 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
+| 1.1 slab | pass-list-parity | [#2022] open, ready | -4.2% instructions, -2.9% cycles |
+| 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971] merged; [#2032] open | -1.17%; -0.38% |
+| 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
+| 1.4 backend copies | ssa-spill-m16 | [#2027] merged; [#2021], [#2038] open | -0.56%, -0.52%; peak heap -15.4%, -13.9% |
+| 1.5 mask test | ssa-spill-m16 | [#2010] merged | diamond 800: 1,995 to 1,075 M; `d_faces` identical |
+| 1.6 gvn, walker, lsr | greedy-port | [#1999], [#2017] merged; [#2012], [#2011], [#2020], [#2034], [#2008] open | `loop` N=1600 -65% stacked |
+| 1.7 dse | edit-rollback | [#2015] merged; [#2013] open | 2.0x per doubling (`arith`), 2.17x to 2.33x (`mem`) |
+| 1.8 deep nests | greedy-port | [#1977], [#1978] open | queens -O3 -23% |
+| 1.9 exact ThroughMemory | keep-analyses | [#1915] merged | +1.0% (correctness) |
+| 1.10 held PRs | greedy-port, attrs-budgets | [#1958] open, ready; [#1962], [#1965] drafts; [#1921] closed | per PR, stale |
+| 2.1 point_values | keep-analyses | stop; 2.1b blocked on 0.3 | asked 87% / 60% / 63% of solved; repeats 13.6 M |
+| 2.2 Annotated per access | keep-analyses, edit-rollback | to do | pool 42.4 M |
+| 2.3 persistent MemorySSA | hoist-bounded, keep-analyses | to do | `unmeasured` |
+| 2.4 split path | greedy-port | B' killed; A' alone | B' -0.03% |
+| 2.5 interval recompute | ssa-spill-m16 | closed | 0.25% realistic |
+| 2.6 `Frequencies` dense | attrs-budgets | to do, after pricing PRs | `unmeasured` |
+| 2.7 rollback | edit-rollback | draft [#1945] | +0.09% |
+| 2.8 scaling shapes | hoist-bounded | to do | `unmeasured` |
+| 2.9 Vec growth by site | unowned | to do | about 15 M |
+| 3.1 facts from the change log | edit-rollback, keep-analyses | design, starts now | family 403 M own (12.8%) |
+| 3.2 one pipeline pass | pass-list-parity, hoist-bounded | design, starts now | combine alone about 0 |
+| 3.3 allocator on the LIR core | greedy-port, ssa-spill-m16 | design, starts now | `regalloc` 415.5 M |
+| 3.4 LIR clean-up | ssa-spill-m16 | probe done (96.5% idle); per-visit probe next | 290 M; realistic recoverable about 40 M |
+| 3.5 pricing in the back end | greedy-port, ssa-spill-m16, hoist-bounded | after 3.3 | forecast 1.39% |
+
 ## 1. TL;DR
 
 `d_faces` -O2 compiles in 2,903 M instructions against LLVM's 415 M (6.8x; 4.8x to 6.4x in cycles) ([synthesis]). Bounded step by step, this plan does not close that gap. It removes about half of it, and it names the work that would close the rest:
@@ -48,6 +85,10 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | [#2027] | facts rings let go at phase end | peak heap -13.9% (23.97 to 20.65 MB); instructions -0.02%; cycles unchanged |
 | [#2017] | a load is offered the loads before it in its block | `d_faces` -0.14% |
 | [#1915] | exact ThroughMemory for decisions | correctness fix for [#1909]; +1.0% at -O2 |
+| [#1971] | block-address sets and maps are bit sets and id maps | -1.04% / -1.17% / -1.32% at -O1/-O2/-Os, B-tree frames 224.7 to 203.3 M, identity 1583/0 |
+| [#2010] | mask test made at each branch | diamond 800: 1,995 to 1,075 M, 419 stack operands to 0; `d_faces` identical |
+| [#1999] | `gvn`: equal loads look at each write once | `loop` N=1600 and exponent per the ladder; part of the 1.6 stack |
+| [#2015] | `dse`: the cells of one address share their sets | `arith` N=1600 818 to 52 M; `d_faces` +0.01% to +0.03% |
 | [#2031], [#2033] | docs: withdrawn `fold` fix; escape structure not kept | no instruction change |
 
 ### 2.2 In flight
@@ -55,17 +96,15 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | PR | owner | state | measured (on its parent) |
 |---|---|---|---|
 | [#2022] slab allocator | pass-list-parity | ready | -4.2% instructions at every level, -2.9% cycles (min of 11); RSS +7% (`d_faces`), +18% (`mdl_ai`) |
-| [#1971] block-address ids dense | attrs-budgets | ready | -1.04% / -1.17% / -1.32% at -O1/-O2/-Os against its parent (main `39501a050`); B-tree frames 224.7 to 203.3 M (-21.5 M at -O2); identity 1583/0 |
 | [#2032] register and live sets dense | ssa-spill-m16 | ready | -0.38% |
 | [#2035], [#2037] escape phase | keep-analyses | ready, draft (stacked) | -0.29%, then -0.64% |
 | [#2021] LIR rename shares | ssa-spill-m16 | ready | -0.56%; peak heap -15% |
 | [#2038] facts bundle edited in place | ssa-spill-m16 | ready | -0.52% (`Facts::of` 86.8 to 70.7 M) |
-| [#2010] mask test made at each branch | ssa-spill-m16 | ready | diamond 800: 1,995 to 1,075 M, 419 stack operands to 0; `d_faces` 0 (byte-identical) |
-| [#1999], [#2012], [#2011], [#2020], [#2034], [#2008] | greedy-port | ready, stacked | everything stacked with [#2010]: ladder `loop` N=1600 30,626 to 10,804 M (-65%), exponent 400 to 1600 = 1.1, `mem` 7,299 to 5,969 M ([#1999] with [#2008] alone: 31,766 to 19,654 M, -38%); diamond N=1600 -13% ([#2034]). `d_faces` per PR: [#2020] +0.07% to +0.11%, [#2034] +0.09%, [#1999], [#2012], [#2011] about -0.15% to +0.15%; together +0.1% to +0.2% (nothing measured is negative) |
-| [#2013], [#2015] dse | edit-rollback | ready | `dse` 3.5x to 4.0x per doubling down to 2.0x on the distinct-offset and `arith` shapes (2.17x then 2.33x on `mem`); `d_faces` +0.03% to +0.04% ([#2013] `e717bd522`, index only past 256 cells) and +0.01% to +0.03% ([#2015] `b6d39ca35`), objects identical. The two conflict in `avail.rs` and `dse_tests.rs` (two hunks; the owner resolves at landing) |
+| [#2012], [#2011], [#2020], [#2034], [#2008] | greedy-port | ready, stacked | everything stacked with [#2010]: ladder `loop` N=1600 30,626 to 10,804 M (-65%), exponent 400 to 1600 = 1.1, `mem` 7,299 to 5,969 M ([#1999] with [#2008] alone: 31,766 to 19,654 M, -38%); diamond N=1600 -13% ([#2034]). `d_faces` per PR: [#2020] +0.07% to +0.11%, [#2034] +0.09%, [#1999], [#2012], [#2011] about -0.15% to +0.15%; together +0.1% to +0.2% (nothing measured is negative) |
+| [#2013] dse | edit-rollback | ready | `dse` 3.5x to 4.0x per doubling down to 2.0x on the distinct-offset and `arith` shapes (2.17x then 2.33x on `mem`); `d_faces` +0.03% to +0.04% ([#2013] `e717bd522`, index only past 256 cells) and +0.01% to +0.03% ([#2015] `b6d39ca35`), objects identical. The two conflict in `avail.rs` and `dse_tests.rs` (two hunks; the owner resolves at landing) |
 | [#1977], [#1978] bounded on deep nests | greedy-port | ready, stacked | queens -O3 1,703 to 1,306 M; `d_faces` -O2 3,248 to 3,193 M |
 | [#1958] split placed from one table | greedy-port | open, ready (not a draft), measured on an old main | -3.4% (3,450 to 3,333 M); re-measure on main |
-| [#1921] LIR clean-up on blocks with work | ssa-spill-m16 | draft; to be closed ([#1975] did its dirty-block mechanism in general; its allocation-free rule windows, -4 M, live on branch `alim/perf/lir-cleanup-2` `6db843a29`, not a PR) | -1.77% on main `254855801`, now stale |
+| [#1921] LIR clean-up on blocks with work | ssa-spill-m16 | closed ([#1975] did its dirty-block mechanism in general; its allocation-free rule windows, -4 M, live on branch `alim/perf/lir-cleanup-2` `6db843a29`, not a PR) | -1.77% on main `254855801`, now stale |
 | [#1962] `initialized` events once | attrs-budgets | draft | -0.46%, under the 0.5% bar: bundle with 2.6, not a loose draft |
 | [#1965] allocator rewrites from a floor | UNOWNED | draft | -0.3% |
 | [#1972], [#1973] footprints by part | keep-analyses | draft | -0.02%, -0.07%; carries [parity] |
@@ -132,14 +171,14 @@ The exit method M and the bars it uses are defined once in section 4.
 | 0.3 context-free `ObjectRef` identity (unresolved) | a skipped or shared solve changes no output (131 of 1,583 objects differ in the skip prototype; 0 differ on main under `LLRM_CHECK_INTERN=SEED`) | the 131 do not fall to 0 | objectref-identity, keep-analyses | testing, blocks 2.1b and 3.1 |
 | 1.0 inline storage across the hot `Vec` sites | allocations removed as far as the probe says; instructions and cycles on `d_faces`; peak RSS | a site whose inline fraction does not fit, or whose struct growth is not justified | pass-list-parity | to do ([#1956] first instance) |
 | 1.1 slab allocator | -4.2% instructions, cycles negative | cycles not below base on a quiet host | pass-list-parity | ready [#2022] |
-| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | ready |
+| 1.2 dense ids | -1.2% ([#1971] -1.17%, [#2032] -0.38%; the two overlap) | below 0.5% together | attrs-budgets, ssa-spill-m16 | [#1971] merged, [#2032] ready |
 | 1.3 escape phase | -0.9% | below 0.5% together | keep-analyses | ready |
 | 1.4 backend copies | -1.1% instructions ([#2021] -0.56%, [#2038] -0.52%); peak heap -15.4% ([#2021]) and -13.9% ([#2027], merged), each against main alone, stacked peak unmeasured | below 0.5% and no heap change | ssa-spill-m16 | ready |
-| 1.5 mask at each branch | diamond 1,951 to 1,075 M; `d_faces` 0 | any object differs | ssa-spill-m16 | ready [#2010] |
+| 1.5 mask at each branch | diamond 1,951 to 1,075 M; `d_faces` 0 | any object differs | ssa-spill-m16 | merged [#2010] |
 | 1.6 gvn, walker, lsr slopes | `loop` N=1600 -65% stacked (30,626 to 10,804 M), exponent 400 to 1600 = 1.1; `mem` 7,299 to 5,969 M | `d_faces` above +0.5% together | greedy-port | ready, stacked |
-| 1.7 dse slope | `dse` 2.0x per doubling on the distinct-offset and `arith` shapes, 2.17x to 2.33x on `mem` (partial) | `d_faces` above +0.3% | edit-rollback | ready |
+| 1.7 dse slope | `dse` 2.0x per doubling on the distinct-offset and `arith` shapes, 2.17x to 2.33x on `mem` (partial) | `d_faces` above +0.3% | edit-rollback | [#2015] merged, [#2013] ready |
 | 1.8 bounded on deep nests | queens -O3 -23% | any object differs | greedy-port | ready, stacked |
-| 1.9 exact ThroughMemory | fixes [#1909] at +1.0% | none (correctness) | keep-analyses | ready [#1915] |
+| 1.9 exact ThroughMemory | fixes [#1909] at +1.0% | none (correctness) | keep-analyses | merged [#1915] |
 | 1.10 held PRs on main | -3% if they reproduce; [#1921] to be closed, [#1962] bundled with 2.6 | each one below 0.5% on main | greedy-port, attrs-budgets | [#1958] ready, [#1965] draft |
 | B1 re-baseline | the phase-1 row of the TL;DR measured | n/a | llvm-compare | after 1.x |
 | 2.1 point_values per query | stop: meets its no-effect row (asked 87% / 60% / 63% of solved); 2.1b repeats at most 0.45% (13.6 M), blocked by 0.3 | projected saving below 15 M, or the oracle differs | keep-analyses | step 0 done |
@@ -154,7 +193,7 @@ The exit method M and the bars it uses are defined once in section 4.
 | 3.1 facts updated from the change log (re-pointed: edit-rollback's family `Held`, `ThroughMemory`, decide facts, 403 M own, 12.8%) | computations per run 2.8 toward 0.5 for that family only; the pointer families are small now | a prototype costs at least the whole build | edit-rollback, keep-analyses | design |
 | 3.2 one pipeline pass | the combine alone about 0; the round drop is the effect and the risk (see 3.2) | a vsgcc row newly above min(gcc, clang), or an enabler the combine cannot absorb | pass-list-parity, hoist-bounded | design |
 | 3.3 allocator on the LIR core | `regalloc` 415.5 M on main with [#2010], [#2021], [#2027], [#2032] (444 M is older) to 100 M or less | whole-body work per edit below 1% | greedy-port, ssa-spill-m16 | design |
-| 3.4 LIR clean-up | about 290 M on the merged tree to a credible 240 M (about 50 M recoverable) | idle block visits below 30% of clean-up (expected to fire) | ssa-spill-m16 | after 3.3 |
+| 3.4 LIR clean-up | about 290 M on the merged tree to 250 M (idle ceiling about 76 M net, realistic about 40 M) | idle block visits below 30% of clean-up: not met (96.5% idle on `d_faces`, 97.1% on the corpus) | ssa-spill-m16 | per-visit probe next |
 | 3.5 pricing in the back end | -1.4% (-O2) to -2.5% (-Os) | forecast and pressure below 1% at both levels | greedy-port, ssa-spill-m16, hoist-bounded | after 3.3 |
 | B3 re-baseline | the phase-3 row measured | n/a | llvm-compare | after 3.x |
 | 4.1 per-pass budgets | each pass 300 instructions or fewer per IR instruction per run | a pass already within budget | each pass's owner | measure first |
@@ -725,7 +764,7 @@ Checklist: the shared list. Its own metric boxes:
 Re-run 0.1 on main after phase 2 merges.
 
 - **Pass:** the measured row is within 2 points of the TL;DR's phase-2 row (about 2,210 M).
-- **If it misses:** re-rank phase 3 by the new table before any phase-3 build starts.
+- **If it misses:** re-rank the open phase-3 steps by the new table; phase 3 is not held for B2.
 - **Owner:** llvm-compare.
 
 ## Phase 3: structural work (critical path)
@@ -788,7 +827,7 @@ Checklist: the shared list. Its own metric boxes:
   - the landing rule of [spec] 4.3;
   - -8% or better at -O2 and -Os;
   - idle runs per compile down 50% or more: row 5 is closed ([#2028], [#2030]), so this can come only from the round drop, not from a skip.
-- **(e) Who:** pass-list-parity (pipeline, combine), hoist-bounded (rounds, loop worklist). Depends on 3.1 for the round drop (steps 1 and 2 of R3 can start at B1). Touches `pipeline.rs`, `fold.rs`, `algebraic.rs`, `phiopt.rs`, `dead.rs`, `decide.rs`.
+- **(e) Who:** pass-list-parity (pipeline, combine), hoist-bounded (rounds, loop worklist). Depends on 3.1 for the round drop; the per-pass ablation starts now. Touches `pipeline.rs`, `fold.rs`, `algebraic.rs`, `phiopt.rs`, `dead.rs`, `decide.rs`.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -818,7 +857,7 @@ Checklist: the shared list. Its own metric boxes:
 - **(b) Early:** spec 6 counters on `d_faces` -O2: `full_interval_builds`, allocator `visited` per spill or split, body copies per carve ([#1309]). Kill (re-rank against 3.4) if whole-body work per edit is below 1% of the compile.
 - **(c) Gate:** a design page (spec 2.1 and 4.1 for LIR) with a big-picture review; the edit contract of spec 2.3 for LIR.
 - **(d) Exit:** M; counted `full_interval_builds = 1` and allocator `visited` at most 40 × edited range + 4 × blocks touched; identical output (spec stage 2 is identical). Pass: `regalloc` 150 M or less at -O2.
-- **(e) Who:** greedy-port (allocator), ssa-spill-m16 (LIR model). Depends on 2.4, 2.5 and B2. Touches `model/lir.rs`, `allocate.rs`, `splitkit.rs`, `intervals.rs`, `postings.rs`.
+- **(e) Who:** greedy-port (allocator), ssa-spill-m16 (LIR model). Starts now: gated by its early probe and design review, not by B2; it uses 2.4's A' and 3.3's own interval buffers. Touches `model/lir.rs`, `allocate.rs`, `splitkit.rs`, `intervals.rs`, `postings.rs`.
 
 Checklist: the shared list. Its own metric boxes:
 
@@ -834,10 +873,10 @@ Checklist: the shared list. Its own metric boxes:
 
 ### 3.4 LIR clean-up on dirty blocks and at selection
 
-- **(a) Effect:** merged-tree numbers (ssa-spill-m16): `Peephole` 97.1 M, `jumps` 58.7, `coalesce` 57.8, `FloatAssign` plus `FloatAlloc` 65.1, `phielim` 11.4: 290 M (and `parcopy` 9.8, `twoaddr` 8.3, `pressuresink` 8.1, `loopslots` 7.0 beside it); the 340 M of [synthesis] row 6 is stale. The credible exit is about 240 M (about 50 M recoverable), not 160. The peephole's shared lane and exit facts (at most 1.0%) and the x87 live rows (0.9%) are dropped. Rewrites that need no physical register could move into selection (DAG-combine style, [lir-cleanup] item 5). Moves [synthesis] row 6.
-- **(b) Early:** the idle-visit count, per sub-pass, on `d_faces` -O2: the block visits that change nothing (the open question in [lir-cleanup]). It is the first probe. Kill if idle block visits are below 30% of clean-up cost; ssa-spill-m16 expects it to fire.
+- **(a) Effect:** merged-tree numbers (ssa-spill-m16): `Peephole` 97.1 M, `jumps` 58.7, `coalesce` 57.8, `FloatAssign` plus `FloatAlloc` 65.1, `phielim` 11.4: 290 M (and `parcopy` 9.8, `twoaddr` 8.3, `pressuresink` 8.1, `loopslots` 7.0 beside it); the 340 M of [synthesis] row 6 is stale. The credible exit is about 250 M until the next probe (290 to 250), not 160. The peephole's shared lane and exit facts (at most 1.0%) and the x87 live rows (0.9%) are dropped. Rewrites that need no physical register could move into selection (DAG-combine style, [lir-cleanup] item 5). Moves [synthesis] row 6.
+- **(b) Early:** done by ssa-spill-m16: `Peephole::once` as 44 steps, counting after each the blocks whose instruction list is not element-wise the same `Arc`s (a lower bound on idleness). `d_faces` -O2: 14,017 block visits (11 functions, 318 blocks), 494 change a block, 96.5% idle; 23 of 44 sub-passes change no block (about 25 M); `Peephole::once` is 97.1 M inclusive (`copyprop` 13.6, `exact_addresses` 9.2, `spillforward` 8.4, `postrasink` 5.0, `machinecse` 4.2, `widened_moves` 3.4, `narrowed_arithmetic` 3.2, `fused` 3.1, `thrashed` 3.0). Whole corpus (vsgcc, `tests/run`, QCport; 350 files at -O2): 1,000,912 visits, 97.1% idle; 10 of 45 sub-passes never change a block (`copysink`, `exact_addresses`, `frame`, `narrowed_arithmetic`, `restored_copies`, `secondary_bases`, `stepped_after_compare`, `storecombine`, `upperzero_established`, `waits`). The kill threshold (idle below 30%) is not met. Ceiling: the idle cost is about 93 of the 97 M, less classification (the idle-skip experiment's 0.65%, about 17 M), about 76 M net; realistic about 40 M, because `copyprop`, `spillforward` and `exact_addresses` are per-body dataflow, not per visited block. The next probe splits per-visit from per-body cost.
 - **(c) Gate:** a design page for the selection-time rewrites with a review, only if the probe does not fire.
-- **(d) Exit:** M; counted `block_visits` at most the dirty blocks after the first visit (spec 6). Pass: clean-up 240 M or less at -O2.
+- **(d) Exit:** M; counted `block_visits` at most the dirty blocks after the first visit (spec 6). Pass: clean-up 250 M or less at -O2 until the per-visit probe says more.
 - **(e) Who:** ssa-spill-m16. Depends on 3.3. [#1921] is closed, not depended on ([#1975] merged); its allocation-free rule windows (-4 M) are on branch `alim/perf/lir-cleanup-2`. Touches `peephole.rs`, `peep/`, `jumps`, isel combine.
 
 Checklist: the shared list. Its own metric boxes:
@@ -1010,7 +1049,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 | all of phase 1 (1.6 and 1.7 serialised on `avail.rs`) | 0.1 |
 | 2.1b, 2.2, 2.4 (A'), 2.6, 2.7, 2.8, 2.9 | B1; 2.1b after 0.3; 2.2 after [#1943]; 2.4 after [#1958] |
 | 2.3 | 1.6 merged (`memoryssa.rs`) |
-| 3.1 families; 3.3 | 0.3 and B2 for 3.1; B2 for 3.3 |
+| 3.1 families; 3.3 | 3.1: 0.3 for the skipping families, the early probe and design review for the rest; 3.3: its early probe and design review (neither waits for B1 or B2) |
 | 3.2 per-pass ablation, then the round drop | B1 for the ablation; 3.1 for the round drop |
 | 3.4 | 3.3 |
 | 3.5 | 3.3 and 2.7 |
@@ -1054,7 +1093,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 | 0 instruments | now | 0.1's table committed; 0.2's counters in CI |
 | 1 land the measured | 0.1 | every 1.x checked or closed; B1 within 2 points of -8.3% (ready set) |
 | 2 open levers | B1 | each 2.x landed or recorded in [spec 8]; B2 within 2 points of its row |
-| 3 structural | B1 for 3.2 steps 1-2; B2 for the rest | computations per run 0.5 or fewer; one round at -O1 to -Os with rows held; `regalloc` 150 M or less; clean-up 160 M or less; B3 within 3 points of about 1,460 M |
+| 3 structural | now, in parallel with phases 1 and 2; each step by its early probe and design review | computations per run 0.5 or fewer; one round at -O1 to -Os with rows held; `regalloc` 150 M or less; clean-up 160 M or less; B3 within 3 points of about 1,460 M |
 | 4 per-pass cost | B3 | every pass within its counted budget; budgets re-derived from clang (4.2); `d_faces` at each level at clang's column or with a named remainder |
 
 [synthesis]: https://github.com/ali-mosavian/llrm/blob/ef40f30a7fc4a06e2693bd1c6b0d69bee9a19446/docs/comparison/llvm/synthesis.md
