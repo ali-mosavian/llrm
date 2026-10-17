@@ -14,11 +14,20 @@ floor_minstr = 5.0      # ... and this much, in millions of instructions
 [[debt]]
 kind = "steps"
 axis = "branches"
-name = "mir decide"
-ratio = 2.7
+name = "mir gvn"
+ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 203.0 -> 488.2 Minstr (x2.40)"
+why = "measured 227.0 -> 529.6 Minstr (x2.33)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir decide"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1874"
+owner = "o1-rounds"
+why = "measured 188.2 -> 439.0 Minstr (x2.33)"
 
 [[debt]]
 kind = "steps"
@@ -27,7 +36,7 @@ name = "isel"
 ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 122.0 -> 283.6 Minstr (x2.32)"
+why = "measured 118.5 -> 275.9 Minstr (x2.33)"
 
 [[debt]]
 kind = "steps"
@@ -36,7 +45,7 @@ name = "mir indvars"
 ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 80.7 -> 275.1 Minstr (x3.41)"
+why = "measured 80.5 -> 274.6 Minstr (x3.41)"
 
 [[debt]]
 kind = "steps"
@@ -45,7 +54,16 @@ name = "regalloc base"
 ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 88.2 -> 221.2 Minstr (x2.51)"
+why = "measured 87.9 -> 220.6 Minstr (x2.51)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir twoaddr"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 65.6 -> 153.8 Minstr (x2.35)"
 
 [[debt]]
 kind = "steps"
@@ -54,7 +72,7 @@ name = "lir coalesce"
 ratio = 3.3
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 19.7 -> 58.3 Minstr (x2.96)"
+why = "measured 19.7 -> 58.2 Minstr (x2.96)"
 
 [[debt]]
 kind = "steps"
@@ -63,7 +81,7 @@ name = "facts intervals"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 5.3 -> 17.0 Minstr (x3.20)"
+why = "measured 5.3 -> 16.9 Minstr (x3.21)"
 
 [[debt]]
 kind = "steps"
@@ -77,11 +95,20 @@ why = "measured 3.6 -> 12.7 Minstr (x3.51)"
 [[debt]]
 kind = "steps"
 axis = "chain"
+name = "mir interprocedural"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 8.8 -> 20.4 Minstr (x2.31)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
 name = "regalloc base"
-ratio = 2.9
+ratio = 3.0
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 3.9 -> 10.4 Minstr (x2.63)"
+why = "measured 3.9 -> 10.3 Minstr (x2.64)"
 
 [[debt]]
 kind = "events"
@@ -105,10 +132,10 @@ why = "measured 1 -> 12 (x12.00)"
 kind = "steps"
 axis = "nest"
 name = "mir lsr"
-ratio = 5.7
+ratio = 4.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1875"
 owner = "unrolled-slopes"
-why = "measured 26.8 -> 138.0 Minstr (x5.15)"
+why = "measured 26.2 -> 115.9 Minstr (x4.42)"
 
 [[debt]]
 kind = "steps"
@@ -117,7 +144,7 @@ name = "lir jumps"
 ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 22.1 -> 53.2 Minstr (x2.40)"
+why = "measured 21.9 -> 53.0 Minstr (x2.42)"
 
 [[debt]]
 kind = "steps"
@@ -131,38 +158,11 @@ why = "measured 20.2 -> 50.7 Minstr (x2.51)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "mir gvn"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 20.5 -> 49.4 Minstr (x2.41)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "regalloc base"
 ratio = 3.5
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 14.1 -> 43.9 Minstr (x3.11)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "split placed"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 14.1 -> 39.8 Minstr (x2.81)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir decide"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 12.3 -> 35.1 Minstr (x2.85)"
+why = "measured 14.0 -> 43.7 Minstr (x3.11)"
 
 [[debt]]
 kind = "steps"
@@ -171,25 +171,43 @@ name = "mir indvars"
 ratio = 3.5
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 11.2 -> 34.9 Minstr (x3.10)"
+why = "measured 11.1 -> 34.5 Minstr (x3.10)"
 
 [[debt]]
 kind = "steps"
 axis = "nest"
 name = "mir lcssa"
-ratio = 3.8
+ratio = 3.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1947"
 owner = "coordinator (to assign)"
-why = "measured 10.1 -> 34.6 Minstr (x3.44)"
+why = "measured 9.5 -> 33.4 Minstr (x3.52)"
 
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "mir hoist"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 10.1 -> 33.7 Minstr (x3.35)"
+name = "mir decide"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/1874"
+owner = "o1-rounds"
+why = "measured 11.6 -> 33.2 Minstr (x2.87)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "split placed"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/1876"
+owner = "alloc-slopes"
+why = "measured 11.7 -> 33.1 Minstr (x2.84)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir gvn"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1874"
+owner = "o1-rounds"
+why = "measured 13.4 -> 31.4 Minstr (x2.34)"
 
 [[debt]]
 kind = "steps"
@@ -198,7 +216,7 @@ name = "lir coalesce"
 ratio = 3.3
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 21.6 -> 63.3 Minstr (x2.93)"
+why = "measured 21.5 -> 63.2 Minstr (x2.94)"
 
 [[debt]]
 kind = "steps"
@@ -207,16 +225,16 @@ name = "regalloc base"
 ratio = 3.3
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 19.7 -> 57.9 Minstr (x2.93)"
+why = "measured 19.6 -> 57.5 Minstr (x2.93)"
 
 [[debt]]
 kind = "steps"
 axis = "cells"
 name = "mir dse"
-ratio = 2.8
+ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/1875"
 owner = "unrolled-slopes"
-why = "measured 11.8 -> 29.1 Minstr (x2.47)"
+why = "measured 11.8 -> 28.8 Minstr (x2.43)"
 
 [[debt]]
 kind = "steps"
@@ -225,25 +243,34 @@ name = "regalloc spill"
 ratio = 3.0
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 9.1 -> 24.2 Minstr (x2.66)"
+why = "measured 8.9 -> 23.8 Minstr (x2.67)"
 
 [[debt]]
 kind = "steps"
 axis = "cells"
-name = "hir verify"
-ratio = 2.7
+name = "spill cleanup"
+ratio = 4.5
 issue = "https://github.com/ali-mosavian/llrm/issues/1947"
 owner = "coordinator (to assign)"
-why = "measured 9.7 -> 23.7 Minstr (x2.45)"
+why = "measured 4.4 -> 17.5 Minstr (x4.03)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "regalloc prepare"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 7.2 -> 16.7 Minstr (x2.30)"
 
 [[debt]]
 kind = "steps"
 axis = "joins"
 name = "mir gvn"
-ratio = 3.1
+ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 281.4 -> 792.4 Minstr (x2.82)"
+why = "measured 179.9 -> 447.2 Minstr (x2.49)"
 
 [[debt]]
 kind = "steps"
@@ -252,7 +279,7 @@ name = "split placed"
 ratio = 4.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 81.7 -> 338.5 Minstr (x4.15)"
+why = "measured 66.1 -> 271.0 Minstr (x4.10)"
 
 [[debt]]
 kind = "steps"
@@ -261,43 +288,52 @@ name = "lir coalesce"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 58.3 -> 150.2 Minstr (x2.57)"
+why = "measured 58.2 -> 149.8 Minstr (x2.58)"
 
 [[debt]]
 kind = "steps"
 axis = "joins"
 name = "analysis through-memory"
-ratio = 3.1
+ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 53.8 -> 147.6 Minstr (x2.74)"
+why = "measured 39.0 -> 110.7 Minstr (x2.84)"
 
 [[debt]]
 kind = "steps"
 axis = "joins"
-name = "mir sroa"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/1878"
-owner = "tracker-1492"
-why = "measured 39.5 -> 107.2 Minstr (x2.72)"
+name = "regalloc base"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/1876"
+owner = "alloc-slopes"
+why = "measured 29.1 -> 88.3 Minstr (x3.03)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir twoaddr"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 30.5 -> 78.3 Minstr (x2.56)"
 
 [[debt]]
 kind = "steps"
 axis = "fjoins"
 name = "lir floatassign"
-ratio = 4.0
+ratio = 3.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 196.4 -> 697.1 Minstr (x3.55)"
+why = "measured 188.7 -> 668.7 Minstr (x3.54)"
 
 [[debt]]
 kind = "steps"
 axis = "fjoins"
 name = "mir gvn"
-ratio = 3.2
+ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 236.2 -> 684.0 Minstr (x2.90)"
+why = "measured 127.6 -> 306.3 Minstr (x2.40)"
 
 [[debt]]
 kind = "steps"
@@ -306,34 +342,34 @@ name = "lir jumps"
 ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 59.0 -> 138.2 Minstr (x2.34)"
+why = "measured 55.9 -> 131.7 Minstr (x2.35)"
 
 [[debt]]
 kind = "steps"
 axis = "fjoins"
-name = "mir sroa"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/1878"
-owner = "tracker-1492"
-why = "measured 39.5 -> 107.4 Minstr (x2.72)"
+name = "lir floatalloc"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 34.9 -> 81.3 Minstr (x2.33)"
 
 [[debt]]
 kind = "steps"
 axis = "unrolled"
 name = "mir gvn"
-ratio = 3.0
+ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1874"
 owner = "o1-rounds"
-why = "measured 66.5 -> 175.4 Minstr (x2.64)"
+why = "measured 42.9 -> 100.9 Minstr (x2.35)"
 
 [[debt]]
 kind = "steps"
 axis = "unrolled"
 name = "mir lsr"
-ratio = 3.5
+ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1875"
 owner = "unrolled-slopes"
-why = "measured 49.9 -> 154.3 Minstr (x3.09)"
+why = "measured 36.5 -> 93.1 Minstr (x2.55)"
 
 [[debt]]
 kind = "steps"
@@ -342,16 +378,7 @@ name = "split placed"
 ratio = 3.9
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 27.2 -> 96.2 Minstr (x3.54)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir decide"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 28.3 -> 73.6 Minstr (x2.60)"
+why = "measured 22.9 -> 80.4 Minstr (x3.52)"
 
 [[debt]]
 kind = "steps"
@@ -360,16 +387,16 @@ name = "mir dse"
 ratio = 3.5
 issue = "https://github.com/ali-mosavian/llrm/issues/1875"
 owner = "unrolled-slopes"
-why = "measured 23.0 -> 72.9 Minstr (x3.17)"
+why = "measured 22.0 -> 69.9 Minstr (x3.17)"
 
 [[debt]]
 kind = "steps"
 axis = "unrolled"
-name = "isel"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/1877"
-owner = "lir-cleanup"
-why = "measured 27.8 -> 69.2 Minstr (x2.49)"
+name = "mir decide"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/1874"
+owner = "o1-rounds"
+why = "measured 26.8 -> 69.3 Minstr (x2.59)"
 
 [[debt]]
 kind = "steps"
@@ -378,7 +405,16 @@ name = "regalloc base"
 ratio = 3.4
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 22.5 -> 68.5 Minstr (x3.05)"
+why = "measured 22.3 -> 68.1 Minstr (x3.05)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "isel"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/1877"
+owner = "lir-cleanup"
+why = "measured 27.2 -> 68.0 Minstr (x2.50)"
 
 [[debt]]
 kind = "steps"
@@ -387,25 +423,52 @@ name = "facts intervals"
 ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 17.4 -> 60.2 Minstr (x3.45)"
+why = "measured 17.4 -> 60.1 Minstr (x3.45)"
 
 [[debt]]
 kind = "steps"
 axis = "unrolled"
 name = "lir jumps"
-ratio = 3.5
+ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
-why = "measured 17.3 -> 54.7 Minstr (x3.16)"
+why = "measured 16.6 -> 53.2 Minstr (x3.21)"
 
 [[debt]]
 kind = "steps"
 axis = "unrolled"
 name = "analysis pressure"
-ratio = 4.2
+ratio = 4.3
 issue = "https://github.com/ali-mosavian/llrm/issues/1875"
 owner = "unrolled-slopes"
-why = "measured 12.9 -> 48.2 Minstr (x3.74)"
+why = "measured 11.7 -> 45.4 Minstr (x3.89)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "split carving"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 11.2 -> 41.8 Minstr (x3.72)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir indvars"
+ratio = 3.0
+issue = "https://github.com/ali-mosavian/llrm/issues/1874"
+owner = "o1-rounds"
+why = "measured 14.2 -> 38.2 Minstr (x2.69)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir interprocedural"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 8.9 -> 20.6 Minstr (x2.32)"
 
 [[debt]]
 kind = "steps"
@@ -414,4 +477,4 @@ name = "regalloc base"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/1876"
 owner = "alloc-slopes"
-why = "measured 5.2 -> 16.6 Minstr (x3.23)"
+why = "measured 5.1 -> 16.5 Minstr (x3.24)"
