@@ -12,6 +12,8 @@ pub mod context;
 #[cfg(test)]
 mod context_tests;
 pub mod guarantee;
+#[cfg(test)]
+mod guarantee_tests;
 pub mod known;
 pub mod nonzero;
 pub mod pattern;
@@ -36,6 +38,7 @@ pub fn column(
         "p2z" => power2::column(query, value, true),
         "cru" => range::column(query, value, false),
         "crs" => range::column(query, value, true),
+        "gp" => guarantee::column(query, value),
         other => format!(" {other}=?"),
     }
 }

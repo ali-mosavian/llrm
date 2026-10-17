@@ -3,7 +3,7 @@
 
     tools/llvmport/vtcompare.py COLS FILE.ll... [--show N]
 
-FILE may be a directory (every `.ll` under it). A file either side cannot read is skipped and counted. COLS is the comma list `vtdump` takes (kb sb nz p2 p2z nn ng cru crs). Prints the number of values compared
+FILE may be a directory (every `.ll` under it). A file either side cannot read is skipped and counted. COLS is the comma list `vtdump` takes (kb sb nz p2 p2z nn ng cru crs gp). Prints the number of values compared
 and, for each differing one, both lines. Exit 1 on a difference. LLVM's side is `vtdump.sh`, llrm's the
 `vtdump` example of llrm-mir (CARGO_TARGET_DIR is honoured).
 """

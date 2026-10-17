@@ -1,7 +1,7 @@
 // Prints what LLVM's ValueTracking proves of every integer and pointer value of a module, one line each:
 //   <function> <n> <column>=<answer> ...
 // where <n> numbers the function's arguments and then its instructions that have a scalar integer or pointer result.
-// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z nn ng cru crs
+// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z nn ng cru crs gp
 // `tools/llvmport/vtcompare.py` runs it beside the Rust `vtdump` example and compares the lines.
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/SimplifyQuery.h"
@@ -71,6 +71,8 @@ int main(int argc, char **argv) {
         if (cols.count("nz")) printf(" nz=%d", isKnownNonZero(V, Q, 0));
         if (cols.count("p2")) printf(" p2=%d", isKnownToBeAPowerOfTwo(V, DL, false, &AC, CxtI, &DT, true, 0));
         if (cols.count("p2z")) printf(" p2z=%d", isKnownToBeAPowerOfTwo(V, DL, true, &AC, CxtI, &DT, true, 0));
+        if (cols.count("gp"))
+          printf(" gp=%d%d", isGuaranteedNotToBePoison(V, &AC, CxtI, &DT), isGuaranteedNotToBeUndef(V, &AC, CxtI, &DT));
         if (cols.count("nn")) printf(" nn=%d", isKnownNonNegative(V, Q, 0));
         if (cols.count("ng")) printf(" ng=%d", isKnownNegative(V, Q, 0));
         if (Ty->isIntegerTy()) {

@@ -52,9 +52,8 @@ fn test_assume_known_bits_are_llvms() {
 }
 
 /// An `assume` after its context in one block holds there when nothing in
-/// between can leave the block; waits for `guarantee.rs` to be translated.
+/// between can leave the block.
 #[test]
-#[ignore = "needs is_guaranteed_to_transfer_execution_to_successor"]
 fn test_assume_after_its_context_in_one_block() {
     let expected = "before_assume 1 kb=00000000000000000000000000000???\n";
     assert_eq!(context_lines(include_str!("../../tests/vt/context/order.ll")), expected);
