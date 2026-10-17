@@ -153,30 +153,61 @@ impl FunctionPass for FloatLoop {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        // With no float in the body no loop is a float loop.
-        // LLRM_CHECK_FLOATSKIP runs the pass anyway and says if it
-        // changed anything.
-        // Nor does a float loop exist unless some loop has `_planned`'s shape,
-        // which is seen without the solve: that is for nothing where none has.
-        let none = !floatfacts::touches(unit.context, unit.function) || !self.float_loop(unit, analyses);
-        if none && !llrm_support::env_set("LLRM_CHECK_FLOATSKIP") {
-            return PreservedAnalyses::all();
-        }
-        let before = none.then(|| unit.function.clone());
-        let preserved = self.floated(unit, analyses);
-        if let Some(before) = before {
-            assert!(
-                preserved.are_all_preserved()
-                    && llrm_mir::print::body(unit.context, unit.function)
-                        == llrm_mir::print::body(unit.context, &before),
-                "LLRM_CHECK_FLOATSKIP: floatloop changed a body with no float in it"
-            );
-        }
-        preserved
+        self.run_checking(unit, analyses, llrm_support::env_set("LLRM_CHECK_FLOATSKIP"))
     }
 }
 
 impl FloatLoop {
+    /// `run`, `check` being `LLRM_CHECK_FLOATSKIP`.
+    pub(crate) fn run_checking(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+        check: bool,
+    ) -> PreservedAnalyses {
+        // With no float in the body no loop is a float loop.
+        // Nor does a float loop exist unless some loop has `_planned`'s shape,
+        // which is seen without the solve: that is for nothing where none has.
+        let none = !floatfacts::touches(unit.context, unit.function) || !self.float_loop(unit, analyses);
+        if !none {
+            return self.floated(unit, analyses);
+        }
+        if check {
+            self.checked(unit, analyses);
+        }
+        PreservedAnalyses::all()
+    }
+
+    /// The pass run anyway, and what it asked of the analyses and changed
+    /// said: on a copy of the body and with analyses of its own. What it asks
+    /// of the manager (the integers `FloatFacts` solves under, `ThroughMemory`)
+    /// is kept and read by every pass after it, a kept result knowing less than
+    /// one asked later, so a check that asked changed the object (matmul bq32
+    /// -O3: 18 KB of code against 34 KB).
+    fn checked(
+        &mut self,
+        unit: &passes::Unit,
+        analyses: &Analyses,
+    ) {
+        let mut context = unit.context.clone();
+        let mut function = unit.function.clone();
+        let mut declared = unit.declared.clone();
+        let mut copy = passes::Unit {
+            context: &mut context,
+            layout: unit.layout,
+            function: &mut function,
+            id: unit.id,
+            metadata: unit.metadata,
+            declared: &mut declared,
+        };
+        let preserved = self.floated(&mut copy, &mut analyses.fresh());
+        assert!(
+            preserved.are_all_preserved()
+                && llrm_mir::print::body(unit.context, unit.function) == llrm_mir::print::body(&context, &function),
+            "LLRM_CHECK_FLOATSKIP: floatloop changed a body with no float in it"
+        );
+    }
+
     /// Whether some loop has the shape `_planned` starts from, which needs no
     /// solve to see: one exit that only the header reaches and no phi takes,
     /// a phi in the header, and a latch of float work, steps and a jump.

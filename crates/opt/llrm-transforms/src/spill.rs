@@ -385,7 +385,7 @@ pub fn transient(
     function: &Function,
     inst: InstId,
     room: Room,
-    live: &BTreeSet<ValueId>,
+    live: &IdSet<ValueId>,
 ) -> i64 {
     transient_by(context, layout, function, inst, room, live, &mut |value| {
         folded_in(context, function, value, room.index_scales)
@@ -400,7 +400,7 @@ fn transient_by(
     function: &Function,
     inst: InstId,
     room: Room,
-    live: &BTreeSet<ValueId>,
+    live: &IdSet<ValueId>,
     is_folded: &mut dyn FnMut(ValueId) -> bool,
 ) -> i64 {
     let op = function.instruction(inst);
@@ -425,7 +425,7 @@ fn transient_by(
 pub fn copied(
     function: &Function,
     inst: InstId,
-    past: &BTreeSet<ValueId>,
+    past: &IdSet<ValueId>,
     room: Room,
     counted: &dyn Fn(ValueId) -> bool,
 ) -> i64 {
@@ -1146,7 +1146,7 @@ pub fn sites(
     points: &[LivePoint],
     room: Room,
     across: &dyn Fn(InstId) -> i64,
-    transient: &dyn Fn(InstId, &BTreeSet<ValueId>) -> i64,
+    transient: &dyn Fn(InstId, &IdSet<ValueId>) -> i64,
     cells: &BTreeMap<ValueId, ValueId>,
     counted: &dyn Fn(ValueId) -> bool,
     segment: &dyn Fn(ValueId) -> bool,
@@ -1155,9 +1155,8 @@ pub fn sites(
     let viewed = |one: ValueId| room.segments > 0 && segment(one);
     // The cells of the live values that pass `keep`, in order and once each:
     // sorted in a vector, where a tree of them was most of a loop's model.
-    let cells_of = |live: &BTreeSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
-        let mut found: Vec<ValueId> =
-            live.iter().copied().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
+    let cells_of = |live: &IdSet<ValueId>, keep: &dyn Fn(ValueId) -> bool| -> Vec<ValueId> {
+        let mut found: Vec<ValueId> = live.iter().filter(|&one| keep(one)).map(|one| _cell(cells, one)).collect();
         found.sort_unstable();
         found.dedup();
         found
@@ -1322,7 +1321,7 @@ impl Pressure {
         let out = &self.found.live_out[&key.0];
         let first = &self.steps(function, to).first;
         let (mut leave, mut enter) = (Vec::new(), Vec::new());
-        let (mut ahead, mut behind) = (out.iter().copied().peekable(), first.iter().copied().peekable());
+        let (mut ahead, mut behind) = (out.iter().peekable(), first.iter().copied().peekable());
         loop {
             match (ahead.peek(), behind.peek()) {
                 (Some(&gone), Some(&new)) if gone == new => {
@@ -1541,12 +1540,12 @@ impl Pressure {
             let mut index = IdMap::<ValueId, (BTreeSet<i64>, BTreeSet<i64>)>::new();
             for (at, values) in &found.live_in {
                 for value in values.iter().filter(|value| !shared || named.contains(value)) {
-                    index.get_or_insert_with(*value, Default::default).0.insert(*at);
+                    index.get_or_insert_with(value, Default::default).0.insert(*at);
                 }
             }
             for (at, values) in &found.live_out {
                 for value in values.iter().filter(|value| !shared || named.contains(value)) {
-                    index.get_or_insert_with(*value, Default::default).1.insert(*at);
+                    index.get_or_insert_with(value, Default::default).1.insert(*at);
                 }
             }
             index
@@ -1555,7 +1554,7 @@ impl Pressure {
         renewed(&mut found, &mut placed, &named, computed, &mut touched);
         if llrm_support::env_set("LLRM_CHECK_PRESSURE") {
             let fresh = Pressure::of(context, function, scales);
-            let flat = |sets: &BTreeMap<i64, BTreeSet<ValueId>>| {
+            let flat = |sets: &BTreeMap<i64, IdSet<ValueId>>| {
                 sets.iter()
                     .filter(|(_, set)| !set.is_empty())
                     .map(|(at, set)| (*at, set.clone()))
@@ -1861,7 +1860,7 @@ impl<'a> View<'a> {
             for kind in &mut kinds {
                 kind.clear();
             }
-            let mut live = first.iter().copied().collect::<BTreeSet<_>>();
+            let mut live = first.iter().copied().collect::<IdSet<_>>();
             for &value in &first {
                 let (cell, member) = class(value);
                 for (kind, _) in kinds.iter_mut().zip(member).filter(|(_, member)| *member) {

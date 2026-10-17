@@ -91,6 +91,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::dense::IdSet;
 
 use crate::analysis::intervals::{self as ranges, Indexes, Segment};
 use crate::analysis::loops;
@@ -420,13 +421,13 @@ fn crossings_in(
     let (body, graph) = (blocks.body, &blocks.graph);
     // A block is in a crossing only if the region has it or has a successor of
     // it, in the order the blocks come.
-    let mut near: BTreeSet<usize> = BTreeSet::new();
+    let mut near: IdSet<usize> = IdSet::new();
     for at in region.spans.keys() {
         let position = graph.position[at];
         near.insert(position);
         near.extend(graph.parents[position].iter().copied());
     }
-    let found = crossings_among(blocks, value, region, live, near.into_iter());
+    let found = crossings_among(blocks, value, region, live, near.iter());
     if llrm_support::env_set("LLRM_CHECK_SPLIT") {
         assert_eq!(
             found,
@@ -976,9 +977,9 @@ fn analysed_along(
 ) -> Analysis {
     let (body, graph) = (blocks.body, &blocks.graph);
     let names = blocks.names(value);
-    let mut seen: BTreeSet<usize> = names.keys().copied().collect();
+    let mut seen: IdSet<usize> = names.keys().copied().collect();
     let mut stack: Vec<usize> = names.keys().copied().collect();
-    let mut through: BTreeSet<usize> = BTreeSet::new();
+    let mut through: IdSet<usize> = IdSet::new();
     while let Some(position) = stack.pop() {
         if !live.live_in(body.blocks[position].at, value) {
             continue;
@@ -1008,7 +1009,7 @@ fn analysed_along(
             }
         })
         .collect();
-    Analysis { uses, through: through.into_iter().map(|position| body.blocks[position].at).collect() }
+    Analysis { uses, through: through.iter().map(|position| body.blocks[position].at).collect() }
 }
 
 fn analysed_scan(
