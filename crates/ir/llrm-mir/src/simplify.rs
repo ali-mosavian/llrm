@@ -33,11 +33,15 @@
 //! # Used by
 //! `earlycse`, the combine worklist, `gvn`, `fold`.
 
+use crate::constantrange::ConstantRange;
 use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
+use crate::datalayout::DataLayout;
+use crate::knownbits::KnownBits;
 use crate::module::{Function, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use crate::types::TypeId;
+use crate::valuetracking::{Query as ValueQuery, known, nonzero, range};
 
 /// `RecursionLimit` in InstructionSimplify.cpp.
 const RECURSION_LIMIT: u32 = 3;
@@ -46,6 +50,7 @@ const RECURSION_LIMIT: u32 = 3;
 struct Query<'a> {
     context: &'a mut Context,
     function: &'a Function,
+    layout: &'a DataLayout,
 }
 
 impl Query<'_> {
@@ -246,12 +251,34 @@ impl Query<'_> {
         }
     }
 
-    /// `KnownBits::Zero`.
-    fn known_zero(
+    /// A ValueTracking query over this body (`SimplifyQuery`).
+    fn tracking(&self) -> ValueQuery<'_> {
+        ValueQuery::bare(self.context, self.function, self.layout)
+    }
+
+    /// `computeKnownBits(V, Q)`.
+    fn known(
         &self,
         operand: Operand,
-    ) -> u128 {
-        crate::valuetracking::known_zero(self.context, self.function, operand)
+    ) -> KnownBits {
+        known::compute_known_bits(&self.tracking(), operand, 0)
+    }
+
+    /// `computeConstantRange(V, ForSigned, ...)`.
+    fn range(
+        &self,
+        operand: Operand,
+        for_signed: bool,
+    ) -> ConstantRange {
+        range::compute_constant_range(&self.tracking(), operand, for_signed, 0)
+    }
+
+    /// `isKnownNonZero(V, Q)`.
+    fn is_known_non_zero(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        nonzero::is_known_non_zero(&self.tracking(), operand, 0)
     }
 
     /// `match(C, m_LowBitMask())`: `2^n - 1`, n > 0.
@@ -527,7 +554,7 @@ fn simplify_sub(
             return Some(q.null(ty));
         }
         if let Some(width) = q.width(op1)
-            && q.known_zero(op1) == mask(width) >> 1
+            && q.known(op1).zero == mask(width) >> 1
         {
             // Op1 is either 0 or the minimum signed value. If the sub is NSW,
             // then Op1 must be 0 because negating the minimum
@@ -698,14 +725,13 @@ fn simplify_div_rem(
         return Some(if is_div { q.int(ty, 1) } else { q.null(ty) });
     }
     if let Some(width) = q.width(op1) {
-        let zeros = q.known_zero(op1);
+        let known = q.known(op1);
         // If the divisor is known to be zero, just return poison.
-        if zeros == mask(width) {
+        if known.is_zero() {
             return Some(q.poison(ty));
         }
-        // If the divisor can only be zero or one, X / 1 -> X, X % 1 -> 0
-        // (`Known.countMinLeadingZeros() == BitWidth - 1`).
-        if (zeros << (128 - width)).leading_ones() == width - 1 {
+        // If the divisor can only be zero or one, X / 1 -> X, X % 1 -> 0.
+        if known.count_min_leading_zeros() == width - 1 {
             return Some(if is_div { op0 } else { q.null(ty) });
         }
     }
@@ -806,8 +832,8 @@ fn is_div_zero(
         return false;
     }
     // Is the unsigned dividend known to be less than a constant divisor?
-    if let Some((c, width)) = q.number(y)
-        && !q.known_zero(x) & mask(width) < c
+    if let Some((c, _)) = q.number(y)
+        && q.known(x).max_value() < c
     {
         return true;
     }
@@ -929,15 +955,32 @@ fn simplify_shift(
         let ty = q.ty(op0);
         return Some(q.poison(ty));
     }
-    // The amount's low bits known zero: it is 0 or the width or more (poison):
-    // either way op0. `KnownAmt.getMinValue().uge(BitWidth)` and the `nsw`
-    // KnownBits::shl check need KnownBits::One: DEVIATE.
     let width = q.width(op1)?;
+    let known_amount = q.known(op1);
+    // A shift amount known to be the width or more is poison.
+    if known_amount.min_value() >= u128::from(width) {
+        let ty = q.ty(op0);
+        return Some(q.poison(ty));
+    }
+    // An amount whose low bits are known zero is 0 or poison: op0.
     let valid_shift_bits = u32::BITS - (width - 1).leading_zeros();
-    if q.known_zero(op1).trailing_ones() >= valid_shift_bits {
+    if known_amount.count_min_trailing_zeros() >= valid_shift_bits {
         return Some(op0);
     }
-    let _ = is_nsw;
+    if is_nsw {
+        let known_value = q.known(op0);
+        let mut known_shl = KnownBits::shl(&known_value, &known_amount, false, true, false);
+        if known_value.zero >> (width - 1) & 1 == 1 {
+            known_shl.zero |= 1u128 << (width - 1);
+        }
+        if known_value.one >> (width - 1) & 1 == 1 {
+            known_shl.one |= 1u128 << (width - 1);
+        }
+        if known_shl.has_conflict() {
+            let ty = q.ty(op0);
+            return Some(q.poison(ty));
+        }
+    }
     None
 }
 
@@ -1634,6 +1677,32 @@ fn simplify_icmp(
     if let Some(v) = simplify_icmp_with_constant(q, pred, lhs, rhs) {
         return Some(v);
     }
+    if let Some(v) = simplify_icmp_of_extensions(q, pred, lhs, rhs, max_recurse) {
+        return Some(v);
+    }
+    // icmp eq/ne X, Y where X and Y are known to differ.
+    if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+        && !q.is_zero(rhs)
+        && nonzero::is_known_non_equal(&q.tracking(), lhs, rhs, 0)
+    {
+        return Some(q.int(i1, u128::from(pred == IntPredicate::Ne)));
+    }
+    if let Some(v) = simplify_icmp_using_monotonic_values(q, pred, lhs, rhs) {
+        return Some(v);
+    }
+    simplify_icmp_using_monotonic_values(q, swapped(pred), rhs, lhs)
+}
+
+/// The zext/sext cases of `simplifyICmpInst` (:3883): the compare of an
+/// extension against an extension or a constant.
+fn simplify_icmp_of_extensions(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+    max_recurse: u32,
+) -> Option<Operand> {
+    let i1 = q.context.types.int(1);
     let Some((first, src_op, _)) = q.cast(lhs).filter(|&(op, ..)| matches!(op, CastOp::ZExt | CastOp::SExt)) else {
         return None;
     };
@@ -1708,6 +1777,75 @@ fn simplify_icmp(
     }
 }
 
+/// `getUnsignedMonotonicValues`
+/// ([:3170](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3170)).
+/// DEVIATE: `uadd.sat` / `usub.sat` are intrinsics.
+fn unsigned_monotonic_values(
+    q: &Query,
+    result: &mut Vec<Operand>,
+    v: Operand,
+    greater_eq: bool,
+    depth: u32,
+) {
+    if result.contains(&v) {
+        return;
+    }
+    result.push(v);
+    if depth + 1 > 1 {
+        return;
+    }
+    let depth = depth + 1;
+    let Some((op, x, y, flags)) = q.binary(v) else { return };
+    if greater_eq {
+        if op == BinaryOp::Or {
+            unsigned_monotonic_values(q, result, x, greater_eq, depth);
+            unsigned_monotonic_values(q, result, y, greater_eq, depth);
+        }
+        if op == BinaryOp::Mul && flags.contains(Flags::NUW) {
+            if q.is_known_non_zero(x) {
+                unsigned_monotonic_values(q, result, y, greater_eq, depth);
+            }
+            if q.is_known_non_zero(y) {
+                unsigned_monotonic_values(q, result, x, greater_eq, depth);
+            }
+        }
+    } else {
+        match op {
+            BinaryOp::And => {
+                unsigned_monotonic_values(q, result, x, greater_eq, depth);
+                unsigned_monotonic_values(q, result, y, greater_eq, depth);
+            }
+            BinaryOp::URem | BinaryOp::UDiv | BinaryOp::LShr => {
+                unsigned_monotonic_values(q, result, x, greater_eq, depth);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// `simplifyICmpUsingMonotonicValues`
+/// ([:3228](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3228)).
+fn simplify_icmp_using_monotonic_values(
+    q: &mut Query,
+    pred: IntPredicate,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Operand> {
+    if !matches!(pred, IntPredicate::Uge | IntPredicate::Ult) {
+        return None;
+    }
+    // We have LHS uge GreaterValues and LowerValues uge RHS. If any of the
+    // GreaterValues and LowerValues are the same, it follows that LHS uge RHS.
+    let (mut greater, mut lower) = (Vec::new(), Vec::new());
+    unsigned_monotonic_values(q, &mut greater, lhs, true, 0);
+    unsigned_monotonic_values(q, &mut lower, rhs, false, 0);
+    if greater.iter().any(|value| lower.contains(value)) {
+        let i1 = q.context.types.int(1);
+        return Some(q.int(i1, u128::from(pred == IntPredicate::Uge)));
+    }
+    None
+}
+
 /// `CmpInst::getSwappedPredicate`.
 fn swapped(p: IntPredicate) -> IntPredicate {
     match p {
@@ -1735,70 +1873,40 @@ fn unsigned_predicate(p: IntPredicate) -> IntPredicate {
     }
 }
 
-/// Whether `pred` holds for every `x` in `[lo, hi]` against `c` (`Some(true)`)
-/// or for none (`Some(false)`): `ConstantRange::icmp`, for the intervals this
-/// module has.
-fn predicate_over(
-    pred: IntPredicate,
-    (lo, hi): (i128, i128),
-    c: i128,
-) -> Option<bool> {
-    let (all, none) = match pred {
-        IntPredicate::Ult | IntPredicate::Slt => (hi < c, lo >= c),
-        IntPredicate::Ule | IntPredicate::Sle => (hi <= c, lo > c),
-        IntPredicate::Ugt | IntPredicate::Sgt => (lo > c, hi <= c),
-        IntPredicate::Uge | IntPredicate::Sge => (lo >= c, hi < c),
-        IntPredicate::Eq => (lo == hi && lo == c, c < lo || c > hi),
-        IntPredicate::Ne => (c < lo || c > hi, lo == hi && lo == c),
-    };
-    if all {
-        Some(true)
-    } else if none {
-        Some(false)
-    } else {
-        None
-    }
+/// `CmpInst::isSigned`.
+fn is_signed(p: IntPredicate) -> bool {
+    matches!(
+        p,
+        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
+    )
 }
 
 /// `simplifyICmpWithConstant`
 /// ([:3124](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3124)).
-/// `computeConstantRange` is the range the zero bits give (`[0, ~Zero]`, and
-/// the signed range of a value whose sign bit is zero); `isKnownNonZero` is not
-/// translated.
+/// DEVIATE: the `bitcast (uitofp X)` sign-bit check is floating point.
 fn simplify_icmp_with_constant(
     q: &mut Query,
     pred: IntPredicate,
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let (c, width) = q.number(rhs).filter(|&(_, width)| width < 127)?;
+    let (c, width) = q.number(rhs)?;
     let i1 = q.context.types.int(1);
-    let signed_pred = matches!(
-        pred,
-        IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
-    );
-    let (full, bound) = if signed_pred {
-        ((-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1), signed(c, width))
-    } else {
-        ((0i128, mask(width) as i128), c as i128)
-    };
-    // RHS_CR is the empty or the full set: the compare is false or true for
-    // every LHS.
-    if let Some(answer) = predicate_over(pred, full, bound) {
-        return Some(q.int(i1, u128::from(answer)));
+    let rhs_range = ConstantRange::make_exact_icmp_region(pred, width, c);
+    if rhs_range.is_empty_set() {
+        return Some(q.null(i1));
     }
-    // LHS_CR from the zero bits, and RHS_CR.contains(LHS_CR) or its inverse
-    // does.
-    let maximum = !q.known_zero(lhs) & mask(width);
-    let range = if signed_pred {
-        if q.known_zero(lhs) >> (width - 1) & 1 == 1 { Some((0, maximum as i128)) } else { None }
-    } else {
-        Some((0, maximum as i128))
-    };
-    if let Some(range) = range
-        && let Some(answer) = predicate_over(pred, range, bound)
-    {
-        return Some(q.int(i1, u128::from(answer)));
+    if rhs_range.is_full_set() {
+        return Some(q.int(i1, 1));
+    }
+    let lhs_range = q.range(lhs, is_signed(pred));
+    if !lhs_range.is_full_set() {
+        if rhs_range.contains_range(&lhs_range) {
+            return Some(q.int(i1, 1));
+        }
+        if rhs_range.inverse().contains_range(&lhs_range) {
+            return Some(q.null(i1));
+        }
     }
     // icmp eq/ne (mul nuw X, M), C where M does not divide C.
     if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
@@ -1810,6 +1918,9 @@ fn simplify_icmp_with_constant(
                 && signed(c, width).checked_rem(signed(m, width)).is_some_and(|rest| rest != 0)))
     {
         return Some(q.int(i1, u128::from(pred == IntPredicate::Ne)));
+    }
+    if pred == IntPredicate::Uge && c == 1 && q.is_known_non_zero(lhs) {
+        return Some(q.int(i1, 1));
     }
     None
 }
@@ -1892,9 +2003,6 @@ fn match_equivalent_zero_rhs(
 
 /// `simplifyICmpWithZero`
 /// ([:3063](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L3063)).
-/// DEVIATE: `isKnownNonZero` and `KnownBits::isNegative` (the one half of the
-/// bits) are not available: the `isNonNegative` cases are, as the sign bit
-/// known zero.
 fn simplify_icmp_with_zero(
     q: &mut Query,
     pred: IntPredicate,
@@ -1903,16 +2011,63 @@ fn simplify_icmp_with_zero(
 ) -> Option<Operand> {
     let pred = match_equivalent_zero_rhs(q, pred, rhs)?;
     let i1 = q.context.types.int(1);
-    let width = q.width(lhs)?;
-    let non_negative = q.known_zero(lhs) >> (width - 1) & 1 == 1;
+    let (yes, no) = (true, false);
+    let answer = |q: &mut Query, value: bool| Some(q.int(i1, u128::from(value)));
     match pred {
-        IntPredicate::Ult => Some(q.null(i1)),
-        IntPredicate::Uge => Some(q.int(i1, 1)),
-        // X >=s 0 is true when the sign bit is known zero.
-        IntPredicate::Sge if non_negative => Some(q.int(i1, 1)),
-        // X <s 0 is false when the sign bit is known zero.
-        IntPredicate::Slt if non_negative => Some(q.null(i1)),
-        _ => None,
+        IntPredicate::Ult => answer(q, no),
+        IntPredicate::Uge => answer(q, yes),
+        IntPredicate::Eq | IntPredicate::Ule => {
+            if q.is_known_non_zero(lhs) {
+                return answer(q, no);
+            }
+            None
+        }
+        IntPredicate::Ne | IntPredicate::Ugt => {
+            if q.is_known_non_zero(lhs) {
+                return answer(q, yes);
+            }
+            None
+        }
+        IntPredicate::Slt => {
+            let known = q.known(lhs);
+            if known.is_negative() {
+                return answer(q, yes);
+            }
+            if known.is_non_negative() {
+                return answer(q, no);
+            }
+            None
+        }
+        IntPredicate::Sle => {
+            let known = q.known(lhs);
+            if known.is_negative() {
+                return answer(q, yes);
+            }
+            if known.is_non_negative() && q.is_known_non_zero(lhs) {
+                return answer(q, no);
+            }
+            None
+        }
+        IntPredicate::Sge => {
+            let known = q.known(lhs);
+            if known.is_negative() {
+                return answer(q, no);
+            }
+            if known.is_non_negative() {
+                return answer(q, yes);
+            }
+            None
+        }
+        IntPredicate::Sgt => {
+            let known = q.known(lhs);
+            if known.is_negative() {
+                return answer(q, no);
+            }
+            if known.is_non_negative() && q.is_known_non_zero(lhs) {
+                return answer(q, yes);
+            }
+            None
+        }
     }
 }
 
@@ -1947,13 +2102,14 @@ fn simplify_gep(
 /// `simplifyInstructionWithOperands`): the value `inst` equals, or None.
 pub fn simplify_instruction(
     context: &mut Context,
+    layout: &DataLayout,
     function: &Function,
     inst: InstId,
 ) -> Option<Operand> {
     let instruction = function.instruction(inst);
     let operands = instruction.operands.to_vec();
     let flags = instruction.flags;
-    let mut q = Query { context, function };
+    let mut q = Query { context, function, layout };
     match &instruction.opcode {
         Opcode::Binary(op) => {
             let [lhs, rhs] = operands[..] else { return None };
@@ -1978,49 +2134,53 @@ pub fn simplify_instruction(
 /// builder).
 pub fn simplify_binop_operands(
     context: &mut Context,
+    layout: &DataLayout,
     function: &Function,
     opcode: BinaryOp,
     flags: Flags,
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function };
+    let mut q = Query { context, function, layout };
     simplify_binop_flags(&mut q, opcode, lhs, rhs, flags, RECURSION_LIMIT)
 }
 
 /// `simplifyICmpInst` for operands.
 pub fn simplify_icmp_operands(
     context: &mut Context,
+    layout: &DataLayout,
     function: &Function,
     predicate: IntPredicate,
     lhs: Operand,
     rhs: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function };
+    let mut q = Query { context, function, layout };
     simplify_icmp(&mut q, predicate, lhs, rhs, RECURSION_LIMIT)
 }
 
 /// `simplifyCastInst` for operands.
 pub fn simplify_cast_operand(
     context: &mut Context,
+    layout: &DataLayout,
     function: &Function,
     op: CastOp,
     value: Operand,
     to: TypeId,
 ) -> Option<Operand> {
-    let mut q = Query { context, function };
+    let mut q = Query { context, function, layout };
     simplify_cast(&mut q, op, value, to, RECURSION_LIMIT)
 }
 
 /// `simplifySelectInst` for operands.
 pub fn simplify_select_operands(
     context: &mut Context,
+    layout: &DataLayout,
     function: &Function,
     condition: Operand,
     if_true: Operand,
     if_false: Operand,
 ) -> Option<Operand> {
-    let mut q = Query { context, function };
+    let mut q = Query { context, function, layout };
     simplify_select(&mut q, condition, if_true, if_false)
 }
 

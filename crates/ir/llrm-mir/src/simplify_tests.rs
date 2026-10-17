@@ -21,7 +21,12 @@ fn simplified(
             function.instruction(inst).result.is_some_and(|result| function.value(result).name.as_deref() == Some(name))
         })
         .expect("a named instruction");
-    let found = simplify::simplify_instruction(&mut module.context, &function, inst)?;
+    let found = simplify::simplify_instruction(
+        &mut module.context,
+        &crate::datalayout::DataLayout::default(),
+        &function,
+        inst,
+    )?;
     Some(match found {
         Operand::Value(value) => format!("%{}", function.value(value).name.clone().unwrap_or_default()),
         Operand::Constant(id) => match module.context.get(id).kind {
@@ -122,6 +127,18 @@ fn select_phi_cast_and_compare() {
     check("  %w = zext i16 %x to i32\n  %v = zext i16 %y to i32\n  %r = icmp ult i32 %w, %v\n", "r", None);
 }
 
+/// The compares the zero-half stand-in missed, now answered from the real
+/// ValueTracking: a mask is below its source, a shift amount known to be the
+/// width is poison, and `lshr` bounds a range.
+#[test]
+fn compares_answered_from_value_tracking() {
+    check("  %a = and i16 %x, %y\n  %c1 = icmp uge i16 %x, %a\n", "c1", Some("1"));
+    check("  %o = or i16 %x, %y\n  %c1 = icmp ult i16 %o, %x\n", "c1", Some("0"));
+    check("  %s = lshr i16 %x, 3\n  %c1 = icmp ult i16 %s, 8192\n", "c1", Some("1"));
+    check("  %o = or i16 %x, 16\n  %c1 = icmp eq i16 %o, 0\n", "c1", Some("0"));
+    check("  %r = shl i16 %x, 16\n", "r", Some("poison"));
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a
@@ -145,7 +162,13 @@ fn simplify_cases() {
         }) else {
             continue;
         };
-        let found = simplify::simplify_instruction(&mut module.context, &function, inst).map(|value| match value {
+        let found = simplify::simplify_instruction(
+            &mut module.context,
+            &crate::datalayout::DataLayout::default(),
+            &function,
+            inst,
+        )
+        .map(|value| match value {
             Operand::Value(value) => format!("%{}", function.value(value).name.clone().unwrap_or_default()),
             Operand::Constant(id) => match module.context.get(id).kind {
                 ConstantKind::Int(bits) => bits.to_string(),
@@ -215,7 +238,8 @@ fn simplify_dumps() {
                     changed = true;
                     continue;
                 }
-                if let Some(found) = simplify::simplify_instruction(context, function, inst)
+                if let Some(found) =
+                    simplify::simplify_instruction(context, &crate::datalayout::DataLayout::default(), function, inst)
                     && found != Operand::Value(result)
                 {
                     function.replace_value(result, found);
