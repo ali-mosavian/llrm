@@ -88,7 +88,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, Use, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -157,17 +157,16 @@ pub fn use_index(
 /// Whether any went.
 pub fn pruned_phis(
     function: &mut Function,
-    roots: &BTreeSet<ValueId>,
+    roots: &IdSet<ValueId>,
 ) -> bool {
-    let mut needed: BTreeSet<ValueId> = roots.clone();
+    let mut needed: IdSet<ValueId> = roots.clone();
     for (_, _, op) in operations(function) {
         needed.extend(reads(op));
     }
-    let found: BTreeMap<ValueId, InstId> =
-        phis(function).filter_map(|(inst, _, phi)| Some((phi.result?, inst))).collect();
-    let mut pending: Vec<ValueId> = needed.iter().filter(|value| found.contains_key(value)).copied().collect();
+    let found: IdMap<ValueId, InstId> = phis(function).filter_map(|(inst, _, phi)| Some((phi.result?, inst))).collect();
+    let mut pending: Vec<ValueId> = needed.iter().filter(|value| found.contains_key(value)).collect();
     while let Some(next) = pending.pop() {
-        let incoming: BTreeSet<ValueId> =
+        let incoming: Vec<ValueId> =
             reads(function.instruction(found[&next])).filter(|value| !needed.contains(value)).collect();
         needed.extend(incoming.iter().copied());
         pending.extend(incoming.into_iter().filter(|value| found.contains_key(value)));
@@ -464,6 +463,7 @@ impl SsaUpdater {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use llrm_mir::dense::IdSet;
     use llrm_mir::module::Use;
     use llrm_mir::module::{Operand, ValueId};
 
@@ -498,9 +498,9 @@ b2:
 "
             ));
             let roots = if reader == "root" {
-                BTreeSet::from([value(function(&module, "f"), "first")])
+                IdSet::from_iter([value(function(&module, "f"), "first")])
             } else {
-                BTreeSet::new()
+                IdSet::new()
             };
             let f = module.function_mut("f").unwrap().1;
             let changed = pruned_phis(f, &roots);
@@ -652,7 +652,7 @@ b2:
 ",
         );
         let f = module.function_mut("f").unwrap().1;
-        assert!(pruned_phis(f, &BTreeSet::new()));
+        assert!(pruned_phis(f, &IdSet::new()));
         let names = phis(f).map(|(_, _, phi)| f.value(phi.result.unwrap()).name.clone().unwrap()).collect::<Vec<_>>();
         assert_eq!(names, ["inner", "outer"]);
         assert!(f.check_uses().is_empty());
@@ -670,7 +670,7 @@ b0:
         );
         let f = module.function_mut("f").unwrap().1;
         let before = f.clone();
-        assert!(!pruned_phis(f, &BTreeSet::new()));
+        assert!(!pruned_phis(f, &IdSet::new()));
         assert_eq!(*f, before);
     }
 

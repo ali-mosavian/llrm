@@ -362,7 +362,7 @@ impl Adjacent<'_> {
             }
             found?
         };
-        let mut guards = function.predecessors(guard);
+        let mut guards: Vec<BlockId> = function.predecessors(guard).into();
         guards.sort();
         let mut expected = vec![*between.last()?, first_guard];
         expected.sort();

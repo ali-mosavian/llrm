@@ -28,6 +28,15 @@ that trained it.
 CI: `.github/workflows/pgo.yml` runs on a push to main that changes the compiler. It builds both, requires `tools/identical.py` to find the
 same bytes (every program and tests/run/c program at each level; the job fails otherwise) and uploads `llrm-c-pgo`.
 
+## A release build
+
+A release takes the compiler from the latest green `pgo` run on main: the artifact `llrm-c-pgo` (14 days), built from that commit with the
+profile described below. Building it elsewhere is the command above with the profile cache: the key is `pgo-profile-` and the compiler
+tree's hash (`python3 tools/bench/basecounts.py key HEAD`), and a commit with no profile of its own restores the newest older one
+(`restore-keys: pgo-profile-`) and uses it while `pgo.py stale` says fresh (at most 50 commits to the compiler and 14 days). A cache miss
+makes a new profile (about 15 minutes more); the first pgo run on main (39018948814, 27 minutes: 547 training compiles, 1,323 objects
+identical) did exactly that. A cache saved by a pull request run is visible to that pull request only.
+
 ## The profile
 
 - What trains it: `tools/pgo/corpus.toml`: every bench C program at -m32 and -m16, at -O1, -O2 and -Os, and every tests/run/c program at its

@@ -176,6 +176,7 @@ pub mod selectors {
 
     include!(concat!(env!("OUT_DIR"), "/selectors.rs"));
 }
+pub mod incremental;
 #[cfg(test)]
 mod isel_tests;
 pub mod jumps;
