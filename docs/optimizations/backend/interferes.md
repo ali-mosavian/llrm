@@ -1,13 +1,21 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/interferes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/interferes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/interferes.rs sha256:c972773642a3c6966f28a95b5ab347be7a7bbfae9063f37aae4bf5be2880fd97 -->
+<!-- src: crates/backend/llrm-core/src/backend/interferes.rs sha256:ab02f68f0392e63b527ebc6ebeb1555ee8eeda59fb44c2f684673641315c302f -->
 
 # interferes
 
 Whether two values interfere, asked of the pairs a pass has a question
-about: LLVM's `LiveInterval::liveAt` and `LiveRange::overlaps` asked of two
-registers, where `coalesce::_interference_among` builds the graph of every
-pair of the asked values live together (quadratic in the values live at
-once, a row of bits per value for each block they cross).
+about. LLVM structure: `LiveRange::liveAt`
+([`LiveInterval.h#L411-L414`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveInterval.h#L411-L414))
+and `LiveRange::overlaps(other)`
+([`#L458-L462`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveInterval.h#L458-L462))
+asked of two registers' ranges, with `overlaps(other, CP, Indexes)` letting
+a copy's two ends meet. Ours: the same question asked of the values'
+occurrences and segments, because the ranges are not kept (DEVIATE until
+`liveness::LiveRange` lands: then this is `overlaps_cp`);
+`coalesce::_interference_among` builds the graph of every pair of the asked
+values live together (quadratic in the values live at once, a row of bits
+per value for each block they cross), which this replaces for the pairs
+asked.
 
 ## How it works
 Two values interfere where one is defined while the other lives on (a copy

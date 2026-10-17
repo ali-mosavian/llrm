@@ -1,8 +1,16 @@
 //! Whether two values interfere, asked of the pairs a pass has a question
-//! about: LLVM's `LiveInterval::liveAt` and `LiveRange::overlaps` asked of two
-//! registers, where `coalesce::_interference_among` builds the graph of every
-//! pair of the asked values live together (quadratic in the values live at
-//! once, a row of bits per value for each block they cross).
+//! about. LLVM structure: `LiveRange::liveAt`
+//! ([`LiveInterval.h#L411-L414`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveInterval.h#L411-L414))
+//! and `LiveRange::overlaps(other)`
+//! ([`#L458-L462`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/LiveInterval.h#L458-L462))
+//! asked of two registers' ranges, with `overlaps(other, CP, Indexes)` letting
+//! a copy's two ends meet. Ours: the same question asked of the values'
+//! occurrences and segments, because the ranges are not kept (DEVIATE until
+//! `liveness::LiveRange` lands: then this is `overlaps_cp`);
+//! `coalesce::_interference_among` builds the graph of every pair of the asked
+//! values live together (quadratic in the values live at once, a row of bits
+//! per value for each block they cross), which this replaces for the pairs
+//! asked.
 //!
 //! # How it works
 //! Two values interfere where one is defined while the other lives on (a copy
