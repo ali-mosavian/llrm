@@ -512,7 +512,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Before gvn: a far pointer cast from a near one is read as the near
         // one.
         Box::new(inferspace::InferAddressSpaces),
-        if std::env::var_os("LLRM_DSE_POC").is_some() { Box::new(dse_poc::DsePoc) } else { Box::new(dse::Dse) },
+        if std::env::var_os("LLRM_DSE_POC").is_some() { Box::new(crate::dse_poc::DsePoc) } else { Box::new(dse::Dse) },
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN.
         Box::new(promote::Promote),
