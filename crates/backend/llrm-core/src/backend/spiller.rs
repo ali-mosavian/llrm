@@ -7097,6 +7097,21 @@ mod tests {
         }
     }
 
+    /// Asking for the postings of a body they follow already looked into every
+    /// block of it (10.5 M instructions of d_faces -O2 in 3,617 asks): the
+    /// blocks are told apart by the allocations they are.
+    #[test]
+    fn test_asking_the_postings_of_the_body_they_follow_looks_into_no_block() {
+        let body = _three_blocks();
+        crate::backend::postings::following(&body, |_| ());
+        let before = crate::backend::postings::looked();
+        for _ in 0..100 {
+            crate::backend::postings::following(&body, |_| ());
+            crate::backend::postings::following(&body.clone(), |_| ());
+        }
+        assert_eq!(crate::backend::postings::looked() - before, 0, "blocks were looked into again");
+    }
+
     #[test]
     fn test_a_spill_redoes_the_occurrences_of_the_blocks_it_changed_only() {
         let body = _three_blocks();
