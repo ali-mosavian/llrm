@@ -17,9 +17,11 @@
 //!   slots   B E R D B E R D ...
 //! ```
 //!
-//! DEVIATE (container, no number): `IndexListEntry` is an `Rc` node with a
-//! strong `next` and a weak `prev` instead of an intrusive `simple_ilist`, and
-//! an instruction is known by `Insn::id()` instead of a `MachineInstr*`. A
+//! DEVIATE (container, no number): the entries live in a per-thread arena
+//! (parallel columns indexed by `EntryId`, `prev`/`next` links) instead of an
+//! intrusive `simple_ilist` in a bump allocator, so a `SlotIndex` is `Copy`
+//! like the `PointerIntPair`; an instruction is known by `Insn::id()` instead
+//! of a `MachineInstr*`. A
 //! block is its position in the body. `repairIndexesInRange` is not translated:
 //! it repairs a range of a `MachineBasicBlock` iterator pair, and our rewrites
 //! name the instructions they put in and take out
@@ -33,44 +35,58 @@
 //! # Used by
 //! `liverange` (the points of a live range), and the allocator's shadow core.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
-use std::rc::{Rc, Weak};
 
 use crate::model::lir::LirBody;
 
 /// A stand-in for `MachineInstr*`: `Insn::id()`.
 pub type InstrKey = u64;
 
-/// `IndexListEntry` (SlotIndexes.h#L45): an entry in the slot index list.
-pub struct IndexListEntry {
-    instr: Cell<Option<InstrKey>>,
-    index: Cell<u32>,
-    prev: RefCell<Weak<IndexListEntry>>,
-    next: RefCell<Option<Rc<IndexListEntry>>>,
+/// An entry of the index list, by its place in the arena: `IndexListEntry*`.
+type EntryId = u32;
+
+const NONE: EntryId = u32::MAX;
+
+/// `IndexListEntry` (SlotIndexes.h#L45): an entry in the slot index list,
+/// held in the arena as parallel columns.
+#[derive(Default)]
+struct Arena {
+    instr: Vec<Option<InstrKey>>,
+    index: Vec<u32>,
+    prev: Vec<EntryId>,
+    next: Vec<EntryId>,
+    free: Vec<EntryId>,
 }
 
-impl IndexListEntry {
-    fn new(
+thread_local! {
+    /// The entries of every `SlotIndexes` of this thread: a `SlotIndex` is a
+    /// copyable (entry, slot) pair whose number is read here, so renumbering
+    /// the list moves every index held anywhere without touching them.
+    static ARENA: RefCell<Arena> = RefCell::new(Arena::default());
+}
+
+impl Arena {
+    fn create(
+        &mut self,
         instr: Option<InstrKey>,
         index: u32,
-    ) -> Rc<Self> {
-        Rc::new(Self {
-            instr: Cell::new(instr),
-            index: Cell::new(index),
-            prev: RefCell::new(Weak::new()),
-            next: RefCell::new(None),
-        })
-    }
-
-    pub fn instr(&self) -> Option<InstrKey> {
-        self.instr.get()
-    }
-
-    pub fn index(&self) -> u32 {
-        self.index.get()
+    ) -> EntryId {
+        if let Some(id) = self.free.pop() {
+            let at = id as usize;
+            self.instr[at] = instr;
+            self.index[at] = index;
+            self.prev[at] = NONE;
+            self.next[at] = NONE;
+            return id;
+        }
+        self.instr.push(instr);
+        self.index.push(index);
+        self.prev.push(NONE);
+        self.next.push(NONE);
+        (self.index.len() - 1) as EntryId
     }
 }
 
@@ -101,11 +117,20 @@ impl Slot {
     }
 }
 
-/// `SlotIndex` (SlotIndexes.h#L74): an opaque wrapper around machine indexes.
-#[derive(Clone, Default)]
+/// `SlotIndex` (SlotIndexes.h#L74): an opaque wrapper around machine indexes,
+/// as C++'s `PointerIntPair<IndexListEntry*, 2>`: copyable, compared by the
+/// number its entry holds now.
+#[derive(Clone, Copy)]
 pub struct SlotIndex {
-    lie: Option<Rc<IndexListEntry>>,
+    lie: EntryId,
     slot: u8,
+}
+
+impl Default for SlotIndex {
+    /// An invalid index.
+    fn default() -> Self {
+        Self { lie: NONE, slot: 0 }
+    }
 }
 
 impl SlotIndex {
@@ -113,19 +138,24 @@ impl SlotIndex {
     pub const INSTR_DIST: u32 = 4 * SLOT_COUNT;
 
     fn at(
-        entry: &Rc<IndexListEntry>,
+        entry: EntryId,
         slot: Slot,
     ) -> Self {
-        Self { lie: Some(Rc::clone(entry)), slot: slot as u8 }
+        Self { lie: entry, slot: slot as u8 }
     }
 
-    fn list_entry(&self) -> &Rc<IndexListEntry> {
-        self.lie.as_ref().expect("Attempt to compare reserved index.")
+    fn list_entry(&self) -> EntryId {
+        assert!(self.lie != NONE, "Attempt to compare reserved index.");
+        self.lie
+    }
+
+    fn entry_index(&self) -> u32 {
+        ARENA.with(|arena| arena.borrow().index[self.list_entry() as usize])
     }
 
     /// The number: the entry's index with the slot in the low bits.
     pub fn get_index(&self) -> u32 {
-        self.list_entry().index.get() | u32::from(self.slot)
+        self.entry_index() | u32::from(self.slot)
     }
 
     pub fn get_slot(&self) -> Slot {
@@ -141,21 +171,21 @@ impl SlotIndex {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.lie.is_some()
+        self.lie != NONE
     }
 
     pub fn is_same_instr(
         a: &SlotIndex,
         b: &SlotIndex,
     ) -> bool {
-        Rc::ptr_eq(a.list_entry(), b.list_entry())
+        a.list_entry() == b.list_entry()
     }
 
     pub fn is_earlier_instr(
         a: &SlotIndex,
         b: &SlotIndex,
     ) -> bool {
-        a.list_entry().index.get() < b.list_entry().index.get()
+        a.entry_index() < b.entry_index()
     }
 
     pub fn is_earlier_equal_instr(
@@ -176,7 +206,7 @@ impl SlotIndex {
         &self,
         other: &SlotIndex,
     ) -> i32 {
-        (other.list_entry().index.get() as i32 - self.list_entry().index.get() as i32) / SLOT_COUNT as i32
+        (other.entry_index() as i32 - self.entry_index() as i32) / SLOT_COUNT as i32
     }
 
     pub fn is_block(&self) -> bool {
@@ -214,38 +244,42 @@ impl SlotIndex {
         Self::at(self.list_entry(), Slot::Dead)
     }
 
-    fn next_entry(&self) -> Rc<IndexListEntry> {
-        self.list_entry().next.borrow().clone().expect("no entry after the last one")
+    fn next_entry(&self) -> EntryId {
+        let next = ARENA.with(|arena| arena.borrow().next[self.list_entry() as usize]);
+        assert!(next != NONE, "no entry after the last one");
+        next
     }
 
-    fn prev_entry(&self) -> Rc<IndexListEntry> {
-        self.list_entry().prev.borrow().upgrade().expect("no entry before the first one")
+    fn prev_entry(&self) -> EntryId {
+        let prev = ARENA.with(|arena| arena.borrow().prev[self.list_entry() as usize]);
+        assert!(prev != NONE, "no entry before the first one");
+        prev
     }
 
     /// `getNextSlot`: the next slot of this instruction or the first slot of
     /// the next one.
     pub fn get_next_slot(&self) -> SlotIndex {
         match self.get_slot() {
-            Slot::Dead => Self::at(&self.next_entry(), Slot::Block),
+            Slot::Dead => Self::at(self.next_entry(), Slot::Block),
             s => Self::at(self.list_entry(), Slot::from(s as u8 + 1)),
         }
     }
 
     pub fn get_next_index(&self) -> SlotIndex {
-        Self::at(&self.next_entry(), self.get_slot())
+        Self::at(self.next_entry(), self.get_slot())
     }
 
     /// `getPrevSlot`: the previous slot of this instruction or the last slot of
     /// the previous one.
     pub fn get_prev_slot(&self) -> SlotIndex {
         match self.get_slot() {
-            Slot::Block => Self::at(&self.prev_entry(), Slot::Dead),
+            Slot::Block => Self::at(self.prev_entry(), Slot::Dead),
             s => Self::at(self.list_entry(), Slot::from(s as u8 - 1)),
         }
     }
 
     pub fn get_prev_index(&self) -> SlotIndex {
-        Self::at(&self.prev_entry(), self.get_slot())
+        Self::at(self.prev_entry(), self.get_slot())
     }
 }
 
@@ -254,11 +288,7 @@ impl PartialEq for SlotIndex {
         &self,
         other: &Self,
     ) -> bool {
-        match (&self.lie, &other.lie) {
-            (Some(a), Some(b)) => Rc::ptr_eq(a, b) && self.slot == other.slot,
-            (None, None) => true,
-            _ => false,
-        }
+        self.lie == other.lie && self.slot == other.slot
     }
 }
 
@@ -278,7 +308,13 @@ impl Ord for SlotIndex {
         &self,
         other: &Self,
     ) -> Ordering {
-        self.get_index().cmp(&other.get_index())
+        // One borrow of the arena for both numbers.
+        ARENA.with(|arena| {
+            let arena = arena.borrow();
+            let a = arena.index[self.list_entry() as usize] | u32::from(self.slot);
+            let b = arena.index[other.list_entry() as usize] | u32::from(other.slot);
+            a.cmp(&b)
+        })
     }
 }
 
@@ -287,7 +323,7 @@ impl std::hash::Hash for SlotIndex {
         &self,
         state: &mut H,
     ) {
-        self.lie.as_ref().map(|entry| Rc::as_ptr(entry) as usize).hash(state);
+        self.lie.hash(state);
         self.slot.hash(state);
     }
 }
@@ -299,7 +335,7 @@ impl fmt::Display for SlotIndex {
         f: &mut fmt::Formatter<'_>,
     ) -> fmt::Result {
         if self.is_valid() {
-            write!(f, "{}{}", self.list_entry().index.get(), ["B", "e", "r", "d"][self.slot as usize])
+            write!(f, "{}{}", self.entry_index(), ["B", "e", "r", "d"][self.slot as usize])
         } else {
             write!(f, "invalid")
         }
@@ -318,8 +354,8 @@ impl fmt::Debug for SlotIndex {
 /// `SlotIndexes` (SlotIndexes.h#L248): assigns indexes to each instruction.
 #[derive(Default)]
 pub struct SlotIndexes {
-    first: Option<Rc<IndexListEntry>>,
-    last: Option<Rc<IndexListEntry>>,
+    first: EntryId,
+    last: EntryId,
     mi2i_map: HashMap<InstrKey, SlotIndex>,
     /// `MBBRanges`: block number to (start, stop).
     mbb_ranges: Vec<(SlotIndex, SlotIndex)>,
@@ -327,6 +363,8 @@ pub struct SlotIndexes {
     /// block.
     idx2mbb_map: Vec<(SlotIndex, usize)>,
     local_renumberings: usize,
+    /// Whether this holds entries of the arena.
+    live: bool,
 }
 
 impl Drop for SlotIndexes {
@@ -338,7 +376,9 @@ impl Drop for SlotIndexes {
 impl SlotIndexes {
     /// `SlotIndexes(MachineFunction&)` / `analyze` (SlotIndexes.cpp#L66): the
     /// numbering of `body`, a block's start sharing the entry that ends the
-    /// block before it and one blank entry between blocks.
+    /// block before it and one blank entry between blocks. The instructions of
+    /// a parallel copy share the entry of the first, as the instructions of a
+    /// bundle share its index (`getInstructionIndex`).
     pub fn new(body: &LirBody) -> Self {
         let mut found = Self::default();
         found.analyze(body);
@@ -347,52 +387,78 @@ impl SlotIndexes {
 
     fn push_back(
         &mut self,
-        entry: Rc<IndexListEntry>,
-    ) {
-        match self.last.take() {
-            Some(last) => {
-                *entry.prev.borrow_mut() = Rc::downgrade(&last);
-                *last.next.borrow_mut() = Some(Rc::clone(&entry));
+        instr: Option<InstrKey>,
+        index: u32,
+    ) -> EntryId {
+        ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let entry = arena.create(instr, index);
+            if self.live {
+                let last = self.last;
+                arena.prev[entry as usize] = last;
+                arena.next[last as usize] = entry;
+            } else {
+                self.first = entry;
+                self.live = true;
             }
-            None => self.first = Some(Rc::clone(&entry)),
-        }
-        self.last = Some(entry);
+            self.last = entry;
+            entry
+        })
     }
 
-    /// `clear`: breaks the chain iteratively (a long list dropped through its
-    /// `next` links would recurse once per entry).
+    /// `clear`: frees the entries one by one.
     pub fn clear(&mut self) {
         self.mi2i_map.clear();
         self.mbb_ranges.clear();
         self.idx2mbb_map.clear();
-        self.last = None;
-        let mut at = self.first.take();
-        while let Some(entry) = at {
-            at = entry.next.borrow_mut().take();
+        if self.live {
+            ARENA.with(|arena| {
+                let mut arena = arena.borrow_mut();
+                let mut at = self.first;
+                while at != NONE {
+                    let next = arena.next[at as usize];
+                    arena.free.push(at);
+                    at = next;
+                }
+            });
         }
+        self.live = false;
+        self.first = NONE;
+        self.last = NONE;
     }
 
     pub fn analyze(
         &mut self,
         body: &LirBody,
     ) {
-        assert!(self.first.is_none(), "Index list non-empty at initial numbering?");
+        assert!(!self.live, "Index list non-empty at initial numbering?");
         let mut index = 0u32;
         self.mbb_ranges = vec![(SlotIndex::default(), SlotIndex::default()); body.blocks.len()];
-        self.push_back(IndexListEntry::new(None, index));
+        self.push_back(None, index);
         for (number, block) in body.blocks.iter().enumerate() {
-            let block_start_index = SlotIndex::at(self.last.as_ref().expect("an entry"), Slot::Block);
+            let block_start_index = SlotIndex::at(self.last, Slot::Block);
+            let mut previous_group: Option<i64> = None;
             for one in block.insns.iter() {
+                // The instructions of a parallel copy are one bundle: one
+                // index.
+                if let (Some(group), Some(same)) = (one.group, previous_group) {
+                    if group == same {
+                        let at = SlotIndex::at(self.last, Slot::Block);
+                        self.mi2i_map.insert(one.id(), at);
+                        continue;
+                    }
+                }
+                previous_group = one.group;
                 index += SlotIndex::INSTR_DIST;
-                self.push_back(IndexListEntry::new(Some(one.id()), index));
-                let at = SlotIndex::at(self.last.as_ref().expect("an entry"), Slot::Block);
+                self.push_back(Some(one.id()), index);
+                let at = SlotIndex::at(self.last, Slot::Block);
                 self.mi2i_map.insert(one.id(), at);
             }
             // We insert one blank instructions between basic blocks.
             index += SlotIndex::INSTR_DIST;
-            self.push_back(IndexListEntry::new(None, index));
-            self.mbb_ranges[number].0 = block_start_index.clone();
-            self.mbb_ranges[number].1 = SlotIndex::at(self.last.as_ref().expect("an entry"), Slot::Block);
+            self.push_back(None, index);
+            self.mbb_ranges[number].0 = block_start_index;
+            self.mbb_ranges[number].1 = SlotIndex::at(self.last, Slot::Block);
             self.idx2mbb_map.push((block_start_index, number));
         }
         self.idx2mbb_map.sort_by(|a, b| a.0.cmp(&b.0));
@@ -400,14 +466,14 @@ impl SlotIndexes {
 
     /// `getZeroIndex`.
     pub fn get_zero_index(&self) -> SlotIndex {
-        let first = self.first.as_ref().expect("an index list");
-        assert_eq!(first.index.get(), 0, "First index is not 0?");
-        SlotIndex::at(first, Slot::Block)
+        let first = SlotIndex::at(self.first, Slot::Block);
+        assert_eq!(first.entry_index(), 0, "First index is not 0?");
+        first
     }
 
     /// `getLastIndex`: the base index of the last slot.
     pub fn get_last_index(&self) -> SlotIndex {
-        SlotIndex::at(self.last.as_ref().expect("an index list"), Slot::Block)
+        SlotIndex::at(self.last, Slot::Block)
     }
 
     /// `hasIndex`.
@@ -423,7 +489,7 @@ impl SlotIndexes {
         &self,
         instr: InstrKey,
     ) -> SlotIndex {
-        self.mi2i_map.get(&instr).expect("Instruction not found in maps.").clone()
+        *self.mi2i_map.get(&instr).expect("Instruction not found in maps.")
     }
 
     /// `getInstructionFromIndex`: the instruction at `index`, or None.
@@ -431,7 +497,7 @@ impl SlotIndexes {
         &self,
         index: &SlotIndex,
     ) -> Option<InstrKey> {
-        index.list_entry().instr()
+        ARENA.with(|arena| arena.borrow().instr[index.list_entry() as usize])
     }
 
     /// `getNextNonNullIndex`.
@@ -439,15 +505,18 @@ impl SlotIndexes {
         &self,
         index: &SlotIndex,
     ) -> SlotIndex {
-        let mut at = index.list_entry().next.borrow().clone();
-        while let Some(entry) = at {
-            if entry.instr().is_some() {
-                return SlotIndex::at(&entry, index.get_slot());
+        ARENA.with(|arena| {
+            let arena = arena.borrow();
+            let mut at = arena.next[index.list_entry() as usize];
+            while at != NONE {
+                if arena.instr[at as usize].is_some() {
+                    return SlotIndex::at(at, index.get_slot());
+                }
+                at = arena.next[at as usize];
             }
-            at = entry.next.borrow().clone();
-        }
-        // We reached the end of the function.
-        self.get_last_index()
+            // We reached the end of the function.
+            self.get_last_index()
+        })
     }
 
     /// `getIndexBefore`: the index of the last indexed instruction before the
@@ -461,7 +530,7 @@ impl SlotIndexes {
     ) -> SlotIndex {
         for one in insns[..position].iter().rev() {
             if let Some(found) = self.mi2i_map.get(&one.id()) {
-                return found.clone();
+                return *found;
             }
         }
         self.get_mbb_start_idx(block)
@@ -477,7 +546,7 @@ impl SlotIndexes {
     ) -> SlotIndex {
         for one in &insns[position + 1..] {
             if let Some(found) = self.mi2i_map.get(&one.id()) {
-                return found.clone();
+                return *found;
             }
         }
         self.get_mbb_end_idx(block)
@@ -495,14 +564,14 @@ impl SlotIndexes {
         &self,
         block: usize,
     ) -> SlotIndex {
-        self.mbb_ranges[block].0.clone()
+        self.mbb_ranges[block].0
     }
 
     pub fn get_mbb_end_idx(
         &self,
         block: usize,
     ) -> SlotIndex {
-        self.mbb_ranges[block].1.clone()
+        self.mbb_ranges[block].1
     }
 
     /// `getMBBLastIdx`: the dead slot of the last instruction of the block.
@@ -559,31 +628,36 @@ impl SlotIndexes {
         late: bool,
     ) -> SlotIndex {
         assert!(!self.mi2i_map.contains_key(&instr), "Instr already indexed.");
-        let (prev_entry, next_entry) = if late {
-            // Insert MI's index immediately before the following instruction.
-            let next_entry = Rc::clone(next.list_entry());
-            let prev_entry = next_entry.prev.borrow().upgrade().expect("an entry before");
-            (prev_entry, next_entry)
-        } else {
-            // Insert MI's index immediately after the preceding instruction.
-            let prev_entry = Rc::clone(prev.list_entry());
-            let next_entry = prev_entry.next.borrow().clone().expect("an entry after");
-            (prev_entry, next_entry)
-        };
-        // Get a number for the new instr, or 0 if there's no room currently.
-        let dist = ((next_entry.index.get() - prev_entry.index.get()) / 2) & !3u32;
-        let new_number = prev_entry.index.get() + dist;
-        let entry = IndexListEntry::new(Some(instr), new_number);
-        *entry.prev.borrow_mut() = Rc::downgrade(&prev_entry);
-        *entry.next.borrow_mut() = Some(Rc::clone(&next_entry));
-        *next_entry.prev.borrow_mut() = Rc::downgrade(&entry);
-        *prev_entry.next.borrow_mut() = Some(Rc::clone(&entry));
+        let (entry, dist) = ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let (prev_entry, next_entry) = if late {
+                // Insert MI's index immediately before the following
+                // instruction.
+                let next_entry = next.list_entry();
+                (arena.prev[next_entry as usize], next_entry)
+            } else {
+                // Insert MI's index immediately after the preceding
+                // instruction.
+                let prev_entry = prev.list_entry();
+                (prev_entry, arena.next[prev_entry as usize])
+            };
+            // Get a number for the new instr, or 0 if there's no room
+            // currently.
+            let dist = ((arena.index[next_entry as usize] - arena.index[prev_entry as usize]) / 2) & !3u32;
+            let new_number = arena.index[prev_entry as usize] + dist;
+            let entry = arena.create(Some(instr), new_number);
+            arena.prev[entry as usize] = prev_entry;
+            arena.next[entry as usize] = next_entry;
+            arena.prev[next_entry as usize] = entry;
+            arena.next[prev_entry as usize] = entry;
+            (entry, dist)
+        });
         // Renumber locally if we need to.
         if dist == 0 {
-            self.renumber_indexes(&entry);
+            self.renumber_indexes(entry);
         }
-        let new_index = SlotIndex::at(&entry, Slot::Block);
-        self.mi2i_map.insert(instr, new_index.clone());
+        let new_index = SlotIndex::at(entry, Slot::Block);
+        self.mi2i_map.insert(instr, new_index);
         new_index
     }
 
@@ -594,10 +668,14 @@ impl SlotIndexes {
         instr: InstrKey,
     ) {
         let Some(index) = self.mi2i_map.remove(&instr) else { return };
-        let entry = index.list_entry();
-        assert_eq!(entry.instr(), Some(instr), "Instruction indexes broken.");
-        // FIXME (LLVM): Eventually we want to actually delete these indexes.
-        entry.instr.set(None);
+        ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let at = index.list_entry() as usize;
+            assert_eq!(arena.instr[at], Some(instr), "Instruction indexes broken.");
+            // FIXME (LLVM): Eventually we want to actually delete these
+            // indexes.
+            arena.instr[at] = None;
+        });
     }
 
     /// `replaceMachineInstrInMaps`: `new` takes the index of `old`.
@@ -607,9 +685,13 @@ impl SlotIndexes {
         new: InstrKey,
     ) -> SlotIndex {
         let Some(base) = self.mi2i_map.remove(&old) else { return SlotIndex::default() };
-        assert_eq!(base.list_entry().instr(), Some(old), "Mismatched instruction in index tables.");
-        base.list_entry().instr.set(Some(new));
-        self.mi2i_map.insert(new, base.clone());
+        ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let at = base.list_entry() as usize;
+            assert_eq!(arena.instr[at], Some(old), "Mismatched instruction in index tables.");
+            arena.instr[at] = Some(new);
+        });
+        self.mi2i_map.insert(new, base);
         base
     }
 
@@ -617,25 +699,28 @@ impl SlotIndexes {
     /// entry `cur` was inserted but failed to get a new index.
     fn renumber_indexes(
         &mut self,
-        cur: &Rc<IndexListEntry>,
+        cur: EntryId,
     ) {
         // Number indexes with half the default spacing so we can catch up
         // quickly.
         const SPACE: u32 = SlotIndex::INSTR_DIST / 2;
-        let start = cur.prev.borrow().upgrade().expect("an entry before");
-        let mut index = start.index.get();
-        let begin_index = index;
-        let mut at = Some(Rc::clone(cur));
-        while let Some(entry) = at {
-            index += SPACE;
-            entry.index.set(index);
-            at = entry.next.borrow().clone();
-            // If the next index is bigger, we have caught up.
-            match &at {
-                Some(next) if next.index.get() <= index => {}
-                _ => break,
+        let (begin_index, index) = ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let start = arena.prev[cur as usize];
+            let mut index = arena.index[start as usize];
+            let begin_index = index;
+            let mut at = cur;
+            loop {
+                index += SPACE;
+                arena.index[at as usize] = index;
+                at = arena.next[at as usize];
+                // If the next index is bigger, we have caught up.
+                if at == NONE || arena.index[at as usize] > index {
+                    break;
+                }
             }
-        }
+            (begin_index, index)
+        });
         // If we repack more than 20% of a function, add spacing in between the
         // instructions so that future renumberings are able to catch up
         // without also renumbering so much.
@@ -647,13 +732,16 @@ impl SlotIndexes {
 
     /// `packIndexes`: renumbers all indexes using the default distance.
     pub fn pack_indexes(&mut self) {
-        let mut at = self.first.clone();
-        let mut number = 0u32;
-        while let Some(entry) = at {
-            entry.index.set(number * SlotIndex::INSTR_DIST);
-            number += 1;
-            at = entry.next.borrow().clone();
-        }
+        ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let mut at = self.first;
+            let mut number = 0u32;
+            while at != NONE {
+                arena.index[at as usize] = number * SlotIndex::INSTR_DIST;
+                number += 1;
+                at = arena.next[at as usize];
+            }
+        });
     }
 
     /// `insertMBBInMaps` (SlotIndexes.h#L549): after block `block` was made by
@@ -667,25 +755,29 @@ impl SlotIndexes {
         assert!(block != 0, "Can't insert a new block at the beginning of a function.");
         // Create a new entry to be used for the start of mbb and the end of
         // prevMBB.
-        let start_entry = IndexListEntry::new(None, 0);
-        let end_entry = Rc::clone(self.mbb_ranges[block - 1].1.list_entry());
+        let end_entry = self.mbb_ranges[block - 1].1.list_entry();
         let ins_entry = match first_instr {
-            Some(instr) => Rc::clone(self.get_instruction_index(instr).list_entry()),
-            None => Rc::clone(&end_entry),
+            Some(instr) => self.get_instruction_index(instr).list_entry(),
+            None => end_entry,
         };
         // indexList.insert(insEntry, startEntry): before insEntry.
-        let before = ins_entry.prev.borrow().upgrade().expect("an entry before");
-        *start_entry.prev.borrow_mut() = Rc::downgrade(&before);
-        *start_entry.next.borrow_mut() = Some(Rc::clone(&ins_entry));
-        *ins_entry.prev.borrow_mut() = Rc::downgrade(&start_entry);
-        *before.next.borrow_mut() = Some(Rc::clone(&start_entry));
-        let start_idx = SlotIndex::at(&start_entry, Slot::Block);
-        let end_idx = SlotIndex::at(&end_entry, Slot::Block);
-        self.mbb_ranges[block - 1].1 = start_idx.clone();
+        let start_entry = ARENA.with(|arena| {
+            let mut arena = arena.borrow_mut();
+            let start_entry = arena.create(None, 0);
+            let before = arena.prev[ins_entry as usize];
+            arena.prev[start_entry as usize] = before;
+            arena.next[start_entry as usize] = ins_entry;
+            arena.prev[ins_entry as usize] = start_entry;
+            arena.next[before as usize] = start_entry;
+            start_entry
+        });
+        let start_idx = SlotIndex::at(start_entry, Slot::Block);
+        let end_idx = SlotIndex::at(end_entry, Slot::Block);
+        self.mbb_ranges[block - 1].1 = start_idx;
         assert_eq!(block, self.mbb_ranges.len(), "Blocks must be added in order");
-        self.mbb_ranges.push((start_idx.clone(), end_idx));
+        self.mbb_ranges.push((start_idx, end_idx));
         self.idx2mbb_map.push((start_idx, block));
-        self.renumber_indexes(&start_entry);
+        self.renumber_indexes(start_entry);
         self.idx2mbb_map.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
@@ -695,7 +787,7 @@ impl SlotIndexes {
         block: usize,
     ) {
         assert!(block != 0, "Can't remove the first block of a function.");
-        let (start, end) = self.mbb_ranges[block].clone();
+        let (start, end) = self.mbb_ranges[block];
         // Give MBB's slot range to its layout predecessor so blocks stay
         // contiguous.
         self.mbb_ranges[block - 1].1 = end;
@@ -704,7 +796,7 @@ impl SlotIndexes {
         assert!(at < self.idx2mbb_map.len() && self.idx2mbb_map[at].0 == start && self.idx2mbb_map[at].1 == block);
         self.idx2mbb_map.remove(at);
         // Clear the block-start boundary entry.
-        start.list_entry().instr.set(None);
+        ARENA.with(|arena| arena.borrow_mut().instr[start.list_entry() as usize] = None);
     }
 
     /// How many local renumberings this has done (`NumLocalRenum`).
@@ -715,15 +807,18 @@ impl SlotIndexes {
     /// `print`: each entry's number and whether it is an instruction.
     pub fn print(&self) -> String {
         let mut out = String::new();
-        let mut at = self.first.clone();
-        while let Some(entry) = at {
-            out.push_str(&format!(
-                "{} {}\n",
-                entry.index.get(),
-                entry.instr().map_or("-".to_owned(), |one| one.to_string())
-            ));
-            at = entry.next.borrow().clone();
-        }
+        ARENA.with(|arena| {
+            let arena = arena.borrow();
+            let mut at = self.first;
+            while at != NONE {
+                out.push_str(&format!(
+                    "{} {}\n",
+                    arena.index[at as usize],
+                    arena.instr[at as usize].map_or("-".to_owned(), |one| one.to_string())
+                ));
+                at = arena.next[at as usize];
+            }
+        });
         for (number, (start, end)) in self.mbb_ranges.iter().enumerate() {
             out.push_str(&format!("bb.{number}\t[{start};{end})\n"));
         }
@@ -874,5 +969,41 @@ mod tests {
         );
         let in_second = indexes.get_instruction_index(body.blocks[1].insns[0].id());
         assert_eq!(indexes.get_mbb_from_index(&in_second, &|_| 1), 1);
+    }
+
+    /// The instructions of a parallel copy are one bundle: they share the
+    /// index of the first, so the copy reads and writes at one point.
+    #[test]
+    fn test_the_instructions_of_a_parallel_copy_share_one_index() {
+        let mut insns: Vec<Arc<Insn>> = (0..4).map(|_| insn()).collect();
+        for at in 1..3 {
+            let mut one = (*insns[at]).clone();
+            one.group = Some(7);
+            insns[at] = Arc::new(one);
+        }
+        let body = LirBody::new(
+            "bundle",
+            0,
+            vec![crate::model::lir::Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at: Vec<u32> = insns.iter().map(|one| indexes.get_instruction_index(one.id()).get_index()).collect();
+        assert_eq!(at, vec![16, 32, 32, 48]);
+    }
+
+    /// Entries of a dropped `SlotIndexes` are reused: numbering a body over and
+    /// over does not grow the arena.
+    #[test]
+    fn test_the_entries_of_a_dropped_numbering_are_reused() {
+        let body = body(&[50]);
+        let size = || ARENA.with(|arena| arena.borrow().index.len());
+        drop(SlotIndexes::new(&body));
+        let after_one = size();
+        for _ in 0..20 {
+            drop(SlotIndexes::new(&body));
+        }
+        assert_eq!(size(), after_one);
     }
 }

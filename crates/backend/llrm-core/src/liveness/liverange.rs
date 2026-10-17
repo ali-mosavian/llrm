@@ -814,6 +814,12 @@ impl LiveRange {
 
     /// `extendSegmentStartTo` (LiveInterval.cpp#L186): extends segment `i` to
     /// start at `new_start`, returns the index of the segment that results.
+    ///
+    /// C++ BUG NOT COPIED: where the loop reaches the first segment, C++ erases
+    /// `[begin, I)` and then returns `I`, an iterator that erase invalidated
+    /// (it points past the segment that moved to the front). The caller
+    /// then reads `I->end`. Here the index of the segment after the erase
+    /// is returned.
     fn extend_segment_start_to(
         &mut self,
         i: usize,
