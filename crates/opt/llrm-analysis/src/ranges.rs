@@ -2001,10 +2001,12 @@ fn bounded_solved_under(
             scoped
         };
         let prefixes: RefCell<Prefixes> = RefCell::new(Prefixes::default());
-        // What the edges above the loop narrow, found once: they read only
-        // values made outside it, which every `known` of this loop
-        // holds alike.
-        let outer_delta: RefCell<Option<Rc<Intervals>>> = RefCell::new(None);
+        // What the edges above the loop narrow of a `known`, found once for it
+        // (by its id): they read only values made outside the loop, but the
+        // `known`s of one loop do not hold those alike (the one with the
+        // assumes narrows an argument the plain one leaves alone), and a delta
+        // found against one left out what the other lacks.
+        let outer_delta: RefCell<Option<(u64, Rc<Intervals>)>> = RefCell::new(None);
         // How many blocks of the loop each block dominates (itself too): the
         // blocks a prefix ending at it is shared by.
         let led = std::cell::OnceCell::<HashMap<i64, usize>>::new();
@@ -2101,7 +2103,9 @@ fn bounded_solved_under(
                 Ok(())
             };
             let outer_narrowing = |edges: &[(usize, usize, i64)], known: &Intervals| -> Result<Rc<Intervals>, String> {
-                if let Some(found) = outer_delta.borrow().as_ref() {
+                if let Some((of, found)) = outer_delta.borrow().as_ref()
+                    && *of == id
+                {
                     return Ok(Rc::clone(found));
                 }
                 let mut narrowed = known.clone();
@@ -2113,7 +2117,7 @@ fn bounded_solved_under(
                     }
                 }
                 let delta = Rc::new(delta);
-                *outer_delta.borrow_mut() = Some(Rc::clone(&delta));
+                *outer_delta.borrow_mut() = Some((id, Rc::clone(&delta)));
                 Ok(delta)
             };
             // A prefix of the edges inside the loop is kept where the blocks it
