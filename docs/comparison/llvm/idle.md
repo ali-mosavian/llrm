@@ -84,6 +84,44 @@ The round loop keeps, per pass, the version of the body at which it last found n
                 *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
 ```
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart TB
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph LV["LLVM: a fixed list, each pass about once"]
+    direction LR
+    a1["<b>pass</b>"]:::mid
+    a2{"<b>last-run record?</b>"}
+    a3["<b>skip</b><br/><small>before any analysis is asked</small>"]:::out
+    a4["<b>run</b>"]:::opt
+    a1 --> a2
+    a2 -->|"yes"| a3
+    a2 -->|"no"| a4
+  end
+  subgraph RK["llrm: rounds until nothing changes"]
+    direction LR
+    b1["<b>pass, next round</b>"]:::mid
+    b2{"<b>body version seen,<br/>or edits miss reads()?</b>"}
+    b3["<b>skip</b><br/><small>36 of 782</small>"]:::out
+    b4["<b>run</b><br/><small>asks its analyses first</small>"]:::opt
+    b5["<b>no change</b><br/><small>637 runs, 361 M</small>"]:::warn
+    b6["<b>changed</b><br/><small>85 runs, 666 M</small>"]:::mid
+    b1 --> b2
+    b2 -->|"yes"| b3
+    b2 -->|"no"| b4
+    b4 --> b5
+    b4 --> b6
+  end
+  style LV fill:transparent,stroke:#16a34a
+  style RK fill:transparent,stroke:#64748b
+```
+
+*`d_faces` -O2: what happens to a pass at its turn*
+
 ## Divergence
 
 The mechanism is the same; its reach is not. LLVM's pipeline is a fixed list that visits each pass about once per position (77 function-pass runs and 207 loop-pass runs on `d_draw_faces`), so a skipped run is a run that would repeat. llrm iterates the whole list to a fixed point, 4 rounds of 21 passes (86 runs on `d_draw_faces`), and the second round finds that an edit did reach what most passes read: `skipped as unreached` is 6 over the file, `skipped as settled` 30. The 637 idle runs average 0.57 M with analyses; the 85 runs that change something average 7.8 M. A run that changes the body invalidates the analyses and the next pass pays to compute them again (`r01-decide`: 0.47 M own work, 13.0 M with analyses).

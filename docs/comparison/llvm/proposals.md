@@ -4,9 +4,45 @@ TL;DR: nine changes, ranked by what the measurements say is at stake on `d_faces
 
 Order: first by the share of `d_faces` the thing costs, then by slope where `d_faces` hides it (its loops are small, so a quadratic pass can cost nothing there and 40% of a larger file). "unmeasured" means no number exists yet. llrm line links are at main `21f5c9fc8`, the code the measurements ran on; LLVM links are at `d1106deb71cc81016406a1917d0508d2df296266`.
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  c1["<b>heap churn</b><br/><small>3.77 M allocations, 518 M</small>"]:::warn
+  c2["<b>analyses rebuilt</b><br/><small>651 M, quadratic queries</small>"]:::warn
+  c3["<b>idle runs</b><br/><small>361 M</small>"]:::warn
+  c4["<b>mask held across blocks</b><br/><small>79 splits</small>"]:::warn
+  c5["<b>quadratic passes</b><br/><small>dse, gvn, lsr</small>"]:::warn
+  c6["<b>bookkeeping</b><br/><small>about 4%</small>"]:::warn
+  p1["<b>inline lists, arena, presize</b><br/><small>#1956 landed (successors)</small>"]:::out
+  p1b["<b>operands inline, scratch, arena</b><br/><small>unowned</small>"]:::data
+  p2["<b>lazy memory facts</b><br/><small>keep-analyses, design</small>"]:::data
+  p3["<b>narrow reads(), check before analyses</b><br/><small>unowned</small>"]:::data
+  p4["<b>masks_sunk</b><br/><small>#2010, open</small>"]:::opt
+  p5a["<b>gvn linear</b><br/><small>#1999, open</small>"]:::opt
+  p5b["<b>lsr linear</b><br/><small>#2008, open</small>"]:::opt
+  p5c["<b>dse sparse set</b><br/><small>edit-rollback, coming</small>"]:::data
+  p6["<b>digest, env once</b><br/><small>#1931 merged, #2007 open</small>"]:::opt
+  c1 --> p1
+  c1 --> p1b
+  c2 --> p2
+  c3 --> p3
+  c4 --> p4
+  c5 --> p5a
+  c5 --> p5b
+  c5 --> p5c
+  c6 --> p6
+```
+
+*Cause, proposed change, status: landed, open PR, design or unowned*
+
 | # | change | bound on `d_faces` -O2 | slope | owner, PR, status |
 |---:|---|---|---|---|
-| 1 | allocation and copying | 518 M (18.0%, a bound: it includes 22.7 M of `memcmp`); 3,765,923 allocations against 62,881; 24% of D1 misses, the largest group | memory 8 to 18 KB per IR instruction | unassigned; none built |
+| 1 | allocation and copying | 518 M (18.0%, a bound: it includes 22.7 M of `memcmp`); 3,765,923 allocations against 62,881; 24% of D1 misses, the largest group | memory 4 to 12 KB per IR instruction (system allocator) | unassigned; none built |
 | 2 | lazy, per-version memory facts | analyses 651 M of 2,830 M (23%) in [LLVM measured](measured.md), overlapping #1 (memory SSA and alias facts are 19% of the allocations); self cost of `alias::escapes`, `MemRef::of`, `walked_from`, `structure_of`, `exposed_frames` 210 M (7.3%) | through-memory 3.7x per doubling | keep-analyses, design; walker tables greedy-port |
 | 3 | idle pass runs | 361 M (12.8%) in 637 runs | none | unassigned; none built |
 | 4 | mask test made at each branch | none on `d_faces` stated; `diamond 800`: 1,995 M to 1,075 M reported | removes 79 splits | ssa-spill-m16, [#2010](https://github.com/ali-mosavian/llrm/pull/2010), open |

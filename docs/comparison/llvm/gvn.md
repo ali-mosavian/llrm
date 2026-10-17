@@ -154,6 +154,37 @@ It sits late in the round, after the loop passes and after `dse`; `sroa`, `fold`
         // Ordinary scalar write-through promotion remains after memory GVN.
 ```
 
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
+flowchart LR
+  classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  classDef warn fill:#dc2626,stroke:#991b1b,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
+  linkStyle default stroke:#64748b,stroke-width:2.2px
+  subgraph LV["LLVM, per function"]
+    direction LR
+    e1["<b>SROA</b><br/><small>5.3 M</small>"]:::mid
+    e2["<b>EarlyCSE</b><br/><small>13.7 M</small>"]:::opt
+    e3["<b>InstCombine</b><br/><small>29.1 M</small>"]:::mid
+    e4["<b>GVN</b><br/><small>2.0 M, sees a third</small>"]:::out
+    e5["<b>DSE</b><br/><small>12.9 M</small>"]:::mid
+    e1 --> e2 --> e3 --> e4 --> e5
+  end
+  subgraph RK["llrm, round 1"]
+    direction LR
+    f1["<b>sroa</b>"]:::mid
+    f2["<b>fold</b>"]:::mid
+    f3["<b>dse</b><br/><small>35.5 M, finds nothing</small>"]:::warn
+    f4["<b>gvn</b><br/><small>59.7 M, 2,941 to 761 instructions</small>"]:::warn
+    f1 --> f2 --> f3 --> f4
+  end
+  style LV fill:transparent,stroke:#16a34a
+  style RK fill:transparent,stroke:#dc2626
+```
+
+*`mem` N=200: the order of the redundancy passes and what each costs*
+
 ## Divergence
 
 The caps are alike (100 writes in llrm's walk, 100 in LLVM's), so caps are not the gap. Two things are. First, order and size: the first `gvn` run takes 59.7 M and removes 2,180 of 2,941 MIR instructions (counted lines of the stage dump); LLVM does the same removal in EarlyCSE (13.7 M) and DSE (12.9 M) and its GVN then sees 556. Second, what a run asks for first: `gvn` needs `memoryssa::Accesses`, `alias::PointsTo` and `Summaries`, which `LLRM_DEBUG=runs` bills to the step (`r01-fold`: 2.4 M own work, 27.5 M with its analyses; `r01-decide`: 0.47 M, 13.0 M; `r01-sroa`: 1.9 M, 19.8 M), while EarlyCSE asks for memory SSA and uses it only when the generation counters differ, and InstCombine asks for a dominator tree and alias analysis it queries lazily.
