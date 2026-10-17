@@ -30,6 +30,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import clangpin  # noqa: E402
+
+CLANG_BIN = clangpin.default()  # the pinned clang, else PATH's; the report's header names its version
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import llrmbin  # noqa: E402
@@ -217,7 +223,7 @@ def build_map(args) -> dict:
     own_sum = sum(r[1] for r in rows)
     result = {
         "header": {"commit": commit(), "llrm": " ".join(base), "gcc": f"gcc {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}",
-                   "clang": f"clang {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}"},
+                   "clang": f"{CLANG_BIN} {' '.join(FOREIGN)} {args.level} -S -o /dev/null {source}"},
         "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None,
         "outside_every_step_M": step_total[2] if step_total else None,
         "rows": [], "categories": {},
@@ -234,7 +240,7 @@ def build_map(args) -> dict:
         work = Path(tmp)
         many = copies(source, work)
         gcc_one = instructions(["gcc", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
-        clang_one = instructions(["clang", *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
+        clang_one = instructions([CLANG_BIN, *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env) / 1e6
         for name in ("gcc", "clang"):
             timing[name] = cycles([name, *FOREIGN, args.level, "-S", "-o", "/dev/null", str(source)], env)
         # Their timers are time, not instructions: three runs, summed.
@@ -253,7 +259,7 @@ def build_map(args) -> dict:
         for k in range(REPEATS):
             trace = work / f"trace{k}"
             trace.mkdir()
-            run(["clang", *FOREIGN, args.level, "-S", "-o", trace / "o.s", "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
+            run([CLANG_BIN, *FOREIGN, args.level, "-S", "-o", trace / "o.s", "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
             selfs.update(self_times(json.loads(next(trace.glob("*.json")).read_text())["traceEvents"]))
         ccat = collections.defaultdict(float)
         for name, micro in selfs.items():
@@ -277,7 +283,7 @@ def build_map(args) -> dict:
 def show(result: dict, old: dict | None = None) -> str:
     out = []
     head = result["header"]
-    out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", ""]
+    out += [f"commit  {head['commit']}", f"llrm    {head['llrm']}", f"gcc     {head['gcc']}", f"clang   {head['clang']}", clangpin.header(CLANG_BIN), ""]
     total = result["total_M"]
     inst = result["instrumented_M"]
     gap = inst - result["rows_sum_M"]

@@ -20,6 +20,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import clangpin  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
@@ -89,14 +93,17 @@ def main() -> None:
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     parser.add_argument(
         "--clang",
-        default="clang",
-        help="the clang to compare with (a static build of the pinned tag, docs/architecture/compile-gap-series.md); the distro's by default",
+        default=clangpin.default(),
+        help="the clang to compare with: the pinned 24.0.0git d1106deb71cc (~/scratch/llvm-build/bin/clang) when built; the distro's 20.1.8 costs 555 M on d_faces -O2 where the pinned costs 415 M",
     )
+    parser.add_argument("--allow-other-clang", action="store_true", help="compare with a clang that is not the pinned one")
     parser.add_argument(
         "--distro-clang",
         help="a second clang column, what users run (the distro's shared-libLLVM clang: +20% of startup and calls into libLLVM)",
     )
     args = parser.parse_args()
+    clangpin.require_pinned(args.clang, args.allow_other_clang)
+    print(clangpin.header(args.clang))
     args.llrm = args.llrm or dist_build()
     qc = Path(os.environ["QCPORT"]).expanduser()
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
