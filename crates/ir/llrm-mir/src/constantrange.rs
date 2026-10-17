@@ -8,7 +8,7 @@
 //! the full set when it is the maximum value and the empty set when it is zero.
 //! An `APInt` is a `u128` and its width ([`crate::apint`]).
 //!
-//! DEVIATE, approved by oversight: widths above 128 are refused: MIR parses
+//! DEVIATE: widths above 128 are refused: MIR parses
 //! `i1` to `i128` and no wider (`mir_holds_no_integer_wider_than_128` in
 //! `knownbits_tests.rs` fails if that changes). `multiply` runs at twice the
 //! width, as LLVM does, in a [`U256`](crate::apint::U256) above 64 bits.

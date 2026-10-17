@@ -939,7 +939,7 @@ fn is_known_non_zero_from_operator(
                         }
                         let Operand::Block(block) = incoming[1] else { return false };
                         let Some(terminator) = q.function.terminator(block) else { return false };
-                        let rec_q = q.with_cxt(Some(terminator));
+                        let rec_q = q.without_cond_context().with_cxt(Some(terminator));
                         let branch = q.function.instruction(terminator);
                         if branch.opcode == Opcode::Br
                             && branch.operands.len() == 3
@@ -1409,7 +1409,7 @@ fn is_non_equal_phis(
             return false;
         }
 
-        let rec_q = q.with_cxt(q.function.terminator(incom_bb));
+        let rec_q = q.without_cond_context().with_cxt(q.function.terminator(incom_bb));
         if !is_known_non_equal_demanded(&rec_q, iv1, iv2, depth + 1) {
             return false;
         }

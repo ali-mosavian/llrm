@@ -21,8 +21,6 @@
 //!   `getRISCVVLENBRange` (L1319-L1350: `read_register` takes metadata);
 //! - the `vscale_range` attribute, which MIR does not parse: `getVScaleRange`
 //!   (L1297-L1316) is the range without it;
-//! - `SimplifyQuery::CC`, the injected condition: `getWithoutCondContext` is
-//!   the query itself;
 //! - `smulh` and `umulh` above 64 bits, where `KnownBits::mulhs` stops.
 //!
 //! Approximated by what MIR holds: a global without `align`, an `alloca`
@@ -764,10 +762,10 @@ fn compute_known_bits_for_recurrence_operands(
     let incoming: Vec<_> = phi_incoming(q.function.instruction(phi)).collect();
     let op_num = if incoming[0].0 == start { 0 } else { 1 };
 
-    let rec_q = q.with_cxt(q.function.terminator(incoming[op_num].1));
+    let rec_q = q.without_cond_context().with_cxt(q.function.terminator(incoming[op_num].1));
     let known_start = compute_known_bits(&rec_q, start, depth + 1);
 
-    let rec_q = q.with_cxt(q.function.terminator(incoming[1 - op_num].1));
+    let rec_q = q.without_cond_context().with_cxt(q.function.terminator(incoming[1 - op_num].1));
     let known_step = compute_known_bits(&rec_q, step, depth + 1);
     (known_start, known_step)
 }
@@ -932,7 +930,7 @@ fn known_bits_of_phi(
             BinaryOp::LShr | BinaryOp::AShr | BinaryOp::Shl | BinaryOp::UDiv | BinaryOp::URem
                 if opcode == BinaryOp::URem || bo_instruction.operands[0] == this =>
             {
-                let rec_q = q.with_cxt(Some(phi));
+                let rec_q = q.without_cond_context().with_cxt(Some(phi));
                 let known_start = compute_known_bits(&rec_q, start, depth + 1);
                 match opcode {
                     BinaryOp::Shl => {
@@ -1024,7 +1022,7 @@ fn known_bits_of_phi(
                 continue;
             }
 
-            let rec_q = q.with_cxt(cxt_i);
+            let rec_q = q.without_cond_context().with_cxt(cxt_i);
 
             let mut known2 = compute_known_bits(&rec_q, inc_value, MAX_ANALYSIS_RECURSION_DEPTH - 1);
 

@@ -13,8 +13,9 @@ use llrm_mir::valuetracking::context::{
     compute_known_bits_from_context, find_values_affected_by_condition, is_implied_by_dom_condition_cmp,
     is_implied_by_dom_condition_cond, is_implied_condition, is_valid_assume_for_context, will_not_free_between,
 };
+use llrm_mir::valuetracking::known::compute_known_bits;
 use llrm_mir::valuetracking::pattern::CmpPredicate;
-use llrm_mir::valuetracking::{AssumptionCache, DomConditionCache, Query};
+use llrm_mir::valuetracking::{AssumptionCache, CondContext, DomConditionCache, Query};
 
 fn tri(r: Option<bool>) -> &'static str {
     match r {
@@ -130,6 +131,44 @@ fn dump(
             let mut list = String::new();
             find_values_affected_by_condition(&q, c, assume == 1, &mut |v| list += &format!(" {}", nm(v)));
             println!("{name} aff {} {assume}{list}", nm(c));
+        }
+    }
+    for &u in &insts {
+        let instruction = function.instruction(u);
+        let c = match instruction.opcode {
+            Opcode::Select => instruction.operands[0],
+            Opcode::Br if instruction.operands.len() == 3 => instruction.operands[0],
+            _ => continue,
+        };
+        if base.scalar_bits(c) != 1 || base.is_pointer(c) {
+            continue;
+        }
+        let mut cc = CondContext::new(c);
+        find_values_affected_by_condition(&q, c, false, &mut |v| {
+            cc.affected_values.insert(v);
+        });
+        for inv in 0..2 {
+            cc.invert = inv == 1;
+            let q = query(Some(u)).with_cond_context(&cc);
+            let mut vals: Vec<Operand> = cc.affected_values.iter().copied().collect();
+            if instruction.opcode == Opcode::Select {
+                vals.push(instruction.operands[1]);
+                vals.push(instruction.operands[2]);
+            }
+            let mut sorted: Vec<(String, Operand)> = Vec::new();
+            for v in vals {
+                let w = q.scalar_bits(v);
+                if w == 0 || w > 128 || !matches!(v, Operand::Value(_)) {
+                    continue;
+                }
+                if !sorted.iter().any(|(n, _)| *n == nm(v)) {
+                    sorted.push((nm(v), v));
+                }
+            }
+            sorted.sort_by(|a, b| a.0.cmp(&b.0));
+            for (n, v) in sorted {
+                println!("{name} cc {} {} {inv} {n} kb={}", nm(c), inm(u), compute_known_bits(&q, v, 0).print());
+            }
         }
     }
     let acache = |v: Operand| {

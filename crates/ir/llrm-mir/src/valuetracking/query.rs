@@ -33,6 +33,8 @@ pub struct Query<'a> {
     pub assumptions: Option<&'a AssumptionCache>,
     /// `DC`: the conditional branches each value is tested by.
     pub dom_conditions: Option<&'a DomConditionCache>,
+    /// `CC`: a condition the query is asked under.
+    pub cond_context: Option<&'a CondContext>,
     /// `CxtI`: the instruction the query is asked at.
     pub cxt: Option<InstId>,
 }
@@ -52,6 +54,7 @@ impl<'a> Query<'a> {
             dt: None,
             assumptions: None,
             dom_conditions: None,
+            cond_context: None,
             cxt: None,
         }
     }
@@ -72,6 +75,7 @@ impl<'a> Query<'a> {
             dt: None,
             assumptions: None,
             dom_conditions: None,
+            cond_context: None,
             cxt: None,
         }
     }
@@ -81,6 +85,19 @@ impl<'a> Query<'a> {
         cxt: Option<InstId>,
     ) -> Self {
         Self { cxt, ..self }
+    }
+
+    /// `getWithCondContext`.
+    pub fn with_cond_context(
+        self,
+        cc: &'a CondContext,
+    ) -> Self {
+        Self { cond_context: Some(cc), ..self }
+    }
+
+    /// `getWithoutCondContext`.
+    pub fn without_cond_context(self) -> Self {
+        Self { cond_context: None, ..self }
     }
 
     pub fn context(&self) -> &'a Context {
@@ -202,6 +219,20 @@ impl<'a> Query<'a> {
         b: Operand,
     ) -> bool {
         a == b
+    }
+}
+
+/// `CondContext`: evaluate a query assuming `cond` holds (`invert`: does not).
+#[derive(Clone, Debug)]
+pub struct CondContext {
+    pub cond: Operand,
+    pub invert: bool,
+    pub affected_values: crate::hash::HashSet<Operand>,
+}
+
+impl CondContext {
+    pub fn new(cond: Operand) -> Self {
+        Self { cond, invert: false, affected_values: Default::default() }
     }
 }
 

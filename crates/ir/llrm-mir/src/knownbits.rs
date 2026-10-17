@@ -9,9 +9,10 @@
 //!
 //! An `APInt` is a `u128` and its width: `zero` and `one` hold the low `width`
 //! bits and no others. DEVIATE: widths above 128 are refused (`unknown`
-//! panics); `mulhs`/`mulhu` need twice the width in `u128`, so they take at
-//! most 64 bits, and the averages one more bit than the width. Approved by
-//! oversight.
+//! panics): MIR parses `i1` to `i128` and no wider
+//! (`mir_holds_no_integer_wider_than_128` fails if that changes). The
+//! operations LLVM runs at twice the width (`mulhs`, `mulhu`) or one more bit
+//! (the averages) run in a [`U256`](crate::apint::U256).
 //!
 //! # Example
 //! `0b1?0?` is `zero = 0b0101, one = 0b1000` at width 4; `add` of it with the

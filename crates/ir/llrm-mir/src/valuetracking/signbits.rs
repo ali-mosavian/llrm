@@ -8,8 +8,6 @@
 //! Not translated, as MIR has no such thing:
 //! - vectors: `computeNumSignBitsVectorConstant`, the `BitCast` case,
 //!   `ExtractElement` and `ShuffleVector` (L4374-4396, L4509-4535, L4693-4728);
-//! - `Q.getWithoutCondContext()` (L4683): `Query` has no condition context to
-//!   drop;
 //! - `safeCxtI` (L363): the caller sets `Query::cxt`.
 //!
 //! # Example
@@ -227,7 +225,7 @@ fn compute_num_sign_bits_impl(
                             return tmp;
                         }
                         let Operand::Block(block) = pair[1] else { unreachable!("a phi names its blocks") };
-                        let rec_q = q.with_cxt(q.function.terminator(block));
+                        let rec_q = q.without_cond_context().with_cxt(q.function.terminator(block));
                         tmp = tmp.min(compute_num_sign_bits(&rec_q, pair[0], depth + 1));
                     }
                     return tmp;

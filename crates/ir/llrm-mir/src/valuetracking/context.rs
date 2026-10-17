@@ -8,9 +8,10 @@
 //! `findValuesAffectedByCondition`, `isImpliedCondition`,
 //! `isImpliedByDomCondition` and what they call), each function linking the
 //! line it translates. `Query::dt`, `Query::assumptions` and
-//! `Query::dom_conditions` are `SQ.DT`, `SQ.AC` and `SQ.DC`: absent, nothing
-//! here applies. Not translated, as MIR has no such thing:
-//! - `Q.CC`, the injected condition (L1058-1060).
+//! `Query::dom_conditions` and `Query::cond_context` are `SQ.DT`, `SQ.AC`,
+//! `SQ.DC` and `SQ.CC`: absent, nothing here applies. Not translated, as MIR
+//! has no such thing:
+//! - `computeKnownFPClassFromContext`'s use of `Q.CC` (floating point).
 //! - Operand bundles: `assumeBundleImpliesNonNull` and the `align` bundle
 //!   (L856-863, L1085-1100).
 //! - Floating point comparisons: `isImpliedCondFCmps` (L10088-10147) needs
@@ -568,6 +569,12 @@ pub fn compute_known_bits_from_context(
     known: &mut KnownBits,
     depth: u32,
 ) {
+    if let Some(cc) = q.cond_context
+        && cc.affected_values.contains(&v)
+    {
+        compute_known_bits_from_cond(q, v, cc.cond, known, cc.invert, depth);
+    }
+
     let Some(cxt) = q.cxt else { return };
     if let (Some(conditions), Some(_)) = (q.dom_conditions, q.dt) {
         let cxt_block = q.block_of(cxt);
@@ -869,7 +876,7 @@ fn constant_range_of(
     match side {
         Side::Int(c, w) => ConstantRange::single(w, c),
         Side::Value(v) => {
-            let bare = Query { dt: None, assumptions: None, dom_conditions: None, cxt: None, ..*q };
+            let bare = Query { dt: None, assumptions: None, dom_conditions: None, cond_context: None, cxt: None, ..*q };
             super::range::compute_constant_range(&bare, v, for_signed, MAX_ANALYSIS_RECURSION_DEPTH - 1)
         }
     }

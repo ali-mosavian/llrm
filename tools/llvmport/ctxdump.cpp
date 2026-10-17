@@ -5,6 +5,7 @@
 //   <f> domp i<I> <c> <r>       isImpliedByDomCondition(pred, lhs, rhs, I) for the icmp c
 //   <f> aff <c> <assume> <list> findValuesAffectedByCondition
 //   <f> acache <v> <list>       the instructions of AssumptionCache::assumptionsFor(v)
+//   <f> cc <c> i<U> <inv> <v> kb=...  computeKnownBits of v at U (a select or br using i1 c) under CondContext(c, inv)
 //   <f> free <a> i<I> <r>       willNotFreeBetween
 //   <f> valid <a> i<I> <dt> <r> isValidAssumeForContext, with (dt=1) or without a DominatorTree
 // Values are named a<k> (argument), i<k> (k-th instruction of the function), @name or ?.
@@ -23,7 +24,9 @@
 #include "llvm/Support/KnownBits.h"
 #include "llvm/Support/SourceMgr.h"
 #include <cstdio>
+#include <algorithm>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -121,6 +124,37 @@ int main(int argc, char **argv) {
           findValuesAffectedByCondition(C, Asm, [&](Value *V) { L += " " + nm(V); });
           printf("%s aff %s %d%s\n", FN.c_str(), nm(C).c_str(), Asm, L.c_str());
         }
+      for (Instruction *U : Insts) {
+        Value *C = nullptr;
+        if (auto *SI = dyn_cast<SelectInst>(U)) C = SI->getCondition();
+        else if (auto *BI = dyn_cast<CondBrInst>(U)) C = BI->getCondition();
+        if (!C || !C->getType()->isIntegerTy(1)) continue;
+        CondContext CC(C);
+        findValuesAffectedByCondition(C, false, [&](Value *V) { CC.AffectedValues.insert(V); });
+        for (int Inv = 0; Inv < 2; ++Inv) {
+          CC.Invert = Inv;
+          SimplifyQuery Q = SimplifyQuery(DL, nullptr, &DT, &AC, U, true, true, &DC).getWithCondContext(CC);
+          std::set<std::string> Done;
+          std::vector<Value *> Vals(CC.AffectedValues.begin(), CC.AffectedValues.end());
+          if (auto *SI = dyn_cast<SelectInst>(U)) {
+            Vals.push_back(SI->getTrueValue());
+            Vals.push_back(SI->getFalseValue());
+          }
+          std::vector<std::pair<std::string, Value *>> Sorted;
+          for (Value *V : Vals) {
+            unsigned W = scalar(V->getType());
+            if (W == 0 || W > 128 || (!isa<Argument>(V) && !isa<Instruction>(V))) continue;
+            if (Done.insert(nm(V)).second) Sorted.push_back({nm(V), V});
+          }
+          std::sort(Sorted.begin(), Sorted.end());
+          for (auto &[N, V] : Sorted) {
+            std::string S;
+            raw_string_ostream OS(S);
+            computeKnownBits(V, Q, 0).print(OS);
+            printf("%s cc %s %s %d %s kb=%s\n", FN.c_str(), nm(C).c_str(), nm(U).c_str(), Inv, N.c_str(), S.c_str());
+          }
+        }
+      }
       auto acache = [&](Value *V) {
         std::string L;
         for (auto &E : AC.assumptionsFor(V)) L += " " + nm(E.Assume);

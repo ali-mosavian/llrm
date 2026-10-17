@@ -240,14 +240,14 @@ pub fn is_known_to_be_a_power_of_two(
                 && is_known_to_be_a_power_of_two(q, i.operands[2], or_zero, depth)
         }
         Opcode::Phi => {
-            let mut rec_q = *q;
+            let mut rec_q = q.without_cond_context();
             if is_power_of_two_recurrence(&mut rec_q, inst, or_zero, depth) {
                 return true;
             }
 
             let result = Operand::Value(i.result.expect("a phi has a result"));
             let new_depth = depth.max(MAX_ANALYSIS_RECURSION_DEPTH - 1);
-            let mut rec_q = *q;
+            let mut rec_q = q.without_cond_context();
             i.operands
                 .chunks(2)
                 .all(
