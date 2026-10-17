@@ -568,6 +568,51 @@ fn and_or_of_compares() {
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
+/// `isCheckForZeroAndMulWithOverflow` (an `and` of the multiplier's non-zero
+/// test with the overflow bit is the bit) and `((X | Y) ^ X) & ((X | Y) ^ Y)`.
+#[test]
+fn mul_overflow_checks_and_xor_of_or() {
+    let decls = "declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)\ndeclare { i16, i1 } @llvm.smul.with.overflow.i16(i16, i16)\n";
+    let cases: &[(&str, Option<&str>)] = &[
+        (
+            "b0:\n  %a = call {i16, i1} @llvm.umul.with.overflow.i16(i16 %x, i16 %y)\n  %o = extractvalue {i16, i1} %a, 1\n  %nz = icmp ne i16 %x, 0\n  %r = and i1 %nz, %o\n  ret void\n",
+            Some("%o"),
+        ),
+        (
+            "b0:\n  %a = call {i16, i1} @llvm.smul.with.overflow.i16(i16 %y, i16 %x)\n  %o = extractvalue {i16, i1} %a, 1\n  %nz = icmp ne i16 %x, 0\n  %r = and i1 %o, %nz\n  ret void\n",
+            Some("%o"),
+        ),
+        (
+            "b0:\n  %a = call {i16, i1} @llvm.umul.with.overflow.i16(i16 %x, i16 %y)\n  %o = extractvalue {i16, i1} %a, 1\n  %n = xor i1 %o, true\n  %z = icmp eq i16 %y, 0\n  %r = or i1 %n, %z\n  ret void\n",
+            Some("%n"),
+        ),
+        (
+            "b0:\n  %a = call {i16, i1} @llvm.umul.with.overflow.i16(i16 %x, i16 %y)\n  %o = extractvalue {i16, i1} %a, 1\n  %z = icmp eq i16 %x, 0\n  %r = or i1 %z, %o\n  ret void\n",
+            None,
+        ),
+        (
+            "b0:\n  %o = or i16 %x, %y\n  %a = xor i16 %o, %x\n  %b = xor i16 %o, %y\n  %r = and i16 %a, %b\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %o = or i16 %y, %x\n  %a = xor i16 %x, %o\n  %b = xor i16 %y, %o\n  %r = and i16 %b, %a\n  ret void\n",
+            Some("0"),
+        ),
+        (
+            "b0:\n  %a = call {i16, i1} @llvm.umul.with.overflow.i16(i16 %x, i16 %y)\n  %o = extractvalue {i16, i1} %a, 1\n  %n = xor i1 %o, true\n  %z = icmp eq i16 %y, 0\n  %r = or i1 %n, %z\n  ret void\n",
+            Some("%n"),
+        ),
+    ];
+    let wrong: Vec<_> = cases
+        .iter()
+        .filter(|(body, expected)| {
+            let text = format!("{decls}define void @f(i16 %x, i16 %y, i1 %c) {{\n{body}}}\n");
+            simplified(&text, "r").as_deref() != *expected
+        })
+        .collect();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// Differential check against `opt -passes=instsimplify` (not part of the
 /// gate): `LLRM_SIMPLIFY_CASES=in.ll LLRM_SIMPLIFY_OUT=out.txt cargo test -p
 /// llrm-mir --lib simplify_cases -- --ignored`. Each function `@fN` has a

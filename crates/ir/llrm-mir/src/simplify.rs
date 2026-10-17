@@ -1252,6 +1252,45 @@ fn simplify_and_or_of_cmps(
     constfold::cast(q.context, cast_op, c, cast_ty?).map(Operand::Constant)
 }
 
+/// `isCheckForZeroAndMulWithOverflow`
+/// ([OverflowInstAnalysis.cpp:21](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/OverflowInstAnalysis.cpp#L21)):
+/// `op0` is `X != 0` (`X == 0`) and `op1` the overflow bit of `X * ?` (its
+/// negation).
+fn is_check_for_zero_and_mul_with_overflow(
+    q: &Query,
+    op0: Operand,
+    op1: Operand,
+    is_and: bool,
+) -> bool {
+    let Some((pred, x, zero)) = q.icmp(op0) else { return false };
+    if !q.is_zero(zero) {
+        return false;
+    }
+    // %Agg = call { i4, i1 } @llvm.[us]mul.with.overflow.i4(i4 %X, i4 %???)
+    // %V = extractvalue { i4, i1 } %Agg, 1
+    let match_mul_overflow_check = |v: Operand| {
+        let Some(extract) = q.definition(v).map(|inst| q.function.instruction(inst)) else { return false };
+        // We should only be extracting the overflow bit.
+        if !matches!(
+            &extract.opcode,
+            Opcode::ExtractValue(indices) if indices[..] == [1]
+        ) {
+            return false;
+        }
+        let tracking = q.tracking();
+        let Some(args) = ["llvm.umul.with.overflow", "llvm.smul.with.overflow"]
+            .into_iter()
+            .find_map(|base| pattern::intrinsic_call(&tracking, extract.operands[0], base))
+            .map(|(_, args)| args)
+        else {
+            return false;
+        };
+        matches!(args, [a, b] if *a == x || *b == x)
+    };
+    (is_and && pred == IntPredicate::Ne && match_mul_overflow_check(op1))
+        || (!is_and && pred == IntPredicate::Eq && q.not_of(op1).is_some_and(match_mul_overflow_check))
+}
+
 /// `simplifyAssociativeBinOp`
 /// ([:250](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L250)).
 fn simplify_associative(
@@ -2087,6 +2126,12 @@ fn simplify_and_commutative(
     {
         return Some(x);
     }
+    // If we have a multiplication overflow check that is being 'and'ed with a
+    // check that one of the multipliers is not zero, we can omit the 'and', and
+    // only keep the overflow check.
+    if is_check_for_zero_and_mul_with_overflow(q, op0, op1, true) {
+        return Some(op1);
+    }
     // -A & A = A if A is a power of two or zero.
     if q.neg_of(op0).is_some_and(|(inner, _)| inner == op1) && q.is_power_of_two(op1, true) {
         return Some(op1);
@@ -2251,6 +2296,19 @@ fn simplify_and(
             }
         }
     }
+    // ((X | Y) ^ X ) & ((X | Y) ^ Y) --> 0
+    // ((X | Y) ^ Y ) & ((X | Y) ^ X) --> 0
+    if let Some((a, b, _)) = q.binary_of(op0, BinaryOp::Xor) {
+        for (x, or) in [(a, b), (b, a)] {
+            if let Some(y) = q.other_of(or, BinaryOp::Or, x)
+                && let Some((p, r, _)) = q.binary_of(op1, BinaryOp::Xor)
+                && ((p == or && r == y) || (p == y && r == or))
+            {
+                let ty = q.ty(op0);
+                return Some(q.null(ty));
+            }
+        }
+    }
     // (A ^ C1) & (A ^ ~C1) -> 0
     if let Some((a, c1, _)) = q.binary_of(op0, BinaryOp::Xor)
         && let Some((bits, width)) = q.number(c1)
@@ -2370,6 +2428,15 @@ fn simplify_or(
     }
     if let Some(v) = simplify_and_or_of_cmps(q, op0, op1, false) {
         return Some(v);
+    }
+    // If we have a multiplication overflow check that is being 'or'ed with a
+    // check that one of the multipliers is not zero, we can omit the 'or', and
+    // only keep the overflow check.
+    if is_check_for_zero_and_mul_with_overflow(q, op0, op1, false) {
+        return Some(op1);
+    }
+    if is_check_for_zero_and_mul_with_overflow(q, op1, op0, false) {
+        return Some(op0);
     }
     // Try some generic simplifications for associative operations.
     if let Some(v) = simplify_associative(q, BinaryOp::Or, op0, op1, max_recurse) {
