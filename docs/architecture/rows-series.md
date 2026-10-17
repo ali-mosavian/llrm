@@ -30,4 +30,4 @@ Code bytes, llrm over min(gcc, clang):
 
 Rows newly below or above 1.00: none, at any level. `d_faces` clocks over min(gcc, clang): -O1 1.020, -O2 1.005, -O3 1.023, -Os 1.008. QCport emitted bytes: 274,261 (-O1), 274,366 (-O2), 290,924 (-O3), 260,195 (-Os), unchanged.
 
-The -O3 code geomean of 1.28 is the clone chain of `ipa-cp-clone` (gcc's own -O3 flag), not growth past gcc's limits: queens -O3 is 8.6x the smaller compiler and smaller than gcc's.
+The -O3 code geomean of 1.28 is the clone chain of `ipa-cp-clone` (gcc's own -O3 flag): queens -O3 is 8.6x the smaller compiler.
