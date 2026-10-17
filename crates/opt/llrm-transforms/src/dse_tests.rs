@@ -626,3 +626,38 @@ fn the_stores_to_one_address_are_compared_as_one_cell() {
     let asked = llrm_analysis::avail::related_pairs() - before;
     assert!(asked <= 4 * n as usize, "{n} stores to one address asked {asked} pairs of cells");
 }
+
+/// A slot's address joined with a pointer no fact follows, then read through
+/// the join, kept the slot's store out of the escaped set: DSE dropped the
+/// `store i16 5`, and `@f(-7)` read the slot unwritten (bench bintree bq32
+/// printed 2158 for 5736113).
+#[test]
+fn test_dse_keeps_a_store_read_through_a_join_with_an_unknown_pointer() {
+    let after = dropped(
+        "@buf = global i16 7
+
+@box = global ptr @buf
+
+define i16 @f(i16 %x) {
+b0:
+  %s = alloca i16
+  store i16 5, ptr %s
+  %q = load ptr, ptr @box
+  %c = icmp slt i16 %x, 0
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi ptr [ %s, %b1 ], [ %q, %b2 ]
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("store i16 5, ptr %s"), "{after}");
+}
