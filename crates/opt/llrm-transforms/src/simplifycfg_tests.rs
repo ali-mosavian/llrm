@@ -5,6 +5,7 @@ use llrm_mir::passes::Outer;
 
 use super::simplified;
 use crate::testing::{parsed, printed, results};
+use crate::transform::BLOCKS_VISITED;
 
 /// @f simplified; whether anything changed.
 fn simplify(module: &mut Module) -> bool {
@@ -275,8 +276,9 @@ b4:
     assert_eq!(results(&module, &[&[1, 5], &[2, 9]]), before);
 }
 
-/// A chain of n folded branches, each leaving a phi of one value, simplified.
-fn chain_time(n: usize) -> std::time::Duration {
+/// Blocks `_trivial_phis` looked at simplifying a chain of n folded branches,
+/// each leaving a phi of one value.
+fn chain_work(n: usize) -> usize {
     let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br i1 true, label %b1, label %d0\n\n");
     for i in 0..n {
         let next =
@@ -291,22 +293,19 @@ fn chain_time(n: usize) -> std::time::Duration {
         text += &format!("  {}\n\n", next.replace("%p", &format!("%p{}", i + 1)));
     }
     text += "}\n";
-    (0..5)
-        .map(|_| {
-            let mut module = parsed(&text);
-            let start = std::time::Instant::now();
-            simplify(&mut module);
-            start.elapsed()
-        })
-        .min()
-        .unwrap()
+    let mut module = parsed(&text);
+    BLOCKS_VISITED.with(|visited| visited.set(0));
+    simplify(&mut module);
+    BLOCKS_VISITED.with(std::cell::Cell::get)
 }
 
-/// The fold loop and the phi cleanup after it took time linear in the
-/// function: 4x the blocks must cost well under the 16x of a quadratic one.
+/// The phi cleanup after the folds ran once per pass: 4x the blocks is 4x the
+/// blocks looked at. Run after every fold it looked at 16x (the first version
+/// of this test timed the pass and failed under host load; this counts).
+/// Seen to fail first with `_trivial_phis` called after each fold.
 #[test]
-fn test_simplifying_a_chain_of_folds_is_linear_in_its_length() {
-    let small = chain_time(400);
-    let large = chain_time(1600);
-    assert!(large < small * 9, "400 blocks {small:?}, 1600 blocks {large:?}: slope above 1.6");
+fn test_simplifying_a_chain_of_folds_looks_at_blocks_linearly_in_its_length() {
+    let small = chain_work(100);
+    let large = chain_work(400);
+    assert!(small > 0 && large < small * 6, "100 blocks {small} blocks looked at, 400 blocks {large}: slope above 1.3");
 }

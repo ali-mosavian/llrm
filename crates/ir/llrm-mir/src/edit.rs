@@ -72,7 +72,6 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
             USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
@@ -418,7 +417,6 @@ impl Function {
             }
             for (operand, indexes) in places {
                 if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
                     USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                     uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
                 }
@@ -460,6 +458,18 @@ impl Function {
             *volatile = true;
             self.log(Change::Rewritten(inst));
         }
+    }
+
+    /// Gives the `icmp` `inst` the predicate `predicate`, as LLVM's
+    /// `CmpInst::setPredicate`.
+    pub fn set_icmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::IntPredicate,
+    ) {
+        let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces an instruction's flags.
@@ -676,7 +686,6 @@ impl Function {
         }
         for operand in operands {
             if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
                 USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                 uses.retain(|one| !gone.contains(&one.user));
             }
@@ -914,7 +923,13 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
-        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let held = metadata.len();
+        metadata.retain(|(one, _)| one != kind);
+        // `!range` and the like are facts about the result.
+        if metadata.len() != held {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
@@ -1077,19 +1092,48 @@ impl Function {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
-            return Err(format!("block {} still holds instructions", block.0));
+        self.erase_blocks(&[block])
+    }
+
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
+    pub fn erase_blocks(
+        &mut self,
+        blocks: &[BlockId],
+    ) -> Result<(), String> {
+        for &block in blocks {
+            if !self.block(block).instructions.is_empty() {
+                return Err(format!("block {} still holds instructions", block.0));
+            }
+            if !self.block_users(block).is_empty() {
+                return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+            }
         }
-        if !self.block_users(block).is_empty() {
-            return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
         }
-        self.layout.retain(|one| *one != block);
-        self.release_name(block);
-        self.blocks[block.0 as usize].erased = true;
-        self.blocks[block.0 as usize].placed = false;
-        self.log(Change::BlockErased(block));
+        LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.layout.retain(|one| !gone.contains(one));
+        for &block in blocks {
+            self.release_name(block);
+            self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
+            self.log(Change::BlockErased(block));
+        }
         Ok(())
     }
+}
+
+thread_local! {
+    /// Layout entries looked over to take blocks out of it.
+    static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has looked over to erase blocks, for a
+/// test that erasing k of n blocks does not scan k times n.
+pub fn layout_scanned() -> usize {
+    LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -1105,7 +1149,12 @@ pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
 thread_local! {
     pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many use-list entries this thread has looked over to remove uses, for a
+/// test that a pass does not scan a long list once per use it removes.
+pub fn uses_scanned() -> usize {
+    USES_SCANNED.with(std::cell::Cell::get)
 }

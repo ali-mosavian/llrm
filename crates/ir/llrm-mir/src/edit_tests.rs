@@ -586,3 +586,51 @@ fn a_block_is_placed_from_its_insertion_to_its_erasure() {
     f.delete_body();
     assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
 }
+
+/// Erasing several empty blocks at once leaves the others in order, and a
+/// block that still holds an instruction refuses the whole call.
+#[test]
+fn erase_blocks_removes_each_empty_block_in_one_pass() {
+    let mut module = module("define void @f() {\nentry:\n  br label %c\n\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let (a, b) = (f.create_block(Some("a")), f.create_block(Some("b")));
+    f.insert_block(a, None).expect("placed");
+    f.insert_block(b, None).expect("placed");
+    let entry = f.entry().unwrap();
+    assert!(f.erase_blocks(&[a, entry]).is_err());
+    assert!(f.is_placed(a));
+    f.erase_blocks(&[a, b]).expect("empty and unnamed");
+    assert_eq!(f.layout().len(), 2);
+    assert!(!f.is_placed(a) && !f.is_placed(b));
+}
+/// `set_icmp_predicate` is `CmpInst::setPredicate`: the compare reads the same
+/// operands under another predicate, and the log tells of the rewrite.
+#[test]
+fn an_icmp_takes_another_predicate() {
+    let mut module = module("define i1 @f(i16 %a) {\nentry:\n  %c = icmp slt i16 %a, 5\n  ret i1 %c\n}\n");
+    let f = function(&mut module);
+    let (c, _) = named(f, "c");
+    f.take_changes();
+    f.set_icmp_predicate(c, crate::opcode::IntPredicate::Ult);
+    assert_eq!(f.instruction(c).opcode, Opcode::ICmp(crate::opcode::IntPredicate::Ult));
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(c)]);
+}
+
+/// Taking `!range` off a load changes what is known of its result, so the log
+/// tells of the rewrite: EarlyCSE took it off the surviving load of two and
+/// logged nothing, the manager kept the ranger's answers of the old range and
+/// `LLRM_CHECK_REPLAY` panicked on bintree.nib (#2369).
+#[test]
+fn test_unannotate_logs_the_rewrite_of_the_instruction() {
+    let mut module = module(
+        "define i16 @f(ptr %p) {\nentry:\n  %v = load i16, ptr %p, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 -32768}\n",
+    );
+    let f = function(&mut module);
+    let (v, _) = named(f, "v");
+    f.take_changes();
+    f.unannotate(v, "range");
+    assert!(f.instruction(v).metadata.is_empty(), "premise: the range is gone");
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.unannotate(v, "range");
+    assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
+}
