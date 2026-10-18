@@ -1,0 +1,578 @@
+//! ScalarEvolution: a translation of LLVM's `ScalarEvolution.cpp`,
+//! `ScalarEvolutionExpressions.h` and their helpers at `d1106deb71cc`.
+//!
+//! # How it works
+//! [`ScalarEvolution`] holds the arena of uniqued [`expr::Node`]s and the
+//! caches LLVM keeps in the analysis object; it borrows nothing, so a pass can
+//! edit the function between queries and say what it changed (`forget*`), as
+//! with LLVM's. Each query is handed a [`Cx`]: the function, its loops and
+//! dominator tree, the data layout and the module's globals, which LLVM's
+//! object keeps as members.
+//!
+//! The folds (`getAddExpr`, `getMulExpr`, the casts, ...) are translated
+//! function for function, each naming its C++ original, and verified against
+//! LLVM's own constructors through `tools/scev/oracle.cpp`.
+
+pub mod ap;
+pub mod arith;
+pub mod cast;
+pub mod compare;
+pub mod disposition;
+pub mod divrec;
+pub mod eval;
+pub mod expr;
+#[cfg(test)]
+mod golden_tests;
+pub mod minmax;
+pub mod pattern;
+pub mod poison;
+pub mod predicate;
+pub mod print;
+pub mod range;
+pub mod rewrite;
+pub mod scope;
+pub mod seams;
+pub mod sequential;
+
+use std::collections::HashMap;
+
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dominators::DominatorTree;
+use llrm_mir::loopinfo::LoopInfo;
+use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef};
+use llrm_mir::types::Type as MirType;
+use llrm_mir::valuetracking::{AssumptionCache, Query};
+
+use self::ap::Ap;
+use self::expr::{Kind, Node, Scev, Ty, Type, Use, flags};
+
+/// What LLVM's `ScalarEvolution` holds by reference: the module, function,
+/// loops and dominator tree, and the data layout.
+#[derive(Clone, Copy)]
+pub struct Cx<'a> {
+    pub module: &'a Module,
+    pub function: &'a Function,
+    pub layout: &'a DataLayout,
+    pub loops: &'a LoopInfo,
+    pub tree: &'a DominatorTree,
+    /// `AC`: the `llvm.assume` calls of the function.
+    pub assumptions: &'a AssumptionCache,
+}
+
+impl<'a> Cx<'a> {
+    /// The `SimplifyQuery{DL, DT, AC}` the ValueTracking calls of
+    /// ScalarEvolution are made with, at `cxt`.
+    pub fn query(
+        &self,
+        cxt: Option<llrm_mir::module::InstId>,
+    ) -> Query<'a> {
+        Query {
+            dt: Some(self.tree),
+            assumptions: Some(self.assumptions),
+            ..Query::new(self.module, self.function, self.layout).with_cxt(cxt)
+        }
+    }
+}
+
+/// The key `UniqueSCEVs` finds a node by (`FoldingSetNodeID`): the kind, the
+/// operands as pointers with their use bits, the type, and what else the kind
+/// holds.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct Key {
+    pub(super) tag: Type,
+    pub(super) ops: Vec<Use>,
+    pub(super) ty: Option<Ty>,
+    pub(super) constant: Option<Ap>,
+    pub(super) value: Option<Operand>,
+    pub(super) header: Option<BlockId>,
+}
+
+/// `SCEVFlags`: the no-wrap flags of an expression and of its use.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Flags {
+    pub expr: u8,
+    pub use_: u8,
+}
+
+impl Flags {
+    /// Expression flags only.
+    pub fn expr(expr: u8) -> Self {
+        Self { expr, use_: 0 }
+    }
+}
+
+/// `llvm::ScalarEvolution`.
+pub struct ScalarEvolution {
+    pub(super) nodes: Vec<Node>,
+    /// `UniqueSCEVs`.
+    pub(super) unique: HashMap<Key, Scev>,
+    /// `FoldCache`: the extensions already folded.
+    pub(super) fold_cache: HashMap<(Type, Use, Ty), Scev>,
+    /// `ProvingSplitPredicate`.
+    pub(super) proving_split_predicate: bool,
+    /// `UnsignedRanges`.
+    pub(super) unsigned_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    /// `SignedRanges`.
+    pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    /// `ConstantMultipleCache`.
+    pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
+    /// `LoopDispositions`.
+    pub(super) loop_dispositions: HashMap<(Scev, Option<BlockId>), disposition::LoopDisposition>,
+    /// `BlockDispositions`.
+    pub(super) block_dispositions: HashMap<(Scev, BlockId), disposition::BlockDisposition>,
+    /// `CouldNotCompute`.
+    could_not_compute: Scev,
+}
+
+impl Default for ScalarEvolution {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ScalarEvolution {
+    pub fn new() -> Self {
+        let mut se = Self {
+            nodes: Vec::new(),
+            unique: HashMap::new(),
+            fold_cache: HashMap::new(),
+            proving_split_predicate: false,
+            unsigned_ranges: HashMap::new(),
+            signed_ranges: HashMap::new(),
+            constant_multiple_cache: HashMap::new(),
+            loop_dispositions: HashMap::new(),
+            block_dispositions: HashMap::new(),
+            could_not_compute: Scev(0),
+        };
+        se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
+        se
+    }
+
+    pub fn node(
+        &self,
+        s: Scev,
+    ) -> &Node {
+        &self.nodes[s.0 as usize]
+    }
+
+    /// `getSCEVType`.
+    pub fn scev_type(
+        &self,
+        s: Scev,
+    ) -> Type {
+        self.node(s).kind.tag()
+    }
+
+    /// `getType`.
+    pub fn type_of(
+        &self,
+        s: Scev,
+    ) -> Ty {
+        self.node(s).ty.expect("a SCEV that has a type")
+    }
+
+    /// `getCouldNotCompute`.
+    pub fn get_could_not_compute(&self) -> Scev {
+        self.could_not_compute
+    }
+
+    /// `ExpressionSize`.
+    pub fn expression_size(
+        &self,
+        s: Scev,
+    ) -> u16 {
+        self.node(s).size
+    }
+
+    /// `SCEV::operands`.
+    pub fn operands(
+        &self,
+        s: Scev,
+    ) -> &[Use] {
+        match &self.node(s).kind {
+            Kind::Constant(_) | Kind::Unknown(_) => &[],
+            Kind::Truncate(op) | Kind::ZeroExtend(op) | Kind::SignExtend(op) | Kind::PtrToAddr(op) => {
+                std::slice::from_ref(op)
+            }
+            Kind::Add(ops)
+            | Kind::Mul(ops)
+            | Kind::AddRec(ops, _)
+            | Kind::UMax(ops)
+            | Kind::SMax(ops)
+            | Kind::UMin(ops)
+            | Kind::SMin(ops)
+            | Kind::SequentialUMin(ops) => ops,
+            Kind::UDiv(..) => {
+                // The two operands are stored apart; `UDiv` callers use
+                // `udiv_operands`.
+                unreachable!("use udiv_operands")
+            }
+            Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
+        }
+    }
+
+    /// `SCEVUDivExpr::getLHS` and `getRHS`.
+    pub fn udiv_operands(
+        &self,
+        s: Scev,
+    ) -> (Use, Use) {
+        match self.node(s).kind {
+            Kind::UDiv(l, r) => (l, r),
+            _ => unreachable!("not a udiv"),
+        }
+    }
+
+    /// `SCEVNAryExpr::getNoWrapFlags(Mask)`.
+    pub fn get_no_wrap_flags(
+        &self,
+        s: Scev,
+        mask: u8,
+    ) -> u8 {
+        self.node(s).flags & mask
+    }
+
+    /// `SCEVUse::getNoWrapFlags(Mask)`: the use's flags and the node's.
+    pub fn use_no_wrap_flags(
+        &self,
+        u: Use,
+        mask: u8,
+    ) -> u8 {
+        let node = match self.node(u.scev).kind {
+            Kind::Add(_) | Kind::Mul(_) | Kind::AddRec(..) => self.node(u.scev).flags,
+            _ => 0,
+        };
+        (node | self.use_flags(u)) & mask
+    }
+
+    /// `SCEVUse::getUseNoWrapFlags`: `NW` follows from `NUW` or `NSW`.
+    pub fn use_flags(
+        &self,
+        u: Use,
+    ) -> u8 {
+        let mut f = u.bits & (flags::NUW | flags::NSW);
+        if f != 0 {
+            f |= flags::NW;
+        }
+        f
+    }
+
+    /// `SCEVUse(S, Flags)`: only `NUW` and `NSW`, and only those `S` does not
+    /// already have.
+    pub fn with_use_flags(
+        &self,
+        s: Scev,
+        f: u8,
+    ) -> Use {
+        let mut f = f;
+        if f != 0 {
+            debug_assert!(
+                matches!(self.node(s).kind, Kind::Add(_) | Kind::Mul(_) | Kind::AddRec(..)),
+                "use flags require an expression that can carry no-wrap flags"
+            );
+            f &= !self.node(s).flags;
+        }
+        Use { scev: s, bits: f & (flags::NUW | flags::NSW) }
+    }
+
+    /// `ScalarEvolution::getTypeSizeInBits`.
+    pub fn get_type_size_in_bits(
+        &self,
+        cx: &Cx,
+        ty: Ty,
+    ) -> u32 {
+        match ty {
+            Ty::Int(bits) => bits,
+            Ty::Ptr(space) => cx.layout.pointer(space).index_bits,
+        }
+    }
+
+    /// `ScalarEvolution::isSCEVable`: an integer, or a pointer.
+    pub fn is_scevable(
+        &self,
+        ty: &MirType,
+    ) -> bool {
+        match ty {
+            MirType::Int(bits) => (1..=128).contains(bits),
+            MirType::Pointer(_) => true,
+            _ => false,
+        }
+    }
+
+    /// `ScalarEvolution::getEffectiveSCEVType`: a pointer is the integer of
+    /// its width.
+    pub fn get_effective_scev_type(
+        &self,
+        cx: &Cx,
+        ty: Ty,
+    ) -> Ty {
+        match ty {
+            Ty::Int(_) => ty,
+            Ty::Ptr(space) => Ty::Int(cx.layout.pointer(space).index_bits),
+        }
+    }
+
+    /// `ScalarEvolution::getWiderType`.
+    pub fn get_wider_type(
+        &self,
+        cx: &Cx,
+        a: Ty,
+        b: Ty,
+    ) -> Ty {
+        if self.get_type_size_in_bits(cx, a) > self.get_type_size_in_bits(cx, b) { a } else { b }
+    }
+
+    /// The SCEV type of an IR type.
+    pub fn ty_of(
+        &self,
+        cx: &Cx,
+        id: llrm_mir::types::TypeId,
+    ) -> Option<Ty> {
+        match cx.module.context.types.get(id) {
+            MirType::Int(bits) if (1..=128).contains(bits) => Some(Ty::Int(*bits)),
+            MirType::Pointer(space) => Some(Ty::Ptr(*space)),
+            _ => None,
+        }
+    }
+
+    /// The type of the value an unknown names.
+    fn operand_ty(
+        &self,
+        cx: &Cx,
+        v: Operand,
+    ) -> Ty {
+        let id = match v {
+            Operand::Value(value) => cx.function.value(value).ty,
+            Operand::Constant(constant) => cx.module.context.get(constant).ty,
+            Operand::Block(_) => unreachable!("a block is not a SCEVable value"),
+        };
+        self.ty_of(cx, id).expect("a SCEVable value")
+    }
+
+    /// Interns `kind`, with `size`, computing the canonical form. The one
+    /// place a node is made (`new (SCEVAllocator) ...; UniqueSCEVs.insert`).
+    pub(super) fn intern(
+        &mut self,
+        key: Key,
+        kind: Kind,
+        ty: Option<Ty>,
+        size: u16,
+    ) -> Scev {
+        if let Some(&found) = self.unique.get(&key) {
+            return found;
+        }
+        let at = Scev(self.nodes.len() as u32);
+        self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
+        self.unique.insert(key, at);
+        at
+    }
+
+    /// `computeExpressionSize`.
+    pub(super) fn compute_expression_size(
+        &self,
+        ops: &[Use],
+    ) -> u16 {
+        ops.iter().fold(1u16, |size, op| size.saturating_add(self.expression_size(op.scev)))
+    }
+
+    /// `ScalarEvolution::getConstant(const APInt &)`.
+    pub fn get_constant(
+        &mut self,
+        value: Ap,
+    ) -> Scev {
+        let key = Key {
+            tag: Type::Constant,
+            ops: Vec::new(),
+            ty: Some(Ty::Int(value.width)),
+            constant: Some(value),
+            value: None,
+            header: None,
+        };
+        self.intern(key, Kind::Constant(value), Some(Ty::Int(value.width)), 1)
+    }
+
+    /// `ScalarEvolution::getConstant(Type *, uint64_t, bool)`.
+    pub fn get_constant_of_type(
+        &mut self,
+        cx: &Cx,
+        ty: Ty,
+        value: i128,
+    ) -> Scev {
+        let Ty::Int(bits) = self.get_effective_scev_type(cx, ty) else { unreachable!("an integer") };
+        self.get_constant(Ap::from_signed(bits, value))
+    }
+
+    /// `getZero(Ty)`.
+    pub fn get_zero(
+        &mut self,
+        cx: &Cx,
+        ty: Ty,
+    ) -> Scev {
+        self.get_constant_of_type(cx, ty, 0)
+    }
+
+    /// `getOne(Ty)`.
+    pub fn get_one(
+        &mut self,
+        cx: &Cx,
+        ty: Ty,
+    ) -> Scev {
+        self.get_constant_of_type(cx, ty, 1)
+    }
+
+    /// `ScalarEvolution::getUnknown`.
+    pub fn get_unknown(
+        &mut self,
+        cx: &Cx,
+        v: Operand,
+    ) -> Scev {
+        let ty = self.operand_ty(cx, v);
+        let key =
+            Key { tag: Type::Unknown, ops: Vec::new(), ty: Some(ty), constant: None, value: Some(v), header: None };
+        self.intern(key, Kind::Unknown(v), Some(ty), 1)
+    }
+
+    /// The constant `s` is, if it is one.
+    pub fn as_constant(
+        &self,
+        s: Scev,
+    ) -> Option<Ap> {
+        match self.node(s).kind {
+            Kind::Constant(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    /// The header the loop of an add recurrence has.
+    pub fn addrec_header(
+        &self,
+        s: Scev,
+    ) -> Option<BlockId> {
+        match self.node(s).kind {
+            Kind::AddRec(_, header) => Some(header),
+            _ => None,
+        }
+    }
+
+    /// Whether `s` is `ValueDef::Instruction`-defined unknown.
+    pub fn unknown_value(
+        &self,
+        s: Scev,
+    ) -> Option<Operand> {
+        match self.node(s).kind {
+            Kind::Unknown(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+/// `Value::getValueID` for the values `CompareValueComplexity` orders: the
+/// constants, then the arguments, then the instructions by LLVM's opcode
+/// number (`InstructionVal + Opcode`). Only the order is read.
+pub fn value_id(
+    cx: &Cx,
+    v: Operand,
+) -> u32 {
+    use llrm_mir::context::ConstantKind as K;
+    use llrm_mir::module::GlobalKind;
+    match v {
+        Operand::Constant(id) => match &cx.module.context.get(id).kind {
+            K::Poison => 1,
+            K::Zero => 2,
+            K::Bytes(_) => 3,
+            K::Int(_) => 5,
+            K::Float(_) => 7,
+            K::Null => 9,
+            K::Aggregate(_) => match cx.module.context.types.get(cx.module.context.get(id).ty) {
+                MirType::Array { .. } => 11,
+                MirType::Vector { .. } => 13,
+                _ => 12,
+            },
+            K::Global(global) => match cx.module.global(*global).kind {
+                GlobalKind::Function(_) => 14,
+                _ => 17,
+            },
+            K::Expr(_) => 19,
+        },
+        Operand::Value(id) => match cx.function.value(id).def {
+            ValueDef::Argument(_) => 30,
+            ValueDef::Instruction(inst) => INSTRUCTION_VAL + llvm_opcode(cx.function, inst),
+        },
+        Operand::Block(_) => 31,
+    }
+}
+
+const INSTRUCTION_VAL: u32 = 100;
+
+/// `Instruction.def`'s opcode numbers. `br` is `UncondBr` or `CondBr` there;
+/// MIR's `FPRound` is an `fptrunc` to the same type.
+fn llvm_opcode(
+    function: &Function,
+    inst: llrm_mir::module::InstId,
+) -> u32 {
+    use llrm_mir::opcode::{BinaryOp as B, CastOp as C, Opcode as O};
+    let instruction = function.instruction(inst);
+    match &instruction.opcode {
+        O::Ret => 1,
+        O::Br => {
+            if instruction.operands.len() == 1 {
+                2
+            } else {
+                3
+            }
+        }
+        O::Switch => 4,
+        O::Invoke(_) => 6,
+        O::Resume => 7,
+        O::Unreachable => 8,
+        O::FNeg => 13,
+        O::Binary(op) => match op {
+            B::Add => 14,
+            B::FAdd => 15,
+            B::Sub => 16,
+            B::Mul => 18,
+            B::UDiv => 20,
+            B::SDiv => 21,
+            B::FDiv => 22,
+            B::URem => 23,
+            B::SRem => 24,
+            B::FRem => 25,
+            B::Shl => 26,
+            B::LShr => 27,
+            B::AShr => 28,
+            B::And => 29,
+            B::Or => 30,
+            B::Xor => 31,
+            B::FSub => 17,
+            B::FMul => 19,
+        },
+        O::Alloca { .. } => 32,
+        O::Load { .. } => 33,
+        O::Store { .. } => 34,
+        O::GetElementPtr { .. } => 35,
+        O::Cast(op) => match op {
+            C::Trunc => 39,
+            C::ZExt => 40,
+            C::SExt => 41,
+            C::FPToUI => 42,
+            C::FPToSI => 43,
+            C::UIToFP => 44,
+            C::SIToFP => 45,
+            C::FPTrunc | C::FPRound => 46,
+            C::FPExt => 47,
+            C::PtrToInt => 48,
+            C::IntToPtr => 50,
+            C::BitCast => 51,
+            #[allow(unreachable_patterns)]
+            _ => 51,
+        },
+        O::ICmp(_) => 55,
+        O::FCmp(_) => 56,
+        O::Phi => 57,
+        O::Call(_) => 58,
+        O::Select => 59,
+        O::ExtractValue(_) => 66,
+        O::InsertValue(_) => 67,
+        O::LandingPad { .. } => 68,
+        O::Freeze => 69,
+    }
+}
