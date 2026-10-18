@@ -147,6 +147,16 @@ Stage-specific:
 5. Load PRE and loop PRE inputs; inserted-load counts equal.
 6. Whole-pass difftest; `gvn.rs`, `loadjoins.rs` and their dead helpers deleted in the same PR.
 
+## Stage 1 measurements
+
+[#2179](https://github.com/ali-mosavian/llrm/pull/2179), base = main built the same day.
+
+- **Rows** (71 programs x 4 levels, gcc and clang from `main24d`): 284 total / 284 with counters / 0 failed / 0 missing. Worse: clocks, instructions, memory operands, code bytes 0 at -O1, -O2, -O3, -Os; 284 of 284 objects identical to main. Rows above min(gcc, clang), base to head, unchanged: -O1 clocks 30, instructions 48, memory operands 24, code bytes 24; -O2 32, 48, 38, 29; -O3 28, 46, 35, 39; -Os 39, 29, 21, 19.
+- **Corpus** (`tools/identical.py`, defaults, every `LLRM_CHECK_*` on): 1,587 objects, 126 differ, 0 failed. Bench (`tools/bench/bench.py`, the 16 programs with differing objects, 222 cells at -O2 and -Os): 0 worse on instructions, code bytes, memory operands and clocks. `tests/run` has no counters: 5 objects smaller (up to 104 bytes), 4 larger by 1 or 2 bytes (idioms#0..#2, idiom_edges#0), traced to backend encoding in [#2212](https://github.com/ali-mosavian/llrm/issues/2212) (MIR equal until round 3, then `icmp sge x, 1` where main has `icmp sge (x-1), 0`, whose `dec; jl` reuses the flags).
+- **Instrument for the traces:** `LLRM_MIR_STAGES=DIR` (there is no `tools/stages.py`); the first adjacent pair of dumps that differs names the pass.
+- **Found on the way, each with a fail-first test:** the pipeline cycle between `lcssa` and phi simplification; stale registers, counted proofs and shape after the scalar pass (`tests/gvn_scalar_leaves_the_manager_true.rs`); hanoi.bas +2..4% instructions when numbering was priced before the scalar merges.
+- **Temporary DEVIATEs** D15-D18, each with an issue: [#2186](https://github.com/ali-mosavian/llrm/issues/2186) no phi simplified (x_hanoi2 -O2 +22.8% clocks otherwise), [#2187](https://github.com/ali-mosavian/llrm/issues/2187) flags in the key (x_mergesort +5.9% memory operands), [#2188](https://github.com/ali-mosavian/llrm/issues/2188) compare facts not propagated (matmul +5.7% code), [#2199](https://github.com/ali-mosavian/llrm/issues/2199) no GEP simplified (consumer `loadjoins::reused`).
+
 ## Compile-time cost
 
 Stage 1 ([#2179](https://github.com/ali-mosavian/llrm/pull/2179)) costs **+1.4%** instructions on `d_faces` -O2 (callgrind, whole compile 2,487.3 M to 2,522.2 M; geomean +0.7..0.95% over 136 files). This is **temporary**, accepted by oversight.
