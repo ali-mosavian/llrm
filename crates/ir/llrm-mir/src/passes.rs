@@ -744,11 +744,15 @@ pub struct PreservedAnalyses {
     /// LLVM's `preserveSet<CFGAnalyses>`: the pass left the CFG as it was.
     cfg: bool,
     kept: HashSet<TypeId>,
+    /// Kept because the pass brought them up to date itself and put the
+    /// result back (`Analyses::replace`): LLVM's pass that uses
+    /// `MemorySSAUpdater` and then `preserve<MemorySSAAnalysis>()`.
+    updated: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, cfg: false, kept: HashSet::default() }
+        Self { all: true, cfg: false, kept: HashSet::default(), updated: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -757,6 +761,16 @@ impl PreservedAnalyses {
 
     pub fn preserve<A: Analysis>(mut self) -> Self {
         self.kept.insert(TypeId::of::<A>());
+        self
+    }
+
+    /// `A` is kept because the pass updated it: the manager holds it only if
+    /// the pass put its updated result back with [`Analyses::replace`] as the
+    /// function stands after its last edit; otherwise it drops it (and
+    /// `LLRM_CHECK_STALE` fails, naming the pass).
+    pub fn preserve_updated<A: Analysis>(mut self) -> Self {
+        self.kept.insert(TypeId::of::<A>());
+        self.updated.insert(TypeId::of::<A>());
         self
     }
 
@@ -792,6 +806,14 @@ impl PreservedAnalyses {
         analysis: TypeId,
     ) -> bool {
         self.all || self.kept.contains(&analysis)
+    }
+
+    /// Whether the pass kept `analysis` by updating it (`preserve_updated`).
+    fn updated_by_pass(
+        &self,
+        analysis: TypeId,
+    ) -> bool {
+        self.updated.contains(&analysis)
     }
 }
 
@@ -1555,6 +1577,32 @@ impl Analyses {
         }
     }
 
+    /// Puts `result` back as `A`'s result for `function` as it stands now: a
+    /// pass that updated a clone of what it asked for (LLVM's
+    /// `MemorySSAUpdater` on the analysis itself) stores it here, then
+    /// returns `PreservedAnalyses::preserve_updated::<A>()`. Call it after the
+    /// last edit: the result is stamped with the function's history now.
+    pub fn replace<A: Analysis>(
+        &mut self,
+        function: &Function,
+        result: A::Result,
+    ) {
+        let key = TypeId::of::<A>();
+        self.kept.remove(&key);
+        self.evicted.remove(&key);
+        self.soft.remove(&key);
+        self.cache.insert(
+            key,
+            Box::new(Entry::<A> {
+                result: Rc::new(result),
+                outer: Rc::clone(&self.outer),
+                mark: function.mark(),
+                bits: 0,
+                from_older: false,
+            }),
+        );
+    }
+
     /// Drops what `preserved` does not keep: LLVM's
     /// `FunctionAnalysisManager::invalidate`, for a pass running others. What
     /// it keeps the pass vouches for as `function` is now: it is stamped
@@ -1601,8 +1649,24 @@ impl Analyses {
         current: Option<&Function>,
     ) {
         self.attributes = current.map(Function::attributes_stamp);
-        let gone: Vec<TypeId> =
+        let mut gone: Vec<TypeId> =
             self.cache.iter().filter(|(_, entry)| !entry.preserved(preserved)).map(|(key, _)| *key).collect();
+        // Kept because the pass updated it: held only if the pass put the
+        // result back as the function stands, else it is as old as the edits.
+        if let Some(function) = current {
+            for (key, entry) in &self.cache {
+                if preserved.updated_by_pass(*key) && !preserved.are_all_preserved() && entry.mark() != function.mark()
+                {
+                    assert!(
+                        !stale_checks_on(),
+                        "{} was declared kept updated by {} and not put back with `replace` after its last edit",
+                        entry.name(),
+                        PASS.with(std::cell::Cell::get)
+                    );
+                    gone.push(*key);
+                }
+            }
+        }
         self.retire(gone);
     }
 
@@ -2624,6 +2688,12 @@ thread_local! {
 /// `LLRM_CHECK_STALE` for this thread, for a test.
 pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
+}
+
+/// `LLRM_CHECK_STALE`, or `check_stale(true)` on this thread.
+fn stale_checks_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    CHECK_STALE.with(std::cell::Cell::get) || *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_STALE").is_some())
 }
 
 static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

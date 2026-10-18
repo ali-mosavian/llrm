@@ -44,3 +44,13 @@ def test_the_known_file_parses_and_names_issue_numbers():
     import tomllib
 
     assert all(isinstance(e["issue"], int) and e["match"] for e in tomllib.loads(q.KNOWN.read_text()).get("known", []))
+
+
+def test_the_front_end_compiles_cover_nib_and_basic_at_both_machines_and_all_levels():
+    """The smoke's `programs` step caught a Nib -m32 panic (#2531) that no QCport module compiles."""
+    assert len(q.EXTRA) == 2 * 2 * len(q.LEVELS) and {t for t, *_ in q.EXTRA} == {"llrm-nib", "llrm-qb"} and {m for _, _, m, _ in q.EXTRA} == {"-m16", "-m32"}
+
+
+def test_a_panic_is_keyed_by_its_place_and_message_not_by_rusts_backtrace_note():
+    text = "thread 'main' (3957823) panicked at crates/opt/llrm-transforms/src/widen.rs:142:39:\nan instruction with a value\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n"
+    assert q.kind(text) == "panic crates/opt/llrm-transforms/src/widen.rs:N:N: an instruction with a value"
