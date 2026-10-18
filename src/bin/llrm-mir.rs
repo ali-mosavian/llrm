@@ -29,6 +29,10 @@ fn main() -> ExitCode {
     if scev {
         arguments.remove(0);
     }
+    let values = arguments.first().is_some_and(|one| one == "--scev-values");
+    if values {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -86,6 +90,10 @@ fn main() -> ExitCode {
                 print!("{}", scalar_evolution(&module));
                 return ExitCode::SUCCESS;
             }
+            if values {
+                print!("{}", llrm_analysis::scev::values::print_module_values(&module));
+                return ExitCode::SUCCESS;
+            }
             if let Some((header, count)) = unroll {
                 if let Err(error) = unrolled_loop(&mut module, &header, count, &exits) {
                     eprintln!("{path}: {error}");
@@ -139,7 +147,7 @@ fn scalar_evolution(module: &llrm_mir::module::Module) -> String {
         .as_deref()
         .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
         .unwrap_or_default();
-    let tree = llrm_mir::domtree::DomTree::new(function);
+    let tree = llrm_mir::domtree::DomTree::of(function);
     let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
     let assumptions = llrm_mir::valuetracking::AssumptionCache::new(module, function);
     let cx = llrm_analysis::scev::Cx {

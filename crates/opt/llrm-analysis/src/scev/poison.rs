@@ -2,8 +2,9 @@
 //! `impliesPoison`, `isGuaranteedNotToBePoison` and `isGuaranteedNotToCauseUB`
 //! of ScalarEvolution.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::Operand;
 use llrm_mir::valuetracking::guarantee;
 
@@ -52,7 +53,7 @@ impl ScalarEvolution {
     ) -> BTreeSet<Scev> {
         let q = cx.query(None);
         let mut maybe_poison = BTreeSet::new();
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = Vec::new();
         let mut push = |s: Scev, maybe_poison: &mut BTreeSet<Scev>, worklist: &mut Vec<Scev>| {
             if !visited.insert(s) {
@@ -136,7 +137,7 @@ impl ScalarEvolution {
         // divisor is a non-zero constant, we have to assume the UDiv may be UB.
         let divisors: Vec<Scev> = {
             let mut found = Vec::new();
-            let mut visited = HashSet::new();
+            let mut visited = HashSet::default();
             let mut worklist = vec![op];
             visited.insert(op);
             while let Some(s) = worklist.pop() {

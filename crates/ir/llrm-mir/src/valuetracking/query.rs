@@ -241,7 +241,7 @@ const MAX_ASSUMES_PER_VALUE: usize = 1024;
 
 /// `AssumptionCache`: the `llvm.assume` calls of a function, and the values
 /// each one tells of.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AssumptionCache {
     pub assumes: Vec<InstId>,
     affected: HashMap<Operand, Vec<InstId>>,
@@ -256,7 +256,7 @@ impl AssumptionCache {
         Self::of(&module.context, &module.globals, &module.metadata, function)
     }
 
-    /// `new` for a pass that holds the parts of its module, not the module.
+    /// `AssumptionCache(F)` from the parts of a module a pass holds.
     pub fn of(
         context: &Context,
         globals: &[GlobalValue],
@@ -264,8 +264,7 @@ impl AssumptionCache {
         function: &Function,
     ) -> Self {
         let layout = DataLayout::default();
-        let query =
-            Query { context, globals, metadata, function, layout: &layout, ..Query::bare(context, function, &layout) };
+        let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
         let assumes: Vec<InstId> = function
             .walk()
             .filter(|(_, inst)| query.intrinsic(*inst) == Some(Intrinsic::Assume))

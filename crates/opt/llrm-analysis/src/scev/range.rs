@@ -2,8 +2,11 @@
 //! of, `getConstantMultiple`, `setNoWrapFlags`, `inferNoWrapViaConstantRanges`.
 
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType, RangeIntrinsic};
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::valuetracking::known::compute_known_bits;
+use llrm_mir::opcode::Opcode;
+use llrm_mir::valuetracking::known::{compute_known_bits, pointer_alignment, pointer_dereferenceable_bytes};
+use llrm_mir::valuetracking::nonzero::is_known_non_zero;
 use llrm_mir::valuetracking::signbits::compute_num_sign_bits;
 
 use super::ap::Ap;
@@ -309,32 +312,31 @@ impl ScalarEvolution {
         hint: RangeSignHint,
     ) -> ConstantRange {
         let mut work_list: Vec<Scev> = Vec::new();
-        let mut seen: std::collections::HashSet<Scev> = std::collections::HashSet::new();
+        let mut seen: HashSet<Scev> = HashSet::default();
 
         // Add Expr to the worklist, if Expr is either an N-ary expression or a
         // SCEVUnknown PHI node.
-        let add_to_worklist =
-            |se: &Self, work_list: &mut Vec<Scev>, seen: &mut std::collections::HashSet<Scev>, expr: Scev| {
-                if !seen.insert(expr) {
-                    return;
-                }
-                if se.cached_range(expr, hint).is_some() {
-                    return;
-                }
-                match se.node(expr).kind {
-                    Kind::Unknown(Operand::Value(id)) => {
-                        // Only a PHI node is followed.
-                        if let ValueDef::Instruction(inst) = cx.function.value(id).def
-                            && cx.function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi
-                        {
-                            work_list.push(expr);
-                        }
+        let add_to_worklist = |se: &Self, work_list: &mut Vec<Scev>, seen: &mut HashSet<Scev>, expr: Scev| {
+            if !seen.insert(expr) {
+                return;
+            }
+            if se.cached_range(expr, hint).is_some() {
+                return;
+            }
+            match se.node(expr).kind {
+                Kind::Unknown(Operand::Value(id)) => {
+                    // Only a PHI node is followed.
+                    if let ValueDef::Instruction(inst) = cx.function.value(id).def
+                        && cx.function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi
+                    {
+                        work_list.push(expr);
                     }
-                    Kind::Unknown(_) => {}
-                    Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
-                    _ => work_list.push(expr),
                 }
-            };
+                Kind::Unknown(_) => {}
+                Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
+                _ => work_list.push(expr),
+            }
+        };
         add_to_worklist(self, &mut work_list, &mut seen, s);
 
         // Build worklist by queuing operands of N-ary expressions and phi
@@ -625,9 +627,70 @@ impl ScalarEvolution {
                         .intersect_with(&ConstantRange::new(bit_width, lower.bits, upper.bits), range_type);
                 }
 
-                // SEAM (S3/pointer facts): the range of an object-sized pointer
-                // (`getPointerDereferenceableBytes`) and of a PHI as the union
-                // of its inputs need `createSCEV` and the object's size.
+                if self.type_of(s).is_pointer() && hint == RangeSignHint::Unsigned {
+                    // Strengthen the range if the underlying IR value is a
+                    // global/alloca/heap allocation using the size of the
+                    // object.
+                    let (deref_bytes, _can_be_null) = pointer_dereferenceable_bytes(&q, value);
+                    if deref_bytes > 1 && (bit_width >= 64 || deref_bytes < (1u64 << bit_width)) {
+                        // The highest address the object can start is
+                        // DerefBytes bytes before the end (unsigned max
+                        // value). If this value is not a multiple of the
+                        // alignment, the last possible start value is the next
+                        // lowest multiple of the alignment. Note: The
+                        // computations below cannot overflow, because if they
+                        // would there's no possible start address for the
+                        // object.
+                        let max_val = Ap::all_ones(bit_width).sub(Ap::new(bit_width, u128::from(deref_bytes)));
+                        let align = pointer_alignment(&q, value);
+                        let rem = max_val.zext_value() % u128::from(align);
+                        let max_val = max_val.sub(Ap::new(bit_width, rem));
+                        let mut min_val = Ap::zero(bit_width);
+                        if is_known_non_zero(&q, value, 0) {
+                            min_val = Ap::new(bit_width, u128::from(align));
+                        }
+                        conservative_result = conservative_result.intersect_with(
+                            &ConstantRange::non_empty(bit_width, min_val.bits, max_val.add(Ap::one(bit_width)).bits),
+                            range_type,
+                        );
+                    }
+                }
+
+                // A range of Phi is a subset of union of all ranges of its
+                // input.
+                if let Operand::Value(id) = value
+                    && let ValueDef::Instruction(phi) = cx.function.value(id).def
+                    && cx.function.instruction(phi).opcode == Opcode::Phi
+                {
+                    // SCEVExpander sometimes creates SCEVUnknowns that are
+                    // secretly AddRecs; return the range for the corresponding
+                    // AddRec.
+                    let phi_scev = self.get_scev(cx, value);
+                    if matches!(self.node(phi_scev).kind, Kind::AddRec(..)) {
+                        return self.get_range_ref(cx, phi_scev, hint, depth + 1);
+                    }
+
+                    // Make sure that we do not run over cycled Phis.
+                    if self.range_ref_phi_allowed_operands(cx, phi) {
+                        let mut range_from_ops = ConstantRange::empty(bit_width);
+
+                        let operands = cx.function.instruction(phi).operands.clone();
+                        for op in operands {
+                            if matches!(op, Operand::Block(_)) {
+                                continue;
+                            }
+                            let op_scev = self.get_scev(cx, op);
+                            let op_range = self.get_range_ref(cx, op_scev, hint, depth + 1);
+                            range_from_ops = range_from_ops.union_with(&op_range, PreferredRangeType::Smallest);
+                            // No point to continue if we already have a full
+                            // set.
+                            if range_from_ops.is_full_set() {
+                                break;
+                            }
+                        }
+                        conservative_result = conservative_result.intersect_with(&range_from_ops, range_type);
+                    }
+                }
 
                 self.set_range(s, hint, conservative_result)
             }
