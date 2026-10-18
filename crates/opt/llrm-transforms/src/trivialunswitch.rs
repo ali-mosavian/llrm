@@ -211,7 +211,7 @@ fn planned(
     // What the header does before the branch is skipped where the loop is never
     // entered: it does nothing but phis and work that cannot trap, and its
     // results leave only through the exit's phis.
-    for &inst in function.block(header).instructions() {
+    for inst in function.block(header).iter() {
         if inst == branch || function.instruction(inst).opcode == Opcode::Phi {
             continue;
         }
@@ -226,7 +226,7 @@ fn planned(
         _ => false,
     };
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let user = one.user;

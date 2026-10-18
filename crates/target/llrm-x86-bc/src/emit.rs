@@ -446,7 +446,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     ) -> Operand {
         let undefined = poison(self.b, ty);
         let inst = self.b.function.create_instruction(Opcode::Freeze, ty, vec![undefined], Flags::default(), None);
-        let first = self.b.function.block(self.block).instructions().first().copied();
+        let first = self.b.function.block(self.block).first();
         self.b
             .function
             .insert(inst, first.map_or(Position::End(self.block), Position::Before))
@@ -773,7 +773,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let ty = self.var_type(var);
         let undefined = poison(self.b, ty);
         let inst = self.b.function.create_instruction(Opcode::Freeze, ty, vec![undefined], Flags::default(), None);
-        let first = self.b.function.block(self.block).instructions().first().copied();
+        let first = self.b.function.block(self.block).first();
         self.b
             .function
             .insert(inst, first.map_or(Position::End(self.block), Position::Before))
