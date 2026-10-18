@@ -15,31 +15,40 @@
 //! `simplifyPHINode`, and the compare-of-self, bool and zero parts of
 //! `simplifyICmpInst`.
 //!
-//! DEVIATE, with the reason:
-//! - `undef` (MIR has none), vectors, floating point, pointers, intrinsics
-//!   (`fshl`, `fshr`, `llvm.umin`...): not in the integer subset, except the
-//!   `llvm.smax` family, matched by `simplify_instruction_in`, whose caller
-//!   passes the module's globals; the other entry points know no callee.
-//! - The ValueTracking query is `Query::bare` over the body: no module, no
-//!   dominator tree, no assumptions, unless the caller uses
-//!   `simplify_instruction_in`, which takes the module's globals (so the
-//!   intrinsics are known) and a `FunctionAnalyses` (the dominator tree and the
-//!   assumptions). The other entry points (`simplify_binop_operands`...) pass
-//!   none and no context instruction: `simplifyByDomEq`,
-//!   `isImpliedByDomCondition` and `valueDominatesPHI` then find the facts that
-//!   need no tree (a single-predecessor branch needs only the context
-//!   instruction, which `simplify_instruction_in` sets). `earlycse`, the
-//!   combine worklist, `gvn` and `fold` would have to call
-//!   `simplify_instruction_in` with their `FunctionAnalyses`.
-//! - `simplifyWithOpsReplaced` (behind `simplifyAndOrWithICmpEq`) does not
-//!   simplify a call, whose C++ folds the intrinsics.
-//! - `simplifySelectWithICmpCond`, `simplifySelectWithBitTest`,
-//!   `simplifyICmpWithDominatingAssume`: not yet translated; ValueTracking is
-//!   not what stops them.
-//! - `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
+//! `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
+//!
+//! DEVIATE, permanent (MIR lacks the construct):
+//! 1. `undef`: MIR has `poison` and `freeze` (#2202).
+//! 2. Vectors: `extractelement`, `insertelement`, `shufflevector`,
+//!    `simplifyIdentityInterleave`, `simplifySVEIntReduction`. MIR types
+//!    vectors but has no lane operation and nothing produces a vector value
+//!    (#2201).
+//!
+//! OWED, each with an issue and its exit condition:
+//! 3. `x86_fp80` constants: MIR has the type (`FloatKind::X86Fp80`) but
+//!    `ConstantKind::Float` holds 64 bits, so an extended constant is held as
+//!    the nearest double (`constfold.rs`): #2251. Whether MIR carries fp80 per
+//!    target is a separate decision.
+//! 4. Floating-point folds, `bitcast (uitofp X)` included: #2246.
+//! 5. Loads, pointer compares, `addrspacecast`: #2247.
+//! 6. Calls and intrinsics, `simplifyICmpWithIntrinsicOnLHS`, the call arm of
+//!    `simplifyWithOpsReplaced`: #2248. Only the `llvm.smax` family is folded,
+//!    matched by `simplify_instruction_in`, whose caller passes the globals.
+//! 7. `simplifySelectWithICmpCond`, `simplifySelectBitTest`/`WithBitTest`,
+//!    `simplifySelectWithEquivalence`, `simplifyCmpSelOfMaxMin`,
+//!    `simplifyICmpWithDominatingAssume`: #2249.
+//! 8. `extractvalue`, `insertvalue`, `freeze`: #2250.
+//! 9. GEP and cast constant expressions, wrap-flag poison folds in
+//!    `constfold.rs`: #2252.
 //!
 //! # Used by
-//! `earlycse`, the combine worklist, `gvn`, `fold`.
+//! `earlycse`, the combine worklist, `gvn` and `fold` would call
+//! `simplify_instruction_in` with their `FunctionAnalyses` (the dominator tree
+//! and the assumptions). The other entry points (`simplify_binop_operands`...)
+//! pass no module, tree, assumptions or context instruction:
+//! `simplifyByDomEq`, `isImpliedByDomCondition` and `valueDominatesPHI` then
+//! find only the facts that need none (a single-predecessor branch needs only
+//! the context instruction, which `simplify_instruction_in` sets).
 
 use crate::constantrange::ConstantRange;
 use crate::constantrange::PreferredRangeType;
