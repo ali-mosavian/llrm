@@ -551,6 +551,18 @@ fn nearcode_is_a_function_attribute_that_round_trips() {
     assert!(crate::opcode::FLAG_ATTRIBUTES.contains(&crate::callgraph::NEAR_CODE));
 }
 
+/// `null_pointer_is_valid` is the attribute `null_pointer_is_defined` reads;
+/// the parser refused it ("expected `}`, found `null_pointer_is_valid`"), so a
+/// function carrying it could not be read and no pointer fact could depend on
+/// it.
+#[test]
+fn null_pointer_is_valid_is_a_function_attribute_that_round_trips() {
+    let text = format!("{DATALAYOUT}\ndefine i16 @f(i16 %a) null_pointer_is_valid {{\nb0:\n  ret i16 %a\n}}\n");
+    let once = round(&text);
+    assert!(once.contains("null_pointer_is_valid"), "{once}");
+    assert_eq!(round(&once), once);
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the
 /// block for both: the verifier was 12% of compiling 800 BASIC statements
 /// (#560). The positions are made once.

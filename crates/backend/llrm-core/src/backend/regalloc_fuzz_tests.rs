@@ -988,6 +988,7 @@ fn test_generated_bodies_allocate() {
 /// last resort evicts the cheapest and spills them.
 #[test]
 fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     let before = crate::backend::allocate::last_resorts();
     let shape = Shape { pool: 12, ops: 11 };
     let done = allocated(4, &shape, "386");
@@ -1002,6 +1003,7 @@ fn test_a_value_that_cannot_be_spilled_takes_a_register_by_force() {
 /// shape was cheaper.
 #[test]
 fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::trials;
     let shape = Shape { pool: 12, ops: 11 };
     let mut searched = 0;
@@ -1036,6 +1038,7 @@ fn test_an_allocator_that_does_not_search_allocates_a_body_once() {
 /// shapes it dropped. Unless it is exhaustive it makes the one it allocates.
 #[test]
 fn test_a_search_that_is_not_exhaustive_makes_only_the_shape_it_allocates() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::{shapes_made, trials};
     let shape = Shape { pool: 12, ops: 11 };
     let (mut made_directed, mut made_all) = (0, 0);
@@ -1074,6 +1077,7 @@ fn test_a_search_that_is_not_exhaustive_makes_only_the_shape_it_allocates() {
 /// allocation's.
 #[test]
 fn test_a_search_that_is_not_exhaustive_makes_at_most_two_more_allocations() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::trials;
     let shape = Shape { pool: 12, ops: 11 };
     let mut most_all = 0;
@@ -1359,6 +1363,7 @@ fn test_the_interference_of_a_whole_body_is_bits_not_a_tree_of_pairs() {
 /// the trials over QCport, the bench and the 66 programs, none of them won).
 #[test]
 fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_without_splitting() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::{base_splits, trials};
     let mut unsplit = 0;
     for seed in 0..240_u64 {
@@ -1414,6 +1419,7 @@ fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
 /// changed are looked at.
 #[test]
 fn test_a_rewrite_looks_for_pins_in_the_blocks_it_changed_only() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::required_skipped;
     let before = required_skipped();
     for seed in 0..240_u64 {
@@ -2217,6 +2223,7 @@ fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_
 /// what is kept is what it was.
 #[test]
 fn test_a_trial_that_spills_a_protected_value_stops_there_and_changes_nothing() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     use crate::backend::allocate::{abandoned_trials, abandoning};
     let shape = Shape { pool: 12, ops: 11 };
     let mut stopped = 0;
@@ -2258,6 +2265,7 @@ fn test_a_trial_that_spills_a_protected_value_stops_there_and_changes_nothing() 
 /// that made none keeps it.
 #[test]
 fn test_the_pinned_set_is_kept_by_a_rebuild_that_made_no_unspillable_value() {
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     let shape = Shape { pool: 12, ops: 11 };
     let (mut facts, mut kept) = (0, 0);
     for seed in 0..60_u64 {

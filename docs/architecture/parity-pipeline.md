@@ -39,3 +39,41 @@ The run count per slot must match LLVM's. Today `loopsimplify`/`lcssa` run 3 tim
 ## Scoreboard
 
 Under the parity switch `LLRM_DEBUG=time` prints instructions per slot, and the rows report the per-slot totals next to LLVM's (`-time-passes`-equivalent). Not built yet.
+
+## Road to parity
+
+Target: every bucket at most 1.5x clang's, `d_faces` -O2. Figures are M instructions, llrm / clang, from llvm-difftest's projection (callgrind, per-pass inclusive; per-pass llrm figures are upper bounds). Owner `?` is unassigned.
+
+| bucket | llrm / clang M | translations | owner | blocker | target M |
+|---|---|---|---|---|---|
+| SimplifyCFG + JumpThreading | 343 / 20 | `SimplifyCFG.cpp`, `JumpThreading.cpp` | scalar-cleanup-port | DomTree and LVI joins; run counts | 30 |
+| InstCombine | 243 / 42 | `InstCombine*.cpp` onto InstSimplify | fold-poc | InstSimplify join | 63 |
+| regalloc | 276 / 42 | `RAGreedy`, `SplitKit`, region splitting | regalloc-core-poc | greedy not default | 63 |
+| llrm-only analyses | 599 / 57 | BasicAA, SCEV, BPI/BFI, MemorySSA, LVI behind the managers | cgscc-poc, scev-port | BasicAA S3 and SCEV S3 migrations | 86 |
+| glue | 390 / 99 | CGSCC FunctionAttrs walk, emission, C front end | cgscc-poc, backend-slopes, hir-branch-icmp-2211 | glue-plan steps | 149 |
+| loop passes + LSR | 120+ / 10+ | rotate, unroll, peel, unswitch, `LoopStrengthReduce.cpp` | loop-passes-port, loop-products-slope | SCEV S3 to S5 | 15 |
+| machine clean-up + FPS | 171 / 23 | MachineCopyPropagation, `X86FloatingPoint.cpp` | backend-slopes | greedy default | 35 |
+
+Order:
+
+1. Join the existing translations: EarlyCSE, SROA/mem2reg, GVN, InstSimplify, DomTree. Done when GVN's body is at most 1.2x clang's and the run counts are equal.
+2. SimplifyCFG, InstCombine, LICM.
+3. Migrations off BasicAA S3 and SCEV S3. Critical path: the loop, BPI/BFI and LSR rows wait on them.
+4. Backend: greedy default, MachineCopyPropagation, FPS.
+5. Glue: the CGSCC FunctionAttrs walk, emission, the front end.
+6. In parallel: ilist block storage and use lists.
+
+### Scoreboard table
+
+llvm-difftest fills this every half hour; one row per bucket, instrument stated in the header.
+
+| bucket | llrm M | clang M | ratio | target M | main |
+|---|---|---|---|---|---|
+| SimplifyCFG + JumpThreading | | | | 30 | |
+| InstCombine | | | | 63 | |
+| regalloc | | | | 63 | |
+| llrm-only analyses | | | | 86 | |
+| glue | | | | 149 | |
+| loop passes + LSR | | | | 15 | |
+| machine clean-up + FPS | | | | 35 | |
+| total | | | | | |

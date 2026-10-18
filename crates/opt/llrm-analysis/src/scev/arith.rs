@@ -1,8 +1,10 @@
 //! The arithmetic folds: `getAddExpr`, `getMulExpr`, their helpers and the
 //! flag strengthening they share.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
+use llrm_mir::hash::HashMap;
+use llrm_mir::hash::HashSet;
 use llrm_mir::opcode::BinaryOp;
 
 use super::ap::Ap;
@@ -692,7 +694,7 @@ impl ScalarEvolution {
         // operands multiplied by constant values.
         if idx < ops.len() && matches!(self.node(ops[idx].scev).kind, Kind::Mul(_)) {
             let bit_width = self.get_type_size_in_bits(cx, ty);
-            let mut m: HashMap<Use, Ap> = HashMap::new();
+            let mut m: HashMap<Use, Ap> = HashMap::default();
             let mut new_ops: Vec<Use> = Vec::new();
             let mut accumulated_constant = Ap::zero(bit_width);
             if self.collect_add_operands_with_scales(
@@ -978,7 +980,7 @@ impl ScalarEvolution {
         start_expr: Scev,
     ) -> bool {
         let mut found = false;
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = Vec::new();
         let mut push = |s: Scev, found: &mut bool, worklist: &mut Vec<Scev>, se: &Self| {
             if visited.insert(s) {
