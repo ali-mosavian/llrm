@@ -235,11 +235,11 @@ pub struct Options {
     /// rotated loop (they refuse one: docs/architecture/rotate-refusals.md).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
-    /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
+    /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
     pub mem2reg: bool,
     /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
-    /// [`crate::sroa`], with [`crate::mem2reg`]); `LLRM_EXP_SROA` sets it, off
-    /// by default.
+    /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
+    /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
@@ -308,7 +308,7 @@ impl Default for Options {
             unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
-            sroa: llrm_support::env_flag!("LLRM_EXP_SROA"),
+            sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -501,10 +501,11 @@ pub struct Applied {
     pub dump: Option<PathBuf>,
 }
 
-/// `LLRM_EXP_MEM2REG`, read once: the round's `Promote` is the translated
-/// `PromoteMemToReg` ([`crate::mem2reg`]). Off by default.
+/// `LLRM_NO_MEM2REG`, read once: set, the round's `Promote` stays the
+/// write-through stand-in; otherwise it is the translated `PromoteMemToReg`
+/// ([`crate::mem2reg`]).
 fn experiment_mem2reg() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_MEM2REG")
+    !llrm_support::env_flag!("LLRM_NO_MEM2REG")
 }
 
 /// The passes, in order, that `applied` leaves on.
@@ -549,7 +550,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dse::Dse),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN;
-        // `LLRM_EXP_MEM2REG` swaps in the translated PromoteMemToReg.
+        // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
+        // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
         Box::new(indvars::IndVars {
             exit_values: false,
@@ -680,7 +682,16 @@ pub(crate) fn llvm_order(
     let translated = applied.options.sroa;
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg), Box::new(promote::DeadSlots)]
+            // DEVIATE: PromoteMemToReg promotes allocas only; the write-through
+            // `Promote` after it still promotes the cells it declines (an
+            // internal global only `main` uses: LLVM localizes it to an alloca
+            // in GlobalOpt, which llrm's does not yet).
+            vec![
+                Box::new(crate::sroa::Sroa),
+                Box::new(crate::mem2reg::Mem2Reg),
+                Box::new(promote::Promote),
+                Box::new(promote::DeadSlots),
+            ]
         } else {
             vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
         };
@@ -702,7 +713,13 @@ pub(crate) fn llvm_order(
         Phase::Cleanup => vec![
             Box::new(Together {
                 name: "promote@1241",
-                parts: vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+                // DEVIATE as in the SROA slot: `Promote` keeps promoting the
+                // cells (globals) PromoteMemToReg does not.
+                parts: if applied.options.mem2reg {
+                    vec![Box::new(mem2reg::Mem2Reg), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                } else {
+                    vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                },
             }),
             fold("fold@1242"),
             dead("dead@1242"),
@@ -1216,7 +1233,8 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
-        let checked = crate::parity::check_phase_with(phase, &built, level, applied.options.sroa);
+        let checked =
+            crate::parity::check_phase_with(phase, &built, level, applied.options.sroa, applied.options.mem2reg);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {

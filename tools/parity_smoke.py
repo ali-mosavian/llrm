@@ -183,7 +183,7 @@ def d_faces(bins: Path) -> tuple[str, str]:
 
 
 def qc_d_faces(bins: Path) -> tuple[str, str]:
-    """QCport's own render/d_faces.c with the flags the QCport build uses (the m16 default, QCport's -I dirs), at all four levels: the flat d_faces of the `d_faces` step is another
+    """QCport's own render/d_faces.c with the flags the QCport build uses (the compiler's default target, QCport's -I dirs), at all four levels: the flat d_faces of the `d_faces` step is another
     file at one level, and passed on 3858c5195 while this one failed the verifier at -O2/-O3 ('block 964 leaves for ... with no instruction choosing')."""
     qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()

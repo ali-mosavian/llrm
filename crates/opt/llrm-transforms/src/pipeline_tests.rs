@@ -1420,6 +1420,33 @@ fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
 }
 
+/// The translated SROA and PromoteMemToReg were switches that defaulted off
+/// (`LLRM_EXP_SROA`, `LLRM_EXP_MEM2REG`) while the registry called their slots
+/// Old: the parity pipeline ran the stand-ins. Now both are on by default, the
+/// registry says Translated, and the explicit off knobs do not fail its check.
+#[test]
+fn test_sroa_and_mem2reg_are_on_by_default_and_the_registry_calls_their_slots_translated() {
+    let on = Applied::default();
+    assert!(on.options.sroa && on.options.mem2reg, "translated SROA and mem2reg are on by default");
+    let kind = |slot: &str| crate::parity::REGISTRY.iter().find(|one| one.slot == slot).map(|one| one.kind);
+    for slot in ["sroa@1179", "promote@1241", "sroa@646", "sroa@776"] {
+        assert_eq!(kind(slot), Some(crate::parity::SlotKind::Translated), "{slot}");
+    }
+    let off = Applied {
+        options: pipeline::Options { sroa: false, mem2reg: false, ..Default::default() },
+        ..Applied::default()
+    };
+    for applied in [&on, &off] {
+        for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+            let built = pipeline::llvm_order(applied, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
+            let level = crate::parity::Level::O2;
+            let checked =
+                crate::parity::check_phase_with(phase, &built, level, applied.options.sroa, applied.options.mem2reg);
+            assert_eq!(checked, Ok(()), "{phase:?} sroa {} mem2reg {}", applied.options.sroa, applied.options.mem2reg);
+        }
+    }
+}
+
 /// With `Options::llvm_order` a body goes through LLVM's early function
 /// pipeline, GlobalCleanup and function simplification once each, in that
 /// order, and `gvn` and `dse` run once; without it the rounds stand. The
