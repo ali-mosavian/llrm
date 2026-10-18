@@ -197,10 +197,7 @@ impl FunctionPass for Gvn {
         if cfg_changed {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
         } else if scalar {
-            analyses.invalidate(
-                unit.function,
-                &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            );
+            analyses.invalidate(unit.function, &operands_edited());
         }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
@@ -677,3 +674,32 @@ pub fn joined(
 #[cfg(test)]
 #[path = "gvn_tests.rs"]
 mod tests;
+
+/// What the scalar pass leaves true of a body whose operands it edited and
+/// whose blocks it kept: everything the manager holds but the facts about
+/// values (`Registers`) and the counted-loop proofs built on them (`Counted`).
+fn operands_edited() -> PreservedAnalyses {
+    use llrm_analysis::manager::{
+        Annotated, Bounded, CallEffects, DemandedBits, DominatedEdges, ExposedFrames, FloatFacts, Followers,
+        PlainAccesses, PointerValues, Pointers, TableLoads, ThroughMemory, Writes,
+    };
+    PreservedAnalyses::none()
+        .preserve::<Dominators>()
+        .preserve::<Loops>()
+        .preserve::<llrm_analysis::cfg::Shape>()
+        .preserve::<Accesses>()
+        .preserve::<ExposedFrames>()
+        .preserve::<Pointers>()
+        .preserve::<PointerValues>()
+        .preserve::<Annotated>()
+        .preserve::<CallEffects>()
+        .preserve::<TableLoads>()
+        .preserve::<DemandedBits>()
+        .preserve::<Followers>()
+        .preserve::<Writes>()
+        .preserve::<PlainAccesses>()
+        .preserve::<FloatFacts>()
+        .preserve::<ThroughMemory>()
+        .preserve::<DominatedEdges>()
+        .preserve::<Bounded>()
+}
