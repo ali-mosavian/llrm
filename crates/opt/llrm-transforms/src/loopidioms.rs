@@ -203,15 +203,11 @@ impl FunctionPass for Merge {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        if merged(
-            unit.context,
-            unit.layout,
-            analyses.outer().callees(),
-            unit.function,
-            analyses.outer(),
-            unit.declared,
-            self.size,
-        ) {
+        let memset =
+            crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
+        if merged(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), self.size)
+            | memset
+        {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -248,10 +244,8 @@ pub fn merged(
     callees: &Callees,
     function: &mut Function,
     outer: &Outer,
-    declared: &mut Declared,
     size: bool,
 ) -> bool {
-    let mut runs: Vec<(Vec<_Cell>, u32, u32)> = Vec::new();
     let wides: Vec<_Wide>;
     {
         let unit = Unit::within(context, layout, function, outer);
@@ -264,8 +258,10 @@ pub fn merged(
             for cell in &open {
                 *stored.entry((cell.value, (cell.high - cell.low) as u32)).or_default() += 1;
             }
+            // The memsets are `MemCpyOptimizer`'s (it ran first): what is left
+            // of a run it did not take is stores to merge wider, if any.
             let (filled, rest) = _adjacent(&unit, open);
-            runs.extend(filled);
+            left.extend(filled.into_iter().map(|(run, ..)| run));
             left.extend(rest);
         };
         for block in function.layout() {
@@ -300,38 +296,7 @@ pub fn merged(
             function.erase(one.store).expect("a store has no result");
         }
     }
-    for (run, space, width) in &runs {
-        let length: i64 = run.iter().map(|one| one.high - one.low).sum();
-        let (callee, function_type) = _memset(context, declared, *space, *width);
-        let ty = context.types.ptr(0);
-        let callee = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Global(callee) }));
-        let byte = counting::constant(context, &BigInt::from(run[0].byte.expect("a repeated byte")), 8);
-        let count = counting::constant(context, &BigInt::from(length), *width);
-        let off = counting::constant(context, &BigInt::from(0), 1);
-        let void = context.types.void();
-        let info = CallInfo {
-            function_type,
-            calling_convention: 0,
-            return_attrs: Vec::new(),
-            argument_attrs: vec![Vec::new(); 4],
-            attrs: Vec::new(),
-            tail: Default::default(),
-        };
-        let lowest = run.iter().min_by_key(|one| one.low).expect("a run has stores");
-        let last = run.iter().max_by_key(|one| one.order).expect("a run has stores").store;
-        let call = function.create_instruction(
-            Opcode::Call(Box::new(info)),
-            void,
-            vec![lowest.pointer, byte, count, off, callee],
-            Flags::default(),
-            None,
-        );
-        function.insert(call, Position::Before(last)).expect("a placed store");
-        for one in run {
-            function.erase(one.store).expect("a store has no result");
-        }
-    }
-    !runs.is_empty() || !wides.is_empty()
+    !wides.is_empty()
 }
 
 /// The store `inst` is, where it writes one repeated byte at a constant
@@ -1148,7 +1113,7 @@ fn _cheaper_by(
 
 /// `llvm.memset` for pointers of `space` and lengths `width` bits wide,
 /// declared where the module has none.
-fn _memset(
+pub(crate) fn _memset(
     context: &mut Context,
     declared: &mut Declared,
     space: u32,
