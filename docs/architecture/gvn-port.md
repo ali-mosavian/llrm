@@ -34,10 +34,10 @@ Each cap is a named constant at its `cl::opt` default; a different value is a DE
 
 | Fact | Owner | Used by |
 |---|---|---|
-| alias and mod-ref answers | basicaa-port: per-query `AliasQuery` (interface requested, not yet received) | `memdep` (every `AA.getModRefInfo` and `alias`); no alias logic in `memdep` or `gvn` |
+| alias and mod-ref answers | basicaa-port: `AliasQuery` mirroring `AAResults` at the pin under LLVM's names: `alias`, `getModRefInfo` (instruction and call forms), `getModRefInfoMask` (`pointsToConstantMemory` is a wrapper), `getMemoryEffects`, and the `BatchAAResults`/`AAQueryInfo` batch; basicaa-port writes the trait, `memdep` is written against it (no landing date yet) | `memdep` (every `AA.getModRefInfo` and `alias`); no alias logic in `memdep` or `gvn` |
 | PHI translation of an address (`PHITransAddr`) | memoryssa-port: `mssa::phitrans::PhiTransAddr` (`translate_value`, `translate_with_insertion`, `insert_translated_sub_expr`, `needs_phi_translation_from_block`), one copy shared with its walker; its simplify step takes the same fold hook `gvn` passes; PR targeted 2026-10-20 | `memdep`, `gvn` (`collectPredecessors`, `performLoadPRE`) |
 | known bits, ranges | valuetracking-port | `gvn` where LLVM calls `computeKnownBits`/`isKnownNonZero` |
-| instruction simplification and constant folds | fold-poc | `gvn` where LLVM calls `simplifyInstruction`/`ConstantFoldInstruction` |
+| instruction simplification, constant folds, `ConstantFoldLoadFromConst` | fold-poc | `gvn` where LLVM calls `simplifyInstruction`/`ConstantFoldInstruction` |
 | dominators, edge dominance, critical-edge splitting | existing `cfg` shapes | `gvn` |
 | `AssumptionCache` | valuetracking-port: the one shared cache (`assumptions.rs`) | `gvn` (`processAssumeIntrinsic`) |
 | order of the pass in the pipeline | llvm-order-poc | `pipeline.rs` |
@@ -120,11 +120,10 @@ Stages 1 and 3 can land before the two upstream dependencies.
 | D3 | no debug-value salvage | MIR has no debug-value use lists | test with debug info |
 | D5 | masked loads, `invariant.group` | not in MIR | assert at the front ends |
 | D6 | `VNCoercion` arms for scalable vectors, target-ext types, non-integral pointers | not in `Type` or the datalayout | none reachable |
-| D9 | `ConstantFoldLoadFromConst` | llrm has no folder of a load from a constant; memcpy-from-constant arms are none (owner wanted: fold-poc) | stage 3 test |
 | D7 | optimization remarks | no remark stream | |
 | D8 | llrm's motion pricing | not LLVM; removed unless rows keep it | stage 5 rows |
 
-D2 and D4 are withdrawn (MIR carries the flags; the shared `AssumptionCache` is used). D1 is the only one that does not need an assert.
+D9 is not a DEVIATE: `ConstantFoldLoadFromConst`/`ConstantFoldLoadFromConstPtr` ([ConstantFolding.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp)) are fold-poc's, owed. Until they land, stage 3 returns none for the arms that need them (the memcpy-from-constant-global arms and the constant-source `get_constant_*`), a gap that closes when fold-poc's functions are called. D2 and D4 are withdrawn (MIR carries the flags; the shared `AssumptionCache` is used). D1 is the only one that does not need an assert.
 
 ## 6. Verification
 
