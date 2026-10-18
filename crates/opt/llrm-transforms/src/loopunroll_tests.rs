@@ -244,6 +244,11 @@ fn unroll_seconds(trips: u32) -> f64 {
 /// doubling of the count took about four times as long.
 #[test]
 fn test_unroll_time_doubles_with_the_count() {
+<<<<<<< HEAD
     let (a, b, c) = (unroll_seconds(512), unroll_seconds(1024), unroll_seconds(2048));
     assert!(b / a <= 2.8 && c / b <= 2.8, "512: {a:.4}s, 1024: {b:.4}s, 2048: {c:.4}s");
+=======
+    let (a, b, c) = (unroll_seconds(1024), unroll_seconds(2048), unroll_seconds(4096));
+    assert!(b / a <= 2.6 && c / b <= 2.6, "1024: {a:.4}s, 2048: {b:.4}s, 4096: {c:.4}s");
+>>>>>>> origin/feat/parity
 }

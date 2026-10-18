@@ -267,7 +267,13 @@ impl Objects {
                 continue;
             }
             let byte = module.context.types.int(8);
-            let variable = GlobalVariable { ty: byte, constant: false, initializer: None, align: None };
+            let variable = GlobalVariable {
+                externally_initialized: false,
+                ty: byte,
+                constant: false,
+                initializer: None,
+                align: None,
+            };
             let global =
                 add_unique(module, name, |module, one| module.add_variable(one, variable.clone(), Linkage::External));
             objects.externals.insert(index as i64, module.reference(global));
@@ -296,7 +302,13 @@ impl Objects {
         }) {
             let Some(Some((name, _))) = segments.get(code as usize) else { return Err("no code segment".to_owned()) };
             let byte = module.context.types.int(8);
-            let variable = GlobalVariable { ty: byte, constant: true, initializer: None, align: None };
+            let variable = GlobalVariable {
+                externally_initialized: false,
+                ty: byte,
+                constant: true,
+                initializer: None,
+                align: None,
+            };
             let global = add_unique(module, name, |module, named| {
                 module.add_variable(named, variable.clone(), Linkage::External)
             });
@@ -341,7 +353,8 @@ impl Objects {
             let byte = module.context.types.int(8);
             let ty = module.context.types.intern(Type::Array { element: byte, count: (end - start) as u64 });
             let shared = carving.shared.contains(segment);
-            let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
+            let variable =
+                GlobalVariable { externally_initialized: false, ty, constant: false, initializer: None, align: None };
             let linkage = if shared { Linkage::Common } else { Linkage::Internal };
             let named = name.clone().unwrap_or_default();
             let global = add_unique(module, &named, |module, one| module.add_variable(one, variable.clone(), linkage));

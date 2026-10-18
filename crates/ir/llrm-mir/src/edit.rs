@@ -1094,6 +1094,7 @@ impl Function {
                 return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
             }
         }
+<<<<<<< HEAD
         if let [block] = blocks {
             self.layout.retain(|one| one != block);
         } else {
@@ -1103,6 +1104,14 @@ impl Function {
             }
             self.layout.retain(|one| !gone.contains(one));
         }
+=======
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
+        }
+        LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.layout.retain(|one| !gone.contains(one));
+>>>>>>> origin/feat/parity
         for &block in blocks {
             self.release_name(block);
             self.blocks[block.0 as usize].erased = true;
@@ -1111,6 +1120,17 @@ impl Function {
         }
         Ok(())
     }
+}
+
+thread_local! {
+    /// Layout entries looked over to take blocks out of it.
+    static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has looked over to erase blocks, for a
+/// test that erasing k of n blocks does not scan k times n.
+pub fn layout_scanned() -> usize {
+    LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
 thread_local! {

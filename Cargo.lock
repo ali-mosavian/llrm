@@ -552,6 +552,7 @@ dependencies = [
  "llrm-analysis",
  "llrm-mir",
  "llrm-support",
+ "llrm-x86",
  "llrm-x86-m16",
  "num-bigint",
  "num-traits",
@@ -563,6 +564,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "llrm-lir",
+ "llrm-mir",
  "llrm-support",
  "llrm-target",
  "toml",
