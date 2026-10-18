@@ -94,7 +94,6 @@ use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops, PreservedAnalyses};
 use llrm_mir::{Constant, ConstantKind, Context};
-use llrm_support::hash::HashSet;
 
 use crate::graph::loops::{self, Dominates, Loop, Node};
 
@@ -431,22 +430,22 @@ pub fn natural(
     function: &Function,
     info: &LoopInfo,
 ) -> Vec<Loop> {
-    let forest = std::rc::Rc::new(llrm_mir::forest::Forest::of_loop_info(function, info));
-    let mut seen = HashSet::default();
-    let mut found = Vec::with_capacity(forest.loops.len());
-    for &at in function.layout() {
-        for successor in function.successors(at) {
-            let Some(one) = info.get_loop_for(successor).filter(|one| one.get_header() == successor) else { continue };
-            let index = one.id().0 as usize;
-            if one.contains(at) && seen.insert(successor) {
-                found.push(Loop {
-                    header: id(successor),
-                    latches: forest.loops[index].latches.iter().copied().collect(),
-                    body: llrm_mir::forest::Body::new(&forest, index),
-                });
-            }
-        }
-    }
+    let forest = std::rc::Rc::new(llrm_mir::forest::Forest::of_graph(
+        function,
+        info,
+        function.layout().iter().copied(),
+        |block| i64::from(block.0),
+    ));
+    let mut found: Vec<Loop> = forest
+        .loops
+        .iter()
+        .enumerate()
+        .map(|(index, one)| Loop {
+            header: one.header,
+            latches: one.latches.iter().copied().collect(),
+            body: llrm_mir::forest::Body::new(&forest, index),
+        })
+        .collect();
     found.sort_by_key(|one| one.body.len());
     found
 }

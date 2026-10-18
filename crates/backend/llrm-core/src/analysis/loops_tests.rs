@@ -248,9 +248,9 @@ fn test_the_forest_visits_each_block_once_however_deep_the_nest() {
     let visits = |depth: i64| {
         let blocks = nest(depth);
         FLOOD_VISITS.with(|one| one.set(0));
-        let before = llrm_mir::forest::forest_visits();
+        let before = llrm_mir::loopinfo::visits();
         let found = forest_of(&blocks, Some(0));
-        let forest_visits = llrm_mir::forest::forest_visits() - before;
+        let forest_visits = llrm_mir::loopinfo::visits() - before;
         let flood = flooded(&blocks, Some(0));
         assert_eq!(flat(&named(&found)), flood);
         (forest_visits, FLOOD_VISITS.with(|one| one.get()))
