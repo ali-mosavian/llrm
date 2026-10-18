@@ -114,3 +114,29 @@ dead:
         }
     }
 }
+
+/// `Shape` takes its loops from `LoopInfo` (LLVM's `analyzeImpl`), the graph
+/// walks from the address forest: two finders of the same loops. They agree
+/// on every loop of the corpus, header, latches and blocks.
+#[test]
+fn the_loops_of_a_shape_are_those_the_graph_walks_find() {
+    let mut found = 0;
+    for (name, module) in corpus() {
+        for (_, global, function) in module.functions() {
+            if function.entry().is_none() {
+                continue;
+            }
+            let walks = |loops: Vec<loops::Loop>| {
+                loops
+                    .into_iter()
+                    .map(|one| (one.header, (one.latches.clone(), one.body.iter().copied().collect::<Vec<_>>())))
+                    .collect::<std::collections::BTreeMap<_, _>>()
+            };
+            let name = format!("{name}/@{}", global.name.as_deref().unwrap_or(""));
+            let from_info = walks(cfg::Shape::of(function).loops);
+            found += from_info.len();
+            assert_eq!(from_info, walks(loops::loops(&cfg::graph(function), None)), "{name}");
+        }
+    }
+    assert!(found > 1000, "premise: the corpus holds many loops, {found} compared");
+}

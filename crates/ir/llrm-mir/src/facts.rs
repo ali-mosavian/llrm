@@ -17,6 +17,12 @@ use crate::module::{Function, InstId, MetadataNode, MetadataOperand};
 use crate::opcode::{Attribute, Flags};
 use crate::types::TypeId;
 
+/// Whether `function` is `noipa`: no interprocedural pass uses its body for
+/// anyone else or changes how it is called.
+pub fn opaque(function: &Function) -> bool {
+    Facts::of(&function.attrs).no_ipa()
+}
+
 /// The kind of thing a fact is stated of: a routine, one of its parameters,
 /// or one of its instructions. HIR names them; MIR has the carriers alone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +257,13 @@ facts! {
         // It is never entered again while it runs: in no cycle of calls, and
         // nothing it reaches calls what may call back.
         NoRecurse no_recurse "norecurse" on [Callable];
+        // GCC's `noipa`: no interprocedural pass uses the routine's body for
+        // anyone else, or changes how it is called (it is never inlined,
+        // cloned, specialised on its callers' constants or given a new
+        // convention, and its callers read only the attributes the source
+        // declared). LLVM has no IR form of it; a named deviation (D9), for
+        // bench kernels.
+        NoIpa no_ipa "noipa" on [Callable];
         NoCallback no_callback "nocallback" on [Callable];
         Cold cold "cold" on [Callable];
         // The result is a three-way compare of the data: its sign says which
