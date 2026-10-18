@@ -46,15 +46,6 @@ impl ScalarEvolution {
         !cx.assumptions.assumes.is_empty()
     }
 
-    /// `getSCEV(V)`. SEAM (S3): `createSCEV`; an unknown is a valid answer.
-    pub fn get_scev(
-        &mut self,
-        cx: &Cx,
-        v: llrm_mir::module::Operand,
-    ) -> Scev {
-        self.get_unknown(cx, v)
-    }
-
     /// `proveNoUnsignedWrapViaInduction` (S5).
     pub fn prove_no_unsigned_wrap_via_induction(
         &mut self,

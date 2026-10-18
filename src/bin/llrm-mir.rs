@@ -26,6 +26,10 @@ fn main() -> ExitCode {
     if scev {
         arguments.remove(0);
     }
+    let values = arguments.first().is_some_and(|one| one == "--scev-values");
+    if values {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -61,6 +65,10 @@ fn main() -> ExitCode {
             }
             if scev {
                 print!("{}", scalar_evolution(&module));
+                return ExitCode::SUCCESS;
+            }
+            if values {
+                print!("{}", llrm_analysis::scev::values::print_module_values(&module));
                 return ExitCode::SUCCESS;
             }
             if loops {

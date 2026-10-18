@@ -74,6 +74,28 @@ impl ScalarEvolution {
             }
         }
 
+        if let Some(scope) = self.values_at_scopes.remove(&s) {
+            for (l, value) in scope {
+                let Some(value) = value else { continue };
+                if self.as_constant(value.scev).is_none()
+                    && let Some(users) = self.values_at_scopes_users.get_mut(&value.scev)
+                    && let Some(at) = users.iter().position(|one| *one == (l, s))
+                {
+                    users.remove(at);
+                }
+            }
+        }
+
+        if let Some(users) = self.values_at_scopes_users.remove(&s) {
+            for (l, v) in users {
+                // The recorded value at scope is a use of S, which may carry
+                // no-wrap flags that are not part of this key.
+                if let Some(values) = self.values_at_scopes.get_mut(&v) {
+                    values.retain(|ls| !(ls.0 == l && ls.1.is_some_and(|value| value.scev == s)));
+                }
+            }
+        }
+
         if let Some(keys) = self.fold_cache_user.remove(&s) {
             for key in keys {
                 self.fold_cache.remove(&key);
@@ -134,5 +156,20 @@ impl ScalarEvolution {
     ) -> Option<Scev> {
         let Operand::Value(id) = v else { return None };
         self.value_expr_map.get(&id).copied()
+    }
+}
+
+impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.cpp#L4526
+    /// `getSCEVValues`: the values `s` was made for (`ExprValueMap`), in the
+    /// order they were first mapped.
+    pub fn get_scev_values(
+        &self,
+        s: Scev,
+    ) -> Vec<Operand> {
+        self.expr_value_map
+            .get(&s)
+            .map(|values| values.iter().map(|id| Operand::Value(*id)).collect())
+            .unwrap_or_default()
     }
 }

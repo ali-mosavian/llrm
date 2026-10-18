@@ -73,7 +73,6 @@ fn constant(
 
 /// `%n u< 10` rewrites `%n` to `umin(%n, 9)`.
 #[test]
-#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
 fn test_an_unsigned_less_than_guard_clamps_the_argument() {
     with_guard("  %g = icmp ult i32 %n, 10", |se, cx, header, n, _| {
         let want = {
@@ -88,7 +87,6 @@ fn test_an_unsigned_less_than_guard_clamps_the_argument() {
 
 /// `%n != 0` rewrites `%n` to `umax(%n, 1)`, and `%n s> 4` to `smax(%n, 5)`.
 #[test]
-#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
 fn test_a_nonzero_and_a_signed_greater_than_guard() {
     with_guard("  %g = icmp ne i32 %n, 0", |se, cx, header, n, _| {
         let one = constant(se, 1);
@@ -113,7 +111,6 @@ fn test_a_guard_on_another_argument_leaves_this_one() {
 
 /// `%n % 8 == 0` makes `%n` into `(%n /u 8) * 8`.
 #[test]
-#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
 fn test_a_divisibility_guard_rewrites_the_argument_as_a_multiple() {
     with_guard("  %r = urem i32 %n, 8\n  %g = icmp eq i32 %r, 0", |se, cx, header, n, _| {
         let eight = constant(se, 8);
