@@ -1197,6 +1197,8 @@ pub fn _split_edges(
                 succ: vec![into].into(),
                 phis: vec![].into(),
                 cold: false,
+                align: 0,
+                max_skip: 0,
             },
         );
     }
@@ -1244,6 +1246,8 @@ pub fn _split_edges(
                     })
                     .collect::<Result<_, _>>()?,
                 cold: block.cold,
+                align: block.align,
+                max_skip: block.max_skip,
             }
             .into(),
         );
@@ -1367,6 +1371,8 @@ pub fn unsplit(body: &LirBody) -> LirBody {
                 succ: block.succ.iter().map(|&at| where_(at)).collect(),
                 phis,
                 cold: block.cold,
+                align: block.align,
+                max_skip: block.max_skip,
             }
             .into(),
         );
@@ -1406,7 +1412,7 @@ mod tests {
         succ: Vec<i64>,
         phis: Vec<Phi>,
     ) -> LirBlock {
-        LirBlock { at, insns: insns.into(), succ: succ.into(), phis: phis.into(), cold: false }
+        LirBlock { at, insns: insns.into(), succ: succ.into(), phis: phis.into(), cold: false, align: 0, max_skip: 0 }
     }
 
     fn body(
