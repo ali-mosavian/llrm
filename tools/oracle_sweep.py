@@ -7,6 +7,10 @@ Compiles each bench/*/*.bas and *.nib, tests/run/{bas,nib}/*, and examples/**/*.
 oracle on, using `llrm-qb` and `llrm-nib` of DIR (default target/release). A refusal the compiler says in words (a library without `main`, a
 convention the target does not define, a literal that does not fit) is not a failure; a panic, or a non-zero exit without a message, is. It
 prints each distinct panic with its programs and exits 1 if there is one. Repeat it before a change to a pass or an analysis lands.
+
+A sweep that finds nothing proves nothing unless the oracles ran. Before the sweep each oracle is run alone on the largest programs
+and must cost the compile at least 0.05% more instructions (`perf stat`, user mode) than the same compile with a variable of the same length that no oracle reads; one that does not is named and
+the sweep stops with exit 2 (`--allow-unexercised NAME` for one the target cannot reach, said aloud in the output).
 """
 
 from __future__ import annotations
@@ -52,6 +56,33 @@ def classify(returncode: int, stderr: str) -> str | None:
     return "exit %d: %s" % (returncode, lines[-1][:100] if lines else "no message")
 
 
+def instructions(binaries: Path, job: tuple[str, Path, str, str], env_extra: dict[str, str]) -> int | None:
+    """User-mode instructions of one compile with `env_extra` added, or None where `perf` cannot say."""
+    tool, source, level, machine = job
+    out = Path(os.environ.get("TMPDIR", "/tmp")) / f"probe-{os.getpid()}-{abs(hash((job, tuple(env_extra))))}.o"
+    command = ["perf", "stat", "-x,", "-e", "instructions:u", str(binaries / tool), str(source), level, machine, "-o", str(out)]
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **env_extra})
+    except FileNotFoundError:
+        return None
+    out.unlink(missing_ok=True)
+    for line in done.stderr.splitlines():
+        if "instructions" in line and line.split(",")[0].isdigit():
+            return int(line.split(",")[0])
+    return None
+
+
+def exercised(binaries: Path, probes: list[tuple[str, Path, str, str]]) -> dict[str, tuple[int, int] | None]:
+    """For each oracle: (instructions with a variable of the same length that no oracle reads, with the oracle) over `probes`; None
+    where perf cannot say. The control carries the cost of the variable's presence, which a compiler ignoring the oracle also pays."""
+    found: dict[str, tuple[int, int] | None] = {}
+    for name in CHECKS:
+        control = [instructions(binaries, job, {"LLRM_CHECK_" + "X" * len(name): "1"}) for job in probes]
+        with_it = [instructions(binaries, job, {f"LLRM_CHECK_{name}": "1"}) for job in probes]
+        found[name] = None if None in control or None in with_it else (sum(control), sum(with_it))
+    return found
+
+
 def compile_one(job: tuple[str, Path, str, str], binaries: Path) -> tuple[tuple[str, Path, str, str], str | None]:
     tool, source, level, machine = job
     out = Path(os.environ.get("TMPDIR", "/tmp")) / f"sweep-{os.getpid()}-{abs(hash(job))}.o"
@@ -67,8 +98,23 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "8")))
     parser.add_argument("--levels", default="-O1,-O2,-O3,-Os,-Omax")
     parser.add_argument("--machines", default="-m16,-m32")
+    parser.add_argument("--allow-unexercised", action="append", default=[], metavar="NAME", help="an oracle the sweep may skip")
     args = parser.parse_args()
-    jobs = [(t, p, l, m) for t, p in programs() for l in args.levels.split(",") for m in args.machines.split(",")]
+    found = programs()
+    biggest = sorted(found, key=lambda one: -one[1].stat().st_size)[:3]
+    ran = exercised(args.bin, [(t, p, "-O2", "-m32") for t, p in biggest])
+    unexercised = []
+    for name, counts in ran.items():
+        if counts is None:
+            print(f"oracle {name}: not measurable (no perf, or a probe did not compile)")
+        else:
+            print(f"oracle {name}: {counts[0]} -> {counts[1]} instructions on the {len(biggest)} largest programs")
+        if (counts is None or counts[1] - counts[0] < max(1000, counts[0] // 2000)) and name not in args.allow_unexercised:
+            unexercised.append(name)
+    if unexercised:
+        print("never exercised: " + ", ".join(unexercised) + " (a sweep where an oracle did not run proves nothing about it)")
+        return 2
+    jobs = [(t, p, l, m) for t, p in found for l in args.levels.split(",") for m in args.machines.split(",")]
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda job: compile_one(job, args.bin), jobs))
     findings: dict[str, set[str]] = collections.defaultdict(set)
