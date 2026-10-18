@@ -394,7 +394,7 @@ pub struct Function {
     pub(crate) blocks: Vec<Block>,
     /// The blocks in order, entry first; empty for a declaration.
     pub(crate) layout: Vec<BlockId>,
-    pub(crate) value_uses: Vec<Vec<Use>>,
+    pub(crate) value_uses: crate::uselist::UseLists,
     pub(crate) block_uses: Vec<Vec<Use>>,
     pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
@@ -459,7 +459,7 @@ impl Function {
             erased: Vec::new(),
             blocks: Vec::new(),
             layout: Vec::new(),
-            value_uses: Vec::new(),
+            value_uses: Default::default(),
             block_uses: Vec::new(),
             order: OrderCache::default(),
             changes: ChangeLog::default(),
@@ -501,7 +501,7 @@ impl Function {
         for &parameter in &self.parameters {
             out.parameters.push(ValueId(out.values.len() as u32));
             out.values.push(ValueData { name: None, ..self.value(parameter).clone() });
-            out.value_uses.push(Vec::new());
+            out.value_uses.push_value();
         }
         out
     }
@@ -676,8 +676,8 @@ impl Function {
     pub fn users(
         &self,
         value: ValueId,
-    ) -> &[Use] {
-        &self.value_uses[value.0 as usize]
+    ) -> crate::uselist::Users<'_> {
+        self.value_uses.users(value.0)
     }
 
     /// The operand slots naming `block`: terminators' and phis'.

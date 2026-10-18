@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 96 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 97 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -53,6 +53,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loadjoins | Load PRE at joins: a load whose bytes every predecessor already holds becomes a phi of those values, and a predecessor holding none may get a load of its own on its edge. | Not a pass of the pipeline: [`crate::gvn`](gvn.md) calls `reused` after its | [loadjoins](loadjoins.md) |
 | local | The utilities GVN calls on a CSE: patching the surviving instruction, replacing the uses a dominator tree allows, dead and duplicate-phi cleanup, block merging, and the pointer-equality replacement checks. | Nothing yet; `gvn` is the caller this is for. | [local](local.md) |
 | loopclone | Clones loop iterations as CFG, for the passes that peel, unswitch or jam a loop: `peeled` copies whole iterations ahead of a loop, `chained` copies bodies inside it, keeping the loop and every exit. | Called by [`crate::peel`](peel.md) and [`crate::unswitch`](unswitch.md) (`peeled`), | [loopclone](loopclone.md) |
+| loopdeletion | `LoopDeletion`: a loop that computes nothing the rest of the function reads is removed, and a loop whose backedge is never taken is made straight code. |  | [loopdeletion](loopdeletion.md) |
 | loopdistribute | Loop distribution: a loop whose stores do not need each other's trips becomes one loop for each group of them, so each loop is smaller, holds fewer values live and may be an idiom (a fill, a copy) of its own. | Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax | [loopdistribute](loopdistribute.md) |
 | loopexit | Replaces what a counted loop computes, as read after it, by an expression of its trip count, and deletes a loop that only counts, so the code after the loop does not wait for the loop to produce a number the compiler can write down. | Not a pipeline pass of its own: [`crate::indvars`](indvars.md) calls | [loopexit](loopexit.md) |
 | loopfuse | Loop fusion: two adjacent loops of the same trips become one, so the data is walked once and the loop's own work is paid once. | After `unswitch` and `split`, before unroll-jam, at -Omax only | [loopfuse](loopfuse.md) |

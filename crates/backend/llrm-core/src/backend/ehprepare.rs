@@ -193,7 +193,7 @@ pub fn prepared(
         let on = trapping(&module.context, function, &registrations);
         for &block in function.layout() {
             let mut trapped = on[&block];
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 if trapped
                     && matches!(function.instruction(inst).opcode, Opcode::Call(_))
                     && unwinds(&module.context, &nounwind, function, inst)
@@ -239,9 +239,8 @@ fn trapping(
     while let Some(block) = pending.pop() {
         let out = function
             .block(block)
-            .instructions()
             .iter()
-            .fold(on[&block], |trapped, &inst| trapping_after(context, function, registrations, inst, trapped));
+            .fold(on[&block], |trapped, inst| trapping_after(context, function, registrations, inst, trapped));
         for next in function.successors(block) {
             if out && !on[&next] {
                 on.insert(next, true);
@@ -345,12 +344,7 @@ fn landing_pad(
     function: &Function,
     block: BlockId,
 ) -> Option<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    function.block(block).iter().find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
@@ -563,7 +557,7 @@ fn slot(
     ty: TypeId,
 ) -> Result<Operand, String> {
     let entry = function.entry().expect("a body");
-    let first = function.block(entry).instructions()[0];
+    let first = function.block(entry).first().expect("a block with instructions");
     let pointer = context.types.ptr(0);
     let alloca = function.create_instruction(
         Opcode::Alloca { allocated: ty, align: None, address_space: 0 },
@@ -619,9 +613,7 @@ fn body_start(
 ) -> Position {
     let found = function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&one| !matches!(
             function.instruction(one).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
@@ -636,13 +628,8 @@ fn demote_phis(
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
-    let phis: Vec<InstId> = function
-        .block(pad)
-        .instructions()
-        .iter()
-        .copied()
-        .filter(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let phis: Vec<InstId> =
+        function.block(pad).iter().filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in phis {
         let instruction = function.instruction(phi).clone();
         let slot = slot(context, function, instruction.ty)?;
@@ -669,7 +656,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
     let mut edges: BTreeMap<(BlockId, BlockId), BTreeSet<ValueId>> = BTreeMap::new();
     for &block in function.layout() {
         let (mut used, mut defined) = (BTreeSet::new(), BTreeSet::new());
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let instruction = function.instruction(inst);
             if instruction.opcode == Opcode::Phi {
                 for pair in instruction.operands.chunks(2) {
@@ -732,9 +719,7 @@ fn demote_live(
                 let entry = function.entry().expect("a body");
                 let first = function
                     .block(entry)
-                    .instructions()
                     .iter()
-                    .copied()
                     .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }));
                 first.map_or(Position::End(entry), Position::Before)
             }
@@ -754,11 +739,7 @@ fn demote_live(
                         }
                         body_start(function, normal)
                     }
-                    _ => {
-                        let list = function.block(block).instructions();
-                        let at = list.iter().position(|&one| one == def).expect("in its block");
-                        Position::Before(list[at + 1])
-                    }
+                    _ => Position::Before(function.next_in_block(def).expect("a successor in its block")),
                 }
             }
         };
