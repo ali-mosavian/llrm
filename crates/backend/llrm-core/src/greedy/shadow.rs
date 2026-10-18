@@ -71,6 +71,9 @@ pub struct ShadowReport {
 /// The body's analyses the allocator asks of.
 struct BodyEnv {
     orders: Rc<Tables>,
+    /// The register each pinned value is fixed to, as a root: the physical
+    /// hint of a copy from it (`copyHint`).
+    pins: IndexMap<u32, RegId>,
     freq: Vec<f32>,
     exiting: Vec<bool>,
 }
@@ -99,9 +102,9 @@ impl SpillWeightEnv for BodyEnv {
 
     fn pinned(
         &self,
-        _reg: u32,
+        reg: u32,
     ) -> Option<RegId> {
-        None
+        self.pins.get(&reg).copied()
     }
 
     fn is_rematerializable(
@@ -321,7 +324,8 @@ pub fn decide_with(
         tables.widths.borrow_mut().insert(value, width);
     }
     tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
-    let env = BodyEnv { orders: Rc::clone(&tables), freq, exiting };
+    let pins = inputs.pins.iter().map(|(&reg, &phys)| (reg, crate::model::ir::root(phys))).collect();
+    let env = BodyEnv { orders: Rc::clone(&tables), pins, freq, exiting };
     // The calls.
     let mut calls = Vec::new();
     for block in &body.blocks {
