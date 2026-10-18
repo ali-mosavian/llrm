@@ -428,6 +428,12 @@ fn test_a_block_that_jumps_to_itself_stays() {
     assert_eq!(_printed(vec![block(1, vec![_jump(1, 1)], vec![1]).into()]), ["L0_1:", "jmp L0_1"]);
 }
 
+/// `optimized`'s round: the tails merged, then the branches settled.
+fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
+    let merged = tailmerge::merged(body, false)?.unwrap_or_else(|| body.clone());
+    Ok(machinedce::eliminated(_converged(&threaded(&merged))))
+}
+
 fn two_zero_tails(inserted: bool) -> LirBody {
     let fresh = |one: Arc<Insn>| if inserted { _inserted(one) } else { one };
     body(
@@ -480,6 +486,122 @@ fn test_merged_tails_share_their_values() {
     assert_eq!(undefined, Vec::<String>::new());
 }
 
+/// Both ways of a branch led to bare jumps to one block: threading sent each
+/// to it, which left `jae L; jmp L` with the successor listed twice. A second
+/// threading then took the jump to `L` and stranded `L` under the branch's
+/// other reference (qcport mdl_ai -Os: "a jump to L66_287, which is nowhere").
+#[test]
+fn test_a_branch_whose_two_ways_were_threaded_to_one_block_is_not_left_a_branch() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "jae", 10), _jump(3, 20)], vec![10, 20]).into(),
+            block(10, vec![_jump(10, 30)], vec![30]).into(),
+            block(20, vec![_jump(20, 30)], vec![30]).into(),
+            block(30, vec![_move(30, cx()), _return(31)], vec![]).into(),
+        ],
+    );
+
+    let once = threaded(&source);
+    let twice = threaded(&once);
+
+    assert_eq!(count(&once, Operation::Branch), 0);
+    let known: std::collections::BTreeSet<i64> = twice.blocks.iter().map(|block| block.at).collect();
+    for one in twice.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if let Some(target) = one.what.as_ref().and_then(|what| what.target) {
+            assert!(known.contains(&target), "a jump to {target}, which is nowhere");
+        }
+    }
+}
+
+/// Two arms that differ in their first instruction and share the last three:
+/// `BranchFolder::TailMergeBlocks` splits the shared three off one arm and
+/// sends the other to it. The merge of whole blocks left both copies: 7 moves
+/// and 3 compares where 5 and 2 do.
+fn arms_sharing_a_tail(shared: usize) -> LirBody {
+    let tail = |at: i64| -> Vec<Arc<Insn>> {
+        [_move(at, bx()), _compare(at + 1), _move(at + 2, imm(7))].into_iter().take(shared).map(_inserted).collect()
+    };
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first))];
+        insns.extend(tail(at + 1));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![40]).into()
+    };
+    body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    )
+}
+
+fn count(
+    result: &LirBody,
+    op: Operation,
+) -> usize {
+    physical(result).iter().filter(|what| what.op == op).count()
+}
+
+#[test]
+fn test_a_tail_of_three_shared_by_two_arms_is_split_off_and_shared() {
+    let source = arms_sharing_a_tail(3);
+    assert_eq!((count(&source, Operation::Move), count(&source, Operation::Compare)), (7, 3));
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    assert_eq!((count(&result, Operation::Move), count(&result, Operation::Compare)), (5, 2));
+}
+
+/// One shared instruction plus the jump taken off is two, under the three a
+/// merge must save (`MinCommonTailLength`): the arms stay as they are.
+#[test]
+fn test_a_tail_of_one_is_not_shared() {
+    let source = arms_sharing_a_tail(1);
+
+    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+}
+
+/// Blocks that end the function share the tail they end in, the return
+/// included.
+#[test]
+fn test_two_blocks_that_return_share_their_last_three_instructions() {
+    let ends = |at: i64, first: Loc| {
+        block(
+            at,
+            vec![
+                _inserted(_move(at, first)),
+                _inserted(_move(at + 1, bx())),
+                _inserted(_compare(at + 2)),
+                _inserted(_return(at + 3)),
+            ],
+            vec![],
+        )
+        .into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            ends(10, imm(1)),
+            ends(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+        ],
+    );
+    assert_eq!(count(&source, Operation::Return), 3);
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    assert_eq!(count(&result, Operation::Return), 2);
+}
+
 /// Decoded tails cannot share one copy without reconciling source maps.
 #[test]
 fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
@@ -516,39 +638,6 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
 
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Move).count(), 1);
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
-}
-
-/// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
-#[test]
-fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
-    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds
-    // say.
-    let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
-        let mut shaped = body(
-            "f",
-            1,
-            vec![
-                block(1, entry, vec![10]).into(),
-                block(10, looped, vec![30, 20]).into(),
-                block(20, vec![_jump(20, 10)], vec![10]).into(),
-                block(30, vec![_return(30)], vec![]).into(),
-            ],
-        );
-        for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
-            shaped.odds.taken.insert((10, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
-        }
-        shaped
-    };
-
-    let before = shaped(
-        vec![_move(1, bx()), _move(2, cx()), _move(3, imm(0)), _jump(4, 10)],
-        vec![_compare(10), _branch(11, "je", 30)],
-    );
-    let after = shaped(vec![_jump(1, 10)], vec![_move(9, cx()), _compare(10), _branch(11, "je", 30)]);
-
-    assert!(_work(&after).0 < _work(&before).0);
-    assert!(_work(&after).1 > _work(&before).1);
-    assert!(std::ptr::eq(preferred(&before, &after), &before));
 }
 
 /// choose's folded arms joined through a two-byte `jmp` to `pop bp; retf`.
