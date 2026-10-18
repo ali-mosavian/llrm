@@ -5554,3 +5554,17 @@ fn test_the_old_coalescer_is_not_reached_by_default() {
     assert!(got.len() > 3, "premise: the function compiled: {got:?}");
     assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
 }
+
+/// A far pointer that is poison (SROA's value for a read of an unwritten
+/// slot, which a returned struct's hidden pointer was) was refused: "an address
+/// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
+#[test]
+fn test_a_poison_far_pointer_is_selected_as_any_value() {
+    let text = "define ptr addrspace(1) @f() addrspace(1) {
+b0:
+  ret ptr addrspace(1) poison
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|line| line == "retf"), "{got:?}");
+}

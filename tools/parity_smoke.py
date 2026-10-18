@@ -35,7 +35,7 @@ import llrmbin  # noqa: E402
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 5  # a merge touching more is tested in the 5 crates with most changed files: each crate costs its cargo start before any test
+MAX_CRATES = 3  # a merge touching more is tested in the 3 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
@@ -224,7 +224,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 0.5), ("sc", sc, 0.8), ("d_faces", d_faces, 2.0), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.3), ("sc", sc, 0.8), ("d_faces", d_faces, 1.8), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 3.6)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
