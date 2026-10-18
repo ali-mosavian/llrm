@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 85 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 86 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -77,12 +77,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
+| simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
 | sink | Work moved down to the one place that needs it, so the paths that skip that place no longer run it: gcc's `-ftree-sink` (`pass_sink_code`), LLVM's `Sink` and `MachineSink`. | Last of the function passes before `switchconv`, after `addresssink`; off | [sink](sink.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
-| switchlower | A switch lowered as gcc 13.4 lowers one: a lookup table where every case only picks constants, bit tests for few targets in a narrow range, and otherwise a balanced tree of range tests. | As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
+| switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |

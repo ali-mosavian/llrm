@@ -122,11 +122,14 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
-use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
+use llrm_mir::module::{Function, InstId, Operand, Use, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses};
+use llrm_mir::valuetracking::{AssumptionCache, Query, known};
 use llrm_support::hash::IndexMap;
 
 use crate::counting;
@@ -1885,6 +1888,36 @@ fn _redundant_masks(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
+    // CVP's `processAnd`: LazyValueInfo's range at the use first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let tree = DomTree::of(function);
+    let mut lvi = LazyValueInfo::new();
+    let mut settled: Vec<(InstId, Operand)> = Vec::new();
+    let mut candidates = candidates;
+    candidates.retain(|&(_, inst, value, mask, width)| {
+        let Some(index) = function.instruction(inst).operands.iter().position(|one| *one == value) else { return true };
+        let range = {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: index as u32 }, false)
+        };
+        let top = range.get_unsigned_max();
+        let reach = if top == 0 { 0 } else { u128::MAX >> (top.leading_zeros()) };
+        let all = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+        let query = Query {
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            dt: Some(&tree),
+            assumptions: Some(&assumptions),
+            cxt: Some(inst),
+            ..Query::bare(context, function, layout)
+        };
+        let possible = reach & !known::compute_known_bits(&query, value, 0).zero & all;
+        if possible & !mask == 0 {
+            settled.push((inst, value));
+            return false;
+        }
+        true
+    });
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, Operand)> = candidates
@@ -1900,6 +1933,7 @@ fn _redundant_masks(
             let possible = reach & !llrm_mir::valuetracking::known_zero(context, function, value) & all;
             (possible & !mask == 0).then_some((inst, value))
         })
+        .chain(settled)
         .collect();
     for &(inst, value) in &made {
         if !function.is_erased(inst) {
@@ -2043,11 +2077,22 @@ fn _unsigned_divisions(
         analyses
             .invalidate_if_edited(function, &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>());
     }
+    // CVP's `processSDivOrSRem`: LazyValueInfo's range of the dividend first.
+    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
+    let mut lvi = LazyValueInfo::new();
+    let non_negative: Vec<bool> = candidates
+        .iter()
+        .map(|&(_, inst, _)| {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
+        })
+        .collect();
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, width)| {
+        .zip(non_negative)
+        .filter_map(|((block, inst, width), non_negative)| {
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
@@ -2063,11 +2108,12 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || !size);
-            let proved = ranges::operand_at(&unit, operands[0], cfg::id(block))
-                .ok()
-                .flatten()
-                .filter(|interval| interval.width == width)
-                .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
+            let proved = non_negative
+                || ranges::operand_at(&unit, operands[0], cfg::id(block))
+                    .ok()
+                    .flatten()
+                    .filter(|interval| interval.width == width)
+                    .is_some_and(|interval| interval.low.sign() != num_bigint::Sign::Minus)
                 || llrm_mir::valuetracking::known_zero(context, function, operands[0]) >> (width - 1) & 1 == 1;
             let op = if function.instruction(inst).opcode == Opcode::Binary(BinaryOp::SDiv) {
                 BinaryOp::UDiv

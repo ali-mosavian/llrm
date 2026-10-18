@@ -97,6 +97,7 @@ pub mod avail;
 pub mod basicaa;
 pub mod branchprob;
 pub mod capturecheck;
+pub mod capturetracking;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;

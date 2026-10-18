@@ -168,3 +168,134 @@ bad:
 ";
     assert!(!inferred(text, &["f"])[0].no_unwind);
 }
+
+/// What `infer_memory` says of the SCC `names`, as `(name, argmem, other)`
+/// mod/ref words; a member whose attribute does not narrow is left out.
+fn memory_of(
+    text: &str,
+    names: &[&str],
+) -> Vec<(String, ModRefInfo, ModRefInfo)> {
+    let module = parsed(text);
+    let members: Vec<GlobalId> = names.iter().map(|one| module.named(one).expect("a global")).collect();
+    infer_memory(&module, &members)
+        .into_iter()
+        .map(|(id, me)| {
+            (
+                module.global(id).name.clone().expect("a name"),
+                me.mod_ref(IRMemLocation::ArgMem),
+                me.mod_ref(IRMemLocation::Other),
+            )
+        })
+        .collect()
+}
+
+const NO: ModRefInfo = ModRefInfo::NoModRef;
+
+/// `Stamp` stated these through `Summaries` and `alias::initialized`; the
+/// translation reads the body with BasicAA's `getModRefInfoMask`.
+#[test]
+fn a_store_through_a_parameter_is_argmem_write_and_a_constant_read_is_nothing() {
+    let text = "@k = internal constant i32 7
+define void @put(ptr %p) {
+b0:
+  store i32 1, ptr %p
+  ret void
+}
+define i32 @table() {
+b0:
+  %v = load i32, ptr @k
+  ret i32 %v
+}
+define i32 @local() {
+b0:
+  %a = alloca i32
+  store i32 1, ptr %a
+  %v = load i32, ptr %a
+  ret i32 %v
+}
+";
+    assert_eq!(memory_of(text, &["put"]), [("put".to_owned(), ModRefInfo::Mod, NO)]);
+    assert_eq!(memory_of(text, &["table"]), [("table".to_owned(), NO, NO)]);
+    assert_eq!(memory_of(text, &["local"]), [("local".to_owned(), NO, NO)]);
+}
+
+/// A write to a mutable global is `Other`, not argument memory.
+#[test]
+fn a_store_to_a_mutable_global_is_other_memory() {
+    let text = "@g = internal global i32 0
+define void @set() {
+b0:
+  store i32 1, ptr @g
+  ret void
+}
+";
+    assert_eq!(memory_of(text, &["set"]), [("set".to_owned(), NO, ModRefInfo::Mod)]);
+}
+
+/// Calls inside the SCC are free, but their pointer arguments count once the
+/// SCC reads argument memory (`RecursiveArgME`): `walk` reads `%p` and passes
+/// `@g` on to itself, so it also reads `@g`, which is `Other`.
+#[test]
+fn a_recursive_call_adds_its_arguments_locations_when_the_scc_reads_argument_memory() {
+    let text = "@g = internal global i32 0
+define i32 @walk(ptr %p, i32 %n) {
+b0:
+  %v = load i32, ptr %p
+  %m = sub i32 %n, 1
+  %r = call i32 @walk(ptr @g, i32 %m)
+  %s = add i32 %v, %r
+  ret i32 %s
+}
+";
+    assert_eq!(memory_of(text, &["walk"]), [("walk".to_owned(), ModRefInfo::Ref, ModRefInfo::Ref)]);
+}
+
+/// A member that writes narrows every member of its SCC (`ME` is the SCC's).
+#[test]
+fn one_writing_member_states_its_whole_scc() {
+    let text = "define void @ping(ptr %p, i32 %n) {
+b0:
+  call void @pong(ptr %p, i32 %n)
+  ret void
+}
+define void @pong(ptr %p, i32 %n) {
+b0:
+  store i32 %n, ptr %p
+  call void @ping(ptr %p, i32 %n)
+  ret void
+}
+";
+    let found = memory_of(text, &["ping", "pong"]);
+    assert_eq!(found.len(), 2);
+    assert!(found.iter().all(|(_, argument, other)| *argument == ModRefInfo::Mod && *other == NO));
+}
+
+/// Stating the result replaces `readonly` by `memory(...)` and a callee's new
+/// attribute reaches its caller in the same bottom-up pass: `outer` reads
+/// nothing of its own, so it is `memory(none)` only because `inner` was
+/// stated first.
+#[test]
+fn a_stated_callee_narrows_its_caller_in_one_pass() {
+    let mut module = parsed(
+        "@k = internal constant i32 7
+define i32 @inner() readonly {
+b0:
+  %v = load i32, ptr @k
+  ret i32 %v
+}
+define i32 @outer() {
+b0:
+  %v = call i32 @inner()
+  ret i32 %v
+}
+",
+    );
+    let (inner, outer) = (module.named("inner").unwrap(), module.named("outer").unwrap());
+    assert_eq!(stamp_memory(&mut module, &[inner]), [inner]);
+    assert_eq!(stamp_memory(&mut module, &[outer]), [outer]);
+    for id in [inner, outer] {
+        let attrs = &module.global(id).function().unwrap().attrs;
+        assert!(MemoryEffects::of_attrs(attrs).does_not_access_memory());
+        assert!(!Facts::of(attrs).read_only(), "readonly is replaced by memory(...)");
+    }
+}

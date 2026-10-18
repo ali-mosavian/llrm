@@ -105,7 +105,7 @@ impl Expander {
         s: Scev,
     ) -> bool {
         use super::expr::Kind;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         let mut work = vec![s];
         while let Some(s) = work.pop() {
             if !seen.insert(s) {

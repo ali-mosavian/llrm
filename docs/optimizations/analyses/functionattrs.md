@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/functionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/functionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:8bf0aee4e0962816d3f0583075e8b804a7ef8bc77f7c2e18ba5f7a49a852ac0e -->
+<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:1ad291dc546bc18e62567286c7d69eea00d0bcbf4391325879afdbab70b14467 -->
 
 # functionattrs
 
@@ -43,8 +43,20 @@ b0:
 From unit test `test_a_body_over_norecurse_callees_is_stamped_all_three` in
 `functionattrs_tests.rs`.
 
+- `memory(...)` (`addMemoryAttrs`, `checkFunctionMemoryAccess`): the meet
+  over the SCC of what each body accesses, by the places its instructions
+  name; a call is judged by `AAResults::getMemoryEffects`, a location by
+  `getModRefInfoMask` and its underlying object. Calls inside the SCC are
+  free, except that their pointer arguments count if the SCC reads argument
+  memory. DEVIATE F3: a `noipa` body is left out of the SCC (it is this
+  repository's `optnone`: callers read what the source declared). DEVIATE
+  F4: no `writable` argument attribute to drop (MIR has none).
+
 ## Runs
-`interprocedural::stamped` once per SCC, callees first.
+`interprocedural::stamped` once per SCC, callees first, for the four flags.
+`infer_memory` is not wired yet: `LLRM_SHADOW_MEMORY=1` compares
+`stamp_memory`'s result with `stamped`'s `memory(...)` and prints one line
+per body that differs.
 
 ## See also
 LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
