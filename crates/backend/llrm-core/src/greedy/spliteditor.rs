@@ -45,6 +45,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
@@ -332,7 +333,11 @@ impl<'d> SplitEditor<'d> {
         let late = reg_idx != 0;
         let to = self.edit().get(reg_idx);
         let from = self.edit().get_reg();
-        let copy = cx.env.build_copy(to, from);
+        let beside = match before {
+            Some(k) => Some(Arc::clone(cx.lis.instr(k))),
+            None => cx.lis.block_insns(mbb).last().cloned(),
+        };
+        let copy = cx.env.build_copy(cx.lis, to, from, beside.as_deref());
         let def = cx.lis.insert_instr_before_at(mbb, before, copy, late).get_reg_slot(false);
         self.def_value(cx, reg_idx, parent_vni, def, false)
     }
@@ -364,24 +369,39 @@ impl<'d> SplitEditor<'d> {
         self.open_idx = idx;
     }
 
-    /// The block `idx` falls in and the instruction there.
+    /// The block `idx` falls in and the instruction there. The members of a
+    /// parallel copy share one index (`SlotIndexes`): this is the first of them,
+    /// where code goes before the copy.
     fn instr_at(
         cx: &SplitCx,
         idx: &SlotIndex,
     ) -> (usize, InstrKey) {
         let mi = cx.lis.indexes.get_instruction_from_index(idx).expect("called with an invalid index");
-        (cx.lis.indexes.get_mbb_from_index(idx), mi)
+        let mbb = cx.lis.indexes.get_mbb_from_index(idx);
+        let at = cx.lis.indexes.get_instruction_index(mi);
+        let first = cx
+            .lis
+            .block_insns(mbb)
+            .iter()
+            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) == at)
+            .expect("an instruction of the block");
+        (mbb, first.id())
     }
 
-    /// The instruction after `mi` in `mbb`, None at the end (`std::next`).
+    /// The instruction after `mi` in `mbb`, None at the end (`std::next`),
+    /// after every member of a parallel copy that shares its index.
     fn next_instr(
         cx: &SplitCx,
         mbb: usize,
         mi: InstrKey,
     ) -> Option<InstrKey> {
-        let insns = cx.lis.block_insns(mbb);
-        let at = insns.iter().position(|i| i.id() == mi).expect("an instruction of the block");
-        insns.get(at + 1).map(|i| i.id())
+        let at = cx.lis.indexes.get_instruction_index(mi);
+        cx.lis
+            .block_insns(mbb)
+            .iter()
+            .skip_while(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
+            .find(|i| cx.lis.indexes.get_instruction_index(i.id()) != at)
+            .map(|i| i.id())
     }
 
     /// `enterIntvBefore`
@@ -1405,7 +1425,7 @@ impl<'d> SplitEditor<'d> {
                 }
                 let mi =
                     cx.lis.indexes.get_instruction_from_index(&vni.def()).expect("Missing instruction for dead def");
-                if cx.env.is_copy_like(mi) && cx.lis.instr(mi).defines.len() == 1 {
+                if cx.env.is_copy_like(cx.lis.instr(mi)) && cx.lis.instr(mi).defines.len() == 1 {
                     dead.push(mi);
                 }
             }
@@ -1536,16 +1556,23 @@ mod tests {
     struct Env;
 
     impl SplitEnv for Env {
-        fn first_terminator(
+        fn is_terminator(
             &self,
-            _block: usize,
-        ) -> Option<InstrKey> {
-            None
+            _insn: &Insn,
+        ) -> bool {
+            false
         }
 
         fn is_loop_latch(
             &self,
             _block: usize,
+        ) -> bool {
+            false
+        }
+
+        fn is_rematerializable(
+            &self,
+            _reg: u32,
         ) -> bool {
             false
         }
@@ -1573,15 +1600,17 @@ mod tests {
 
         fn is_copy_like(
             &self,
-            _instr: InstrKey,
+            _insn: &Insn,
         ) -> bool {
             false
         }
 
         fn build_copy(
             &self,
+            _lis: &LiveIntervals,
             to: u32,
             from: u32,
+            _beside: Option<&Insn>,
         ) -> Arc<Insn> {
             let what = Semantics {
                 name: Some("mov".to_owned()),
