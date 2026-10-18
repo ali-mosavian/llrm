@@ -148,7 +148,7 @@ fn a_pass_that_says_none_drops_what_it_did_not_name_edited_or_not() {
 
 /// Asks for the loops and the dominators, then says what it kept.
 struct LooksAtLoops {
-    seen: Rc<RefCell<Vec<(Rc<crate::loopinfo::LoopInfo>, Rc<crate::dominators::DominatorTree>)>>>,
+    seen: Rc<RefCell<Vec<(Rc<crate::loopinfo::LoopInfo>, Rc<crate::domtree::DomTree>)>>>,
     kept: PreservedAnalyses,
 }
 
