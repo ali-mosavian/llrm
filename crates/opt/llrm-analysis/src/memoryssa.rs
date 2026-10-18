@@ -529,38 +529,71 @@ impl Accesses {
         }
     }
 
+    /// What `inst` reads and writes, as `new` has it: none where it touches
+    /// no memory.
+    fn touched_by(
+        unit: &Unit,
+        inst: InstId,
+        reference: &dyn Fn() -> Rc<[MemRef]>,
+        footprint: &impl Fn(InstId) -> Option<Footprint>,
+    ) -> Option<Footprint> {
+        let function = unit.function;
+        let opcode = &function.instruction(inst).opcode;
+        Some(match opcode {
+            // Its order against other volatile accesses is the passes',
+            // which never move one.
+            _ if let Some(own) = own_bytes(opcode) => {
+                let touched = |does: bool| Some(if does { reference() } else { none() });
+                (touched(own.reads), touched(own.writes))
+            }
+            Opcode::Call(info) | Opcode::Invoke(info) => {
+                let callee = llrm_mir::memory::callee(unit.context, function, inst)
+                    .and_then(|one| unit.globals.get(one.0 as usize))
+                    .and_then(GlobalValue::function);
+                let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
+                let (reads, writes) = footprint(inst).unwrap_or((None, None));
+                (
+                    if reading { reads } else { Some(none()) },
+                    if unmodeled_write(unit, inst) { writes } else { Some(none()) },
+                )
+            }
+            _ => return None,
+        })
+    }
+
+    /// These accesses told of `inst`, an instruction made since: its reference
+    /// as the unit has it and what it touches (a call writes what its
+    /// attributes allow, as `plain` has it).
+    pub fn add_instruction(
+        &mut self,
+        unit: &Unit,
+        inst: InstId,
+    ) {
+        if let Some(reference) = unit.reference(inst) {
+            self.references.insert(inst, reference);
+        }
+        let own = self.references.get(&inst).cloned();
+        if let Some(found) = Self::touched_by(unit, inst, &|| own.clone().into_iter().collect::<Rc<[_]>>(), &|_| None) {
+            self.touched.insert(inst, found);
+        }
+    }
+
     /// `footprint` gives a call's reads and writes, where known.
     fn new(
         unit: &Unit,
         references: IndexMap<InstId, MemRef>,
         footprint: impl Fn(InstId) -> Option<Footprint>,
     ) -> Self {
-        let function = unit.function;
         let mut touched = IndexMap::default();
-        for (_, inst) in function.walk() {
-            let reference = || references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>();
-            let opcode = &function.instruction(inst).opcode;
-            let found = match opcode {
-                // Its order against other volatile accesses is the passes',
-                // which never move one.
-                _ if let Some(own) = own_bytes(opcode) => {
-                    let touched = |does: bool| Some(if does { reference() } else { none() });
-                    (touched(own.reads), touched(own.writes))
-                }
-                Opcode::Call(info) | Opcode::Invoke(info) => {
-                    let callee = llrm_mir::memory::callee(unit.context, function, inst)
-                        .and_then(|one| unit.globals.get(one.0 as usize))
-                        .and_then(GlobalValue::function);
-                    let reading = stated(&info.attrs).reads && callee.is_none_or(|one| stated(&one.attrs).reads);
-                    let (reads, writes) = footprint(inst).unwrap_or((None, None));
-                    (
-                        if reading { reads } else { Some(none()) },
-                        if unmodeled_write(unit, inst) { writes } else { Some(none()) },
-                    )
-                }
-                _ => continue,
-            };
-            touched.insert(inst, found);
+        for (_, inst) in unit.function.walk() {
+            if let Some(found) = Self::touched_by(
+                unit,
+                inst,
+                &|| references.get(&inst).cloned().into_iter().collect::<Rc<[_]>>(),
+                &footprint,
+            ) {
+                touched.insert(inst, found);
+            }
         }
         Self {
             references,

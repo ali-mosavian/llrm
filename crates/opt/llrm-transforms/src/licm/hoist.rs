@@ -4,6 +4,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::mssa::alias::AliasQuery;
 use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
+use llrm_mir::facts::Facts;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
 use llrm_mir::passes::{self, Outer};
@@ -163,14 +164,20 @@ pub fn is_safe_to_speculatively_execute_in(
                     .iter()
                     .any(
                         |attr| match attr {
-                            Attribute::Flag(name) => name == "noundef" || name == "nonnull",
-                            Attribute::Int(name, _) => name == "align" || name.starts_with("dereferenceable"),
+                            Attribute::Flag(name) => name == "noundef",
+                            Attribute::Int(name, _) => name.starts_with("dereferenceable"),
                             Attribute::Range { .. } => true,
                             _ => false,
                         },
                     )
             };
-            !(implies_ub(&info.return_attrs) || info.argument_attrs.iter().any(implies_ub))
+            let states_fact = |attrs: &Vec<Attribute>| {
+                let facts = Facts::of(attrs);
+                facts.non_null() || facts.align().is_some()
+            };
+            !(implies_ub(&info.return_attrs)
+                || states_fact(&info.return_attrs)
+                || info.argument_attrs.iter().any(|attrs| implies_ub(attrs) || states_fact(attrs)))
         }
         Opcode::Alloca { .. }
         | Opcode::Invoke(_)

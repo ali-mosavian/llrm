@@ -273,6 +273,19 @@ mod tests {
     /// gcc's by-pieces ratios of a constant memset, read from the description:
     /// `i486_cost` and `pentium_cost` (x86-tune-costs.h, gcc 13.4.0), and the
     /// size table every CPU takes.
+    /// Greedy allocates the x87 values into the RFP registers FP0..FP6, LLVM's
+    /// seven (FP7 is the stackifier's scratch); they are no stack position,
+    /// so the float stack stays eight deep.
+    #[test]
+    fn test_seven_rfp_registers_and_an_eight_deep_float_stack() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M32.registers_text()).unwrap();
+        let rfp: Vec<&str> = file.iter().filter(|one| one.is("rfp")).map(|one| one.name.as_str()).collect();
+        assert_eq!(rfp, ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert!(file.iter().filter(|one| one.is("rfp")).all(|one| !one.is("x87") && !one.is("gpr")));
+        assert_eq!(M32.float_stack(), 8);
+    }
+
     #[test]
     fn test_the_memset_ratios_are_gccs_per_cpu() {
         let (i486, p5) = (TIMINGS.cpu("486").expect("a 486"), TIMINGS.cpu("P5").expect("a P5"));
