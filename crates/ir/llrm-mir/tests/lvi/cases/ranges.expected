@@ -1,0 +1,60 @@
+val load_range 0 cr=- cst=- pn=-
+val load_range 1 cr=i32:[3,8) cst=- pn=-
+val load_range 2 cr=i32:[4,9) cst=- pn=-
+rval load_range 2 cr=i32:[4,9)
+rval load_range 1 cr=i32:[3,8)
+use load_range 1 0 cr=i32:[3,8)
+use load_range 2 0 cr=i32:[4,9)
+val load_range2 0 cr=- cst=- pn=-
+val load_range2 1 cr=i32:[3,30) cst=- pn=-
+val load_range2 2 cr=i32:[4,31) cst=- pn=-
+rval load_range2 2 cr=i32:[4,31)
+rval load_range2 1 cr=i32:[3,30)
+use load_range2 1 0 cr=i32:[3,30)
+use load_range2 2 0 cr=i32:[4,31)
+val call_range 0 cr=i32:[5,10) cst=- pn=-
+val call_range 1 cr=i32:[0,3) cst=- pn=-
+val call_range 2 cr=i32:[5,12) cst=- pn=-
+rval call_range 2 cr=i32:[5,12)
+rval call_range 1 cr=i32:[0,3)
+rval call_range 0 cr=i32:[5,10)
+use call_range 2 0 cr=i32:[5,10)
+use call_range 2 1 cr=i32:[0,3)
+use call_range 3 0 cr=i32:[5,12)
+val call_md 0 cr=i32:[3,8) cst=- pn=-
+val call_md 1 cr=i32:[6,15) cst=- pn=-
+rval call_md 1 cr=i32:[6,15)
+rval call_md 0 cr=i32:[3,8)
+use call_md 1 0 cr=i32:[3,8)
+use call_md 2 0 cr=i32:[6,15)
+val arg_range 0 cr=i32:[3,9) cst=- pn=-
+val arg_range 1 cr=i8:[-4,4) cst=- pn=-
+val arg_range 2 cr=i32:[4,10) cst=- pn=-
+val arg_range 3 cr=i32:[-4,4) cst=- pn=-
+val arg_range 4 cr=i32:[0,13) cst=- pn=-
+rval arg_range 4 cr=i32:[0,13)
+rval arg_range 3 cr=i32:[-4,4)
+rval arg_range 2 cr=i32:[4,10)
+use arg_range 0 0 cr=i32:[3,9)
+use arg_range 1 0 cr=i8:[-4,4)
+use arg_range 2 0 cr=i32:[4,10)
+use arg_range 2 1 cr=i32:[-4,4)
+use arg_range 3 0 cr=i32:[0,13)
+val arg_range_edge 0 cr=i32:[0,100) cst=- pn=-
+val arg_range_edge 1 cr=i1:full-set cst=- pn=-
+val arg_range_edge 2 cr=i32:[1,11) cst=- pn=-
+val arg_range_edge 3 cr=i32:[0,90) cst=- pn=-
+rval arg_range_edge 3 cr=i32:[0,90)
+rval arg_range_edge 2 cr=i32:[1,11)
+rval arg_range_edge 1 cr=i1:full-set
+edge arg_range_edge 0 1 0 cr=i32:[0,10)
+edge arg_range_edge 0 2 0 cr=i32:[10,100)
+pred arg_range_edge 0 a=- b=-
+epred arg_range_edge 0 0 0 T
+epred arg_range_edge 0 1 0 F
+use arg_range_edge 0 0 cr=i32:[0,100)
+use arg_range_edge 1 0 cr=i1:full-set
+use arg_range_edge 2 0 cr=i32:[0,10)
+use arg_range_edge 3 0 cr=i32:[1,11)
+use arg_range_edge 4 0 cr=i32:[10,100)
+use arg_range_edge 5 0 cr=i32:[0,90)

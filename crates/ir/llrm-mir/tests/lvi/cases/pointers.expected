@@ -1,0 +1,107 @@
+val null_edge 0 cr=- cst=- pn=-
+val null_edge 1 cr=i1:full-set cst=- pn=-
+val null_edge 2 cr=i32:full-set cst=- pn=-
+rval null_edge 2 cr=i32:full-set
+rval null_edge 1 cr=i1:full-set
+pred null_edge 0 a=- b=-
+epred null_edge 0 0 0 T
+epred null_edge 0 1 0 F
+use null_edge 1 0 cr=i1:full-set
+use null_edge 4 0 cr=i32:full-set
+val deref 0 cr=- cst=- pn=-
+val deref 1 cr=i1:full-set cst=- pn=-
+val deref 2 cr=i32:full-set cst=- pn=-
+val deref 3 cr=i1:full-set cst=- pn=-
+val deref 4 cr=i32:[0,2) cst=- pn=-
+rval deref 4 cr=i32:[0,2)
+rval deref 3 cr=i1:full-set
+rval deref 2 cr=i32:full-set
+edge deref 0 2 2 cr=i32:full-set
+pred deref 2 a=F b=F
+use deref 1 0 cr=i1:full-set
+use deref 3 0 cr=i1:full-set
+use deref 4 0 cr=i32:[0,2)
+use deref 5 0 cr=i32:full-set
+val deref_store 0 cr=- cst=- pn=-
+val deref_store 1 cr=- cst=- pn=-
+val deref_store 2 cr=i32:full-set cst=- pn=-
+val deref_store 3 cr=- cst=- pn=T
+val deref_store 4 cr=i32:full-set cst=- pn=-
+val deref_store 5 cr=i1:full-set cst=- pn=-
+val deref_store 6 cr=i1:full-set cst=- pn=-
+val deref_store 7 cr=i1:full-set cst=- pn=-
+rval deref_store 7 cr=i1:full-set
+rval deref_store 6 cr=i1:full-set
+rval deref_store 5 cr=i1:full-set
+rval deref_store 4 cr=i32:full-set
+pred deref_store 3 a=- b=-
+pred deref_store 4 a=- b=-
+pred deref_store 5 a=F b=F
+use deref_store 0 0 cr=i32:full-set
+use deref_store 6 0 cr=i32:full-set
+val nonnull_arg 0 cr=- cst=- pn=-
+val nonnull_arg 1 cr=i1:full-set cst=- pn=-
+val nonnull_arg 2 cr=i32:[0,2) cst=- pn=-
+rval nonnull_arg 2 cr=i32:[0,2)
+rval nonnull_arg 1 cr=i1:full-set
+pred nonnull_arg 1 a=- b=-
+use nonnull_arg 2 0 cr=i1:full-set
+use nonnull_arg 3 0 cr=i32:[0,2)
+val memintrin 0 cr=- cst=- pn=-
+val memintrin 1 cr=- cst=- pn=-
+val memintrin 2 cr=i1:full-set cst=- pn=-
+val memintrin 3 cr=i1:full-set cst=- pn=-
+val memintrin 4 cr=i32:[0,2) cst=- pn=-
+rval memintrin 4 cr=i32:[0,2)
+rval memintrin 3 cr=i1:full-set
+rval memintrin 2 cr=i1:full-set
+pred memintrin 1 a=- b=-
+pred memintrin 2 a=- b=-
+use memintrin 3 0 cr=i1:full-set
+use memintrin 4 0 cr=i32:[0,2)
+val memset_vol 0 cr=- cst=- pn=-
+val memset_vol 1 cr=i1:full-set cst=- pn=-
+val memset_vol 2 cr=i32:[0,2) cst=- pn=-
+rval memset_vol 2 cr=i32:[0,2)
+rval memset_vol 1 cr=i1:full-set
+pred memset_vol 1 a=- b=-
+use memset_vol 2 0 cr=i1:full-set
+use memset_vol 3 0 cr=i32:[0,2)
+val alloca_nonnull 0 cr=- cst=- pn=T
+val alloca_nonnull 1 cr=i1:full-set cst=- pn=-
+val alloca_nonnull 2 cr=i32:[0,2) cst=- pn=-
+rval alloca_nonnull 2 cr=i32:[0,2)
+rval alloca_nonnull 1 cr=i1:full-set
+pred alloca_nonnull 1 a=F b=F
+use alloca_nonnull 2 0 cr=i1:full-set
+use alloca_nonnull 3 0 cr=i32:[0,2)
+val global_eq 0 cr=- cst=- pn=-
+val global_eq 1 cr=i1:full-set cst=- pn=-
+val global_eq 2 cr=i1:full-set cst=- pn=-
+val global_eq 3 cr=i32:[0,2) cst=- pn=-
+val global_eq 4 cr=i1:full-set cst=- pn=-
+rval global_eq 4 cr=i1:full-set
+rval global_eq 3 cr=i32:[0,2)
+rval global_eq 2 cr=i1:full-set
+rval global_eq 1 cr=i1:full-set
+pred global_eq 0 a=- b=-
+pred global_eq 2 a=F b=F
+pred global_eq 5 a=T b=T
+epred global_eq 0 0 0 T
+epred global_eq 0 1 0 F
+use global_eq 1 0 cr=i1:full-set
+use global_eq 3 0 cr=i1:full-set
+use global_eq 4 0 cr=i32:[0,2)
+val phi_ptr 0 cr=- cst=- pn=-
+val phi_ptr 1 cr=i1:full-set cst=- pn=-
+val phi_ptr 2 cr=- cst=- pn=T
+val phi_ptr 3 cr=- cst=- pn=T
+val phi_ptr 4 cr=- cst=- pn=T
+val phi_ptr 5 cr=i1:full-set cst=- pn=-
+val phi_ptr 6 cr=i32:[0,2) cst=- pn=-
+rval phi_ptr 6 cr=i32:[0,2)
+rval phi_ptr 5 cr=i1:full-set
+pred phi_ptr 6 a=F b=F
+use phi_ptr 0 0 cr=i1:full-set
+use phi_ptr 7 0 cr=i1:full-set
+use phi_ptr 8 0 cr=i32:[0,2)

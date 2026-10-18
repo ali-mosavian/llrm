@@ -34,6 +34,7 @@ pub mod lazyvalueinfo;
 pub mod lexer;
 pub mod lint;
 pub mod loopinfo;
+pub mod lvidump;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -74,6 +75,8 @@ mod edit_tests;
 mod interpret_tests;
 #[cfg(test)]
 mod knownbits_tests;
+#[cfg(test)]
+mod lazyvalueinfo_tests;
 #[cfg(test)]
 mod lint_tests;
 #[cfg(test)]

@@ -1,0 +1,59 @@
+val cases 0 cr=i32:full-set cst=- pn=-
+val cases 1 cr=i32:[2,4) cst=- pn=-
+val cases 2 cr=i32:[7,8) cst=i32:7 pn=-
+val cases 3 cr=i32:[6,4) cst=- pn=-
+rval cases 3 cr=i32:[6,4)
+rval cases 2 cr=i32:[7,8)
+rval cases 1 cr=i32:[2,4)
+edge cases 0 3 0 cr=i32:[3,1)
+edge cases 0 1 0 cr=i32:[1,3)
+edge cases 0 2 0 cr=i32:[5,6)
+use cases 0 0 cr=i32:full-set
+use cases 1 0 cr=i32:[1,3)
+use cases 2 0 cr=i32:[2,4)
+use cases 3 0 cr=i32:[5,6)
+use cases 4 0 cr=i32:[7,8)
+use cases 5 0 cr=i32:[3,1)
+use cases 6 0 cr=i32:[6,4)
+val foldable 0 cr=i8:full-set cst=- pn=-
+val foldable 1 cr=i32:[0,256) cst=- pn=-
+val foldable 2 cr=i32:[3,4) cst=i32:3 pn=-
+val foldable 3 cr=i32:[7,8) cst=i32:7 pn=-
+val foldable 4 cr=i32:[0,256) cst=- pn=-
+rval foldable 4 cr=i32:[0,256)
+rval foldable 3 cr=i32:[7,8)
+rval foldable 2 cr=i32:[3,4)
+rval foldable 1 cr=i32:[0,256)
+edge foldable 0 3 1 cr=i32:[0,256)
+edge foldable 0 1 1 cr=i32:[3,4)
+edge foldable 0 2 1 cr=i32:[7,8)
+use foldable 0 0 cr=i8:full-set
+use foldable 1 0 cr=i8:full-set
+use foldable 2 0 cr=i32:[3,4)
+use foldable 3 0 cr=i32:[3,4)
+use foldable 4 0 cr=i32:[7,8)
+use foldable 5 0 cr=i32:[7,8)
+use foldable 6 0 cr=i32:[0,256)
+use foldable 7 0 cr=i32:[0,256)
+val foldable_binop 0 cr=i32:full-set cst=- pn=-
+val foldable_binop 1 cr=i32:full-set cst=- pn=-
+val foldable_binop 2 cr=i32:[12,13) cst=i32:12 pn=-
+val foldable_binop 3 cr=i32:[400,401) cst=i32:400 pn=-
+rval foldable_binop 3 cr=i32:[400,401)
+rval foldable_binop 2 cr=i32:[12,13)
+rval foldable_binop 1 cr=i32:full-set
+edge foldable_binop 0 1 1 cr=i32:[12,13)
+edge foldable_binop 0 2 1 cr=i32:[400,401)
+use foldable_binop 0 0 cr=i32:full-set
+use foldable_binop 1 0 cr=i32:full-set
+use foldable_binop 2 0 cr=i32:[12,13)
+use foldable_binop 3 0 cr=i32:[12,13)
+use foldable_binop 4 0 cr=i32:[400,401)
+use foldable_binop 5 0 cr=i32:[400,401)
+val default_only 0 cr=i32:full-set cst=- pn=-
+val default_only 1 cr=i32:[0,101) cst=- pn=-
+rval default_only 1 cr=i32:[0,101)
+edge default_only 0 2 0 cr=i32:[1,0)
+use default_only 0 0 cr=i32:full-set
+use default_only 2 1 cr=i32:[1,0)
+use default_only 3 0 cr=i32:[0,101)

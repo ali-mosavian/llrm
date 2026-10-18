@@ -1,0 +1,10 @@
+val guarded 0 cr=i32:full-set cst=- pn=-
+val guarded 1 cr=i1:full-set cst=- pn=-
+val guarded 2 cr=i32:[1,11) cst=- pn=-
+rval guarded 2 cr=i32:[1,11)
+rval guarded 1 cr=i1:full-set
+pred guarded 0 a=- b=-
+use guarded 0 0 cr=i32:full-set
+use guarded 1 0 cr=i1:full-set
+use guarded 2 0 cr=i32:[0,10)
+use guarded 3 0 cr=i32:[1,11)
