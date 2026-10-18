@@ -33,6 +33,10 @@ fn main() -> ExitCode {
     if memops_wanted {
         arguments.remove(0);
     }
+    let calls_wanted = arguments.first().is_some_and(|one| one == "--calls");
+    if calls_wanted {
+        arguments.remove(0);
+    }
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -65,6 +69,10 @@ fn main() -> ExitCode {
             }
             if memops_wanted {
                 print!("{}", memops(&module));
+                return ExitCode::SUCCESS;
+            }
+            if calls_wanted {
+                print!("{}", calls(&module));
                 return ExitCode::SUCCESS;
             }
             let problems = llrm_mir::verify::verify(&module);
@@ -265,6 +273,119 @@ fn memops(module: &llrm_mir::module::Module) -> String {
         for (at, store) in stores.iter().enumerate() {
             for earlier in &stores[..at] {
                 out += &format!("{name}\t{}\n", answer(&store.1, &earlier.1));
+            }
+        }
+    }
+    out
+}
+
+/// `function<TAB>answer` per mod/ref pair `aa-eval` lists, in its order: each call
+/// against each pointer (the pointer operands of the loads and stores, one per
+/// pointer and size), then each call against every other call. The answer is what
+/// the call's `CallEffects` say of the other access: `Mod` where the call may
+/// write what it touches, `Ref` where it may read it.
+fn calls(module: &llrm_mir::module::Module) -> String {
+    use llrm_analysis::manager::CallEffects;
+    use llrm_analysis::memory::{MemRef, Unit};
+    use llrm_mir::opcode::Opcode;
+    use llrm_mir::passes::{Analyses, Outer};
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
+            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
+        });
+    let mut module = module.clone();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let names: Vec<String> = module.functions().map(|(_, global, _)| global.name.clone().unwrap_or_default()).collect();
+    let mut out = String::new();
+    for name in names {
+        let effects = {
+            let Some((context, function)) = module.function_mut(&name) else { continue };
+            if function.layout().is_empty() {
+                continue;
+            }
+            analyses.get::<CallEffects>(context, &layout, function)
+        };
+        let Ok(effects) = &*effects else { continue };
+        let Some((_, _, function)) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name.as_str())) else {
+            continue;
+        };
+        let plain = Unit::of(&module, &layout, function);
+        let known = llrm_analysis::consts::known(&Unit { registers: None, ..plain });
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = plain.with_registers(&known).with_shape(&shape);
+        let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
+        let reference = |inst| {
+            let mut reference = MemRef::of(&unit, inst)?;
+            reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
+            Some(reference)
+        };
+        // aa-eval's pointers: one entry for each pointer and size, in the order of first use.
+        let mut entries: Vec<(llrm_mir::module::Operand, u32, Option<MemRef>)> = Vec::new();
+        let mut call_sites = Vec::new();
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            let pointer = match &op.opcode {
+                Opcode::Load { .. } => op.operands[0],
+                Opcode::Store { .. } => op.operands[1],
+                Opcode::Call(_) | Opcode::Invoke(_) => {
+                    call_sites.push(inst);
+                    continue;
+                }
+                _ => continue,
+            };
+            let reference = reference(inst);
+            let width = reference.as_ref().map_or(0, |one| one.width);
+            if entries.iter().any(|(had, had_width, _)| *had == pointer && *had_width == width) {
+                continue;
+            }
+            entries.push((pointer, width, reference));
+        }
+        let touches = |inst| effects.get(&inst);
+        let overlaps = |list: &[MemRef], other: &MemRef| {
+            list.iter().any(|one| !matches!(llrm_analysis::regions::overlapping(one, other, None, None, None), Ok(false)))
+        };
+        let answer = |writes: bool, reads: bool| match (writes, reads) {
+            (false, false) => "NoModRef",
+            (false, true) => "Ref",
+            (true, false) => "Mod",
+            (true, true) => "ModRef",
+        };
+        let label = name.as_str();
+        for &call in &call_sites {
+            for (_, _, other) in &entries {
+                let (writes, reads) = match (touches(call), other) {
+                    (Some(effect), Some(other)) => (
+                        overlaps(&effect.stores, other) || effect.fills.iter().any(|fill| overlaps(std::slice::from_ref(fill), other)),
+                        overlaps(&effect.loads, other),
+                    ),
+                    _ => {
+                        out += &format!("{label}\t?\n");
+                        continue;
+                    }
+                };
+                out += &format!("{label}\t{}\n", answer(writes, reads));
+            }
+        }
+        for &call in &call_sites {
+            for &other in &call_sites {
+                if call == other {
+                    continue;
+                }
+                let (Some(one), Some(two)) = (touches(call), touches(other)) else {
+                    out += &format!("{label}\t?\n");
+                    continue;
+                };
+                let set = |effect: &llrm_analysis::alias::Effect, writes: bool| -> Vec<MemRef> {
+                    if writes { effect.stores.iter().cloned().chain(effect.fills.iter().cloned()).collect() } else { effect.loads.to_vec() }
+                };
+                // What `call` does to the memory `other` touches: Mod if it may write
+                // what the other reads or writes, Ref if it may read what the other writes.
+                let touched: Vec<MemRef> = set(two, true).into_iter().chain(set(two, false)).collect();
+                let writes = set(one, true).iter().any(|mine| overlaps(&touched, mine));
+                let reads = set(one, false).iter().any(|mine| overlaps(&set(two, true), mine));
+                out += &format!("{label}\t{}\n", answer(writes, reads));
             }
         }
     }
