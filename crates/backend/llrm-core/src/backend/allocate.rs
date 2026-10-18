@@ -1811,13 +1811,14 @@ fn greedy_check(
 
 /// Whether the translated greedy allocator allocates: by default, the allocate
 /// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
-/// unless `LLRM_GREEDY` is set.
+/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
 pub fn greedy_on() -> bool {
     #[cfg(test)]
     if OLD_ALLOCATOR.with(std::cell::Cell::get) {
         return false;
     }
-    llrm_support::env_flag!("LLRM_GREEDY") || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
+    llrm_support::env_flag!("LLRM_GREEDY")
+        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
 }
 
 #[cfg(test)]
