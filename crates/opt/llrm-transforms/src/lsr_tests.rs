@@ -2572,3 +2572,55 @@ fn the_dead_code_after_a_loop_is_found_from_the_loop_not_the_function() {
         "{loops} loops of a {size}-instruction function swept {scanned} instructions for dead code"
     );
 }
+
+/// `for (i = n - 1; i >= 0; --i) a[i + 16] = a[i]` over shorts, 32-bit
+/// addresses, the step flagged `nsw` as constraint elimination leaves it.
+const SCROLL_DOWN: &str =
+    "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+@a = external global [0 x i8]
+define void @f(i16 %n) memory(none) norecurse willreturn {
+b1:
+  %top = sub i16 %n, 1
+  %go = icmp sge i16 %top, 0
+  br i1 %go, label %b2, label %b3
+
+b2:
+  br label %b4
+
+b3:
+  ret void
+
+b4:
+  %i = phi i16 [ %i.next, %b4 ], [ %top, %b2 ]
+  %w = sext i16 %i to i32
+  %o = mul i32 %w, 2
+  %pa = getelementptr inbounds i8, ptr @a, i32 %o
+  %v = load i16, ptr %pa
+  %q = add nuw nsw i32 %w, 16
+  %o2 = mul i32 %q, 2
+  %pb = getelementptr inbounds i8, ptr @a, i32 %o2
+  store i16 %v, ptr %pb
+  %i.next = sub nsw i16 %i, 1
+  %more = icmp sge i16 %i.next, 0
+  br i1 %more, label %b4, label %b5
+
+b5:
+  br label %b3
+}
+";
+
+/// A counter biased to count to zero tests `!= 0` for nothing, but only
+/// where its step is the instruction before the test. Here the body reads the
+/// stepped value, so the step is placed above the body, the test is not beside
+/// it, and the model priced the test at nothing: the biased counter cost one
+/// instruction a trip more than the `i >= 0` counter it replaced (tests/run
+/// idioms#3 once `nsw` is on the step).
+#[test]
+fn test_a_step_the_body_reads_does_not_make_the_exit_test_free() {
+    let mut after = parsed(SCROLL_DOWN);
+    let mut manager = PassManager::default();
+    manager.add(Lsr::default());
+    manager.run_module(&mut after, Rc::new(target())).unwrap();
+    let text = printed(&after);
+    assert!(!text.contains("lsr.iv"), "the counter was biased for a test that is not free:\n{text}");
+}
