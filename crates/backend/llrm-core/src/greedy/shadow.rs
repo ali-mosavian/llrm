@@ -106,9 +106,9 @@ impl SpillWeightEnv for BodyEnv {
 
     fn is_rematerializable(
         &self,
-        _instr: &Insn,
+        instr: &Insn,
     ) -> bool {
-        false
+        super::inlinespiller::remat_shape(instr) && self.orders.remat.borrow().contains(&instr.defines[0])
     }
 
     fn reg_mask_slots(&self) -> Vec<SlotIndex> {
@@ -312,6 +312,7 @@ pub fn decide_with(
     for (value, width) in crate::backend::allocate::_widest(body) {
         tables.widths.borrow_mut().insert(value, width);
     }
+    tables.remat.borrow_mut().extend(crate::backend::spiller::remade_values(body));
     let env = BodyEnv { orders: Rc::clone(&tables), freq, exiting };
     // The calls.
     let mut calls = Vec::new();

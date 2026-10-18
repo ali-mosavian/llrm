@@ -69,6 +69,33 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 pub struct Tables {
     pub orders: RefCell<HashMap<u32, Vec<RegId>>>,
     pub widths: RefCell<HashMap<u32, u32>>,
+    /// The registers whose one definition can be made again where they are
+    /// read (`isTriviallyReMaterializable`).
+    pub remat: RefCell<std::collections::HashSet<u32>>,
+}
+
+// DEVIATE D-I: `isTriviallyReMaterializable` is answered by the spiller's own
+// facts (`spiller::remade_values`): a literal, a frame or symbol address, or a
+// load of a cell nothing writes while the value lives. The fact: LLVM takes a
+// load only when its memory operand is a dereferenceable invariant load; llrm
+// proves the same per live range (`_stable_loads_by`), which covers the m16
+// descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated with
+// an invariant-load flag set from those facts.
+/// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
+/// register written by a plain move or address, nothing pinned or destroyed.
+pub fn remat_shape(one: &Insn) -> bool {
+    one.defines.len() == 1
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty()
+        && one.clobbers_high.is_empty()
+        && one.symbol != Some(true)
+        && one.what.as_ref().is_some_and(|w| {
+            matches!(w.op, Operation::Move | Operation::Address)
+                && matches!(w.dests.as_slice(), [Loc::Held(held)] if held.value == one.defines[0])
+                && w.sources.len() == 1
+        })
 }
 
 /// `InlineSpiller`.
@@ -137,23 +164,25 @@ impl<'a> InlineSpiller<'a> {
         units
     }
 
-    /// `reMaterializeAll` for a register defined once by `mov %reg, imm`: the
-    /// move is made again, in a new register, before each instruction that
-    /// reads it, and the original goes (`eliminateDeadDef`). A constant needs
-    /// nothing to be available where it is read. Returns the registers made,
-    /// or None when the register is not one of these.
-    ///
-    /// DEVIATE D-E2: only a constant is rematerialized here. The fact: the
-    /// other forms the spiller makes again (a frame address, a load of a frame
-    /// cell, an extension of a value kept) need `allUsesAvailableAt`, which
-    /// needs the live intervals of what they read; they are spilled through
-    /// the cell instead. Exit: `LiveRangeEdit::allUsesAvailable` over
-    /// `LiveIntervals` (step 2).
+    /// `reMaterializeAll` and `reMaterializeFor` (InlineSpiller.cpp#L586,
+    /// #L640): a register defined once by an instruction `isTriviallyReMaterializable`
+    /// takes (a literal, an address, a load of a cell nothing writes while it
+    /// lives) is made again before each instruction that reads it, in a new
+    /// register, when what the definition reads is still the same there
+    /// (`allUsesAvailableAt`); the definition goes (`eliminateDeadDefs`). A
+    /// plain copy of it takes the definition in place, the copy's destination
+    /// written by the literal, address or load (`foldMemoryOperand` of a COPY
+    /// with the remat as its LoadMI). Returns the registers made, or None when
+    /// the register is not one of these.
     fn rematerialize_all(
         &mut self,
         lis: &mut LiveIntervals,
         reg: u32,
+        vrai: &crate::liveness::calcspillweights::VirtRegAuxInfo<'_>,
     ) -> Option<Vec<u32>> {
+        if !self.tables.remat.borrow().contains(&reg) {
+            return None;
+        }
         let mut def: Option<InstrKey> = None;
         for operand in lis.operands(reg) {
             if operand.is_def {
@@ -164,32 +193,25 @@ impl<'a> InlineSpiller<'a> {
             }
         }
         let def = Arc::clone(lis.instr(def?));
-        let what = def.what.as_ref()?;
-        let constant = what.op == Operation::Move
-            && what.name.as_deref() == Some("mov")
-            && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.address.is_none())
-            && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.value == reg)
-            && def.defines == [reg]
-            && def.uses.is_empty()
-            && def.group.is_none()
-            && def.requires.is_empty()
-            && def.delivers.is_empty()
-            && def.clobbers.is_empty()
-            && def.symbol != Some(true);
-        if !constant {
+        if !remat_shape(&def) || def.uses.contains(&reg) {
             return None;
+        }
+        let what = def.what.clone()?;
+        let Loc::Held(defined) = what.dests[0] else { return None };
+        let units: Vec<(usize, Vec<InstrKey>)> =
+            Self::units(lis, reg).into_iter().filter(|(_, members)| members != &[def.id()]).collect();
+        for (_, members) in &units {
+            let first = lis.indexes.get_instruction_index(members[0]);
+            if !vrai.all_uses_available_at(def.id(), &first, lis) {
+                return None;
+            }
         }
         let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(def.id()));
         let mut made = Vec::new();
-        let Loc::Imm(imm) = &what.sources[0] else { unreachable!("checked above") };
-        for (block, members) in Self::units(lis, reg) {
-            if members == [def.id()] {
-                continue;
-            }
-            // A parallel copy takes the literal in place: `mov %d, %reg` as a
-            // member becomes `mov %d, imm`, and no register holds the constant
-            // until the copy (the constants of every member would be live at
-            // once).
+        for (block, members) in units {
+            // The registers a copy's members write: a definition that reads one
+            // cannot stand in for a member, which reads before any member writes.
+            let written: Vec<u32> = members.iter().flat_map(|key| lis.instr(*key).defines.clone()).collect();
             let in_place: Option<Vec<Arc<Insn>>> = members
                 .iter()
                 .map(|key| {
@@ -199,19 +221,21 @@ impl<'a> InlineSpiller<'a> {
                     }
                     let w = one.what.as_ref()?;
                     let plain = w.op == Operation::Move && w.name.as_deref() == Some("mov");
-                    let ok = one.group.is_some()
-                        && plain
+                    let [Loc::Held(dest)] = w.dests.as_slice() else { return None };
+                    let ok = plain
                         && one.uses == [reg]
+                        && one.defines == [dest.value]
                         && one.requires.is_empty()
                         && one.delivers.is_empty()
                         && one.clobbers.is_empty()
-                        && matches!(w.sources.as_slice(), [Loc::Held(h)] if h.value == reg && h.width == imm.width)
-                        && matches!(w.dests.as_slice(), [Loc::Held(d)] if d.width == imm.width);
+                        && dest.width == defined.width
+                        && matches!(w.sources.as_slice(), [Loc::Held(h)] if h.value == reg && h.width == defined.width)
+                        && (one.group.is_none() || !def.uses.iter().any(|read| written.contains(read)));
                     ok.then(|| {
                         let mut folded = (**one).clone();
-                        folded.what = Some(Semantics { sources: vec![Loc::Imm(imm.clone())], ..w.clone() });
-                        folded.uses.clear();
-                        folded.symbol = Some(false);
+                        folded.what = Some(Semantics { dests: vec![Loc::Held(*dest)], ..what.clone() });
+                        folded.uses = def.uses.clone();
+                        folded.symbol = def.symbol;
                         Arc::new(folded)
                     })
                 })
@@ -219,6 +243,7 @@ impl<'a> InlineSpiller<'a> {
             if let Some(folded) = in_place {
                 for (key, one) in members.iter().zip(folded) {
                     if lis.instr(*key).id() != one.id() {
+                        self.named.extend(one.uses.iter().copied());
                         lis.rewrite_instr(block, *key, one);
                     }
                 }
@@ -229,21 +254,12 @@ impl<'a> InlineSpiller<'a> {
             lis.reserve_virtual_register(value);
             let again = Arc::new(Insn {
                 defines: vec![value],
-                what: Some(Semantics {
-                    dests: vec![Loc::Held(Held {
-                        value,
-                        width: match &what.dests[0] {
-                            Loc::Held(held) => held.width,
-                            _ => unreachable!("checked above"),
-                        },
-                    })],
-                    ..what.clone()
-                }),
+                what: Some(Semantics { dests: vec![Loc::Held(Held { value, width: defined.width })], ..what.clone() }),
                 spill_reload: true,
                 rematerialized: true,
                 ..(*def).clone()
             });
-            // A parallel copy reads before it writes: the constant goes before
+            // A parallel copy reads before it writes: the definition goes before
             // its first member, whichever member reads it.
             let mut first = None;
             for key in &members {
@@ -251,11 +267,18 @@ impl<'a> InlineSpiller<'a> {
                 first.get_or_insert(renamed.id());
                 lis.rewrite_instr(block, *key, renamed);
             }
+            self.named.extend(def.uses.iter().copied());
             lis.insert_instr_before(block, first, again);
             self.reloads += 1;
+            let order = self.tables.orders.borrow().get(&reg).cloned().unwrap_or_default();
+            self.tables.orders.borrow_mut().insert(value, order);
+            let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
+            self.tables.widths.borrow_mut().insert(value, width);
+            self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
         lis.remove_instr(def_block, def.id());
+        self.named.extend(def.uses.iter().copied());
         Some(made)
     }
 
@@ -355,7 +378,7 @@ impl<'a> InlineSpiller<'a> {
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
         self.named.extend(old.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().filter(|value| *value != reg));
-        if std::env::var("LLRM_ISP_NOFOLD").is_err() && let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
+        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
             return Some(folded);
         }
         // The plan of the spiller reads the definitions of a register it can see:
@@ -504,15 +527,9 @@ impl Spiller for InlineSpiller<'_> {
         // The cell is as wide as the widest access anywhere in the function: a
         // unit asks for the width of its own accesses only, and a narrow cell
         // made by the first would be written whole by a wider one.
-        if let Some(width) = self.tables.widths.borrow().get(&reg).copied().filter(|width| *width > 0) {
-            if self.frame.cell(reg, width).is_err() {
-                self.failed = true;
-                return;
-            }
-        }
         let mut delegate = NoDelegate;
         let mut edit = LiveRangeEdit::new(reg, &mut delegate);
-        if std::env::var("LLRM_ISP_NOREMAT").is_err() && let Some(made) = self.rematerialize_all(lis, reg) {
+        if let Some(made) = self.rematerialize_all(lis, reg, vrai) {
             for value in made {
                 edit.create_from(lis, vrm, value, reg);
                 let mut li = lis.compute_virt_reg_interval(value);
@@ -522,6 +539,12 @@ impl Spiller for InlineSpiller<'_> {
             }
             edit.erase_virt_reg(lis, reg);
             return;
+        }
+        if let Some(width) = self.tables.widths.borrow().get(&reg).copied().filter(|width| *width > 0) {
+            if self.frame.cell(reg, width).is_err() {
+                self.failed = true;
+                return;
+            }
         }
         for (block, members) in Self::units(lis, reg) {
             let Some(fresh) = self.spill_unit(lis, reg, block, &members) else {

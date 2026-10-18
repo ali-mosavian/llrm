@@ -320,6 +320,21 @@ pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
     (result, ids)
 }
 
+/// The values of `body` the spiller makes again where they are read rather
+/// than storing them: literals, frame and symbol addresses, and loads of a cell
+/// nothing writes while the value lives. What `TargetInstrInfo::
+/// isTriviallyReMaterializable` answers for the translated allocator.
+pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
+    postings::following(body, |postings| {
+        let values: BTreeSet<u32> =
+            body.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.defines.iter().copied()).collect();
+        let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
+        out.extend(_addresses_by(body, &values, postings).keys().copied());
+        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        out
+    })
+}
+
 /// `spilled_from`, with `plain` kept out of the merging of updates into one
 /// register value, and what that merging made told apart from the rest: (the
 /// body, the values made to live for one use, the values made to live across
