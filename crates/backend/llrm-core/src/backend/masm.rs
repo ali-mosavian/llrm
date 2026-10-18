@@ -244,6 +244,22 @@ pub struct Align {
     pub to: i64,
 }
 
+/// `MCAlignFragment`: pad the code to a multiple of `1 << log2` with
+/// no-operations, unless that takes more than `max_skip` bytes (0: no limit).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CodeAlign {
+    pub log2: u8,
+    pub max_skip: u8,
+}
+
+/// What a target pads its code with and to: `getPrefFunctionAlignment` as a
+/// power of two (0: none) and `getMaximumNopSize` (0 reads as 1).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Padding {
+    pub function: u8,
+    pub nop: u8,
+}
+
 /// `Datum`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Datum {
@@ -287,6 +303,8 @@ pub struct Module {
     pub stack: i64,
     /// The target's object format: the listing's header, the writer's mode.
     pub object: llrm_target::object::ObjectFormat,
+    /// How the code is padded.
+    pub padding: Padding,
 }
 
 impl Module {
@@ -422,6 +440,8 @@ pub fn datum(item: &Datum) -> Vec<String> {
 /// `Item`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
+    /// The block that follows starts at a multiple of this (`setAlignment`).
+    Align(CodeAlign),
     Label(Label),
     Callee(Callee),
     Semantics(Semantics),
@@ -978,6 +998,9 @@ fn built(
         .chain(enter.into_iter().map(Item::Semantics))
         .collect();
     for (index, block) in blocks.iter().enumerate() {
+        if block.align > 0 {
+            out.push(Item::Align(CodeAlign { log2: block.align, max_skip: block.max_skip }));
+        }
         out.push(Item::Label(Label { name: label(number, block.at) }));
         if let Some(pieces) = wrap.as_ref().and_then(|wrap| wrap.opens.get(&block.at)) {
             out.extend(pieces.iter().flat_map(|piece| item(piece).0).map(Item::Semantics));
@@ -1282,6 +1305,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items {
         match item {
+            Item::Align(align) => out.push(Item::Align(align)),
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -1612,6 +1636,7 @@ pub fn _procedure_of(
     let mut out = vec![format!("{} proc {}", procedure.name, if procedure.far { "far" } else { "near" })];
     for item in items {
         match item {
+            Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
             Item::Mark(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
@@ -2357,6 +2382,7 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,
             stack: 0,
