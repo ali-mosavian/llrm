@@ -539,7 +539,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
+        hoisting(applied),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -566,6 +566,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
+/// The pass that moves loop invariants: `hoist`, or with `LLRM_EXP_LICM=1` the
+/// translation of LLVM's LICM (`licm`), which also sinks and promotes. An
+/// experiment: not part of the pipeline.
+fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
+    if llrm_support::env_flag!("LLRM_EXP_LICM") {
+        Box::new(crate::licm::Licm { apply: true })
+    } else {
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
+    }
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
@@ -1013,7 +1024,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
+        manager.add_boxed(hoisting(applied));
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1081,7 +1092,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
+        passes.push(hoisting(applied));
     }
     passes
 }

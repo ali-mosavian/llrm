@@ -140,3 +140,216 @@ pub fn apply_loop(
     }
     Ok(changed)
 }
+
+/// What a promotion edits: the loop and where its pieces go.
+pub struct PromotionSite<'a> {
+    pub preheader: BlockId,
+    /// The unique exit blocks, each with the instruction its stores go before
+    /// (`InsertPts`: the first non-phi at the time the loop's promotion
+    /// began, so successive promotions' stores follow each other).
+    pub exits: &'a [(BlockId, InstId)],
+    /// The innermost loop of a block, to tell an exit use that needs an LCSSA
+    /// phi.
+    pub loop_of: &'a dyn Fn(BlockId) -> Option<&'a Loop>,
+}
+
+/// `LoopInfo::wouldBeOutOfLoopUseRequiringLCSSA`: `value` is defined in a loop
+/// that does not contain `block`.
+fn requires_lcssa(
+    function: &Function,
+    site: &PromotionSite,
+    value: Operand,
+    block: BlockId,
+) -> bool {
+    let Operand::Value(value) = value else { return false };
+    let ValueDef::Instruction(def) = function.value(value).def else { return false };
+    let Some(home) = function.parent(def) else { return false };
+    match (site.loop_of)(home) {
+        Some(loop_) => !loop_.body.contains(&llrm_analysis::cfg::id(block)),
+        None => false,
+    }
+}
+
+/// `maybeInsertLCSSAPHI`: `value` read in the exit block `block`, through a phi
+/// of it there when it is defined in a loop that block is outside of.
+fn maybe_insert_lcssa_phi(
+    function: &mut Function,
+    site: &PromotionSite,
+    value: Operand,
+    block: BlockId,
+) -> Result<Operand, String> {
+    if !requires_lcssa(function, site, value, block) {
+        return Ok(value);
+    }
+    let Operand::Value(source) = value else { return Ok(value) };
+    let incoming: Vec<Operand> =
+        function.predecessors(block).into_iter().flat_map(|pred| [value, Operand::Block(pred)]).collect();
+    let ty = function.value(source).ty;
+    let name = function.value(source).name.clone().map(|name| format!("{name}.lcssa"));
+    let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
+    let first = function.block(block).instructions().first().copied().map_or(Position::End(block), Position::Before);
+    function.insert(phi, first)?;
+    Ok(Operand::Value(function.instruction(phi).result.expect("a phi's result")))
+}
+
+/// [`promoteLoopAccessesToScalars`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1692)
+/// from "Lets do the promotion" on, with `LoopPromoter` and
+/// [`LoadAndStorePromoter::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SSAUpdater.cpp#L360):
+/// the loop's loads of the pointers read an SSA value, a load before the loop
+/// makes the value on entry, and when `store_safe` the last value is stored
+/// in each exit block and the loop's stores go.
+pub fn promote(
+    function: &mut Function,
+    context: &mut llrm_mir::context::Context,
+    site: &PromotionSite,
+    found: &super::promote::Promotion,
+) -> Result<(), String> {
+    use llrm_analysis::ssa::SsaUpdater;
+    use llrm_mir::context::{Constant, ConstantKind};
+    let some_ptr = found.pointers[0];
+    let ty = found.access_ty;
+    let mut ssa = SsaUpdater::new(ty, None);
+    // Set up the preheader to have a definition of the value.
+    let mut preheader_load: Option<InstId> = None;
+    if found.found_load_to_promote || !found.store_is_guaranteed_to_execute {
+        let name = match some_ptr {
+            Operand::Value(value) => function.value(value).name.clone().map(|name| format!("{name}.promoted")),
+            _ => Some("promoted".to_owned()),
+        };
+        let load = function.create_instruction(
+            Opcode::Load { align: Some(found.alignment), volatile: false },
+            ty,
+            vec![some_ptr],
+            Flags::default(),
+            name.as_deref(),
+        );
+        if found.load_is_guaranteed_to_execute
+            && let Some(node) = found.tbaa
+        {
+            function.annotate(load, "tbaa", node);
+        }
+        let terminator = function.terminator(site.preheader).ok_or("a preheader with no terminator")?;
+        function.insert(load, Position::Before(terminator))?;
+        ssa.add_available_value(site.preheader, Operand::Value(function.instruction(load).result.expect("a load")));
+        preheader_load = Some(load);
+    } else {
+        let poison = context.constant(Constant { ty, kind: ConstantKind::Poison });
+        ssa.add_available_value(site.preheader, Operand::Constant(poison));
+    }
+    // Bucket up the uses by the block they occur in: the SSA updater is for
+    // references across blocks, a block's own order is ours.
+    let mut by_block: IdMap<BlockId, Vec<InstId>> = IdMap::new();
+    for &inst in &found.uses {
+        let block = function.parent(inst).ok_or("a use outside every block")?;
+        by_block.get_or_insert_with(block, Vec::new).push(inst);
+    }
+    let mut live_in_loads: Vec<InstId> = Vec::new();
+    let mut replaced: IdMap<InstId, Operand> = IdMap::new();
+    let is_store =
+        |function: &Function, inst: InstId| matches!(function.instruction(inst).opcode, Opcode::Store { .. });
+    let blocks: Vec<BlockId> = by_block.keys().collect();
+    for block in blocks {
+        let uses = by_block.get(&block).cloned().unwrap_or_default();
+        if uses.is_empty() {
+            continue;
+        }
+        // A block with one use: a store defines the value in the block, a load
+        // reads the value on entry.
+        if let [only] = uses[..] {
+            if is_store(function, only) {
+                ssa.add_available_value(block, function.instruction(only).operands[0]);
+            } else {
+                live_in_loads.push(only);
+            }
+            continue;
+        }
+        // A block of loads alone reads the value on entry.
+        if !uses.iter().any(|&inst| is_store(function, inst)) {
+            live_in_loads.extend(uses);
+            continue;
+        }
+        // Mixed: a scan of the block tells the order. A load after a store
+        // reads the stored value; the last store defines the value at the end.
+        let mut stored: Option<Operand> = None;
+        for inst in function.block(block).instructions().to_vec() {
+            if !uses.contains(&inst) {
+                continue;
+            }
+            if is_store(function, inst) {
+                stored = Some(function.instruction(inst).operands[0]);
+            } else if let Some(value) = stored {
+                let result = function.instruction(inst).result.expect("a load's result");
+                function.replace_all_uses_with(result, value);
+                replaced.insert(inst, value);
+            } else {
+                live_in_loads.push(inst);
+            }
+        }
+        ssa.add_available_value(block, stored.expect("a store in the block"));
+    }
+    // Now that all of the values are set up, handle the live-in loads.
+    for load in live_in_loads {
+        let block = function.parent(load).ok_or("a load outside every block")?;
+        let mut value = ssa.value_in_middle_of_block(context, function, block);
+        let result = function.instruction(load).result.expect("a load's result");
+        // Avoid assertions in unreachable code.
+        if value == Operand::Value(result) {
+            value = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }));
+        }
+        function.replace_all_uses_with(result, value);
+        replaced.insert(load, value);
+    }
+    // Insert stores after in the loop exit blocks. Each exit block gets a store
+    // of the live-out value that feeds it.
+    if found.store_safe {
+        for &(exit, before) in site.exits {
+            let live_in = ssa.value_in_middle_of_block(context, function, exit);
+            let live_in = maybe_insert_lcssa_phi(function, site, live_in, exit)?;
+            let pointer = maybe_insert_lcssa_phi(function, site, some_ptr, exit)?;
+            let void = context.types.void();
+            let store = function.create_instruction(
+                Opcode::Store { align: Some(found.alignment), volatile: false },
+                void,
+                vec![live_in, pointer],
+                Flags::default(),
+                None,
+            );
+            if found.store_is_guaranteed_to_execute
+                && let Some(node) = found.tbaa
+            {
+                function.annotate(store, "tbaa", node);
+            }
+            function.insert(store, Position::Before(before))?;
+        }
+    }
+    // Now that everything is rewritten, delete the instructions.
+    for &inst in &found.uses {
+        if is_store(function, inst) && !found.store_safe {
+            continue;
+        }
+        if let Some(result) = function.instruction(inst).result
+            && !function.users(result).is_empty()
+        {
+            // A load that still has uses was added as a live value in the SSA
+            // updater (the loaded value was stored later): follow the
+            // replacements to the real value.
+            let mut value = *replaced.get(&inst).ok_or("a load with uses that was not replaced")?;
+            while let Operand::Value(next) = value
+                && let ValueDef::Instruction(def) = function.value(next).def
+                && let Some(&again) = replaced.get(&def)
+            {
+                value = again;
+            }
+            function.replace_all_uses_with(result, value);
+        }
+        function.erase(inst)?;
+    }
+    // If the SSA updater didn't use the load in the preheader, just zap it now.
+    if let Some(load) = preheader_load {
+        let result = function.instruction(load).result.expect("a load");
+        if function.users(result).is_empty() {
+            function.erase(load)?;
+        }
+    }
+    Ok(())
+}
