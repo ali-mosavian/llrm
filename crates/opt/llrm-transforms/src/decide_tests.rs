@@ -782,3 +782,50 @@ b2:
     decide(&mut module);
     assert!(!has(&module, "b2"), "{}", printed(&module));
 }
+
+/// `rectwo`'s count check at a counted loop's exit (reduced by scev-port,
+/// `COUNT_NOT_ZERO_AT_THE_EXIT` of `alim/feat/scev-decide`): the loop is
+/// entered with `%n != 0` and continues with `%k - 1 != 0`, so the header phi
+/// `%k` is not zero where the loop is left from its header. The old engine
+/// decides it; LazyValueInfo must too (the phi's edge values, CVP's way), or
+/// `rectwo` loses the fold.
+#[test]
+fn test_lazy_value_info_settles_the_count_check_at_a_loops_exit() {
+    let mut module = parsed(&format!(
+        "{DOS}define i16 @f(i16 %inv, i16 %n) {{
+entry:
+  %z0 = icmp eq i16 %n, 0
+  br i1 %z0, label %zero, label %pre
+pre:
+  br label %h
+h:
+  %c = phi i16 [ 0, %pre ], [ %c2, %l ]
+  %k = phi i16 [ %n, %pre ], [ %dec, %l ]
+  %t = icmp eq i16 %inv, 1
+  br i1 %t, label %l, label %x
+l:
+  %dec = sub nsw i16 %k, 1
+  %c2 = add i16 %c, 1
+  %d = icmp eq i16 %dec, 0
+  br i1 %d, label %out, label %h
+x:
+  %z = icmp eq i16 %k, 0
+  br i1 %z, label %zero, label %nz
+out:
+  ret i16 %c2
+nz:
+  ret i16 7
+zero:
+  ret i16 0
+}}
+"
+    ));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let settled = super::_settled(context, &layout, function, &outer);
+    let at = |name: &str| {
+        function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some(name)).expect("block")
+    };
+    assert_eq!(settled.get(&at("x")), Some(&false), "the check at the exit is settled");
+    assert_eq!(settled.get(&at("h")), None, "an unknown condition is not");
+}
