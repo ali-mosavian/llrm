@@ -336,3 +336,94 @@ fn test_normalizing_for_post_inc_is_inverted_by_denormalizing() {
         chain
     });
 }
+
+/// `hoistIVInc` moves the increment above a use that reads the next value.
+#[test]
+fn test_an_iv_increment_is_hoisted_above_the_use_that_needs_it() {
+    let text = "define i32 @f(i32 %a, i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %u = add i32 %i2, %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 0
+}
+";
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let named = |function: &llrm_mir::module::Function, name: &str| {
+        function
+            .block(header)
+            .instructions()
+            .iter()
+            .copied()
+            .find(|&one| {
+                function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
+            })
+            .expect("named")
+    };
+    let (inc, user) = (named(&function, "i2"), named(&function, "u"));
+    let mut se = ScalarEvolution::new();
+    let mut expander = Expander::new("t");
+    assert!(expander.hoist_iv_inc(&env, &mut context, &mut function, &mut se, inc, user, false));
+    let after = llrm_mir::print::body(&context, &function);
+    let at = |needle: &str| after.find(needle).expect(needle);
+    assert!(at("%i2 = add i32 %i, 1") < at("%u = add i32 %i2, %a"), "{after}");
+}
+
+/// The increments of a wide and a narrow phi agree on the operation.
+#[test]
+fn test_two_increments_of_one_operation_can_share_flags() {
+    let text = "define void @f(i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %j = phi i32 [ 0, %entry ], [ %j2, %h ]
+  %i2 = add nuw i32 %i, 1
+  %j2 = sub i32 %j, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let find = |name: &str| {
+        function
+            .layout()
+            .iter()
+            .flat_map(|&b| function.block(b).instructions().to_vec())
+            .find(|&one| {
+                function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
+            })
+            .expect("named")
+    };
+    let (i, j, i2, j2) = (find("i"), find("j"), find("i2"), find("j2"));
+    assert!(Expander::can_reuse_flags_from_original_iv_inc(function, i, i, i2, i2));
+    assert!(!Expander::can_reuse_flags_from_original_iv_inc(function, i, j, i2, j2));
+}
