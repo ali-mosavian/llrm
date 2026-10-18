@@ -755,3 +755,30 @@ b25:
     assert!(!decide(&mut module), "a run left a decision for the next:\n{}", printed(&module));
     assert!(!printed(&module).contains("phi i1 ["), "the branch on the phi was threaded:\n{}", printed(&module));
 }
+
+/// A branch on `x u< 20` after `llvm.assume(x u< 10)` is always taken: the
+/// assume is LazyValueInfo's to read (`getPredicateAt`), not `ranges`'. It
+/// stayed a branch.
+#[test]
+fn a_branch_an_assume_settles_is_decided() {
+    let mut module = parsed(
+        "declare void @llvm.assume(i1)
+
+define i16 @f(i16 %x) {
+b0:
+  %a = icmp ult i16 %x, 10
+  call void @llvm.assume(i1 %a)
+  %c = icmp ult i16 %x, 20
+  br i1 %c, label %b1, label %b2
+
+b1:
+  ret i16 1
+
+b2:
+  ret i16 2
+}
+",
+    );
+    decide(&mut module);
+    assert!(!has(&module, "b2"), "{}", printed(&module));
+}
