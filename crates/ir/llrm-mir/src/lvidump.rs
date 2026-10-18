@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::lazyvalueinfo::{Env, LazyValueInfo, Subject};
 use crate::module::{BlockId, GlobalKind, InstId, Operand, Use, ValueDef};
 use crate::opcode::{IntPredicate, Opcode};
@@ -58,7 +58,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 continue;
             }
             let name = module.globals[at].name.clone().unwrap_or_default();
-            let dt = DominatorTree::new(function);
+            let dt = DomTree::of(function);
             let assumptions = AssumptionCache::new(&module, function);
             let mut lvi = LazyValueInfo::new();
             let globals = &module.globals;

@@ -369,7 +369,7 @@ impl FunctionAnalyses {
     }
 
     /// The dominator tree (`SQ.DT`).
-    pub fn dominator_tree(&self) -> &DominatorTree {
+    pub fn dominator_tree(&self) -> &DomTree {
         &self.dt
     }
 

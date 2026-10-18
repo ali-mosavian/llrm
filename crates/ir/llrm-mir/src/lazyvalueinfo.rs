@@ -85,7 +85,7 @@ use crate::apint;
 use crate::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, PreferredRangeType, RangeIntrinsic};
 use crate::context::{Constant, ConstantId, ConstantKind, Context, mask};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::knownbits::KnownBits;
 use crate::module::{
@@ -2320,7 +2320,8 @@ fn constant_fold_user(
     match &user.opcode {
         Opcode::Cast(cast_op) => {
             debug_assert!(user.operands[0] == op, "Operand 0 isn't Op");
-            let folded = crate::simplify::simplify_cast_operand(env.context, function, *cast_op, op_const, user.ty);
+            let folded =
+                crate::simplify::simplify_cast_operand(env.context, env.layout, function, *cast_op, op_const, user.ty);
             if let Some(lattice) = as_range(env, folded) {
                 return lattice;
             }
@@ -2331,8 +2332,15 @@ fn constant_fold_user(
             debug_assert!(op0_match || op1_match, "Operand 0 nor Operand 1 isn't a match");
             let lhs = if op0_match { op_const } else { user.operands[0] };
             let rhs = if op1_match { op_const } else { user.operands[1] };
-            let folded =
-                crate::simplify::simplify_binop_operands(env.context, function, *binary_op, Flags::default(), lhs, rhs);
+            let folded = crate::simplify::simplify_binop_operands(
+                env.context,
+                env.layout,
+                function,
+                *binary_op,
+                Flags::default(),
+                lhs,
+                rhs,
+            );
             if let Some(lattice) = as_range(env, folded) {
                 return lattice;
             }
@@ -3012,7 +3020,7 @@ impl LazyValueInfo {
     pub fn print_lvi(
         &mut self,
         env: &mut Env,
-        dtree: &DominatorTree,
+        dtree: &DomTree,
     ) -> String {
         match self.get_impl() {
             Some(imp) => imp.print_lvi(env, dtree),
@@ -3057,7 +3065,7 @@ impl LazyValueInfoImpl {
     pub fn print_lvi(
         &mut self,
         env: &mut Env,
-        dtree: &DominatorTree,
+        dtree: &DomTree,
     ) -> String {
         let mut out = String::new();
         for annotation in self.annotations(env, dtree) {
@@ -3071,7 +3079,7 @@ impl LazyValueInfoImpl {
     pub fn annotations(
         &mut self,
         env: &mut Env,
-        dtree: &DominatorTree,
+        dtree: &DomTree,
     ) -> Vec<Annotation> {
         let function = env.function;
         let mut out = Vec::new();
@@ -3120,7 +3128,7 @@ impl LazyValueInfoImpl {
     fn emit_instruction_annot(
         &mut self,
         env: &mut Env,
-        dt: &DominatorTree,
+        dt: &DomTree,
         i: InstId,
         os: &mut Vec<Annotation>,
     ) {
