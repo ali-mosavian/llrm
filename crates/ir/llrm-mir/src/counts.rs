@@ -143,7 +143,7 @@ pub fn pass_run_over(
     if !PER_PASS.load(Ordering::Relaxed) {
         return Running(None);
     }
-    pass_run(name, function.layout().iter().map(|&block| function.block(block).instructions().len()).sum())
+    pass_run(name, function.layout().iter().map(|&block| function.block(block).len()).sum())
 }
 
 /// Charges the analyses computed to the pass that was running before.

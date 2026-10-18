@@ -855,7 +855,7 @@ impl FunctionPass for Lies {
         let ty = unit.context.types.int(16);
         let one = unit.context.int(ty, 1);
         let function = &mut *unit.function;
-        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let first = function.block(function.entry().unwrap()).first().expect("a block with an instruction");
         let made = function.create_instruction(
             crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
             ty,

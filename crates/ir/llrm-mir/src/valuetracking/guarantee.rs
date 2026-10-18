@@ -945,7 +945,7 @@ pub fn is_guaranteed_to_execute_for_every_iteration(
     if q.block_of(inst) != Some(l.get_header()) {
         return false;
     }
-    for &one in q.function.block(l.get_header()).instructions() {
+    for one in q.function.block(l.get_header()).iter() {
         if one == inst {
             return true;
         }
@@ -1252,7 +1252,7 @@ fn program_undefined_if_undef_or_poison_of(
             .instructions()
             .iter()
             .position(|one| q.function.instruction(*one).opcode != Opcode::Phi)
-            .unwrap_or(q.function.block(block).instructions().len());
+            .unwrap_or(q.function.block(block).len());
     }
     false
 }
