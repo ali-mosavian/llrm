@@ -205,8 +205,17 @@ impl FunctionPass for Merge {
     ) -> PreservedAnalyses {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
+        let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
+            && crate::mergestores::merged_copies(
+                unit.context,
+                unit.layout,
+                analyses.outer().callees(),
+                unit.function,
+                analyses.outer(),
+            );
         if merged(unit.context, unit.layout, analyses.outer().callees(), unit.function, analyses.outer(), self.size)
             | memset
+            | copies
         {
             PreservedAnalyses::none()
         } else {

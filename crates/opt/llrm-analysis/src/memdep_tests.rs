@@ -2,6 +2,7 @@
 //! block, and the cache after an instruction is removed.
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::module::{Function, InstId, Module, ValueDef};
 
 use super::*;
@@ -73,6 +74,13 @@ impl AAResults for WithInstructions<'_> {
                 }
             }
             (Some(_), None) => effect,
+            // Anything else that is no call touches no memory.
+            _ if !matches!(
+                unit.function.instruction(inst).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            ) => {
+                ModRefInfo::NoModRef
+            }
             _ => self.0.get_mod_ref_info(inst, loc, aaqi),
         }
     }
@@ -140,7 +148,7 @@ fn dependency(
     let f = function(module, "f");
     let unit = Unit::of(module, layout, f);
     let mut aa = WithInstructions(BasicAA::new(&unit), &unit);
-    let result = memdep.get_dependency(Env { unit: &unit }, &mut aa, inst(f, query));
+    let result = memdep.get_dependency(Env { unit: &unit, dt: &DomTree::of(unit.function) }, &mut aa, inst(f, query));
     named(f, result)
 }
 
@@ -180,7 +188,10 @@ fn test_a_store_to_another_object_is_scanned_past() {
     let unit = Unit::of(&module, &layout, f);
     let mut memdep = MemoryDependenceResults::default();
     let mut aa = BasicAA::new(&unit);
-    assert_eq!(memdep.get_dependency(Env { unit: &unit }, &mut aa, inst(f, "x")), MemDepResult::Def(first_store));
+    assert_eq!(
+        memdep.get_dependency(Env { unit: &unit, dt: &DomTree::of(unit.function) }, &mut aa, inst(f, "x")),
+        MemDepResult::Def(first_store)
+    );
 }
 
 #[test]
@@ -228,9 +239,10 @@ fn test_removing_the_def_dirties_what_depended_on_it_and_a_rescan_finds_the_next
     let f = function(&module, "f");
     let mut memdep = MemoryDependenceResults::default();
     assert_eq!(dependency(&module, &layout, &mut memdep, "x"), "Def(store)");
+    let unit_before = Unit::of(&module, &layout, f);
     let store =
         f.walk().map(|(_, i)| i).find(|&i| matches!(f.instruction(i).opcode, Opcode::Store { .. })).expect("a store");
-    memdep.remove_instruction(f, store);
+    memdep.remove_instruction(&unit_before, store);
     // `x` is dirty and will rescan from the instruction after the store.
     assert_eq!(named(f, memdep.local_deps[&inst(f, "x")]), "Invalid(x)");
     // The function without the store: the load depends on the earlier load.
@@ -239,9 +251,9 @@ fn test_removing_the_def_dirties_what_depended_on_it_and_a_rescan_finds_the_next
     let (unit_module, unit_layout) = (&module, &layout);
     let unit = Unit::of(unit_module, unit_layout, &after);
     let mut aa = BasicAA::new(&unit);
-    let got = memdep.get_dependency(Env { unit: &unit }, &mut aa, inst(&after, "x"));
+    let got = memdep.get_dependency(Env { unit: &unit, dt: &DomTree::of(unit.function) }, &mut aa, inst(&after, "x"));
     assert_eq!(named(&after, got), "Def(a)");
-    memdep.verify_removed(store);
+    memdep.verify_removed(f, store);
 }
 
 #[test]
@@ -254,13 +266,21 @@ fn test_a_non_local_call_dependency_walks_the_predecessors_and_is_cached() {
     let mut aa = BasicAA::new(&unit);
     let mut memdep = MemoryDependenceResults::default();
     let query = inst(f, "x");
-    let info = memdep.get_non_local_call_dependency(Env { unit: &unit }, &mut aa, query).clone();
+    let info = memdep
+        .get_non_local_call_dependency(Env { unit: &unit, dt: &DomTree::of(unit.function) }, &mut aa, query)
+        .clone();
     let by_block: Vec<(BlockId, String)> = info.iter().map(|entry| (entry.bb, named(f, entry.result))).collect();
     // The two arms are empty (non-local); b0 is reached through both and holds
     // the clobbering call.
     assert!(by_block.contains(&(block(f, "b0"), "Clobber(call)".to_owned())), "{by_block:?}");
     assert!(by_block.contains(&(block(f, "b1"), "NonLocal".to_owned())), "{by_block:?}");
-    assert_eq!(memdep.get_non_local_call_dependency(Env { unit: &unit }, &mut aa, query).len(), info.len(), "cached");
+    assert_eq!(
+        memdep
+            .get_non_local_call_dependency(Env { unit: &unit, dt: &DomTree::of(unit.function) }, &mut aa, query)
+            .len(),
+        info.len(),
+        "cached"
+    );
 }
 
 #[test]
@@ -271,4 +291,147 @@ fn test_invariant_group_metadata_is_refused() {
     // A load alone in its block is answered before the scan: put one before it.
     let two = "define i16 @f(ptr %p) {\nb:\n  store i16 1, ptr %p\n  %x = load i16, ptr %p, !invariant.group !0\n  ret i16 %x\n}\n!0 = !{}\n";
     one(two, "x");
+}
+
+/// The non-local dependence of `%name` in `@f`, each as `block:Result@address`.
+fn non_local(
+    memdep: &mut MemoryDependenceResults,
+    module: &Module,
+    layout: &DataLayout,
+    query: &str,
+) -> Vec<String> {
+    let f = function(module, "f");
+    let unit = Unit::of(module, layout, f);
+    let tree = DomTree::of(f);
+    let mut aa = WithInstructions(BasicAA::new(&unit), &unit);
+    let mut results = Vec::new();
+    memdep.get_non_local_pointer_dependency(Env { unit: &unit, dt: &tree }, &mut aa, inst(f, query), &mut results);
+    let block_name = |bb: BlockId| f.block(bb).name.clone().expect("a named block");
+    let address = |address: SelectAddr| match address {
+        SelectAddr::Addr(None) => "none".to_owned(),
+        SelectAddr::Addr(Some(Operand::Value(v))) => format!("%{}", f.value(v).name.clone().unwrap_or_default()),
+        SelectAddr::Addr(Some(_)) => "constant".to_owned(),
+        SelectAddr::Select { .. } => "select".to_owned(),
+    };
+    let mut lines: Vec<String> = results
+        .iter()
+        .map(|one| format!("{}:{}@{}", block_name(one.bb), named(f, one.result), address(one.address)))
+        .collect();
+    lines.sort();
+    lines
+}
+
+const DIAMOND: &str = "define i16 @f(ptr %x, ptr %y, i1 %c) {
+b0:
+  store i16 1, ptr %x
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %v = load i16, ptr %x
+  ret i16 %v
+}
+";
+
+#[test]
+fn test_a_load_after_a_join_depends_on_the_store_before_the_branch() {
+    let module = module(DIAMOND);
+    let layout = layout(&module);
+    let mut memdep = MemoryDependenceResults::default();
+    assert_eq!(non_local(&mut memdep, &module, &layout, "v"), ["b0:Def(store)@%x"]);
+}
+
+#[test]
+fn test_a_clobber_on_one_arm_is_that_arms_dependence() {
+    let body = DIAMOND.replace("b1:\n  br label %b3", "b1:\n  call void @g()\n  br label %b3");
+    let module = module(&body);
+    let layout = layout(&module);
+    let mut memdep = MemoryDependenceResults::default();
+    assert_eq!(non_local(&mut memdep, &module, &layout, "v"), ["b0:Def(store)@%x", "b1:Clobber(call)@%x"]);
+}
+
+#[test]
+fn test_a_second_query_is_answered_from_the_cache() {
+    let module = module(DIAMOND);
+    let layout = layout(&module);
+    let mut memdep = MemoryDependenceResults::default();
+    let first = non_local(&mut memdep, &module, &layout, "v");
+    assert_eq!(non_local(&mut memdep, &module, &layout, "v"), first);
+    let f = function(&module, "f");
+    let info = &memdep.non_local_pointer_deps[&(Operand::Value(value(f, "x")), true)];
+    assert_eq!(info.pair, (Some(block(f, "b3")), true), "the whole query is cached");
+}
+
+#[test]
+fn test_a_phi_pointer_is_translated_to_each_predecessor() {
+    let body = "define i16 @f(ptr %x, ptr %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr %x
+  br label %b3
+
+b2:
+  store i16 2, ptr %y
+  br label %b3
+
+b3:
+  %p = phi ptr [ %x, %b1 ], [ %y, %b2 ]
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+";
+    let module = module(body);
+    let layout = layout(&module);
+    let mut memdep = MemoryDependenceResults::default();
+    assert_eq!(non_local(&mut memdep, &module, &layout, "v"), ["b1:Def(store)@%x", "b2:Def(store)@%y"]);
+}
+
+#[test]
+fn test_a_constant_address_made_by_translation_is_not_available() {
+    // Translating `gep %x, %i` into b0 gives a poison pointer:
+    // `simplifyGEPInst` makes the constant, which the real context does not
+    // hold. DEVIATE 8: the block is Unknown.
+    let body = "define i16 @f(ptr %x, i16 %n, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i16 [ poison, %b0 ], [ %n, %b1 ]
+  %q = getelementptr i8, ptr %x, i16 %i
+  %v = load i16, ptr %q
+  ret i16 %v
+}
+";
+    let module = module(body);
+    let layout = layout(&module);
+    let mut memdep = MemoryDependenceResults::default();
+    let got = non_local(&mut memdep, &module, &layout, "v");
+    assert!(got.iter().any(|line| line == "b0:Unknown@none"), "{got:?}");
+}
+
+#[test]
+fn test_removing_the_def_of_a_cached_pointer_query_dirties_it() {
+    let module = module(DIAMOND);
+    let layout = layout(&module);
+    let f = function(&module, "f");
+    let mut memdep = MemoryDependenceResults::default();
+    non_local(&mut memdep, &module, &layout, "v");
+    let store =
+        f.walk().map(|(_, i)| i).find(|&i| matches!(f.instruction(i).opcode, Opcode::Store { .. })).expect("a store");
+    let unit = Unit::of(&module, &layout, f);
+    memdep.remove_instruction(&unit, store);
+    let info = &memdep.non_local_pointer_deps[&(Operand::Value(value(f, "x")), true)];
+    assert_eq!(info.pair, (None, false), "no longer a whole query");
+    assert!(info.non_local_deps.iter().any(|entry| entry.result.is_dirty()), "{info:?}");
+    memdep.verify_removed(f, store);
 }

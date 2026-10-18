@@ -755,7 +755,12 @@ impl<'p> Machine<'p> {
                     return fail("pointer offset requires an address and an integer");
                 };
                 let mut address = address.clone();
-                address.offset += *displacement as i64;
+                // A third operand is the element size the displacement counts.
+                let scale = match args.get(2) {
+                    Some(Scalar::Int(size)) => *size as i64,
+                    _ => 1,
+                };
+                address.offset += *displacement as i64 * scale;
                 vec![Scalar::Address(address)]
             }
             // Pointers into one object order by their offsets in it.

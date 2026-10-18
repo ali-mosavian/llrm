@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 89 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 92 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -43,6 +43,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
 | inlinecost | LLVM's inline cost: what inlining one call site costs, and the threshold it is held to, translated from `InlineCost.cpp` and `InlineAdvisor.cpp`. | Off by default. With `LLRM_EXP_INLINECOST` the interprocedural stage prints | [inlinecost](inlinecost.md) |
+| instsimplify | InstSimplify as a pass: every instruction that equals one of its operands, or a constant, is replaced by it, and what that leaves dead goes. |  | [instsimplify](instsimplify.md) |
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
@@ -82,6 +83,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), on by default; `LLRM_NO_SCEV_IVCMP` turns it | [simplifyindvar](simplifyindvar.md) |
 | sink | Work moved down to the one place that needs it, so the paths that skip that place no longer run it: gcc's `-ftree-sink` (`pass_sink_code`), LLVM's `Sink` and `MachineSink`. | Last of the function passes before `switchconv`, after `addresssink`; off | [sink](sink.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
+| speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. |  | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
 | sroa | `sroa-real`: scalar replacement of aggregates as LLVM's SROA does it: the uses of an alloca are cut into slices, the slices into partitions that no access straddles, each partition becomes an alloca of its own (or the old one), the accesses are rewritten onto it, and what is then only loaded and stored whole is promoted to registers. |  | [sroa](sroa.md) |
