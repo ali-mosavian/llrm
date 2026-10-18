@@ -5,7 +5,6 @@
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Module};
-use llrm_mir::opcode::Opcode;
 
 use super::build::Effect;
 use super::edit::Where;
