@@ -63,6 +63,13 @@ enum Root {
     Inst(InstId),
 }
 
+thread_local! {
+    /// The tables of the last run, empty: the next run takes their storage, as
+    /// LLVM's pass object keeps its `ValueTable` and `LeaderMap` from function
+    /// to function.
+    static TABLES: std::cell::Cell<Option<(ValueTable, LeaderMap)>> = const { std::cell::Cell::new(None) };
+}
+
 pub struct GvnPass<'a> {
     context: &'a mut Context,
     layout: &'a DataLayout,
@@ -95,6 +102,7 @@ pub fn run_impl_cfg(
     outer: &Outer,
     dominators: Option<&DominatorTree>,
 ) -> (bool, bool) {
+    let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
     let dt =
         dominators.map_or_else(|| std::borrow::Cow::Owned(DominatorTree::new(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
@@ -103,13 +111,14 @@ pub fn run_impl_cfg(
         function,
         outer,
         dt,
-        vn: ValueTable::new(),
-        leader_table: LeaderMap::default(),
+        vn: tables.0,
+        leader_table: tables.1,
         dead_blocks: IdSet::new(),
         cfg_changed: false,
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();
+    TABLES.with(|pool| pool.set(Some((std::mem::take(&mut pass.vn), std::mem::take(&mut pass.leader_table)))));
     (pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty()), pass.cfg_changed)
 }
 
@@ -153,7 +162,13 @@ impl GvnPass<'_> {
         }
 
         let mut should_continue = true;
+        let mut first = true;
         while should_continue {
+            // The tables come empty; each later iteration empties them
+            // (cleanupGlobalSets).
+            if !std::mem::take(&mut first) {
+                self.cleanup_global_sets();
+            }
             should_continue = self.iterate_on_function();
             changed |= should_continue;
         }
@@ -168,7 +183,6 @@ impl GvnPass<'_> {
     /// `iterateOnFunction`
     /// ([GVN.cpp:3862](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L3862)).
     fn iterate_on_function(&mut self) -> bool {
-        self.cleanup_global_sets();
         // The order is fixed before any block is processed, as RPOT's is.
         let mut changed = false;
         for block in reverse_postorder(self.function) {
@@ -505,7 +519,7 @@ impl GvnPass<'_> {
                 // point in looking for an instruction realizing it: there
                 // cannot be one!
                 if PROPAGATE_COMPARE_FACTS && num < next_num {
-                    for entry in self.leader_table.get_leaders(num).to_vec() {
+                    for entry in self.leader_table.get_leaders(num).collect::<Vec<_>>() {
                         // Only look at leaders that either dominate the start
                         // of the edge, or are dominated by the end. This check
                         // is not necessary for correctness, it only discards

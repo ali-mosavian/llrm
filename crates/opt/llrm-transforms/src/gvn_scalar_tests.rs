@@ -665,3 +665,24 @@ b0:
 ",
     );
 }
+
+/// The tables were emptied three times a run (at the start of each iteration
+/// and again at the end); `cleanupGlobalSets` empties them once per iteration
+/// over the function: a body that settles in one iteration clears once.
+#[test]
+fn test_a_run_that_settles_in_one_iteration_clears_the_tables_once() {
+    let text = "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = add i16 %x, %y
+  %b = mul i16 %a, %y
+  ret i16 %b
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = crate::gvn::table::clears();
+    assert!(!run_impl(context, &layout, function, &outer));
+    assert_eq!(crate::gvn::table::clears() - before, 1);
+}

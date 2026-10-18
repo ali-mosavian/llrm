@@ -31,6 +31,7 @@ use std::hash::{Hash, Hasher};
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::inline::InlineVec;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
@@ -71,7 +72,7 @@ pub struct Expression {
     pub commutative: bool,
     /// Not necessarily the result type: any type that tells expressions apart.
     pub ty: Option<TypeId>,
-    pub var_args: Vec<u32>,
+    pub var_args: InlineVec<u32, 4>,
     pub attrs: CallAttrs,
     /// DEVIATE 16: LLVM's key has no IR flags. Exit and owner:
     /// https://github.com/ali-mosavian/llrm/issues/2187
@@ -84,7 +85,7 @@ impl Expression {
             opcode,
             commutative: false,
             ty: None,
-            var_args: Vec::new(),
+            var_args: InlineVec::new(),
             attrs: CallAttrs::default(),
             flags: Flags::default(),
         }
@@ -113,7 +114,7 @@ impl Hash for Expression {
     ) {
         self.opcode.hash(state);
         self.ty.hash(state);
-        self.var_args.hash(state);
+        self.var_args.as_slice().hash(state);
         self.flags.hash(state);
     }
 }
@@ -191,10 +192,21 @@ fn commutative(
 #[derive(Debug, Default)]
 struct Numbering {
     values: Vec<u32>,
+    /// Slots of `values` set since the last clear, so a clear is the size of
+    /// the use.
+    touched: Vec<u32>,
     others: HashMap<Operand, u32>,
 }
 
 impl Numbering {
+    fn clear(&mut self) {
+        for &slot in &self.touched {
+            self.values[slot as usize] = 0;
+        }
+        self.touched.clear();
+        self.others.clear();
+    }
+
     fn get(
         &self,
         value: &Operand,
@@ -215,7 +227,9 @@ impl Numbering {
                 if self.values.len() <= id.0 as usize {
                     self.values.resize(id.0 as usize + 1 + self.values.len() / 2, 0);
                 }
-                self.values[id.0 as usize] = number;
+                if std::mem::replace(&mut self.values[id.0 as usize], number) == 0 {
+                    self.touched.push(id.0);
+                }
             }
             other => {
                 self.others.insert(other, number);
@@ -235,6 +249,16 @@ impl Numbering {
             other => self.others.remove(other),
         }
     }
+}
+
+thread_local! {
+    static CLEARS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has cleared a value table, for a test that a
+/// run clears it once per iteration over the function and no more.
+pub fn clears() -> usize {
+    CLEARS.with(std::cell::Cell::get)
 }
 
 /// `GVNPass::ValueTable`
@@ -294,7 +318,7 @@ impl ValueTable {
             e.commutative = true;
         }
         match &instruction.opcode {
-            Opcode::InsertValue(indices) => e.var_args.extend(indices),
+            Opcode::InsertValue(indices) => e.var_args.extend_from_slice(indices),
             Opcode::Call(info) => {
                 e.attrs = CallAttrs {
                     function: info.attrs.clone(),
@@ -359,7 +383,7 @@ impl ValueTable {
         let mut e = Expression::new(ExprOp::ExtractValue);
         e.ty = Some(ty);
         e.var_args.push(self.lookup_or_add(env, aggregate));
-        e.var_args.extend(indices);
+        e.var_args.extend_from_slice(indices);
         e
     }
 
@@ -547,7 +571,15 @@ impl ValueTable {
     /// `clear`
     /// ([GVN.cpp:772](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L772)).
     pub fn clear(&mut self) {
-        *self = Self::new();
+        CLEARS.with(|count| count.set(count.get() + 1));
+        self.value_numbering.clear();
+        self.expression_numbering.clear();
+        self.expressions.clear();
+        self.expr_idx.clear();
+        self.numbering_phi.clear();
+        self.phi_translate_table.clear();
+        self.next_expr_number = 0;
+        self.next_value_number = 1;
     }
 
     /// `erase`
@@ -606,7 +638,7 @@ impl ValueTable {
         block: BlockId,
         leaders: &LeaderMap,
     ) -> bool {
-        leaders.get_leaders(number).iter().all(|leader| leader.block == block)
+        leaders.get_leaders(number).all(|leader| leader.block == block)
     }
 
     /// `phiTranslate`
@@ -639,7 +671,6 @@ impl ValueTable {
     ) -> bool {
         let call = leaders
             .get_leaders(number)
-            .iter()
             .find_map(
                 |leader| {
                     let Operand::Value(value) = leader.value else { return None };
@@ -836,36 +867,58 @@ pub struct LeaderTableEntry {
 
 /// `GVNPass::LeaderMap`
 /// ([GVN.h:262](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Scalar/GVN.h#L262)):
-/// the values that have each number, the first inserted first.
+/// per number a list whose head is first inserted; a new entry goes after the
+/// head. LLVM's nodes are in a bump allocator and its heads in a `DenseMap`;
+/// here the nodes are a `Vec` and the heads a `Vec` indexed by the (dense)
+/// number.
 #[derive(Debug, Default)]
 pub struct LeaderMap {
-    num_to_leaders: HashMap<u32, Vec<LeaderTableEntry>>,
+    /// Node index + 1 of each number's head; 0 for none.
+    heads: Vec<u32>,
+    nodes: Vec<(LeaderTableEntry, u32)>,
+    /// Numbers whose head is set, so a clear is the size of the use.
+    used: Vec<u32>,
 }
 
 impl LeaderMap {
+    /// The entries of `number`, head first.
     pub fn get_leaders(
         &self,
         number: u32,
-    ) -> &[LeaderTableEntry] {
-        self.num_to_leaders.get(&number).map_or(&[], Vec::as_slice)
+    ) -> impl Iterator<Item = LeaderTableEntry> + '_ {
+        let mut at = self.heads.get(number as usize).copied().unwrap_or(0);
+        std::iter::from_fn(move || {
+            if at == 0 {
+                return None;
+            }
+            let (entry, next) = self.nodes[at as usize - 1];
+            at = next;
+            Some(entry)
+        })
     }
 
     /// `insert`
     /// ([GVN.cpp:807](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L807)).
-    /// The first entry stays first and a new one goes second, as LLVM's list
-    /// does: `find_leader` takes the last dominating entry, a constant at once.
     pub fn insert(
         &mut self,
         number: u32,
         value: Operand,
         block: BlockId,
     ) {
-        let entries = self.num_to_leaders.entry(number).or_default();
         let entry = LeaderTableEntry { value, block };
-        if entries.is_empty() {
-            entries.push(entry);
+        if self.heads.len() <= number as usize {
+            self.heads.resize(number as usize * 2 + 1, 0);
+        }
+        let head = self.heads[number as usize];
+        if head == 0 {
+            self.nodes.push((entry, 0));
+            self.heads[number as usize] = self.nodes.len() as u32;
+            self.used.push(number);
         } else {
-            entries.insert(1, entry);
+            // Key already exists: insert the new node after the head.
+            let after = self.nodes[head as usize - 1].1;
+            self.nodes.push((entry, after));
+            self.nodes[head as usize - 1].1 = self.nodes.len() as u32;
         }
     }
 
@@ -877,16 +930,40 @@ impl LeaderMap {
         value: Operand,
         block: BlockId,
     ) {
-        let Some(entries) = self.num_to_leaders.get_mut(&number) else { return };
-        let Some(at) = entries.iter().position(|one| one.value == value && one.block == block) else { return };
-        // The head is replaced by the second node's data, as LLVM moves it.
-        entries.remove(at);
-        if entries.is_empty() {
-            self.num_to_leaders.remove(&number);
+        let head = self.heads.get(number as usize).copied().unwrap_or(0);
+        let mut previous = 0;
+        let mut current = head;
+        while current != 0
+            && !{
+                let (entry, _) = self.nodes[current as usize - 1];
+                entry.value == value && entry.block == block
+            }
+        {
+            previous = current;
+            current = self.nodes[current as usize - 1].1;
+        }
+        if current == 0 {
+            return;
+        }
+        let next = self.nodes[current as usize - 1].1;
+        if previous != 0 {
+            // Non-head node: unlink.
+            self.nodes[previous as usize - 1].1 = next;
+        } else if next == 0 {
+            // Only node: the number has no list.
+            self.heads[number as usize] = 0;
+        } else {
+            // Move the second node's data into the head.
+            self.nodes[current as usize - 1] = (self.nodes[next as usize - 1].0, self.nodes[next as usize - 1].1);
         }
     }
 
+    /// Empties the map, keeping its storage.
     pub fn clear(&mut self) {
-        self.num_to_leaders.clear();
+        for &number in &self.used {
+            self.heads[number as usize] = 0;
+        }
+        self.used.clear();
+        self.nodes.clear();
     }
 }
