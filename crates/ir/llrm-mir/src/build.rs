@@ -122,7 +122,7 @@ impl Module {
 /// The declaration `@name` of type `ty` is, as `Module::add_function` makes it
 /// and a pass that declares a function sees it before the module has it.
 pub fn function_declaration(
-    context: &mut Context,
+    context: &Context,
     name: &str,
     ty: TypeId,
 ) -> Result<Function, String> {

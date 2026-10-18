@@ -61,7 +61,7 @@ pub(crate) fn is_null_value(
 
 /// `Constant::getNullValue`.
 pub fn null_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
@@ -81,7 +81,7 @@ fn is_poison(
 }
 
 fn poison(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Poison })
@@ -90,7 +90,7 @@ fn poison(
 /// `ConstantFoldBinaryInstruction`
 /// ([ConstantFold.cpp:637](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L637)).
 pub fn binary(
-    context: &mut Context,
+    context: &Context,
     op: BinaryOp,
     c1: ConstantId,
     c2: ConstantId,
@@ -218,7 +218,7 @@ fn float_number(
 /// `APFloat::convert` does (an `X86Fp80` constant is never folded: it is held
 /// as the nearest double).
 fn float_constant(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
     kind: FloatKind,
     value: f64,
@@ -234,7 +234,7 @@ fn float_constant(
 /// ([ConstantFold.cpp:163](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L163)):
 /// integer casts, and the casts between integers and floats of a constant.
 pub fn cast(
-    context: &mut Context,
+    context: &Context,
     op: CastOp,
     c: ConstantId,
     to: TypeId,
@@ -322,7 +322,7 @@ pub fn cast(
 /// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
 /// for a caller that has no module: a global is a pointer nothing is known of.
 pub fn compare(
-    context: &mut Context,
+    context: &Context,
     predicate: IntPredicate,
     c1: ConstantId,
     c2: ConstantId,
@@ -475,7 +475,7 @@ fn evaluate_icmp_relation(
 /// vectors, floating point (`FCmpInst::compare`), and `i1` equality, which
 /// the C++ makes an `xor` expression (#2252).
 pub fn compare_in(
-    context: &mut Context,
+    context: &Context,
     globals: &[GlobalValue],
     predicate: IntPredicate,
     c1: ConstantId,
@@ -532,7 +532,7 @@ pub fn compare_in(
 /// ([ConstantFold.cpp:295](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L295)):
 /// a condition that is a number picks an arm, a poison one is poison.
 pub fn select(
-    context: &mut Context,
+    context: &Context,
     condition: ConstantId,
     if_true: ConstantId,
     if_false: ConstantId,
@@ -551,7 +551,7 @@ mod tests {
     use crate::context::{ConstantExpr, GlobalId};
 
     fn unknown(
-        context: &mut Context,
+        context: &Context,
         width: u32,
     ) -> ConstantId {
         let ptr = context.types.ptr(0);
@@ -564,7 +564,7 @@ mod tests {
     }
 
     fn number(
-        context: &mut Context,
+        context: &Context,
         width: u32,
         value: u128,
     ) -> ConstantId {
@@ -642,7 +642,7 @@ mod relation_tests {
     }
 
     fn global(
-        context: &mut Context,
+        context: &Context,
         at: u32,
     ) -> ConstantId {
         let ptr = context.types.ptr(0);
