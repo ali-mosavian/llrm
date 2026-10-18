@@ -390,7 +390,7 @@ fn survives(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
@@ -543,7 +543,7 @@ fn survives_scanning(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {

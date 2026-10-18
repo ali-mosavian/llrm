@@ -3072,7 +3072,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 let defined = self.function().parent(def).expect("a placed definition");
                 defined == block
                     || llrm_analysis::cfg::Dominance::of(self.function())
-                        .dominates(llrm_analysis::cfg::id(defined), llrm_analysis::cfg::id(block))
+                        .dominates(self.function(), llrm_analysis::cfg::id(defined), llrm_analysis::cfg::id(block))
             }
             _ => true,
         }

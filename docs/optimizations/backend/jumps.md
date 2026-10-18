@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:73654aa17d002ce2873f0392d4b7ee10e4e50ecca36a35872515c21f4bd69146 -->
+<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:52f78e652897d4dd61852470963327417d9af2e169bc40e772c36fd8bdbb2ef9 -->
 
 # jumps
 
@@ -24,13 +24,11 @@ steps on the body.
    with a measured trip count is kept), a jump to the next block is dropped,
    `jcc L; jmp M` where `L` is next becomes `j!cc M`, and a `jcc` over a
    block that only jumps is inverted. Unreachable blocks go.
-4. `merged` joins blocks with the same physical tail (`_tail_key`: the same
-   instructions, registers and successors) and renames the values of the
-   copy to the kept block's; `machinedce::eliminated` then removes what the
-   merge made dead (a compare nothing selects on). Both repeat until nothing
-   changes, and the merged body is threaded again. `preferred` takes it only
-   if static work falls and the executed work (`_work`, blocks by frequency)
-   does not rise.
+4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
+   blocks that share the last instructions one copy of them, splitting a
+   block where no one holds only the tail; `machinedce::eliminated` then
+   removes what the merge made dead (a compare nothing selects on), and the
+   body is threaded again. Both repeat until nothing merges.
 
 Then, unless sized for code size, `duplicated_tails` replaces a `jmp` to a
 short tail (at most `TAIL_DUPLICATION` plain instructions besides its

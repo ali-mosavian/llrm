@@ -1,0 +1,18 @@
+# Each fixture is a pair NAME.llrm.ll (llrm's printer) and NAME.opt.ll (opt's printer) of one function: `identical` is what difftest must count,
+# `llrm_only` / `llvm_only` the opcodes it must name. A spelling of the same program counts identical; a real opcode difference counts different.
+[cc-spelling]
+identical = true
+
+[float-spelling]
+identical = true
+
+[extra-load]
+identical = false
+llrm_only = { load = 1 }
+llvm_only = {}
+
+[float-f0x]
+identical = true
+
+[double-f0x]
+identical = true

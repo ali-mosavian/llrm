@@ -3,7 +3,7 @@
 //! is its oracle: `tools/mir-oracle.sh` holds the two to the same verdicts.
 
 use crate::context::{ConstantKind, Context};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
@@ -206,7 +206,7 @@ impl Checker<'_> {
         for problem in function.check_uses() {
             self.fail(format!("use lists: {problem}"));
         }
-        let tree = DominatorTree::new(function);
+        let tree = DomTree::of(function);
         let entry = function.entry().expect("a body has an entry");
         if !function.predecessors(entry).is_empty() {
             self.fail("the entry block has predecessors".to_owned());
@@ -310,7 +310,7 @@ impl Checker<'_> {
 
     fn dominance(
         &mut self,
-        tree: &DominatorTree,
+        tree: &DomTree,
         inst: InstId,
     ) {
         let instruction = self.function.instruction(inst);

@@ -296,6 +296,49 @@ pub fn spilled_from(
     Ok((body, made.union(&merged).copied().collect()))
 }
 
+thread_local! {
+    /// The instructions `materialized` made of the ones it was given, when a
+    /// caller asks to know them (`recording_cores`).
+    static CORES: std::cell::RefCell<Option<Vec<u64>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn core_made(one: &Insn) {
+    CORES.with(|cores| {
+        if let Some(list) = cores.borrow_mut().as_mut() {
+            list.push(one.id());
+        }
+    });
+}
+
+/// `work`, and the ids of the instructions it wrote in place of the ones it
+/// was given, as opposed to the reloads, stores and loads it put beside them
+/// (a spiller that edits a function it keeps needs to tell them apart).
+pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
+    CORES.with(|cores| *cores.borrow_mut() = Some(Vec::new()));
+    let result = work();
+    let ids = CORES.with(|cores| cores.borrow_mut().take()).unwrap_or_default();
+    (result, ids)
+}
+
+/// The values of `body` the spiller makes again where they are read rather
+/// than storing them: literals, frame and symbol addresses, and loads of a cell
+/// nothing writes while the value lives. What `TargetInstrInfo::
+/// isTriviallyReMaterializable` answers for the translated allocator.
+pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
+    postings::following(body, |postings| {
+        let values: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
+        let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
+        out.extend(_addresses_by(body, &values, postings).keys().copied());
+        out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());
+        out
+    })
+}
+
 /// `spilled_from`, with `plain` kept out of the merging of updates into one
 /// register value, and what that merging made told apart from the rest: (the
 /// body, the values made to live for one use, the values made to live across
@@ -552,6 +595,7 @@ pub fn materialized(
                 None => _tied(body.bits, &one, &stored, frame, classes)?,
             };
             if let Some(direct) = direct {
+                core_made(&direct);
                 insns.push(direct);
                 continue;
             }
@@ -564,6 +608,7 @@ pub fn materialized(
                 insns.extend(reloads);
                 insns.push(if renamed.is_empty() { read } else { _renamed(&read, &renamed) });
                 if let Some(direct) = _tied(body.bits, &one, &stored, frame, classes)? {
+                    core_made(&direct);
                     insns.push(direct);
                     continue;
                 }
@@ -584,6 +629,7 @@ pub fn materialized(
             }
             insns.extend(before);
             let rewritten = if rename.is_empty() { Arc::clone(&one) } else { _renamed(&one, &rename) };
+            core_made(&rewritten);
             insns.push(Arc::clone(&rewritten));
             if one.defines.iter().any(|value| frame_loads.contains_key(value)) {
                 marked.insert(block_index);

@@ -54,14 +54,6 @@ fn mir_has_no_half() {
     assert!(rejects("define half @f(half %a) {\n  ret half %a\n}\n"));
 }
 
-/// `DataLayout` has no preferred alignment (`getPrefTypeAlign`), which
-/// `getPointerAlignment` uses for a global.
-#[test]
-fn the_data_layout_has_no_preferred_alignment() {
-    let source = include_str!("../datalayout.rs");
-    assert!(!source.contains("fn preferred_align"), "translate Value::getPointerAlignment's preferred alignment");
-}
-
 /// No front end, pass or lowering of llrm builds a vector type, so
 /// `DemandedElts` is not translated. Fails the day one does: ValueTracking's
 /// vector cases are then owed.

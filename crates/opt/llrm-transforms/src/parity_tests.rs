@@ -1,5 +1,6 @@
+use crate::parity::Phase;
 use crate::parity::{self, Entry, SlotKind};
-use crate::pipeline::{self, Applied, Phase};
+use crate::pipeline::{self, Applied};
 
 fn names(
     applied: &Applied,
@@ -21,6 +22,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
         llvm: "ghost",
         kind: SlotKind::Translated,
         replaced_by: "",
+        note: "",
     });
     let why = parity::check(&registry, Phase::Simplify, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@999"), "{why}");
@@ -44,7 +46,7 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
         let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify] {
             let built = names(&on, phase);
-            assert_eq!(parity::check_phase(phase, &built, on.options.sroa), Ok(()), "{phase:?}");
+            assert_eq!(parity::check_phase(phase, &built), Ok(()), "{phase:?}");
         }
     }
 }
@@ -61,25 +63,57 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     let report = parity::report();
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
-    assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
+    assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
+    let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
+    assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));
 }
 
-/// The SROA slots are Translated only when the translated unit runs in them:
-/// `Options::sroa` put `sroa-real` in the slot, and without it the stand-in
-/// stayed, so the registry would have said joined over the old pass.
+/// A Translated machine slot that `flow::machine_with` does not run passed
+/// unnoticed, and a phase that runs with no slot had no kind.
 #[test]
-fn test_the_sroa_slots_run_the_translated_unit_only_with_the_flag() {
-    let parts = |sroa: bool, phase: Phase, slot: &str| {
-        let on = Applied {
-            options: pipeline::Options { llvm_order: true, sroa, ..pipeline::Options::standard() },
-            ..Applied::default()
-        };
-        let list = pipeline::llvm_order(&on, phase);
-        let found = list.iter().find(|one| one.name() == slot).expect("slot");
-        found.parts()
-    };
-    for (phase, slot) in [(Phase::Early, "sroa@1179"), (Phase::Simplify, "sroa@646"), (Phase::Simplify, "sroa@776")] {
-        assert!(parts(true, phase, slot).contains(&"sroa-real"), "{slot}");
-        assert!(!parts(false, phase, slot).contains(&"sroa-real"), "{slot}");
+fn test_a_translated_backend_slot_that_is_not_run_fails() {
+    let mut registry = parity::REGISTRY.to_vec();
+    registry.push(Entry {
+        slot: "ghost@99",
+        phase: Phase::Backend,
+        llvm: "ghost",
+        kind: SlotKind::Translated,
+        replaced_by: "",
+        note: "",
+    });
+    let built: Vec<&str> = parity::REGISTRY
+        .iter()
+        .filter(|one| one.phase == Phase::Backend && one.kind != SlotKind::Missing)
+        .map(|one| one.slot)
+        .collect();
+    assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
+    let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
+    assert!(why.contains("ghost@99"), "{why}");
+    let why = parity::check_backend(&["floatalloc@8", "jumps@17", "allocate@11", "unknown@1"]).unwrap_err();
+    assert!(why.contains("unknown@1"), "{why}");
+}
+
+/// A Partial slot that is not run fails like a Translated one, but it is never
+/// counted as joined: `jumps@17` is TailMergeBlocks only.
+#[test]
+fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined() {
+    let built: Vec<&str> =
+        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
+    let without: Vec<&str> = built.iter().copied().filter(|one| *one != "jumps@17").collect();
+    let why = parity::check(parity::REGISTRY, Phase::Backend, &without).expect_err("jumps@17 left out");
+    assert!(why.contains("jumps@17"), "{why}");
+    assert!(parity::joined_slots(parity::REGISTRY, &built).all(|one| one != "jumps@17"));
+    let count = parity::tally(parity::REGISTRY);
+    // jumps@17 and allocate@11 (greedy by default under LLVM's order).
+    assert_eq!(count.partial, 2);
+    assert!(parity::report().contains("jumps@17") && parity::report().contains("2 partial"));
+}
+
+/// A Partial slot without its criterion and exit says what is done and not what
+/// is left.
+#[test]
+fn test_a_partial_slot_states_its_criterion_and_exit() {
+    for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
+        assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
     }
 }
