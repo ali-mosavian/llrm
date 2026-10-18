@@ -161,6 +161,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
 pub mod spill;

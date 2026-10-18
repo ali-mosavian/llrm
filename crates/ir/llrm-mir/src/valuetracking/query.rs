@@ -241,7 +241,7 @@ const MAX_ASSUMES_PER_VALUE: usize = 1024;
 
 /// `AssumptionCache`: the `llvm.assume` calls of a function, and the values
 /// each one tells of.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct AssumptionCache {
     pub assumes: Vec<InstId>,
     affected: HashMap<Operand, Vec<InstId>>,

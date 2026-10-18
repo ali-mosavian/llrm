@@ -131,6 +131,7 @@ pub mod ranger;
 pub mod ranges;
 pub mod references;
 pub mod regions;
+pub mod scev;
 pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;

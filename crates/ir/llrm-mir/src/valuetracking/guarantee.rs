@@ -255,7 +255,7 @@ fn can_unwind_past_landing_pad(
 /// `Instruction::mayThrow()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1331>
-fn may_throw(
+pub fn may_throw(
     q: &Query,
     inst: InstId,
 ) -> bool {
@@ -1288,4 +1288,25 @@ pub fn column(
         u8::from(is_guaranteed_not_to_be_poison(q, v, 0)),
         u8::from(is_guaranteed_not_to_be_undef(q, v, 0))
     )
+}
+
+/// `Instruction::mayWriteToMemory()`. MIR has no atomics, fences or `va_arg`:
+/// a load writes nothing (it is always unordered), and a call writes unless it
+/// or its callee only reads memory (`CallBase::onlyReadsMemory`).
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1157>
+pub fn may_write_to_memory(
+    q: &Query,
+    inst: InstId,
+) -> bool {
+    let instruction = q.function.instruction(inst);
+    match &instruction.opcode {
+        Opcode::Store { .. } => true,
+        Opcode::Call(info) | Opcode::Invoke(info) => {
+            let only_reads = |attrs: &[Attribute]| !crate::memory::stated(attrs).writes;
+            !(only_reads(&info.attrs)
+                || called_function(q, instruction).is_some_and(|callee| only_reads(&callee.attrs)))
+        }
+        _ => false,
+    }
 }

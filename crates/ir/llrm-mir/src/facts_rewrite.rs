@@ -210,7 +210,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 20] = [
+        const CHECKED: [&str; 22] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -231,6 +231,13 @@ mod tests {
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
             "inlinecost.rs",
+            // ScalarEvolution.cpp reads them in `createSCEV`
+            // and `MatchBinaryOp`
+            // (`getNoWrapFlagsFromUB`, `getNoWrapFlagsForGEP`); a pass that
+            // drops one forgets the value, as LLVM's do (`forgetValue`).
+            "create.rs",
+            "create_phi.rs",
+            "create_addrec.rs",
             // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
             // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
             // LLVM does.
