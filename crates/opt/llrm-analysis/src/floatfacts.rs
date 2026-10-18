@@ -844,8 +844,14 @@ fn _exits<'s>(
         let before =
             cells_before(unit, calls, integers, &solved.facts, consts::ReadAt::End(preheader), &references, &mut asked);
         let initial = consts::_kills(before, last, integers, calls, None, None, false, &mut asked);
-        let Some(after) = repeated(unit, &instructions(latch).iter().collect::<Vec<_>>(), &count, &initial, Some(integers), Some(&mut asked))
-        else {
+        let Some(after) = repeated(
+            unit,
+            &instructions(latch).iter().collect::<Vec<_>>(),
+            &count,
+            &initial,
+            Some(integers),
+            Some(&mut asked),
+        ) else {
             continue;
         };
         let facts = stored

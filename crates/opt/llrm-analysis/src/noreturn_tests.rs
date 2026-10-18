@@ -40,14 +40,7 @@ fn shape(
     function
         .layout()
         .iter()
-        .map(|&one| {
-            function
-                .block(one)
-                
-                .iter()
-                .map(|inst| function.instruction(inst).opcode.mnemonic())
-                .collect()
-        })
+        .map(|&one| function.block(one).iter().map(|inst| function.instruction(inst).opcode.mnemonic()).collect())
         .collect()
 }
 

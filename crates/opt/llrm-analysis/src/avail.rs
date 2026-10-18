@@ -1184,12 +1184,7 @@ fn memory_providers(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                
-                .iter()
-                .enumerate()
-                .map(move |(index, inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let loads: Vec<(InstId, (MemRef, ValueId))> =

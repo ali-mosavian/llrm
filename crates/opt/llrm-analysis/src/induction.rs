@@ -2529,7 +2529,6 @@ pub fn control_replacement<'a>(
     }
     let tests_only = function
         .block(header)
-        
         .iter()
         .all(
             |inst| inst == proof.compare

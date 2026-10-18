@@ -240,7 +240,6 @@ pub fn cold(
     let marked = |at: i64| {
         function
             .block(cfg::block(at))
-            
             .iter()
             .any(
                 |inst| matches!(
@@ -270,8 +269,8 @@ fn _ends_cold(
     terminal_calls: &BTreeSet<InstId>,
     found: &BTreeSet<i64>,
 ) -> bool {
-    let instructions = function.block(cfg::block(block.at)).instructions();
-    if instructions.iter().any(|inst| terminal_calls.contains(inst)) || _stops(function, block.at) {
+    let instructions = function.block(cfg::block(block.at));
+    if instructions.iter().any(|inst| terminal_calls.contains(&inst)) || _stops(function, block.at) {
         return true;
     }
     !block.succ.is_empty() && block.succ.iter().all(|at| found.contains(at))

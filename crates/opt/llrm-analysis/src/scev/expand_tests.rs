@@ -221,7 +221,6 @@ fn expanded_in_loop_with(
     let s = build(&mut se, &env.cx(&context, &function), header, &arguments);
     let at = function
         .block(header)
-        
         .iter()
         .find(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
         .expect("the compare");
@@ -374,7 +373,6 @@ exit:
     let named = |function: &llrm_mir::module::Function, name: &str| {
         function
             .block(header)
-            
             .iter()
             .find(|&one| {
                 function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))

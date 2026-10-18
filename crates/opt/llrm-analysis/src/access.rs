@@ -212,7 +212,6 @@ impl<'a> Addresses<'a> {
             let latch = cfg::block(*loop_.latches.first().expect("one latch"));
             for phi in function
                 .block(cfg::block(loop_.header))
-                
                 .iter()
                 .take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
             {
