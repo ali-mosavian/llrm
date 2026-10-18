@@ -52,6 +52,25 @@ def still_rising(work_small: float, work_big: float) -> bool:
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
 
 
+def read(work_big: float, total: float) -> bool:
+    """Whether the test reads a step: it has the share of the compile's work and the floor."""
+    return work_big >= DEFAULT["share"] * total and work_big >= DEFAULT["floor_minstr"]
+
+
+def near_read(work_big: float, total: float) -> bool:
+    """Within 10% under the share or the floor: a step that hovers there is read on one build and not on the next."""
+    return work_big >= 0.9 * DEFAULT["share"] * total and work_big >= 0.9 * DEFAULT["floor_minstr"]
+
+
+def test_a_debt_step_hovering_at_the_share_threshold_does_not_flip_the_result():
+    """lir pressuresink was 2.03% of the compile (limit 2%): it entered the test at one commit (blamed on #2195) and could leave it, 'paid' by dipping."""
+    total = 1850.0
+    for work_big in (0.0205 * total, 0.0199 * total, 0.0195 * total):
+        assert read(work_big, total) == (work_big >= 0.02 * total)
+        assert near_read(work_big, total), "within 10% under the share: still held to its debt"
+    assert not near_read(0.015 * total, total)
+
+
 def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
     """lir twoaddr read x2.30 (60.3 -> 138.8): paid on one build, over on the next, and its debt was deleted as paid (#2191) then needed again."""
     assert still_rising(60.3, 138.8) and still_rising(60.3, 138.0)
@@ -153,7 +172,9 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     grown, rising = [], set()
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
-        if work_big < DEFAULT["share"] * total or work_big < DEFAULT["floor_minstr"]:
+        if not read(work_big, total):
+            if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
+                rising.add(name)  # a debt's step that dips under the share is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
         if still_rising(work_small, work_big):

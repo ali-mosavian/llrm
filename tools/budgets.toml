@@ -216,7 +216,7 @@ name = "lir pressuresink"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2243"
 owner = "scev-port"
-why = "slope from #2195 LoopInfo (1187237d6); measured 11.3 -> 37.6 Minstr (x3.33)"
+why = "slope pre-existing; read since 1187237d6 only because the step crosses the 2% share (2.03%); measured 11.3 -> 37.6 Minstr (x3.33)"
 exit = "pressuresink cases back to x<=2.3 at 2N, slope from #2195 removed"
 
 [[debt]]
