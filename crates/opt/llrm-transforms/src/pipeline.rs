@@ -704,7 +704,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
-                slot("fill@737", Box::new(fill::Fill { size })),
+                slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",
                     Box::new(indvars::IndVars {
@@ -720,7 +720,7 @@ pub(crate) fn llvm_order(
                 dead("dead@801"),
                 decide("decide@809"),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
-                slot("merge@818", Box::new(fill::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
