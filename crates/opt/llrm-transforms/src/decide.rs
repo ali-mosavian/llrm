@@ -101,6 +101,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
+use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -112,6 +113,17 @@ use llrm_support::hash::IndexMap;
 
 use crate::edges;
 use crate::transform;
+
+/// `LLRM_EXP_SCEV_DECIDE`, read once: `decide` asks ScalarEvolution
+/// (`isKnownPredicateAt`) what the guards over a branch prove, not the old
+/// guard engine. Off by default: it decides more of some loops and keeps the
+/// `count == 0` check at the exit of `rectwo`'s nested counted loops (-O2, -O3
+/// clocks +10%). The pinned `opt` drops that check in `correlated-propagation`
+/// (LazyValueInfo), `instcombine` and `sccp`, not in ScalarEvolution's users
+/// (see `COUNT_NOT_ZERO_AT_THE_EXIT` in the tests).
+fn scev_enabled() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_SCEV_DECIDE")
+}
 
 /// `decided`, then its chains merged, as the old Decide.
 pub struct Decide;
@@ -133,7 +145,7 @@ impl FunctionPass for Decide {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let decided = _decided(unit.context, unit.layout, unit.function, analyses)
+        let decided = _decided(unit.context, unit.layout, unit.function, analyses, scev_enabled())
             .unwrap_or_else(|error| panic!("decide: {error}"));
         if decided | crate::cfg::merged(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -147,7 +159,18 @@ pub fn decided(
     function: &mut Function,
     outer: &Outer,
 ) -> Result<bool, String> {
-    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())))
+    decided_using(context, layout, function, outer, scev_enabled())
+}
+
+/// [`decided`], asking ScalarEvolution (`scev`) or the old guard engine.
+pub fn decided_using(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    scev: bool,
+) -> Result<bool, String> {
+    _decided(context, layout, function, &mut Analyses::new(std::rc::Rc::new(outer.clone())), scev)
 }
 
 /// `decided`, `analyses` holding what is known of `function`.
@@ -156,6 +179,7 @@ fn _decided(
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
+    use_scev: bool,
 ) -> Result<bool, String> {
     let threaded = _threaded(context, function) | _phi_threaded(context, function)?;
     if threaded {
@@ -168,7 +192,9 @@ fn _decided(
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let scev = LazyScevView::new(analyses);
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev, use_scev)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -185,6 +211,8 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
+    scev: &LazyScevView,
+    use_scev: bool,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -256,7 +284,7 @@ fn _decisions(
             }
         }
         if answer.is_none() {
-            answer = _implied(unit, block, last);
+            answer = if use_scev { _implied_by_scev(unit, scev, last) } else { _implied_by_guards(unit, block, last) };
         }
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
@@ -265,7 +293,7 @@ fn _decisions(
 
 /// Whether the compare `last` branches on holds or fails there, by what the
 /// guards over `block` and the loops holding it prove of its two sides.
-fn _implied(
+fn _implied_by_guards(
     unit: &Unit,
     block: BlockId,
     last: InstId,
@@ -283,6 +311,28 @@ fn _implied(
         return Some(true);
     }
     given.holds(unit, predicate.inverse(), &left, &right).then_some(false)
+}
+
+/// Whether the compare `last` branches on holds or fails there, by what
+/// ScalarEvolution proves of its two sides at `last` (`isKnownPredicateAt`,
+/// which reads the guards over its block and the loops holding it).
+fn _implied_by_scev(
+    unit: &Unit,
+    scev: &LazyScevView,
+    last: InstId,
+) -> Option<bool> {
+    let function = unit.function;
+    let Some(Operand::Value(condition)) = function.instruction(last).operands.first().copied() else { return None };
+    let (_, compare) = unit.defining(Operand::Value(condition))?;
+    let (Opcode::ICmp(predicate), [left, right]) = (&compare.opcode, &compare.operands[..]) else { return None };
+    unit.int_bits(*left)?;
+    scev.ask(unit.context, unit.layout, function, |scev, cx| {
+        let (left, right) = (scev.get_scev(cx, *left), scev.get_scev(cx, *right));
+        if scev.is_known_predicate_at(cx, *predicate, left, right, Some(last)) {
+            return Some(true);
+        }
+        scev.is_known_predicate_at(cx, predicate.inverse(), left, right, Some(last)).then_some(false)
+    })
 }
 
 /// `last`, a terminator, replaced by a jump to `target`.
