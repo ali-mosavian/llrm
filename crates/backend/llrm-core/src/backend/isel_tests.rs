@@ -2805,7 +2805,7 @@ done:
     assert_eq!(
         (&got[body + 1..body + 3], steps, &got[body + 5..body + 7]),
         (
-            &["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..],
+            &["mov cl, byte ptr es:[bx]".to_owned(), "mov byte ptr [si], cl".to_owned()][..],
             vec!["inc bx".to_owned(), "inc si".to_owned()],
             &["dec ax".to_owned(), "jne L0_2".to_owned()][..]
         ),
@@ -4187,8 +4187,8 @@ b:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ax, word ptr [bp+8]",
             "cmp byte ptr [bp+6], 0",
+            "mov ax, word ptr [bp+8]",
             "je L0_3",
             "L0_1:",
             "mov ax, -4",
