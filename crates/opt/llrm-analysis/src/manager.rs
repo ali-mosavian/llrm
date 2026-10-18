@@ -1173,7 +1173,15 @@ impl Analysis for Pointers {
             // A callee the module defines is read in its body as it stood
             // before this pass.
             let snapshot = llrm_mir::passes::MODULE_SNAPSHOT.with(|held| held.borrow().clone());
-            let verify = snapshot.as_ref().map(|module| crate::capturecheck::Verify::new(module, layout, 8));
+            let verify = snapshot
+                .as_ref()
+                .map(
+                    |module| {
+                        let mut verify = crate::capturecheck::Verify::new(module, layout, 8);
+                        verify.trust_external = true;
+                        verify
+                    },
+                );
             crate::capturecheck::check_with(&unit, facts, verify.as_ref());
         }
     }

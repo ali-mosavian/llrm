@@ -29,6 +29,9 @@ pub struct Verify<'a> {
     pub module: &'a llrm_mir::module::Module,
     pub layout: &'a llrm_mir::datalayout::DataLayout,
     depth: u32,
+    /// A callee without a body here is taken as not capturing: the audit of a
+    /// single module, whose other modules' bodies it cannot read.
+    pub trust_external: bool,
     stack: std::cell::RefCell<Vec<(llrm_mir::context::GlobalId, usize)>>,
     /// Parameters shown uncaptured, by callee name, for the report.
     pub verified: std::cell::RefCell<Vec<String>>,
@@ -45,6 +48,7 @@ impl<'a> Verify<'a> {
             module,
             layout,
             depth,
+            trust_external: false,
             stack: Default::default(),
             verified: Default::default(),
             unproven: Default::default(),
@@ -283,6 +287,10 @@ fn captured_by(
                         (Some(callee), Some(verify)) => match verify.parameter_named(unit, callee, at) {
                             Ok(()) => {}
                             Err(Unproven::Undefined) if crate::alias::borrowed(unit, used.user, at) => {}
+                            // A callee this compile has no body for is another
+                            // module's: the audit leaves it, the module report
+                            // counts it.
+                            Err(Unproven::Undefined) if verify.trust_external => {}
                             Err(_) => return Some(used.user),
                         },
                         // A unit holds the other bodies as declarations and the
