@@ -150,6 +150,94 @@ impl<'a> BasicAA<'a> {
         )
     }
 
+    /// A phi's incoming values (its operands are value, block pairs).
+    fn incoming(phi: &Instruction) -> Vec<Operand> {
+        phi.operands.iter().copied().filter(|one| !matches!(one, Operand::Block(_))).collect()
+    }
+
+    /// `getUnderlyingObjectAggressive` (ValueTracking.cpp:7380,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/ValueTracking.cpp#L7380>):
+    /// the one object every arm of the selects and phis reaches, else the
+    /// plain underlying object.
+    pub(crate) fn underlying_aggressive(
+        &self,
+        operand: Operand,
+    ) -> Operand {
+        const MAX_VISITED: usize = 8;
+        let first = self.underlying(operand);
+        let mut work = vec![operand];
+        let mut visited = Vec::new();
+        let mut object = None;
+        let mut is_first = true;
+        loop {
+            let popped = work.pop().expect("a pending pointer");
+            let pointer = if is_first { first } else { self.underlying(popped) };
+            is_first = false;
+            if !visited.contains(&pointer) {
+                visited.push(pointer);
+                if visited.len() == MAX_VISITED {
+                    return first;
+                }
+                match self.defining(pointer) {
+                    Some(one) if matches!(one.opcode, Opcode::Select) => work.extend_from_slice(&one.operands[1..]),
+                    Some(one) if matches!(one.opcode, Opcode::Phi) => work.extend(Self::incoming(one)),
+                    _ => match object {
+                        None => object = Some(pointer),
+                        Some(found) if found != pointer => return first,
+                        Some(_) => {}
+                    },
+                }
+            }
+            if work.is_empty() {
+                return object.unwrap_or(first);
+            }
+        }
+    }
+
+    /// `isIdentifiedObject`.
+    pub(crate) fn is_identified_object(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.identified(operand) || self.global_value(operand)
+    }
+
+    fn global_value(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(self.unit.context.get(id).kind, ConstantKind::Global(_))
+        )
+    }
+
+    pub(crate) fn is_alloca(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }))
+    }
+
+    pub(crate) fn is_argument(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.argument(operand)
+    }
+
+    fn global_variable_of(
+        &self,
+        operand: Operand,
+    ) -> Option<&'a llrm_mir::module::GlobalVariable> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Global(global) = self.unit.context.get(id).kind else { return None };
+        match &self.unit.globals.get(global.0 as usize)?.kind {
+            GlobalKind::Variable(variable) => Some(variable),
+            GlobalKind::Function(_) => None,
+        }
+    }
+
     fn argument_attrs(
         &self,
         operand: Operand,
@@ -512,13 +600,56 @@ impl AAResults for BasicAA<'_> {
         self.alias_check(a, b, aaqi)
     }
 
+    /// `BasicAAResult::getModRefInfoMask` (BasicAliasAnalysis.cpp:783,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L783>):
+    /// what may be done to the location at all; a constant global, a
+    /// `noalias readonly` argument and (when asked) an alloca are exempt.
     fn get_mod_ref_info_mask(
         &mut self,
-        _: &MemoryLocation,
+        loc: &MemoryLocation,
         _: &mut AAQueryInfo,
-        _: bool,
+        ignore_locals: bool,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let mut max_lookup = 8;
+        let mut work = vec![loc.ptr];
+        let mut visited = Vec::new();
+        let mut result = ModRefInfo::NoModRef;
+        loop {
+            let object = self.underlying(work.pop().expect("a pending pointer"));
+            if !visited.contains(&object) {
+                visited.push(object);
+                let defined = self.defining(object);
+                if ignore_locals && defined.is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. })) {
+                } else if let Some(attrs) = self.argument_attrs(object) {
+                    let facts = llrm_mir::facts::Facts::of(attrs);
+                    if !(facts.no_alias() && (facts.read_only() || facts.read_none())) {
+                        return ModRefInfo::ModRef;
+                    }
+                    result = result.union(ModRefInfo::Ref);
+                } else if let Some(variable) = self.global_variable_of(object) {
+                    if !variable.constant {
+                        return ModRefInfo::ModRef;
+                    }
+                } else if let Some(one) = defined.filter(|one| matches!(one.opcode, Opcode::Select)) {
+                    work.extend_from_slice(&one.operands[1..]);
+                } else if let Some(one) = defined.filter(|one| matches!(one.opcode, Opcode::Phi)) {
+                    let incoming = Self::incoming(one);
+                    if incoming.len() > max_lookup {
+                        return ModRefInfo::ModRef;
+                    }
+                    work.extend(incoming);
+                } else {
+                    return ModRefInfo::ModRef;
+                }
+            }
+            max_lookup -= 1;
+            if work.is_empty() {
+                return result;
+            }
+            if max_lookup == 0 {
+                return ModRefInfo::ModRef;
+            }
+        }
     }
 
     /// `BasicAAResult::getArgModRefInfo` (BasicAliasAnalysis.cpp:897,
@@ -734,6 +865,40 @@ mod tests {
         assert_eq!(arg("readonly", ""), ModRefInfo::Ref);
         assert_eq!(arg("", "writeonly"), ModRefInfo::Mod);
         assert_eq!(arg("readonly", "readnone"), ModRefInfo::NoModRef);
+    }
+
+    /// `getModRefInfoMask` of `%p` in `@f`.
+    fn mask(
+        body: &str,
+        ignore_locals: bool,
+    ) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location = MemoryLocation::before_or_after(Operand::Value(value(function, "p")));
+        BasicAA::new(&unit).get_mod_ref_info_mask(&location, &mut AAQueryInfo::default(), ignore_locals)
+    }
+
+    /// A location the callee may not modify is `Ref` at most; a constant
+    /// global is none, an alloca none when locals are ignored. The stub said
+    /// `ModRef` for all, so `FunctionAttrs` counted every read of a constant
+    /// table and every write to a local as an access of `Other`.
+    #[test]
+    fn a_constant_global_a_local_and_a_readonly_noalias_argument_are_masked() {
+        let global = |keyword: &str| {
+            format!(
+                "@g = internal {keyword} i32 0\ndefine void @f() {{\nentry:\n  %p = getelementptr i8, ptr @g, i32 0\n  ret void\n}}\n"
+            )
+        };
+        assert_eq!(mask(&global("constant"), false), ModRefInfo::NoModRef);
+        assert_eq!(mask(&global("global"), false), ModRefInfo::ModRef);
+        let local = "define void @f() {\nentry:\n  %p = alloca i32\n  ret void\n}\n";
+        assert_eq!(mask(local, true), ModRefInfo::NoModRef);
+        assert_eq!(mask(local, false), ModRefInfo::ModRef);
+        let argument = |attrs: &str| format!("define void @f(ptr {attrs} %p) {{\nentry:\n  ret void\n}}\n");
+        assert_eq!(mask(&argument("noalias readonly"), false), ModRefInfo::Ref);
+        assert_eq!(mask(&argument("readonly"), false), ModRefInfo::ModRef);
     }
 
     /// Distinct allocas are distinct objects.
