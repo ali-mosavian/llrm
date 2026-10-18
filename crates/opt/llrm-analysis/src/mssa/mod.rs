@@ -211,7 +211,7 @@ impl Mssa {
 
     /// `MemoryUseOrDef::setOptimized`: for a use, `setOptimized` also sets
     /// operand 0 (the defining access); for a def, operand 1.
-    pub(crate) fn set_optimized(
+    pub fn set_optimized(
         &mut self,
         access: AccessId,
         to: AccessId,
