@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:f6eb8aeeceef238531623e2fb12d7b907f9bcc304e341ce3e2b5699ac7c2907c -->
+<!-- src: crates/backend/llrm-core/src/backend/phielim.rs sha256:acceb45ac4d94c3d61b0cd55ebd8a653ebcc9817205f6ce2b0c9158941c740a0 -->
 
 # phielim
 
@@ -72,6 +72,13 @@ flowchart TB
 
 The new block's label is above every physical offset (`(entry + 1) << 32`),
 in a namespace of its own per body entry.
+
+`LLRM_PHIELIM_LLVM=1` lowers the phis that are not x87 by the translation of
+LLVM's `PHIElimination` ([`crate::phielimination`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/phielimination.rs)) first, and this pass the
+rest. Off by default: it leaves a cycle of loop-carried values to be broken
+by copies through a register, where the parallel copy here breaks it with an
+`xchg`, and the i64 Fibonacci loop (`test_an_i64_is_a_dword_pair_through_phis_calls_and_returns`)
+spills a dword with it.
 
 `unsplit` undoes a split whose copies coalescing removed: a block of only a
 jump is bypassed, so the jump is not taken on every pass. The peephole calls
