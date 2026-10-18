@@ -611,8 +611,7 @@ impl FunctionPass for Together {
 /// `LLRM_EXP_LLVM`, read once: [`Options::llvm_order`] by default
 /// (PassBuilderPipelines.cpp at d1106deb71cc).
 fn experiment_llvm() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_set("LLRM_EXP_LLVM"))
+    llrm_support::env_flag!("LLRM_EXP_LLVM")
 }
 
 /// Where a list of LLVM's order stands.
@@ -640,7 +639,6 @@ pub(crate) fn llvm_order(
     let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
     let fold = |name| slot(name, Box::new(fold::Fold));
     let dead = |name| slot(name, Box::new(dead::Dead));
-    let promote = |name| slot(name, Box::new(promote::Promote));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
