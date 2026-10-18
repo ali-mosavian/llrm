@@ -702,7 +702,7 @@ mod tests;
 fn operands_edited() -> PreservedAnalyses {
     use llrm_analysis::manager::{
         Annotated, Bounded, CallEffects, DemandedBits, DominatedEdges, ExposedFrames, FloatFacts, Followers,
-        PlainAccesses, PointerValues, Pointers, TableLoads, ThroughMemory, Writes,
+        PlainAccesses, Pointers, TableLoads, ThroughMemory, Writes,
     };
     PreservedAnalyses::none()
         .preserve::<Dominators>()
@@ -711,7 +711,6 @@ fn operands_edited() -> PreservedAnalyses {
         .preserve::<Accesses>()
         .preserve::<ExposedFrames>()
         .preserve::<Pointers>()
-        .preserve::<PointerValues>()
         .preserve::<Annotated>()
         .preserve::<CallEffects>()
         .preserve::<TableLoads>()
