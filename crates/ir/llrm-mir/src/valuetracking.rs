@@ -56,7 +56,7 @@ pub fn column(
         "cru" => range::column(query, value, false),
         "crs" => range::column(query, value, true),
         "gp" => guarantee::column(query, value),
-        "sp" => range::pattern_column(query, value),
+        "pat" => range::pattern_column(query, value),
         "ov" => range::overflow_column(query, value),
         other => format!(" {other}=?"),
     }

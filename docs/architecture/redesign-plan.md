@@ -8,6 +8,8 @@
 
 ## Status
 
+Merged since the scoreboard of section 2.0 (main `5eea0777a`; `d_faces` not re-taken since `cb2a78038`, so the scoreboard stands as measured): LoopInfo translated ([#2195]), InlineCost behind `LLRM_EXP_INLINEDECIDE` ([#2140]), the GVN and MemDep plan ([#2155]), poison float and address ([#2135]), two spiller fixes ([#2223]), call-effects renamed to a chain ([#2093]), `@noipa` on the Nib kernels ([#2210]), the pinned-clang row check (commit `5c49634a4`), three paid budget debts deleted. Open PRs are capped at 10 (oversight): green and correctness or instrument fixes stay in flight; red or stacked ones go to draft until green on main, order #2163, #2127, #2159, then #2164, #2172, #2160, #2137, #2156.
+
 As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). keep-analyses and facts-per-query are now basicaa-port (the translation of `BasicAliasAnalysis`, `CaptureTracking`, `AliasAnalysis` and `MemoryLocation` at `d1106deb71cc` as memoryssa-port's `AliasQuery`; the `Pointers` tower and its join rules are deleted when the clients move; first [#2125] and the main-order soundness search); identical-corpus is now simplifycfg-port (the `SimplifyCFG.cpp` translation, `ConstantFoldTerminator` and the early-FPM options first); scev-port ([#2150], `scev-port.md`): (1) LoopInfo first, which owns `Loops` and whose consumers are told first; (2) the SCEV tree translated on `ConstantRange`; (3) the Expander on the shared X86 TTI, which cgscc-poc owns; fill goes to LoopIdiom, owner loopidiom-port (renamed from loadpre-idioms); lcssa and stamp go to llvm-order-poc (stamp: it says what it is for first); emission is unowned and ranked last; the LIR clean-up (266 M gap) is lir-cleanup-poc, who writes a translation map. gvn-port ([#2155]: `GVN.cpp` and `MemoryDependenceAnalysis`) takes the gvn row's open owner; fold-poc also owns `ConstantFolding.cpp`; `AliasQuery` mirrors `AAResults` at the pin; the order stack lands OFF by default, with its conditions in its PR (oversight, 2026-10-18). Unchanged: plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
@@ -27,11 +29,11 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
 | valuetracking-port | valuetracking-port | starting; fold-poc writes the API stub first | translation of `ValueTracking.cpp`, `KnownBits`, `ConstantRange`; consumers: InstSimplify gaps, EarlyCSE, InstCombine, SCCP, LVI, CVP, SCEV |
 | basicaa-port | basicaa-port | starting | about 4,100 C++ lines at the core, about 6,400 llrm lines to delete when the clients have moved |
-| oracle triage | basicaa-port | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); soundness finds: DSE dropped a store through a phi with an unknown arm (cgscc-poc, fix PR coming), a join with an unfollowed arm published only the other arms' objects ([#2132], merged), kept points-to facts were not re-derived after in-place retargets ([#2125], merged), a body kept its memory-SSA structure after an edit changed it ([#2151], open), a volatile load is a Use in main's graph (issue #2129, no miscompile); oracle sweeps over C, BASIC, Nib and BQ at every level, m16 and m32, are a standing gate item (`identical.py`'s corpus includes the bas, nib and bq programs with every `LLRM_CHECK_*` on; llvm-difftest wires the gate); classes found on main by lir-cleanup-poc's sweep (`703d070b7` and #2152, 1,350 compiles, Nib only): an allocator crash on `jpeg_fixed.nib` -Omax (regalloc-core-poc), STALE frozen summaries at rotate, lcssa, window and lsr (cgscc-poc: soundness first, mirroring LLVM's rule that a pass must not add effects beyond the inferred memory attributes or must drop the attribute), REPLAY call-effects on Nib (basicaa-port, with #2158); [#2110] is held by the user (no row trade; decision A: re-measure stacked on regalloc S1/S2 in shadow, the per-row table is part of S1's checkpoint) |
+| oracle triage | basicaa-port | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); soundness finds: DSE dropped a store through a phi with an unknown arm (cgscc-poc, fix PR coming), a join with an unfollowed arm published only the other arms' objects ([#2132], merged), kept points-to facts were not re-derived after in-place retargets ([#2125], merged), a body kept its memory-SSA structure after an edit changed it ([#2151], open), a volatile load is a Use in main's graph (issue #2129, no miscompile); oracle sweeps over C, BASIC, Nib and BQ at every level, m16 and m32, are a standing gate item (`identical.py`'s corpus includes the bas, nib and bq programs with every `LLRM_CHECK_*` on; llvm-difftest wires the gate); classes found on main by lir-cleanup-poc's sweep (`703d070b7` and #2152, 1,350 compiles, Nib only): an allocator crash on `jpeg_fixed.nib` -Omax (regalloc-core-poc), STALE frozen summaries at rotate, lcssa, window and lsr (cgscc-poc: soundness first, mirroring LLVM's rule that a pass must not add effects beyond the inferred memory attributes or must drop the attribute), REPLAY call-effects on Nib (basicaa-port, with #2158); [#2110] is held by the user (rows pending redo: its min(gcc, clang) sentence is void until redone on `main24d`, the pass-cost and object figures stand; no row trade; decision A: re-measure stacked on regalloc S1/S2 in shadow, the per-row table is part of S1's checkpoint) |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
-| 1.0 inline storage | fold-poc | [#2051] (InlineVec) merged: instructions only (-0.55%), cycles not claimed (taken at load about 90); [#2069] and [#2077] wait for a quiet-host cycles run | [#1956]: 259 K allocations |
+| 1.0 inline storage | fold-poc | [#2051] (InlineVec) merged: instructions -0.277% (first taken -0.55%), cycles -0.14% against an A/A of 0.36, so inside noise (quiet window of 2026-10-18; first merged on instructions only, load about 90); [#2069] and [#2077] wait for a quiet-host cycles run | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
 | 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged | -1.17%; -0.38% |
 | 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
@@ -124,6 +126,8 @@ Sum check: llrm 2,170.0 grouped plus 0.1 ungrouped is 2,170.1 whole; clang 44.8 
 | unroll | LoopUnroll | 26 / 11 | 6,101 / 1,164 | 2,459 | 3,093 | 0.79x | 15.0 | 3.6 | indvars-decide-poc |
 | rotate | LoopRotate | 22 / 35 | 3,050 / 4,774 | 3,705 | 1,236 | 3.00x | 11.3 | 5.9 | indvars-decide-poc |
 | decide | SimplifyCFG | 35 / 88 | 8,333 / 11,706 | 9,180 | 718 | 12.79x | 76.5 | 8.4 | simplifycfg-port |
+
+**Upper bound, timing env.** Every llrm per-pass figure in the phase table and in this table was taken with `LLRM_DEBUG=counts,time`, which adds about 6 to 7 K instructions per span (measured on `d_faces` -O2: the old regalloc has 12,075 spans = 81.3 M, greedy 5,471 spans = 31.3 M). They are upper bounds until llvm-difftest re-takes them with plain `perf stat` totals and a span-free per-pass instrument.
 
 Ratios derived by dividing by the pinned 415.5 M (the 5.2x above, and any later quotient) are labelled derived, not measured, unless llrm's numerator was itself re-taken on the pinned build.
 
@@ -1185,6 +1189,22 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 
 **Bundling.** Constant-factor PRs under 0.5% are bundled per area; slopes, soundness and architecture items are separate PRs.
 
+**The quiet window of 2026-10-18 (05:30 to 06:15 CEST; the procedure that worked).** The CI runners were stopped idle-only with the user's direct permission, restarted afterwards and confirmed online; load was 1.0 to 1.4; the measurement ran on core 8, outside the CI cpusets. The A/A control is a copy of the base binary, not the same file twice: a repeated file stays warm in the page cache and fakes +6% to +13%. Results: [#2173] `d_faces` +0.3% to +0.5% cycles for +0.09% to +0.20% instructions; bench inputs of 15 to 60 ms are unreadable (an A/A of identical binaries swings 0.1% to 8.9%); the fold chain is inside the noise; [#2051] post hoc: cycles -0.14% against an A/A of 0.36, instructions -0.277%.
+
+**Quiet-window switch and a finding.** The scheduled perf-on-main workflow honours the repository variable `QUIET_WINDOW=1` (`gh variable set` and `delete`; llvm-difftest's #2191), set by the window owner together with the runner stop. The three `tools/test_budgets.py` failures seen on the #2154 gate (`lir twoaddr`, `lir coalesce`, `isel` and `analysis pressure`) were never green on a measured main: `lir coalesce` is a x2.31 debt (issue #2189).
+
+**Void rows.** `rows/main` and `rows/base` were built with the Ubuntu clang 20.1.8 and are not a reference ([#2226]); `main24` to `main24d` are pinned and valid. Figures read from the void rows: `rows-series.md` (every table against min(gcc, clang)), `compile-gap-series.md` (the rows of `5e2e995ef`), the plan's 0.1 rows box and the `[rows-series]` ablation constraint in the 3.2 text, and the numbers in the PR bodies that quote them (owners redo them on `main24d`).
+
+**Decisions of 2026-10-18, second batch (oversight).**
+1. Greedy allocator: the turn-on is parked OFF and the per-row cause work is stopped (quality waits on S2); the mirror stays. Measured: greedy -56.4 M (-2.2%) at `d_faces` -O2 by plain `perf stat`; the old regalloc is 376 M against LLVM's RAGreedy at about 27 to 29 M on the pin. Next: profile greedy's own 143 M per function against RAGreedy; the line stops if it cannot get within about 2x per decision.
+2. GVN ([#2179]): about +1% compile is accepted, on the condition of the per-IR-instruction cost per run against LLVM's 25,680.
+3. JUMPS step 1: go, faithful, no hotness guard; D1 returns only as a numbered temporary DEVIATE if a row ends above min.
+4. SimplifyCFG D5 is accepted as temporary with exits [#2186] and [#2194]; the owner of [#2194] (hoist and rotate order) is llvm-order-poc, mirror: LPM1 runs loop-rotate before LICM.
+5. INLINEDECIDE stays off: the +28% to +87% compile is the per-re-run fixed-point steps (llvm-order-poc's 3.2); the walk PR is not opened.
+6. TTI: two cost systems are accepted as LLVM's split; the MIR passes migrate to read TTI and `OperationCosts` stays for LIR (the migration is owed in `tti-plan.md`).
+7. `noipa`: [#2196] is closed (merged via [#2140]); the parity kernels stay missing until executed; `matmul` is re-blessed, no waiver.
+8. The fold split is approved ([#2218]); `KnownFPClass` Stage A only, Stage B waits for a named reader. Front-end item 2 is parked ([#2221]). The perf cron is daily only ([#2191]).
+
 **Method M (every exit measurement).**
 
 1. **Binaries.** The base is the PR's first parent (`git rev-parse <head>^1`), never main of another day and never the merge-base after main moved. Build both with `cargo build --release --bins` in separate worktrees on the perf host. Check each binary's mtime is after its commit, and record both SHAs in the PR.
@@ -1425,6 +1445,21 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2132]: https://github.com/ali-mosavian/llrm/pull/2132
 [#2145]: https://github.com/ali-mosavian/llrm/pull/2145
 [#2150]: https://github.com/ali-mosavian/llrm/pull/2150
+[#2210]: https://github.com/ali-mosavian/llrm/pull/2210
+[#2093]: https://github.com/ali-mosavian/llrm/pull/2093
+[#2223]: https://github.com/ali-mosavian/llrm/pull/2223
+[#2135]: https://github.com/ali-mosavian/llrm/pull/2135
+[#2155]: https://github.com/ali-mosavian/llrm/pull/2155
+[#2195]: https://github.com/ali-mosavian/llrm/pull/2195
+[#2140]: https://github.com/ali-mosavian/llrm/pull/2140
+[#2186]: https://github.com/ali-mosavian/llrm/pull/2186
+[#2191]: https://github.com/ali-mosavian/llrm/pull/2191
+[#2194]: https://github.com/ali-mosavian/llrm/pull/2194
+[#2226]: https://github.com/ali-mosavian/llrm/pull/2226
+[#2196]: https://github.com/ali-mosavian/llrm/pull/2196
+[#2218]: https://github.com/ali-mosavian/llrm/pull/2218
+[#2221]: https://github.com/ali-mosavian/llrm/pull/2221
+[#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179
 [#2151]: https://github.com/ali-mosavian/llrm/pull/2151
 [#2134]: https://github.com/ali-mosavian/llrm/pull/2134

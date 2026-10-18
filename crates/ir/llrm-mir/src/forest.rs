@@ -441,6 +441,66 @@ pub fn forest(
     Forest { loops, ats, innermost, table }
 }
 
+impl Forest {
+    /// The forest of the loops `info` found in `function`, loop `n` of `info`
+    /// being loop `n` of the forest: the form the graph walks and `Body` read,
+    /// until they read `LoopInfo`. DEVIATE (temporary): an adapter, not in
+    /// LLVM; it goes with `forest::forest` in #2197. Not counted as a forest
+    /// built: `LoopInfo::analyze` is the finder.
+    pub fn of_loop_info(
+        function: &crate::module::Function,
+        info: &crate::loopinfo::LoopInfo,
+    ) -> Self {
+        let all = info.get_loops_in_preorder();
+        let mut loops: Vec<TreeLoop> = Vec::new();
+        loops.resize_with(all.len(), || TreeLoop {
+            header: 0,
+            latches: Vec::new(),
+            parent: None,
+            children: Vec::new(),
+            own: Vec::new(),
+            size: 0,
+            depth: 0,
+            enter: 0,
+            last: 0,
+        });
+        let mut ats: Vec<i64> = Vec::new();
+        for (number, one) in all.iter().enumerate() {
+            let at = one.id().0 as usize;
+            debug_assert!(at < loops.len());
+            loops[at] = TreeLoop {
+                header: i64::from(one.get_header().0),
+                latches: one.get_loop_latches(function).iter().map(|block| i64::from(block.0)).collect(),
+                parent: one.get_parent_loop().map(|parent| parent.id().0 as usize),
+                children: one.get_sub_loops().map(|child| child.id().0 as usize).collect(),
+                own: Vec::new(),
+                size: one.get_num_blocks(),
+                depth: one.get_loop_depth(),
+                enter: number as u32,
+                last: 0,
+            };
+            ats.extend(one.get_blocks().iter().map(|block| i64::from(block.0)));
+        }
+        ats.sort_unstable();
+        ats.dedup();
+        let mut innermost = vec![NONE; ats.len()];
+        for (place, &at) in ats.iter().enumerate() {
+            if let Some(one) = info.get_loop_for(crate::module::BlockId(at as u32)) {
+                innermost[place] = one.id().0;
+                loops[one.id().0 as usize].own.push(at);
+            }
+        }
+        // `enter` numbers loops in preorder, so a subtree's last number is the
+        // largest of its children's, itself if none.
+        for one in all.iter().rev() {
+            let at = one.id().0 as usize;
+            loops[at].last = loops[at].children.iter().map(|&child| loops[child].last).max().unwrap_or(loops[at].enter);
+        }
+        let table = lookup(&ats);
+        Forest { loops, ats, innermost, table }
+    }
+}
+
 /// `ats`' places by distance from the first, when they lie within four times
 /// their number of it.
 fn lookup(ats: &[i64]) -> Vec<u32> {

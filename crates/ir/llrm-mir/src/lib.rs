@@ -35,7 +35,7 @@ pub mod knownbits;
 pub mod knownfpclass;
 pub mod lexer;
 pub mod lint;
-pub mod loops;
+pub mod loopinfo;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -87,6 +87,8 @@ mod knownbits_tests;
 mod knownfpclass_tests;
 #[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod loopinfo_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]

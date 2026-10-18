@@ -62,32 +62,32 @@ fn assert_llvm(
 
 #[test]
 fn test_range_of_binary_operators_with_constant_operands() {
-    assert_llvm("binops", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/binops.llvm"));
+    assert_llvm("binops", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/binops.llvm"));
 }
 
 #[test]
 fn test_range_of_intrinsics() {
-    assert_llvm("intrinsics", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/intrinsics.llvm"));
+    assert_llvm("intrinsics", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/intrinsics.llvm"));
 }
 
 #[test]
 fn test_range_and_pattern_of_integer_selects() {
-    assert_llvm("select", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/select.llvm"));
+    assert_llvm("select", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/select.llvm"));
 }
 
 #[test]
 fn test_pattern_of_selects_through_casts_and_float_compares() {
-    assert_llvm("casts", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/casts.llvm"));
+    assert_llvm("casts", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/casts.llvm"));
 }
 
 #[test]
 fn test_range_of_arguments_calls_and_metadata() {
-    assert_llvm("attributes", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/attributes.llvm"));
+    assert_llvm("attributes", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/attributes.llvm"));
 }
 
 #[test]
 fn test_range_of_operands_of_overflow_checks() {
-    assert_llvm("overflow", &["cru", "crs", "sp"], include_str!("../../tests/vt/range/overflow.llvm"));
+    assert_llvm("overflow", &["cru", "crs", "pat"], include_str!("../../tests/vt/range/overflow.llvm"));
 }
 
 /// Only the lines that need no known bits, sign bits, `noundef` or dominating

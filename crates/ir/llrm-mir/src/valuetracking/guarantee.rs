@@ -34,7 +34,7 @@ use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
 use crate::dense::IdSet;
 use crate::hash::HashSet;
-use crate::loops::Loop;
+use crate::loopinfo::Loop;
 use crate::module::{BlockId, InstId, Instruction, Operand, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Clause, Flags, Opcode};
 use crate::types::Type;
@@ -942,10 +942,10 @@ pub fn is_guaranteed_to_execute_for_every_iteration(
     inst: InstId,
     l: &Loop,
 ) -> bool {
-    if q.block_of(inst) != Some(l.header) {
+    if q.block_of(inst) != Some(l.get_header()) {
         return false;
     }
-    for &one in q.function.block(l.header).instructions() {
+    for &one in q.function.block(l.get_header()).instructions() {
         if one == inst {
             return true;
         }

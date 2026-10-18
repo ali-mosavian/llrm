@@ -2083,7 +2083,7 @@ pub fn column(
     format!(" {}={}", if for_signed { "crs" } else { "cru" }, compute_constant_range(q, v, for_signed, 0).print())
 }
 
-/// One value of the `sp` column: a name, or the constant's type and bits.
+/// One value of the `pat` column: a name, or the constant's type and bits.
 fn pattern_value(
     q: &Query,
     v: SelectOperand,
@@ -2105,11 +2105,11 @@ pub fn pattern_column(
 ) -> String {
     let is_select = q.instruction_of(v).is_some_and(|(_, instruction)| instruction.opcode == Opcode::Select);
     if !is_select {
-        return " sp=-".to_owned();
+        return " pat=-".to_owned();
     }
     let r = match_select_pattern_cast(q, v.into(), true, 0);
     let flavor = match r.flavor {
-        SelectPatternFlavor::None => return " sp=none".to_owned(),
+        SelectPatternFlavor::None => return " pat=none".to_owned(),
         SelectPatternFlavor::SMin => "smin",
         SelectPatternFlavor::UMin => "umin",
         SelectPatternFlavor::SMax => "smax",
@@ -2128,7 +2128,7 @@ pub fn pattern_column(
     let cast =
         r.cast_op.and_then(|op| crate::opcode::CAST.iter().find(|(one, _)| *one == op)).map_or("-", |(_, name)| *name);
     let value = |one: Option<SelectOperand>| one.map_or("?".to_owned(), |one| pattern_value(q, one));
-    format!(" sp={flavor}/{nan}/{}/{cast}/{}/{}", u8::from(r.ordered), value(r.lhs), value(r.rhs))
+    format!(" pat={flavor}/{nan}/{}/{cast}/{}/{}", u8::from(r.ordered), value(r.lhs), value(r.rhs))
 }
 
 fn overflow_letter(overflow: OverflowResult) -> char {

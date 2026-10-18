@@ -288,7 +288,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
         return narrowed(p, cfg, live)
     steps = []
     if cargo or p.tier == "full":
-        steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture"]
+        steps += ["build", "lib", "doc", "integration", "crate-tests", "bench", "torture", "oracle-sweep", "oracle-premise"]
     steps += ["pytest", "pytest-perf"]
     if cargo and p.tier != "full" and any(matches(f, cfg["scan_inputs"]["paths"]) for f in live):
         steps.append("scans")
@@ -379,6 +379,8 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
         steps.append("bench")
     if any(f.startswith("tools/torture/") for f in live):
         steps.append("torture")
+    if any(f in ("tools/oracle_sweep.py", "tools/oracle_expected.toml") for f in live):
+        steps += ["oracle-sweep", "oracle-premise"]  # a change to the sweep runs the sweep: it cannot be tried any other way
     if any(matches(f, cfg["fmt"]["paths"]) for f in live):
         steps.append("fmt")
     for h in cfg["heavy"]:
@@ -521,6 +523,11 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + "; exit $rc",
         "bench": bench,
         "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        # Every LLRM_CHECK_* oracle over the BASIC and Nib programs (needs perf: it first checks each oracle ran). Red on a finding nothing
+        # expects, or on an expected one that stopped failing: tools/oracle_expected.toml.
+        "oracle-sweep": 'uv run -q --project tools python tools/oracle_sweep.py --no-premise --jobs ${JOBS:-8} --expected tools/oracle_expected.toml ${ORACLE_SHARD:+--shard "$ORACLE_SHARD"}',
+        # Which oracle ran at all: measured with perf (tinytim), once; the sharded compiles need no counters and run on hosted runners.
+        "oracle-premise": "uv run -q --project tools python tools/oracle_sweep.py --premise-only",
         # Enforced or not (tiers.toml [fmt]), the check runs and lists the files. Unenforced, "files would change" (exit 1) passes
         # and anything else (2 or more: no toolchain, a failed build, a crash) still fails the step.
         "fmt": "tools/fmt.sh --check"
@@ -661,15 +668,19 @@ def unusable(missing: dict[str, str]) -> tuple[list[str], frozenset[str]]:
     return langs, frozenset(k[4:] for k, hit in out.items() if hit and k.startswith("bin:"))
 
 
+# Groups cut into slices that run on their own runners: group -> (the tiers.toml table holding `shards`, the env variable the slice is passed in).
+SHARDED = {"bench": ("bench", "BENCH_SHARD"), "oracle": ("oracle", "ORACLE_SHARD")}
+
+
 def shard_names(group: str) -> list[str]:
-    """`bench` as the CI jobs `bench-1` .. `bench-N`: the bench step is cut into slices that run on their own runners; any other group as itself."""
-    return [f"{group}-{i}" for i in range(1, load()["bench"]["shards"] + 1)] if group == "bench" else [group]
+    """`bench` as the CI jobs `bench-1` .. `bench-N` (likewise `oracle`): the step is cut into slices that run on their own runners; any other group as itself."""
+    return [f"{group}-{i}" for i in range(1, load()[SHARDED[group][0]]["shards"] + 1)] if group in SHARDED else [group]
 
 
 def shard_of(group: str | None) -> tuple[str | None, str | None]:
-    """(the group, its BENCH_SHARD "I/N") for a job named `bench-I`; any other group as it is."""
-    if group and (one := re.fullmatch(r"bench-(\d+)", group)):
-        return "bench", f"{one[1]}/{load()['bench']['shards']}"
+    """(the group, its slice "I/N") for a job named `bench-I` or `oracle-I`; any other group as it is."""
+    if group and (one := re.fullmatch(r"(bench|oracle)-(\d+)", group)):
+        return one[1], f"{one[2]}/{load()[SHARDED[one[1]][0]]['shards']}"
     return group, None
 
 
@@ -791,7 +802,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def group_plan(p: Plan, group: str) -> Plan:
@@ -810,7 +821,7 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
     env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     if shard:
-        env["BENCH_SHARD"] = shard
+        env[SHARDED[group][1]] = shard
     logs = Path(target) / "gate-logs"
     logs.mkdir(parents=True, exist_ok=True)
     pkgs = packages()
