@@ -156,8 +156,8 @@ use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
     globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
-    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
-    phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
+    loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt,
+    peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
     unswitch, window,
 };
 
@@ -226,12 +226,21 @@ pub struct Options {
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
     /// The passes run in LLVM's order, once each (`Fixed::linear`:
-    /// [`llvm_order`]), not in the rounds; `LLRM_EXP_LLVM` sets it, off by
-    /// default.
+    /// [`llvm_order`]), not in the rounds; on by default, `LLRM_NO_LLVM_ORDER`
+    /// turns it off.
     pub llvm_order: bool,
+    /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
+    /// `LLRM_EXP_ROTATE` sets it, off by default until the loop passes take a
+    /// rotated loop (they refuse one: docs/architecture/rotate-refusals.md).
+    pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
     pub mem2reg: bool,
+    /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
+    /// [`crate::sroa`], with [`crate::mem2reg`]); `LLRM_EXP_SROA` sets it, off
+    /// by default.
+    pub sroa: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -266,7 +275,8 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             optimize: true,
-            llvm_order: experiment_llvm(),
+            llvm_order: llvm_order_default(),
+            rotate_slot: experiment_rotate(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -298,6 +308,7 @@ impl Default for Options {
             unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
+            sroa: llrm_support::env_flag!("LLRM_EXP_SROA"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -527,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size() }),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -553,6 +564,13 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
+/// Translations that have not joined the pipeline yet: `llrm-pass` and
+/// `Applied::only` run them alone, which is what `tools/difftest` compares
+/// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
+fn translated() -> Vec<Box<dyn FunctionPass>> {
+    vec![Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -602,6 +620,10 @@ impl FunctionPass for Together {
         self.name
     }
 
+    fn parts(&self) -> Vec<&'static str> {
+        self.parts.iter().flat_map(|part| part.parts()).collect()
+    }
+
     fn adds_memory_operations(&self) -> bool {
         self.parts.iter().any(|part| part.adds_memory_operations())
     }
@@ -627,10 +649,16 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_EXP_LLVM`, read once: [`Options::llvm_order`] by default
-/// (PassBuilderPipelines.cpp at d1106deb71cc).
-fn experiment_llvm() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_LLVM")
+/// `LLRM_EXP_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs
+/// (it stays off until the loop passes accept a rotated loop).
+fn experiment_rotate() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_ROTATE")
+}
+
+/// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
+/// default (PassBuilderPipelines.cpp at d1106deb71cc is the order otherwise).
+fn llvm_order_default() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
 }
 
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
@@ -649,14 +677,17 @@ pub(crate) fn llvm_order(
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
+    let translated = applied.options.sroa;
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together {
-            name,
-            parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)],
-        })
+        let parts: Vec<Box<dyn FunctionPass>> = if translated {
+            vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg), Box::new(promote::DeadSlots)]
+        } else {
+            vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+        };
+        Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
+    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate, priced: false }));
     let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
@@ -681,6 +712,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
+                slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
@@ -691,11 +723,31 @@ pub(crate) fn llvm_order(
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
+            // Without the rotate slot the first LICM keeps speculating, as the
+            // single hoist did.
+            let rotating = applied.options.rotate_slot;
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
-                hoist("hoist@724"),
+                // LPM1
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L724:
+                // licm<no-allowspeculation> L724, loop-rotate L728,
+                // licm<allowspeculation> L730. The first hoists only what the
+                // loop certainly runs; the rotate puts a guard before a loop
+                // not proven to run, so that the second hoists into a preheader
+                // behind it (#2194). llrm skips the header copy at -Os, as
+                // gcc's -ftree-ch.
+                hoist("hoist@724", !rotating),
                 loopmotion("loopmotion@724"),
-                hoist("hoist@730"),
+            ]);
+            if rotating {
+                list.push(slot(
+                    "rotate@728",
+                    Box::new(looprotate::LoopRotate { duplicate_headers: applied.options.copy_headers && !size }),
+                ));
+                list.extend(canonical("loopsimplify@728", "lcssa@728"));
+            }
+            list.extend([
+                hoist("hoist@730", true),
                 slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
@@ -715,17 +767,21 @@ pub(crate) fn llvm_order(
                 slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
+                // The pin's `default<O1>` has no GVN (`pre` is off exactly at
+                // -O1 and -Og); rows against clang's -O1 are pending, a loss
+                // there becomes a numbered DEVIATE.
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
+                slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
-                hoist("hoist@823"),
+                hoist("hoist@823", true),
                 loopmotion("loopmotion@823"),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
@@ -735,12 +791,16 @@ pub(crate) fn llvm_order(
             list
         }
     };
-    list.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+    list.into_iter()
+        .filter(|one| applied.options.wanted(one.name()))
+        .filter(|one| applied.options.pre || one.name() != "gvn@787")
+        .collect()
 }
 
-/// The order, from the pipeline itself rather than beside it.
+/// The order, from the pipeline itself rather than beside it, then the
+/// translations not yet in it.
 pub fn passes() -> Vec<&'static str> {
-    pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
+    pipeline(&Applied::default()).iter().chain(translated().iter()).map(|one| one.name()).collect()
 }
 
 /// Plugs the pass manager's steps into `LLRM_DEBUG=time` and `runs`, if either
@@ -818,11 +878,22 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
+    // LLVM keeps GlobalsAA past every function pass
+    // (`GlobalsAAResult::invalidate`, GlobalsModRef.cpp:825, d1106deb71cc):
+    // made once, not again after each pass that changed a body. Only the
+    // order has it so; the rounds keep theirs.
+    if applied.options.llvm_order {
+        manager.hold::<GlobalsAA>();
+    }
     for stage in function_stages(applied) {
         manager.add(stage);
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
+    // DEVIATE from LLVM: `ipa-range` runs after the function pipeline here,
+    // LLVM's `ipsccp` before it, so a body it changes runs the Simplify list a
+    // second time (d_faces -O2: one body, `gvn` 12 runs over 11 functions
+    // against clang's 11, `parity::RUNS_PER_BODY`).
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = if applied.options.llvm_order {
@@ -925,7 +996,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size() });
+        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -961,7 +1032,13 @@ pub fn recorded(
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
-    manager.run(program)
+    let done = manager.run(program);
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    done
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
@@ -987,7 +1064,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size() }));
+        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
     }
     passes
 }
@@ -1070,7 +1147,9 @@ impl Fixed {
             Some("drop_stores") => Some("dse"),
             other => other,
         };
-        let passes = pipeline(applied).into_iter().filter(|one| only.is_none_or(|only| one.name() == only));
+        let translated = only.map(|_| translated()).unwrap_or_default();
+        let passes =
+            pipeline(applied).into_iter().chain(translated).filter(|one| only.is_none_or(|only| one.name() == only));
         // SROA establishes the scalar memory shape at structural
         // boundaries; it is no member of the scalar fixed point.
         let (boundary, passes): (Vec<_>, Vec<_>) = passes.partition(|one| one.name() == "sroa");
@@ -1135,7 +1214,8 @@ impl Fixed {
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
-        let checked = crate::parity::check_phase(phase, &built);
+        let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let checked = crate::parity::check_phase_with(phase, &built, level, applied.options.sroa);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
@@ -1265,7 +1345,10 @@ impl Fixed {
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::fingerprint(unit.function)]);
+        // Only a list that rounds more than once can come back to a state, so
+        // only that one hashes the body (LLVM's order runs its lists once).
+        let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
+
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
@@ -1323,7 +1406,7 @@ impl Fixed {
             // A list that runs once (LLVM's order) may end where it began:
             // EarlyCSE drops the LCSSA phis that `lcssa` makes
             // again.
-            if self.rounds > 1 && !history.insert(print::fingerprint(unit.function)) {
+            if history.as_mut().is_some_and(|seen| !seen.insert(print::fingerprint(unit.function))) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }

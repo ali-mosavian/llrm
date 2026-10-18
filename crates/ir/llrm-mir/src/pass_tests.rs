@@ -8,7 +8,7 @@ use crate::module::{Change, Function, GlobalKind, Module, Operand};
 use crate::opcode::Attribute;
 use crate::parse;
 use crate::passes::{
-    Analyses, Analysis, Dominators, FunctionPass, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
+    Analyses, Analysis, Dominators, FunctionPass, Loops, ModuleAnalyses, ModuleAnalysis, ModulePass, PassManager,
     PreservedAnalyses, Unit,
 };
 use crate::target::Neutral;
@@ -144,6 +144,58 @@ fn a_pass_that_says_none_drops_what_it_did_not_name_edited_or_not() {
     passes.add(Look(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
     assert_eq!(COMPUTED.get(), 2, "a pass that said none kept an analysis");
+}
+
+/// Asks for the loops and the dominators, then says what it kept.
+struct LooksAtLoops {
+    seen: Rc<RefCell<Vec<(Rc<crate::loopinfo::LoopInfo>, Rc<crate::domtree::DomTree>)>>>,
+    kept: PreservedAnalyses,
+}
+
+impl FunctionPass for LooksAtLoops {
+    fn name(&self) -> &'static str {
+        "looks-at-loops"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let loops = analyses.get::<Loops>(unit.context, unit.layout, unit.function);
+        let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
+        self.seen.borrow_mut().push((loops, tree));
+        self.kept.clone()
+    }
+}
+
+/// LLVM's `preserveSet<CFGAnalyses>`: a pass that left the CFG alone keeps the
+/// loops and dominators, one that names nothing drops both. Without the set
+/// the manager recomputed LoopInfo after every pass that only moved
+/// instructions.
+#[test]
+fn a_pass_preserving_the_cfg_keeps_loops_and_dominators() {
+    let run = |kept: PreservedAnalyses| {
+        let seen = Rc::default();
+        let mut passes = PassManager::default();
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept });
+        passes.add(LooksAtLoops { seen: Rc::clone(&seen), kept: PreservedAnalyses::all() });
+        passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+        let seen = seen.borrow();
+        (Rc::ptr_eq(&seen[0].0, &seen[1].0), Rc::ptr_eq(&seen[0].1, &seen[1].1))
+    };
+    assert_eq!(run(PreservedAnalyses::none().preserve_cfg()), (true, true), "the CFG set was not honoured");
+    assert_eq!(run(PreservedAnalyses::none()), (false, false), "premise: none drops both");
+}
+
+/// A pass that claims the CFG and changes it is caught, as LLVM's
+/// `-verify-analysis-invalidation` does.
+#[test]
+fn a_pass_claiming_the_cfg_it_changed_is_caught() {
+    let mut passes = PassManager { verify_invalidation: true, ..Default::default() };
+    passes.add(Retarget(PreservedAnalyses::none().preserve_cfg()));
+    let error = passes.run_module(&mut module(), Rc::new(Neutral)).err();
+    assert!(error.is_some_and(|e| e.starts_with("retarget claims to preserve")), "a changed CFG went unnoticed");
 }
 
 /// Asks, drops as a rule that edited would, and asks again, the body unedited.
@@ -735,6 +787,34 @@ fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
     assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
 }
 
+/// GlobalsAA was computed 9 times for one compile of d_faces -O2: every
+/// function pass that may add a memory operation dropped it and the next pass
+/// made it again. LLVM keeps it past every function pass
+/// (`GlobalsAAResult::invalidate` drops it only when a pass abandons it), so a
+/// held analysis stands whatever a function pass may add.
+#[test]
+fn a_held_module_analysis_is_kept_past_function_passes_that_may_add_memory_operations() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.hold::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 1, "a function pass that may add a memory operation dropped the held analysis");
+
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.freeze::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 3, "premise: a frozen one is dropped by each such pass");
+}
+
 /// What a body holds, as a number: a summary that can only be an upper bound.
 struct Size;
 
@@ -775,7 +855,7 @@ impl FunctionPass for Lies {
         let ty = unit.context.types.int(16);
         let one = unit.context.int(ty, 1);
         let function = &mut *unit.function;
-        let first = function.block(function.entry().unwrap()).instructions()[0];
+        let first = function.block(function.entry().unwrap()).first().expect("a block with an instruction");
         let made = function.create_instruction(
             crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add),
             ty,

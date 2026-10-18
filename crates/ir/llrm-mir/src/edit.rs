@@ -11,10 +11,12 @@ use crate::module::{
 use crate::opcode::{Flags, Opcode};
 use crate::types::{Type, TypeId};
 
-/// Where an instruction goes: before another, or at a block's end.
+/// Where an instruction goes: before or after another, or at a block's end.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Position {
     Before(InstId),
+    /// Right after another: `Before` what follows it, or the end of its block.
+    After(InstId),
     End(BlockId),
 }
 
@@ -72,7 +74,6 @@ impl Function {
         at: Use,
     ) {
         if let Some(uses) = self.uses_of(operand) {
-            #[cfg(test)]
             USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
             uses.retain(|one| *one != at);
         }
@@ -205,6 +206,16 @@ impl Function {
     ) -> Result<(BlockId, usize), String> {
         match position {
             Position::End(block) => Ok((block, self.block(block).instructions.len())),
+            Position::After(prev) => {
+                let block = self.parent(prev).ok_or_else(|| format!("instruction {} is not placed", prev.0))?;
+                let at = self
+                    .block(block)
+                    .instructions
+                    .iter()
+                    .position(|one| *one == prev)
+                    .expect("a parent holds its instruction");
+                Ok((block, at + 1))
+            }
             Position::Before(next) => {
                 let block = self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?;
                 let at = self
@@ -274,6 +285,7 @@ impl Function {
         let next = list.get(at + 1).copied();
         self.settle_records(inst, next, moving);
         self.blocks[block.0 as usize].instructions.remove(at);
+        self.order.invalidate(block);
         self.parent[inst.0 as usize] = None;
         Some((block, next))
     }
@@ -329,7 +341,9 @@ impl Function {
         let next = match position {
             Position::End(_) => None,
             Position::Before(next) => Some(next),
+            Position::After(_) => self.blocks[block.0 as usize].instructions.get(at + 1).copied(),
         };
+        self.order.invalidate(block);
         Ok((block, next))
     }
 
@@ -377,9 +391,63 @@ impl Function {
             let list = &mut self.blocks[block_from.0 as usize].instructions;
             let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
             list.remove(at);
+            self.order.invalidate(block_from);
             self.parent[inst.0 as usize] = None;
             let (to, next) = self.attach(inst, Position::End(block))?;
             self.log(Change::Moved { inst, block: to, next, from: block_from });
+        }
+        Ok(())
+    }
+
+    /// `BasicBlock::splice`: the placed instructions `run`, in order, moved to
+    /// `position` (not inside the run), as moving them one by one before it
+    /// would. Each block is rewritten once, not once per instruction: O(the
+    /// blocks it touches), where `move_to` for each is O(run x block).
+    pub fn splice(
+        &mut self,
+        run: &[InstId],
+        position: Position,
+    ) -> Result<(), String> {
+        let mut moving = crate::dense::IdSet::<InstId>::new();
+        for &inst in run {
+            if self.parent(inst).is_none() {
+                return Err(format!("instruction {} is not placed", inst.0));
+            }
+            if !moving.insert(inst) {
+                return Err(format!("instruction {} is twice in the run", inst.0));
+            }
+        }
+        let anchor = match position {
+            Position::Before(one) | Position::After(one) => Some(one),
+            Position::End(_) => None,
+        };
+        if anchor.is_some_and(|one| moving.contains(&one)) {
+            return Err("the position is inside the run".to_owned());
+        }
+        let froms: Vec<BlockId> = run.iter().map(|&inst| self.parent(inst).expect("placed")).collect();
+        let mut blocks = froms.clone();
+        blocks.sort_unstable();
+        blocks.dedup();
+        for &block in &blocks {
+            let list = &mut self.blocks[block.0 as usize].instructions;
+            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            list.retain(|one| !moving.contains(one));
+            self.order.invalidate(block);
+        }
+        for &inst in run {
+            self.parent[inst.0 as usize] = None;
+        }
+        // The place is found with the run out of the way: its index, once.
+        let (to, at) = self.slot(position)?;
+        if self.blocks[to.0 as usize].erased {
+            return Err(format!("block {} is erased", to.0));
+        }
+        let next = self.blocks[to.0 as usize].instructions.get(at).copied();
+        self.blocks[to.0 as usize].instructions.splice(at..at, run.iter().copied());
+        self.order.invalidate(to);
+        for (&inst, &from) in run.iter().zip(&froms) {
+            self.parent[inst.0 as usize] = Some(to);
+            self.log(Change::Moved { inst, block: to, next, from });
         }
         Ok(())
     }
@@ -418,7 +486,6 @@ impl Function {
             }
             for (operand, indexes) in places {
                 if let Some(uses) = self.uses_of(operand) {
-                    #[cfg(test)]
                     USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                     uses.retain(|one| one.user != inst || indexes.binary_search(&one.index).is_err());
                 }
@@ -460,6 +527,18 @@ impl Function {
             *volatile = true;
             self.log(Change::Rewritten(inst));
         }
+    }
+
+    /// Gives the `icmp` `inst` the predicate `predicate`, as LLVM's
+    /// `CmpInst::setPredicate`.
+    pub fn set_icmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::IntPredicate,
+    ) {
+        let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
     }
 
     /// Replaces an instruction's flags.
@@ -676,7 +755,6 @@ impl Function {
         }
         for operand in operands {
             if let Some(uses) = self.uses_of(operand) {
-                #[cfg(test)]
                 USES_SCANNED.with(|scanned| scanned.set(scanned.get() + uses.len()));
                 uses.retain(|one| !gone.contains(&one.user));
             }
@@ -697,6 +775,7 @@ impl Function {
                 }
             }
             self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
+            self.order.invalidate(block);
         }
         for inst in insts {
             self.parent[inst.0 as usize] = None;
@@ -887,6 +966,21 @@ impl Function {
         self.instructions[inst.0 as usize].metadata.push((kind.to_owned(), node));
     }
 
+    /// `Instruction::setMetadata`: `inst` has `node` as its metadata of `kind`
+    /// alone, or none of that kind where `node` is `None`.
+    pub fn set_metadata(
+        &mut self,
+        inst: InstId,
+        kind: &str,
+        node: Option<MetadataId>,
+    ) {
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        metadata.retain(|(one, _)| one != kind);
+        if let Some(node) = node {
+            metadata.push((kind.to_owned(), node));
+        }
+    }
+
     /// Every metadata node the function names (on an instruction, or in a debug
     /// record) is the one `map` says it is: nodes made last are numbered
     /// last, and the code that named them before they were made named them by a
@@ -914,7 +1008,13 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
-        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let held = metadata.len();
+        metadata.retain(|(one, _)| one != kind);
+        // `!range` and the like are facts about the result.
+        if metadata.len() != held {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
@@ -1077,19 +1177,48 @@ impl Function {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
-            return Err(format!("block {} still holds instructions", block.0));
+        self.erase_blocks(&[block])
+    }
+
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
+    pub fn erase_blocks(
+        &mut self,
+        blocks: &[BlockId],
+    ) -> Result<(), String> {
+        for &block in blocks {
+            if !self.block(block).instructions.is_empty() {
+                return Err(format!("block {} still holds instructions", block.0));
+            }
+            if !self.block_users(block).is_empty() {
+                return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+            }
         }
-        if !self.block_users(block).is_empty() {
-            return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
         }
-        self.layout.retain(|one| *one != block);
-        self.release_name(block);
-        self.blocks[block.0 as usize].erased = true;
-        self.blocks[block.0 as usize].placed = false;
-        self.log(Change::BlockErased(block));
+        LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.layout.retain(|one| !gone.contains(one));
+        for &block in blocks {
+            self.release_name(block);
+            self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
+            self.log(Change::BlockErased(block));
+        }
         Ok(())
     }
+}
+
+thread_local! {
+    /// Layout entries looked over to take blocks out of it.
+    static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has looked over to erase blocks, for a
+/// test that erasing k of n blocks does not scan k times n.
+pub fn layout_scanned() -> usize {
+    LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -1105,7 +1234,12 @@ pub fn instructions_scanned() -> usize {
     SCANNED.with(std::cell::Cell::get)
 }
 
-#[cfg(test)]
 thread_local! {
     pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many use-list entries this thread has looked over to remove uses, for a
+/// test that a pass does not scan a long list once per use it removes.
+pub fn uses_scanned() -> usize {
+    USES_SCANNED.with(std::cell::Cell::get)
 }

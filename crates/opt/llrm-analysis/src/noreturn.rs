@@ -235,6 +235,7 @@ pub fn cold(
     function: &Function,
     terminal_calls: &BTreeSet<InstId>,
 ) -> BTreeSet<i64> {
+    llrm_mir::counts::bump(llrm_mir::counts::Event::ColdScans);
     let blocks = cfg::graph(function);
     let marked = |at: i64| {
         function
@@ -324,7 +325,7 @@ pub fn _cannot_return(
         if !visited.insert(at) {
             continue;
         }
-        if function.block(cfg::block(at)).instructions().iter().any(|inst| terminal_calls.contains(inst)) {
+        if function.block(cfg::block(at)).iter().any(|inst| terminal_calls.contains(&inst)) {
             continue;
         }
         if _returns(function, at) {

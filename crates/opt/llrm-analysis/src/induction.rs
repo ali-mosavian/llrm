@@ -532,7 +532,7 @@ fn _control(
     // The latch jumps back and only the header branches to it: the header holds
     // the trip.
     let header_holds_trip = latch.succ.as_slice() == [header.at]
-        && function.block(cfg::block(latch.at)).instructions().len() == 1
+        && function.block(cfg::block(latch.at)).len() == 1
         && header.succ.len() == 2
         && header.succ.contains(&latch.at)
         && function.predecessors(cfg::block(latch.at)).len() == 1;
@@ -1242,8 +1242,8 @@ pub fn exits(
     // Those the latch follows are in a chain: each dominates the next.
     exiting.sort_by_key(|&at| {
         (
-            !shape.dominance.dominates(at, latch),
-            inside.iter().filter(|&&other| shape.dominance.dominates(other, at)).count(),
+            !shape.dominance.dominates(unit.function, at, latch),
+            inside.iter().filter(|&&other| shape.dominance.dominates(unit.function, other, at)).count(),
         )
     });
     exiting
@@ -1262,7 +1262,7 @@ pub fn exits(
             else {
                 return found;
             };
-            if !shape.dominance.dominates(at, latch) {
+            if !shape.dominance.dominates(unit.function, at, latch) {
                 return found;
             }
             let shaped = |posttested: bool| _Control {
@@ -1968,7 +1968,7 @@ fn accesses<'a>(
     loop_
         .body
         .iter()
-        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(**at, latch)))
+        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(unit.function, **at, latch)))
         .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
         .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
         .filter(|(_, reference)| reference.inbounds)
@@ -2225,7 +2225,7 @@ pub fn basics(
     // are not `phi + step`, with their start and what they take round.
     let mut backs: Vec<(ValueId, ValueId)> = Vec::new();
     let mut derived: Vec<(ValueId, AffineOperand, ValueId)> = Vec::new();
-    for &inst in function.block(header).instructions() {
+    for inst in function.block(header).iter() {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
             break;
@@ -2367,7 +2367,7 @@ pub fn followers(
         if !llrm_mir::facts::Facts::of_flags(function.instruction(update).flags).no_signed_wrap() {
             continue;
         }
-        for &inst in function.block(header).instructions() {
+        for inst in function.block(header).iter() {
             let phi = function.instruction(inst);
             if phi.opcode != Opcode::Phi {
                 break;
@@ -2425,7 +2425,7 @@ pub fn pointers(
     if !function.is_placed(header) {
         return out;
     }
-    for &inst in function.block(header).instructions() {
+    for inst in function.block(header).iter() {
         let phi = function.instruction(inst);
         if phi.opcode != Opcode::Phi {
             break;

@@ -825,7 +825,7 @@ fn test_erasing_a_dead_pointer_load_does_not_work_the_call_effects_out_again() {
     llrm_mir::passes::trace_recomputes(true);
     analyses.get::<CallEffects>(context, &layout, f);
     let entry = f.entry().expect("an entry");
-    let load = f.block(entry).instructions()[0];
+    let load = f.block(entry).first().expect("a block with an instruction");
     f.erase(load).expect("an unused load");
     analyses.invalidate(f, &PreservedAnalyses::none());
     analyses.get::<CallEffects>(context, &layout, f);
@@ -1500,6 +1500,26 @@ fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
             "{name} kept past a branch sent elsewhere"
         );
     }
+}
+
+/// `LLRM_CHECK_CAPTURES` judges the points-to facts each time `get` hands them
+/// out, so a fact a pass reads (dse dropping a store behind `phi [%slot, %q]`)
+/// is checked where it is used: a planted result that forgot the escape of
+/// the slot is refused by the audit `get` runs.
+#[test]
+fn the_audit_of_points_to_refuses_facts_that_forgot_a_join_with_an_unknown_arm() {
+    let module = parsed(&format!(
+        "{DOS}define i32 @f(i1 %c, ptr %cell) {{\nentry:\n  %s = alloca i32\n  %q = load ptr, ptr %cell\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi ptr [ %s, %a ], [ %q, %b ]\n  %v = load i32, ptr %p\n  ret i32 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let f = function(&module, "f");
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let mut facts = (*analyses.get::<Pointers>(&module.context, &layout, f)).clone().expect("facts");
+    facts.escaped.clear();
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Pointers::audit(&Ok(facts), &module.context, &layout, f, &mut analyses)
+    }));
+    assert!(refused.is_err(), "facts that lost the slot behind the join were accepted by the audit");
 }
 
 /// A gep replaced by another of the same operands that differs in `inbounds`

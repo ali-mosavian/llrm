@@ -569,9 +569,11 @@ b4:
     assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
 }
 
-/// An exit whose count is not a number keeps its value.
+/// An exit whose count is not a number is written from the count, as
+/// `rewriteLoopExitValues` writes it: the loop runs `smax(n, 1)` times, two
+/// instructions, under the budget.
 #[test]
-fn test_an_exit_phi_of_a_loop_with_an_unknown_count_keeps_its_value() {
+fn test_an_exit_phi_of_a_loop_with_an_unknown_count_is_written_from_the_count() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -592,7 +594,7 @@ b4:
 }
 ",
     );
-    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+    assert!(text.contains("llvm.smax.i32(i32 %n, i32 1)") && text.contains("ret i32 %0"), "{text}");
 }
 
 /// bench/sieve: `if (i <= 31)` on the narrow counter of a widened loop read

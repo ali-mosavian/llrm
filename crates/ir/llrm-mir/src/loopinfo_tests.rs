@@ -1,4 +1,4 @@
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::loopinfo::{LoopInfo, print_loops};
 use crate::module::{BlockId, Function, Module};
 use crate::parse;
@@ -48,7 +48,7 @@ fn test_exit_blocks_keep_repeats_and_unique_exit_does_not() {
     let module = load("shapes.ll");
     let (_, _, function) =
         module.functions().find(|(_, global, _)| global.name.as_deref() == Some("switch_exits")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     let exit = block(function, "exit");
     assert_eq!(one.get_exit_blocks(function), vec![exit, exit]);
@@ -64,7 +64,7 @@ fn test_latch_predecessor_and_preheader() {
     let module = load("shapes.ll");
     let find = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
     let function = find("two_latches");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     assert_eq!(one.get_loop_latch(function), None, "two latches");
     assert_eq!(names(function, one.get_loop_latches(function)), ["a", "b"]);
@@ -73,7 +73,7 @@ fn test_latch_predecessor_and_preheader() {
     assert_eq!(one.get_loop_preheader(function), Some(block(function, "entry")));
 
     let function = find("self");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "l")).expect("loop");
     assert_eq!(one.get_loop_latch(function), Some(block(function, "l")));
     assert_eq!(info.get_unique_latch_exit_block(function, one), Some(block(function, "exit")));
@@ -83,7 +83,7 @@ fn test_latch_predecessor_and_preheader() {
 fn test_nesting_preorder_depth_and_common_loop() {
     let module = load("shapes.ll");
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("nest")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let headers: Vec<_> =
         info.get_loops_in_preorder().iter().map(|one| function.block(one.get_header()).name.clone().unwrap()).collect();
     assert_eq!(headers, ["o", "i", "j", "k"], "program order, outer first");
@@ -137,4 +137,39 @@ fn test_loops_are_found_once_while_the_cfg_is_kept() {
     let found = analyses.get::<Loops>(&module.context, &layout, function);
     assert_eq!(get(Event::Forests) - before, 2, "control: the CFG changed, found again");
     assert!(!found.is_loop_header(block(function, "i")));
+}
+
+/// `Loop::isLoopInvariant(const Value *)`: an argument, a constant and an
+/// instruction before the loop are invariant; the loop's own are not.
+#[test]
+fn test_loop_invariance_of_a_value_is_where_its_instruction_is() {
+    let module = parse::module(
+        "define i32 @f(i32 %n) {
+entry:
+  %pre = add i32 %n, 1
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %i2 = add i32 %i, %pre
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 %i2
+}
+",
+    )
+    .expect("a module");
+    let function = module.functions().next().expect("a function").2;
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let one = info.get_loop_for(block(function, "h")).expect("loop");
+    let results: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
+    let [pre, i, i2, c] = results[..] else { panic!("four results") };
+    use crate::module::Operand::Value;
+    assert!(one.is_loop_invariant(function, Value(function.parameters()[0])), "an argument");
+    assert!(one.is_loop_invariant(function, Value(pre)), "defined before the loop");
+    assert!(!one.is_loop_invariant(function, Value(i)), "a phi of the loop");
+    assert!(!one.is_loop_invariant(function, Value(i2)));
+    assert!(!one.is_loop_invariant(function, Value(c)));
 }
