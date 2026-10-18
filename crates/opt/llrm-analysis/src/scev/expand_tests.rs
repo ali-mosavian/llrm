@@ -427,3 +427,43 @@ exit:
     assert!(Expander::can_reuse_flags_from_original_iv_inc(function, i, i, i2, i2));
     assert!(!Expander::can_reuse_flags_from_original_iv_inc(function, i, j, i2, j2));
 }
+
+/// `getAllInsertedInstructions` names what an expansion made, in order, and not
+/// the phi it reused.
+#[test]
+fn test_the_inserted_instructions_are_what_the_expansion_made() {
+    let module = llrm_mir::parse::module(BODY).expect("a module");
+    let (_, _, original) = module.functions().next().expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DomTree::of(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let args: Vec<Operand> = (0..3).map(|at| Operand::Value(function.parameters()[at])).collect();
+    let s = {
+        let cx = env.cx(&context, &function);
+        let a = unknown(&mut se, &cx, args[0]);
+        let b = unknown(&mut se, &cx, args[1]);
+        let four = constant(&mut se, 32, 4);
+        let scaled = se.get_mul_expr(&cx, vec![four, b], Flags::default(), 0);
+        se.get_add_expr(&cx, vec![a, scaled], Flags::default(), 0).scev
+    };
+    let ret = function.terminator(function.entry().expect("an entry")).expect("a ret");
+    let mut expander = Expander::new("t");
+    expander.set_insert_point(ret);
+    let mut declared = Declared::of(&module);
+    expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s, None);
+    let made = expander.inserted_instructions();
+    assert_eq!(made.len(), 2);
+    assert!(made.iter().all(|one| expander.is_inserted_instruction(one)));
+}

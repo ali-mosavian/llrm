@@ -211,6 +211,12 @@ impl Expander {
             && function.instruction(orig_inc).opcode == function.instruction(wide_inc).opcode
     }
 
+    /// `getAllInsertedInstructions`: what the expander made, in order, less
+    /// what it reused.
+    pub fn inserted_instructions(&self) -> Vec<InstId> {
+        self.inserted.iter().copied().filter(|inst| !self.reused.contains(inst)).collect()
+    }
+
     /// `getInsertedIVs`.
     pub fn inserted_ivs(&self) -> &[InstId] {
         &self.inserted_ivs
