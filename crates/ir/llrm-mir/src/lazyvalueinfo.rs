@@ -2430,7 +2430,7 @@ fn constant_fold_extract_value_instruction(
 
 /// `Constant::getNullValue(Ty)`.
 fn zero_value(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     let kind = match context.types.get(ty) {

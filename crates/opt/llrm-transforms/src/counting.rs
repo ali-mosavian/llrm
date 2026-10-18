@@ -155,7 +155,7 @@ impl Seeds<'_> {
 
 /// `n` as a constant `width` bits wide.
 pub fn constant(
-    context: &mut Context,
+    context: &Context,
     n: &BigInt,
     width: u32,
 ) -> Operand {

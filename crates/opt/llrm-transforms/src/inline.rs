@@ -482,9 +482,7 @@ fn copy_byval_arguments(
         let first = anchor.or_else(|| {
             function
                 .block(entry)
-                .instructions()
                 .iter()
-                .copied()
                 .find(|&one| !matches!(function.instruction(one).opcode, Opcode::Alloca { .. }))
         });
         let alloca = function.create_instruction(
@@ -618,15 +616,17 @@ pub fn size(
     function: GlobalId,
     costs: &OperationCosts,
 ) -> Option<i64> {
-    size_of(module, callees, module.global(function).function()?, costs)
+    size_of(module, callees, module.global(function).function()?, None, costs)
 }
 
 /// `size` of a body that need not be in the module: a copy specialised for
-/// the constants a site passes (`interprocedural::Specialisations`).
+/// the constants a site passes (`interprocedural::Specialisations`). Its calls
+/// may name functions it declared, which `declared` holds and the module not.
 pub fn size_of(
     module: &Module,
     callees: &Callees,
     body: &Function,
+    declared: Option<&Declared>,
     costs: &OperationCosts,
 ) -> Option<i64> {
     let calls: i64 = body
@@ -647,11 +647,11 @@ pub fn size_of(
         .filter(|point| {
             matches!(body.instruction(point.inst).opcode, Opcode::Call(_))
                 && !callee(&module.context, body, point.inst).is_some_and(|id| {
-                    module
-                        .global(id)
-                        .name
-                        .as_deref()
-                        .is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
+                    let name = match module.globals.get(id.0 as usize) {
+                        Some(one) => one.name.as_deref(),
+                        None => declared.and_then(|declared| declared.pending_name(id)),
+                    };
+                    name.is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm."))
                 })
         })
         .map(|point| point.across.len() as i64)
@@ -1126,7 +1126,7 @@ fn executed(
     // The call was the entry's first instruction and is gone: the copies that
     // come out of this one are anchored on what the entry starts with now.
     if placed.base == Some(call) {
-        placed.base = function.entry().and_then(|entry| function.block(entry).instructions().first().copied());
+        placed.base = function.entry().and_then(|entry| function.block(entry).first());
     }
     let body = &*planned.candidate.body;
     let entry = body.entry();
@@ -1182,7 +1182,7 @@ pub fn expanded_all(
     }
     let end = (plan.own, plan.frame);
     let mut placed = Placed {
-        base: function.entry().and_then(|entry| function.block(entry).instructions().first().copied()),
+        base: function.entry().and_then(|entry| function.block(entry).first()),
         ..Placed::default()
     };
     for (call, planned) in sites.iter().rev() {
@@ -1387,7 +1387,7 @@ pub fn peeled_into(
     caller: &mut Function,
     original: &Function,
     budget: i64,
-    context: &mut Context,
+    context: &Context,
     unit: &mut UnitSize,
 ) -> usize {
     if !recursion_admits(original, budget) {
@@ -1423,7 +1423,7 @@ pub fn inlined_into_itself(
     original: &Function,
     budget: i64,
     frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
-    context: &mut Context,
+    context: &Context,
     unit: &mut UnitSize,
 ) -> usize {
     let own = |function: &Function, context: &Context| -> Vec<InstId> {

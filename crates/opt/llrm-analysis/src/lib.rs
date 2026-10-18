@@ -107,6 +107,7 @@ pub mod consts;
 #[cfg(test)]
 mod corpus_tests;
 pub mod demanded;
+pub mod demandedbits;
 pub mod dependence;
 pub mod difference;
 pub mod effects;

@@ -80,7 +80,7 @@ pub fn hoist_region(
 }
 
 /// [`isSafeToExecuteUnconditionally`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1507)
-/// (`AllowSpeculation` is `LicmAllowSpeculation`, true).
+/// (`AllowSpeculation` is the run's, `LoopSafety::allow_speculation`).
 fn is_safe_to_execute_unconditionally(
     unit: &passes::Unit,
     outer: &Outer,
@@ -89,7 +89,8 @@ fn is_safe_to_execute_unconditionally(
     _preheader: BlockId,
     inst: InstId,
 ) -> bool {
-    is_safe_to_speculatively_execute(unit, outer, inst) || safety.is_guaranteed_to_execute(inst)
+    (safety.allow_speculation() && is_safe_to_speculatively_execute(unit, outer, inst))
+        || safety.is_guaranteed_to_execute(inst)
 }
 
 /// [`isSafeToSpeculativelyExecuteWithOpcode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L7575).

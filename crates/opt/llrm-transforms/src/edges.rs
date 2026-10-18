@@ -181,7 +181,7 @@ pub fn split_critical_edge(
         return None;
     }
     let first =
-        function.block(to).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+        function.block(to).iter().find(|&one| function.instruction(one).opcode != Opcode::Phi);
     if first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. })) {
         return None;
     }
@@ -209,7 +209,7 @@ pub fn split_critical_edge(
 /// and no GVN runs after them; the branch on the phi then decides itself.
 /// Whether any use changed.
 pub fn conditions_decided(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let mut found = Vec::new();
@@ -262,9 +262,7 @@ pub(crate) fn phis(
 ) -> Vec<InstId> {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
         .collect()
 }
@@ -402,7 +400,7 @@ spare:
         let mut module = parsed(text);
         let (_, function) = module.function_mut("f").expect("@f");
         // An unreachable block lends the store's operands.
-        let spare = function.block(named(function, "spare")).instructions()[0];
+        let spare = function.block(named(function, "spare")).first().expect("an instruction");
         let model = function.instruction(spare).clone();
         let store = function.create_instruction(model.opcode, model.ty, model.operands, model.flags, None);
         let (b1, b3) = (named(function, "b1"), named(function, "b3"));

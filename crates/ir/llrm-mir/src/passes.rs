@@ -193,6 +193,18 @@ impl Declared {
         })
     }
 
+    /// The name of a function declared and not yet placed in the module.
+    pub fn pending_name(
+        &self,
+        id: GlobalId,
+    ) -> Option<&str> {
+        let at = (id.0 as usize).checked_sub(self.next as usize - self.pending.len())?;
+        match self.pending.get(at)? {
+            Pending::Function(name, _) => Some(name),
+            Pending::Table(..) => None,
+        }
+    }
+
     /// The metadata nodes made so far, which the module has after the pass.
     pub fn nodes(&self) -> &[crate::module::MetadataNode] {
         &self.nodes

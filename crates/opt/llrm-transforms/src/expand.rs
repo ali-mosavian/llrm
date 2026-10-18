@@ -77,7 +77,7 @@ impl Expander {
     /// `sum` as an integer of its width.
     pub fn int(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         sum: &Scev,
     ) -> Operand {
@@ -87,7 +87,7 @@ impl Expander {
     /// `pointer + sum`, of type `ty`, or the integer sum where no pointer.
     pub fn value(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         pointer: Option<Operand>,
         sum: &Scev,
@@ -118,7 +118,7 @@ impl Expander {
     /// The least of `sums` as unsigned numbers, each of their one width.
     pub fn least(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         sums: &[Scev],
     ) -> Operand {
@@ -137,7 +137,7 @@ impl Expander {
 
 /// `sum` placed at `at`, reusing what `made` holds.
 fn sum_of(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     sum: &Scev,
     at: Position,
@@ -192,7 +192,7 @@ fn sum_of(
 /// the block `at` is in: each factor is its value's low bits, or its value
 /// zero-extended where the value is narrower than the product.
 fn product_of(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     product: &Monomial,
     width: u32,
@@ -228,7 +228,7 @@ fn product_of(
 
 /// `value * k`, `k` positive: itself, a shift or a multiply.
 pub fn scaled(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     value: Operand,
     k: &BigInt,
@@ -248,7 +248,7 @@ pub fn scaled(
 }
 
 pub fn placed(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     opcode: Opcode,
     ty: TypeId,

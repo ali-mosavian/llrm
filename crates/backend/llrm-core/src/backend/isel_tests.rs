@@ -4504,6 +4504,26 @@ fn test_a_narrowing_float_rounds_to_its_targets_width() {
     assert!(!listing(text, "g").iter().any(|line| line.starts_with("fstp dword")), "{:?}", listing(text, "g"));
 }
 
+/// An i64 made a float rounds to the float under `-fexcess-precision=standard`:
+/// LLVM's order makes `sitofp (zext i32)` a `uitofp nneg`, whose unsigned
+/// 64-bit lowering (two `fild qword`, scaled and added) kept the x87's exact
+/// sum, so `4294967295 == 4294967296.0f` was false (int_compared_with_float).
+/// A `nneg` one is a signed `fild qword`; either rounds through a dword.
+#[test]
+fn test_an_unsigned_i64_made_a_float_rounds_to_the_float() {
+    let text = "define float @f(i64 %x) addrspace(1) {\n  %d = uitofp nneg i64 %x to float\n  ret float %d\n}\ndefine float @g(i64 %x) addrspace(1) {\n  %d = uitofp i64 %x to float\n  ret float %d\n}\n";
+    assert!(text.contains("uitofp nneg i64") && text.contains("uitofp i64"), "the shapes that were not rounded");
+    let rounded = |name| listing_float_store(text, name);
+    for name in ["f", "g"] {
+        let got = rounded(name);
+        assert!(got.iter().any(|line| line.starts_with("fstp dword")), "{name}: {got:?}");
+    }
+    // `nneg`: one signed qword read, no scaling by 2^32.
+    let f = rounded("f");
+    assert_eq!(f.iter().filter(|line| line.starts_with("fild qword")).count(), 1, "{f:?}");
+    assert!(!f.iter().any(|line| line.starts_with("fmul")), "{f:?}");
+}
+
 /// A long double is compared from a register: fcom has no 10-byte memory
 /// operand, and `fcomp tbyte ptr` could not be encoded (#103).
 #[test]
@@ -5519,22 +5539,6 @@ fn test_a_poison_i64_is_two_zero_dwords() {
     assert!(!listing(text, "f").is_empty());
 }
 
-/// The translated coalescer is the default: a function compiled here never
-/// reaches the old pass, whose counter says when it can be deleted.
-#[test]
-fn test_the_old_coalescer_is_not_reached_by_default() {
-    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
-  %c = add i16 %a, %b
-  %d = mul i16 %c, %a
-  ret i16 %d
-}
-";
-    let before = crate::backend::coalesce::old_runs();
-    let got = listing(text, "f");
-    assert!(got.len() > 3, "premise: the function compiled: {got:?}");
-    assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
-}
-
 /// A far pointer that is poison (SROA's value for a read of an unwritten
 /// slot, which a returned struct's hidden pointer was) was refused: "an address
 /// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
@@ -5547,4 +5551,20 @@ b0:
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line == "retf"), "{got:?}");
+}
+
+/// Old: `@g = global i16 undef` was refused as "a poison initializer". An undef
+/// initializer is any bytes; the data is zero, as a `zeroinitializer` is.
+#[test]
+fn test_an_undef_initializer_is_zero_bytes() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = |name: &str| {
+        crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
+    };
+    assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
+    assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }

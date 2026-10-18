@@ -957,6 +957,34 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `Instruction::dropPoisonGeneratingAnnotations`: the flags, metadata and
+    /// call attributes of `inst` that make its result poison when the
+    /// operands it was proved for change. `ctlz`, `cttz` and `abs` have no
+    /// MIR spelling, so their poison-on-zero operand is not here.
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Instruction.h#L614>
+    pub fn drop_poison_generating_annotations(
+        &mut self,
+        inst: InstId,
+    ) {
+        use crate::opcode::Attribute;
+        let poison_attribute = |attr: &Attribute| match attr {
+            Attribute::Range { .. } => true,
+            Attribute::Flag(name) => name == "nonnull",
+            Attribute::Int(name, _) => name == "align",
+            _ => false,
+        };
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.flags = instruction.flags.without(Flags::POISON_GENERATING);
+        instruction.metadata.retain(|(kind, _)| !matches!(kind.as_str(), "range" | "nonnull" | "align" | "nofpclass"));
+        if let Opcode::Call(info) | Opcode::Invoke(info) = &mut instruction.opcode {
+            info.return_attrs.retain(|attr| !poison_attribute(attr));
+            for attrs in &mut info.argument_attrs {
+                attrs.retain(|attr| !poison_attribute(attr));
+            }
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Attaches `node` to `inst` as metadata of `kind`.
     pub fn annotate(
         &mut self,
@@ -1115,7 +1143,7 @@ impl Function {
     /// input per edge, so one call drops one input.
     pub fn predecessor_removed(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         block: BlockId,
         predecessor: BlockId,
         keep_one_input_phis: bool,
