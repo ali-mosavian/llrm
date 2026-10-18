@@ -1293,6 +1293,33 @@ impl Analysis for CallEffects {
     }
 }
 
+/// Whether a value replaced by another is read the same by a decomposition:
+/// both stop it (a load, a call, an allocation, a phi, a parameter, a
+/// constant), or both are one instruction (opcode, operands and flags: an
+/// inbounds gep goes on through its index where a plain one does not).
+pub(crate) fn decomposes_alike(
+    function: &Function,
+    was: ValueId,
+    now: ValueId,
+) -> bool {
+    use llrm_mir::module::ValueDef;
+    let ends = |value: ValueId| match function.value(value).def {
+        ValueDef::Instruction(inst) => matches!(
+            function.instruction(inst).opcode,
+            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
+        ),
+        _ => true,
+    };
+    match (function.value(was).def, function.value(now).def) {
+        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
+            let (a, b) = (function.instruction(a), function.instruction(b));
+            (ends(was) && ends(now))
+                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
+        }
+        _ => ends(was) && ends(now),
+    }
+}
+
 /// Whether a value some reference of `effects` names is replaced by one that a
 /// fresh decomposition reads differently: the reference would name the new
 /// value as its root, where a decomposition goes on through the definition of a
@@ -1305,22 +1332,8 @@ fn renamed_into_a_chain(
     substituted: &dyn Fn(ValueId) -> Option<llrm_mir::module::Operand>,
     effects: &IndexMap<InstId, alias::Effect>,
 ) -> bool {
-    use llrm_mir::module::{Operand, ValueDef};
-    let ends = |value: ValueId| match function.value(value).def {
-        ValueDef::Instruction(inst) => matches!(
-            function.instruction(inst).opcode,
-            Opcode::Load { .. } | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Alloca { .. } | Opcode::Phi
-        ),
-        _ => true,
-    };
-    let alike = |was: ValueId, now: ValueId| match (function.value(was).def, function.value(now).def) {
-        (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
-            let (a, b) = (function.instruction(a), function.instruction(b));
-            (ends(was) && ends(now))
-                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
-        }
-        _ => ends(was) && ends(now),
-    };
+    use llrm_mir::module::Operand;
+    let alike = |was: ValueId, now: ValueId| decomposes_alike(function, was, now);
     let differs = |one: &crate::memory::MemRef| {
         [one.pointer, one.root, one.base.map(Operand::Value), one.segment].into_iter().any(|named| {
             matches!(
