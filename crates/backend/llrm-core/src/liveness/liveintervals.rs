@@ -227,6 +227,8 @@ impl LiveIntervals {
         &mut self,
         reg: u32,
     ) -> LiveInterval {
+        #[cfg(test)]
+        COMPUTED.with(|one| one.borrow_mut().push(reg));
         let mut li = LiveInterval::new(reg, 0.0);
         self.calc.calc.reset(self.cfg.len());
         let ctx = Ctx { cfg: &self.cfg, indexes: &self.indexes, dom: &self.dom };
@@ -994,4 +996,11 @@ mod tests {
         let edited = body(&[def, read, last, late]);
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
+}
+
+// The registers `compute_virt_reg_interval` worked out, for a test that a spill
+// works out only the registers it makes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COMPUTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }
