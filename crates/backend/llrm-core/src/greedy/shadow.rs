@@ -24,12 +24,14 @@
 //! # Used by
 //! `backend::allocate` (behind `LLRM_SHADOW_GREEDY`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use std::rc::Rc;
 
 use llrm_lir::registers::{RegId, Regs};
 
 use super::greedy::{GreedyEnv, LiveRangeStage, RAGreedy, Stats};
 use super::matrix::{LiveRegMatrix, PhysInterference};
+use super::inlinespiller::{InlineSpiller, Tables};
 use super::spill::SimpleSpiller;
 use super::virtregmap::RegisterInfo;
 use crate::analysis::frequency::Frequency;
@@ -37,6 +39,8 @@ use crate::liveness::calcspillweights::SpillWeightEnv;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
+use crate::backend::classes::RegisterClasses;
+use crate::backend::frame::Frame;
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -66,7 +70,7 @@ pub struct ShadowReport {
 
 /// The body's analyses the allocator asks of.
 struct BodyEnv {
-    orders: HashMap<u32, Vec<RegId>>,
+    orders: Rc<Tables>,
     freq: Vec<f32>,
     exiting: Vec<bool>,
 }
@@ -131,14 +135,14 @@ impl GreedyEnv for BodyEnv {
         &self,
         virt: u32,
     ) -> Vec<RegId> {
-        self.orders.get(&virt).cloned().unwrap_or_default()
+        self.orders.orders.borrow().get(&virt).cloned().unwrap_or_default()
     }
 
     fn num_allocatable_regs(
         &self,
         virt: u32,
     ) -> usize {
-        self.orders.get(&virt).map_or(0, Vec::len)
+        self.orders.orders.borrow().get(&virt).map_or(0, Vec::len)
     }
 
     fn copy_cost(
@@ -153,7 +157,8 @@ impl GreedyEnv for BodyEnv {
         a: u32,
         b: u32,
     ) -> bool {
-        self.orders.get(&a) == self.orders.get(&b)
+        let orders = self.orders.orders.borrow();
+        orders.get(&a) == orders.get(&b)
     }
 
     fn has_tied_def(
@@ -171,7 +176,7 @@ struct CallMasks {
     calls: Vec<(SlotIndex, Vec<RegId>, Vec<RegId>, Vec<RegId>)>,
     /// The widest each value is named (bytes): a value wider than 2 loses the
     /// high half of the roots in a call's third list.
-    widths: IndexMap<u32, u32>,
+    widths: Rc<Tables>,
 }
 
 impl PhysInterference for CallMasks {
@@ -186,7 +191,7 @@ impl PhysInterference for CallMasks {
             return None;
         }
         let mut found: Option<Vec<RegId>> = None;
-        let wide = self.widths.get(&li.reg()).copied().unwrap_or(0) > 2;
+        let wide = self.widths.widths.borrow().get(&li.reg()).copied().unwrap_or(0) > 2;
         let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         let mut segment = 0usize;
         while at < self.calls.len() && segment < li.segments.len() {
@@ -231,6 +236,20 @@ pub struct Decided {
     pub report: ShadowReport,
     pub placed: Vec<(u32, RegId)>,
     pub spilled: Vec<u32>,
+    /// With an inline spiller: the function as edited, which `placed` is
+    /// about, and whether a spill could not be written.
+    pub edited: Option<LirBody>,
+    pub spill_failed: bool,
+}
+
+/// How a spilled range is dealt with.
+pub enum Mode<'a> {
+    /// Only noted; the caller's emitter writes it and allocates again.
+    Record,
+    /// Placeholder reloads and stores, to count them.
+    Simple,
+    /// Written into the function being allocated (`InlineSpiller`).
+    Inline { frame: &'a mut Frame, classes: &'a RegisterClasses },
 }
 
 /// Runs the translated greedy allocator over `inputs`; None when the body has
@@ -244,6 +263,14 @@ pub fn run(inputs: &ShadowInputs) -> Option<ShadowReport> {
 pub fn decide(
     inputs: &ShadowInputs,
     recording: bool,
+) -> Option<Decided> {
+    decide_with(inputs, if recording { Mode::Record } else { Mode::Simple })
+}
+
+/// `decide`, with the way spills are written chosen.
+pub fn decide_with(
+    inputs: &ShadowInputs,
+    mode: Mode<'_>,
 ) -> Option<Decided> {
     let body = inputs.body;
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
@@ -266,13 +293,16 @@ pub fn decide(
                 .is_some_and(|one| block.succ.iter().any(|to| !one.body.contains(to)))
         })
         .collect();
-    let mut orders: HashMap<u32, Vec<RegId>> = HashMap::new();
+    let tables = Rc::new(Tables::default());
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect();
         order.dedup();
-        orders.insert(reg, order);
+        tables.orders.borrow_mut().insert(reg, order);
     }
-    let env = BodyEnv { orders, freq, exiting };
+    for (value, width) in crate::backend::allocate::_widest(body) {
+        tables.widths.borrow_mut().insert(value, width);
+    }
+    let env = BodyEnv { orders: Rc::clone(&tables), freq, exiting };
     // The calls.
     let mut calls = Vec::new();
     for block in &body.blocks {
@@ -292,11 +322,14 @@ pub fn decide(
             }
         }
     }
-    let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls, widths: crate::backend::allocate::_widest(body) }));
-    let spiller: Box<dyn super::greedy::Spiller> = if recording {
-        Box::new(super::spill::RecordingSpiller::default())
-    } else {
-        Box::new(SimpleSpiller::default())
+    let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls, widths: Rc::clone(&tables) }));
+    let inline = matches!(mode, Mode::Inline { .. });
+    let spiller: Box<dyn super::greedy::Spiller + '_> = match mode {
+        Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
+        Mode::Simple => Box::new(SimpleSpiller::default()),
+        Mode::Inline { frame, classes } => {
+            Box::new(InlineSpiller::new(body, frame, classes, inputs.order, Rc::clone(&tables)))
+        }
     };
     let mut greedy = RAGreedy::new(lis, matrix, &env, spiller);
     greedy.calculate_spill_weights_and_hints();
@@ -315,6 +348,7 @@ pub fn decide(
             let li = greedy.lis.interval_rc(reg);
             greedy.matrix.assign(&li, crate::model::ir::root(phys));
             greedy.extra.set_stage(reg, LiveRangeStage::Done);
+            greedy.pinned.insert(reg);
         }
     }
     greedy.allocate_phys_regs();
@@ -333,7 +367,16 @@ pub fn decide(
     }
     let spilled = greedy.recorded_spills();
     let report = ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature };
-    Some(Decided { report, placed, spilled })
+    let edited = inline.then(|| {
+        let blocks = body
+            .blocks
+            .iter()
+            .zip(greedy.lis.blocks())
+            .map(|(block, insns)| block.with_insns(insns.clone()))
+            .collect();
+        body.with_blocks(blocks)
+    });
+    Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed() })
 }
 
 #[cfg(test)]

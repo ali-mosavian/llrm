@@ -1606,6 +1606,57 @@ pub fn greedy_rewritten(
     let mut current = body.clone();
     let mut spilled_all: BTreeSet<u32> = BTreeSet::new();
     let mut floor = splitkit::_next_value(&current);
+    // The spills are written into the function as the allocation goes
+    // (`InlineSpiller`); the rounds below are the fallback.
+    if !llrm_support::env_flag!("LLRM_GREEDY_ROUNDS") && body.blocks.iter().all(|block| block.phis.is_empty()) {
+        let kept = frame.saved();
+        let facts =
+            Facts::of(&current, profile, segments, classes, &unspill, &empty, &Frequency::of(&current), None, None);
+        let inputs = crate::greedy::shadow::ShadowInputs {
+            body: &current,
+            registers: classes.registers,
+            order: &|value| target::order(facts.confined.get(&value), segments, classes),
+            pins,
+            unspillable: &unspill,
+            data: Some(segments.data),
+        };
+        let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
+        let decided = crate::greedy::shadow::decide_with(&inputs, mode);
+        if let Some(decided) = decided {
+            if decided.report.stats.failed == 0 && !decided.spill_failed {
+                if let Some(edited) = decided.edited {
+                    GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
+                    let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
+                    if llrm_support::env_flag!("LLRM_GREEDY_CHECK") {
+                        let facts = Facts::of(
+                            &edited,
+                            profile,
+                            segments,
+                            classes,
+                            &unspill,
+                            &empty,
+                            &Frequency::of(&edited),
+                            None,
+                            None,
+                        );
+                        greedy_check(&edited, &facts, &r#where, classes);
+                    }
+                    return Ok((
+                        Assignment {
+                            r#where,
+                            spilled: BTreeSet::new(),
+                            cost: 0.0,
+                            optimal: false,
+                            why: "llvm greedy".to_owned(),
+                        },
+                        edited,
+                        decided.spilled.into_iter().collect(),
+                    ));
+                }
+            }
+        }
+        frame.restore(&kept);
+    }
     for _round in 0..ROUNDS {
         if current.blocks.iter().any(|block| !block.phis.is_empty()) {
             break;

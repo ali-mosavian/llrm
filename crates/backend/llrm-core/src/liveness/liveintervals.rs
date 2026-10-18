@@ -186,6 +186,25 @@ impl LiveIntervals {
         reg
     }
 
+    /// Makes `reg` a number `create_virtual_register` will not give out again:
+    /// a register another component numbered (the spiller's fresh values).
+    pub fn reserve_virtual_register(
+        &mut self,
+        reg: u32,
+    ) {
+        self.next_vreg = self.next_vreg.max(reg + 1);
+    }
+
+    /// The number the next `create_virtual_register` gives.
+    pub fn next_virtual_register(&self) -> u32 {
+        self.next_vreg
+    }
+
+    /// The function as edited: the instructions of every block, in order.
+    pub fn blocks(&self) -> &[Vec<Arc<Insn>>] {
+        &self.blocks
+    }
+
     /// Replaces the weight of an interval already computed (the spill weights
     /// are computed after the intervals).
     pub fn set_weight(

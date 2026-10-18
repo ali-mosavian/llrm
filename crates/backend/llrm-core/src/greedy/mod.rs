@@ -6,6 +6,8 @@
 //! yet.
 
 pub mod greedy;
+pub mod inlinespiller;
+pub mod liverangeedit;
 pub mod matrix;
 pub mod shadow;
 pub mod spill;

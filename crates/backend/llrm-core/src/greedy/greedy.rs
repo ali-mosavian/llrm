@@ -328,6 +328,11 @@ pub trait Spiller {
     fn recorded(&self) -> Vec<u32> {
         Vec::new()
     }
+
+    /// A spill the spiller could not write: the allocation cannot be used.
+    fn failed(&self) -> bool {
+        false
+    }
 }
 
 /// What `selectOrSplit` answers: a register, no register this round (maybe new
@@ -362,8 +367,12 @@ pub struct RAGreedy<'a> {
     pub original: HashMap<u32, u32>,
     pub hints: BTreeMap<u32, Vec<Hint>>,
     pub extra: ExtraRegInfo,
+    /// Registers fixed to their physical register by the instructions that
+    /// require one (pre-assigned): nothing recolors them (DEVIATE: LLVM
+    /// models a fixed register as the reg units of a physical register).
+    pub pinned: HashSet<u32>,
     queue: BinaryHeap<(u32, u32)>,
-    spiller: Box<dyn Spiller>,
+    spiller: Box<dyn Spiller + 'a>,
     pub stats: Stats,
 }
 
@@ -372,7 +381,7 @@ impl<'a> RAGreedy<'a> {
         lis: LiveIntervals,
         matrix: LiveRegMatrix,
         env: &'a dyn GreedyEnv,
-        spiller: Box<dyn Spiller>,
+        spiller: Box<dyn Spiller + 'a>,
     ) -> Self {
         Self {
             lis,
@@ -381,6 +390,7 @@ impl<'a> RAGreedy<'a> {
             original: HashMap::new(),
             hints: BTreeMap::new(),
             extra: ExtraRegInfo::default(),
+            pinned: HashSet::new(),
             queue: BinaryHeap::new(),
             spiller,
             stats: Stats::default(),
@@ -391,6 +401,11 @@ impl<'a> RAGreedy<'a> {
     /// The registers a recording spiller was asked to spill.
     pub fn recorded_spills(&self) -> Vec<u32> {
         self.spiller.recorded()
+    }
+
+    /// Whether the spiller failed to write a spill.
+    pub fn spill_failed(&self) -> bool {
+        self.spiller.failed()
     }
 
     /// What the spiller has made: reloads, stores, folded.
@@ -944,7 +959,7 @@ impl<'a> RAGreedy<'a> {
                     )
                     && !partially_overlaps;
                 let tied_exception = self.env.has_tied_def(virt.reg()) && !self.env.has_tied_def(intf_reg);
-                if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) {
+                if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) || self.pinned.contains(&intf_reg) {
                     return false;
                 }
                 let intf = self.lis.interval_rc(intf_reg);
