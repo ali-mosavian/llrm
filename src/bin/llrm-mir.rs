@@ -91,6 +91,13 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let memcpyopt = {
+        let at = arguments.iter().position(|one| one == "--memcpyopt");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -198,6 +205,16 @@ fn main() -> ExitCode {
                         eprintln!("{path}: @{name}: {error}");
                         return ExitCode::FAILURE;
                     }
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if memcpyopt {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::memcpyoptimizer::MemCpyOptimizer);
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
                 }
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;

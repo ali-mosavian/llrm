@@ -86,7 +86,7 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
             for (b, &bb) in function.layout().iter().enumerate() {
                 block.insert(bb, b as u32);
-                for &inst in function.block(bb).instructions() {
+                for inst in function.block(bb).iter() {
                     index.insert(inst, u);
                     u += 1;
                     if let Some(result) = function.instruction(inst).result
@@ -105,7 +105,8 @@ pub fn dump(text: &str) -> Result<String, String> {
                 _ => None,
             };
             let dominates_block = |op: Operand, at: BlockId| parent_of(op).is_none_or(|def| dt.dominates(def, at));
-            let entry_first = function.block(function.entry().expect("an entry")).instructions()[0];
+            let entry_first =
+                function.block(function.entry().expect("an entry")).first().expect("a block with an instruction");
 
             let mut env = Env::new(context, globals, metadata, function, &layout, &assumptions);
             let mut dump_value = |env: &mut Env, op: Operand, cxt: InstId| -> Option<String> {
@@ -137,7 +138,7 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
             for &bb in function.layout() {
                 if dt.is_reachable(bb) {
-                    for &inst in function.block(bb).instructions() {
+                    for inst in function.block(bb).iter() {
                         if let Some(result) = function.instruction(inst).result {
                             out.extend(dump_value(&mut env, Operand::Value(result), inst).map(|line| line + "\n"));
                         }
@@ -151,7 +152,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for &inst in function.block(bb).instructions().iter().rev() {
+                for inst in function.block(bb).iter().rev() {
                     let Some(result) = function.instruction(inst).result else { continue };
                     let op = Operand::Value(result);
                     if !is_int(env.context, op) {
@@ -169,7 +170,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 }
                 for succ in function.successors(bb) {
                     let mut done: Vec<Operand> = Vec::new();
-                    for &inst in function.block(succ).instructions() {
+                    for inst in function.block(succ).iter() {
                         let instruction = function.instruction(inst);
                         for (k, &v) in instruction.operands.iter().enumerate() {
                             if !matches!(v, Operand::Value(_)) || !is_int(env.context, v) || !dominates_block(v, bb) {
@@ -200,7 +201,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for &inst in function.block(bb).instructions() {
+                for inst in function.block(bb).iter() {
                     let instruction = function.instruction(inst);
                     let Opcode::ICmp(pred) = instruction.opcode else { continue };
                     let (a, b) = (instruction.operands[0], instruction.operands[1]);
@@ -259,7 +260,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 if !dt.is_reachable(bb) {
                     continue;
                 }
-                for &inst in function.block(bb).instructions() {
+                for inst in function.block(bb).iter() {
                     let instruction = function.instruction(inst);
                     for (k, &v) in instruction.operands.iter().enumerate() {
                         if !matches!(v, Operand::Value(_)) || !is_int(env.context, v) {
@@ -287,14 +288,14 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
 
             // printLVI, where every block, argument and result has a name.
-            let named =
-                function.parameters().iter().all(|&p| function.value(p).name.is_some())
-                    && function.layout().iter().all(|&bb| {
-                        function.block(bb).name.is_some()
-                            && function.block(bb).instructions().iter().all(|&i| {
-                                function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some())
-                            })
-                    });
+            let named = function.parameters().iter().all(|&p| function.value(p).name.is_some())
+                && function.layout().iter().all(|&bb| {
+                    function.block(bb).name.is_some()
+                        && function
+                            .block(bb)
+                            .iter()
+                            .all(|i| function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some()))
+                });
             if named {
                 let annotations = match lvi.get_impl() {
                     Some(imp) => imp.annotations(&mut env, &dt),

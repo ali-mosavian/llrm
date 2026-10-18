@@ -690,7 +690,7 @@ mod tests {
         name: &str,
         definition: Definition,
     ) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition, group: None }
+        Symbol { name: name.into(), binding: Binding::Public, definition, size: 0, group: None }
     }
 
     fn section(
@@ -728,6 +728,7 @@ mod tests {
                 name: "helper".into(),
                 binding: Binding::Local,
                 definition: Definition::Defined { section: 0, offset: 0 },
+                size: 0,
                 group: None,
             }],
         );

@@ -3924,6 +3924,18 @@ pub fn simplify_cast_operand(
     simplify_cast(&mut q, op, value, to, RECURSION_LIMIT)
 }
 
+/// `simplifyGEPInst` for operands.
+pub fn simplify_gep_operands(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &Function,
+    ptr: Operand,
+    indices: &[Operand],
+) -> Option<Operand> {
+    let mut q = Query { context, function, layout, globals: &[], analyses: None, cxt: None };
+    simplify_gep(&mut q, ptr, indices)
+}
+
 /// `simplifySelectInst` for operands.
 pub fn simplify_select_operands(
     context: &mut Context,

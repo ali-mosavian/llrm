@@ -80,6 +80,8 @@
 //! | [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8800) | `jump_simplified` | the empty-block half; D2 |
 //! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
 //! | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
+//! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
+//! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -94,10 +96,10 @@
 //! - D2. Not ported yet, each a later change of this series:
 //!   `tailMergeBlocksWithSimilarFunctionTerminators`,
 //!   `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
-//!   at this slot), `foldTwoEntryPHINode` (`phiopt` meanwhile), and the
-//!   terminator simplifications `simplifyUncondBranch` beyond the empty block
-//!   (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
-//!   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
+//!   at this slot), and the terminator simplifications `simplifyUncondBranch`
+//!   beyond the empty block (`tryToSimplifyUncondBranchWithICmpInIt`, landing
+//!   pads: none in the MIR), `simplifyCondBranch`, `simplifySwitch`,
+//!   `simplifyUnreachable`.
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): not ported yet. It reads the target's
@@ -180,6 +182,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
+use crate::speculate;
+use crate::twoentryphi::{self, Speculation};
 use crate::{cfg, dead, edges, transform};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
@@ -200,8 +204,10 @@ impl FunctionPass for SimplifyCfg {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let callees = analyses.outer().callees();
-        if simplified(unit.context, callees, unit.function) {
+        let outer = std::rc::Rc::clone(analyses.outer());
+        let tti = crate::looprotate::target_tti(outer.target());
+        let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
+        if simplified(unit.context, &spec, unit.function) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -215,11 +221,13 @@ pub struct Options {
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
+    /// `SpeculateBlocks`: true by default and at every slot.
+    pub speculate_blocks: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { need_canonical_loop: true }
+        Options { need_canonical_loop: true, speculate_blocks: true }
     }
 }
 
@@ -227,29 +235,30 @@ impl Default for Options {
 /// `simplifyFunctionCFGImpl`. Whether anything changed.
 pub fn simplified(
     context: &mut Context,
-    callees: &Callees,
+    spec: &Speculation,
     function: &mut Function,
 ) -> bool {
-    simplified_with(&Options::default(), context, callees, function)
+    simplified_with(&Options::default(), context, spec, function)
 }
 
 /// `simplified` under `options`.
 pub fn simplified_with(
     options: &Options,
     context: &mut Context,
-    callees: &Callees,
+    spec: &Speculation,
     function: &mut Function,
 ) -> bool {
+    let callees = spec.outer.callees();
     let mut folded = false;
     let ever = unreachable_removed(context, callees, function, &mut folded)
-        | iteratively_simplified(options, context, callees, function, &mut folded);
+        | iteratively_simplified(options, context, spec, function, &mut folded);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
     if unreachable_removed(context, callees, function, &mut folded) {
-        while iteratively_simplified(options, context, callees, function, &mut folded)
+        while iteratively_simplified(options, context, spec, function, &mut folded)
             | unreachable_removed(context, callees, function, &mut folded)
         {}
     }
@@ -265,7 +274,7 @@ pub fn simplified_with(
 fn iteratively_simplified(
     options: &Options,
     context: &mut Context,
-    callees: &Callees,
+    spec: &Speculation,
     function: &mut Function,
     folded: &mut bool,
 ) -> bool {
@@ -281,7 +290,8 @@ fn iteratively_simplified(
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers, &form)
+            if function.is_placed(block)
+                && block_simplified(options, context, spec, function, block, folded, &headers, &form)
             {
                 local = true;
             }
@@ -294,14 +304,16 @@ fn iteratively_simplified(
 /// One visit of `block`: LLVM's `SimplifyCFGOpt::simplifyOnce`, as far as it
 /// is ported (D2).
 fn block_simplified(
+    options: &Options,
     context: &mut Context,
-    callees: &Callees,
+    spec: &Speculation,
     function: &mut Function,
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
     form: &std::collections::BTreeSet<i64>,
 ) -> bool {
+    let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
     if (predecessors.is_empty() && function.entry() != Some(block)) || predecessors[..] == [block] {
@@ -312,10 +324,42 @@ fn block_simplified(
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
     changed |= cfg::merged_into_predecessor(function, block);
+    if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
+        return true;
+    }
+    if options.speculate_blocks && function.is_placed(block) && branch_speculated(context, spec, function, block) {
+        return true;
+    }
     changed
         | (function.is_placed(block)
             && !form.contains(&llrm_analysis::cfg::id(block))
             && jump_simplified(context, function, block, headers))
+}
+
+/// The one-armed `if` ending `block` run before its branch: the speculation
+/// of LLVM's `simplifyCondBranch`.
+fn branch_speculated(
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    let alone = |one: BlockId| function.predecessors(one).len() == 1;
+    let jumps_to = |one: BlockId, target: BlockId| {
+        function.terminator(one).is_some_and(|jump| function.instruction(jump).operands[..] == [Operand::Block(target)])
+    };
+    let then = if alone(first) {
+        (!alone(second) && jumps_to(first, second)).then_some(first)
+    } else if alone(second) {
+        jumps_to(second, first).then_some(second)
+    } else {
+        None
+    };
+    then.is_some_and(|then| speculate::executed(context, spec, function, block, then))
 }
 
 /// The back edges' targets, by one walk from the entry: LLVM's

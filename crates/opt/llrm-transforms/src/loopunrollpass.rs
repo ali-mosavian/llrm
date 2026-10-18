@@ -54,8 +54,6 @@
 //! [`analyzeLoopUnrollCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L336),
 //! [`LoopFullUnrollPass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1640).
 
-use std::collections::HashSet;
-
 use llrm_analysis::loopunrollanalyzer::{Env, UnrolledInstAnalyzer};
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_mir::codemetrics::{CodeMetrics, Query, collect_ephemeral_values};
@@ -1456,7 +1454,7 @@ fn unrolled_blocks(
     capacity: usize,
     body: &[BlockId],
 ) -> Vec<BlockId> {
-    let own: HashSet<BlockId> = body.iter().copied().collect();
+    let own: IdSet<BlockId> = body.iter().copied().collect();
     run.function.layout().iter().copied().filter(|&at| at.0 as usize >= capacity || own.contains(&at)).collect()
 }
 
@@ -1489,7 +1487,7 @@ pub fn unroll_loops(run: &mut Run) -> bool {
                 None => loops.top_level_loops().map(|one| one.get_header()).collect(),
             }
         };
-        let old: HashSet<BlockId> = siblings_of(&analyzed.loops).into_iter().collect();
+        let old: IdSet<BlockId> = siblings_of(&analyzed.loops).into_iter().collect();
         let capacity = run.function.block_capacity();
         let body = lp.get_blocks().to_vec();
         let holds_loops = lp.get_sub_loops().next().is_some();

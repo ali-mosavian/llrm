@@ -1,17 +1,33 @@
 //! Each body is MIR text run by llrm-mir's interpreter before and after.
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
 use super::simplified;
 use crate::testing::{parsed, printed, results};
 use crate::transform::BLOCKS_VISITED;
+use crate::twoentryphi::Speculation;
 
 /// @f simplified; whether anything changed.
 fn simplify(module: &mut Module) -> bool {
     let outer = Outer::of(module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
     let (context, function) = module.function_mut("f").expect("@f");
-    simplified(context, outer.callees(), function)
+    simplified(context, &spec, function)
+}
+
+/// @f simplified under `options`; whether anything changed.
+fn simplify_with(
+    options: &super::Options,
+    module: &mut Module,
+) -> bool {
+    let outer = Outer::of(module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::simplified_with(options, context, &spec, function)
 }
 
 /// `text` simplified is `expected`, and computes what it did on `inputs`.
@@ -20,9 +36,28 @@ fn check(
     expected: &str,
     inputs: &[&[i128]],
 ) {
+    check_with(&super::Options::default(), text, expected, inputs);
+}
+
+/// [`check`] without `foldTwoEntryPHINode`: for the tests of the jump blocks,
+/// whose diamonds it would turn into selects.
+fn check_branching(
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
+    check_with(&super::Options { speculate_blocks: false, ..Default::default() }, text, expected, inputs);
+}
+
+fn check_with(
+    options: &super::Options,
+    text: &str,
+    expected: &str,
+    inputs: &[&[i128]],
+) {
     let mut module = parsed(text);
     let before = results(&module, inputs);
-    assert_eq!(simplify(&mut module), text != expected, "{text}");
+    assert_eq!(simplify_with(options, &mut module), text != expected, "{text}");
     assert_eq!(printed(&module), expected);
     assert_eq!(results(&module, inputs), before);
 }
@@ -315,7 +350,7 @@ fn test_simplifying_a_chain_of_folds_looks_at_blocks_linearly_in_its_length() {
 /// (`decide` bypassed it only where the target had no phi).
 #[test]
 fn test_a_block_that_only_jumps_is_bypassed_and_the_phi_after_it_follows() {
-    check(
+    check_branching(
         "define i16 @f(i16 %x, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -353,7 +388,7 @@ b3:
 /// 2, so b1 must stay.
 #[test]
 fn test_a_jump_block_stays_where_a_shared_predecessor_would_send_two_values() {
-    check(
+    check_branching(
         "define i16 @f(i16 %x, i1 %c) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -386,7 +421,7 @@ b2:
 /// successor's phis.
 #[test]
 fn test_a_block_of_phis_and_a_jump_is_merged_into_the_successor() {
-    check(
+    check_branching(
         "define i16 @f(i16 %x, i1 %c, i1 %d) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -456,7 +491,7 @@ b5:
   ret i16 %i
 }
 ";
-    check(text, text, &[&[0], &[7]]);
+    check_branching(text, text, &[&[0], &[7]]);
 }
 
 /// With `needCanonicalLoops` off (the slot after vectorization) the block that
@@ -492,8 +527,225 @@ b5:
 ";
     let mut module = parsed(text);
     let outer = Outer::of(&mut module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
     let (context, function) = module.function_mut("f").expect("@f");
-    let options = super::Options { need_canonical_loop: false };
-    assert!(super::simplified_with(&options, context, outer.callees(), function));
+    let options = super::Options { need_canonical_loop: false, ..Default::default() };
+    assert!(super::simplified_with(&options, context, &spec, function));
     assert!(!printed(&module).contains("b4:"), "{}", printed(&module));
+}
+
+/// `m = a < b ? a : b` was a diamond of empty arms and a phi, and the
+/// bisect of `d_draw_faces` found no `select` where clang has 18: no
+/// SimplifyCFG here formed one.
+#[test]
+fn test_a_diamond_of_empty_arms_and_a_phi_is_a_select() {
+    check(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  %c = icmp slt i16 %a, %b
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %m = phi i16 [ %a, %b1 ], [ %b, %b2 ]
+  ret i16 %m
+}
+",
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  %c = icmp slt i16 %a, %b
+  %0 = select i1 %c, i16 %a, i16 %b
+  ret i16 %0
+}
+",
+        &[&[1, 2], &[5, 3], &[4, 4]],
+    );
+}
+
+/// The triangle's one cheap instruction runs before the branch; the phi
+/// reads it through the select.
+#[test]
+fn test_a_triangle_with_a_cheap_instruction_hoists_it_and_selects() {
+    check(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %y = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  %y = add i16 %x, 1
+  %0 = select i1 %c, i16 %y, i16 %x
+  ret i16 %0
+}
+",
+        &[&[3, 1], &[3, 0]],
+    );
+}
+
+/// Five instructions cost more than the budget (4): the branch stays.
+#[test]
+fn test_an_arm_dearer_than_the_budget_keeps_its_branch() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  %b = add i16 %a, 2
+  %d = add i16 %b, 3
+  %e = add i16 %d, 4
+  %g = add i16 %e, 5
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %g, %b1 ]
+  ret i16 %p
+}
+";
+    check(text, text, &[&[3, 1], &[3, 0]]);
+}
+
+/// A division by a variable may trap: it is not run where it did not run.
+#[test]
+fn test_an_arm_that_may_trap_keeps_its_branch() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %q = udiv i16 %x, %y
+  br label %b2
+
+b2:
+  %p = phi i16 [ %x, %b0 ], [ %q, %b1 ]
+  ret i16 %p
+}
+";
+    check(text, text, &[&[6, 3, 1], &[6, 0, 0]]);
+}
+
+/// With `SpeculateBlocks` off no select forms: only the empty arm goes.
+#[test]
+fn test_without_speculate_blocks_no_select_forms() {
+    let text = "define i16 @f(i16 %a, i16 %b, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %m = phi i16 [ %a, %b1 ], [ %b, %b2 ]
+  ret i16 %m
+}
+";
+    let expected = "define i16 @f(i16 %a, i16 %b, i1 %c) {
+b0:
+  br i1 %c, label %b3, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %m = phi i16 [ %b, %b2 ], [ %a, %b0 ]
+  ret i16 %m
+}
+";
+    check_branching(text, expected, &[&[1, 2, 1], &[1, 2, 0]]);
+}
+
+/// The join has a third predecessor, so `foldTwoEntryPHINode` does not apply:
+/// the add of the arm runs before the branch (`speculativelyExecuteBB`) and
+/// the phi reads a select.
+#[test]
+fn test_one_cheap_instruction_of_a_one_armed_if_runs_before_the_branch() {
+    check(
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  br i1 %d, label %b0, label %b2
+
+b0:
+  br i1 %c, label %b2, label %b1
+
+b1:
+  %y = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ 9, %b9 ], [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  %y = add i16 %x, 1
+  %0 = select i1 %c, i16 %x, i16 %y
+  %1 = select i1 %d, i16 %0, i16 9
+  ret i16 %1
+}
+",
+        &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]],
+    );
+}
+
+/// A store is not run early (the pin only does that for a store it can prove
+/// safe, which is not ported).
+#[test]
+fn test_a_store_in_the_one_armed_if_stays_behind_its_branch() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  %q = alloca i16
+  br i1 %c, label %b2, label %b1
+
+b1:
+  store i16 %x, ptr %q
+  br label %b2
+
+b2:
+  ret i16 %x
+}
+";
+    check(text, text, &[&[3, 1], &[3, 0]]);
+}
+
+/// `%t` is read by the arm alone: running the arm early leaves `%t` behind
+/// as a second instruction speculated, so the branch stays.
+#[test]
+fn test_a_value_only_the_arm_reads_counts_as_a_second_speculated_instruction() {
+    let text = "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  br i1 %d, label %b0, label %b2
+
+b0:
+  %t = add i16 %x, 1
+  br i1 %c, label %b2, label %b1
+
+b1:
+  %y = add i16 %t, 3
+  br label %b2
+
+b2:
+  %p = phi i16 [ 9, %b9 ], [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+";
+    check(text, text, &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]]);
 }

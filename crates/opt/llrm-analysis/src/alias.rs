@@ -2616,7 +2616,7 @@ pub fn initialized(
         }
     };
     let transfer = |at: i64, mut state: State| -> State {
-        for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
+        for inst in function.block(cfg::block(at)).iter().rev() {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
                 for one in
@@ -2662,8 +2662,7 @@ pub fn initialized(
     };
     let graph = cfg::graph(function);
     let exit = |at: i64| -> State {
-        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode
-        {
+        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode {
             Opcode::Ret => vec![Some(Vec::new()); count],
             _ => vec![None; count],
         }
@@ -2945,7 +2944,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     // the ones that read each value they read.
     let mut order: Vec<InstId> = Vec::new();
     for block in &graph {
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.block(cfg::block(block.at)).iter() {
             let op = function.instruction(inst);
             let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
             let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
@@ -2971,7 +2970,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         let place: llrm_mir::dense::IdMap<InstId, usize> = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .flat_map(|&block| function.block(block).iter().enumerate().map(|(at, inst)| (inst, at)))
             .collect();
         pointer_loads
             .iter()

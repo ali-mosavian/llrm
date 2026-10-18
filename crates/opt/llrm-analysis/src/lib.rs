@@ -92,6 +92,7 @@
 pub mod aa;
 pub mod access;
 pub mod alias;
+pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;
@@ -124,6 +125,7 @@ pub mod liveness;
 pub mod loopaccess;
 pub mod loopunrollanalyzer;
 pub mod manager;
+pub mod memdep;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;

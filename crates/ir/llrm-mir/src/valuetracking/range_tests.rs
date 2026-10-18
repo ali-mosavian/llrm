@@ -20,7 +20,7 @@ fn dump(
         }
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|one| (Operand::Value(*one), entry_first)).collect();
         for (_, inst) in function.walk() {

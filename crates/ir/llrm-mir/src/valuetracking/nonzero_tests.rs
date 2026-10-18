@@ -24,7 +24,7 @@ pub(super) fn dump(
         let name = global.name.clone().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|parameter| (Operand::Value(*parameter), entry_first)).collect();
         for (_, inst) in function.walk() {

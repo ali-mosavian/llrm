@@ -22,9 +22,9 @@
 //! `computeSubRangeUndefs`; x86's AL/AH are register units of our register
 //! classes, not lanes of one virtual register), the `SegmentSet` mode of
 //! `LiveRange` (it serves `computeRegUnitRange` of physical registers),
-//! `findIndexesLiveAt` and `ConnectedVNInfoEqClasses` (S2: they come with
-//! SplitKit). `extendSegmentStartTo` returns the index of the extended segment
-//! where the C++ returns an iterator that its own `erase` invalidated.
+//! `findIndexesLiveAt` (S2: it comes with SplitKit); `ConnectedVNInfoEqClasses`
+//! is in `eqclasses`. `extendSegmentStartTo` returns the index of the extended
+//! segment where the C++ returns an iterator that its own `erase` invalidated.
 //!
 //! # Example
 //! `a = 1` at 16, `b = a + 2` at 32, a read of `a` at 48: `a` is
@@ -72,7 +72,7 @@ impl VNInfo {
         self.id.get()
     }
 
-    fn set_id(
+    pub(crate) fn set_id(
         &self,
         id: u32,
     ) {

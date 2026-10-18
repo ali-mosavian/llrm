@@ -325,7 +325,7 @@ pub fn _cannot_return(
         if !visited.insert(at) {
             continue;
         }
-        if function.block(cfg::block(at)).instructions().iter().any(|inst| terminal_calls.contains(inst)) {
+        if function.block(cfg::block(at)).iter().any(|inst| terminal_calls.contains(&inst)) {
             continue;
         }
         if _returns(function, at) {

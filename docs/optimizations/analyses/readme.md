@@ -2,13 +2,14 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 53 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
 | access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and | [access](access.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
+| aliassets | `AliasSetTracker` (LLVM `AliasSetTracker.cpp`, `d1106deb71cc`): the locations an analysis asks of, grouped into sets that may alias, with whether each set's locations all must alias. |  | [aliassets](aliassets.md) |
 | argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
 | avail | Available loads and dead stores, as LLVM's GVN load forwarding and DSE find them through MemoryDependence. | `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the | [avail](avail.md) |
@@ -38,6 +39,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undoc
 | loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
 | loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
 | manager | The memory and range analyses as entries of llrm-mir's analysis manager: asked for by name, cached, kept or brought up to date after a pass. | The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`, | [manager](manager.md) |
+| memdep | `MemoryDependenceAnalysis`: for a load, a store or a call, the nearest instruction it depends on in its block (a def or a clobber), or that there is none there and the question moves to the predecessors. | `MemDepResult`, `MemoryDependenceResults` (`get_dependency`, | [memdep](memdep.md) |
 | memory | The memory model every alias query reads: objects, byte slices, provenance, accesses (`MemRef`) and the `Unit` that carries a function's facts. | The types above; `exposed_frames`, `object_of`, `global_object`, `typed`, | [memory](memory.md) |
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
 | mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |

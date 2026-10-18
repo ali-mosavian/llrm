@@ -63,11 +63,26 @@ pub struct State {
     large_visits: HashMap<u32, u32>,
     /// `ErasedInstrs`.
     pub erased: HashSet<InstrKey>,
+    /// Instructions renamed to a new instruction, by their old key. A
+    /// `MachineInstr*` survives its operands being rewritten; a key here is
+    /// the instruction's identity, so the lists of copies follow the moves.
+    moved: HashMap<InstrKey, InstrKey>,
 }
 
 impl State {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The key the instruction first known as `key` has now.
+    pub fn current(
+        &self,
+        mut key: InstrKey,
+    ) -> InstrKey {
+        while let Some(next) = self.moved.get(&key) {
+            key = *next;
+        }
+        key
     }
 
     /// `isHighCostLiveInterval`.
@@ -93,6 +108,7 @@ pub fn join_copy(
     lis: &mut LiveIntervals,
     env: &dyn CoalescerEnv,
     state: &mut State,
+    current_erased: &mut HashSet<InstrKey>,
     copy: InstrKey,
 ) -> JoinResult {
     let copy_insn = Arc::clone(lis.instr(copy));
@@ -135,10 +151,15 @@ pub fn join_copy(
     if result != JoinResult::Joined {
         return result;
     }
-    // CopyMI has been erased by joinVirtRegs at this point.
-    state.erased.remove(&copy);
+    // CopyMI has been erased by joinVirtRegs at this point. Remove it from
+    // ErasedInstrs since the work list does not add a successful join back.
+    // This keeps ErasedInstrs from growing needlessly.
+    if state.erased.remove(&copy) {
+        // But we may encounter the instruction again in this iteration.
+        current_erased.insert(copy);
+    }
     // Rewrite all SrcReg operands to DstReg.
-    update_reg_defs_uses(lis, cp.src_reg(), cp.dst_reg());
+    update_reg_defs_uses(lis, state, cp.src_reg(), cp.dst_reg());
     // SrcReg is guaranteed to be the register whose live interval that is
     // being merged.
     lis.remove_interval(cp.src_reg());
@@ -201,15 +222,19 @@ fn join_virt_regs(
 /// `updateRegDefsUses`: every instruction that names `src` names `dst`.
 fn update_reg_defs_uses(
     lis: &mut LiveIntervals,
+    state: &mut State,
     src: u32,
     dst: u32,
 ) {
+    lis.rename_input(src, dst);
     let mut keys: Vec<InstrKey> = lis.operands(src).iter().map(|operand| operand.instr).collect();
     keys.sort_unstable();
     keys.dedup();
     for key in keys {
         let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
         let renamed = Arc::clone(lis.instr(key)).renamed(&|value| if value == src { dst } else { value });
+        let new = renamed.id();
         lis.rewrite_instr(block, key, renamed);
+        state.moved.insert(key, new);
     }
 }

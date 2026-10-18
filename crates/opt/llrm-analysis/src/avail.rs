@@ -686,7 +686,7 @@ impl Solve<'_, '_> {
         let stored = &self.stored;
         let mut found = Vec::new();
         let mut overwritten = overwritten.clone();
-        for &inst in unit.function.block(cfg::block(block)).instructions().iter().rev() {
+        for inst in unit.function.block(cfg::block(block)).iter().rev() {
             let opcode = &unit.function.instruction(inst).opcode;
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
