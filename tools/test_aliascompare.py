@@ -70,3 +70,20 @@ def test_capture_tracking_gives_up_after_150_uses_in_the_pinned_opt():
         v for (_, names), v in aliascompare.llvm_answers(dt, slot_with_loads(loads), "basic").items() if {n for n, _ in names} == {"%a", "%slot"}
     )
     assert pair(148) == "NoAlias" and pair(149) == "MayAlias"
+
+
+def test_memops_prints_must_alias_for_a_load_and_a_store_of_one_pointer(tmp_path):
+    """--memops with BasicAA collapsed MustAlias to MayAlias: 5,657,881 'May vs LLVM Must' cells that were the instrument, not the analysis."""
+    import os
+    import subprocess
+
+    binary = os.environ.get("LLRM_MIR")
+    if not binary or not Path(binary).exists():
+        pytest.skip("set LLRM_MIR to a built llrm-mir")
+    path = tmp_path / "same.ll"
+    path.write_text(
+        f'target datalayout = "{aliascompare.M32_DATALAYOUT}"\n'
+        "define i32 @f(ptr %p) {\nentry:\n  store i32 1, ptr %p\n  %v = load i32, ptr %p\n  ret i32 %v\n}\n"
+    )
+    out = subprocess.run([binary, "--memops", str(path)], capture_output=True, text=True, env={**os.environ, "LLRM_ALIASES_BASICAA": "1"}).stdout
+    assert "MustAlias" in out, out

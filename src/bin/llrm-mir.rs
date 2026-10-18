@@ -305,7 +305,9 @@ fn memops(module: &llrm_mir::module::Module) -> String {
                     let (Some(first), Some(second)) = (&one.2, &other.2) else { return "?" };
                     return match basicaa.alias(first, second, &mut batch, None) {
                         AliasResult::NoAlias => "NoAlias",
-                        _ => "MayAlias",
+                        AliasResult::MustAlias => "MustAlias",
+                        AliasResult::PartialAlias { .. } => "PartialAlias",
+                        AliasResult::MayAlias => "MayAlias",
                     };
                 }
                 match (&one.1, &other.1) {
