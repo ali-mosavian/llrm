@@ -1,6 +1,4 @@
-# Findings of tools/oracle_sweep.py that may stay until their fix lands. The file only shrinks: an entry that no longer matches fails the sweep
-# until it is deleted, and a finding no entry covers fails it.
-[[expected]]
-match = "call-effects: the result kept past N sound edits contradicts"
-fix = "#2193"
-owner = "basicaa-port"
+# Findings of tools/oracle_sweep.py that may stay until their fix lands, each a [[expected]] table with `match` (a substring of the finding's first
+# line), `fix` (the pull request or issue that fixes it) and `owner`. The file only shrinks: an entry that no longer matches fails the sweep
+# until it is deleted, and a finding no entry covers fails it. Empty now: #2193 fixed the REPLAY call-effects finding.
+expected = []
