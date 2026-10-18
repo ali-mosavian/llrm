@@ -1,7 +1,7 @@
 # TargetTransformInfo: one translation, many readers
 
 TL;DR: translate `TargetTransformInfo` with `BasicTTIImpl` (the generic profile `opt` uses without a triple)
-and `X86TTIImpl` (the i486 scalar subset) once, in `llrm-analysis`, for InlineCost, the SCEV expander, lsr, unroll
+and `X86TTIImpl` (the i486 scalar subset) once, in `llrm-mir` (the interface) and `llrm-x86` (the profile), for InlineCost, the SCEV expander, lsr, unroll
 and loop-idiom. Owner: cgscc-poc. Source: llvm-project at d1106deb71cc.
 
 ## Source map (llvm/)
@@ -17,7 +17,7 @@ Only scalar integer and x87 paths are translated, for each supported `-march` (i
 athlon, core2): the scalar subtarget features of `X86Subtarget` (CMOV from pentiumpro, per-CPU multiply and shift
 costs). The vector, masked, gather, interleave and reduction costs return `Invalid` (DEVIATE T1: no producer).
 
-## Interface (Rust, `crates/opt/llrm-analysis/src/tti/`)
+## Interface (Rust: `llrm_mir::tti` is the trait, `llrm_x86::tti::X86` the profile)
 
 `Cost { value: i64, valid: bool }` is `InstructionCost`. `CostKind` is `TCK_RecipThroughput | Latency | CodeSize |
 SizeAndLatency`. One trait, `Tti`, with a profile each (`Generic`, `X86 { cpu }`, `cpu` from `-march` (its scalar features)):

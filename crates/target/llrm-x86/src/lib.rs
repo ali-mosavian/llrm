@@ -6,6 +6,9 @@ pub mod effects;
 /// include it with `#[path]`.
 pub mod parse;
 pub mod select;
+pub mod tti;
+#[cfg(test)]
+mod tti_tests;
 
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.
