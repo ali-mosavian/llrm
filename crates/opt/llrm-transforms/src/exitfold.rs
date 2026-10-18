@@ -17,6 +17,12 @@
 //! - some other exit's count is below all of its own, by the constants or by
 //!   the guards on entry (`guards::holds`): it never leaves.
 //!
+//! With `LLRM_EXP_SCEV_EXITFOLD` the exits and their counts are
+//! ScalarEvolution's (`getExitCount`, `isLoopEntryGuardedByCond`: LLVM's
+//! `optimizeLoopExits`: zero, below the loop's symbolic maximum, a count an
+//! earlier exit has); off by default, it differs from `induction::exits` on 2
+//! of 1,590 corpus objects, both smaller.
+//!
 //! The branch is given the constant that decides it; `decide` then makes it a
 //! jump. Nothing else changes, so no effect or value between the exits matters.
 //!
