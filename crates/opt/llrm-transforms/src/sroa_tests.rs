@@ -344,10 +344,10 @@ b0:
     assert!(!after.contains("i24"), "{after}");
 }
 
-/// Old: a partition read before any store was `poison`; the pin's is `undef`
-/// and MIR's refinement is the zero of the type.
+/// Old: a partition read before any store was `poison`, then the zero of the
+/// type; the pin's is `undef`.
 #[test]
-fn test_a_partition_nothing_wrote_reads_as_zero_not_poison() {
+fn test_a_partition_nothing_wrote_reads_as_undef_not_poison() {
     let after = sroa(
         "define i32 @f(i32 %a) {
 b0:
@@ -362,4 +362,5 @@ b0:
 ",
     );
     assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
+    assert!(after.contains("undef"), "{after}");
 }

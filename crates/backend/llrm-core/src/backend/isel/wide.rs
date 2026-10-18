@@ -173,7 +173,7 @@ impl Selector<'_, '_, '_> {
         // Poison is any value: zero, as a float and an address are.
         let poison = matches!(
             operand,
-            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Poison)
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Poison | llrm_mir::ConstantKind::Undef)
         );
         if let Some(bits) = if poison { Some(0) } else { self.constant(operand, 8) } {
             let [low, high] = self.immediates(bits)?;

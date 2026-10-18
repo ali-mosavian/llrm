@@ -631,7 +631,7 @@ fn _narrowed_binary(
     if !alone && !(free(&a, left) && free(&b, right)) {
         return false;
     }
-    let mut cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
+    let cut = |function: &mut Function, known: Option<Operand>, operand: Operand| match (known, operand) {
         (Some(from), _) => from,
         (None, Operand::Constant(_)) => {
             _integer(context, operand).map_or(operand, |bits| Operand::Constant(context.int(narrow, bits as i128)))

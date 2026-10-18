@@ -7,6 +7,7 @@ use std::cell::RefCell;
 use llrm_mir::module::InstId;
 
 use super::alias::AliasQuery;
+use super::updater::MemorySsaUpdater;
 use super::{AccessId, Mssa};
 use crate::memory::Unit;
 use crate::memoryssa::Accesses;
@@ -14,6 +15,7 @@ use crate::memoryssa::Accesses;
 /// The translated graph and the alias query its walker asks.
 pub struct Translated<'a> {
     mssa: RefCell<Mssa>,
+    updater: RefCell<MemorySsaUpdater>,
     aa: AliasQuery<'a>,
 }
 
@@ -23,7 +25,29 @@ impl<'a> Translated<'a> {
         accesses: &'a Accesses,
         mssa: Mssa,
     ) -> Self {
-        Self { mssa: RefCell::new(mssa), aa: AliasQuery::new(unit, accesses) }
+        Self {
+            mssa: RefCell::new(mssa),
+            updater: RefCell::new(MemorySsaUpdater::new()),
+            aa: AliasQuery::new(unit, accesses),
+        }
+    }
+
+    /// `MemorySSAUpdater::removeMemoryAccess(inst)`, before `inst` goes from
+    /// `function`: what used its access reads what it read.
+    pub fn remove_memory_access(
+        &self,
+        function: &llrm_mir::module::Function,
+        inst: InstId,
+    ) {
+        let mut mssa = self.mssa.borrow_mut();
+        if let Some(access) = mssa.get_memory_access(inst) {
+            self.updater.borrow_mut().remove_memory_access(&mut mssa, function, access, true);
+        }
+    }
+
+    /// The graph as the edits made through this view left it.
+    pub fn into_mssa(self) -> Mssa {
+        self.mssa.into_inner()
     }
 
     /// `MemorySSA::getMemoryAccess`.

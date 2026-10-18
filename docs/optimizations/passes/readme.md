@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 94 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 95 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -70,7 +70,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no such pass and leaves them to the by-pieces expansion). | After the function fixed point, beside `Merge` (no pass asks a memcpy what | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
-| mergestores | Adjacent copies through registers become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of loaded values (`tryStoreMergeOfLoads`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
+| mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: [`crate::lsr`](lsr.md) calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |

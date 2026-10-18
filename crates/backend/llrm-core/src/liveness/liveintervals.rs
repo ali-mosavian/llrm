@@ -530,6 +530,14 @@ impl LiveIntervals {
         LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
     }
 
+    /// Whether `reg` is a parameter, defined on entry to the function.
+    pub fn is_input(
+        &self,
+        reg: u32,
+    ) -> bool {
+        self.inputs.contains(&reg)
+    }
+
     /// A parameter that joined another value is that value now (the rename
     /// `updateRegDefsUses` makes in every instruction, for the entry's def).
     pub fn rename_input(

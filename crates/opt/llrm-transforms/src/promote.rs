@@ -987,12 +987,11 @@ fn rewrite(
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
         .collect::<llrm_mir::dense::IdSet<ValueId>>();
-    // The entry value of a cell is the zero of its type: MIR has no `undef`
-    // (mem2reg.rs DEVIATE 1).
+    // The entry value of a cell is `UndefValue` of its type.
     let poison = plan
         .types
         .iter()
-        .map(|&ty| Operand::Constant(llrm_mir::constfold::null_value(context, ty)))
+        .map(|&ty| Operand::Constant(context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Undef })))
         .collect::<Vec<_>>();
 
     // Where each cell is live on entering a block: LLVM's PromoteMemToReg
