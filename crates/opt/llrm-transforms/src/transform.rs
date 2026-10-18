@@ -302,7 +302,9 @@ pub fn subexpressions(
             let first = candidates
                 .iter()
                 .rev()
-                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &dominance, function.layout(), block))
+                .find(|candidate| {
+                    _reaches(candidate.0, candidate.1, here, index, &dominance, function, function.layout(), block)
+                })
                 .copied();
             let Some((at, where_, earlier)) = first else {
                 candidates.push((here, index, inst));
@@ -404,7 +406,7 @@ pub fn equal_calls(
             let earlier = leaders
                 .iter()
                 .rev()
-                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, &layout, layout[at]))
+                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, function, &layout, layout[at]))
                 .copied();
             match earlier {
                 Some((_, _, leader)) => {
@@ -507,13 +509,14 @@ pub fn _reaches(
     then: usize,
     index: usize,
     dominance: &cfg::Dominance,
+    function: &Function,
     layout: &[BlockId],
     block: BlockId,
 ) -> bool {
     if at == then {
         return where_ < index;
     }
-    dominance.dominates(cfg::id(layout[at]), cfg::id(block))
+    dominance.dominates(function, cfg::id(layout[at]), cfg::id(block))
 }
 
 thread_local! {

@@ -699,7 +699,10 @@ fn _rewinding(
         };
         let sources = exiting.iter().map(|(source, _)| *source).collect::<BTreeSet<_>>();
         let exit_preds = function.predecessors(cfg::block(exit)).into_iter().map(cfg::id).collect::<BTreeSet<_>>();
-        if !parent.body.contains(&exit) || exit_preds != sources || !dominance.dominates(exit, *parent_latch) {
+        if !parent.body.contains(&exit)
+            || exit_preds != sources
+            || !dominance.dominates(unit.function, exit, *parent_latch)
+        {
             continue;
         }
         let Some(count) = induction::trip_count(unit, inner, facts) else { continue };
@@ -729,7 +732,7 @@ fn _rewinding(
             // already `start + count * step`; a post-tested one from its
             // latch, where the update is.
             let updated = _block_of(function, stepping);
-            let exit_value = if sources.iter().all(|&source| dominance.dominates(updated, source)) {
+            let exit_value = if sources.iter().all(|&source| dominance.dominates(unit.function, updated, source)) {
                 Operand::Value(update)
             } else if sources == BTreeSet::from([inner.header]) {
                 Operand::Value(counter.value)

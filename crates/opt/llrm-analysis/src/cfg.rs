@@ -89,8 +89,9 @@ use std::rc::Rc;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
+use llrm_mir::domtree_updater::{DomTreeUpdater, UpdateStrategy};
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{BlockId, Function, Operand};
+use llrm_mir::module::{BlockId, Function, Mark, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops, PreservedAnalyses};
 use llrm_mir::{Constant, ConstantKind, Context};
@@ -272,45 +273,119 @@ impl Around for Loop {
 
 /// `Dominators` as the graph walks read it: over block ids, and nothing
 /// dominates a block the entry does not reach.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Dominance(Rc<DomTree>);
+///
+/// The tree may be one a pass has not asked to bring up to date yet (a lazy
+/// `DomTreeUpdater`: the edits since `mark` queue as the change log, and the
+/// first reader applies them as one batch). That reader says which function
+/// it asks of, so no pass pays for a tree nobody reads: `rotate` rotated N/8
+/// loops in a function and asked after each.
+#[derive(Clone, Debug)]
+pub struct Dominance(Rc<Lazy>);
+
+struct Lazy {
+    tree: std::cell::OnceCell<Rc<DomTree>>,
+    /// The tree as it was at `mark`, until the first read.
+    pending: RefCell<Option<(Rc<DomTree>, Mark)>>,
+}
+
+impl std::fmt::Debug for Lazy {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.debug_struct("Lazy").field("resolved", &self.tree.get().is_some()).finish()
+    }
+}
+
+/// Two are the same where they are one, or both resolved to equal trees.
+impl PartialEq for Dominance {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+            || matches!(
+                (self.0.tree.get(), other.0.tree.get()),
+                (Some(a), Some(b)) if a == b
+            )
+    }
+}
 
 impl Dominance {
     pub fn new(tree: Rc<DomTree>) -> Self {
-        Self(tree)
+        Self(Rc::new(Lazy { tree: std::cell::OnceCell::from(tree), pending: RefCell::new(None) }))
+    }
+
+    /// `tree`, true of the function at `mark`, to be brought up to date from
+    /// the edits since by the first reader (`DomTreeUpdater`, Lazy).
+    pub fn pending(
+        tree: Rc<DomTree>,
+        mark: Mark,
+    ) -> Self {
+        Self(Rc::new(Lazy { tree: std::cell::OnceCell::new(), pending: RefCell::new(Some((tree, mark))) }))
     }
 
     /// Of a body no manager holds.
     pub fn of(function: &Function) -> Self {
-        Self(Rc::new(DomTree::of(function)))
+        Self::new(Rc::new(DomTree::of(function)))
     }
 
-    pub fn tree(&self) -> &DomTree {
-        &self.0
-    }
-
-    pub fn reachable(
+    /// The tree of `function`: the edits queued since it was true applied now
+    /// as one batch, or the tree built afresh where the log cannot tell them.
+    pub fn tree(
         &self,
-        at: i64,
-    ) -> bool {
-        self.0.is_reachable(block(at))
+        function: &Function,
+    ) -> &DomTree {
+        self.0.tree.get_or_init(|| {
+            let (tree, mark) = self.0.pending.borrow_mut().take().expect("a tree is resolved or pending");
+            let Some(updates) = function.changes_since(mark).and_then(|changes| tree.updates_for(function, changes))
+            else {
+                return Rc::new(DomTree::of(function));
+            };
+            let mut updater = DomTreeUpdater::new(Some(Rc::unwrap_or_clone(tree)), None, UpdateStrategy::Lazy);
+            updater.apply_updates(function, &updates);
+            updater.get_dom_tree(function);
+            let (tree, _) = updater.into_trees(function);
+            Rc::new(tree.expect("a dominator tree was given"))
+        })
     }
 
-    pub fn dominates(
+    /// `dominates` of a `Dominance` its owner resolved (the memory SSA asks
+    /// the tree it was built over, for a function it no longer holds).
+    pub fn dominates_resolved(
         &self,
         dominator: i64,
         at: i64,
     ) -> bool {
-        self.reachable(at) && self.0.dominates(block(dominator), block(at))
+        let tree = self.0.tree.get().expect("the owner resolved the tree");
+        tree.is_reachable(block(at)) && tree.dominates(block(dominator), block(at))
+    }
+
+    pub fn reachable(
+        &self,
+        function: &Function,
+        at: i64,
+    ) -> bool {
+        self.tree(function).is_reachable(block(at))
+    }
+
+    pub fn dominates(
+        &self,
+        function: &Function,
+        dominator: i64,
+        at: i64,
+    ) -> bool {
+        self.reachable(function, at) && self.tree(function).dominates(block(dominator), block(at))
     }
 
     /// The nearest strict dominator: none for the entry or an unreachable
     /// block.
     pub fn immediate(
         &self,
+        function: &Function,
         at: i64,
     ) -> Option<i64> {
-        self.0.immediate_dominator(block(at)).map(id)
+        self.tree(function).immediate_dominator(block(at)).map(id)
     }
 
     /// Each block's dominators, itself among them; none for an unreachable one.
@@ -320,10 +395,10 @@ impl Dominance {
     ) -> BTreeMap<i64, BTreeSet<i64>> {
         let above = |at: i64| {
             let mut found = BTreeSet::new();
-            let mut next = self.reachable(at).then_some(at);
+            let mut next = self.reachable(function, at).then_some(at);
             while let Some(one) = next {
                 found.insert(one);
-                next = self.immediate(one);
+                next = self.immediate(function, one);
             }
             found
         };
@@ -339,7 +414,7 @@ impl Dominance {
         let mut found = BTreeMap::<i64, usize>::new();
         for &start in function.layout() {
             let mut path = Vec::new();
-            let mut next = self.reachable(id(start)).then_some(id(start));
+            let mut next = self.reachable(function, id(start)).then_some(id(start));
             let mut base = 0;
             while let Some(one) = next {
                 if let Some(&known) = found.get(&one) {
@@ -347,7 +422,7 @@ impl Dominance {
                     break;
                 }
                 path.push(one);
-                next = self.immediate(one);
+                next = self.immediate(function, one);
             }
             for (below, one) in path.into_iter().rev().enumerate() {
                 found.insert(one, base + below + 1);
@@ -361,7 +436,7 @@ impl Dominance {
         &self,
         function: &Function,
     ) -> BTreeMap<i64, Option<i64>> {
-        function.layout().iter().map(|&one| (id(one), self.immediate(id(one)))).collect()
+        function.layout().iter().map(|&one| (id(one), self.immediate(function, id(one)))).collect()
     }
 
     /// Where a definition stops being the only one that reaches: the
@@ -373,14 +448,14 @@ impl Dominance {
         let mut found = function.layout().iter().map(|&one| (id(one), BTreeSet::new())).collect::<BTreeMap<_, _>>();
         for &one in function.layout() {
             let at = id(one);
-            if !self.reachable(at) {
+            if !self.reachable(function, at) {
                 continue;
             }
             let preds = function
                 .predecessors(one)
                 .into_iter()
                 .map(id)
-                .filter(|&from| self.reachable(from))
+                .filter(|&from| self.reachable(function, from))
                 .collect::<BTreeSet<_>>();
             if preds.len() < 2 {
                 continue;
@@ -388,11 +463,11 @@ impl Dominance {
             for from in preds {
                 let mut runner = Some(from);
                 while let Some(walked) = runner {
-                    if Some(walked) == self.immediate(at) {
+                    if Some(walked) == self.immediate(function, at) {
                         break;
                     }
                     found.get_mut(&walked).expect("a block").insert(at);
-                    runner = self.immediate(walked);
+                    runner = self.immediate(function, walked);
                 }
             }
         }
@@ -404,16 +479,23 @@ impl Dominance {
         &self,
         function: &Function,
     ) -> BTreeSet<i64> {
-        loops::irreducible_under(&graph(function), self)
+        loops::irreducible_under(&graph(function), &Bound { dominance: self, function })
     }
 }
 
-impl Dominates for Dominance {
+/// A `Dominance` and the function it is asked of, to the graph walks that
+/// take any `Dominates`.
+pub struct Bound<'a> {
+    pub dominance: &'a Dominance,
+    pub function: &'a Function,
+}
+
+impl Dominates for Bound<'_> {
     fn reachable(
         &self,
         at: i64,
     ) -> bool {
-        Dominance::reachable(self, at)
+        self.dominance.reachable(self.function, at)
     }
 
     fn dominates(
@@ -421,7 +503,7 @@ impl Dominates for Dominance {
         dominator: i64,
         at: i64,
     ) -> bool {
-        Dominance::dominates(self, dominator, at)
+        self.dominance.dominates(self.function, dominator, at)
     }
 }
 
@@ -535,7 +617,7 @@ impl Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
         let dominance = Dominance::of(function);
-        let loops = natural(function, &LoopInfo::analyze(function, || dominance.tree()));
+        let loops = natural(function, &LoopInfo::analyze(function, || dominance.tree(function)));
         Self { dominance, loops, reaching: Reaching::default() }
     }
 }
@@ -721,7 +803,7 @@ dead:
             assert_eq!(depths[&id(below)], sets[&id(below)].len(), "depth of {}", id(below));
             for &above in function.layout() {
                 assert_eq!(
-                    dominance.dominates(id(above), id(below)),
+                    dominance.dominates(function, id(above), id(below)),
                     sets[&id(below)].contains(&id(above)),
                     "{} over {}",
                     id(above),

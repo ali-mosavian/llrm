@@ -605,7 +605,7 @@ fn correlated(
     for source in function.predecessors(block) {
         if function.terminator(source).is_some_and(|end| {
             function.instruction(end).operands.iter().filter(|one| **one == Operand::Block(block)).count() != 1
-        }) || !shape.dominance.dominates(cfg::id(home), cfg::id(source))
+        }) || !shape.dominance.dominates(unit.function, cfg::id(home), cfg::id(source))
         {
             continue;
         }

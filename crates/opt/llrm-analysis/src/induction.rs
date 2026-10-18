@@ -1242,8 +1242,8 @@ pub fn exits(
     // Those the latch follows are in a chain: each dominates the next.
     exiting.sort_by_key(|&at| {
         (
-            !shape.dominance.dominates(at, latch),
-            inside.iter().filter(|&&other| shape.dominance.dominates(other, at)).count(),
+            !shape.dominance.dominates(unit.function, at, latch),
+            inside.iter().filter(|&&other| shape.dominance.dominates(unit.function, other, at)).count(),
         )
     });
     exiting
@@ -1262,7 +1262,7 @@ pub fn exits(
             else {
                 return found;
             };
-            if !shape.dominance.dominates(at, latch) {
+            if !shape.dominance.dominates(unit.function, at, latch) {
                 return found;
             }
             let shaped = |posttested: bool| _Control {
@@ -1968,7 +1968,7 @@ fn accesses<'a>(
     loop_
         .body
         .iter()
-        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(**at, latch)))
+        .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(unit.function, **at, latch)))
         .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
         .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
         .filter(|(_, reference)| reference.inbounds)

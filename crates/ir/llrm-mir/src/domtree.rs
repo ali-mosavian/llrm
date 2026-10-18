@@ -2780,13 +2780,24 @@ impl DomTree {
         function: &Function,
         changes: &[Change],
     ) -> bool {
-        let Some(entry) = function.entry() else { return false };
-        if self.roots.first() != Some(&entry) {
-            return false;
-        }
-        let Some(updates) = edge_updates(function, changes) else { return false };
+        let Some(updates) = self.updates_for(function, changes) else { return false };
         self.apply_updates(function, &updates);
         true
+    }
+
+    /// The edge updates `changes` make to the CFG this tree is of, for
+    /// `applyUpdates` or a `DomTreeUpdater`. None where the changes did
+    /// something else to the graph (another entry, an operand out of range).
+    pub fn updates_for(
+        &self,
+        function: &Function,
+        changes: &[Change],
+    ) -> Option<Vec<Update>> {
+        let entry = function.entry()?;
+        if self.roots.first() != Some(&entry) {
+            return None;
+        }
+        edge_updates(function, changes)
     }
 }
 

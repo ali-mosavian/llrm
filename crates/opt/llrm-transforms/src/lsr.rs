@@ -1296,7 +1296,7 @@ fn _stepped_before_test(
             let all = function.block(block).instructions();
             all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
         } else {
-            view.shape().dominance.dominates(cfg::id(stepped_in), at)
+            view.shape().dominance.dominates(function, cfg::id(stepped_in), at)
         };
         // The counter is read by the step, the compare and its phi alone.
         let readers = function.users(read);
@@ -1394,7 +1394,9 @@ fn _steps_before_test(
             && here.is_some_and(|step| {
                 function
                     .parent(proof.branch)
-                    .is_some_and(|test| cfg::Shape::of(function).dominance.dominates(cfg::id(step), cfg::id(test)))
+                    .is_some_and(
+                        |test| cfg::Shape::of(function).dominance.dominates(function, cfg::id(step), cfg::id(test)),
+                    )
             })
 }
 

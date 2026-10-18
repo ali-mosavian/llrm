@@ -614,7 +614,11 @@ fn _available(
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
-    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
+    let reachable = graph
+        .iter()
+        .map(|block| block.at)
+        .filter(|&at| dominance.reachable(unit.function, at))
+        .collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells
         .iter()
