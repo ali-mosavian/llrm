@@ -265,7 +265,7 @@ impl Function {
         if !entries.is_empty() && entries != [inst] {
             return None;
         }
-        self.block(target).instructions().iter().copied().find(|&one| self.instruction(one).opcode != Opcode::Phi)
+        self.block(target).iter().find(|&one| self.instruction(one).opcode != Opcode::Phi)
     }
 
     /// Takes `inst` out of its block. What was said before it is said before
@@ -1122,9 +1122,7 @@ impl Function {
     ) {
         let phis: Vec<InstId> = self
             .block(block)
-            .instructions()
             .iter()
-            .copied()
             .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
             .collect();
         for phi in phis {
