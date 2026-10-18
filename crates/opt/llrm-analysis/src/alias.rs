@@ -673,6 +673,28 @@ fn merged_types(
     }
 }
 
+/// Whether the bytes `fresh` names lie in the bytes some slice of `kept` names:
+/// the one rule of 'is the fresh footprint covered by the kept one', which a
+/// summary and a call's effect (and the replay checks over both) ask. Bytes
+/// past the object's end are no byte of it, and a slice stands for the bytes it
+/// names, not for its shape.
+pub fn slice_covered<'a>(
+    fresh: &Slice,
+    kept: impl IntoIterator<Item = &'a Slice>,
+) -> bool {
+    let clipped = fresh
+        .object
+        .extent
+        .and_then(
+            |extent| {
+                let high = fresh.high.min(extent);
+                let width = fresh.width.min(extent - (high - 1));
+                Slice::new(fresh.object, fresh.low, high, fresh.stride, width.max(1)).ok()
+            },
+        );
+    kept.into_iter().any(|one| one.contains(fresh) || clipped.as_ref().is_some_and(|c| one.contains(c)))
+}
+
 impl Summary {
     /// Whether `fresh` shows a read or write that `self`, held past passes that
     /// add no memory operation, does not state. A fresh summary that gives
@@ -689,21 +711,10 @@ impl Summary {
         let within = |old_unknown: bool, new_unknown: bool, old: &SliceSet, new: &SliceSet| {
             old_unknown
                 || new_unknown
-                || new.iter().filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one)).all(|one| {
-                    // Bytes past the object's end are no byte of it, and a
-                    // slice stands for the bytes it names, not for its shape.
-                    let clipped = one
-                        .object
-                        .extent
-                        .and_then(
-                            |extent| {
-                                let high = one.high.min(extent);
-                                let width = one.width.min(extent - (high - 1));
-                                Slice::new(one.object, one.low, high, one.stride, width.max(1)).ok()
-                            },
-                        );
-                    old.iter().any(|kept| kept.contains(one) || clipped.as_ref().is_some_and(|c| kept.contains(c)))
-                })
+                || new
+                    .iter()
+                    .filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one))
+                    .all(|one| slice_covered(one, old.iter()))
         };
         within(self.unknown_read, fresh.unknown_read, &self.reads, &fresh.reads)
             && within(self.unknown_write, fresh.unknown_write, &self.writes, &fresh.writes)
@@ -2238,7 +2249,28 @@ impl Effect {
         &self,
         fresh: &Effect,
     ) -> bool {
-        let within = |old: &[MemRef], new: &[MemRef]| new.iter().all(|one| old.contains(one));
+        // A reference that names no value is its provenance alone: covered
+        // where each of its slices is within a kept slice by the bytes
+        // it names, or within the unknown object's whole range where
+        // its object escaped (the unknown reaches what escaped). One
+        // that names a value is a decomposition, and stays exact.
+        let names_nothing =
+            |one: &MemRef| one.pointer.is_none() && one.root.is_none() && one.base.is_none() && one.segment.is_none();
+        let within = |old: &[MemRef], new: &[MemRef]| {
+            let kept_slices = || old.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter());
+            let unknown_whole = kept_slices().any(|one| {
+                one.object.kind == MemoryKind::Unknown && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31
+            });
+            new.iter().all(|one| {
+                old.contains(one)
+                    || (names_nothing(one)
+                        && one.provenance.as_ref().is_some_and(|provenance| {
+                            provenance.slices.iter().all(|slice| {
+                                slice_covered(slice, kept_slices()) || (unknown_whole && slice.object.captured())
+                            })
+                        }))
+            })
+        };
         within(&self.loads, &fresh.loads) && within(&self.stores, &fresh.stores) && self.fills == fresh.fills
     }
 }
