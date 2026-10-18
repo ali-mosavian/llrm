@@ -11,7 +11,8 @@ N/A.
 | mem2reg, SROA, Promote | `PromoteMemoryToRegister` L914, `SROA` L6393 | DONE (#2536) |
 | ConstantFold (creation) | [`ConstantFoldBinaryInstruction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L637), `ConstantFoldCastInstruction`, `ConstantFoldCompareInstruction`, `ConstantFoldSelectInstruction` | DONE |
 | ConstantFolding | `isa<UndefValue>` sites that read `is_poison` | OWED (vt-constantfolding) |
-| InstSimplify | `simplifyPHINode`, `simplifySelectInst`, `simplifyICmpInst`, `simplifyDivRem`, `simplifyAdd/Sub/Mul/And/Or/Xor/Shl/RightShift`, `simplifyFreezeInst`, `simplifyGEPInst`, `simplifyInsertValueInst`, `simplifyWithOpsReplaced` | OWED |
+| InstSimplify | `simplifyPHINode`, `simplifySelectInst`, `simplifyICmpInst`, `simplifyDivRem`, `simplifyAdd/Sub/Mul/And/Or/Xor/Shl/RightShift`, `isPoisonShift`, `expandBinOp` (`getWithoutUndef`), `threadBinOpOverSelect`, `simplifyGEPInst` | DONE |
+| InstSimplify (rest) | `simplifyFreezeInst`, `simplifyInsertValueInst` (#2250), `simplifyWithOpsReplaced` (`CanUseUndef`), `simplifyAndOrWithICmpEq`, the intrinsics (#2248) | OWED |
 | ValueTracking | `isGuaranteedNotToBeUndefOrPoison`, `computeKnownBits` of an undef | OWED (check) |
 | LVI, CVP | `getFromConstant` (undef state), `ValueLatticeElement` | OWED: lattice folds poison into `Undef` |
 | GVN, PHITransAddr, EarlyCSE | undef operands in value numbering | OWED |
