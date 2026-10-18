@@ -89,6 +89,7 @@ pub mod canonical;
 pub mod cfg;
 #[cfg(test)]
 mod corpus_tests;
+pub mod constraintelim;
 pub mod counting;
 pub mod dead;
 pub mod deadargs;
