@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/vncoercion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vncoercion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:ba4c01060b1451fb8704bf5b81bcc59e4bb3436e38e8a8a1a8207af31e3057b7 -->
+<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:d37bed124c0857e9df266748bea9689ae46a11aa05e30a46fab5fbaa05256f57 -->
 
 # vncoercion
 
@@ -49,4 +49,5 @@ From unit test `test_a_half_of_a_word_is_shifted_and_truncated` in
 `vncoercion_tests.rs`.
 
 ## Used by
-Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the caller this is for.
+Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the
+caller this is for.
