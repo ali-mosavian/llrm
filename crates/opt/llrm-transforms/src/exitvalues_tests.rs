@@ -115,3 +115,22 @@ done:
     assert!(!after.contains("i33") && !after.contains("i34"), "{after}");
     assert!(!changed, "{after}");
 }
+
+/// The expansion is priced by the target's cost model, not one unit each: an
+/// `i32` divide costs more than an `i32` add on the x87 targets (the unit
+/// prices made `isHighCostExpansion` count both the same).
+#[test]
+fn test_the_expansion_is_priced_by_the_targets_cost_model() {
+    use llrm_analysis::scev::expand_cost::{ExpansionTti, MachineCosts, Opc};
+    use llrm_analysis::scev::expr::Ty;
+    let tti =
+        llrm_x86::tti::X86::of_cpu("i486").map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
+    let costs = MachineCosts { tti, minimum_size: false };
+    let (divide, add) = (
+        costs.get_arithmetic_instr_cost(Opc::UDiv, Ty::Int(32)),
+        costs.get_arithmetic_instr_cost(Opc::Add, Ty::Int(32)),
+    );
+    assert!(divide > add, "divide {divide}, add {add}");
+    let unit = MachineCosts { tti: None, minimum_size: false };
+    assert_eq!(unit.get_arithmetic_instr_cost(Opc::UDiv, Ty::Int(32)), 1);
+}
