@@ -102,9 +102,7 @@ pub fn simplified(
                 let phis: Vec<InstId> = cx
                     .function
                     .block(header)
-                    .instructions()
                     .iter()
-                    .copied()
                     .take_while(|inst| cx.function.instruction(*inst).opcode == Opcode::Phi)
                     .collect();
                 for phi in phis {
@@ -383,9 +381,7 @@ fn simplify_and_extend(
     let mut loop_phis: Vec<InstId> = e
         .function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi)
         .collect();
 

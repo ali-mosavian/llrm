@@ -328,7 +328,7 @@ fn site(
         }
         _ => return None,
     };
-    let work: Vec<InstId> = function.block(block).instructions().iter().copied().filter(|&one| one != end).collect();
+    let work: Vec<InstId> = function.block(block).iter().filter(|&one| one != end).collect();
     let is_call = |inst: InstId| {
         let op = function.instruction(inst);
         let Opcode::Call(info) = &op.opcode else { return false };
@@ -463,15 +463,11 @@ fn rewrite(
     function.insert_block(header, Some(entry)).expect("a new block");
     let first = function
         .block(entry)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }));
     let rest: Vec<_> = function
         .block(entry)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
         .collect();
     function.move_run(&rest, header).expect("a placed instruction");

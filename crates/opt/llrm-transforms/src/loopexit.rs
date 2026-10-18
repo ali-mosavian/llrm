@@ -318,7 +318,7 @@ fn _exit_terms(
     let mut headers = phis.iter().filter_map(|&phi| function.instruction(phi).result).collect::<BTreeSet<_>>();
     // An invariant is a term, whatever computes it.
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             headers.extend(function.instruction(inst).operands.iter().filter_map(|one| match one {
                 Operand::Value(value) if still.contains(*value) => Some(*value),
                 _ => None,
@@ -435,7 +435,7 @@ fn _widened_counters(
     let extensions = loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .flat_map(|&at| function.block(cfg::block(at)).iter().map(move |inst| (at, inst)))
         .filter(|&(_, inst)| function.instruction(inst).opcode == Opcode::Cast(CastOp::SExt))
         .collect::<Vec<_>>();
     if extensions.is_empty() {
@@ -632,7 +632,7 @@ fn _disposable(
     loop_
         .body
         .iter()
-        .flat_map(|&at| function.block(cfg::block(at)).instructions().to_vec())
+        .flat_map(|&at| function.block(cfg::block(at)).iter().collect::<Vec<_>>())
         .all(
             |inst| {
                 let op = function.instruction(inst);

@@ -455,7 +455,7 @@ pub fn rewound_with(
             Flags::default(),
             None,
         );
-        let first = function.block(plan.exit).instructions()[0];
+        let first = function.block(plan.exit).first().expect("a block with an instruction");
         function.insert(closed, Position::Before(first)).expect("a placed block");
         Operand::Value(function.instruction(closed).result.expect("a phi's value"))
     };
@@ -465,9 +465,7 @@ pub fn rewound_with(
         function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![exit_value, back], Flags::default(), None);
     let after = function
         .block(plan.exit)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
         .expect("a terminator");
     function.insert(reset, Position::Before(after)).expect("a placed block");
@@ -479,7 +477,7 @@ pub fn rewound_with(
         Flags::default(),
         None,
     );
-    let first = function.block(plan.parent_header).instructions()[0];
+    let first = function.block(plan.parent_header).first().expect("a block with an instruction");
     function.insert(carried, Position::Before(first)).expect("a placed block");
     let carried = Operand::Value(function.instruction(carried).result.expect("a phi's value"));
     let mut incoming = arms(function, plan.phi);
@@ -896,7 +894,7 @@ fn _widen(
     let header = function.parent(found.phi).expect("a placed phi");
     // The bound and the start, extended once before the loop.
     let bound = _extended(context, function, found.preheader, found.bound, ty, found.signed);
-    let first = function.block(header).instructions()[0];
+    let first = function.block(header).first().expect("a block with an instruction");
     let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("widen.iv"));
     function.insert(phi, Position::Before(first)).expect("a header");
     let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));

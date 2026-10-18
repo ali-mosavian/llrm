@@ -126,6 +126,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::{Identity, MemRef, ObjectRef, Provenance, Slice, Unit};
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::{cfg, regions, ssa};
+use llrm_mir::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
@@ -133,7 +134,6 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use llrm_mir::Context;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
@@ -991,7 +991,11 @@ fn rewrite(
     let poison = plan
         .types
         .iter()
-        .map(|&ty| Operand::Constant(context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Undef })))
+        .map(|&ty| {
+            Operand::Constant(
+                context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Undef }),
+            )
+        })
         .collect::<Vec<_>>();
 
     // Where each cell is live on entering a block: LLVM's PromoteMemToReg

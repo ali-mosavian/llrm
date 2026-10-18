@@ -408,7 +408,7 @@ fn jump_simplified(
         return false;
     };
     if function.entry() == Some(block)
-        || function.block(block).instructions().len() != edges::phis(function, block).len() + 1
+        || function.block(block).len() != edges::phis(function, block).len() + 1
     {
         return false;
     }
@@ -517,9 +517,7 @@ fn empty_block_removed(
         function.erase(last).expect("a jump defines nothing");
         let anchor = function
             .block(successor)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| function.instruction(one).opcode != Opcode::Phi);
         for inst in function.block(block).instructions().to_vec() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");

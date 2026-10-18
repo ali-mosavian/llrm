@@ -1845,7 +1845,7 @@ fn bounded_solved_under(
         // value above it. A loop that took them all made its blocks' maps as
         // large as the body above it, quadratic in the branches before it.
         let header_above = shape.dominance.immediate(unit.function, loop_.header);
-        for &inst in in_layout.iter().flat_map(|&block| function.block(block).instructions().iter()) {
+        for inst in in_layout.iter().flat_map(|&block| function.block(block).iter()) {
             for operand in &function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
                     && outside(value)

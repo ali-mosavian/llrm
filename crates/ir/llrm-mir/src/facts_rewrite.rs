@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 31] = [
+        const CHECKED: [&str; 32] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -255,6 +255,11 @@ mod tests {
             // LLVM does.
             "local.rs",
             "pass.rs",
+            // SimplifyIndVar.cpp's `WidenIV` reads an add's/sub's/mul's
+            // `nsw`/`nuw` (`matchBinaryOp`, `getExtendedOperandRecurrence`,
+            // `widenWithVariantUse`) to extend its operands, and `copyIRFlags`
+            // gives the wide clone the narrow flags it proved.
+            "widen.rs",
             // PHITransAddr.cpp's `translateSubExpr` reads an add's
             // `nsw`/`nuw` for `simplifyAddInst`, and `insertTranslatedSubExpr`
             // copies a GEP's no-wrap flags to the GEP it makes.

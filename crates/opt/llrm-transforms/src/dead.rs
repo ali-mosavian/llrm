@@ -117,10 +117,7 @@ pub fn dead(
 ) -> bool {
     #[cfg(test)]
     SCANNED.with(|scanned| {
-        scanned.set(
-            scanned.get()
-                + function.layout().iter().map(|&block| function.block(block).instructions().len()).sum::<usize>(),
-        )
+        scanned.set(scanned.get() + function.layout().iter().map(|&block| function.block(block).len()).sum::<usize>())
     });
     let markers = _unneeded_markers(context, callees, function);
     function.erase_all(&markers).expect("a call with no result");
