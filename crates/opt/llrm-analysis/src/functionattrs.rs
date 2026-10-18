@@ -38,8 +38,20 @@
 //! From unit test `test_a_body_over_norecurse_callees_is_stamped_all_three` in
 //! `functionattrs_tests.rs`.
 //!
+//! - `memory(...)` (`addMemoryAttrs`, `checkFunctionMemoryAccess`): the meet
+//!   over the SCC of what each body accesses, by the places its instructions
+//!   name; a call is judged by `AAResults::getMemoryEffects`, a location by
+//!   `getModRefInfoMask` and its underlying object. Calls inside the SCC are
+//!   free, except that their pointer arguments count if the SCC reads argument
+//!   memory. DEVIATE F3: a `noipa` body is left out of the SCC (it is this
+//!   repository's `optnone`: callers read what the source declared). DEVIATE
+//!   F4: no `writable` argument attribute to drop (MIR has none).
+//!
 //! # Runs
-//! `interprocedural::stamped` once per SCC, callees first.
+//! `interprocedural::stamped` once per SCC, callees first, for the four flags.
+//! `infer_memory` is not wired yet: `LLRM_SHADOW_MEMORY=1` compares
+//! `stamp_memory`'s result with `stamped`'s `memory(...)` and prints one line
+//! per body that differs.
 //!
 //! # See also
 //! LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
@@ -50,10 +62,13 @@ use std::collections::BTreeSet;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Linkage, Module};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::{BlockId, Context, GlobalId, memory};
 
+use crate::aa::{AAQueryInfo, AAResults, IRMemLocation, MemoryEffects, MemoryLocation, ModRefInfo};
+use crate::basicaa::BasicAA;
 use crate::effects::{self, Declarations};
+use crate::memory::Unit;
 
 /// What one member of an SCC may be stamped with.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -259,6 +274,212 @@ pub fn infer(
             (id, inferred)
         })
         .collect()
+}
+
+/// `addLocAccess` (FunctionAttrs.cpp:100,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L100>).
+fn add_loc_access(
+    me: &mut MemoryEffects,
+    aa: &mut BasicAA,
+    aaqi: &mut AAQueryInfo,
+    loc: &MemoryLocation,
+    info: ModRefInfo,
+) {
+    let info = info.intersect(aa.get_mod_ref_info_mask(loc, aaqi, true));
+    if info.is_no_mod_ref() {
+        return;
+    }
+    let object = aa.underlying_aggressive(loc.ptr);
+    if aa.is_alloca(object) {
+        return;
+    }
+    if aa.is_argument(object) {
+        *me = me.union(MemoryEffects::arg_mem_only(info));
+        return;
+    }
+    if !aa.is_identified_object(object) {
+        *me = me.union(MemoryEffects::arg_mem_only(info));
+    }
+    *me = me
+        .union(MemoryEffects::none().with(IRMemLocation::ErrnoMem, info))
+        .union(MemoryEffects::none().with(IRMemLocation::Other, info));
+}
+
+/// `addArgLocs` (FunctionAttrs.cpp:123): each pointer argument of the call.
+fn add_arg_locs(
+    me: &mut MemoryEffects,
+    aa: &mut BasicAA,
+    aaqi: &mut AAQueryInfo,
+    context: &Context,
+    function: &Function,
+    call: InstId,
+    info: ModRefInfo,
+) {
+    let op = function.instruction(call);
+    // `invoke args.., normal, unwind, callee`; `call args.., callee`.
+    let tail = if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
+    for &arg in &op.operands[..op.operands.len() - tail] {
+        let pointer = function
+            .operand_type(context, arg)
+            .is_some_and(|ty| matches!(context.types.get(ty), llrm_mir::types::Type::Pointer(_)));
+        if pointer {
+            add_loc_access(me, aa, aaqi, &MemoryLocation::before_or_after(arg), info);
+        }
+    }
+}
+
+/// `Instruction::getMemoryEffects` (Instruction.cpp:1085) for what is not a
+/// call. MIR has no atomics, fences or `va_arg`: a load and a store only.
+fn instruction_effects(opcode: &Opcode) -> MemoryEffects {
+    let access = |info, volatile| {
+        if volatile {
+            MemoryEffects::arg_mem_only(ModRefInfo::ModRef)
+                .union(MemoryEffects::none().with(IRMemLocation::InaccessibleMem, ModRefInfo::ModRef))
+        } else {
+            MemoryEffects::arg_mem_only(info)
+        }
+    };
+    match opcode {
+        Opcode::Load { volatile, .. } => access(ModRefInfo::Ref, *volatile),
+        Opcode::Store { volatile, .. } => access(ModRefInfo::Mod, *volatile),
+        _ => MemoryEffects::none(),
+    }
+}
+
+/// `checkFunctionMemoryAccess` (FunctionAttrs.cpp:154): what the body of `id`
+/// always does to memory, and what it additionally does if the SCC accesses
+/// argument memory.
+fn check_function_memory_access(
+    module: &Module,
+    layout: &llrm_mir::datalayout::DataLayout,
+    id: GlobalId,
+    members: &BTreeSet<GlobalId>,
+) -> (MemoryEffects, MemoryEffects) {
+    let global = module.global(id);
+    let function = global.function().expect("a procedure");
+    let original = MemoryEffects::of_attrs(&function.attrs);
+    if original.does_not_access_memory() || !exact(global.linkage) || function.is_declaration() {
+        return (original, MemoryEffects::none());
+    }
+    let context = &module.context;
+    let unit = Unit::of(module, layout, function);
+    let mut aa = BasicAA::new(&unit);
+    let aaqi = &mut AAQueryInfo::default();
+    let mut me = MemoryEffects::none();
+    let mut recursive = MemoryEffects::none();
+    let non_argument = |me: &mut MemoryEffects, inst_me: MemoryEffects| {
+        *me = me.union(inst_me.without_loc(IRMemLocation::ArgMem));
+        *me = me.union(MemoryEffects::arg_mem_only(inst_me.mod_ref(IRMemLocation::Other)));
+    };
+    if function.parameter_attrs.iter().flatten().any(
+        |attr| matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "inalloca" || name == "preallocated"
+        ),
+    ) {
+        me = me.union(MemoryEffects::arg_mem_only(ModRefInfo::ModRef));
+    }
+    for (_, inst) in function.walk() {
+        let op = function.instruction(inst);
+        if matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+            // DEVIATE B1: MIR has no operand bundles.
+            if llrm_mir::memory::callee(context, function, inst).is_some_and(|one| members.contains(&one)) {
+                add_arg_locs(&mut recursive, &mut aa, aaqi, context, function, inst, ModRefInfo::ModRef);
+                continue;
+            }
+            let call_me = aa.get_memory_effects(inst, aaqi);
+            if call_me.does_not_access_memory() {
+                continue;
+            }
+            non_argument(&mut me, call_me);
+            let argument = call_me.mod_ref(IRMemLocation::ArgMem);
+            if argument != ModRefInfo::NoModRef {
+                add_arg_locs(&mut me, &mut aa, aaqi, context, function, inst, argument);
+            }
+            continue;
+        }
+        let inst_me = instruction_effects(&op.opcode);
+        if inst_me.does_not_access_memory() {
+            continue;
+        }
+        let Some(loc) = MemoryLocation::get(&unit, inst) else {
+            me = me.union(MemoryEffects::everywhere(inst_me.overall()));
+            continue;
+        };
+        non_argument(&mut me, inst_me);
+        add_loc_access(&mut me, &mut aa, aaqi, &loc, inst_me.mod_ref(IRMemLocation::ArgMem));
+    }
+    (original.intersect(me), recursive)
+}
+
+/// `addMemoryAttrs` (FunctionAttrs.cpp:273,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L273>):
+/// the new `memory(...)` of each member of the SCC whose attribute narrows.
+pub fn infer_memory(
+    module: &Module,
+    members: &[GlobalId],
+) -> Vec<(GlobalId, MemoryEffects)> {
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(Default::default, |text| llrm_mir::datalayout::DataLayout::parse(text).unwrap_or_default());
+    // DEVIATE F3: a `noipa` body is not a member.
+    let set: BTreeSet<GlobalId> = members
+        .iter()
+        .copied()
+        .filter(|&id| module.global(id).function().is_some_and(|one| !llrm_mir::facts::opaque(one)))
+        .collect();
+    let mut me = MemoryEffects::none();
+    let mut recursive = MemoryEffects::none();
+    for &id in &set {
+        let (always, argument) = check_function_memory_access(module, &layout, id, &set);
+        me = me.union(always);
+        recursive = recursive.union(argument);
+        if me == MemoryEffects::unknown() {
+            return Vec::new();
+        }
+    }
+    let argument = me.mod_ref(IRMemLocation::ArgMem);
+    if argument != ModRefInfo::NoModRef {
+        me = me.union(recursive.intersect(MemoryEffects::everywhere(argument)));
+    }
+    set.into_iter()
+        .filter_map(|id| {
+            let old = MemoryEffects::of_attrs(&module.global(id).function()?.attrs);
+            let new = me.intersect(old);
+            (new != old).then_some((id, new))
+        })
+        .collect()
+}
+
+/// `infer_memory` stated on the members (`F->setMemoryEffects`): the
+/// `memory(...)` attribute replaces `readnone`, `readonly` and `writeonly`.
+/// The members whose attributes changed.
+pub fn stamp_memory(
+    module: &mut Module,
+    members: &[GlobalId],
+) -> Vec<GlobalId> {
+    let found = infer_memory(module, members);
+    let mut changed = Vec::new();
+    for (id, effects) in found {
+        let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
+            continue;
+        };
+        function
+            .attrs
+            .retain(
+                |one| match one {
+                    Attribute::Memory(_) => false,
+                    other => !matches!(
+                        Fact::of_attribute(&other),
+                        Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
+                    ),
+                },
+            );
+        function.attrs.push(effects.attribute());
+        changed.push(id);
+    }
+    changed
 }
 
 #[cfg(test)]
