@@ -4,7 +4,7 @@ TL;DR: LoopInfo first, then `ScalarEvolution.cpp` (16,469 lines), the Expander (
 
 Rule for the code: each Rust function is a translation of the C++ function named in its first comment (permalink at the pin); `cl::opt` defaults stand; anything not translated is a numbered DEVIATE (section 4) resting on a stated fact about MIR or the target, with an assert or test at the boundary. A stage is not landed until the llrm code it replaces is deleted.
 
-Pinned: LLVM `d1106deb71cc` (clang 24.0.0git), `~/scratch/llvm-src`, binaries `~/scratch/llvm-build/bin` through `tools/llvmpin.py` (on `alim/test/clang-pinned`, not yet on main: stage 0 waits on it).
+Pinned: LLVM `d1106deb71cc` (clang 24.0.0git), the pinned source and build tree, named in one place by `tools/llvmpin.py` (on `alim/test/clang-pinned`, not yet on main: stage 0 waits on it).
 
 ## 1. What exists
 

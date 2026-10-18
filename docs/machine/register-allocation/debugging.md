@@ -60,6 +60,6 @@ Each incremental structure has a switch that recomputes it whole and asserts equ
 2. A copy that should be gone: was it refused by the coalescer (compare the `Coalescer` and `RegAlloc` dumps) or not a copy of one width ([coalescing-and-copies](coalescing-and-copies.md))?
 3. A spill that should not be: `LLRM_DEBUG=regalloc,spill,split,cost`. Which value, which route won (`candidates`), whether the base allocation or a trial kept it.
 4. A register that was not allowed: the class (`regclass`), the pins (`requires`, `delivers`, `fixed`) and the clobbers on the instructions between ([inputs-and-classes](inputs-and-classes.md)).
-5. Slow compile: `LLRM_DEBUG=time`; `regalloc trial` spans count the extra allocations of the search.
+5. Slow compile: `LLRM_DEBUG=time`; `regalloc trial` spans count the extra allocations of the search. Each timed span costs about 6-7 K instructions of its own, so a step called many times reads high and a change that opens fewer spans reads better than it is (greedy against the old allocator on d_faces -O2: -106 M in the report, -56 M in `perf stat`). The last `[instr]` row prints the span count. Quote deltas from a plain `perf stat -e instructions:u`.
 
 General debugging is in [working/debugging](../../working/debugging.md).
