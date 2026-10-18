@@ -1395,6 +1395,8 @@ fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_witho
 #[test]
 fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
     use crate::backend::splitkit::next_value_asks;
+    // The old allocator's rewrites, which greedy has none of: deleted with it.
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     let before = next_value_asks();
     for seed in 0..120_u64 {
         let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };
@@ -2350,4 +2352,22 @@ fn test_live_intervals_are_live_where_the_dataflow_says() {
         checked > 1000 && multi_def > 0,
         "premise: bodies with values defined more than once ({checked}, {multi_def})"
     );
+}
+
+/// The generated bodies of seeds `0..count` through the allocator on the 386,
+/// for tests that count what the allocation did.
+pub(crate) fn allocate_generated_bodies(count: u64) {
+    for seed in 0..count {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (body, _) = body(seed, &shape);
+        let mut phase = RegAlloc::new(
+            None,
+            None,
+            ProfileOrName::Name("386"),
+            &*target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("a phase");
+        phase.transform(body).expect("allocated");
+    }
 }

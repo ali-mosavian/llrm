@@ -2662,8 +2662,7 @@ pub fn initialized(
     };
     let graph = cfg::graph(function);
     let exit = |at: i64| -> State {
-        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode
-        {
+        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode {
             Opcode::Ret => vec![Some(Vec::new()); count],
             _ => vec![None; count],
         }

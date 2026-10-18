@@ -327,6 +327,64 @@ b0:
     assert!(found[2].1.is_none() && found[2].2 == Kind::Def, "the plain load: {found:?}");
 }
 
+/// Two different globals are different objects: a store to one does not
+/// clobber a load of the other. (Without it the walk of any loop that stores to
+/// another global ended at the header's phi, and LICM kept the load.)
+#[test]
+fn test_a_store_to_another_global_does_not_clobber_the_load() {
+    let found = clobbers_of(
+        "@h = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @g
+  ret i16 %x
+}
+",
+    );
+    let load = found.last().expect("the load");
+    assert!(load.1.is_none() && load.2 == Kind::Def, "{found:?}");
+}
+
+/// A loop that stores through a variable index into one alloca does not clobber
+/// the loads of another: both are identified objects (`getUnderlyingObject`).
+/// Without it the walk ended at the header's phi, and LICM kept every load of a
+/// scalar slot (matmul: 12 of LLVM's 25 hoists missed).
+#[test]
+fn test_a_loop_storing_into_an_array_by_a_variable_index_does_not_clobber_another_slot() {
+    let found = clobbers_of(
+        "define i16 @f(i16 %n) {
+b0:
+  %s = alloca i16
+  %a = alloca [8 x i16]
+  store i16 1, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr %s
+  %o = mul i16 %i, 16
+  %q = getelementptr inbounds i8, ptr %a, i16 %o
+  %o2 = mul i16 %n, 2
+  %p = getelementptr inbounds i8, ptr %q, i16 %o2
+  store i16 %x, ptr %p
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+",
+    );
+    // found: the first store, the load, the store through the index.
+    assert_eq!(found[1].1, Some(found[0].0), "{found:?}");
+}
+
 /// Moving uses off a crowded defining access keeps every other user's place in
 /// its use list (`Use::removeFromList` is O(1); a scan of the list made a body
 /// of N loads cost N^2 to build: loop 1600, 28 M instructions of 305 M).
@@ -408,4 +466,146 @@ fn test_an_alias_question_looks_at_one_cache_entry() {
         let (asked, _) = aa.questions();
         assert!(aa.cache_steps() <= asked as u64, "{n} locations: {} entries for {asked} questions", aa.cache_steps());
     }
+}
+
+/// A pointer read from memory cannot point into an alloca whose address is
+/// never taken, so a store through it does not clobber the alloca's load
+/// (`isNonEscapingLocalObject`). Without it every loop that stores through a
+/// pointer it loaded kept every load of a local (d_faces: 10 of LLVM's 88
+/// promotions missed).
+#[test]
+fn test_a_store_through_a_loaded_pointer_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f(ptr %p) {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  %q = load ptr, ptr %p
+  store i16 2, ptr %q
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    // found: the store to the slot, the load of the pointer, the store through
+    // it, the load of the slot.
+    assert_eq!(found[3].1, Some(found[0].0), "{found:?}");
+}
+
+/// The same through a phi of pointers loaded from memory (`aliasPHI`).
+#[test]
+fn test_a_store_through_a_phi_of_loaded_pointers_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f(ptr %p, ptr %r, i1 %c) {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  %q1 = load ptr, ptr %p
+  %q2 = load ptr, ptr %r
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %q = phi ptr [ %q1, %b1 ], [ %q2, %b2 ]
+  store i16 2, ptr %q
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    let (slot_store, load) = (found[0].0, found.last().expect("the load"));
+    assert_eq!(load.1, Some(slot_store), "{found:?}");
+}
+
+/// A call writes anything it can reach, not an alloca whose address was never
+/// given out.
+#[test]
+fn test_a_call_does_not_clobber_an_unexposed_alloca() {
+    let found = clobbers_of(
+        "define i16 @f() {
+b0:
+  %s = alloca i16
+  store i16 1, ptr %s
+  call void @anything()
+  %x = load i16, ptr %s
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(found[1].1, Some(found[0].0), "{found:?}");
+}
+
+/// The alias sets of the loads and stores of `@f`, as (pointer count, must
+/// alias, mod, ref) of each live set.
+fn alias_sets_of(body: &str) -> Vec<(usize, bool, bool, bool)> {
+    use super::alias::AliasQuery;
+    use crate::aliassets::AliasSetTracker;
+    let parsed = Parsed::new(body);
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let mut tracker = AliasSetTracker::new(&aa);
+    for (_, inst) in unit.function.walk() {
+        let Some(loc) = aa.location_of(inst) else { continue };
+        if matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Store { .. }
+        ) {
+            tracker.add_store(&loc);
+        } else {
+            tracker.add_load(&loc);
+        }
+    }
+    tracker
+        .alias_sets()
+        .map(|(_, set)| (set.get_pointers().len(), set.is_must_alias(), set.is_mod(), set.is_ref()))
+        .collect()
+}
+
+/// A load and a store through one pointer are one set that must alias; a
+/// pointer that may be either of two globals joins them into a set that may.
+#[test]
+fn test_alias_sets_join_what_may_alias_and_keep_what_must() {
+    let same = alias_sets_of(
+        "@h = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @h
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(same, [(1, true, true, true)]);
+    let apart = alias_sets_of(
+        "@h = global i16 0
+@k = global i16 0
+
+define i16 @f() {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr @k
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(apart, [(1, true, true, false), (1, true, false, true)]);
+    let joined = alias_sets_of(
+        "@h = global i16 0
+
+define i16 @f(ptr %p) {
+b0:
+  store i16 1, ptr @h
+  %x = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    assert_eq!(joined, [(2, false, true, true)]);
 }
