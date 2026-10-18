@@ -58,6 +58,7 @@ COUNTERPART = {
     "decide": "simplifycfg",
     "trivialunswitch": "loop-mssa(simple-loop-unswitch<no-nontrivial>)",
     "dead": "adce",
+    "adce": "adce",
     "bdce": "bdce",
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",

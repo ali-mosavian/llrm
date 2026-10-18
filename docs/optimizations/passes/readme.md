@@ -2,12 +2,13 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 78 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 79 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
+| adce | Aggressive dead code elimination: a translation of LLVM's ADCE (`ADCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, BDCE and before MemCpyOpt (slot 35). Not in llrm's | [adce](adce.md) |
 | addresssink | Comparison and address sinking, so isel sees one form: LLVM's CodeGenPrepare `sinkCmpExpression` and address sinking, and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [addresssink](addresssink.md) |
 | algebraic | Algebraic identities over integer values, as LLVM's InstCombine and, for a loop-carried operand, Reassociate. | `algebraic` runs once in each pass of the fixed point, after `indvars` and | [algebraic](algebraic.md) |
 | argpromotion | Argument promotion (LLVM's ArgumentPromotion): a pointer parameter a function only reads at fixed offsets is replaced by the fields read. | In the interprocedural step, once, after its inlining loop and before | [argpromotion](argpromotion.md) |

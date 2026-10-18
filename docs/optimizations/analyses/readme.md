@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 43 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -13,6 +13,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undoc
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
 | cfg | A function's blocks as the graph walks see them: block ids, successors, dominance, natural loops and reachability, built once per body. | `Shape` (a `Analysis` named `shape`), the | [cfg](cfg.md) |
+| cfgwalk | Walks of a function's CFG that LLVM's passes ask for by name. | `adce` in llrm-transforms. | [cfgwalk](cfgwalk.md) |
 | constant_cycles | Sparse value propagation over phis, with distinct pending and overdefined states, to find constants that only a cycle proves. | `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md) | [constant_cycles](constant_cycles.md) |
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |

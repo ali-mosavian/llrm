@@ -96,6 +96,7 @@ pub mod avail;
 pub mod branchprob;
 pub mod cellmap;
 pub mod cfg;
+pub mod cfgwalk;
 pub mod constant_cycles;
 pub mod consts;
 #[cfg(test)]

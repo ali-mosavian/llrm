@@ -153,8 +153,8 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
+    adce, addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop,
+    fold, gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
     loopfuse, loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt,
     peel, phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch,
     window,
@@ -552,7 +552,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(bdce::Bdce)]
+    vec![Box::new(adce::Adce), Box::new(bdce::Bdce)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).
@@ -728,6 +728,7 @@ pub(crate) fn llvm_order(
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
+                slot("adce@815", Box::new(adce::Adce)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
