@@ -141,3 +141,7 @@ because they price two things; the migration owed above moves the MIR readers to
   (llrm models no vector). LLVM: [`getGEPCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L1348).
 - T9 `fpround` (llrm's own instruction: a float rounded to its type's precision) costs `TCC_Basic`, the default of the
   switch; LLVM has no such instruction.
+- T10 A target with no cost model is priced by `Basic`. Fact: `Machine::tti` is None for a target that has none, and a pass
+  names no target crate. LLVM: [`TargetTransformInfoImplBase`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h).
+- T11 `LoopMicroOpBufferSize` is 0. Fact: the scheduling models of the pinned cpus (`i486`, `pentium`, `pentiumpro`) have none, so
+  `BasicTTIImpl::getUnrollingPreferences` sets nothing. LLVM: [`getUnrollingPreferences`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L598).

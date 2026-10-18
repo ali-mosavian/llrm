@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 30] = [
+        const CHECKED: [&str; 31] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -273,6 +273,10 @@ mod tests {
             // SROA.cpp's use of `Value::stripInBoundsOffsets`: it walks a
             // GEP only when it is `inbounds`, where LLVM does.
             "sroa.rs",
+            // LoopUnroll.cpp's `simplifyLoopAfterUnroll` folds
+            // `(x + c1) + c2` and keeps `nuw`/`nsw` only if both adds had
+            // them, and `c1 + c2` did not overflow.
+            "loopunrollpass.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

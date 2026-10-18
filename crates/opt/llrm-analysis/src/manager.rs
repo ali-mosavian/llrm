@@ -1878,11 +1878,8 @@ impl Analysis for MemorySsa {
         let plain = analyses.get::<PlainAccesses>(context, layout, function);
         let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
         let shape = analyses.get::<Shape>(context, layout, function);
-        let mssa = crate::mssa::Mssa::build(
-            function,
-            &shape.dominance,
-            &crate::mssa::shadow::effect_of(accesses, function),
-        );
+        let mssa =
+            crate::mssa::Mssa::build(function, &shape.dominance, &crate::mssa::shadow::effect_of(accesses, function));
         Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
     }
 }

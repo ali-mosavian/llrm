@@ -137,7 +137,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
-    entry("unroll@753", Simplify, "loop-unroll-full", Old, "loop-passes-port"),
+    entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
@@ -165,7 +165,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
-    entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Old, "loop-passes-port"),
+    entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
@@ -379,24 +379,29 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true)
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot)
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
-/// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs.
+/// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
+/// with `rotate` false (`LLRM_NO_ROTATE`) the rotate slot is not run.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
     level: Level,
     sroa: bool,
     mem2reg: bool,
+    rotate: bool,
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    // `LLRM_NO_ROTATE` takes the translated `loop-rotate` out of the order.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {
-            let off = (!sroa && one.replaced_by == "sroa.rs") || (!mem2reg && one.replaced_by == "mem2reg.rs");
+            let off = (!sroa && one.replaced_by == "sroa.rs")
+                || (!mem2reg && one.replaced_by == "mem2reg.rs")
+                || (!rotate && one.slot == "rotate@728");
             Entry { kind: if off { Old } else { one.kind }, ..*one }
         })
         .collect();

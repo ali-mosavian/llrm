@@ -68,6 +68,7 @@
 use llrm_analysis::memory::{MemRef, Unit};
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
@@ -184,15 +185,23 @@ pub fn merged_copies(
     let mut plan: Vec<Vec<Pair>> = Vec::new();
     {
         let unit = Unit::within(context, layout, function, outer);
+        // The loads of the span, by result: one map for the function, emptied
+        // by taking out what the span put in.
+        let mut loads: IdMap<ValueId, InstId> = IdMap::default();
+        let mut put: Vec<ValueId> = Vec::new();
         for block in function.layout() {
-            let mut loads: IndexMap<ValueId, InstId> = IndexMap::default();
             let mut span: Vec<Pair> = Vec::new();
             let mut reads: Vec<Operand> = Vec::new();
-            let mut flush = |span: &mut Vec<Pair>, reads: &mut Vec<Operand>, loads: &mut IndexMap<ValueId, InstId>| {
+            let mut flush = |span: &mut Vec<Pair>,
+                             reads: &mut Vec<Operand>,
+                             loads: &mut IdMap<ValueId, InstId>,
+                             put: &mut Vec<ValueId>| {
                 plan.extend(chunks(&unit, span, reads, legal));
                 span.clear();
                 reads.clear();
-                loads.clear();
+                for value in put.drain(..) {
+                    loads.remove(&value);
+                }
             };
             for (order, &inst) in function.block(*block).instructions().iter().enumerate() {
                 let op = function.instruction(inst);
@@ -211,8 +220,9 @@ pub fn merged_copies(
                             (Some(_), true, Some((root, _))) => {
                                 reads.push(root);
                                 loads.insert(result, inst);
+                                put.push(result);
                             }
-                            _ => flush(&mut span, &mut reads, &mut loads),
+                            _ => flush(&mut span, &mut reads, &mut loads, &mut put),
                         }
                     }
                     Opcode::Store { volatile: false, .. } => {
@@ -221,7 +231,7 @@ pub fn merged_copies(
                             _ => None,
                         };
                         let Some((value, load)) = paired else {
-                            flush(&mut span, &mut reads, &mut loads);
+                            flush(&mut span, &mut reads, &mut loads, &mut put);
                             continue;
                         };
                         let bits = unit.int_bits(Operand::Value(value)).expect("an integer");
@@ -230,7 +240,7 @@ pub fn merged_copies(
                         let (Some((src, src_low)), Some((dst, dst_low))) =
                             (cell(&unit, source, width), cell(&unit, op.operands[1], width))
                         else {
-                            flush(&mut span, &mut reads, &mut loads);
+                            flush(&mut span, &mut reads, &mut loads, &mut put);
                             continue;
                         };
                         span.push(Pair {
@@ -247,10 +257,10 @@ pub fn merged_copies(
                         });
                     }
                     _ if memory::speculatable(unit.context, callees, function, inst) => {}
-                    _ => flush(&mut span, &mut reads, &mut loads),
+                    _ => flush(&mut span, &mut reads, &mut loads, &mut put),
                 }
             }
-            flush(&mut span, &mut reads, &mut loads);
+            flush(&mut span, &mut reads, &mut loads, &mut put);
         }
     }
     for chunk in &plan {

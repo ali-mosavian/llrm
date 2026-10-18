@@ -84,6 +84,13 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let unroll_full = {
+        let at = arguments.iter().position(|one| one == "--unroll-full");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let memcpyopt = {
         let at = arguments.iter().position(|one| one == "--memcpyopt");
         at.inspect(|&at| {
@@ -169,6 +176,31 @@ fn main() -> ExitCode {
                     // The caller has made the loops simplified and LCSSA, as
                     // the loop pass manager does.
                     if let Err(error) = llrm_transforms::looprotate::rotate_function(&mut module, &name, &tti, options)
+                    {
+                        eprintln!("{path}: @{name}: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if unroll_full {
+                let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu");
+                let options = llrm_transforms::loopunrollpass::Options {
+                    opt_level: 2,
+                    opt_size: false,
+                    min_size: false,
+                    only_when_forced: false,
+                    prepare_for_lto: false,
+                };
+                let names: Vec<String> = module
+                    .functions()
+                    .filter(|(_, _, one)| !one.layout().is_empty())
+                    .filter_map(|(_, one, _)| one.name.clone())
+                    .collect();
+                for name in names {
+                    if let Err(error) =
+                        llrm_transforms::loopunrollpass::unroll_function(&mut module, &name, &tti, options)
                     {
                         eprintln!("{path}: @{name}: {error}");
                         return ExitCode::FAILURE;
