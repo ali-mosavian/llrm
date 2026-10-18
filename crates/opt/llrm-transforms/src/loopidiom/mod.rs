@@ -43,6 +43,8 @@ pub struct Options {
     pub disable_memset: bool,
     /// `disable-loop-idiom-memcpy`.
     pub disable_memcpy: bool,
+    /// `disable-loop-idiom-hashrecognize`.
+    pub disable_hash_recognize: bool,
     /// `use-lir-code-size-heurs`.
     pub use_lir_code_size_heurs: bool,
     /// `loop-idiom-force-memset-pattern-intrinsic`.
@@ -55,6 +57,7 @@ impl Default for Options {
             disable_all: false,
             disable_memset: false,
             disable_memcpy: false,
+            disable_hash_recognize: false,
             use_lir_code_size_heurs: true,
             force_memset_pattern_intrinsic: false,
         }
@@ -86,12 +89,14 @@ pub type StoreListMap = Vec<(Operand, Vec<InstId>)>;
 /// `LoopIdiomRecognize`.
 pub struct LoopIdiomRecognize {
     pub options: Options,
+    library: Library,
+    apply_code_size_heuristics: bool,
     has_memset: bool,
     has_memset_pattern: bool,
     has_memcpy: bool,
-    store_refs_for_memset: StoreListMap,
-    store_refs_for_memset_pattern: StoreListMap,
-    store_refs_for_memcpy: Vec<InstId>,
+    pub(crate) store_refs_for_memset: StoreListMap,
+    pub(crate) store_refs_for_memset_pattern: StoreListMap,
+    pub(crate) store_refs_for_memcpy: Vec<InstId>,
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L427
@@ -150,6 +155,8 @@ impl LoopIdiomRecognize {
     ) -> Self {
         Self {
             options,
+            library,
+            apply_code_size_heuristics: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
             has_memcpy: library.memcpy,
@@ -453,7 +460,7 @@ fn constant_stride(
 }
 
 /// `APInt == uint64_t`.
-fn equals(
+pub(crate) fn equals(
     value: Ap,
     other: u64,
 ) -> bool {
@@ -479,6 +486,10 @@ fn push(
         None => map.push((key, vec![store])),
     }
 }
+
+pub mod build;
+pub mod driver;
+pub mod process;
 
 #[cfg(test)]
 mod tests;

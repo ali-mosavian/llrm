@@ -114,16 +114,17 @@ impl Expander {
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L587
 /// `SCEVExpanderCleaner`. LLVM runs `cleanup` in the destructor; it needs the
-/// function, so here it is called: `cleanup(function)` removes the
+/// function, so here it is called: `cleanup(expander, function)` removes the
 /// instructions expanded since `new`, `mark_result_used` keeps them.
-pub struct ExpanderCleaner<'e> {
-    _expander: &'e mut Expander,
+pub struct ExpanderCleaner {
     result_used: bool,
 }
 
-impl<'e> ExpanderCleaner<'e> {
-    pub fn new(expander: &'e mut Expander) -> Self {
-        Self { _expander: expander, result_used: false }
+impl ExpanderCleaner {
+    /// `SCEVExpanderCleaner(Expander)`: it holds no borrow of the expander,
+    /// which is used between `new` and `cleanup`.
+    pub fn new(_expander: &Expander) -> Self {
+        Self { result_used: false }
     }
 
     /// `markResultUsed`.
@@ -134,6 +135,7 @@ impl<'e> ExpanderCleaner<'e> {
     /// `cleanup`.
     pub fn cleanup(
         self,
+        _expander: &mut Expander,
         _function: &mut Function,
     ) {
         if self.result_used {

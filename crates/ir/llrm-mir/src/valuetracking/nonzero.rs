@@ -120,7 +120,7 @@ fn pointer_space(
 }
 
 /// `NullPointerIsDefined(F, AS)`.
-fn null_pointer_is_defined(
+pub fn null_pointer_is_defined(
     function: Option<&Function>,
     space: u32,
 ) -> bool {

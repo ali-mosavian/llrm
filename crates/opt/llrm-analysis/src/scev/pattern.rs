@@ -9,6 +9,21 @@ use super::expr::{Kind, Scev, Type};
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L440
+    /// `SCEV::isNonConstantNegative`: a product whose constant factor is
+    /// negative, such as `-42 * %v`.
+    pub fn is_non_constant_negative(
+        &self,
+        s: Scev,
+    ) -> bool {
+        let Kind::Mul(ops) = &self.node(s).kind else { return false };
+        // If there is a constant factor, it will be first.
+        let Some(factor) = ops.first().and_then(|op| self.as_constant(op.scev)) else { return false };
+        // Return true if the value is negative, this matches things like
+        // (-42 * V).
+        factor.is_negative()
+    }
+
     /// `m_scev_APInt`.
     pub fn match_apint(
         &self,

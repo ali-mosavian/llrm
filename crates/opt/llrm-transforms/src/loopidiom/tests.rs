@@ -194,3 +194,91 @@ exit:
     // the loop is not invariant.
     assert_eq!(same_byte(text), [true, true, true, false, false, false, false]);
 }
+
+/// `runOnLoop` on the loop headed by `%h` of the module's one function, named
+/// `name`: what it answers before it reads an add recurrence.
+fn run_on_loop(
+    text: &str,
+    name: &'static str,
+) -> Option<bool> {
+    use llrm_analysis::scev::expander::Env;
+
+    use super::process::{AaProvider, Run};
+
+    struct NoAa;
+    impl AaProvider for NoAa {
+        fn with(
+            &self,
+            _: &llrm_mir::context::Context,
+            _: &llrm_mir::module::Function,
+            _: &mut dyn FnMut(&mut dyn llrm_analysis::aa::AAResults) -> bool,
+        ) -> bool {
+            unreachable!("no alias query before a store is found")
+        }
+    }
+
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, original) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
+    let mut function = original.clone();
+    let mut context = module.context.clone();
+    let layout = DataLayout::default();
+    let tree = DominatorTree::new(&function);
+    let loops = LoopInfo::analyze(&function, || &tree);
+    let assumptions = AssumptionCache::new(&module, &function);
+    let env = Env {
+        globals: &module.globals,
+        metadata: &module.metadata,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header: BlockId =
+        *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let cur_loop = loops.get_loop_for(header).expect("a loop");
+    let mut se = ScalarEvolution::new();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let mut run = Run {
+        name,
+        env: &env,
+        context: &mut context,
+        function: &mut function,
+        se: &mut se,
+        aa: &NoAa,
+        declared: &mut declared,
+        cur_loop,
+    };
+    LoopIdiomRecognize::new(Options::default(), LIBRARY).run_on_loop(&mut run)
+}
+
+const FILL: &str = "define void @f(ptr %p, i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store i8 0, ptr %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+
+/// A function named like the idiom it would be turned into is left alone
+/// (`memset` calling itself through the call the pass would make).
+#[test]
+fn test_a_function_named_memset_is_left_alone() {
+    assert_eq!(run_on_loop(FILL, "memset"), Some(false));
+    assert_eq!(run_on_loop(FILL, "strlen"), Some(false));
+}
+
+/// Without a count the pass does not decide: `runOnNoncountableLoop` is the
+/// C++'s next step (stage L4).
+#[test]
+fn test_a_loop_without_an_invariant_count_is_left_to_the_noncountable_half() {
+    assert_eq!(run_on_loop(FILL, "f"), None);
+}
