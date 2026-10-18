@@ -32,7 +32,7 @@
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::occurrence::arms;
 use llrm_analysis::scev::analysis::ScevSession;
-use llrm_analysis::scev::expand_cost::{ExpansionTti, UnitCosts};
+use llrm_analysis::scev::expand_cost::{ExpansionTti, MachineCosts};
 use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
@@ -88,7 +88,7 @@ pub fn rewritten(
         headers
     };
     let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
-    let tti = UnitCosts { minimum_size };
+    let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
     let mut rewriter = Expander::new("indvars");
     let mut changed = false;
     for header in headers {
