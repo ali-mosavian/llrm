@@ -30,3 +30,16 @@ fn a_long_array_after_a_short_array_is_on_a_dword() {
         assert_eq!(at % 4, 0, "{line}");
     }
 }
+
+/// Aligning each `long` after a `short` padded the frame (jpeg_fixed bq32 -Os:
+/// +9 B of displacements gone to disp32): the gap a `long` leaves takes the
+/// next `short`, so the frame is the size it was when the `long`s were
+/// misaligned.
+#[test]
+fn a_gap_left_by_alignment_takes_the_next_short() {
+    let text = listing(
+        "extern void use(short *, long *, short *, long *, short *, long *);\n\
+         void f(void) { short a; long b; short c; long d; short e; long f; use(&a, &b, &c, &d, &e, &f); }\n",
+    );
+    assert!(text.contains("sub esp, 24"), "{text}");
+}

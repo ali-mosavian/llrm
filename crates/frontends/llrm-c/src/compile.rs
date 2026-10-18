@@ -2802,9 +2802,9 @@ mod tests {
         let lines = flat_listing("bytes");
         assert!(lines.iter().all(|line| !line.starts_with("movzx ebp")), "{lines:#?}");
         assert!(lines.contains(&"sub esp, 76".to_owned()), "{lines:#?}");
-        // 70 bytes in 76 reserved: the array lies on a dword, at the stack
-        // pointer.
-        assert!(lines.contains(&"mov byte ptr [esp+eax], al".to_owned()), "{lines:#?}");
+        // 70 under the frame register, 76 reserved with its cell: 2 above the
+        // stack pointer.
+        assert!(lines.contains(&"mov byte ptr [esp+eax+2], al".to_owned()), "{lines:#?}");
     }
 
     /// A struct wider than 16 bytes passed by value is one `byval` pointer and
