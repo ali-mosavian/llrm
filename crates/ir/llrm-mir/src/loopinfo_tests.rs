@@ -138,3 +138,38 @@ fn test_loops_are_found_once_while_the_cfg_is_kept() {
     assert_eq!(get(Event::Forests) - before, 2, "control: the CFG changed, found again");
     assert!(!found.is_loop_header(block(function, "i")));
 }
+
+/// `Loop::isLoopInvariant(const Value *)`: an argument, a constant and an
+/// instruction before the loop are invariant; the loop's own are not.
+#[test]
+fn test_loop_invariance_of_a_value_is_where_its_instruction_is() {
+    let module = parse::module(
+        "define i32 @f(i32 %n) {
+entry:
+  %pre = add i32 %n, 1
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %i2 = add i32 %i, %pre
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret i32 %i2
+}
+",
+    )
+    .expect("a module");
+    let function = module.functions().next().expect("a function").2;
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let one = info.get_loop_for(block(function, "h")).expect("loop");
+    let results: Vec<_> = function.walk().filter_map(|(_, inst)| function.instruction(inst).result).collect();
+    let [pre, i, i2, c] = results[..] else { panic!("four results") };
+    use crate::module::Operand::Value;
+    assert!(one.is_loop_invariant(function, Value(function.parameters()[0])), "an argument");
+    assert!(one.is_loop_invariant(function, Value(pre)), "defined before the loop");
+    assert!(!one.is_loop_invariant(function, Value(i)), "a phi of the loop");
+    assert!(!one.is_loop_invariant(function, Value(i2)));
+    assert!(!one.is_loop_invariant(function, Value(c)));
+}
