@@ -114,13 +114,13 @@ pub fn get_mem_set_pattern_value(
     // If the value isn't a constant, we can't promote it to being in a
     // constant array.
     let Operand::Constant(id) = v else { return None };
-    let constant = cx.module.context.get(id);
+    let constant = cx.context.get(id);
     if matches!(constant.kind, ConstantKind::Expr(_)) {
         return None;
     }
 
     // Only handle simple values that are a power of two bytes in size.
-    let size = cx.layout.size_bits(&cx.module.context.types, constant.ty);
+    let size = cx.layout.size_bits(&cx.context.types, constant.ty);
     if size == 0 || (size & 7) != 0 || (size & (size - 1)) != 0 {
         return None;
     }
@@ -138,7 +138,7 @@ pub fn get_mem_set_pattern_value(
 
     // For now, don't handle types that aren't int, floats, or pointers.
     matches!(
-        cx.module.context.types.get(constant.ty),
+        cx.context.types.get(constant.ty),
         Type::Int(_) | Type::Pointer(_) | Type::Float(_)
     ).then_some(id)
 }
@@ -169,7 +169,7 @@ impl LoopIdiomRecognize {
         store: InstId,
     ) -> LegalStoreKind {
         let function = cx.function;
-        let context = &cx.module.context;
+        let context = &cx.context;
         let instruction = function.instruction(store);
         let Opcode::Store { volatile, .. } = instruction.opcode else { return LegalStoreKind::None };
         // Don't touch volatile stores. MIR has no atomic ordering, so an

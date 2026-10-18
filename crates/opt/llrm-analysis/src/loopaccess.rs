@@ -21,8 +21,8 @@ fn address_space(
     cx: &Cx,
     pointer: Operand,
 ) -> Option<u32> {
-    let ty = cx.function.operand_type(&cx.module.context, pointer)?;
-    match cx.module.context.types.get(ty) {
+    let ty = cx.function.operand_type(&cx.context, pointer)?;
+    match cx.context.types.get(ty) {
         Type::Pointer(space) => Some(*space),
         _ => None,
     }
@@ -88,7 +88,7 @@ pub fn get_pointers_diff(
     };
 
     let val = val?;
-    let size = cx.layout.store_size(&cx.module.context.types, elem_ty_a) as i64;
+    let size = cx.layout.store_size(&cx.context.types, elem_ty_a) as i64;
     let dist = val / size;
 
     // Ensure that the calculated distance matches the type-based one after
@@ -125,7 +125,7 @@ fn load_store_type(
     let instruction = cx.function.instruction(inst);
     match instruction.opcode {
         Opcode::Load { .. } => Some(instruction.ty),
-        Opcode::Store { .. } => cx.function.operand_type(&cx.module.context, instruction.operands[0]),
+        Opcode::Store { .. } => cx.function.operand_type(&cx.context, instruction.operands[0]),
         _ => None,
     }
 }
@@ -170,8 +170,16 @@ mod tests {
         let tree = DominatorTree::new(function);
         let loops = LoopInfo::analyze(function, || &tree);
         let assumptions = AssumptionCache::new(&module, function);
-        let cx =
-            Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+        let cx = Cx {
+            context: &module.context,
+            globals: &module.globals,
+            metadata: &module.metadata,
+            function,
+            layout: &layout,
+            loops: &loops,
+            tree: &tree,
+            assumptions: &assumptions,
+        };
         let stores: Vec<InstId> = function
             .walk()
             .map(|(_, inst)| inst)

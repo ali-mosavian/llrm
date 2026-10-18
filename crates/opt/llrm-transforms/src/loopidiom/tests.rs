@@ -27,7 +27,16 @@ fn kinds(
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
-    let cx = Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
     let header: BlockId =
         *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
     let cur_loop = loops.get_loop_for(header).expect("a loop");
@@ -97,7 +106,16 @@ define void @f(ptr %p, i32 %x) {
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
-    let cx = Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
     let found: Vec<bool> = function
         .walk()
         .filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
@@ -118,7 +136,16 @@ fn same_byte(text: &str) -> Vec<bool> {
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
-    let cx = Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
     let header: BlockId =
         *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
     let cur_loop = loops.get_loop_for(header).expect("a loop");
