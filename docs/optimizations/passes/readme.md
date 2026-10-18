@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 86 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 87 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -82,6 +82,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
+| sroa | `sroa-real`: scalar replacement of aggregates as LLVM's SROA does it: the uses of an alloca are cut into slices, the slices into partitions that no access straddles, each partition becomes an alloca of its own (or the old one), the accesses are rewritten onto it, and what is then only loaded and stored whole is promoted to registers. |  | [sroa](sroa.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
 | switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |

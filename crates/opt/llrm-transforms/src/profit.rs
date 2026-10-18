@@ -360,7 +360,39 @@ pub fn proven_trips(
     unit: &memory::Unit,
     facts: &IndexMap<ValueId, Known>,
 ) -> IndexMap<i64, i64> {
-    proven_trips_using(unit, facts, !llrm_support::env_flag!("LLRM_NO_SCEV_TRIPS"))
+    proven_trips_using(unit, facts, scev_trips_enabled())
+}
+
+/// `LLRM_NO_SCEV_TRIPS`, read once: trip counts come from ScalarEvolution
+/// (`proven_trips`, `unroll`), not `induction::trip_count`.
+pub fn scev_trips_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_TRIPS")
+}
+
+/// How often `loop_`'s latch runs, where ScalarEvolution proves it
+/// (`getSmallConstantTripCount`): one exit, in the latch or in the header.
+/// The count is the header's runs, one more than the latch's where the header
+/// leaves.
+pub fn scev_trips(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            let natural = cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            let [exiting] = natural.get_exiting_blocks(cx.function)[..] else { return None };
+            let runs = scev.get_small_constant_trip_count(cx, header);
+            if loop_.latches.contains(&cfg::id(exiting)) {
+                Some(runs)
+            } else if exiting == header {
+                Some(runs.saturating_sub(1))
+            } else {
+                None
+            }
+        })?;
+    (count != 0).then_some(i64::from(count))
 }
 
 /// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
@@ -370,45 +402,17 @@ pub fn proven_trips_using(
     scev: bool,
 ) -> IndexMap<i64, i64> {
     let mut trips = IndexMap::default();
-    if scev {
-        let loops = &unit.shape().loops;
-        if loops.is_empty() {
-            return trips;
-        }
+    let loops = &unit.shape().loops;
+    if scev && !loops.is_empty() {
         let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
         for loop_ in loops {
-            let header = cfg::block(loop_.header);
-            let count = session.ask_within(
-                unit.context,
-                unit.layout,
-                unit.globals,
-                unit.metadata,
-                unit.function,
-                |scev, cx| {
-                    let Some(natural) = cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)
-                    else {
-                        return 0;
-                    };
-                    let [exiting] = natural.get_exiting_blocks(cx.function)[..] else { return 0 };
-                    // `getSmallConstantTripCount` counts the header's runs; a
-                    // trip here is the latch's.
-                    let runs = scev.get_small_constant_trip_count(cx, header);
-                    if loop_.latches.contains(&cfg::id(exiting)) {
-                        runs
-                    } else if exiting == header {
-                        runs.saturating_sub(1)
-                    } else {
-                        0
-                    }
-                },
-            );
-            if count != 0 {
-                trips.extend(loop_.latches.iter().map(|&latch| (latch, i64::from(count))));
+            if let Some(count) = scev_trips(&mut session, unit, loop_) {
+                trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
             }
         }
         return trips;
     }
-    for loop_ in &unit.shape().loops {
+    for loop_ in loops {
         if let Some(count) = induction::trip_count(unit, loop_, facts).and_then(|count| count.to_i64()) {
             trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
         }
