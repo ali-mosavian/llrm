@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 19] = [
+        const CHECKED: [&str; 20] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
