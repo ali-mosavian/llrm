@@ -22,8 +22,8 @@
 //! phi reads `shl n, 1` written in the exit block, and the loop's `s` is dead.
 //!
 //! # Used by
-//! [`crate::indvars`], first of its steps, in place of
-//! [`crate::indvars::exit_values`] when `LLRM_NO_SCEV_EXITVALUES` is not set.
+//! [`crate::indvars`], first of its steps. It replaced indvars' own
+//! `exit_values`, which asked only the header for its exit.
 //!
 //! # See also
 //! `rewriteLoopExitValues`, `canLoopBeDeleted`, `hasHardUserWithinLoop`,
@@ -50,7 +50,7 @@ use crate::local;
 const CHEAP_EXPANSION_BUDGET: u32 = 4;
 
 /// `LLRM_NO_SCEV_EXITVALUES`, read once: the exit values come from
-/// ScalarEvolution, not `loopexit` and `indvars::exit_values`.
+/// ScalarEvolution; set, the step is skipped.
 pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_EXITVALUES")
 }
@@ -188,6 +188,12 @@ fn rewrite_loop_exit_values(
                     if llrm_analysis::scev::guards::contains_add_recurrence(se, exit_value) {
                         continue;
                     }
+                    // DEVIATE 15: the expander writes a min or max as a call
+                    // to `llvm.{s,u}{min,max}.iN`, which the back end does
+                    // not select yet (QCport failed on `@llvm.smax.i16`).
+                    if contains_min_max(se, exit_value) {
+                        continue;
+                    }
                     // Computing the value outside of the loop brings no
                     // benefit if it is definitely used inside the loop in a
                     // way which can not be optimized away. Avoid doing so
@@ -276,6 +282,27 @@ fn rewrite_loop_exit_values(
     // that the rewriter doesn't trip over it later.
     rewriter.clear_insert_point();
     replaced
+}
+
+/// Whether `s` has a min or max in it: the expansion calls an intrinsic.
+fn contains_min_max(
+    se: &llrm_analysis::scev::ScalarEvolution,
+    s: Scev,
+) -> bool {
+    use llrm_analysis::scev::expr::Kind;
+    let mut seen: HashSet<Scev> = HashSet::default();
+    let mut work = vec![s];
+    while let Some(s) = work.pop() {
+        if !seen.insert(s) {
+            continue;
+        }
+        match &se.node(s).kind {
+            Kind::UMax(_) | Kind::SMax(_) | Kind::UMin(_) | Kind::SMin(_) | Kind::SequentialUMin(_) => return true,
+            Kind::Constant(_) | Kind::Unknown(_) | Kind::CouldNotCompute => {}
+            _ => work.extend(se.operands_of(s).iter().map(|op| op.scev)),
+        }
+    }
+    false
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1770

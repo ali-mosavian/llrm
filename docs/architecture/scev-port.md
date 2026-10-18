@@ -171,6 +171,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 12 | `FindValueInExprValueMap` does not call `canReuseInstruction` | the call only answers false for a value whose poison-generating flags cannot be dropped; here that makes a reuse count as a cost where LLVM would price it at zero; the cost query errs towards free |
 | 13 | `ExpansionTti` prices every scalar integer instruction `TCC_Basic` (`UnitCosts`) | the X86 `getArithmeticInstrCost` (#2213) has not merged; it prices a divide above this. Replaced when it does |
 | 14 | `rewriteLoopExitValues` leaves an exit value that contains an add recurrence | the expander's `visitAddRecExpr` is not translated yet (loop-products-slope, S6 round 2); lifted when it is |
+| 15 | `rewriteLoopExitValues` leaves an exit value that contains a min or max | the expander writes it as a call to `llvm.{s,u}{min,max}.iN`, which the back end does not select (#2485); lifted when it does |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 
@@ -188,6 +189,8 @@ Same IR into both: `llrm-mir` prints a function as LLVM assembly (`print.rs`); t
 | S5 | `isKnownPredicate` / `isImpliedCond` answers on the questions `opt` asks (`-debug-only=scalar-evolution`-free: `-passes=indvars,lsr` remarks) and on a dumped question set | equal; every difference classified |
 | S6 | expanded code for a SCEV against `opt -passes=indvars` / `loop-reduce` output on the same loop; `-stats` `scalar-evolution`, `loop-reduce` counters | instruction counts per loop equal or classified |
 | S7 | rows | see below |
+
+**Exit values earn nothing yet.** `rewriteLoopExitValues` is on by default (as LLVM runs it); bench-instruments' rows for #2473 against `LLRM_NO_SCEV_EXITVALUES=1`: no row crosses 1.00, d_faces executes the same on every counter, clocks geomean 0.1% worse, code +0.4..+0.7% (QCport +0.01..+0.06%). What makes it pay is the consumers behind it: `WidenIV` and `LFTR` (a loop's test rewritten against the count it computed), which drop the counters the rewrite leaves unread. It is not extended before one of them shows a row win.
 
 **Fold oracle.** `tools/scev/oracle.cpp` links the pinned `libLLVMAnalysis.a` and builds any expression with LLVM's own `ScalarEvolution` constructors from an s-expression (`(add nuw:- (u 0) (c 16 1))`) over the arguments and loops of `tools/scev/fixture.ll`, printing `SCEV::print` and the type. The one-off run `tools/scev/fuzz.py 20000 3` (seed 3) printed 19,996 of 20,000 equal; the four others are DEVIATE 8. The suite holds fixed golden cases hashed against it, each asserting at least two distinct answers; the fuzzing of the folds against it is a one-off run outside CI. The oracle prints the pinned version (`llvmpin.py` once it is on main).
 
