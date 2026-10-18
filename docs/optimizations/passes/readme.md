@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 73 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 74 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -57,6 +57,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopsplit | A loop with a test of its counter against an invariant in its body becomes two loops, one for the trips before the test flips and one for those after, neither with the test. | Once per body, after unswitching and before unroll-jam, at -O3 and -Omax | [loopsplit](loopsplit.md) |
 | loopversion | Loop versioning: a loop is copied for what is true of it only at run time, and the copy is entered behind a test of that. | Once per body, after `unswitch`, `split`, `fuse` and `distribute` and | [loopversion](loopversion.md) |
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
+| mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no such pass and leaves them to the by-pieces expansion). | After the function fixed point, beside `Merge` (no pass asks a memcpy what | [memcpyopt](memcpyopt.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: [`crate::lsr`](lsr.md) calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |

@@ -149,19 +149,18 @@ use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
 use crate::graph::loops;
 use crate::induction;
 use crate::memory::{
-    self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
+    self, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, wrapped,
 };
 use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval, Lookup};
-use crate::regions::{self, ByteRange};
+use crate::regions;
 use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
@@ -176,14 +175,6 @@ pub enum Actual {
     Provenance(Provenance),
     Pointer(ValueId, i64),
     Absent,
-}
-
-/// Python's `_cell_key` tuples: `(object, low, high)`, or a fixed address
-/// and width.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum CellKey {
-    Object(ObjectRef, i64, i64),
-    Address(Addr, i64),
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
@@ -698,10 +689,21 @@ impl Summary {
         let within = |old_unknown: bool, new_unknown: bool, old: &SliceSet, new: &SliceSet| {
             old_unknown
                 || new_unknown
-                || new
-                    .iter()
-                    .filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one))
-                    .all(|one| old.contains(one))
+                || new.iter().filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one)).all(|one| {
+                    // Bytes past the object's end are no byte of it, and a
+                    // slice stands for the bytes it names, not for its shape.
+                    let clipped = one
+                        .object
+                        .extent
+                        .and_then(
+                            |extent| {
+                                let high = one.high.min(extent);
+                                let width = one.width.min(extent - (high - 1));
+                                Slice::new(one.object, one.low, high, one.stride, width.max(1)).ok()
+                            },
+                        );
+                    old.iter().any(|kept| kept.contains(one) || clipped.as_ref().is_some_and(|c| kept.contains(c)))
+                })
         };
         within(self.unknown_read, fresh.unknown_read, &self.reads, &fresh.reads)
             && within(self.unknown_write, fresh.unknown_write, &self.writes, &fresh.writes)
@@ -966,6 +968,14 @@ fn _borrowed(
     index: usize,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    // What these return is the operand's bytes, followed as a value: the call
+    // keeps nothing (`captures(ret: provenance)` in LLVM).
+    if matches!(
+        unit.intrinsic(at),
+        Some(llrm_mir::intrinsics::Intrinsic::Window | llrm_mir::intrinsics::Intrinsic::Restrict)
+    ) {
+        return true;
+    }
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))
@@ -2675,18 +2685,6 @@ fn _widened(provenance: &Provenance) -> Provenance {
     Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
-fn _cell_key(reference: &MemRef) -> Option<CellKey> {
-    if let Some(provenance) = &reference.provenance {
-        if provenance.slices.len() == 1 {
-            let one = provenance.slices.first().expect("one slice");
-            if one.stride == 1 {
-                return Some(CellKey::Object(one.object, one.low, one.high));
-            }
-        }
-    }
-    reference.addr().map(|addr| CellKey::Address(addr, i64::from(reference.width)))
-}
-
 /// Whether the call `inst` returns what its callee states `noalias`: a
 /// pointer to an object no other pointer reaches, as a constructor's.
 fn returns_unique(
@@ -2716,6 +2714,11 @@ fn _direct(
         }
         // The same bytes as its operand, said restrict: what it and what is
         // based on it reach is reached by nothing that is not.
+        // The window of a huge pointer: the same bytes, said by another
+        // pointer.
+        Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Window) => {
+            Ok(_operand(unit, op.operands[0], values))
+        }
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
             let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
@@ -3520,85 +3523,6 @@ fn _resolved_actuals(
             Actual::Absent => EMPTY.clone(),
         })
         .collect()
-}
-
-/// The object a cell key lies in: only keys sharing it can overlap.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum KeyBucket {
-    Object(ObjectRef),
-    Address(Operand),
-}
-
-impl Bucket for KeyBucket {
-    // Nothing looks a key bucket up by a component.
-    type Parts = ();
-
-    fn held(
-        &self,
-        _: &mut (),
-    ) {
-    }
-
-    fn released(
-        &self,
-        _: &mut (),
-    ) {
-    }
-}
-
-pub fn _key_bucket(key: &CellKey) -> KeyBucket {
-    match key {
-        CellKey::Object(object, _, _) => KeyBucket::Object(object.clone()),
-        CellKey::Address(addr, _) => KeyBucket::Address(addr.root),
-    }
-}
-
-/// A key's bucket, and no span: Python's map has no `span_of`.
-pub fn _key_place(key: &CellKey) -> (KeyBucket, Option<ByteRange>) {
-    (_key_bucket(key), None)
-}
-
-/// Drop the cells a store to `key` may overwrite, keeping `key` itself.
-pub fn _kill<V>(
-    cells: &mut CellMap<CellKey, V, KeyBucket>,
-    key: Option<&CellKey>,
-) {
-    let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
-    cells.kill(
-        reached,
-        |old| {
-            #[cfg(test)]
-            ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
-            Some(old) != key && _keys_overlap(Some(old), key)
-        },
-        None,
-    );
-}
-
-#[cfg(test)]
-thread_local! {
-    /// The cells `_kill` asked the exact test of.
-    pub static ASKED: RefCell<Vec<CellKey>> = const { RefCell::new(Vec::new()) };
-}
-
-pub fn _keys_overlap(
-    one: Option<&CellKey>,
-    other: Option<&CellKey>,
-) -> bool {
-    let (Some(one), Some(other)) = (one, other) else {
-        return true;
-    };
-    match (one, other) {
-        (CellKey::Address(addr, width), CellKey::Address(other_addr, other_width)) if addr.root == other_addr.root => {
-            addr.disp < other_addr.disp + other_width && other_addr.disp < addr.disp + width
-        }
-        (CellKey::Object(object, low, high), CellKey::Object(other_object, other_low, other_high))
-            if object == other_object =>
-        {
-            low < other_high && other_low < high
-        }
-        _ => one == other,
-    }
 }
 
 /// `value` modulo `modulus`, never negative for a positive modulus.

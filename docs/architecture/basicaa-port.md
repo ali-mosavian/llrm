@@ -24,6 +24,20 @@
 2. **LLVM's answers** (not run): `opt -passes=aa-eval -print-all-alias-modref-info` with the pinned `~/scratch/llvm-build/bin/opt` (24.0.0git `d1106deb71cc`), on llvm-difftest's replay of the dumped pass inputs, pair by pair, every difference classified against today's. The first table of this page is the count of NoAlias-vs-MayAlias, MayAlias-vs-NoAlias and MustAlias differences; wherever today says NoAlias and BasicAA says MayAlias is a candidate miscompile and goes to a program test and a fix PR ahead of the perf work.
 3. **Walker equality** (memoryssa-port): `check_clobber_sanity` on every load and store of 167 `d_faces` bodies must hold with the new AA.
 
+### Second table: load and store pairs, with the type tags (`--memops`)
+
+`aa-eval -evaluate-aa-metadata` asks `alias(MemoryLocation::get(load), MemoryLocation::get(store))` with each access's tags, so TBAA shows here (it cannot in the pointer pairs). Same 274 `d_faces` dumps; ours = `regions::overlapping` of the two `MemRef`s with provenance and type tags; pairs matched by position in aa-eval's order (each load against each store, then each store against the stores before it), not by text. Failed rows 0; functions whose pair counts differ: 0.
+
+| ours | LLVM (tbaa, scoped-noalias, basic) | pairs | ours (no tags) | LLVM (basic) | pairs |
+|---|---|---|---|---|---|
+| NoAlias | NoAlias | 3,769,726 | NoAlias | NoAlias | 3,513,180 |
+| MayAlias | MayAlias | 119,562 | MayAlias | MayAlias | 350,196 |
+| MayAlias | NoAlias | 4,472 | MayAlias | NoAlias | 20,106 |
+| MayAlias | MustAlias | 41,105 | MayAlias | MustAlias | 41,105 |
+| NoAlias | MayAlias | 7,119 | NoAlias | MayAlias | 17,397 |
+
+All 7,119 and all 17,397 `NoAlias`-against-`MayAlias` pairs are accesses through pointers loaded from one slot (the class of the first table; the slots are stored once and used by nothing else), so they are not a miscompile column. The 41,105 are equal addresses that the harness prints as MayAlias. The type tags move LLVM from 3.51 M to 3.77 M NoAlias pairs and ours from 3.51 M to 3.77 M: the tags agree. Call-vs-pointer mod/ref pairs are not yet compared.
+
 ### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 
 `opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`), `-aa-pipeline=basic-aa -passes=aa-eval -print-all-alias-modref-info`. Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`, made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps. Both sides list what aa-eval lists: the pointer operand of each load and store with the size of the access, one entry for each pair of pointer and size; llrm's answer is `regions::overlapping` of the two accesses with their provenance, as the consumers ask it, without the type tags (aa-eval's pointer pairs carry none, so TBAA cannot show in them). Failed rows: 0. Pairs one side printed that the other did not: 0.

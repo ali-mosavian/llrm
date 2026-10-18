@@ -692,6 +692,15 @@ pub fn counted_renewed(
     shape.loops.iter().map(|loop_| (loop_.header, found[&loop_.header].clone())).collect()
 }
 
+thread_local! {
+    static CHECK_COUNTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `LLRM_CHECK_COUNTED` for this thread, for a test.
+pub fn check_counted(on: bool) {
+    CHECK_COUNTED.with(|check| check.set(on));
+}
+
 /// `counted`, also for a loop that may leave into a block that never returns.
 pub fn counted_unless_stopped(
     unit: &Unit,
@@ -703,7 +712,7 @@ pub fn counted_unless_stopped(
     if let (false, Some(held), Some(registers)) = (inbounds, unit.counted, unit.registers) {
         if facts.is_none_or(|facts| std::ptr::eq(facts, registers)) {
             if let Some(found) = held.get(&loop_.header) {
-                if llrm_support::env_flag!("LLRM_CHECK_COUNTED") {
+                if llrm_support::env_flag!("LLRM_CHECK_COUNTED") || CHECK_COUNTED.with(std::cell::Cell::get) {
                     assert!(
                         *found == _counted_unless_stopped(unit, loop_, registers, false, false),
                         "the counted proofs a unit carries are not those of the body it stands over: stale"
