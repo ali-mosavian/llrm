@@ -93,7 +93,7 @@ pub struct AliasQuery<'a> {
     /// for the test that holds the cost linear.
     cache_steps: std::cell::Cell<u64>,
     /// The allocas whose address is exposed, found when first asked.
-    exposed: std::cell::OnceCell<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>,
+    exposed: std::cell::OnceCell<Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>>,
 }
 
 /// A width large enough to stand for 'any byte after the pointer'.
@@ -114,6 +114,16 @@ impl<'a> AliasQuery<'a> {
             cache_steps: Default::default(),
             exposed: Default::default(),
         }
+    }
+
+    /// The allocas whose address is exposed, where the caller has them already
+    /// (exposure does not change as instructions move between blocks).
+    pub fn with_exposed(
+        self,
+        exposed: Rc<llrm_mir::dense::IdSet<llrm_mir::module::ValueId>>,
+    ) -> Self {
+        let _ = self.exposed.set(exposed);
+        self
     }
 
     /// Cache entries looked at to answer the questions so far.
@@ -268,7 +278,10 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(reference) else { return false };
-        !self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit).into_iter().collect()).contains(&alloca)
+        !self
+            .exposed
+            .get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()))
+            .contains(&alloca)
     }
 
     /// Whether `pointer` is derived only from objects other than the alloca
@@ -315,7 +328,8 @@ impl<'a> AliasQuery<'a> {
     ) -> bool {
         use llrm_mir::module::Operand;
         let Some(Operand::Value(alloca)) = self.identified_object(local) else { return false };
-        let exposed = self.exposed.get_or_init(|| crate::memory::exposed_frames(self.unit).into_iter().collect());
+        let exposed =
+            self.exposed.get_or_init(|| Rc::new(crate::memory::exposed_frames(self.unit).into_iter().collect()));
         if exposed.contains(&alloca) {
             return false;
         }
