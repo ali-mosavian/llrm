@@ -64,18 +64,6 @@ pub struct Expander {
     pub(super) expressions: HashMap<(Scev, InstId), Operand>,
     /// `RelevantLoops`.
     pub(super) relevant_loops: HashMap<Scev, Option<BlockId>>,
-    /// `CanonicalMode`: add recurrences are written over one `{0,+,1}` phi.
-    pub(super) canonical_mode: bool,
-    /// `LSRMode`.
-    pub(super) lsr_mode: bool,
-    /// `PostIncLoops`, as the headers.
-    pub(super) post_inc_loops: Vec<BlockId>,
-    /// `IVIncInsertLoop` (its header) and `IVIncInsertPos`.
-    pub(super) iv_inc_insert: Option<(BlockId, InstId)>,
-    /// `InsertedIVs`.
-    pub(super) inserted_ivs: Vec<InstId>,
-    /// `ReusedValues`: found, not made.
-    pub(super) reused: llrm_mir::dense::IdSet<InstId>,
 }
 
 impl Expander {
@@ -88,12 +76,6 @@ impl Expander {
             inserted: Vec::new(),
             expressions: HashMap::default(),
             relevant_loops: HashMap::default(),
-            canonical_mode: true,
-            lsr_mode: false,
-            post_inc_loops: Vec::new(),
-            iv_inc_insert: None,
-            inserted_ivs: Vec::new(),
-            reused: Default::default(),
         }
     }
 
@@ -104,49 +86,6 @@ impl Expander {
         ip: InstId,
     ) {
         self.insert_point = Some(ip);
-    }
-
-    /// `setCanonicalMode(false)` for LSR: each add recurrence gets its own phi.
-    pub fn set_canonical_mode(
-        &mut self,
-        on: bool,
-    ) {
-        self.canonical_mode = on;
-    }
-
-    /// `enableLSRMode`.
-    pub fn enable_lsr_mode(&mut self) {
-        self.lsr_mode = true;
-    }
-
-    /// `setIVIncInsertPos(L, Pos)`: the increments of `l`'s phis go before
-    /// `pos`.
-    pub fn set_iv_inc_insert_pos(
-        &mut self,
-        l: BlockId,
-        pos: InstId,
-    ) {
-        self.iv_inc_insert = Some((l, pos));
-    }
-
-    /// `setPostInc(L)`.
-    pub fn set_post_inc(
-        &mut self,
-        l: BlockId,
-    ) {
-        if !self.post_inc_loops.contains(&l) {
-            self.post_inc_loops.push(l);
-        }
-    }
-
-    /// `clearPostInc`.
-    pub fn clear_post_inc(&mut self) {
-        self.post_inc_loops.clear();
-    }
-
-    /// `getInsertedIVs`.
-    pub fn inserted_ivs(&self) -> &[InstId] {
-        &self.inserted_ivs
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L418
@@ -174,14 +113,14 @@ impl Expander {
             }
             match se.node(s).kind.clone() {
                 Kind::UDiv(l, r) => {
-                    if !se.is_known_non_zero(cx, r.scev) || !se.is_guaranteed_not_to_be_poison_scev(cx, r.scev) {
+                    if !se.is_known_non_zero(cx, r.scev) {
                         return false;
                     }
                     work.extend([l.scev, r.scev]);
                 }
                 Kind::AddRec(ops, header) => {
                     let preheader = cx.loops.get_loop_for(header).and_then(|l| l.get_loop_preheader(cx.function));
-                    if preheader.is_none() && (!self.canonical_mode || ops.len() != 2) {
+                    if preheader.is_none() && ops.len() != 2 {
                         return false;
                     }
                     work.extend(ops.iter().map(|op| op.scev));

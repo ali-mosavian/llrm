@@ -1017,6 +1017,8 @@ mod tests {
             succ: vec![1].into(),
             phis: vec![].into(),
             cold: false,
+            align: 0,
+            max_skip: 0,
         };
         let looped = LirBlock {
             at: 1,
@@ -1033,6 +1035,8 @@ mod tests {
             succ: vec![1, 2].into(),
             phis: vec![Phi { result: segment, incoming: vec![(0, entry_segment), (1, segment)] }].into(),
             cold: false,
+            align: 0,
+            max_skip: 0,
         };
         let exit = LirBlock {
             at: 2,
@@ -1041,6 +1045,8 @@ mod tests {
             succ: vec![].into(),
             phis: vec![].into(),
             cold: false,
+            align: 0,
+            max_skip: 0,
         };
         let body = LirBody::new(
             "f",
