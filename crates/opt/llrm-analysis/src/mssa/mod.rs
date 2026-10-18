@@ -9,13 +9,17 @@
 
 pub mod alias;
 pub mod build;
+pub mod edit;
 pub mod shadow;
+pub mod updater;
 pub mod verify;
 pub mod walker;
 
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+mod updater_tests;
 
 use std::cell::RefCell;
 
@@ -72,6 +76,9 @@ pub struct MemoryAccess {
     pub optimized_slot: u32,
     /// `MemoryDef::getID` and `MemoryPhi::getID`.
     pub id: u32,
+    /// Removed from the graph (`delete MA`): its place in the arena stays, in
+    /// no list.
+    pub dead: bool,
 }
 
 /// `AccessList` and `DefsList` of one block
@@ -151,7 +158,7 @@ impl Mssa {
         &self,
         block: BlockId,
     ) -> Option<&[AccessId]> {
-        self.per_block.get(&block).map(|lists| lists.accesses.as_slice())
+        self.per_block.get(&block).map(|lists| lists.accesses.as_slice()).filter(|list| !list.is_empty())
     }
 
     /// `getBlockDefs`.
