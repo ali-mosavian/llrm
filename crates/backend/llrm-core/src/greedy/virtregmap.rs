@@ -6,26 +6,29 @@
 //!
 //! # How it works
 //! A register unit is the smallest piece of a register two registers can
-//! share: here one byte lane of a root (`al` and `ah` are two units of `eax`,
-//! `ax` is both, `eax` all four). Two registers interfere exactly when they
-//! share a unit, so the live interval unions are kept per unit and an
-//! assignment of a value to a register is an entry in each of its units.
+//! share. They are X86RegisterInfo.td's, as `llvm-tblgen -gen-register-info`
+//! writes them at d1106deb71cc: `al` and `ah` are two units of `eax`, `ax` is
+//! both, and `eax` has a third, `HAX`, for its upper half (no register names
+//! bytes 2 and 3 apart). Two registers interfere exactly when they share a
+//! unit, so the live interval unions are kept per unit and an assignment of a
+//! value to a register is an entry in each of its units.
 //!
 //! ```text
-//!   unit    eax.0  eax.1  eax.2  eax.3
-//!   al       x
-//!   ah              x
-//!   ax       x      x
-//!   eax      x      x      x      x
+//!   unit    eax.lo  eax.hi  eax.up (HAX)
+//!   al        x
+//!   ah                x
+//!   ax        x       x
+//!   eax       x       x       x
 //! ```
 //!
-//! DEVIATE (no number): TableGen's units for x86 are not the byte lanes (AX has
-//! two units, EAX a third for its high half); the lane model is the target
-//! description's own (`Info::lanes`), and a byte-granular unit gives the same
-//! overlaps. A segment register or a stack register is a root of one unit.
+//! Units per register against LLVM's table: a 32-bit general register 3, a
+//! 16-bit one 2, a byte register 1, a segment register 1 (the test
+//! `test_the_units_of_a_register_are_the_table_gen_units_of_x86` asserts the
+//! table). The lane masks of the target description (`Info::lanes`) say which
+//! bytes a register covers; the unit numbering is `root * 4 + {0, 1, 2}`.
 //!
 //! # Example
-//! `units(ax)` is `[eax.0, eax.1]`; `ah` and `al` share none.
+//! `units(ax)` is `[eax.lo, eax.hi]`; `ah` and `al` share none.
 //!
 //! # Used by
 //! `matrix`.
@@ -34,7 +37,7 @@ use std::collections::HashMap;
 
 use llrm_lir::registers::{RegId, Regs};
 
-/// A register unit: `root number * 4 + byte lane` (`MCRegUnit`).
+/// A register unit: `root number * 4 + {0: low byte, 1: high byte, 2: upper half}` (`MCRegUnit`).
 pub type RegUnit = u32;
 
 /// The units of a register (`MCRegUnitIterator`), without a heap allocation.
@@ -84,8 +87,13 @@ impl RegisterInfo {
         reg: RegId,
     ) -> Units {
         let root = self.regs.root(reg).index() as u32;
-        let lanes = self.regs.lanes(reg) as u32;
-        Units { root: root * 4, lanes: lanes & 0xf }
+        // A segment register has no sub-registers: one unit (`DS` of the table).
+        let lanes = if self.regs.is_segment(reg) { 1 } else { self.regs.lanes(reg) as u32 & 0xf };
+        // Bytes 2 and 3 are never named apart (no `eax` sub-register covers
+        // one), so they are one unit, `HAX` of X86RegisterInfo.td.
+        assert!(lanes & 0xc == 0 || lanes & 0xc == 0xc, "{reg:?} covers one of the upper bytes only");
+        let hi = if lanes & 0xc != 0 { 0b100 } else { 0 };
+        Units { root: root * 4, lanes: (lanes & 0b11) | hi }
     }
 
     /// Whether writing one register can be seen by reading the other.

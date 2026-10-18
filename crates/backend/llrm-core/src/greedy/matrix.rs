@@ -331,18 +331,45 @@ mod tests {
         li
     }
 
-    /// A register's units are the byte lanes of its root it covers.
+    /// A register's units are the lanes of its root it covers: the two low bytes and the upper half.
     #[test]
     fn test_registers_share_the_units_they_overlap_in() {
         let tri = info();
         let (ax, al, ah, eax, bl) = (RegId::AX, RegId::AL, RegId::AH, RegId::EAX, RegId::BL);
         assert_eq!(tri.regunits(ax).len(), 2);
-        assert_eq!(tri.regunits(eax).len(), 4);
+        assert_eq!(tri.regunits(eax).len(), 3);
         let shared = |a: RegId, b: RegId| tri.regunits(a).any(|u| tri.regunits(b).any(|v| v == u));
         assert!(shared(ax, al) && shared(ax, ah) && shared(eax, al) && !shared(al, ah) && !shared(al, bl));
         for (a, b) in [(ax, al), (al, ah), (ax, bl), (eax, ax)] {
             assert_eq!(shared(a, b), tri.overlaps(a, b), "{a:?} {b:?} against the file's overlap");
         }
+    }
+
+    /// The register units of X86RegisterInfo.td, as `llvm-tblgen -gen-register-info` writes them at
+    /// d1106deb71cc (`X86RegUnitRoots`, decoded through `X86RegDiffLists`): AL, AH and one unit for the
+    /// high half (`HAX`) make EAX three, AX is two, a byte register or a segment register is one. The
+    /// byte-lane model gave EAX four (bytes 2 and 3 are never named apart), so an assignment took four
+    /// union entries where LLVM's takes three.
+    #[test]
+    fn test_the_units_of_a_register_are_the_table_gen_units_of_x86() {
+        let tri = info();
+        let count = |reg: RegId| tri.regunits(reg).count();
+        for wide in [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP, RegId::ESP] {
+            assert_eq!(count(wide), 3, "{wide:?}: low byte, high byte, upper half");
+        }
+        for word in [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI, RegId::DI, RegId::BP, RegId::SP] {
+            assert_eq!(count(word), 2, "{word:?}");
+        }
+        for byte in [RegId::AL, RegId::AH, RegId::BL, RegId::BH, RegId::CL, RegId::CH, RegId::DL, RegId::DH] {
+            assert_eq!(count(byte), 1, "{byte:?}");
+        }
+        for segment in [RegId::DS, RegId::ES, RegId::FS, RegId::GS, RegId::SS, RegId::CS] {
+            assert_eq!(count(segment), 1, "{segment:?}");
+        }
+        // EAX is AX and one more unit, the upper half HAX.
+        let ax: Vec<_> = tri.regunits(RegId::AX).collect();
+        let extra: Vec<_> = tri.regunits(RegId::EAX).filter(|unit| !ax.contains(unit)).collect();
+        assert_eq!(extra.len(), 1);
     }
 
     #[test]
