@@ -81,6 +81,11 @@ def quad_steps(axis: str) -> dict[str, float]:
     return parsed_steps(run(source_of(axis, 4 * SIZES[axis]), axis, "time"))
 
 
+def unread_rising(work_small: float, work_big: float) -> bool:
+    """Whether a step under the floor on this build still grows past the limit: only a read step can be paid, so one that is not read keeps its debt."""
+    return work_small >= DEFAULT["onset_minstr"] and still_rising(work_small, work_big)
+
+
 def still_rising(work_small: float, work_big: float) -> bool:
     """Whether a debt's step still grows: not under the limit by the margin. x2.30 against 2.3 is still rising."""
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
@@ -122,6 +127,14 @@ def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
     """lir twoaddr read x2.30 (60.3 -> 138.8): paid on one build, over on the next, and its debt was deleted as paid (#2191) then needed again."""
     assert still_rising(60.3, 138.8) and still_rising(60.3, 138.0)
     assert not still_rising(60.3, 120.0)
+
+
+def test_a_debts_step_under_the_floor_on_one_build_profile_is_not_paid_by_being_unread():
+    """`analysis counted` (cases) is 2.48 -> 6.09 Minstr (x2.45) on a dist build and 2.01 -> 4.49 on the release build CI measures: under the 5.0 floor there, so
+    it was never judged and its debt read paid, failing every head on main with 'paid, so out of budgets.toml' (#2260)."""
+    assert unread_rising(2.01, 4.49)
+    assert not unread_rising(0.1, 0.4), "a reading under the onset is noise"
+    assert not unread_rising(2.0, 3.0), "x1.5 is under the limit"
 
 
 def run(source: str, axis: str, stage: str) -> str:
@@ -284,8 +297,8 @@ def test_no_step_grows_faster_than_the_program_does(axis):
         if onset(work_small):
             continue  # the step starts between N and 2N: no slope to judge from a base of nothing
         if not read(work_big, total):
-            if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
-                rising.add(name)  # a debt's step that dips under the floor is not paid by dipping
+            if unread_rising(work_small, work_big):
+                rising.add(name)  # a debt's step under the floor on this build (4.49 against 5.0 on release, 6.09 on dist) is not paid by being unread
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
         widest = judged_ratio(work_small, work_big, work_quad)
