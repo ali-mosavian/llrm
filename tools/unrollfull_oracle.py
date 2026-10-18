@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Full loop unrolling against the pinned `opt -passes=loop-unroll-full`, decisions first.
 
-    tools/unrollfull_oracle.py [--rotated] [FILE.ll ...]
+    tools/unrollfull_oracle.py [--rotated] [--optsize] [FILE.ll ...]
         (default: tests/fixtures/unrollfull and the analysis corpus)
 
 Both sides get each file through `loop-simplify,lcssa` (the loop pass manager's
 form), at `-mtriple=i486-unknown-linux-gnu -mcpu=i486`; with `--rotated` through
 `loop-rotate` too, which is the acceptance premise (a rotated loop is unrolled
-like any other). For each function: the loops left (the decision: which loops
+like any other); with `--optsize` every function is `optsize` (the `-Os` threshold). For each function: the loops left (the decision: which loops
 were unrolled), then the blocks and instructions per opcode after
 `instcombine,simplifycfg,adce` on both outputs (llrm leaves the cleanup to the
 passes that follow, D9). A control, `-unroll-threshold=0`-like (`opt` with the
@@ -126,11 +126,12 @@ def opt(ir, passes):
 def main():
     args = sys.argv[1:]
     rotated = "--rotated" in args
-    args = [a for a in args if a != "--rotated"]
+    optsize = "--optsize" in args
+    args = [a for a in args if a not in ("--rotated", "--optsize")]
     version = run([str(PINNED), "--version"]).stdout
     if COMMIT not in version:
         raise SystemExit(f"unrollfull_oracle: {PINNED} is not LLVM {COMMIT}")
-    print([l.strip() for l in version.splitlines() if "version" in l][0], f"(pinned {PINNED})", "rotated" if rotated else "")
+    print([l.strip() for l in version.splitlines() if "version" in l][0], f"(pinned {PINNED})", ("rotated" if rotated else "") + (" optsize" if optsize else ""))
     files = args or sorted(
         glob.glob(str(ROOT / "tests/fixtures/unrollfull/*.ll")) + glob.glob(str(ROOT / "crates/opt/llrm-analysis/corpus/*/*.ll"))
     )
@@ -152,10 +153,12 @@ def main():
             missing += 1
             bad.append(f"{name}: opt could not prepare it")
             continue
+        if optsize:
+            prepared = re.sub(r"^(define [^\n]*?) \{$", r"\1 optsize {", prepared, flags=re.M)
         want = opt(prepared, "loop(loop-unroll-full)")
         tmp = Path(tempfile.mkdtemp()) / "prepared.ll"
         tmp.write_text(to_mir(prepared))
-        got = run([str(LLRM), "--unroll-full", str(tmp)])
+        got = run([str(LLRM), "--unroll-full-os" if optsize else "--unroll-full", str(tmp)])
         if want is None or got.returncode != 0:
             missing += 1
             bad.append(f"{name}: " + ("opt failed" if want is None else "llrm-mir failed: " + got.stderr.strip()[:300]))
