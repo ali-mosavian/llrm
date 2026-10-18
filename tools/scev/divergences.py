@@ -22,7 +22,7 @@ AR = "(use nuw (addrec -:- 1 (u 2) (u 1)))"
 CASES = [
     f"(urem (c 16 100) {AR})",
     f"(urem (u 2) {AR})",
-    f"(mul -:- (c 16 65535) (udiv (u 2) {AR}) {AR})",
+    f"(mul -:- (c 16 7) (udiv (u 2) {AR}) {AR})",
     f"(mul -:- (u 0) (udiv (u 2) {AR}) {AR})",
     f"(add -:- (u 0) (udiv (u 2) {AR}) {AR})",
     f"(add -:- (c 16 5) (udiv (u 2) {AR}) {AR})",
