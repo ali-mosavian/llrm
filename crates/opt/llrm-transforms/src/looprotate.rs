@@ -439,8 +439,7 @@ fn rewrite_uses_of_cloned_instructions(
     // necessary.
     for &inst in &header_instructions {
         let Some(result) = run.function.instruction(inst).result else { continue };
-        // LLVM's use lists begin with the newest use; ours end with it.
-        let uses = run.function.users(result).iter().rev().copied().collect::<Vec<_>>();
+        let uses = run.function.users(result).iter().copied().collect::<Vec<_>>();
         // If there are no uses of the value there is nothing to rewrite.
         if uses.is_empty() {
             continue;
@@ -501,7 +500,7 @@ fn profitable_to_rotate_loop_exiting_latch(
 }
 
 /// `LoopInfo::replacementPreservesLCSSAForm`.
-fn replacement_preserves_lcssa_form(
+pub(crate) fn replacement_preserves_lcssa_form(
     info: &LoopInfo,
     function: &Function,
     from: InstId,
@@ -916,8 +915,8 @@ pub fn process_loop(
     rotated_latch.is_some() || simplified_latch.is_some()
 }
 
-/// `LoopRotatePass` over a function: every loop, innermost first
-/// (`getLoopsInReverseSiblingPreorder`), as the loop pass manager visits them.
+/// `LoopRotatePass` over a function: every loop, each after the loops it holds,
+/// as the loop pass manager visits them.
 ///
 /// `LoopInfo` is made once. A rotation adds blocks to the loops outside the
 /// rotated one and the driver derives it again before it reaches one of them;

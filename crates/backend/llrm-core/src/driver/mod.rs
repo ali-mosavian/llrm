@@ -238,7 +238,7 @@ fn spill_model(program: &Program) {
                 .with_spaces(program.target.spaces())
                 .with_registers(&registers)
                 .with_shape(&shape);
-            let trips = profit::proven_trips(&unit, &registers);
+            let trips = profit::proven_trips(&unit);
             let Some(frequency) =
                 profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips))
             else {
@@ -347,6 +347,7 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir odd widths", || program.modules.iter_mut().try_for_each(crate::backend::legalize::promoted))?;
     timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
     if options.arch.expands("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));

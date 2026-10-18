@@ -343,3 +343,24 @@ b0:
     );
     assert!(!after.contains("i24"), "{after}");
 }
+
+/// Old: a partition read before any store was `poison`, then the zero of the
+/// type; the pin's is `undef`.
+#[test]
+fn test_a_partition_nothing_wrote_reads_as_undef_not_poison() {
+    let after = sroa(
+        "define i32 @f(i32 %a) {
+b0:
+  %s = alloca { i32, i32 }
+  %p0 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 0
+  %p1 = getelementptr { i32, i32 }, ptr %s, i32 0, i32 1
+  store i32 %a, ptr %p0
+  %y = load i32, ptr %p1
+  %r = add i32 %y, %a
+  ret i32 %r
+}
+",
+    );
+    assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
+    assert!(after.contains("undef"), "{after}");
+}

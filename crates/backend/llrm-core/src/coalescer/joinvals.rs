@@ -86,6 +86,15 @@ pub struct Side {
 }
 
 impl Side {
+    /// Whether `vni` is this side's parameter on entry to the function.
+    fn is_entry_input(
+        &self,
+        lis: &LiveIntervals,
+        vni: &Vn,
+    ) -> bool {
+        vni.is_phi_def() && lis.is_input(self.reg) && vni.def() == lis.indexes.get_mbb_start_idx(lis.cfg.entry)
+    }
+
     fn new(
         reg: u32,
         lr: LiveRange,
@@ -224,8 +233,10 @@ impl<'a> JoinVals<'a> {
             }
             // Both sides have been analyzed now. Allow overlapping PHI values.
             // Any real interference would show up in a predecessor, the PHI
-            // itself can't introduce any conflicts.
-            if vni.is_phi_def() {
+            // itself can't introduce any conflicts. A parameter's value on
+            // entry is no PHI: the entry block has no predecessor to show
+            // it, and two parameters are two values (DEVIATE C9).
+            if vni.is_phi_def() && !self.sides[me].is_entry_input(self.lis, &vni) {
                 return Resolution::Merge;
             }
             // Overlapping lanes can't be resolved: one lane, valid on both.

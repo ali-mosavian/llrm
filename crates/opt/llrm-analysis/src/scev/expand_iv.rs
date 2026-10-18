@@ -293,7 +293,7 @@ impl Run<'_> {
         let phi = self.function.create_instruction(Opcode::Phi, ir_ty, operands, IrFlags::default(), None);
         let first = *self.function.block(header).instructions().first().expect("a header");
         self.function.insert(phi, Position::Before(first)).expect("a placed phi");
-        self.x.inserted.push(phi);
+        self.x.remember(phi);
         let value = self.result_of(phi);
         for (at, &pred) in preds.iter().enumerate() {
             if !l.contains(pred) {
@@ -304,7 +304,7 @@ impl Run<'_> {
                 .function
                 .create_instruction(Opcode::Binary(BinaryOp::Add), ir_ty, vec![value, one], IrFlags::default(), None);
             self.function.insert(add, Position::Before(terminator)).expect("a placed add");
-            self.x.inserted.push(add);
+            self.x.remember(add);
             let next = self.result_of(add);
             self.function.set_operand(phi, 2 * at, next);
         }
@@ -751,9 +751,9 @@ impl Run<'_> {
                 }
             }
             if let Some((pn, inc)) = found {
-                self.x.inserted.push(pn);
+                self.x.remember(pn);
                 if let Some(inc) = self.instruction_of(inc) {
-                    self.x.inserted.push(inc);
+                    self.x.remember(inc);
                     self.x.reused.insert(inc);
                 }
                 self.x.reused.insert(pn);
@@ -818,7 +818,7 @@ impl Run<'_> {
             self.function.set_operand(phi, 2 * at, inc);
         }
         self.x.post_inc_loops = saved_post_inc;
-        self.x.inserted.push(phi);
+        self.x.remember(phi);
         self.x.inserted_ivs.push(phi);
         (phi, None, false)
     }
@@ -830,12 +830,18 @@ impl Run<'_> {
         s: Scev,
     ) -> Operand {
         let Kind::AddRec(_, header) = self.se.node(s).kind.clone() else { unreachable!("an add recurrence") };
-        if self.x.post_inc_loops.contains(&header) {
-            todo!("S6: normalizeForPostIncUse (ScalarEvolutionNormalization.cpp)");
-        }
-        let normalized = s;
+        // The expression before any post-increment adjustment.
+        let post_inc = self.x.post_inc_loops.contains(&header);
+        let normalized = if post_inc {
+            let cx = cx!(self);
+            self.se
+                .normalize_for_post_inc_use(&cx, s, &[header], false)
+                .expect("a normalization that is not checked for invertibility")
+        } else {
+            s
+        };
         let (pn, trunc_ty, invert) = self.get_add_rec_expr_phi_literally(normalized, header);
-        let mut result = self.result_of(pn);
+        let mut result = if !post_inc { self.result_of(pn) } else { self.post_inc_result(s, normalized, pn, header) };
         if let Some(trunc_ty) = trunc_ty {
             let to = self.ir_ty(trunc_ty);
             if to != self.ty_of_operand(result) || invert {
@@ -851,5 +857,242 @@ impl Run<'_> {
             }
         }
         result
+    }
+
+    /// The post-incremented value of the phi `pn`: its increment from the
+    /// latch, or a new one at the insert point where that does not dominate it.
+    fn post_inc_result(
+        &mut self,
+        s: Scev,
+        normalized: Scev,
+        pn: InstId,
+        header: BlockId,
+    ) -> Operand {
+        let l = self.env.loops.get_loop_for(header).expect("a loop");
+        let latch = l.get_loop_latch(self.function).expect("PostInc mode requires a unique loop latch!");
+        let mut result = self.incoming_for(pn, latch).expect("an increment from the latch");
+        // A new use of the post-inc IV that is not poison safe keeps only the
+        // flags SCEV has proved always hold.
+        if let Some(inc) = self.instruction_of(result) {
+            if matches!(self.function.instruction(inc).opcode, Opcode::Binary(_)) {
+                let mut f = self.function.instruction(inc).flags;
+                if self.se.get_no_wrap_flags(s, flags::NUW) == 0 {
+                    f.remove(IrFlags::NUW);
+                }
+                if self.se.get_no_wrap_flags(s, flags::NSW) == 0 {
+                    f.remove(IrFlags::NSW);
+                }
+                self.function.set_flags(inc, f);
+            }
+        }
+        let here = self.x.insert_point.expect("an insert point");
+        let dominates = match self.instruction_of(result) {
+            Some(inc) => self.env.tree.instruction_dominates(self.function, inc, here),
+            None => true,
+        };
+        if !dominates {
+            // The post-inc expansion does not dominate this use: add another
+            // increment at the insert point.
+            let mut step = {
+                let cx = cx!(self);
+                self.se.get_step_recurrence(&cx, normalized)
+            };
+            let use_subtract = !self.se.type_of(s).is_pointer() && self.se.is_non_constant_negative(step);
+            if use_subtract {
+                let cx = cx!(self);
+                step = self.se.get_negative_scev(&cx, step, 0);
+            }
+            let first = self.first_insertion_pt(header);
+            let step_v = self.expand_at(step, first);
+            result = self.expand_iv_inc(self.result_of(pn), step_v, use_subtract);
+        }
+        result
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L835
+    /// `fixupInsertPoints`: the insert point past `inst`, which is moving.
+    fn fixup_insert_points(
+        &mut self,
+        inst: InstId,
+    ) {
+        if self.x.insert_point == Some(inst) {
+            let block = self.function.parent(inst).expect("placed");
+            let all = self.function.block(block).instructions();
+            let at = all.iter().position(|&one| one == inst).expect("in its block");
+            self.x.insert_point = Some(all[at + 1]);
+        }
+    }
+
+    /// `rememberFlags`: keep the first flags seen, for a cleanup to restore.
+    fn remember_flags(
+        &mut self,
+        inst: InstId,
+    ) {
+        if self.x.orig_flags.get(&inst).is_none() {
+            let flags = self.function.instruction(inst).flags;
+            self.x.orig_flags.insert(inst, flags);
+        }
+    }
+
+    /// `FixupPoisonFlags` of `hoistIVInc`: drop the flags inferred from the old
+    /// context and infer them again in the new one.
+    fn fixup_poison_flags(
+        &mut self,
+        inst: InstId,
+    ) {
+        self.remember_flags(inst);
+        let mut f = self.function.instruction(inst).flags;
+        for flag in [
+            IrFlags::NUW,
+            IrFlags::NSW,
+            IrFlags::EXACT,
+            IrFlags::DISJOINT,
+            IrFlags::NNEG,
+            IrFlags::SAMESIGN,
+            IrFlags::INBOUNDS,
+            IrFlags::NUSW,
+        ] {
+            f.remove(flag);
+        }
+        if let Opcode::Binary(op @ (BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)) =
+            self.function.instruction(inst).opcode
+        {
+            // `getStrengthenedNoWrapFlagsFromBinOp`, over the flags it had.
+            let was = self.function.instruction(inst).flags;
+            let operands = self.function.instruction(inst).operands.clone();
+            let (lhs, rhs) = {
+                let cx = cx!(self);
+                (self.se.get_scev(&cx, operands[0]), self.se.get_scev(&cx, operands[1]))
+            };
+            let mut deduced = false;
+            let mut nuw = was.contains(IrFlags::NUW);
+            let mut nsw = was.contains(IrFlags::NSW);
+            if !(nuw && nsw) {
+                let cx = cx!(self);
+                if !nuw && self.se.will_not_overflow(&cx, op, false, lhs, rhs, Some(inst)) {
+                    nuw = true;
+                    deduced = true;
+                }
+                if !nsw && self.se.will_not_overflow(&cx, op, true, lhs, rhs, Some(inst)) {
+                    nsw = true;
+                    deduced = true;
+                }
+            }
+            if deduced {
+                if nuw {
+                    f.insert(IrFlags::NUW);
+                }
+                if nsw {
+                    f.insert(IrFlags::NSW);
+                }
+            }
+        }
+        self.function.set_flags(inst, f);
+    }
+
+    /// `LoopInfo::movementPreservesLCSSAForm`.
+    fn movement_preserves_lcssa_form(
+        &self,
+        inst: InstId,
+        new_loc: InstId,
+    ) -> bool {
+        let (old_bb, new_bb) =
+            (self.function.parent(inst).expect("placed"), self.function.parent(new_loc).expect("placed"));
+        if old_bb == new_bb {
+            return true;
+        }
+        let loops = self.env.loops;
+        let (old_loop, new_loop) =
+            (loops.get_loop_for(old_bb).map(|l| l.get_header()), loops.get_loop_for(new_bb).map(|l| l.get_header()));
+        if old_loop == new_loop {
+            return true;
+        }
+        // The null loop is the outermost.
+        let contains = |outer: Option<BlockId>, inner: Option<BlockId>| match (outer, inner) {
+            (None, _) => true,
+            (Some(o), Some(i)) => loops.get_loop_for(o).is_some_and(|l| l.contains(i)),
+            (Some(_), None) => false,
+        };
+        // Hoisting out of an inner loop: the uses of `inst` need no check.
+        if !contains(new_loop, old_loop) {
+            if let Some(result) = self.function.instruction(inst).result {
+                for u in self.function.users(result) {
+                    let user = self.function.instruction(u.user);
+                    let use_bb = if matches!(user.opcode, Opcode::Phi) {
+                        match user.operands[u.index as usize | 1] {
+                            Operand::Block(b) => b,
+                            _ => return false,
+                        }
+                    } else {
+                        self.function.parent(u.user).expect("placed")
+                    };
+                    let use_loop = loops.get_loop_for(use_bb).map(|l| l.get_header());
+                    if use_bb != new_bb && use_loop != new_loop {
+                        return false;
+                    }
+                }
+            }
+        }
+        // Sinking into an inner loop: the operands of `inst` need no check.
+        if !contains(old_loop, new_loop) {
+            if matches!(self.function.instruction(inst).opcode, Opcode::Phi) {
+                return false;
+            }
+            for &op in &self.function.instruction(inst).operands {
+                let Some(def) = self.instruction_of(op) else { return false };
+                let def_bb = self.function.parent(def).expect("placed");
+                if def_bb != new_bb && loops.get_loop_for(def_bb).map(|l| l.get_header()) != new_loop {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `hoistIVInc`.
+    pub(super) fn hoist_iv_inc(
+        &mut self,
+        inc: InstId,
+        insert_pos: InstId,
+        recompute_poison_flags: bool,
+    ) -> bool {
+        let dominates = |run: &Self, def: InstId| run.env.tree.instruction_dominates(run.function, def, insert_pos);
+        if dominates(self, inc) {
+            if recompute_poison_flags {
+                self.fixup_poison_flags(inc);
+            }
+            return true;
+        }
+        // `insert_pos` must itself dominate `inc`, so that `inc`'s new
+        // position satisfies its existing users.
+        let pos_block = self.function.parent(insert_pos).expect("placed");
+        let inc_block = self.function.parent(inc).expect("placed");
+        if matches!(self.function.instruction(insert_pos).opcode, Opcode::Phi)
+            || !self.env.tree.dominates(pos_block, inc_block)
+        {
+            return false;
+        }
+        if !self.movement_preserves_lcssa_form(inc, insert_pos) {
+            return false;
+        }
+        // The chain of IV operands leading back to the phi must be hoistable.
+        let mut ivincs = Vec::new();
+        let mut current = inc;
+        loop {
+            let Some(oper) = self.get_iv_inc_operand(current, insert_pos, true) else { return false };
+            ivincs.push(current);
+            current = oper;
+            if dominates(self, current) {
+                break;
+            }
+        }
+        for &one in ivincs.iter().rev() {
+            self.fixup_insert_points(one);
+            self.function.move_to(one, Position::Before(insert_pos)).expect("a placed position");
+            if recompute_poison_flags {
+                self.fixup_poison_flags(one);
+            }
+        }
+        true
     }
 }

@@ -137,7 +137,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
-    entry("unroll@753", Simplify, "loop-unroll-full", Old, "loop-passes-port"),
+    entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
+    entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Old, "gvn-port"),
@@ -165,7 +166,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
-    entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Old, "loop-passes-port"),
+    entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     entry("loopsimplify@728", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@728", Simplify, "lcssa", Old, "lcssa-port"),
     entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
@@ -236,17 +237,20 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         key: "mssa",
         llvm: "MemorySSAAnalysis",
         kind: Translated,
-        off: true,
+        off: false,
         deps: &["aa"],
         oracle: "shadow_mssa equality on dumped pass inputs",
     },
 ];
 
-/// Vocabulary the manager does not have yet. `PreservedAnalyses` keeps an
-/// analysis or drops it; LLVM's passes that keep MemorySSA do so by updating it
-/// (`MemorySSAUpdater`), which the manager cannot tell from "unchanged".
-pub const TODO: &[&str] =
-    &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
+/// What is still open in the parity pipeline's use of the manager. A pass that
+/// keeps MemorySSA by updating it says `PreservedAnalyses::preserve_updated`
+/// and puts the result back (`Analyses::replace`); EarlyCSE does. LLVM's LICM
+/// and GVN keep MemorySSA the same way at the pin; here they do not yet.
+pub const TODO: &[&str] = &[
+    "LICM updates its clone of MemorySSA (MemorySSAUpdater) and the manager drops it with the pass: it does not `replace` it yet",
+    "GVN (memoryssa mode) does not ask for MemorySSA",
+];
 
 /// How many times LLVM runs a slot's pass over one body in one visit of the
 /// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
@@ -283,6 +287,16 @@ pub const RUN_COUNTS_OPEN: &[&str] = &[
     "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
     "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
 ];
+
+/// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry
+/// has it as a function list's slot: what `llrm-pass --order` reports before it
+/// runs.
+pub fn describe(slot: &str) -> Option<(Phase, SlotKind, &'static str)> {
+    REGISTRY
+        .iter()
+        .find(|one| one.slot == slot && !matches!(one.phase, Phase::Module | Phase::Backend))
+        .map(|one| (one.phase, one.kind, one.llvm))
+}
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`); the rounds name
 /// their passes without a slot.
@@ -376,24 +390,29 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
-    check_phase_with(phase, built, level, true, true)
+    check_phase_with(phase, built, level, true, true, crate::pipeline::Options::default().rotate_slot)
 }
 
 /// [`check_phase_at`] with the explicit off switches: the slots whose
 /// translation is `sroa.rs` are Old when `LLRM_NO_SROA` is set, those of
-/// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs.
+/// `mem2reg.rs` when `LLRM_NO_MEM2REG` is, and the old stand-in is what runs;
+/// with `rotate` false (`LLRM_NO_ROTATE`) the rotate slot is not run.
 pub(crate) fn check_phase_with(
     phase: Phase,
     built: &[&str],
     level: Level,
     sroa: bool,
     mem2reg: bool,
+    rotate: bool,
 ) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    // `LLRM_NO_ROTATE` takes the translated `loop-rotate` out of the order.
     let registry: Vec<Entry> = REGISTRY
         .iter()
         .map(|one| {
-            let off = (!sroa && one.replaced_by == "sroa.rs") || (!mem2reg && one.replaced_by == "mem2reg.rs");
+            let off = (!sroa && one.replaced_by == "sroa.rs")
+                || (!mem2reg && one.replaced_by == "mem2reg.rs")
+                || (!rotate && one.slot == "rotate@728");
             Entry { kind: if off { Old } else { one.kind }, ..*one }
         })
         .collect();

@@ -46,6 +46,7 @@ mod guards_tests;
 pub mod how_many;
 pub mod implied;
 pub mod minmax;
+pub mod normalize;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;
@@ -577,6 +578,7 @@ pub fn value_id(
     use llrm_mir::module::GlobalKind;
     match v {
         Operand::Constant(id) => match &cx.context.get(id).kind {
+            K::Undef => 0,
             K::Poison => 1,
             K::Zero => 2,
             K::Bytes(_) => 3,

@@ -24,7 +24,6 @@
 //!   MIR has none.
 //! - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
 //!   and no droppable users; no `fake_use`. Lifetime markers are translated.
-//! - MIR has `poison` and no `undef`: `UndefValue` is `poison`.
 //! - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
 //!   only (no `noundef` arguments).
 //! - The iterated dominance frontier is `Dominance::frontiers` iterated with
@@ -285,7 +284,7 @@ fn remove_intrinsic_users(
         if let Some(ty) = promoted_type
             && memory::lifetime(context, callees, function, user).is_some()
         {
-            let value = poison(context, ty);
+            let value = uninitialized(context, ty);
             let store = function.create_instruction(
                 Opcode::Store { align, volatile: false },
                 void,
@@ -410,6 +409,14 @@ fn poison(
     ty: TypeId,
 ) -> Operand {
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
+}
+
+/// `UndefValue::get(ty)`.
+fn uninitialized(
+    context: &mut Context,
+    ty: TypeId,
+) -> Operand {
+    Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }))
 }
 
 /// `isGuaranteedNotToBePoison` as far as MIR can say: a constant that is not
@@ -579,7 +586,7 @@ fn promote_single_block_alloca(
         let at = stores.partition_point(|&(index, _)| index < load_index);
         let value = if at == 0 {
             if stores.is_empty() {
-                poison(context, function.instruction(user).ty)
+                uninitialized(context, function.instruction(user).ty)
             } else {
                 // No store before this load: it may be affected by the stores
                 // after it.
@@ -794,12 +801,12 @@ impl<'a> PromoteMem2Reg<'a> {
         }
         lbi.numbers.clear();
 
-        // The incoming value of every alloca on entry is poison, for a load
+        // The incoming value of every alloca on entry is undef, for a load
         // before any store.
         let values: Vec<Operand> = (0..self.allocas.len())
             .map(|at| {
                 let ty = self.alloca_value_types[at].expect("an accessed alloca has a type");
-                poison(self.context, ty)
+                uninitialized(self.context, ty)
             })
             .collect();
         self.incoming_vals = VectorWithUndo { values, undo: Vec::new() };

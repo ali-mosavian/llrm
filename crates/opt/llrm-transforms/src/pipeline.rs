@@ -155,10 +155,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
-    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
-    loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt,
-    peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam,
-    unswitch, window,
+    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion, loopdistribute,
+    loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopunrollpass,
+    loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower,
+    tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -231,8 +231,8 @@ pub struct Options {
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
-    /// `LLRM_EXP_ROTATE` sets it, off by default until the loop passes take a
-    /// rotated loop (they refuse one: docs/architecture/rotate-refusals.md).
+    /// `LLRM_EXP_ROTATE` sets it, off by default until `indvars` and
+    /// `loopidioms` take a rotated loop.
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -276,7 +276,7 @@ impl Default for Options {
         Self {
             optimize: true,
             llvm_order: llvm_order_default(),
-            rotate_slot: experiment_rotate(),
+            rotate_slot: rotate_default(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -664,7 +664,7 @@ impl FunctionPass for Together {
 
 /// `LLRM_EXP_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs
 /// (it stays off until the loop passes accept a rotated loop).
-fn experiment_rotate() -> bool {
+fn rotate_default() -> bool {
     llrm_support::env_flag!("LLRM_EXP_ROTATE")
 }
 
@@ -681,7 +681,6 @@ pub(crate) fn llvm_order(
     phase: Phase,
 ) -> Vec<Box<dyn FunctionPass>> {
     let size = applied.options.prefers_size();
-    let limits = || applied.options.limits.clone();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
@@ -796,7 +795,14 @@ pub(crate) fn llvm_order(
                         unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
                     }),
                 ),
-                slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
+                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
+                slot(
+                    "unroll@753",
+                    Box::new(loopunrollpass::LoopFullUnroll {
+                        opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                        opt_size: size,
+                    }),
+                ),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at
@@ -833,6 +839,20 @@ pub(crate) fn llvm_order(
 /// translations not yet in it.
 pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().chain(translated().iter()).map(|one| one.name()).collect()
+}
+
+/// Whether the options of `applied` build the slot `slot` of LLVM's order
+/// (`-O1` lacks some; an off switch puts the stand-in in the slot, which is
+/// still built).
+pub fn slot_built(
+    applied: &Applied,
+    slot: &str,
+) -> bool {
+    let mut options = applied.options.clone();
+    options.llvm_order = true;
+    crate::parity::describe(slot).is_some_and(|(phase, ..)| {
+        llvm_order(&Applied { options, ..Applied::default() }, phase).iter().any(|one| one.name() == slot)
+    })
 }
 
 /// Plugs the pass manager's steps into `LLRM_DEBUG=time` and `runs`, if either
@@ -1179,6 +1199,9 @@ fn without_candidates(options: &Options) -> Options {
 
 impl Fixed {
     pub fn new(applied: &Applied) -> Self {
+        if let Some(slot) = applied.only.as_deref().filter(|one| one.contains('@')) {
+            return Self::slot(applied, slot);
+        }
         // Public debugging selectors from before value reuse became one pass.
         let only = match applied.only.as_deref() {
             Some("forward" | "drop_loads" | "reuse" | "cse") => Some("gvn"),
@@ -1238,6 +1261,23 @@ impl Fixed {
         }
     }
 
+    /// The one slot `slot` (`sroa@1179`) of LLVM's order, run alone once: what
+    /// `llrm-pass --order` compares with `opt`. [`slot_built`] says first
+    /// whether the options build it.
+    fn slot(
+        applied: &Applied,
+        slot: &str,
+    ) -> Self {
+        let (phase, ..) = crate::parity::describe(slot).expect("a slot of the registry");
+        let mut quiet = applied.clone();
+        quiet.only = None;
+        quiet.options.llvm_order = true;
+        let mut one = Self::linear(&quiet, phase);
+        one.passes.retain(|pass| pass.name() == slot);
+        one.only = true;
+        one
+    }
+
     /// `passes` once each in order, no fixed point: LLVM's function pipelines
     /// run a pass where it stands (`Options::llvm_order`).
     fn linear(
@@ -1253,8 +1293,14 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
-        let checked =
-            crate::parity::check_phase_with(phase, &built, level, applied.options.sroa, applied.options.mem2reg);
+        let checked = crate::parity::check_phase_with(
+            phase,
+            &built,
+            level,
+            applied.options.sroa,
+            applied.options.mem2reg,
+            applied.options.rotate_slot,
+        );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
