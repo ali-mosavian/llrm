@@ -671,6 +671,8 @@ struct Open {
 struct Body<'a, 't> {
     /// The facts the language states of instructions, by instruction id.
     stated_instructions: Vec<(i64, Fact)>,
+    /// A scaled index's product, by value: its index and the element size.
+    scales: HashMap<i64, (i64, i64)>,
     shared: &'a Shared<'a>,
     unit: &'a hir::Unit,
     proc: &'a hir::Proc,
@@ -1027,6 +1029,7 @@ impl<'a, 't> Body<'a, 't> {
             done: HashMap::default(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
+            scales: HashMap::default(),
             calls: Vec::new(),
             instructions: 0,
             inlined: None,
@@ -1055,6 +1058,7 @@ impl<'a, 't> Body<'a, 't> {
             body.statement(one)?;
         }
         body.finish()?;
+        body.drop_unread_scales();
         let mut body_instruction_facts = std::mem::take(&mut body.stated_instructions);
         let body_widths: HashMap<i64, i64> =
             parameters.iter().map(|&one| (one, body.types.get(body.values[one as usize - 1].r#type).width)).collect();
@@ -1256,6 +1260,55 @@ impl<'a, 't> Body<'a, 't> {
         let block = &mut self.blocks[self.current];
         block.instructions.push(made);
         block.instructions.last_mut().expect("just pushed")
+    }
+
+    /// The scaled products no instruction reads: an index that counts elements
+    /// leaves its multiply behind.
+    fn drop_unread_scales(&mut self) {
+        fn read(
+            operand: &Operand,
+            into: &mut HashSet<i64>,
+        ) {
+            match operand {
+                Operand::ValueRef(one) => {
+                    into.insert(one.value);
+                }
+                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, into)),
+                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, into)),
+                Operand::IndirectPlace(one) => {
+                    into.insert(one.base);
+                }
+                Operand::DescriptorPlace(one) => {
+                    into.insert(one.base);
+                }
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+        if self.scales.is_empty() {
+            return;
+        }
+        let mut used = HashSet::default();
+        for block in &self.blocks {
+            let operands = block.instructions.iter().flat_map(|one| &one.operands);
+            let ending = block.terminator.iter().flat_map(|one| &one.operands);
+            operands.chain(ending).for_each(|operand| read(operand, &mut used));
+        }
+        let scales = &self.scales;
+        let dead = |one: &h::Instruction| {
+            one.op == Op::Mul && one.results.iter().all(|result| scales.contains_key(result) && !used.contains(result))
+        };
+        let (ids, unread): (HashSet<i64>, HashSet<i64>) = self
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .filter(|one| dead(one))
+            .map(|one| (one.id, one.results[0]))
+            .unzip();
+        for block in &mut self.blocks {
+            block.instructions.retain(|one| !ids.contains(&one.id));
+        }
+        self.stated_instructions.retain(|(id, _)| !ids.contains(id));
+        self.values.retain(|value| !unread.contains(&value.id));
     }
 
     /// That C promises the result of instruction `id` fits its type.
@@ -2693,6 +2746,9 @@ impl<'a, 't> Body<'a, 't> {
         if unsigned {
             self.stated_instructions.push((id, Fact::NoUnsignedWrap));
         }
+        if let Some(bytes) = self.whole_constant(size) {
+            self.scales.insert(result, (if index == left { a } else { b }, bytes));
+        }
         self.done.insert(hir::handle(node), Got::Value(result));
         Ok(())
     }
@@ -2816,14 +2872,30 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<i64> {
         // A huge pointer's index is a dword; a far one's its offset's word.
         let word = self.types.int(if self.space(pointer) == Some(HUGE) { 4 } else { self.types.word() }, true);
-        let by = match self.bits(by) {
-            Some(_) => self.resized(by, signed(&self.unit.canonical_type(from)), word),
-            None => return self.refuse(format!("a pointer moved by a {from}")),
+        // A product of an index and an element size, at 32 bits: the index
+        // counts elements as clang's `a[i]` does. A 16-bit byte offset may pass
+        // 32767 inside a segment, which an element index promises it does not.
+        let scale = self.scales.get(&by).copied().filter(|_| !subtract && self.types.word() == 4);
+        if self.bits(by).is_none() {
+            return self.refuse(format!("a pointer moved by a {from}"));
+        }
+        let signed = signed(&self.unit.canonical_type(from));
+        let operands = match scale {
+            Some((index, size)) => {
+                let index = self.resized(index, signed, word);
+                let ty = self.types.int(self.types.word(), true);
+                let size = Operand::Constant(h::Constant { r#type: ty, value: Number::Int(size) });
+                vec![value_ref(pointer), value_ref(index), size]
+            }
+            None => {
+                let by = self.resized(by, signed, word);
+                let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
+                vec![value_ref(pointer), value_ref(by)]
+            }
         };
-        let by = if subtract { self.op(Op::Neg, word, vec![value_ref(by)]) } else { by };
         let ty = self.type_of(pointer);
         let result = self.value(ty);
-        let id = self.instruction(Op::PtrOffset, vec![result], vec![value_ref(pointer), value_ref(by)]).id;
+        let id = self.instruction(Op::PtrOffset, vec![result], operands).id;
         self.stated_instructions.push((id, Fact::InBounds));
         Ok(result)
     }
@@ -3871,6 +3943,61 @@ mod tests {
             (Linkage::Internal, Linkage::External)
         );
         assert_eq!(linkage(&raised("parity/loop.cgs"), "_demo_seed"), Linkage::Internal);
+    }
+
+    /// `source`'s `_f`, recorded by wccq and raised for the m16 or m32 target.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    fn raised_c(
+        source: &str,
+        flat: bool,
+    ) -> String {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("x.c");
+        std::fs::write(&path, source).unwrap();
+        let (calling, profile, layout) = if flat {
+            (
+                llrm_target::Target::calling(&llrm_x86_m32::M32),
+                crate::compile::Profile::of(&llrm_x86_m32::M32).unwrap(),
+                llrm_x86_m32::layout(),
+            )
+        } else {
+            (
+                llrm_target::Target::calling(&llrm_x86_m16::M16),
+                crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
+                llrm_x86_m16::layout(),
+            )
+        };
+        let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
+        let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
+        let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        defined(&emitted.module, "_f")
+    }
+
+    const ARRAYS: &str = "short a[100]; int b[100];\n\
+        int __cdecl f(int n, short *p) { int t = 0; int i; for (i = 0; i < n; i++) t += a[i] + b[i] + p[i]; return t; }\n";
+
+    /// A flat `a[i]` was `i * 2` and a byte step, per access: 159 `mul`s and
+    /// a byte `getelementptr` each at d_faces' first SROA, against clang's 8.
+    /// It steps `i` elements of the array's own size, as clang's does.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_flat_array_index_counts_elements_without_a_multiply() {
+        let text = raised_c(ARRAYS, true);
+        assert!(!text.contains(" mul "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr @_a, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i32, ptr @_b, i32 "), "{text}");
+        assert!(text.contains("getelementptr inbounds i16, ptr %"), "{text}");
+    }
+
+    /// A 16-bit index may pass 32767 bytes inside a segment (`scaled`), which
+    /// an element count would promise it does not: m16 keeps the byte step.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_16_bit_array_index_keeps_its_byte_offset() {
+        let text = raised_c(ARRAYS, false);
+        assert!(text.contains(" mul ") && text.contains("getelementptr inbounds i8, "), "{text}");
     }
 
     /// In `bytes`, `i++` is a signed int's and `total +=` an unsigned's;

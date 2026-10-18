@@ -235,11 +235,11 @@ pub struct Options {
     /// rotated loop (they refuse one: docs/architecture/rotate-refusals.md).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
-    /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
+    /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
     pub mem2reg: bool,
     /// Under `llvm_order` the SROA slots run the translated unit (`SROA.cpp`,
-    /// [`crate::sroa`], with [`crate::mem2reg`]); `LLRM_EXP_SROA` sets it, off
-    /// by default.
+    /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
+    /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
@@ -308,7 +308,7 @@ impl Default for Options {
             unroll_jam: false,
             interchange: false,
             mem2reg: experiment_mem2reg(),
-            sroa: llrm_support::env_flag!("LLRM_EXP_SROA"),
+            sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -482,7 +482,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
+            "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -501,10 +501,11 @@ pub struct Applied {
     pub dump: Option<PathBuf>,
 }
 
-/// `LLRM_EXP_MEM2REG`, read once: the round's `Promote` is the translated
-/// `PromoteMemToReg` ([`crate::mem2reg`]). Off by default.
+/// `LLRM_NO_MEM2REG`, read once: set, the round's `Promote` stays the
+/// write-through stand-in; otherwise it is the translated `PromoteMemToReg`
+/// ([`crate::mem2reg`]).
 fn experiment_mem2reg() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_MEM2REG")
+    !llrm_support::env_flag!("LLRM_NO_MEM2REG")
 }
 
 /// The passes, in order, that `applied` leaves on.
@@ -538,7 +539,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
+        hoisting(applied),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -549,7 +550,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dse::Dse),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
         // Ordinary scalar write-through promotion remains after memory GVN;
-        // `LLRM_EXP_MEM2REG` swaps in the translated PromoteMemToReg.
+        // `LLRM_NO_MEM2REG` keeps the write-through stand-in instead of the
+        // translated PromoteMemToReg.
         if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
         Box::new(indvars::IndVars {
             exit_values: false,
@@ -564,6 +566,17 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
+/// The pass that moves loop invariants: `hoist`, or with `LLRM_EXP_LICM=1` the
+/// translation of LLVM's LICM (`licm`), which also sinks and promotes. An
+/// experiment: not part of the pipeline.
+fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
+    if llrm_support::env_flag!("LLRM_EXP_LICM") {
+        Box::new(crate::licm::Licm { apply: true })
+    } else {
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
+    }
 }
 
 /// Translations that have not joined the pipeline yet: `llrm-pass` and
@@ -680,7 +693,16 @@ pub(crate) fn llvm_order(
     let translated = applied.options.sroa;
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
         let parts: Vec<Box<dyn FunctionPass>> = if translated {
-            vec![Box::new(crate::sroa::Sroa), Box::new(crate::mem2reg::Mem2Reg), Box::new(promote::DeadSlots)]
+            // DEVIATE: PromoteMemToReg promotes allocas only; the write-through
+            // `Promote` after it still promotes the cells it declines (an
+            // internal global only `main` uses: LLVM localizes it to an alloca
+            // in GlobalOpt, which llrm's does not yet).
+            vec![
+                Box::new(crate::sroa::Sroa),
+                Box::new(crate::mem2reg::Mem2Reg),
+                Box::new(promote::Promote),
+                Box::new(promote::DeadSlots),
+            ]
         } else {
             vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
         };
@@ -702,13 +724,22 @@ pub(crate) fn llvm_order(
         Phase::Cleanup => vec![
             Box::new(Together {
                 name: "promote@1241",
-                parts: vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+                // DEVIATE as in the SROA slot: `Promote` keeps promoting the
+                // cells (globals) PromoteMemToReg does not.
+                parts: if applied.options.mem2reg {
+                    vec![Box::new(mem2reg::Mem2Reg), Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                } else {
+                    vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)]
+                },
             }),
             fold("fold@1242"),
             dead("dead@1242"),
             decide("decide@1244"),
             phiopt("phiopt@1244"),
         ],
+        // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
+        // pass of `OptimizePM`, after LoopSink.
+        Phase::Late => vec![slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify))],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
@@ -756,6 +787,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
+                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",
@@ -840,6 +872,9 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
             Fixed::linear(applied, Phase::Early),
             Fixed::linear(applied, Phase::Cleanup),
             Fixed::linear(applied, Phase::Simplify),
+            // DEVIATE: LLVM runs it after the interprocedural passes; here it
+            // closes the function stages, before `ipa-range`.
+            Fixed::linear(applied, Phase::Late),
         ]
     } else {
         vec![Fixed::new(applied)]
@@ -915,6 +950,8 @@ pub fn recorded(
                 let outer = analyses.outer_held(module);
                 let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
                 let Module { context, metadata, .. } = &mut *module;
+                // A specialised copy has no global of its own yet.
+                llrm_mir::passes::set_running_function("(specialised copy)");
                 let mut unit = Unit {
                     context,
                     layout: &layout,
@@ -996,7 +1033,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
+        manager.add_boxed(hoisting(applied));
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1064,7 +1101,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
+        passes.push(hoisting(applied));
     }
     passes
 }
@@ -1087,6 +1124,7 @@ fn rerun(
     let outer = analyses.outer(module);
     let mut declared = Declared::over(std::rc::Rc::clone(&outer.globals), module.metadata.len());
     let Module { context, globals, metadata, .. } = &mut *module;
+    llrm_mir::passes::set_running_function(globals[id.0 as usize].name.as_deref().unwrap_or_default());
     let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else {
         return Err(format!("@{}: not a function", id.0));
     };
@@ -1215,7 +1253,8 @@ impl Fixed {
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
         let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
-        let checked = crate::parity::check_phase_with(phase, &built, level, applied.options.sroa);
+        let checked =
+            crate::parity::check_phase_with(phase, &built, level, applied.options.sroa, applied.options.mem2reg);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {

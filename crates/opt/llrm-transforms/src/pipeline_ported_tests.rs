@@ -421,7 +421,12 @@ b7:
 "#;
     let out = piped(TEXT);
     assert!(!out.contains("phi") && !out.contains("mul") && !out.contains("shl"), "{out}");
-    assert_eq!(out.matches("store i32 0").count(), 64, "{out}");
+    // The 64 stores are one memset of their 256 bytes (LoopIdiomRecognize
+    // takes the loop nest, as LLVM's does).
+    assert!(
+        out.contains("llvm.memset.p0.i64(ptr %0, i8 0, i64 256, i1 false)") && !out.contains("store i32 0"),
+        "{out}"
+    );
 }
 
 /// What every call of a private function passes is the parameter.

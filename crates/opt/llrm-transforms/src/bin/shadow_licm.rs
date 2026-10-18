@@ -15,8 +15,12 @@ fn main() {
         return;
     }
     let mut manager = PassManager::default();
-    manager.add(Licm);
+    (manager.verify_each, manager.verify_invalidation) = (true, true);
+    manager.add(Licm { apply: std::env::var_os("LICM_APPLY").is_some() });
     manager.run_module(&mut module, Rc::new(llrm_mir::target::Neutral)).expect("licm decides");
+    if let Some(path) = std::env::var_os("OUT") {
+        std::fs::write(path, llrm_mir::print::module(&module)).expect("a writable OUT");
+    }
     DECIDED.with(|all| {
         let all = all.borrow();
         for (tag, list) in [("HOIST", &all.hoisted), ("SINK", &all.sunk), ("ERASE", &all.erased)] {
@@ -53,14 +57,17 @@ fn main() {
             println!("PROMOTE {} {} {}", global.name.as_deref().unwrap_or("?"), names.join(","), one.store_safe);
         }
         println!(
-            "COUNTS {} {} {} {} {} {} {}",
+            "COUNTS {} {} {} {} {} {} {} {} {} {}",
             all.hoisted.len(),
             all.sunk.len(),
             all.erased.len(),
             all.moved_loads,
             all.moved_calls,
             all.promotion_candidates,
-            all.promoted.len()
+            all.promoted.len(),
+            all.rebuilds,
+            all.max_rebuilds,
+            all.rebuilt_instructions
         );
     });
 }

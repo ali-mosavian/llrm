@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mem2reg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mem2reg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:84daa963bab54f5cc2fa1046d68aafd99e519f55a47e15bbbd876935bc077220 -->
+<!-- src: crates/opt/llrm-transforms/src/mem2reg.rs sha256:907c0ed4989a23e39b032d301e63d0c83b059be3dafea7b761642fe3a951b45e -->
 
 # mem2reg
 
@@ -80,4 +80,4 @@ b3:
 
 ## Used by
 [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when
-`Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
+`Options::mem2reg` is set (on by default; `LLRM_NO_MEM2REG` turns it off).

@@ -123,8 +123,8 @@ mod tests {
         }
     }
 
-    /// A function's `st_size` was written 0, so a tool that sums symbol sizes read
-    /// no code at all; it is the size the object model carries.
+    /// A function's `st_size` was written 0, so a tool that sums symbol sizes
+    /// read no code at all; it is the size the object model carries.
     #[test]
     fn a_function_symbol_carries_its_size() {
         let mut function = symbol("f", Binding::Public, Definition::Defined { section: 0, offset: 16 });
@@ -132,7 +132,8 @@ mod tests {
         let bytes = write(&object(vec![text(vec![0x90; 19], vec![])], vec![function])).unwrap();
         let found = sections(&bytes);
         let table = named(&found, ".symtab");
-        // Entries are 16 bytes: the null symbol, the file, one section, then `f`: name, value, size.
+        // Entries are 16 bytes: the null symbol, the file, one section, then
+        // `f`: name, value, size.
         let at = table.2 + 16 * 3;
         assert_eq!((word(&bytes, at + 4), word(&bytes, at + 8)), (16, 3));
     }

@@ -197,7 +197,7 @@ b0:
 }
 
 /// The pipeline the compilers run, with `Options::mem2reg` (what
-/// `LLRM_EXP_MEM2REG` sets): a local scalar and a loop-carried local leave no
+/// the default sets): a local scalar and a loop-carried local leave no
 /// alloca, and the answer is the same as with the write-through `Promote`.
 #[test]
 fn test_the_pipeline_with_mem2reg_on_leaves_no_alloca_and_the_same_answer() {

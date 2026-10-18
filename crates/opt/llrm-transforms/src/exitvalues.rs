@@ -22,8 +22,8 @@
 //! phi reads `shl n, 1` written in the exit block, and the loop's `s` is dead.
 //!
 //! # Used by
-//! [`crate::indvars`], first of its steps, in place of
-//! [`crate::indvars::exit_values`] when `LLRM_NO_SCEV_EXITVALUES` is not set.
+//! [`crate::indvars`], first of its steps. It replaced indvars' own
+//! `exit_values`, which asked only the header for its exit.
 //!
 //! # See also
 //! `rewriteLoopExitValues`, `canLoopBeDeleted`, `hasHardUserWithinLoop`,
@@ -37,6 +37,7 @@ use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, Opcode};
@@ -50,7 +51,7 @@ use crate::local;
 const CHEAP_EXPANSION_BUDGET: u32 = 4;
 
 /// `LLRM_NO_SCEV_EXITVALUES`, read once: the exit values come from
-/// ScalarEvolution, not `loopexit` and `indvars::exit_values`.
+/// ScalarEvolution; set, the step is skipped.
 pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_EXITVALUES")
 }
@@ -288,7 +289,7 @@ fn has_hard_user_within_loop(
     l: &Loop,
     inst: InstId,
 ) -> bool {
-    let mut visited: HashSet<InstId> = HashSet::default();
+    let mut visited: IdSet<InstId> = IdSet::new();
     let mut worklist = vec![inst];
     visited.insert(inst);
     while let Some(curr) = worklist.pop() {
