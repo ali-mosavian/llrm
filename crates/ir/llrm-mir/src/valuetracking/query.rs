@@ -378,11 +378,6 @@ impl FunctionAnalyses {
         &self.assumptions
     }
 
-    /// The dominator tree (`SQ.DT`).
-    pub fn dominator_tree(&self) -> &DominatorTree {
-        &self.dt
-    }
-
     /// The assumptions (`SQ.AC`).
     pub fn assumption_cache(&self) -> &AssumptionCache {
         &self.assumptions
