@@ -38,11 +38,6 @@ impl ScalarEvolution {
         self.get_signed_range_min(cx, s).is_strictly_positive()
     }
 
-    /// `HasGuards`: the function calls `llvm.experimental.guard`.
-    pub fn has_guards(&self) -> bool {
-        false
-    }
-
     /// `!AC.assumptions().empty()`.
     pub fn has_assumptions(
         &self,

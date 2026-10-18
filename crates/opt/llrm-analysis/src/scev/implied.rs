@@ -13,12 +13,12 @@
 //! difference, or the operations that built the expressions.
 //!
 //! # Deviations
-//! - D-G1 (temporary): `CmpPredicate`'s `samesign` is dropped, as the rest of
-//!   the port's predicates do (`IntPredicate`). `CmpPredicate::getMatching`
-//!   then matches fewer pairs, which is conservative.
-//! - D-G2: `llvm.experimental.guard` has no MIR counterpart (`has_guards` is
-//!   false), so `isImpliedViaGuard` and the guard scan of
-//!   `isBasicBlockEntryGuardedByCond` find nothing.
+//! - D-G1 (temporary,
+//!   [#2334](https://github.com/ali-mosavian/llrm/issues/2334)):
+//!   `CmpPredicate`'s `samesign` is dropped, as the rest of the port's
+//!   predicates do (`IntPredicate`), though MIR's `icmp` carries the flag.
+//!   `CmpPredicate::getMatching` then matches fewer pairs, which is
+//!   conservative.
 //!
 //! # Example
 //! After `br (icmp ult %i, %n), loop, exit`, `%i u< %n` is guarded at the
@@ -41,6 +41,9 @@ const MAX_SCEV_OPERATIONS_IMPLICATION_DEPTH: u32 = 2;
 /// the phis being merged, and whether a backedge query is on the stack.
 #[derive(Clone, Default)]
 pub struct GuardState {
+    /// The calls of `llvm.experimental.guard`, found when first asked
+    /// (`HasGuards` and the declaration's users).
+    guard_calls: Option<Vec<InstId>>,
     /// `PendingLoopPredicates`.
     pending_loop_predicates: Vec<Operand>,
     /// `PendingMerges`.
@@ -110,6 +113,69 @@ impl ScalarEvolution {
     ) -> bool {
         (self.is_known_non_negative(cx, s1) && self.is_known_non_negative(cx, s2))
             || (self.is_known_negative(cx, s1) && self.is_known_negative(cx, s2))
+    }
+
+    /// `HasGuards`: the function calls `llvm.experimental.guard`.
+    pub fn has_guards(
+        &mut self,
+        cx: &Cx,
+    ) -> bool {
+        !self.guard_calls(cx).is_empty()
+    }
+
+    /// The calls of `llvm.experimental.guard` of the function (the users of
+    /// its declaration).
+    pub(super) fn guard_calls(
+        &mut self,
+        cx: &Cx,
+    ) -> Vec<InstId> {
+        use llrm_mir::valuetracking::pattern::{IntrinsicId, call_intrinsic};
+        if self.guards.guard_calls.is_none() {
+            let query = cx.query(None);
+            let mut found = Vec::new();
+            for &block in cx.function.layout() {
+                for &inst in cx.function.block(block).instructions() {
+                    if call_intrinsic(&query, inst) == Some(IntrinsicId::ExperimentalGuard) {
+                        found.push(inst);
+                    }
+                }
+            }
+            self.guards.guard_calls = Some(found);
+        }
+        self.guards
+            .guard_calls
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|&inst| !cx.function.is_erased(inst))
+            .collect()
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L11879
+    /// `isImpliedViaGuard`: whether a guard in `bb` implies the predicate.
+    fn is_implied_via_guard(
+        &mut self,
+        cx: &Cx,
+        bb: BlockId,
+        pred: IntPredicate,
+        lhs: Scev,
+        rhs: Scev,
+    ) -> bool {
+        // No need to even try if we know the module has no guards.
+        if !self.has_guards(cx) {
+            return false;
+        }
+
+        for guard in self.guard_calls(cx) {
+            if cx.function.parent(guard) != Some(bb) {
+                continue;
+            }
+            let condition = cx.function.instruction(guard).operands[0];
+            if self.is_implied_cond(cx, pred, lhs, rhs, condition, false, None) {
+                return true;
+            }
+        }
+        false
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10940
@@ -239,12 +305,18 @@ impl ScalarEvolution {
             }
         }
 
-        // isImpliedViaGuard: D-G2.
+        if self.is_implied_via_guard(cx, latch, pred, lhs, rhs) {
+            return true;
+        }
 
         let mut dtn = latch;
         while dtn != l {
             // should reach the loop header before reaching the root!
             let bb = dtn;
+
+            if self.is_implied_via_guard(cx, bb, pred, lhs, rhs) {
+                return true;
+            }
 
             if let Some(pbb) = single_predecessor(cx, bb)
                 && let Some((condition, first)) = conditional_branch(cx, pbb)
@@ -347,7 +419,7 @@ impl ScalarEvolution {
         // Check conditions due to any @llvm.assume intrinsics.
         for &assume in &cx.assumptions.assumes {
             let Some(first) = cx.function.block(bb).instructions().first().copied() else { continue };
-            if assume != first && !cx.tree.instruction_dominates(cx.function, assume, first) {
+            if !cx.tree.instruction_dominates(cx.function, assume, first) {
                 continue;
             }
 
@@ -357,8 +429,17 @@ impl ScalarEvolution {
             }
         }
 
-        // Check conditions due to any @llvm.experimental.guard intrinsics:
-        // D-G2.
+        // Check conditions due to any @llvm.experimental.guard intrinsics.
+        if let Some(first) = ctx_i {
+            for guard in self.guard_calls(cx) {
+                if cx.tree.instruction_dominates(cx.function, guard, first) {
+                    let condition = cx.function.instruction(guard).operands[0];
+                    if prove_via_cond(self, condition, false) {
+                        return true;
+                    }
+                }
+            }
+        }
         false
     }
 

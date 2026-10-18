@@ -10,8 +10,6 @@
 //! expression with them, so ranges and trip counts see what the guards say.
 //!
 //! # Deviations
-//! - D-G2 (see `implied.rs`): no `llvm.experimental.guard` to collect from.
-//!
 //! # Example
 //! Under `if (n != 0)` the preheader's guards rewrite `%n` to `umax(1, %n)`.
 
@@ -171,8 +169,7 @@ impl LoopGuards {
         // First, collect information from assumptions dominating the loop.
         let first = cx.function.block(block).instructions().first().copied();
         for &assume in &cx.assumptions.assumes {
-            let dominates =
-                first.is_some_and(|first| assume == first || cx.tree.instruction_dominates(cx.function, assume, first));
+            let dominates = first.is_some_and(|first| cx.tree.instruction_dominates(cx.function, assume, first));
             if !dominates {
                 continue;
             }
@@ -180,7 +177,14 @@ impl LoopGuards {
         }
 
         // Second, collect information from llvm.experimental.guards dominating
-        // the loop: D-G2.
+        // the loop.
+        if let Some(first) = first {
+            for guard in se.guard_calls(cx) {
+                if cx.tree.instruction_dominates(cx.function, guard, first) {
+                    terms.push((cx.function.instruction(guard).operands[0], true));
+                }
+            }
+        }
 
         // Third, collect conditions from dominating branches. Starting at the
         // loop predecessor, climb up the predecessor chain, as long as there

@@ -650,7 +650,7 @@ impl ScalarEvolution {
             // of overflow. Use this fact to avoid doing extra work that may not
             // pay off.
             if !matches!(self.node(max_be_count).kind, Kind::CouldNotCompute)
-                || self.has_guards()
+                || self.has_guards(cx)
                 || self.has_assumptions(cx)
             {
                 let new_flags = self.prove_no_unsigned_wrap_via_induction(cx, ar);
