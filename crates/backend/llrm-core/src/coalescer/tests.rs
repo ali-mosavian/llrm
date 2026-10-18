@@ -249,3 +249,17 @@ fn test_a_parameter_joined_into_its_copy_stays_a_parameter() {
     assert_eq!(names(&lis), vec![(vec![], vec![survivor])], "the read names the parameter");
     assert!(lis.assert_intervals_cover_afresh(&after) >= 1);
 }
+
+/// Two parameters, both defined on entry and both live there, are different
+/// values: copying the first into the second later does not make them one. They
+/// were joined (the copy removed, the two arguments one register) before the
+/// entry's definitions stopped counting as phis.
+#[test]
+fn test_two_parameters_live_on_entry_are_not_joined() {
+    let (c, r1, r2, r) = (copy(2, 1), read(1), read(2), read(2));
+    let was = LirBody { inputs: [1, 2].into_iter().collect(), ..body(&[(&[r1, r2, Arc::clone(&c), r], &[])]) };
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Deferred);
+    assert_eq!(names(&lis).len(), 4, "no instruction was erased");
+}

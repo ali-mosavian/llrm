@@ -24,10 +24,6 @@
 //!   MIR has none.
 //! - No `llvm.assume`, so no `convertMetadataToAssumes` (`noundef` metadata)
 //!   and no droppable users; no `fake_use`. Lifetime markers are translated.
-//! - DEVIATE 1: MIR has no `undef`: a read of memory nothing wrote is the
-//!   zero of its type (null, `zeroinitializer`), a refinement of the pin's
-//!   `UndefValue` (PromoteMemoryToRegister.cpp#L914); poison would turn a
-//!   fresh bitfield's `and`/`or` into poison. Exit: a MIR `undef`.
 //! - `isGuaranteedNotToBePoison` is true of a constant that is not `poison`
 //!   only (no `noundef` arguments).
 //! - The iterated dominance frontier is `Dominance::frontiers` iterated with
@@ -415,12 +411,12 @@ fn poison(
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
 }
 
-/// The pin's `UndefValue::get(ty)`: the zero of `ty` (DEVIATE 1).
+/// `UndefValue::get(ty)`.
 fn uninitialized(
     context: &mut Context,
     ty: TypeId,
 ) -> Operand {
-    Operand::Constant(llrm_mir::constfold::null_value(context, ty))
+    Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }))
 }
 
 /// `isGuaranteedNotToBePoison` as far as MIR can say: a constant that is not
@@ -805,7 +801,7 @@ impl<'a> PromoteMem2Reg<'a> {
         }
         lbi.numbers.clear();
 
-        // The incoming value of every alloca on entry is the zero (DEVIATE 1), for a load
+        // The incoming value of every alloca on entry is undef, for a load
         // before any store.
         let values: Vec<Operand> = (0..self.allocas.len())
             .map(|at| {

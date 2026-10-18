@@ -144,6 +144,7 @@ pub mod local;
 #[cfg(test)]
 mod local_tests;
 pub mod loopclone;
+pub mod loopdeletion;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;

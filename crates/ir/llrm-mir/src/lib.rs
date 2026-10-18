@@ -5,6 +5,9 @@
 pub mod alias;
 pub mod apfloat;
 pub mod apint;
+pub mod arena;
+#[cfg(test)]
+mod arena_tests;
 pub mod blockfrequency;
 pub mod blocklist;
 pub mod build;
@@ -66,6 +69,7 @@ pub mod tbaa;
 pub mod touched;
 pub mod tti;
 pub mod types;
+pub mod uselist;
 pub mod valuelattice;
 pub mod valuetracking;
 pub mod verify;

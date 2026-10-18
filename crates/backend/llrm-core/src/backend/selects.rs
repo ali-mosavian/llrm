@@ -173,7 +173,7 @@ fn sunk(
 ) -> Option<InstId> {
     let Operand::Value(value) = operand else { return None };
     let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { return None };
-    if function.users(value).len() != 1 || function.users(value)[0].user != select {
+    if function.users(value).only().is_none_or(|only| only.user != select) {
         return None;
     }
     if !llrm_transforms::licm::hoist::is_safe_to_speculatively_execute_in(

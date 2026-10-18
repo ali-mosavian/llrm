@@ -206,6 +206,7 @@ pub fn argument_memory_only(attrs: &[Attribute]) -> bool {
 }
 
 /// The function `inst` calls directly, if it is a call.
+#[inline]
 pub fn callee(
     context: &Context,
     function: &Function,

@@ -1351,11 +1351,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             if let Some(result) = self.function().instruction(inst).result {
                 if !self.function().users(result).is_empty() {
-                    // `UndefValue::get` (SROA.cpp#L6393), the zero here as in
-                    // mem2reg (DEVIATE 1).
+                    // `UndefValue::get` (SROA.cpp#L6393).
                     let ty = self.function().value(result).ty;
-                    let zero = Operand::Constant(llrm_mir::constfold::null_value(&mut self.unit.context, ty));
-                    self.unit.function.replace_value(result, zero);
+                    let undef =
+                        Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef }));
+                    self.unit.function.replace_value(result, undef);
                 }
             }
             let operands: Vec<InstId> = self
@@ -3092,7 +3092,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let function = self.function();
         let result = function.instruction(phi).result?;
         let users = function.users(result);
-        let [only] = users else { return None };
+        let only = users.only()?;
         let store = only.user;
         let Opcode::Store { volatile: false, .. } = function.instruction(store).opcode else { return None };
         if only.index != 1 {
@@ -3174,7 +3174,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         phi: InstId,
     ) {
         let result = self.function().instruction(phi).result.expect("a phi");
-        let store = self.function().users(result)[0].user;
+        let store = self.function().users(result).first().expect("the phi's store").user;
         let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
         let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
         for pair in pairs.chunks(2) {
