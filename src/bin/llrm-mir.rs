@@ -117,7 +117,7 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
 /// `function<TAB>answer<TAB>%a<TAB>%b` per pair of the pointer values that
 /// load, store and call operands name (a value, in order of first use), by what
 /// the points-to facts of the body say: `NoAlias` where no object they point
-/// into is shared, `MustAlias` for one value, else `MayAlias`.
+/// into is shared (offsets and widths not read, as aa-eval asks without a size), `MustAlias` for one value, else `MayAlias`.
 fn aliases(module: &llrm_mir::module::Module) -> String {
     use llrm_analysis::memory::Unit;
     use llrm_mir::module::{Operand, ValueId};
@@ -163,8 +163,23 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         }
         for (at, &one) in pointers.iter().enumerate() {
             for &other in &pointers[at + 1..] {
-                let answer = match (facts.values.get(&one), facts.values.get(&other)) {
-                    (Some(left), Some(right)) if !left.intersects(right) => "NoAlias",
+                // aa-eval asks with no size (`beforeOrAfterPointer`), so any byte of an
+                // object a pointer is into may be the one: NoAlias is a pair with no
+                // object in common, offsets and widths not read.
+                let objects = |value: &ValueId| {
+                    facts.values.get(value).map(|provenance| {
+                        provenance.slices.iter().map(|one| one.object).collect::<std::collections::BTreeSet<_>>()
+                    })
+                };
+                let answer = match (objects(&one), objects(&other)) {
+                    (Some(left), Some(right))
+                        if left.is_disjoint(&right)
+                            && !left.iter().chain(&right).any(|object| {
+                                matches!(object.kind, llrm_analysis::memory::MemoryKind::Unknown)
+                            }) =>
+                    {
+                        "NoAlias"
+                    }
                     _ => "MayAlias",
                 };
                 out += &format!(
