@@ -177,6 +177,13 @@ slow_pytest = [
     "tools/dosbatch/test_dosbatch.py",
 ]
 
+# What tools/prepush.sh runs before a push: these gate steps (the smoke tier's commands, cut to the cheap ones that read the tree: the format check,
+# the generated docs, the tracked build products, the source scans, target_facts) and these root test binaries beside them. A scan added to
+# [[scan]] or a step added here is picked up; the script has no list of its own.
+[prepush]
+steps = ["fmt", "docs", "products", "scans", "facts"]
+tests = ["docs_links"]
+
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
 shards = 3
