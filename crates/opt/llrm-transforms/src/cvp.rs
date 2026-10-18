@@ -308,7 +308,7 @@ impl State<'_, '_> {
             LatticeConstant::Other { ty, kind } => self.unit.context.constant(Constant { ty, kind }),
             LatticeConstant::Undef => {
                 let ty = self.ty(value);
-                self.unit.context.constant(Constant { ty, kind: ConstantKind::Poison })
+                self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef })
             }
         }
     }

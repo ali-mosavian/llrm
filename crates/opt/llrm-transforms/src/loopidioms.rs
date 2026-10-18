@@ -555,7 +555,7 @@ fn _fill(
     // exit's phis take from the test's block.
     let mut left = Vec::new();
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             let Some(result) = function.instruction(inst).result else { continue };
             for one in function.users(result) {
                 let user = function.instruction(one.user);
@@ -1141,7 +1141,7 @@ pub fn takes(
         loop_
             .body
             .iter()
-            .flat_map(|&at| function.block(cfg::block(at)).instructions().iter().copied())
+            .flat_map(|&at| function.block(cfg::block(at)).iter())
             .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
     };
     match stores {

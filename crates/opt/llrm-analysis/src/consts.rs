@@ -1111,10 +1111,10 @@ fn _pointer_stores(
         crate::mssa::view::Translated::new(unit, &accesses, mssa)
     };
     let before = |source: InstId, block: BlockId, inst: InstId| {
-        let order = function.block(block).instructions();
+        let order = function.block(block);
         match function.parent(source) {
             Some(at) if at == block => {
-                order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst)
+                order.iter().position(|one| one == source) < order.iter().position(|one| one == inst)
             }
             Some(at) => dominance.dominates(unit.function, cfg::id(at), cfg::id(block)),
             None => false,

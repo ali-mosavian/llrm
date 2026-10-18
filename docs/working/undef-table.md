@@ -13,8 +13,8 @@ N/A.
 | ConstantFolding | `isa<UndefValue>` sites that read `is_poison` | OWED (vt-constantfolding) |
 | InstSimplify | `simplifyPHINode`, `simplifySelectInst`, `simplifyICmpInst`, `simplifyDivRem`, `simplifyAdd/Sub/Mul/And/Or/Xor/Shl/RightShift`, `isPoisonShift`, `expandBinOp` (`getWithoutUndef`), `threadBinOpOverSelect`, `simplifyGEPInst` | DONE |
 | InstSimplify (rest) | `simplifyFreezeInst`, `simplifyInsertValueInst` (#2250), `simplifyWithOpsReplaced` (`CanUseUndef`), `simplifyAndOrWithICmpEq`, the intrinsics (#2248) | OWED |
-| ValueTracking | `isGuaranteedNotToBeUndefOrPoison`, `computeKnownBits` of an undef | OWED (check) |
-| LVI, CVP | `getFromConstant` (undef state), `ValueLatticeElement` | OWED: lattice folds poison into `Undef` |
+| ValueTracking | `isGuaranteedNotToBeUndefOrPoison` L8154, `computeKnownBits` L2647, phi `hasConstantValue` L2004, `isBytewiseValue` L6744 | DONE |
+| LVI, CVP | `ValueLatticeElement::get` (undef state), `getValueFromICmpCondition` L1390 | DONE |
 | GVN, PHITransAddr, EarlyCSE | undef operands in value numbering | OWED |
 | SimplifyCFG, JumpThreading | branch or switch on undef | OWED |
 | SCEV | `getUnknown` of an undef | OWED (check) |
