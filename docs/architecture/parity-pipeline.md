@@ -36,6 +36,10 @@ Each old analysis keeps a zero-callers counter (`LLRM_DEBUG=analyses`): when no 
 
 The run count per slot must match LLVM's. `parity::RUNS_PER_BODY` states it and `check_run_counts` checks a compile's `LLRM_DEBUG=runs` lines: `gvn@787` once per body. On d_faces -O2 under the order `gvn` runs 12 times over 11 functions (clang 11): the twelfth is the one body the interprocedural stage (`ipa-range`, after the function pipeline here, `ipsccp` before it in LLVM) sends back through the Simplify list. The old rounds ran it 35 times. At -O1 the order still runs `gvn` (11 times); clang's -O1 has none, a levels row. `loopsimplify`/`lcssa` run at three unconditional slots per body (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's 4/10/10/10): stated in `parity::RUN_COUNTS_OPEN`, not yet checked.
 
+## A/Bs against the old rounds
+
+`LLRM_NO_LLVM_ORDER` also turns the translated greedy allocator off (`allocate.rs`), so an order-against-old A/B mixes the pass order with the allocator. `LLRM_NO_GREEDY` isolates the allocator: compare order with and without it before reading a regression as the order's.
+
 ## Recount of the registry
 
 `LLRM_DEBUG=counts llrm-c -O2 f.c -S -o /dev/null 2>&1 | grep '^\[parity\]'` prints the registry's recount from `parity.rs` of the build it runs, with or without the order: all slots by state (Partial counted apart from Translated), each phase's slots, the analyses.

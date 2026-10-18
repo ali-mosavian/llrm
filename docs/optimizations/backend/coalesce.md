@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:2d3372636de8ecaab2d4d3017b29ce827669a5ac3bc4c2aaab7f39768965e5f5 -->
+<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:85cc33f2260dc15532735f1504d8f37f6256ec3411f645bbd3050457d4e4cfd2 -->
 
 # coalesce
 
@@ -50,13 +50,14 @@ pin of either, and the web kept is the one with more neighbours. At the
 end every value is renamed to its web's root and identity moves are
 dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
 
-`LLRM_COALESCE_LLVM=1` runs the translation of LLVM's `RegisterCoalescer`
-(`crate::coalescer`) in place of all of the above; `LLRM_SHADOW_COALESCE=1`
-runs it beside, and prints the copies each leaves. It joins by interval
-overlap and leaves colouring to the allocator, so it joins more (bench
-`-O2` m32: 939 copies left of 5,499, against 2,342 here) and `d_faces` is
-2.5% smaller; `fib`, `frames`, `queens` and `rectwo` grow (+128, +128, +32,
-+32 bytes), which is why it is not the default.
+The translation of LLVM's `RegisterCoalescer` (`crate::coalescer`) runs in
+place of all of the above; `LLRM_NO_COALESCE_LLVM=1` brings this pass back
+(until it is deleted) and `LLRM_SHADOW_COALESCE=1` runs the translation
+beside it, printing the copies each leaves. It joins by interval overlap and
+leaves colouring to the allocator, so it joins more (bench `-O2` m32: 939
+copies left of 5,499, against 2,342 here) and `d_faces` is 2.5% smaller;
+`fib`, `frames`, `queens` and `rectwo` grow (+128, +128, +32, +32 bytes):
+the allocator spills where this pass kept two values apart.
 
 ## Example
 A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates

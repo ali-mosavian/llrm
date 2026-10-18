@@ -235,7 +235,7 @@ impl FunctionPass for JumpThread {
         analyses.invalidate(unit.function, &PreservedAnalyses::none());
         for pass in [
             &mut crate::fold::Fold as &mut dyn FunctionPass,
-            &mut crate::algebraic::Algebraic { size: false },
+            &mut crate::algebraic::Algebraic { size: false, llvm: false },
             &mut crate::decide::Decide,
             &mut crate::dead::Dead,
         ] {

@@ -227,6 +227,8 @@ impl LiveIntervals {
         &mut self,
         reg: u32,
     ) -> LiveInterval {
+        #[cfg(test)]
+        COMPUTED.with(|one| one.borrow_mut().push(reg));
         let mut li = LiveInterval::new(reg, 0.0);
         self.calc.calc.reset(self.cfg.len());
         let ctx = Ctx { cfg: &self.cfg, indexes: &self.indexes, dom: &self.dom };
@@ -286,6 +288,28 @@ impl LiveIntervals {
         reg: u32,
     ) -> &mut LiveInterval {
         Rc::make_mut(self.intervals.get_mut(&reg).expect("an interval is held"))
+    }
+
+    /// Takes the interval of `reg` out of the map, to edit it beside the maps.
+    pub fn take_interval(
+        &mut self,
+        reg: u32,
+    ) -> LiveInterval {
+        let rc = self.intervals.remove(&reg).expect("an interval is held");
+        Rc::try_unwrap(rc).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// `removeVRegDefAt`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L1848>),
+    /// without sub-ranges.
+    pub fn remove_vreg_def_at(
+        li: &mut LiveInterval,
+        pos: &SlotIndex,
+    ) {
+        if let Some(vni) = li.get_vn_info_at(pos) {
+            assert!(vni.def().get_base_index() == pos.get_base_index());
+            li.remove_val_no(&vni);
+        }
     }
 
     /// How many intervals are held.
@@ -972,4 +996,11 @@ mod tests {
         let edited = body(&[def, read, last, late]);
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
+}
+
+// The registers `compute_virt_reg_interval` worked out, for a test that a spill
+// works out only the registers it makes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COMPUTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }

@@ -105,7 +105,7 @@ mod tests {
         binding: Binding,
         definition: Definition,
     ) -> Symbol {
-        Symbol { name: name.into(), binding, definition, group: None }
+        Symbol { name: name.into(), binding, definition, size: 0, group: None }
     }
 
     fn object(
@@ -121,6 +121,20 @@ mod tests {
             omf_comdat: Vec::new(),
             debug: None,
         }
+    }
+
+    /// A function's `st_size` was written 0, so a tool that sums symbol sizes read
+    /// no code at all; it is the size the object model carries.
+    #[test]
+    fn a_function_symbol_carries_its_size() {
+        let mut function = symbol("f", Binding::Public, Definition::Defined { section: 0, offset: 16 });
+        function.size = 3;
+        let bytes = write(&object(vec![text(vec![0x90; 19], vec![])], vec![function])).unwrap();
+        let found = sections(&bytes);
+        let table = named(&found, ".symtab");
+        // Entries are 16 bytes: the null symbol, the file, one section, then `f`: name, value, size.
+        let at = table.2 + 16 * 3;
+        assert_eq!((word(&bytes, at + 4), word(&bytes, at + 8)), (16, 3));
     }
 
     /// `call f`: REL puts S + A - P in the field, so the field is -4 where the

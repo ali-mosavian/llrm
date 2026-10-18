@@ -79,7 +79,7 @@ mod tests {
             name: name.into(),
             binding: Binding::Public,
             definition: Definition::Defined { section: 0, offset },
-            group: None,
+            size: 0, group: None,
         }
     }
 
