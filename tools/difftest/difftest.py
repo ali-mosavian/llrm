@@ -91,7 +91,7 @@ def source_link(passes: str) -> str:
     return f"[{path.rsplit('/', 1)[1]}](https://github.com/llvm/llvm-project/blob/{LLVM_COMMIT}/llvm/lib/{path})" if path else "-"
 
 
-LLRM_CONVENTIONS = re.compile(r"(?<![\w@%$.\"-])(?:watcallcc|sysvcc|ia16cc|regparm3cc|regparm3popcc|cc[0-9]+)(?![\w$.\"-]) ?")
+LLRM_CONVENTIONS = re.compile(r"(?<![\w@%$.\"-])(?:watcallcc|sysvcc|ia16cc|regparm3cc|regparm3popcc|cc ?[0-9]+)(?![\w$.\"-]) ?")
 DECLARED_INTERNAL = re.compile(r"^declare internal ")
 
 
@@ -165,11 +165,34 @@ def blocks_in_order(body: list[str]) -> list[list[str]]:
     return [blocks[name] for name in seen + [n for n in names if n not in seen]]
 
 
+HEX_DOUBLE = re.compile(r"(?<![\w.])0x[0-9A-Fa-f]{16}(?![\w.])")
+
+
+def floats_alike(line: str) -> str:
+    """Every hexadecimal floating constant of the line in the spelling LLVM's printer gives it: `%.6e` when that reads back as the same value
+    (as a float or as a double), else the hex. llrm prints `0x40445EB860000000` where opt prints `4.074000e+01`: one constant."""
+    import struct
+
+    def spelled(match: re.Match) -> str:
+        value = struct.unpack(">d", bytes.fromhex(match[0][2:]))[0]
+        text = "%.6e" % value
+        try:
+            single = struct.unpack("f", struct.pack("f", value))[0] == value
+            back = float(text)
+            if back == value or (single and struct.unpack("f", struct.pack("f", back))[0] == value):
+                return text
+        except (OverflowError, struct.error):
+            pass
+        return match[0]
+
+    return HEX_DOUBLE.sub(spelled, line)
+
+
 def canonical(lines: list[str]) -> list[str]:
     """The function with its blocks in control-flow order, its local names numbered by first appearance, and what is not the code left out
     (comments, function and parameter attributes, `align`, metadata attachments, the order of a phi's incoming pairs). Two bodies that differ
     only in those read alike."""
-    lines = trimmed(lines)
+    lines = [floats_alike(re.sub(r"\bcc (\d+)", r"cc\1", line)) for line in trimmed(lines)]
     names: dict[str, str] = {}
     out = []
     head = next((n for n, line in enumerate(lines) if line.startswith("define ")), None)
@@ -314,14 +337,14 @@ def isolated(replay: Path, row: dict, source: Path) -> str:
     return done.stdout
 
 
-def premise(changed: int, functions: int) -> str:
-    """"ok", or why the comparison proves nothing: the reference must be able to give more than one answer on these inputs (LLVM changes some
-    function and leaves some alone). A reference that changed none, or all, of the functions said one thing; agreeing with it shows nothing about
-    llrm's pass, only that both did nothing (or both did something) here."""
-    if functions >= 2 and changed == 0:
-        return f"PREMISE FAILED: LLVM changed none of {functions} functions: the reference never acted, so agreement proves nothing"
-    if functions >= 2 and changed == functions:
-        return f"PREMISE FAILED: LLVM changed all {functions} functions: the reference never declined, so it was not shown to discriminate"
+def premise(changed: int, functions: int, differing: int = 0) -> str:
+    """"ok", or why the comparison proves nothing: it must be able to give more than one answer on these inputs. It can when LLVM changes some
+    function and leaves some alone, or when it and llrm disagree somewhere (`differing`). If LLVM changed none, or all, of the functions and
+    agrees everywhere, agreement shows nothing about llrm's pass."""
+    if functions >= 2 and differing == 0 and changed == 0:
+        return f"PREMISE FAILED: LLVM changed none of {functions} functions and agrees everywhere: the reference never acted, so agreement proves nothing"
+    if functions >= 2 and differing == 0 and changed == functions:
+        return f"PREMISE FAILED: LLVM changed all {functions} functions and agrees everywhere: the reference never declined, so it was not shown to discriminate"
     return "ok"
 
 
@@ -362,7 +385,7 @@ def analyse(todo: list[tuple[dict, Path]], root: Path, name: str, jobs: int = 8,
         "first_failures": [{"file": r["file"], "error": e} for r, e in failures[:5]],
         "functions": len(judged),
         "llvm_changed": llvm_changed,
-        "premise": premise(llvm_changed, len(judged)),
+        "premise": premise(llvm_changed, len(judged), sum(1 for _, _, v in changed if not v["identical"])),
         "acted_on": len(changed),
         "identical": sum(1 for _, _, v in changed if v["identical"]),
         "histogram_llrm_only": dict(llrm_only.most_common()),

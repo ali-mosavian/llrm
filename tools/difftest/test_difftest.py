@@ -214,4 +214,5 @@ def test_a_comparison_whose_reference_never_acted_or_never_declined_fails_its_pr
     assert difftest.premise(0, 40).startswith("PREMISE FAILED: LLVM changed none of 40")
     assert difftest.premise(40, 40).startswith("PREMISE FAILED: LLVM changed all 40")
     assert difftest.premise(7, 40) == "ok"
+    assert difftest.premise(40, 40, differing=11) == "ok", "it disagreed with llrm somewhere: it can say more than one thing"
     assert difftest.premise(0, 1) == "ok", "one function cannot show both answers: not judged"

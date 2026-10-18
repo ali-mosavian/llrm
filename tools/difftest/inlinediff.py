@@ -96,7 +96,7 @@ def compare(before: str, after: str, pipeline: str = "inline", threshold: int | 
         for kind, count in (("agree", agree), ("llrm-only", llrm_only), ("llvm-only", llvm_only)):
             totals[(kind, band)] += count
     llvm_inlined = sum(row["llvm_inlined"] for row in rows)
-    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(was.values()), "llvm_inlined": llvm_inlined, "premise": difftest.premise(llvm_inlined, sum(was.values())).replace("functions", "sites").replace("changed", "inlined"), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
+    return {"pipeline": pipeline, "threshold": threshold, "sites": sum(was.values()), "llvm_inlined": llvm_inlined, "premise": difftest.premise(llvm_inlined, sum(was.values()), sum(row["llrm_only"] + row["llvm_only"] for row in rows)).replace("functions", "sites").replace("changed", "inlined"), "rows": rows, "by_class_and_size": {f"{k}|{b}": n for (k, b), n in sorted(totals.items())}}
 
 
 def opt_header() -> str:
