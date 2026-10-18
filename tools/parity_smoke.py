@@ -170,7 +170,7 @@ def d_faces(bins: Path) -> tuple[str, str]:
         return "skipped", f"no d_faces.c ({src})"
     if hashlib.sha256(file.read_bytes()).hexdigest()[:16] != DFACES_SHA:
         return "skipped", f"{file} is not the pinned d_faces.c ({DFACES_SHA}): the reference reports are its"
-    sys.path.insert(0, str(ROOT / "crates/target/llrm-x86-m32/vsgcc/dfaces"))
+    sys.path.insert(0, str(next((ROOT / "crates/target").glob("*/vsgcc/dfaces"))))  # a target's directory is found, not named (tests/target_facts.rs)
     os.environ["LLRM_BIN"], os.environ["DFACES_SRC"] = str(bins), str(src)
     with tempfile.TemporaryDirectory() as work:
         os.environ["VSGCC_WORK"] = work
