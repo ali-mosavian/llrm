@@ -6,10 +6,13 @@
 //!
 //! A value number is a `u32` from 1. `Expression` is hashed on opcode, type and
 //! operand numbers and equal on those and the call attributes, as LLVM's is:
-//! IR flags are in no key and are intersected on a merge instead
-//! (`local::patch_replacement_instruction`). The first expression numbered
-//! has expression index 0, which `phi_translate_impl` reads as none, as
-//! LLVM's does (`ExprIdx[Num] == 0`): one expression per table is not
+//! LLVM's key has no IR flags: a merge intersects them
+//! (`local::patch_replacement_instruction`). DEVIATE 16: here the flags of an
+//! arithmetic or cast instruction are in the key, so instructions that differ
+//! in `nsw` stay two; merging them dropped the `nsw` a later pass reads
+//! (x_mergesort -O2 +5.9% memory operands, -Os +21%). The first expression
+//! numbered has expression index 0, which `phi_translate_impl` reads as none,
+//! as LLVM's does (`ExprIdx[Num] == 0`): one expression per table is not
 //! translated through a phi.
 //!
 //! DEVIATE 11, MemorySSA: `NumberingBB`, `addMemoryStateToExp`,
@@ -30,7 +33,7 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::HashMap;
@@ -70,11 +73,20 @@ pub struct Expression {
     pub ty: Option<TypeId>,
     pub var_args: Vec<u32>,
     pub attrs: CallAttrs,
+    /// DEVIATE 16: LLVM's key has no IR flags.
+    pub flags: Flags,
 }
 
 impl Expression {
     fn new(opcode: ExprOp) -> Self {
-        Self { opcode, commutative: false, ty: None, var_args: Vec::new(), attrs: CallAttrs::default() }
+        Self {
+            opcode,
+            commutative: false,
+            ty: None,
+            var_args: Vec::new(),
+            attrs: CallAttrs::default(),
+            flags: Flags::default(),
+        }
     }
 }
 
@@ -87,6 +99,7 @@ impl PartialEq for Expression {
             && self.ty == other.ty
             && self.var_args == other.var_args
             && self.attrs == other.attrs
+            && self.flags == other.flags
     }
 }
 
@@ -100,6 +113,7 @@ impl Hash for Expression {
         self.opcode.hash(state);
         self.ty.hash(state);
         self.var_args.hash(state);
+        self.flags.hash(state);
     }
 }
 
@@ -211,6 +225,7 @@ impl ValueTable {
         let instruction = env.function.instruction(inst);
         let mut e = Expression::new(opcode);
         e.ty = Some(instruction.ty);
+        e.flags = instruction.flags;
         for &operand in &instruction.operands {
             e.var_args.push(self.lookup_or_add(env, operand));
         }

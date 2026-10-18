@@ -18,9 +18,12 @@
 //! anything, and its pass manager lets that stand. A pipeline run to a fixed
 //! point here would not end, so the pass answers whether the function changed.
 //!
-//! DEVIATE 15, a phi is not simplified to a value defined in a loop the phi is
-//! outside of: LLVM forms LCSSA inside its loop pipeline only, and here `lcssa`
-//! and this pass run to one fixed point, which they would never reach.
+//! DEVIATE 15, `simplifyInstruction` is not asked of a phi. Two reasons, each
+//! a measured loss: LLVM forms LCSSA inside its loop pipeline only, and here
+//! `lcssa` and this pass run to one fixed point, which they would never reach;
+//! and a loop's invariant phi simplified to its input lets the loop's
+//! expressions merge with copies outside it, a live range the allocator
+//! spills (x_hanoi2 -O2 +22.8% clocks, quicksort +1.5%).
 //!
 //! DEVIATE 3, `salvageAndRemoveInstruction` removes the instruction: MIR has no
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
@@ -56,8 +59,6 @@ pub struct GvnPass<'a> {
     vn: ValueTable,
     leader_table: LeaderMap,
     dead_blocks: IndexMap<BlockId, ()>,
-    /// The natural loops of the body, found when first asked.
-    loops: Option<Vec<llrm_analysis::graph::loops::Loop>>,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -77,7 +78,6 @@ pub fn run_impl(
         vn: ValueTable::new(),
         leader_table: LeaderMap::default(),
         dead_blocks: IndexMap::default(),
-        loops: None,
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();
@@ -103,21 +103,6 @@ impl GvnPass<'_> {
 
     fn refresh_dominators(&mut self) {
         self.dt = DominatorTree::new(self.function);
-        self.loops = None;
-    }
-
-    /// Whether `value` is defined in a loop that the block of `phi` is not in.
-    fn leaves_loop(
-        &mut self,
-        phi: InstId,
-        value: Operand,
-    ) -> bool {
-        let Some(def) = self.defining(value).and_then(|one| self.function.parent(one)) else { return false };
-        let Some(at) = self.function.parent(phi) else { return false };
-        let function = &*self.function;
-        let loops = self.loops.get_or_insert_with(|| llrm_analysis::cfg::Shape::of(function).loops);
-        let (def, at) = (llrm_analysis::cfg::id(def), llrm_analysis::cfg::id(at));
-        loops.iter().any(|one| one.body.contains(&def) && !one.body.contains(&at))
     }
 
     /// `runImpl`
@@ -707,14 +692,12 @@ impl GvnPass<'_> {
         // redundancies, for example if it determines that %y is equal to %x
         // then the instruction "%z = and i32 %x, %y" becomes "%z = and i32 %x,
         // %x" which we now simplify.
-        let mut simplified = llrm_mir::simplify::simplify_instruction(self.context, self.function, inst);
-        // DEVIATE 15: a phi that carries a loop's value out of it stays.
-        if let Some(value) = simplified
-            && self.function.instruction(inst).opcode == Opcode::Phi
-            && self.leaves_loop(inst, value)
-        {
-            simplified = None;
-        }
+        // DEVIATE 15: no phi is simplified.
+        let simplified = if self.function.instruction(inst).opcode == Opcode::Phi {
+            None
+        } else {
+            llrm_mir::simplify::simplify_instruction(self.context, self.function, inst)
+        };
         if let Some(simplified) = simplified {
             let mut changed = false;
             let result = self.function.instruction(inst).result;

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gvn.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gvn.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:1821f4925e579c44f5686f1ad2a44a051948af98026881fa289fb1ec49a69d5b -->
+<!-- src: crates/opt/llrm-transforms/src/gvn.rs sha256:37ce3d88a704ee4e7ff2e884a1f0b93bdd2fce887aa90311528a6bdb37c6ab37 -->
 
 # gvn
 
@@ -17,11 +17,11 @@ load or a store. `Gvn` is the pass; `EqualCalls` is its call part alone.
    instructions simplified or numbered by opcode, type and operand numbers
    (a commutative pair ordered, a compare's predicate swapped with its
    operands, a GEP by the bytes it adds, flags in no key): one that a
-   dominating leader has is replaced, keeping the flags both have. In what an
-   edge of a branch, a switch case or an assume dominates, the condition is
-   that edge's constant (`propagateEquality`), and the arm of a branch on a
-   constant is dead: its join's phis read poison from it. Two calls with the
-   same callee and arguments that read and write no memory are one.
+   dominating leader has is replaced, keeping the flags both have. In what
+   an edge of a branch, a switch case or an assume dominates, the condition
+   is that edge's constant (`propagateEquality`), and the arm of a branch on
+   a constant is dead: its join's phis read poison from it. Two calls with
+   the same callee and arguments that read and write no memory are one.
 2. Load numbering (`transform::forwarded`, `transform::subexpressions`,
    `transform::equal_calls`). A load a known value serves becomes that
    value: a dominating store of the same bytes and type, or an earlier load

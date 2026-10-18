@@ -373,7 +373,8 @@ b0:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let text = printed(&module);
-    assert!(text.contains("%y = zext i8 7 to i16"), "{text}");
+    // The load is the stored 7, and the widening of a constant is simplified.
+    assert!(text.contains("ret i16 7"), "{text}");
 }
 
 /// A view lent to @bump holds a pointer to %values; @bump reads it out
@@ -1188,4 +1189,32 @@ fn a_numbering_dearer_in_work_than_the_crossing_one_is_not_forecast_for_spills()
     let (_, forecasts) = crate::profit::PRICED.with(std::cell::Cell::get);
     assert!(!printed(&module).contains("%b = load i16, ptr @x"), "the reload is served");
     assert_eq!(forecasts, 1, "{forecasts} whole-function forecasts for the two numberings");
+}
+
+/// Two loads of one cell are one load once the pass has run, and the two
+/// products of them one product: the scalar pass runs again over what load
+/// numbering merged. Run once, before it, the products stayed two, and a later
+/// pass saw no square (x_primes -O2 +4% clocks).
+#[test]
+fn a_product_of_two_loads_of_one_cell_is_one_with_a_product_of_the_same() {
+    let text = "define i16 @f(ptr %p) {
+b0:
+  %a = load i16, ptr %p
+  %b = load i16, ptr %p
+  %m = mul i16 %a, %b
+  %c = load i16, ptr %p
+  %d = load i16, ptr %p
+  %n = mul i16 %c, %d
+  %r = sub i16 %m, %n
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Gvn::default());
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = printed(&module);
+    assert_eq!(after.matches("mul i16").count(), 1, "{after}");
 }

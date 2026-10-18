@@ -12,11 +12,11 @@
 //!    instructions simplified or numbered by opcode, type and operand numbers
 //!    (a commutative pair ordered, a compare's predicate swapped with its
 //!    operands, a GEP by the bytes it adds, flags in no key): one that a
-//!    dominating leader has is replaced, keeping the flags both have. In what an
-//!    edge of a branch, a switch case or an assume dominates, the condition is
-//!    that edge's constant (`propagateEquality`), and the arm of a branch on a
-//!    constant is dead: its join's phis read poison from it. Two calls with the
-//!    same callee and arguments that read and write no memory are one.
+//!    dominating leader has is replaced, keeping the flags both have. In what
+//!    an edge of a branch, a switch case or an assume dominates, the condition
+//!    is that edge's constant (`propagateEquality`), and the arm of a branch on
+//!    a constant is dead: its join's phis read poison from it. Two calls with
+//!    the same callee and arguments that read and write no memory are one.
 //! 2. Load numbering (`transform::forwarded`, `transform::subexpressions`,
 //!    `transform::equal_calls`). A load a known value serves becomes that
 //!    value: a dominating store of the same bytes and type, or an earlier load
@@ -184,13 +184,31 @@ impl FunctionPass for Gvn {
         // the rest reads is read of the body it leaves.
         let blocks = unit.function.layout().len();
         let scalar = pass::run_impl(unit.context, unit.layout, unit.function, analyses.outer());
+        // Edits to operands leave what the manager holds of the body whole but
+        // for its registers; a changed CFG leaves none of it.
+        let cfg_changed = unit.function.layout().len() != blocks;
+        if cfg_changed {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
         // Only the scalar pass and `loadjoins` change the CFG: by merging
         // blocks, and by splitting edges.
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
-        let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+        let managed = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
+        let fresh;
+        let registers = if scalar && !cfg_changed {
+            fresh = llrm_analysis::consts::known(&memory::Unit::within(
+                unit.context,
+                unit.layout,
+                unit.function,
+                analyses.outer(),
+            ));
+            &fresh
+        } else {
+            &*managed
+        };
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let trips = if !self.pre || !profit::registers(analyses.outer()).priced() {
             IndexMap::default()
@@ -198,14 +216,14 @@ impl FunctionPass for Gvn {
             let counted = analyses.get::<llrm_analysis::manager::Counted>(unit.context, unit.layout, unit.function);
             profit::proven_trips(
                 &memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
-                    .with_registers(&registers)
+                    .with_registers(registers)
                     .with_shape(&shape)
                     .with_counted(&counted),
-                &registers,
+                registers,
             )
         };
         match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre, scalar)
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, registers, &shape, self.pre, scalar)
         }) {
             Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
             Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
@@ -277,6 +295,9 @@ pub fn optimized(
         // load is served wherever it is redundant and nothing is numbered
         // twice.
         _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
+    // Loads merged above are operands that two expressions now share.
+    let renumbered = numbered && pass::run_impl(unit.context, unit.layout, unit.function, outer);
+    let numbered = numbered || renumbered;
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;

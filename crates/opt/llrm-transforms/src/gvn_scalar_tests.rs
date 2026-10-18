@@ -126,12 +126,12 @@ b0:
     }
 }
 
-/// The key has no IR flags: two adds that differ in `nsw` are one, and the
-/// survivor keeps only the flags both had (`patchReplacementInstruction`). The
-/// old table kept them apart.
+/// LLVM's key has no IR flags and a merge keeps the flags both have; here the
+/// flags are in the key (DEVIATE 16). Merged, `%a` lost the `nsw` a later pass
+/// reads: x_mergesort -O2 +5.9% memory operands, -Os +21%.
 #[test]
-fn test_expressions_differing_in_flags_are_one_with_the_flags_both_have() {
-    let (text, changed) = numbered(
+fn test_expressions_differing_in_flags_stay_two() {
+    kept(
         "define i16 @f(i16 %x) {
 b0:
   %a = add nsw i16 %x, 1
@@ -140,10 +140,7 @@ b0:
   ret i16 %r
 }
 ",
-        &[&[0], &[5], &[100]],
     );
-    assert!(changed);
-    assert!(text.contains("ret i16 0") && !text.contains("nsw"), "{text}");
 }
 
 #[test]
@@ -376,7 +373,7 @@ b3:
         false,
     );
     assert!(changed);
-    assert!(text.contains("ret i16 1"), "{text}");
+    assert!(text.contains("%p = phi i16 [ 1, %b1 ], [ poison, %b2 ]"), "{text}");
 }
 
 #[test]
@@ -618,4 +615,32 @@ b0:
     );
     assert!(changed);
     assert!(text.contains("%s = fadd double %a, %a"), "{text}");
+}
+
+/// A loop's invariant phi (`phi [%x, entry], [itself, latch]`) stays:
+/// simplified to `%x`, the loop's expressions merged with copies outside it and
+/// a live range ran across the loop (x_hanoi2 -O2 +22.8% clocks, quicksort
+/// +1.5%).
+#[test]
+fn test_a_loops_invariant_phi_is_kept() {
+    kept(
+        "define i16 @f(i16 %n, i16 %x) {
+b0:
+  %outside = mul i16 %x, 64
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %inv = phi i16 [ %x, %b0 ], [ %inv, %b1 ]
+  %inside = mul i16 %inv, 64
+  %j = add i16 %i, %inside
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  %r = add i16 %j, %outside
+  ret i16 %r
+}
+",
+    );
 }
