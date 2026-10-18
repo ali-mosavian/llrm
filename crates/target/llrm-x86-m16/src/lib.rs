@@ -245,6 +245,19 @@ impl llrm_target::Target for M16 {
 mod tests {
     /// E2 put 16-byte padding between every two functions of a 16-bit object,
     /// +2% of QCport's code; m16 asks for none (DEVIATE E2-1).
+    /// Greedy allocates the x87 values into the RFP registers FP0..FP6, LLVM's
+    /// seven (FP7 is the stackifier's scratch); they are no stack position,
+    /// so the float stack stays eight deep.
+    #[test]
+    fn test_seven_rfp_registers_and_an_eight_deep_float_stack() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M16.registers_text()).unwrap();
+        let rfp: Vec<&str> = file.iter().filter(|one| one.is("rfp")).map(|one| one.name.as_str()).collect();
+        assert_eq!(rfp, ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert!(file.iter().filter(|one| one.is("rfp")).all(|one| !one.is("x87") && !one.is("gpr")));
+        assert_eq!(M16.float_stack(), 8);
+    }
+
     #[test]
     fn test_m16_aligns_no_function() {
         use llrm_target::Target;
@@ -346,10 +359,13 @@ mod tests {
             (dwarf("ax"), dwarf("dx"), dwarf("bp"), dwarf("sp"), dwarf("es")),
             (Some(27), Some(30), Some(33), Some(34), Some(38))
         );
+        // FP0..FP6 (`rfp`) never reach the output: the stackifier makes each an
+        // st(i), which has its number.
+        let emitted = |one: &&llrm_target::registers::Register| !one.is("rfp");
         assert!(
-            file.iter().all(|one| one.dwarf.is_some()),
+            file.iter().filter(emitted).all(|one| one.dwarf.is_some()),
             "{:?}",
-            file.iter().filter(|one| one.dwarf.is_none()).map(|one| &one.name).collect::<Vec<_>>()
+            file.iter().filter(emitted).filter(|one| one.dwarf.is_none()).map(|one| &one.name).collect::<Vec<_>>()
         );
         let cv = |name: &str| file.iter().find(|one| one.name == name).unwrap().codeview;
         assert_eq!((cv("bp"), cv("ax"), cv("st0")), (Some(14), Some(9), Some(128)));
