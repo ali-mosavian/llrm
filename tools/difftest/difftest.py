@@ -60,6 +60,7 @@ COUNTERPART = {
     "dead": "adce",
     "tailrec": "tailcallelim",
     "memcpyopt": "memcpyopt",
+    "cvp": "correlated-propagation",
 }
 
 
@@ -82,6 +83,7 @@ SOURCE = {
     "adce": "Transforms/Scalar/ADCE.cpp",
     "tailcallelim": "Transforms/Scalar/TailRecursionElimination.cpp",
     "memcpyopt": "Transforms/Scalar/MemCpyOptimizer.cpp",
+    "correlated-propagation": "Transforms/Scalar/CorrelatedValuePropagation.cpp",
 }
 LLVM_COMMIT = "d1106deb71cc"
 

@@ -90,6 +90,9 @@ pub mod cfg;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
+pub mod cvp;
+#[cfg(test)]
+mod cvp_tests;
 pub mod dead;
 pub mod deadargs;
 #[cfg(test)]
