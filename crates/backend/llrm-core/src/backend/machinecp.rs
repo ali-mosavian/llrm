@@ -707,7 +707,7 @@ impl<'a> Walk<'a> {
                     self.tracker.clear();
                 }
                 Some(effect) => {
-                    let (reads, writes) = (machine.mask(&effect.reads), machine.mask(&effect.writes));
+                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.mask(&effect.writes));
                     self.read(reads);
                     self.tracker.clobber(writes, &self.copies);
                     if let Some(copy) = self.copies[at].clone() {
@@ -754,7 +754,7 @@ impl<'a> Walk<'a> {
             return None;
         }
         let machine = self.machine;
-        let reads = self.effects[at].as_ref().map_or(0, |effect| machine.mask(&effect.reads));
+        let reads = self.effects[at].as_ref().map_or(0, |effect| machine.mask(&effect.all_reads()));
         for (place, register, _) in machine.registers(what) {
             if !matches!(place, Place::Dest(_)) {
                 continue;
@@ -857,7 +857,7 @@ impl<'a> Walk<'a> {
             let one = Arc::clone(&self.insns[at]);
             match (&one.what, &self.effects[at]) {
                 (Some(what), Some(effect)) => {
-                    let (reads, writes) = (machine.mask(&effect.reads), machine.mask(&effect.writes));
+                    let (reads, writes) = (machine.mask(&effect.all_reads()), machine.mask(&effect.writes));
                     let (mut seen_reads, mut seen_writes) = (0u32, 0u32);
                     for (place, register, _) in machine.registers(what) {
                         let Some(mask) = machine.register_mask(register) else {
