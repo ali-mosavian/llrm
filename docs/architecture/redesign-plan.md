@@ -133,8 +133,8 @@ Ratios derived by dividing by the pinned 415.5 M (the 5.2x above, and any later 
 
 | analysis | runs | own M (total M) | consumers (files that ask) | owner |
 |---|--:|--:|---|---|
-| annotated | 116 | 38.6 (171.6) | `consts`, `fill`, `floatfacts`, `memcpyopt`, `memoryssa`, `decide` | basicaa-port |
-| registers | 202 | 25.4 (46.9) | `alias`, `fill`, `induction`, `indvars`, `loopmotion`, `profit`, `ranges`, `spill`, `window`, `ports` | valuetracking-port |
+| annotated | 116 | 38.6 (171.6) | `consts`, `loopidioms`, `floatfacts`, `memcpyopt`, `memoryssa`, `decide` | basicaa-port |
+| registers | 202 | 25.4 (46.9) | `alias`, `loopidioms`, `induction`, `indvars`, `loopmotion`, `profit`, `ranges`, `spill`, `window`, `ports` | valuetracking-port |
 | pressure | 17 | 22.2 | `hoist`, `loopmotion`, `lsr` (the spill forecast) | memoryssa-port and indvars-decide-poc (LICM and lsr owners) |
 | exposed-frames | 282 | 20.0 | alias queries | basicaa-port |
 | shape | 160 | 4.2 (19.7) | `alias`, `avail`, `consts`, `exitfold`, `floatfacts`, `floatloop`, `guards`, `induction`, `indvars`, `jumpthread` | by consumer (open) |
@@ -973,7 +973,7 @@ Checklist: the shared list. Its own metric boxes:
   - idle reruns: 247 M (7.8%) ([compile-gap-series]).
 
   The combine alone is expected at about 0; the effect is the round drop, which is also the risk. Closed ideas, not to repeat: `gvn`, `dse` and `inferspace` ahead of `decide` (-4.4% at -O2, +5.4% at -O3, `x_hanoi2` crosses above 1.00); early scoped CSE (+8% to +11% with the alias-checked table, -3.1% to -3.4% kill-all but 4 cells worse, +1.6% to +1.9% once the stray exit phi is folded). Moves [synthesis] rows 5 and 9.
-- **(b) Early:** step 1 was built and measured before this plan (branch `notkept/combine-worklist`, `fba7c4051..fea9b27f0`): merging fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass at today's positions and rounds gave about 0 compile time, because the cost is analyses and idle reruns, not rewriting (no spec 8 entry yet; the owner re-measures and writes it). Treat step 1 as expected 0, not part of the -10%. The risky part is dropping repeat runs: round-1-only per pass changes output (`hoist` at least 20 objects, `fill` at least 20, `loopsimplify` 17, `promote` 6, `trivialunswitch` 2; all five together -3.0% at -O2 and -6.0% at -Os on `d_faces`), and the enabling relations are dense (`dead`, `gvn`, `dse`, `lcssa` and `fold` enable nearly everything); global `rounds=1` lost 25, 32 and 51 rows at -O1. So the early check is a per-pass ablation: run pass P in round 1 only, list the objects that change, name the enabling pass. Then:
+- **(b) Early:** step 1 was built and measured before this plan (branch `notkept/combine-worklist`, `fba7c4051..fea9b27f0`): merging fold, algebraic, phiopt, dead and the branch fold of decide into one worklist pass at today's positions and rounds gave about 0 compile time, because the cost is analyses and idle reruns, not rewriting (no spec 8 entry yet; the owner re-measures and writes it). Treat step 1 as expected 0, not part of the -10%. The risky part is dropping repeat runs: round-1-only per pass changes output (`hoist` at least 20 objects, `loopidioms` at least 20, `loopsimplify` 17, `promote` 6, `trivialunswitch` 2; all five together -3.0% at -O2 and -6.0% at -Os on `d_faces`), and the enabling relations are dense (`dead`, `gvn`, `dse`, `lcssa` and `fold` enable nearly everything); global `rounds=1` lost 25, 32 and 51 rows at -O1. So the early check is a per-pass ablation: run pass P in round 1 only, list the objects that change, name the enabling pass. Then:
   1. identical.py, which must be 0 differ;
   2. per-pass ablation table, one named enabler per repeat run that matters;
   3. vsgcc rows and bench cells against main.

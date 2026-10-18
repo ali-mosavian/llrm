@@ -77,12 +77,12 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`], [`crate::fill`],
-//! [`crate::window`], [`crate::gepoffset`], [`crate::indvars`],
-//! [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`] and
-//! [`crate::interprocedural`] asks it, before a rewrite that trades code size
-//! or registers for speed, whether the rewrite pays. Not a pass: it runs only
-//! inside those.
+//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
+//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! and [`crate::interprocedural`] asks it, before a rewrite that trades code
+//! size or registers for speed, whether the rewrite pays. Not a pass: it runs
+//! only inside those.
 //!
 //! # Needs
 //! The target's `OperationCosts` and registers, [`crate::spill`] for the
