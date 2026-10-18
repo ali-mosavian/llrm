@@ -12,12 +12,12 @@
 //! jump to it.
 //!
 //! # Deviations
-//! See `docs/architecture/lir-cleanup-plan.md`, "Jumps: tail merge".
+//! See `docs/architecture/jumps-tailmerge-check.md`.
 //!
 //! # See also
 //! `BranchFolding.cpp` at llvm-project d1106deb71cc: `TailMergeBlocks` L1109,
 //! `TryTailMergeBlocks` L981, `ComputeSameTails` L743, `ProfitableToMerge`
-//! L626, `ComputeCommonTailLength` L417, `CreateCommonTailOnlyBlock` L799,
+//! L633, `ComputeCommonTailLength` L417, `CreateCommonTailOnlyBlock` L799,
 //! `SplitMBBAt` L485, `setCommonTailEdgeWeights` L1259.
 
 use std::hash::{Hash, Hasher};
