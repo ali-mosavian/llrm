@@ -466,7 +466,7 @@ fn applied(
         let result = function.instruction(load).result.expect("a load's value");
         let (ty, name) = (function.value(result).ty, function.value(result).name.clone());
         let phi = function.create_instruction(Opcode::Phi, ty, arms, Flags::default(), name.as_deref());
-        function.insert(phi, Position::Before(function.block(join).instructions()[0]))?;
+        function.insert(phi, Position::Before(function.block(join).first().expect("a block with an instruction")))?;
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         function.replace_all_uses_with(result, value);
         function.erase(load)?;

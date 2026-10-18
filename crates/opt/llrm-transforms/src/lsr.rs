@@ -1395,8 +1395,8 @@ fn _steps_before_test(
     let ValueDef::Instruction(made) = function.value(step).def else { return false };
     let (here, there) = (function.parent(made), function.parent(proof.branch));
     here == there
-        && function.block(here.expect("a placed step")).instructions().iter().position(|&one| one == made)
-            < function.block(there.expect("a placed branch")).instructions().iter().position(|&one| one == proof.branch)
+        && function.block(here.expect("a placed step")).iter().position(|one| one == made)
+            < function.block(there.expect("a placed branch")).iter().position(|one| one == proof.branch)
         || here != there
             && here.is_some_and(|step| {
                 function
@@ -1418,7 +1418,7 @@ fn _live_anyway(
 ) -> BTreeSet<ValueId> {
     let mut live = BTreeSet::new();
     for &at in &loop_.body {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             if users.web.contains(&inst) || exit.is_some_and(|exit| exit.proof.compare == inst) {
                 continue;
             }
@@ -3006,7 +3006,7 @@ fn _applied(
         let start = expander.value(context, function, one.of.pointer, &one.of.start, ty);
         let step = expander.int(context, function, &one.of.step);
         let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), Some("lsr.iv"));
-        let first = function.block(plan.header).instructions()[0];
+        let first = function.block(plan.header).first().expect("a block with an instruction");
         function.insert(phi, Position::Before(first)).expect("a header");
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         let opcode = if one.of.pointer.is_some() {
@@ -3053,7 +3053,7 @@ fn _applied(
                             })
                             .ty;
                         let phi = function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), None);
-                        let first = function.block(block).instructions()[0];
+                        let first = function.block(block).first().expect("a block with an instruction");
                         function.insert(phi, Position::Before(first)).expect("an exit");
                         function.set_operands(
                             phi,
@@ -3066,9 +3066,7 @@ fn _applied(
                 };
                 let after = function
                     .block(block)
-                    .instructions()
                     .iter()
-                    .copied()
                     .find(|&inst| function.instruction(inst).opcode != Opcode::Phi)
                     .expect("a terminator");
                 (Position::Before(after), register)

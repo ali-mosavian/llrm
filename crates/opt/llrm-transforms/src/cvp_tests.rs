@@ -114,7 +114,8 @@ fn an_fcmp_of_constants_is_left_alone() {
 
 /// MIR has no operand bundles or lane operations: the `deopt` loop of
 /// `processCallSite` and the vector arms have nothing to read. A test fails
-/// the day MIR gains one. (`undef` arrived: its CVP/LVI states are owed, #2260.)
+/// the day MIR gains one. (`undef` arrived: its CVP/LVI states are owed,
+/// #2260.)
 #[test]
 fn mir_lacks_what_cvp_leaves_out() {
     let rejects = |text: &str| llrm_mir::parse::module(text).is_err();
