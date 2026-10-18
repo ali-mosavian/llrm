@@ -89,6 +89,7 @@
 //! The manager contract is `crates/ir/llrm-mir/src/passes.rs`. LLVM's
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
+pub mod aa;
 pub mod access;
 pub mod alias;
 pub mod assumptions;
