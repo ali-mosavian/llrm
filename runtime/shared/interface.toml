@@ -123,6 +123,20 @@ doc = "Resizes the memory block that starts at paragraph `segment` to `paragraph
 args = [["segment", "usize"], ["paragraphs", "usize"]]
 returns = "usize"
 
+[[op]]
+group = "memory"
+name = "block_alloc"
+doc = "A new memory block of `paragraphs` (16 bytes each), outside the program's own: its segment, or 0 when there is not that much."
+args = [["paragraphs", "usize"]]
+returns = "usize"
+
+[[op]]
+group = "memory"
+name = "block_free"
+doc = "Gives back the block `block_alloc` made at paragraph `segment`."
+args = [["segment", "usize"]]
+returns = "void"
+
 # The program's command line and environment, where the operating system has them.
 [[op]]
 group = "process"

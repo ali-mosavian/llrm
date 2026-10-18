@@ -1,4 +1,4 @@
-;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT
+;; name: LL$OPEN, LL$CREATE, LL$READ, LL$SEEK, LL$WRITE_FILE, LL$CLOSE, LL$EXIT, LL$MORE, LL$BLOCK_RESIZE, LL$BLOCK_ALLOC, LL$BLOCK_FREE, LL$VECTOR, LL$SET_VECTOR, LL$CHAIN, LL$RESTORE_VECTORS, LL$CONSOLE_READ_KEY, LL$CONSOLE_KEY_READY, LL$COMMAND_LINE, LL$ENVIRONMENT
 ;; desc: the OS layer shared by C, Nib and BASIC programs: x86-m16, real-mode DOS
 ;;
 ;; args: the interface of runtime/shared/interface.toml, in cdecl16: arguments in word slots from [bp+6],
@@ -30,6 +30,8 @@ public LL$CREATE
 public LL$READ
 public LL$SEEK
 public LL$BLOCK_RESIZE
+public LL$BLOCK_ALLOC
+public LL$BLOCK_FREE
 public LL$WRITE_FILE
 public LL$CLOSE
 public LL$EXIT
@@ -127,6 +129,40 @@ grown:
                 pop     bp
                 retf
 LL$MORE         endp
+
+;;::::::::::::::
+;; LL$BLOCK_ALLOC(paragraphs: u16) -> u16: the segment of a new block of `paragraphs` (DOS 48h), or 0.
+LL$BLOCK_ALLOC  proc    far
+                push    bp
+                mov     bp, sp
+                push    bx
+                xor     ax, ax                  ;; the program owns every free paragraph until `more` trims its
+                push    ax                      ;; block to what it holds: grow by nothing, so DOS has some to give
+                call    far ptr LL$MORE
+                add     sp, 2
+                mov     bx, [bp+6]
+                mov     ah, DOS_ALLOC
+                int     DOS_INT
+                jnc     short allocated
+                xor     ax, ax
+allocated:
+                pop     bx
+                pop     bp
+                retf
+LL$BLOCK_ALLOC  endp
+
+;; LL$BLOCK_FREE(segment: u16): gives the block at paragraph `segment` back (DOS 49h).
+LL$BLOCK_FREE   proc    far
+                push    bp
+                mov     bp, sp
+                push    es
+                mov     es, [bp+6]
+                mov     ah, DOS_FREE
+                int     DOS_INT
+                pop     es
+                pop     bp
+                retf
+LL$BLOCK_FREE   endp
 
 ;; The DOS file calls. Each returns what DOS does, or when DOS sets carry,
 ;; its error code negated.

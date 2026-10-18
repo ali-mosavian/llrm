@@ -2699,7 +2699,7 @@ pass; its indexes are `u16`.
 `write_file`, `close`, `exit`, `more`, `console_read_key` and
 `console_key_ready`, the handles `STDIN`, `STDOUT` and `STDERR`, and `write`
 and `text_screen`. `-m16` adds `vector`, `set_vector`, `chain`,
-`block_resize`, `command_line` and `environment`. A negative result is minus
+`block_resize`, `block_alloc`, `block_free`, `command_line` and `environment`. A negative result is minus
 the DOS error code.
 
 The `abi.*` modules (section 15.7) hold the BASIC adapters and the string and
