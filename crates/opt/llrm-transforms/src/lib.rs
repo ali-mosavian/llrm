@@ -111,6 +111,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
 pub mod indvars;
@@ -150,6 +152,9 @@ pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
 pub mod phiopt;
 pub mod pipeline;
@@ -160,6 +165,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simplifycfg;
 pub mod sink;
 pub mod spares;
 pub mod spill;
