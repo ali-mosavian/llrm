@@ -33,7 +33,7 @@ use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, power2};
 use crate::apint::{ashr, bit, lshr, popcount, sext, signed};
 use crate::constantrange::ConstantRange;
 use crate::context::{ConstantExpr, ConstantKind, mask};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::knownbits::KnownBits;
 use crate::module::{BlockId, Function, InstId, Instruction, Linkage, MetadataOperand, Operand, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -120,7 +120,7 @@ fn pointer_space(
 }
 
 /// `NullPointerIsDefined(F, AS)`.
-fn null_pointer_is_defined(
+pub fn null_pointer_is_defined(
     function: Option<&Function>,
     space: u32,
 ) -> bool {
@@ -189,7 +189,7 @@ fn param_has_dereferenceable(
 }
 
 /// `CallBase::paramHasNonNullAttr(ArgNo, AllowUndefOrPoison)`.
-fn param_has_non_null_attr(
+pub(crate) fn param_has_non_null_attr(
     q: &Query,
     instruction: &Instruction,
     arg: usize,
@@ -262,7 +262,7 @@ fn load_store_pointer_operand(instruction: &Instruction) -> Option<Operand> {
 /// `DominatorTree::dominates(Def, User)`.
 fn instruction_dominates(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     def: InstId,
     user: InstId,
 ) -> bool {
@@ -290,7 +290,7 @@ fn instruction_dominates(
 /// `DominatorTree::dominates(Def, UseBB)`.
 fn block_dominates_instructions(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     def: InstId,
     use_block: BlockId,
 ) -> bool {
@@ -318,7 +318,7 @@ fn block_dominates_instructions(
 /// `DominatorTree::dominates(BasicBlockEdge(Start, End), UseBB)`.
 fn dominates_edge(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     use_block: BlockId,
@@ -444,7 +444,7 @@ fn is_known_non_null_from_dominating_condition(
     q: &Query,
     v: Operand,
     cxt: Option<InstId>,
-    dt: Option<&DominatorTree>,
+    dt: Option<&DomTree>,
 ) -> bool {
     let (Some(cxt), Some(dt)) = (cxt, dt) else { return false };
     let Operand::Value(value) = v else { return false };
@@ -1500,10 +1500,15 @@ fn accumulate_constant_offset(
 }
 
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732>
-fn strip_and_accumulate_in_bounds_constant_offsets(
+///
+/// `Value::stripAndAccumulateConstantOffsets` with the default arguments
+/// but `AllowNonInbounds`: no invariant group, no external analysis, no look
+/// through `inttoptr`.
+pub fn strip_and_accumulate_constant_offsets(
     q: &Query,
     v: Operand,
     width: u32,
+    allow_non_inbounds: bool,
 ) -> (Operand, u128) {
     if !q.is_pointer(v) {
         return (v, 0);
@@ -1515,7 +1520,7 @@ fn strip_and_accumulate_in_bounds_constant_offsets(
     loop {
         let Some(operator) = operator(q, current) else { return (current, offset) };
         if let Some(gep) = gep_of(&operator) {
-            if !gep.inbounds {
+            if !allow_non_inbounds && !gep.inbounds {
                 return (current, offset);
             }
             let gep_width = q
@@ -1581,13 +1586,13 @@ fn is_non_equal_pointers_with_recursive_gep(
 
     let Some(space) = q.type_of(start).and_then(|ty| pointer_space(q, ty)) else { return false };
     let index_width = q.layout.pointer(space).index_bits;
-    let (start, start_offset) = strip_and_accumulate_in_bounds_constant_offsets(q, start, index_width);
-    let (step, step_offset) = strip_and_accumulate_in_bounds_constant_offsets(q, step, index_width);
+    let (start, start_offset) = strip_and_accumulate_constant_offsets(q, start, index_width, false);
+    let (step, step_offset) = strip_and_accumulate_constant_offsets(q, step, index_width, false);
 
     if step != gep_a.pointer {
         return false;
     }
-    let (b, offset_b) = strip_and_accumulate_in_bounds_constant_offsets(q, b, index_width);
+    let (b, offset_b) = strip_and_accumulate_constant_offsets(q, b, index_width, false);
     let (start_signed, step_signed, b_signed) =
         (signed(start_offset, index_width), signed(step_offset, index_width), signed(offset_b, index_width));
     start == b && ((start_signed >= b_signed && step_signed > 0) || (start_signed <= b_signed && step_signed < 0))

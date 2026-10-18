@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:4f4668ef683ed315060b3e5b2177fabd7d4dbeadec183200bf671e1a52be1eb4 -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:42c8609306b764d11f271d6cfee620678668400c28295b8ec46685b1b8fc0b9f -->
 
 # decide
 
@@ -82,7 +82,9 @@ at -O0. `jumpthread` is the separate pass that threads a state variable's
 edges.
 
 ## Needs
-`consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
+`consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
+branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
+until indvars decides them as LLVM does), `guards`, `induction`, points-to
 (`pointers`), the CFG shape.
 
 ## Keeps

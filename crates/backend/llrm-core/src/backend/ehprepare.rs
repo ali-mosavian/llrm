@@ -394,7 +394,13 @@ fn declare(
     let zero = module.context.int(i16, 0);
     module.add_variable(
         LANDED,
-        GlobalVariable { ty: i16, constant: false, initializer: Some(zero), align: None },
+        GlobalVariable {
+            externally_initialized: false,
+            ty: i16,
+            constant: false,
+            initializer: Some(zero),
+            align: None,
+        },
         Linkage::Internal,
     )?;
     let id = module.add_function(LANDING, nothing, Linkage::Internal)?;

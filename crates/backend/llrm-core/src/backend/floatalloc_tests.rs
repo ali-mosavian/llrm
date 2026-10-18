@@ -18,7 +18,7 @@ use crate::model::lir::{Block, Insn, LirBlock, LirBody, Phi};
 use crate::support::hash::HashMap;
 use crate::support::hash::IndexMap;
 
-fn sem(
+pub(crate) fn sem(
     op: Operation,
     name: &str,
     dests: Vec<Loc>,
@@ -27,34 +27,34 @@ fn sem(
     Semantics { name: Some(name.to_owned()), dests, sources, ..Semantics::new(op) }
 }
 
-fn fl(value: u32) -> Loc {
+pub(crate) fn fl(value: u32) -> Loc {
     Loc::Held(Held { value, width: 10 })
 }
 
-fn m(cell: &Mem) -> Loc {
+pub(crate) fn m(cell: &Mem) -> Loc {
     Loc::Mem(cell.clone())
 }
 
-fn st(index: u32) -> Loc {
+pub(crate) fn st(index: u32) -> Loc {
     Loc::st(index)
 }
 
-fn frame_cell(
+pub(crate) fn frame_cell(
     disp: i64,
     width: u32,
 ) -> Mem {
     Mem::new(Some(Addr::new(Space::Frame, disp)), width)
 }
 
-fn emits(what: &Semantics) -> bool {
+pub(crate) fn emits(what: &Semantics) -> bool {
     select::emit(what, 0, None, false, false, None).is_some()
 }
 
-fn name(one: &Insn) -> &str {
+pub(crate) fn name(one: &Insn) -> &str {
     one.what.as_ref().unwrap().name.as_deref().unwrap_or("")
 }
 
-fn what(one: &Insn) -> &Semantics {
+pub(crate) fn what(one: &Insn) -> &Semantics {
     one.what.as_ref().unwrap()
 }
 
@@ -67,7 +67,7 @@ fn held_values(args: &[Loc]) -> Vec<u32> {
         .collect()
 }
 
-fn _body(operations: Vec<Semantics>) -> LirBody {
+pub(crate) fn _body(operations: Vec<Semantics>) -> LirBody {
     let insns = operations
         .into_iter()
         .enumerate()
@@ -83,7 +83,7 @@ fn _body(operations: Vec<Semantics>) -> LirBody {
     }
 }
 
-fn block(
+pub(crate) fn block(
     at: i64,
     insns: Vec<Arc<Insn>>,
     succ: Vec<i64>,
@@ -92,11 +92,11 @@ fn block(
 }
 
 /// As the pipeline runs it: phis are copies by now.
-fn run(body: &LirBody) -> LirBody {
+pub(crate) fn run(body: &LirBody) -> LirBody {
     allocated(&phielim::eliminated(body).unwrap(), None, None, true, "386").unwrap()
 }
 
-fn with_frame(
+pub(crate) fn with_frame(
     body: &LirBody,
     frame: &mut Frame,
 ) -> LirBody {
@@ -121,7 +121,7 @@ fn arith(
 
 /// Run allocated instructions over `memory`, cells to numbers: the memory after
 /// and the stack left.
-fn _x87(
+pub(crate) fn _x87(
     insns: &[Arc<Insn>],
     memory: &[(&Mem, f64)],
 ) -> (HashMap<Mem, f64>, Vec<f64>) {
@@ -130,7 +130,7 @@ fn _x87(
 }
 
 /// `_x87`, and every store to memory in order.
-fn _x87_traced(
+pub(crate) fn _x87_traced(
     insns: &[Arc<Insn>],
     memory: &[(&Mem, f64)],
 ) -> (HashMap<Mem, f64>, Vec<f64>, Vec<(Mem, f64)>) {
@@ -206,7 +206,7 @@ fn _x87_traced(
 
 /// The instructions run along `path`, through any block allocation put on an
 /// edge of it.
-fn _along(
+pub(crate) fn _along(
     result: &LirBody,
     path: &[i64],
 ) -> Vec<Arc<Insn>> {
@@ -230,21 +230,21 @@ fn _cells(
     displacements.into_iter().map(|disp| frame_cell(disp, width)).collect()
 }
 
-fn _load(
+pub(crate) fn _load(
     value: u32,
     cell: &Mem,
 ) -> Semantics {
     sem(Operation::FloatLoad, "fld", vec![fl(value)], vec![m(cell)])
 }
 
-fn _store(
+pub(crate) fn _store(
     cell: &Mem,
     value: u32,
 ) -> Semantics {
     sem(Operation::FloatStore, "fstp", vec![m(cell)], vec![fl(value)])
 }
 
-fn _arithmetic(
+pub(crate) fn _arithmetic(
     name: &str,
     result: u32,
     left: Loc,
@@ -253,7 +253,7 @@ fn _arithmetic(
     sem(Operation::FloatArith, name, vec![fl(result)], vec![left, right])
 }
 
-fn fchs(
+pub(crate) fn fchs(
     result: u32,
     source: u32,
 ) -> Semantics {
