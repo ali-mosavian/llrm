@@ -4,6 +4,7 @@
 cases = [
   "arith",
   "bitfield_long_long",
+  "byval_initializes",
   "bintree/bintree.c [-O2 -march=i486]",
   "algebra/algebra.c [-O2 -march=i486]",
   "loop/loop.c [-O2 -march=i486]",
