@@ -228,22 +228,20 @@ fn rotated_with(trips: u32) -> String {
     ROTATED.replace("i16 %next, 4", &format!("i16 %next, {trips}"))
 }
 
-/// Seconds `unroll_loop` takes on the rotated loop at `trips`, least of three.
-fn unroll_seconds(trips: u32) -> f64 {
-    (0..3)
-        .map(|_| {
-            let mut module = parsed(&rotated_with(trips));
-            let start = std::time::Instant::now();
-            assert_eq!(unrolled(&mut module, "b1", trips, &[("b2", trips)]), Unrolled::Fully);
-            start.elapsed().as_secs_f64()
-        })
-        .fold(f64::MAX, f64::min)
+/// Layout, block and use-list entries `unroll_loop` looks over at `trips`.
+fn unroll_scanned(trips: u32) -> usize {
+    use llrm_mir::edit::{instructions_scanned, layout_scanned, uses_scanned};
+    let mut module = parsed(&rotated_with(trips));
+    let before = layout_scanned() + instructions_scanned() + uses_scanned();
+    assert_eq!(unrolled(&mut module, "b1", trips, &[("b2", trips)]), Unrolled::Fully);
+    layout_scanned() + instructions_scanned() + uses_scanned() - before
 }
 
-/// Placing each copy by scanning the layout made the unroll quadratic: each
-/// doubling of the count took about four times as long.
+/// Unrolling scanned the layout, the exit's use list and its phi once per copy,
+/// so doubling the count quadrupled the entries looked over (seen: 3.3 to 4x
+/// by time before the fix; counted, not timed, because time failed under load).
 #[test]
-fn test_unroll_time_doubles_with_the_count() {
-    let (a, b, c) = (unroll_seconds(1024), unroll_seconds(2048), unroll_seconds(4096));
-    assert!(b / a <= 2.6 && c / b <= 2.6, "1024: {a:.4}s, 2048: {b:.4}s, 4096: {c:.4}s");
+fn test_unroll_scans_double_with_the_count() {
+    let (a, b, c) = (unroll_scanned(256), unroll_scanned(512), unroll_scanned(1024));
+    assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "256: {a}, 512: {b}, 1024: {c}");
 }
