@@ -1680,7 +1680,8 @@ fn _arm_bytes(
         .sum()
 }
 
-/// Selected bytes in a source-unowned terminal return block, without the frame teardown the emitter adds.
+/// Selected bytes in a source-unowned terminal return block, without the frame
+/// teardown the emitter adds.
 pub fn _duplicable_return_size(
     bits: u32,
     block: &LirBlock,

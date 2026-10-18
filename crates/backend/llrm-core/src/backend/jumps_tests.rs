@@ -909,8 +909,8 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
     assert!(physical.iter().all(|one| one.op != Operation::Jump));
 }
 
-/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2, 11 procedures), also those whose one return
-/// has nothing to duplicate into.
+/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2,
+/// 11 procedures), also those whose one return has nothing to duplicate into.
 #[test]
 fn test_return_duplication_asks_for_the_overhead_only_for_a_tail_with_two_jumping_parents() {
     let asked = std::cell::Cell::new(0);
