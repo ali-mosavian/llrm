@@ -20,8 +20,12 @@
 //! `LLRM_SHADOW_COALESCE=1 llrm-c -O2 f.c` prints
 //! `shadow-coalesce f: copies 30 old-left 4 new-left 3 joined 27`.
 //!
+//! `joined` is the same run returning the body, which `backend::coalesce` uses
+//! in place of the old pass under `LLRM_COALESCE_LLVM`.
+//!
 //! # Used by
-//! `backend::coalesce` (behind `LLRM_SHADOW_COALESCE`).
+//! `backend::coalesce` (behind `LLRM_SHADOW_COALESCE` and
+//! `LLRM_COALESCE_LLVM`).
 
 use std::collections::BTreeSet;
 
@@ -86,4 +90,15 @@ pub fn run(
     }
     let left = copies_in(&after);
     Report { copies, left, stats }
+}
+
+/// `body` with its copies joined by the translated coalescer.
+pub fn joined(
+    body: &LirBody,
+    env: &dyn CoalescerEnv,
+    depth: &[u32],
+) -> LirBody {
+    let mut lis = LiveIntervals::new(body);
+    driver::run(&mut lis, env, depth);
+    lis.body_like(body)
 }

@@ -45,6 +45,14 @@
 //! end every value is renamed to its web's root and identity moves are
 //! dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
 //!
+//! `LLRM_COALESCE_LLVM=1` runs the translation of LLVM's `RegisterCoalescer`
+//! ([`crate::coalescer`]) in place of all of the above;
+//! `LLRM_SHADOW_COALESCE=1` runs it beside, and prints the copies each leaves.
+//! It joins by interval overlap and leaves colouring to the allocator, so it
+//! joins more (bench `-O2` m32: 939 copies left of 5,499, against 2,342 here)
+//! and `d_faces` is 2.5% smaller; `fib`, `frames`, `queens` and `rectwo` grow
+//! (+128, +128, +32, +32 bytes), which is why it is not the default.
+//!
 //! # Example
 //! A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
 //! `v4`. `v5 := mov v4` stays: `v4` and `v5` are pinned to EAX and EDX. `;
@@ -146,6 +154,12 @@ impl LIRTransform for Coalescer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        // The translated pass in place of the old one (`LLRM_COALESCE_LLVM`).
+        if llrm_support::env_flag!("LLRM_COALESCE_LLVM") {
+            if let Some((env, depth)) = self.llvm_env(&body) {
+                return Ok(crate::coalescer::shadow::joined(&body, &env, &depth));
+            }
+        }
         let after = joined(&body, Some(&self.pinned), &self.segments, &self.classes);
         if llrm_support::env_flag!("LLRM_SHADOW_COALESCE") {
             self.shadow(&body, &after);
@@ -155,15 +169,15 @@ impl LIRTransform for Coalescer {
 }
 
 impl Coalescer {
-    /// The translated `RegisterCoalescer` on the same body, to compare what is
-    /// left (`LLRM_SHADOW_COALESCE`).
-    fn shadow(
+    /// What the translated coalescer asks of the target for `body`: the
+    /// registers each value may take and the ones that are fixed. None where
+    /// it does not apply (a body with phis).
+    fn llvm_env(
         &self,
         body: &LirBody,
-        old: &LirBody,
-    ) {
+    ) -> Option<(crate::coalescer::shadow::ShadowEnv, Vec<u32>)> {
         if body.blocks.iter().any(|block| !block.phis.is_empty()) {
-            return;
+            return None;
         }
         let mut pins = body.pins.clone();
         pins.extend(self.pinned.iter().map(|(value, register)| (*value, *register)));
@@ -188,9 +202,19 @@ impl Coalescer {
                 palettes.insert(*value, BTreeSet::from([*register]));
             }
         }
-        let env = crate::coalescer::shadow::ShadowEnv { palettes, pins };
         let depths = ranges::depths_shared(body);
-        let depth: Vec<u32> = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+        let depth = body.blocks.iter().map(|block| depths.get(&block.at).copied().unwrap_or(0)).collect();
+        Some((crate::coalescer::shadow::ShadowEnv { palettes, pins }, depth))
+    }
+
+    /// The translated `RegisterCoalescer` on the same body, to compare what is
+    /// left (`LLRM_SHADOW_COALESCE`).
+    fn shadow(
+        &self,
+        body: &LirBody,
+        old: &LirBody,
+    ) {
+        let Some((env, depth)) = self.llvm_env(body) else { return };
         let report = crate::coalescer::shadow::run(body, &env, &depth);
         let old_copies =
             old.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| _copy(one).is_some()).count();
