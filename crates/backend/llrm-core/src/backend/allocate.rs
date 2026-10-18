@@ -1628,6 +1628,9 @@ pub fn greedy_rewritten(
         if to_spill.is_empty() {
             GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
             let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
+            if llrm_support::env_flag!("LLRM_GREEDY_CHECK") {
+                greedy_check(&current, &facts, &r#where, classes);
+            }
             return Ok((
                 Assignment {
                     r#where,
@@ -1651,6 +1654,39 @@ pub fn greedy_rewritten(
         eprintln!("greedy fallback: {}", body.name);
     }
     rewritten(body, pinned, unspillable, protected, cpu, segments, classes, frame, splitting)
+}
+
+/// Reports on stderr every pair of values placed in registers that overlap while
+/// both are live, and every value live across a point that destroys its register.
+fn greedy_check(
+    body: &LirBody,
+    facts: &Facts,
+    placed: &IndexMap<u32, RegId>,
+    classes: &RegisterClasses,
+) {
+    let info = crate::greedy::virtregmap::RegisterInfo::new(classes.registers);
+    use crate::backend::live::Ranges as _;
+    let live = |value: u32| facts.live.range(value);
+    for one in body.insns() {
+        for (held, register) in one.requires.iter().chain(&one.delivers) {
+            if placed.get(&held.value).is_some_and(|got| _whole(*got) != _whole(*register)) {
+                eprintln!("greedy-check {}: v{} must be in {} but is in {}", body.name, held.value, register.repr(), placed[&held.value].repr());
+            }
+        }
+    }
+    let values: Vec<(&u32, &RegId)> = placed.iter().collect();
+    for (at, (a, ra)) in values.iter().enumerate() {
+        let Some(ia) = live(**a) else { continue };
+        let width = facts.widths.get(*a).copied().unwrap_or(2);
+        if _clobbered(ia, **ra, &facts.masks, width) {
+            eprintln!("greedy-check {}: v{a} in {} is live across a point that destroys it", body.name, ra.repr());
+        }
+        for (b, rb) in &values[at + 1..] {
+            if info.overlaps(**ra, **rb) && live(**b).is_some_and(|ib| ia.overlaps(ib)) {
+                eprintln!("greedy-check {}: v{a} in {} and v{b} in {} are live together", body.name, ra.repr(), rb.repr());
+            }
+        }
+    }
 }
 
 /// (allocations the greedy allocator made, allocations it left to this one).
@@ -4121,7 +4157,13 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocate = if llrm_support::env_flag!("LLRM_GREEDY") { greedy_rewritten } else { rewritten };
+            let allocate = if llrm_support::env_flag!("LLRM_GREEDY")
+                && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
+            {
+                greedy_rewritten
+            } else {
+                rewritten
+            };
             let allocated = allocate(
                 candidate,
                 Some(&pins),
