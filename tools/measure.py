@@ -64,8 +64,9 @@ def build_tree(root: Path = ROOT, env: dict | None = None) -> Path:
 
 
 BUILDS = Path.home() / ".cache/llrm/measure-build"
-# The builds kept, least recently used out first past this many bytes (LLRM_MEASURE_BUILD_CAP_GB): a build tree is 10-37 GB.
-BUILD_CAP = int(float(os.environ.get("LLRM_MEASURE_BUILD_CAP_GB") or 120) * 2**30)
+# The builds kept, least recently used out first past this many bytes (LLRM_MEASURE_BUILD_CAP_GB, default 40 GB: a build tree is 10-37 GB; at 120 the cache held 92 GB and filled the disk).
+DEFAULT_BUILD_CAP_GB = 40
+BUILD_CAP = int(float(os.environ.get("LLRM_MEASURE_BUILD_CAP_GB") or DEFAULT_BUILD_CAP_GB) * 2**30)
 
 
 def size_of(tree: Path) -> int:
