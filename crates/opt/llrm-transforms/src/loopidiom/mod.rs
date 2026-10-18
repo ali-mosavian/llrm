@@ -446,7 +446,7 @@ pub fn get_num_bytes(
     store_size_scev: Scev,
     cur_loop: Loop,
 ) -> Scev {
-    let trip_count_scev = se.get_trip_count_from_exit_count(cx, be_count, int_ptr, cur_loop.get_header());
+    let trip_count_scev = se.get_trip_count_from_exit_count(cx, be_count, int_ptr, Some(cur_loop.get_header()));
     let size = se.get_truncate_or_zero_extend(cx, store_size_scev, int_ptr, 0);
     se.get_mul_expr(cx, vec![Use::of(trip_count_scev), Use::of(size)], ScevFlags::expr(flags::NUW), 0).scev
 }

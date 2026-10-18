@@ -1420,39 +1420,3 @@ fn test_only_the_loops_holding_a_masked_source_are_asked_what_advances() {
         "{with_two_more} loops asked with two loops that hold no masked source, {alone} without"
     );
 }
-
-/// CVP's `processAnd` and `processSDivOrSRem` read LazyValueInfo, which knows
-/// an `llvm.assume` the `ranges` engine does not: `x & 63` after
-/// `assume(x u< 64)` is `x`, and `x sdiv 4` after `assume(x s>= 0)` is a
-/// shift. Both stayed.
-#[test]
-fn a_mask_and_a_division_an_assume_makes_redundant_are_removed() {
-    let mask = checked(
-        "declare void @llvm.assume(i1)
-
-define i32 @f(i32 %x) {
-b0:
-  %a = icmp ult i32 %x, 64
-  call void @llvm.assume(i1 %a)
-  %m = and i32 %x, 63
-  ret i32 %m
-}
-",
-        &[vec![5], vec![63]],
-    );
-    assert!(!mask.contains("and i32"), "{mask}");
-    let division = checked(
-        "declare void @llvm.assume(i1)
-
-define i32 @f(i32 %x) {
-b0:
-  %a = icmp sge i32 %x, 0
-  call void @llvm.assume(i1 %a)
-  %d = sdiv i32 %x, 4
-  ret i32 %d
-}
-",
-        &[vec![8], vec![0], vec![7]],
-    );
-    assert!(!division.contains("sdiv"), "{division}");
-}

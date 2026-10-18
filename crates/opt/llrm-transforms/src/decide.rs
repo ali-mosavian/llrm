@@ -77,9 +77,7 @@
 //! edges.
 //!
 //! # Needs
-//! `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating
-//! branches, assumes and `!range`s settle), `ranges` (the counted loops' facts,
-//! until indvars decides them as LLVM does), `guards`, `induction`, points-to
+//! `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
 //! (`pointers`), the CFG shape.
 //!
 //! # Keeps
@@ -107,12 +105,9 @@ use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
-use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
-use llrm_mir::valuelattice::LatticeConstant;
-use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::IndexMap;
 
 use crate::edges;
@@ -173,8 +168,7 @@ fn _decided(
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let settled = _settled(context, layout, function, analyses.outer());
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers, &settled)?;
+    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -191,7 +185,6 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    settled: &llrm_mir::dense::IdMap<BlockId, bool>,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -251,9 +244,6 @@ fn _decisions(
         };
         let mut answer = _outcome(unit, block, &facts, Some(&nonnull));
         if answer.is_none() {
-            answer = settled.get(&block).copied();
-        }
-        if answer.is_none() {
             let scope = scoped.scope(unit, cfg::id(block));
             let mut possible = Vec::new();
             for target in function.successors(block) {
@@ -271,45 +261,6 @@ fn _decisions(
         out.extend(answer.map(|answer| (block, if answer { taken } else { other })));
     }
     Ok(out)
-}
-
-/// The conditional branches LazyValueInfo settles: the compare a branch is on
-/// holds or fails at it, from the branches that dominate it, the assumes and
-/// the `!range`s, as `JumpThreading`'s `processBranchOnCompare` asks
-/// (`getPredicateAt(Pred, LHS, RHS, Terminator)`); a condition that is no
-/// compare is asked as a constant (`getConstant`).
-fn _settled(
-    context: &mut Context,
-    layout: &DataLayout,
-    function: &Function,
-    outer: &Outer,
-) -> llrm_mir::dense::IdMap<BlockId, bool> {
-    let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
-    let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
-    let mut lvi = LazyValueInfo::new();
-    let mut settled = llrm_mir::dense::IdMap::default();
-    for &block in function.layout() {
-        let Some(last) = function.terminator(block) else { continue };
-        let branch = function.instruction(last);
-        if branch.opcode != Opcode::Br || branch.operands.len() != 3 {
-            continue;
-        }
-        let answer = match transform::_comparison(function, block, last) {
-            Some(compare) => {
-                let compare = function.instruction(compare);
-                let Opcode::ICmp(predicate) = compare.opcode else { continue };
-                lvi.get_predicate_at_values(&mut env, predicate, compare.operands[0], compare.operands[1], last, true)
-            }
-            None => match lvi.get_constant(&mut env, branch.operands[0], last) {
-                Some(LatticeConstant::Int { bits, .. }) => Some(bits & 1 == 1),
-                _ => None,
-            },
-        };
-        if let Some(answer) = answer {
-            settled.insert(block, answer);
-        }
-    }
-    settled
 }
 
 /// Whether the compare `last` branches on holds or fails there, by what the

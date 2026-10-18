@@ -33,6 +33,10 @@ fn main() -> ExitCode {
     if values {
         arguments.remove(0);
     }
+    let counts = arguments.first().is_some_and(|one| one == "--scev-counts");
+    if counts {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -100,6 +104,10 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
                 print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if counts {
+                print!("{}", llrm_analysis::scev::values::print_module_counts(&module));
                 return ExitCode::SUCCESS;
             }
             if loops {
