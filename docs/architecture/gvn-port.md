@@ -120,6 +120,8 @@ Stages 1 and 3 can land before the two upstream dependencies.
 | D3 | no debug-value salvage | MIR has no debug-value use lists | test with debug info |
 | D5 | masked loads, `invariant.group` | not in MIR | assert at the front ends |
 | D6 | `VNCoercion` arms for scalable vectors, target-ext types, non-integral pointers | not in `Type` or the datalayout | none reachable |
+| D15 | stage 1 asks no phi to `simplifyInstruction` (temporary; oversight to rule) | a measured loss: with it x_hanoi2 -O2 +22.8% clocks, quicksort +1.5% (the loop's invariant phi simplified, its expressions merged with copies outside, a live range the allocator spills) | exit: both traced and fixed in LICM or regalloc; `gvn_scalar_tests::test_a_loops_invariant_phi_is_kept` |
+| D16 | stage 1 keeps IR flags in `Expression` (LLVM's has none: [GVN.cpp#L154](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/GVN.cpp#L154)); temporary; oversight to rule | a measured loss: merging `sub nsw` with `sub` through [`patchReplacementInstruction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L3194) drops the `nsw`, x_mergesort -O2 +5.9% memory operands, -Os +21%; the reader of that `nsw` is not yet identified | exit: that reader named and fixed; `gvn_scalar_tests::test_expressions_differing_in_flags_stay_two` |
 | D7 | optimization remarks | no remark stream | |
 | D8 | llrm's motion pricing | not LLVM; removed unless rows keep it | stage 5 rows |
 
