@@ -30,6 +30,7 @@ pub mod inline;
 pub mod interpret;
 pub mod intrinsics;
 pub mod knownbits;
+pub mod lazyvalueinfo;
 pub mod lexer;
 pub mod lint;
 pub mod loopinfo;
