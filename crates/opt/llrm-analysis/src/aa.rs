@@ -24,6 +24,8 @@ pub enum LocationSize {
     UpperBound(u64),
     /// Any bytes before or after the pointer, within its object.
     BeforeOrAfterPointer,
+    /// Any bytes after the pointer, within its object.
+    AfterPointer,
     Unknown,
 }
 
