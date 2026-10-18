@@ -33,3 +33,13 @@ def test_without_the_difftest_normaliser_it_stops_and_says_why(monkeypatch, tmp_
     monkeypatch.setattr(aliascompare, "HERE", tmp_path)
     with pytest.raises(SystemExit, match="DIFFTEST_DIR"):
         aliascompare.difftest()
+
+
+def test_a_set_the_reference_only_ever_calls_may_alias_is_refused():
+    """An analysis that answers one way agrees with anything: a table over such a set is no evidence."""
+    import collections
+
+    only_may = collections.Counter({("MayAlias", "MayAlias"): 10, ("NoAlias", "MayAlias"): 3})
+    assert "NoAlias, MustAlias" in aliascompare.premise(only_may)
+    varied = collections.Counter({("MayAlias", "MayAlias"): 10, ("NoAlias", "NoAlias"): 3, ("MayAlias", "MustAlias"): 1})
+    assert aliascompare.premise(varied) is None

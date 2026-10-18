@@ -92,6 +92,16 @@ def theirs_for(theirs: dict[Key, str], key: Key) -> str | None:
     return None
 
 
+def premise(table: collections.Counter) -> str | None:
+    """Why the reference cannot be trusted on this set: a comparison against an analysis that answered MayAlias alone, or never MustAlias or NoAlias,
+    says nothing of the pairs it was asked (an instrument that cannot answer in more than one way agrees with anything)."""
+    seen = {theirs for (_, theirs) in table}
+    missing = {"NoAlias", "MustAlias"} - seen
+    if missing:
+        return f"the reference never answered {', '.join(sorted(missing))} on this set (it answered {', '.join(sorted(seen)) or 'nothing'})"
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="+", type=Path)
@@ -132,6 +142,9 @@ def main() -> int:
         print(f"  {ours:9} {theirs:12} {count:8}{flag}")
     print(f"pairs llrm printed that aa-eval did not: {unmatched}")
     print(f"pairs aa-eval printed that llrm did not: {theirs_only}")
+    if (why := premise(table)) is not None:
+        print(f"FAILED PREMISE: {why}")
+        return 1
     return 0
 
 
