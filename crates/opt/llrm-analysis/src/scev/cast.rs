@@ -163,7 +163,7 @@ impl ScalarEvolution {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1214
     /// `getSignedOverflowLimitForStep`: the predicate and limit, or none.
-    fn get_signed_overflow_limit_for_step(
+    pub(super) fn get_signed_overflow_limit_for_step(
         &mut self,
         cx: &Cx,
         step: Scev,
@@ -185,7 +185,7 @@ impl ScalarEvolution {
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1234
     /// `getUnsignedOverflowLimitForStep`.
-    fn get_unsigned_overflow_limit_for_step(
+    pub(super) fn get_unsigned_overflow_limit_for_step(
         &mut self,
         cx: &Cx,
         step: Scev,

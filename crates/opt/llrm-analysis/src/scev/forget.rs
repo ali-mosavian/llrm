@@ -6,8 +6,7 @@
 //! `ValuesAtScopes`, `BECountUsers`, the wrap-via-induction sets) are
 //! cleared here when they land with their stage.
 
-use std::collections::HashSet;
-
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand};
 
 use super::expr::Scev;
@@ -67,6 +66,10 @@ impl ScalarEvolution {
         self.unsigned_ranges.remove(&s);
         self.signed_ranges.remove(&s);
         self.constant_multiple_cache.remove(&s);
+
+        // `UnsignedWrapViaInductionTried.erase(AR)` and the signed one.
+        self.unsigned_wrap_via_induction_tried.remove(&s);
+        self.signed_wrap_via_induction_tried.remove(&s);
 
         if let Some(values) = self.expr_value_map.remove(&s) {
             for value in values {

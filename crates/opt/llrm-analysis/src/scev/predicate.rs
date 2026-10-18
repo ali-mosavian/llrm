@@ -3,10 +3,11 @@
 //! Reasoning` adds to the constant ranges. The implication engine
 //! (`isImpliedCond`, `applyLoopGuards`) and the loop guards are the rest of S5.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::dense::IdSet;
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 
@@ -1033,7 +1034,7 @@ impl ScalarEvolution {
         s: Scev,
         loops_used: &mut IdSet<BlockId>,
     ) {
-        let mut visited = HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = vec![s];
         visited.insert(s);
         while let Some(s) = worklist.pop() {
