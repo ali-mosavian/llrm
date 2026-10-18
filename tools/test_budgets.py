@@ -5,6 +5,9 @@ floor. A budget is what an event count or a step's instructions may grow by when
 pass run once for each loop instead of once for the function reads as 4 where it read as 2. Every entry in budgets.toml above the
 default is a debt: it names its issue and its owner, and the file only shrinks (docs/architecture/compile-time-spec.md, section 6).
 
+The budgets are recorded on CI's build (release, CARGO_INCREMENTAL=0; the gate sets it). An incremental or dist binary counts the same step 9% lower or
+higher, enough to cross the share: run it through `gate.py run`, or build with CARGO_INCREMENTAL=0.
+
 Two kinds:
 - events, exact and the same on any host (`LLRM_DEBUG=counts`: analysis misses, copies of a function, allocations, builders of
   dominators, loops, shapes): every count at 2N is at most `linear` times its count at N, plus `slack`, and the counts of a program of
