@@ -379,4 +379,32 @@ mod tests {
         assert_eq!((layout.offset_bits(0), layout.offset_bits(1)), (16, 16));
         assert_eq!(layout.offset_bits(3), 16);
     }
+
+    /// `getPrefTypeAlign`: LLVM's defaults prefer an aggregate 8-byte
+    /// aligned (`a:0:64`) and an `i64` 8 (`i64:32:64`), over their ABI 1 and
+    /// 4 here; a stated preferred alignment wins. `pointer_alignment` took the
+    /// ABI one for a global and lost the low 3 bits of its address.
+    #[test]
+    fn the_preferred_alignment_of_an_aggregate_is_8_unless_the_layout_says_otherwise() {
+        let mut module = crate::parse::module(
+            "@g = global <{ [2 x i8], i16 }> zeroinitializer\n@h = global i64 0\n@p = global ptr null\n",
+        )
+        .unwrap();
+        let types = &module.context.types;
+        let of = |name: &str| {
+            let variable = module.globals.iter().find(|one| one.name.as_deref() == Some(name)).unwrap();
+            let crate::module::GlobalKind::Variable(variable) = &variable.kind else { unreachable!("a variable") };
+            variable.ty
+        };
+        let layout = DataLayout::default();
+        assert_eq!((layout.align(types, of("g")), layout.pref_align(types, of("g"))), (1, 8));
+        assert_eq!((layout.align(types, of("h")), layout.pref_align(types, of("h"))), (4, 8));
+        assert_eq!(layout.pref_align(types, of("p")), layout.pointer(0).align);
+        let stated = DataLayout::parse("a:0:32-i64:32:128-p:64:64:128").unwrap();
+        assert_eq!(
+            (stated.pref_align(types, of("g")), stated.pref_align(types, of("h")), stated.pref_align(types, of("p"))),
+            (4, 16, 16)
+        );
+        module.globals.clear();
+    }
 }
