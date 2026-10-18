@@ -237,8 +237,13 @@ impl Declared {
         let id = GlobalId(self.next);
         self.next += 1;
         self.names().insert(name.clone(), id);
-        let variable =
-            crate::module::GlobalVariable { ty, constant: true, initializer: Some(initializer), align: None };
+        let variable = crate::module::GlobalVariable {
+            externally_initialized: false,
+            ty,
+            constant: true,
+            initializer: Some(initializer),
+            align: None,
+        };
         self.pending.push(Pending::Table(name, variable));
         id
     }
@@ -1218,6 +1223,18 @@ impl Analyses {
     /// The proxy, not noted as a read: for the manager's own use.
     pub fn outer_unread(&self) -> &Rc<Outer> {
         &self.outer
+    }
+
+    /// `A`'s result, if computed, and the point in the function's history it
+    /// was true at: the cached one, or one kept past an invalidation for
+    /// `update` to bring up to date. What a pass that edits and rarely asks
+    /// holds (the updates queue in the change log), for LLVM's lazy
+    /// `DomTreeUpdater`.
+    pub fn held<A: Analysis>(&self) -> Option<(Rc<A::Result>, crate::module::Mark)> {
+        let key = TypeId::of::<A>();
+        let entry = self.cache.get(&key).or_else(|| self.kept.get(&key))?;
+        let entry = entry.as_any().downcast_ref::<Entry<A>>().expect("keyed by its type");
+        Some((Rc::clone(&entry.result), entry.mark))
     }
 
     /// `A`'s result, if computed: LLVM's `getCachedResult`.

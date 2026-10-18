@@ -1,0 +1,32 @@
+t 0 load i32 1
+t 1 load i32 4
+t 2 load i8 9
+t 3 load i64 11
+t 4 load i16 3
+t 5 load i32 33554432
+t 6 load i64 12884901890
+t 7 load i32 4261412864
+t 8 load i8 0
+t 9 load i64 0
+t 10 load i32 4294967295
+t 11 load i8 101
+t 12 load i32 1819043176
+t 13 load float 0x40200000
+t 14 load i32 1069547520
+t 15 load i64 4612811918334230528
+t 16 load double 0x4004000000000000
+t 17 load ptr @g
+t 18 load ptr null
+t 19 load i64 ptrtoint (ptr @g)
+t 20 load -
+t 21 load i32 poison
+t 22 load i32 3
+t 23 load i8 poison
+t 24 load i8 poison
+t 25 load i128 340282366920938463463374607431768211455
+t 26 load i16 1
+t 27 load i32 131073
+t 28 load -
+t 29 load -
+t 30 load -
+t 31 load i1 0

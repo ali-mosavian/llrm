@@ -240,7 +240,7 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
     ) -> AccessId {
         assert!(!self.mssa.access(from).incoming.is_empty(), "phi with no operands?");
         let mut node = Some(cfg::id(self.mssa.access(from).block));
-        while let Some(at) = node.and_then(|at| self.mssa.dominance.immediate(at)) {
+        while let Some(at) = node.and_then(|at| self.mssa.dominance.immediate_resolved(at)) {
             if let Some(defs) = self.mssa.get_block_defs(cfg::block(at)) {
                 return *defs.last().expect("a non-empty defs list");
             }
@@ -472,7 +472,11 @@ impl<'m, 'a> ClobberWalker<'m, 'a> {
                 // Because we know the chain end is as 'high' as we can go,
                 // block dominance is sufficient.
                 for tp in &terminated_paths {
-                    if self.mssa.dominance.dominates(cfg::id(chain_bb), cfg::id(self.mssa.access(tp.clobber).block)) {
+                    if self
+                        .mssa
+                        .dominance
+                        .dominates_resolved(cfg::id(chain_bb), cfg::id(self.mssa.access(tp.clobber).block))
+                    {
                         clobbers.push(*tp);
                     }
                 }
@@ -743,7 +747,7 @@ impl Mssa {
                                 may_be_cross_iteration: map.may_be_cross_iteration,
                             },
                         ) {
-                            if block.is_none_or(|b| self.dominance.reachable(cfg::id(b))) {
+                            if block.is_none_or(|b| self.dominance.reachable_resolved(cfg::id(b))) {
                                 worklist.push(e);
                             }
                         }

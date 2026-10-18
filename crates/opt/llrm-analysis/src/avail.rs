@@ -1201,7 +1201,7 @@ fn memory_providers(
     }
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
-        dominance.dominates(source_block, block) && (source_block != block || source_index < index)
+        dominance.dominates(unit.function, source_block, block) && (source_block != block || source_index < index)
     };
 
     // Whether `value` is defined where `site` can read it.
@@ -1238,7 +1238,7 @@ fn memory_providers(
     // that dominate a site are found from its block upward, nearest first,
     // where every load of the same bytes was taken and sorted for each site
     // (9.5 M candidates for 7,000 sites at N=1024).
-    let tree = shape.dominance.tree();
+    let tree = shape.dominance.tree(unit.function);
     let nearest = crate::nearest::Nearest::of(
         tree,
         loads

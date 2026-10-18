@@ -414,9 +414,9 @@ fn merged(
 ) -> Option<Merged> {
     let reaches = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => {
-                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), cfg::id(join)))
-            }
+            ValueDef::Instruction(def) => function
+                .parent(def)
+                .is_some_and(|block| shape.dominance.dominates(function, cfg::id(block), cfg::id(join))),
             ValueDef::Argument(_) => true,
         },
         _ => true,
