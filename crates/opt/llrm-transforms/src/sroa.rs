@@ -1353,7 +1353,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 if !self.function().users(result).is_empty() {
                     // `UndefValue::get` (SROA.cpp#L6393).
                     let ty = self.function().value(result).ty;
-                    let undef = Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef }));
+                    let undef =
+                        Operand::Constant(self.unit.context.constant(Constant { ty, kind: ConstantKind::Undef }));
                     self.unit.function.replace_value(result, undef);
                 }
             }

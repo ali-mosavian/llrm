@@ -48,7 +48,6 @@ impl Function {
         }
     }
 
-
     fn add_use(
         &mut self,
         operand: Operand,

@@ -859,7 +859,11 @@ fn no_file_gains_a_slice_read_of_a_use_list() {
                 continue;
             }
             let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
-            if name.ends_with(".rs") && !name.ends_with("_tests.rs") && !name.ends_with("/tests.rs") && !name.contains("/tests/") {
+            if name.ends_with(".rs")
+                && !name.ends_with("_tests.rs")
+                && !name.ends_with("/tests.rs")
+                && !name.contains("/tests/")
+            {
                 sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
             }
         }

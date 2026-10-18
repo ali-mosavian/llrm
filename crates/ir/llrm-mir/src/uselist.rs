@@ -3,8 +3,8 @@
 //! through its own links, both O(1).
 //!
 //! A node per operand slot: the slots of instruction `i` are the nodes from
-//! `base[i]` for `cap[i]` entries, so the node of `Use { user, index }` is found
-//! without a search.
+//! `base[i]` for `cap[i]` entries, so the node of `Use { user, index }` is
+//! found without a search.
 
 use crate::module::Use;
 
@@ -134,7 +134,10 @@ impl UseLists {
             let cap = len.max(self.cap[inst] as usize * 2);
             self.base[inst] = self.nodes.len() as u32;
             self.cap[inst] = cap as u32;
-            self.nodes.resize(self.nodes.len() + cap, Node { at: Use { user: crate::module::InstId(0), index: 0 }, prev: NIL, next: NIL });
+            self.nodes.resize(
+                self.nodes.len() + cap,
+                Node { at: Use { user: crate::module::InstId(0), index: 0 }, prev: NIL, next: NIL },
+            );
         }
     }
 

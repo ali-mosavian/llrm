@@ -5,6 +5,9 @@
 pub mod alias;
 pub mod apfloat;
 pub mod apint;
+pub mod arena;
+#[cfg(test)]
+mod arena_tests;
 pub mod blockfrequency;
 pub mod blocklist;
 pub mod build;
@@ -13,9 +16,6 @@ pub mod codemetrics;
 pub mod constantfolding;
 pub mod constantfolding_dump;
 pub mod constantfprange;
-pub mod arena;
-#[cfg(test)]
-mod arena_tests;
 pub mod constantrange;
 pub mod constfold;
 pub mod constraintsystem;
@@ -69,8 +69,8 @@ pub mod tbaa;
 pub mod touched;
 pub mod tti;
 pub mod types;
-pub mod valuelattice;
 pub mod uselist;
+pub mod valuelattice;
 pub mod valuetracking;
 pub mod verify;
 
