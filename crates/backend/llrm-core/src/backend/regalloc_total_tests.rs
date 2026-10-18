@@ -74,10 +74,15 @@ const CONC7: &str = "_f_conc7_s1102468_xi_bpf_index_n_st1_sum_counteraffine_perm
 fn test_the_addresses_a_parallel_copy_reads_do_not_all_live_across_it() {
     // Without the spiller: a phi it moves to memory leaves a copy of six, and
     // the allocator must still take seven.
-    let (body, phases) = crate::backend::regalloc_input::before_regalloc_unspilled(
+    // Without the coalescer either: one that joins the copies leaves no
+    // parallel copy to stress the allocator with.
+    let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(
+        crate::backend::regalloc_input::Calls::C,
         "walks7_s24.ll",
         "_f_conc7_s24_xi_bln_index_n_st1_sum_as_end",
         "Core",
+        "RegAlloc",
+        &["SsaSpill", "Coalescer"],
     );
     let longest = longest_copy(&body);
     assert!(longest >= 7, "premise: a parallel copy of {longest} moves");

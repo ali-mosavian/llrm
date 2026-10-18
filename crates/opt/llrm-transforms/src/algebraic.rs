@@ -139,6 +139,9 @@ use crate::counting;
 #[derive(Default)]
 pub struct Algebraic {
     pub size: bool,
+    /// The LLVM order's pass: where LLVM's InstCombine has no condition llrm's
+    /// stand-in rule adds, the rule has none (`_scaled_chain`).
+    pub llvm: bool,
 }
 
 impl FunctionPass for Algebraic {
@@ -156,7 +159,7 @@ impl FunctionPass for Algebraic {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         // Blocks and edges are as they were.
-        if simplified(unit.context, unit.layout, unit.function, analyses, self.size) {
+        if simplified_in(unit.context, unit.layout, unit.function, analyses, self.size, self.llvm) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()
@@ -213,6 +216,18 @@ pub fn simplified(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
+    simplified_in(context, layout, function, analyses, size, false)
+}
+
+/// [`simplified`], for the LLVM order's pass when `llvm`.
+pub fn simplified_in(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    analyses: &mut Analyses,
+    size: bool,
+    llvm: bool,
+) -> bool {
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function
@@ -240,7 +255,7 @@ pub fn simplified(
         let recurrences = _recurrences(context, layout, function, &outer, analyses, changed || round);
         for (_, inst) in function.walk().collect::<Vec<_>>() {
             if !function.is_erased(inst) {
-                round |= _rewritten(context, layout, function, &recurrences, inst, size);
+                round |= _rewritten(context, layout, function, &recurrences, inst, size, llvm);
             }
         }
         round |= _reassociated_recurrences(function);
@@ -269,6 +284,7 @@ fn _rewritten(
     recurrences: &BTreeSet<ValueId>,
     inst: InstId,
     size: bool,
+    llvm: bool,
 ) -> bool {
     _mask_scaled(context, function, recurrences, inst)
         || _constant_address(context, function, inst)
@@ -287,7 +303,7 @@ fn _rewritten(
         || _negated_difference(context, function, inst)
         || _difference_from_sum(context, function, inst)
         || _shift_chain(context, function, inst)
-        || _scaled_chain(context, function, inst)
+        || _scaled_chain(context, function, inst, llvm)
         || _offset_chain(context, function, inst)
         || _bitwise_chain(context, function, inst)
         || _identity(context, function, inst)
@@ -1467,19 +1483,28 @@ fn _shift_chain(
     true
 }
 
-/// Two single-use scales are one `mul` at an unchanged modular width.
+/// Two single-use scales are one `mul` at an unchanged modular width. Under the
+/// LLVM order two `mul`s by constants are one whatever else reads the first, as
+/// `SimplifyAssociativeOrCommutative` has no single-use condition: `I` becomes
+/// `A op (B op C)` and the inner one stays for its other readers. MIRROR of
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L524
+/// for `mul`; DEVIATE: a `shl` in the chain keeps the guard (LLVM folds those
+/// in `visitMul` / `visitShl`, not here), and the flags are dropped (LLVM keeps
+/// `nuw`/`nsw` when both have them).
 fn _scaled_chain(
     context: &mut Context,
     function: &mut Function,
     inst: InstId,
+    llvm: bool,
 ) -> bool {
     let Some(last) = _scale(context, function, inst) else { return false };
-    if !_single_use(function, last.source) {
-        return false;
-    }
     let Some(first) = _definition(function, last.source).and_then(|made| _scale(context, function, made)) else {
         return false;
     };
+    let both_mul = last.op == BinaryOp::Mul && first.op == BinaryOp::Mul;
+    if !(llvm && both_mul) && !_single_use(function, last.source) {
+        return false;
+    }
     let width = _width(context, function, inst).expect("an integer");
     let factor = _constant(context, function, inst, first.factor.wrapping_mul(last.factor) & mask(width));
     _replace(function, inst, Opcode::Binary(BinaryOp::Mul), vec![first.source, factor]);

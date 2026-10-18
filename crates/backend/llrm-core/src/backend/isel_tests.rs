@@ -287,12 +287,31 @@ no:
 
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
-    for (body, why) in [
-        ("%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v", "arithmetic on an i1"),
-        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
-    ] {
+    for (body, why) in [(
+        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "arithmetic on an i1",
+    )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
+/// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
+#[test]
+fn test_a_byte_division_and_a_freeze_are_selected() {
+    for (body, mnemonic) in [
+        ("%b = trunc i16 %a to i8\n  %v = udiv i8 %b, %b\n  %w = zext i8 %v to i16\n  ret i16 %w", "div"),
+        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "idiv"),
+        (
+            "%b = trunc i16 %a to i8\n  %q = sdiv i8 %b, %b\n  %r = srem i8 %b, %b\n  %v = add i8 %q, %r\n  %w = sext i8 %v to i16\n  ret i16 %w",
+            "idiv",
+        ),
+        ("%f = freeze i16 %a\n  %v = udiv i16 %f, %f\n  ret i16 %v", "div"),
+    ] {
+        let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(got.iter().any(|one| one.starts_with(mnemonic)), "{body}: {got:?}");
     }
 }
 
@@ -599,9 +618,8 @@ define i32 @f(i16 %a) addrspace(1) {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "mov bl, al",
             "push ax",
-            "movzx ax, bl",
+            "movzx ax, al",
             "push ax",
             "call far ptr basic",
             "pushw 5",
@@ -4139,8 +4157,7 @@ define i16 @f() addrspace(1) {
             "db 0fah",
             "xor ax, ax",
             "db 0cdh,01ah",
-            "mov ax, cx",
-            "add ax, dx",
+            "lea ax, [ecx+edx]",
             "pop bp",
             "retf"
         ]
@@ -5468,4 +5485,20 @@ fn test_a_poison_float_or_address_is_zero() {
 fn test_a_poison_i64_is_two_zero_dwords() {
     let text = "define i64 @f(i64 %a) {\n  %v = add i64 poison, %a\n  ret i64 %v\n}\n";
     assert!(!listing(text, "f").is_empty());
+}
+
+/// The translated coalescer is the default: a function compiled here never
+/// reaches the old pass, whose counter says when it can be deleted.
+#[test]
+fn test_the_old_coalescer_is_not_reached_by_default() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = add i16 %a, %b
+  %d = mul i16 %c, %a
+  ret i16 %d
+}
+";
+    let before = crate::backend::coalesce::old_runs();
+    let got = listing(text, "f");
+    assert!(got.len() > 3, "premise: the function compiled: {got:?}");
+    assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
 }

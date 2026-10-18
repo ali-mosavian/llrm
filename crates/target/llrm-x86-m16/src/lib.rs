@@ -97,9 +97,12 @@ impl llrm_target::Target for M16 {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }
 
-    /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
+    /// DEVIATE E2-1: the pin sets `setPrefFunctionAlignment(Align(16))`
+    /// (X86ISelLowering.cpp); m16 aligns no function, loop or block, for
+    /// code size (user decision 2026-10-18). Only segments are aligned, as
+    /// their definitions require.
     fn pref_function_alignment(&self) -> u8 {
-        4
+        0
     }
 
     /// 16-bit mode has the four forms of `Nops16Bit`.
@@ -240,6 +243,14 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// E2 put 16-byte padding between every two functions of a 16-bit object,
+    /// +2% of QCport's code; m16 asks for none (DEVIATE E2-1).
+    #[test]
+    fn test_m16_aligns_no_function() {
+        use llrm_target::Target;
+        assert_eq!(super::M16.pref_function_alignment(), 0);
+    }
+
     /// gcc's by-pieces ratios of a constant memset where its algorithm is `rep
     /// stos` (`i386_cost`, `i486_cost`, `pentium_cost`); none where it is a
     /// loop or a libcall (`pentiumpro_memset`).
