@@ -39,6 +39,8 @@
 //!   and no coroutines.
 //! - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
 //!   sits in a preheader whose analyses the rotation is changing.
+//! - R6 A target with no cost model (`Machine::tti`) is priced by the generic
+//!   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
 //!
 //! # Example
 //! Before:
@@ -969,12 +971,7 @@ impl FunctionPass for LoopRotate {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        // R6: a target with no cost model is priced as the pinned profile,
-        // i486.
-        let tti: std::rc::Rc<dyn Tti> = outer
-            .target()
-            .tti()
-            .unwrap_or_else(|| std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").expect("the i486 profile")));
+        let tti = target_tti(outer.target());
         let options = Options {
             max_header_size: if self.duplicate_headers { 16 } else { 0 },
             rotation_only: false,
@@ -997,6 +994,12 @@ impl FunctionPass for LoopRotate {
         };
         if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// The cost model the pass prices headers with: the target's, or the generic
+/// profile where it has none (R6).
+pub fn target_tti(target: &dyn llrm_mir::target::Machine) -> std::rc::Rc<dyn Tti> {
+    target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic))
 }
 
 /// `rotate_loops` over the function `name` of `module`; whether any loop
