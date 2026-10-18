@@ -440,13 +440,14 @@ fn value_from(
     arms(function, phi).into_iter().find(|&(_, at)| at == from).map(|(value, _)| value)
 }
 
-fn is_poison(
+/// `isa<UndefValue>`: poison is one.
+fn is_undef(
     context: &Context,
     value: Operand,
 ) -> bool {
     matches!(
         value,
-        Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Poison | ConstantKind::Undef)
     )
 }
 
@@ -570,7 +571,7 @@ fn predecessors_propagate(
         return true;
     }
     let merge =
-        |first: Operand, second: Operand| first == second || is_poison(context, first) || is_poison(context, second);
+        |first: Operand, second: Operand| first == second || is_undef(context, first) || is_undef(context, second);
     for phi in edges::phis(function, successor) {
         let from_block = value_from(function, phi, block).expect("a phi entry for each edge");
         let inner = phi_of(function, from_block, block);
@@ -654,14 +655,14 @@ fn values_redirected(
     let mut known: IdMap<BlockId, Option<Operand>> = sources.iter().map(|&one| (one, None)).collect();
     for pair in operands.chunks(2) {
         if let (value, Operand::Block(from)) = (pair[0], pair[1])
-            && !is_poison(context, value)
+            && !is_undef(context, value)
             && let Some(slot) = known.get_mut(&from)
         {
             *slot = Some(value);
         }
     }
     let mut select = |value: Operand, from: BlockId| -> Operand {
-        if !is_poison(context, value) {
+        if !is_undef(context, value) {
             known.insert(from, Some(value));
             return value;
         }
@@ -690,13 +691,30 @@ fn values_redirected(
     for (value, from) in added {
         operands.extend([value, Operand::Block(from)]);
     }
-    // A poison input takes the value another input gives that predecessor.
-    for pair in operands.chunks_mut(2) {
+    // An undef input takes the value another input gives that predecessor
+    // (`replaceUndefValuesInPhi`); those left with none must match.
+    let mut true_undef = Vec::new();
+    for (at, pair) in operands.chunks_mut(2).enumerate() {
         if let (value, Operand::Block(from)) = (pair[0], pair[1])
-            && is_poison(context, value)
-            && let Some(Some(one)) = known.get(&from)
+            && is_undef(context, value)
+            && known.contains_key(&from)
         {
-            pair[0] = *one;
+            match known.get(&from) {
+                Some(Some(one)) => pair[0] = *one,
+                _ => true_undef.push(at),
+            }
+        }
+    }
+    // Both undef and poison incoming for one block is invalid: all become undef.
+    let poisons = true_undef
+        .iter()
+        .filter(|&&at| matches!(operands[2 * at], Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison))
+        .count();
+    if poisons != 0 && poisons != true_undef.len() {
+        let ty = function.instruction(phi).ty;
+        let undef = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }));
+        for at in true_undef {
+            operands[2 * at] = undef;
         }
     }
     function.set_operands(phi, operands);
