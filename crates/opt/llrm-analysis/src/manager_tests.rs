@@ -924,12 +924,14 @@ fn test_annotated_asks_no_strides_of_accesses_without_a_variable_index() {
     assert_eq!(crate::alias::congruences_found() - before, 1, "a variable index asks once");
 }
 
-/// A pass reports what it did not preserve, and an analysis asked after its
-/// last edit (or with no edit at all) was derived from the body as it stands:
-/// 383 of 2,248 results dropped at an invalidation over d_faces -O2 were that,
-/// 151 after `dead` alone. Dropped, each was derived again when next asked.
+/// A pass names what it preserved and the manager drops the rest, whenever the
+/// result was derived (LLVM's `PreservedAnalyses`): one asked after the pass's
+/// last edit was derived from the body as it stands, and was kept by a rule
+/// that read the edit log (383 of 2,248 results dropped at an invalidation
+/// over d_faces -O2, 151 after `dead` alone). Now it is derived again when next
+/// asked: a cost (+40 computations on d_faces -O2), never a stale fact.
 #[test]
-fn test_a_result_derived_from_the_body_as_it_stands_survives_an_invalidation() {
+fn test_a_result_derived_from_the_body_as_it_stands_is_dropped_at_an_invalidation_that_does_not_name_it() {
     let mut module = parsed(&format!(
         "{DOS}declare void @g(ptr)\n\ndefine void @f(ptr %a) {{\nb:\n  call void @g(ptr %a)\n  ret void\n}}\n"
     ));
@@ -945,7 +947,7 @@ fn test_a_result_derived_from_the_body_as_it_stands_survives_an_invalidation() {
     llrm_mir::passes::trace_recomputes(false);
     let of_effects: Vec<_> =
         counts.iter().filter(|(name, ..)| *name == "call-effects").map(|&(_, _, how, n)| (how, n)).collect();
-    assert_eq!(of_effects, vec![("first", 1)], "{counts:?}");
+    assert_eq!(of_effects, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
 /// A scalar written in each arm of N joins is reached by up to N stores at
