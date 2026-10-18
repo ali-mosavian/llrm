@@ -128,7 +128,7 @@ impl ScalarEvolution {
                     // expression (that will be left as-is), but produce a zero
                     // constant.
                     if let Operand::Constant(id) = value
-                        && matches!(cx.module.context.get(id).kind, ConstantKind::Null)
+                        && matches!(cx.context.get(id).kind, ConstantKind::Null)
                     {
                         self.get_zero(cx, target_ty)
                     } else {

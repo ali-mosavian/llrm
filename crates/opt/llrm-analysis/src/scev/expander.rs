@@ -1,17 +1,18 @@
 //! `SCEVExpander`'s surface, as signatures (S6 translates the bodies): what
 //! LoopIdiom and LSR call. Every body is `todo!()`.
 //!
-//! The expander edits the function while it reads SCEVs, and a [`Cx`] borrows
-//! the function. So the expander takes the function as `&mut Function` and the
-//! rest of the context as an [`Env`], and builds a [`Cx`] over `&*function` for
-//! each SCEV query (`Env::cx`). Expansion adds instructions inside existing
-//! blocks, so the loops and the dominator tree in the `Env` stay true, as the
-//! references LLVM's `SE` holds do.
+//! The expander edits the function and interns constants while it reads SCEVs,
+//! and a [`Cx`] borrows both. So the expander takes `&mut Context` and
+//! `&mut Function` and the rest as an [`Env`], and builds a [`Cx`] over
+//! `&*context` and `&*function` for each SCEV query (`Env::cx`). Expansion adds
+//! instructions inside existing blocks, so the loops and the dominator tree in
+//! the `Env` stay true, as the references LLVM's `SE` holds do.
 
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{Function, InstId, Module, Operand};
+use llrm_mir::module::{Function, GlobalValue, InstId, MetadataNode, Operand};
 use llrm_mir::valuetracking::AssumptionCache;
 
 use super::expr::{Scev, Ty};
@@ -20,7 +21,8 @@ use super::{Cx, ScalarEvolution};
 /// A [`Cx`] without its function.
 #[derive(Clone, Copy)]
 pub struct Env<'a> {
-    pub module: &'a Module,
+    pub globals: &'a [GlobalValue],
+    pub metadata: &'a [MetadataNode],
     pub layout: &'a DataLayout,
     pub loops: &'a LoopInfo,
     pub tree: &'a DominatorTree,
@@ -31,13 +33,16 @@ impl<'a> Env<'a> {
     /// The [`Cx`] over `function` as it stands now.
     pub fn cx<'b>(
         &self,
+        context: &'b Context,
         function: &'b Function,
     ) -> Cx<'b>
     where
         'a: 'b,
     {
         Cx {
-            module: self.module,
+            context,
+            globals: self.globals,
+            metadata: self.metadata,
             function,
             layout: self.layout,
             loops: self.loops,
@@ -92,6 +97,7 @@ impl Expander {
     pub fn expand_code_for(
         &mut self,
         _env: &Env,
+        _context: &mut Context,
         _function: &mut Function,
         _se: &mut ScalarEvolution,
         _s: Scev,

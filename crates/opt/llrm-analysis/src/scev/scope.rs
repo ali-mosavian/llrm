@@ -187,7 +187,7 @@ impl ScalarEvolution {
             // TODO: We can do better here in some cases.
             let scevable = match op {
                 Operand::Value(id) => self.ty_of(cx, cx.function.value(id).ty).is_some(),
-                Operand::Constant(id) => self.ty_of(cx, cx.module.context.get(id).ty).is_some(),
+                Operand::Constant(id) => self.ty_of(cx, cx.context.get(id).ty).is_some(),
                 Operand::Block(_) => false,
             };
             if scevable {

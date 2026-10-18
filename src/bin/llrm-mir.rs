@@ -112,7 +112,9 @@ fn scalar_evolution(module: &llrm_mir::module::Module) -> String {
     let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
     let assumptions = llrm_mir::valuetracking::AssumptionCache::new(module, function);
     let cx = llrm_analysis::scev::Cx {
-        module,
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
         function,
         layout: &layout,
         loops: &loops,
