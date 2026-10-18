@@ -14,8 +14,8 @@
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
 //! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 //! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
-//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
-//! attributes.
+//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
+//! read the attributes.
 //!
 //! # Example
 //! Two allocas never alias, and a call cannot touch an alloca nobody holds a
@@ -151,6 +151,72 @@ impl<'a> BasicAA<'a> {
         }
         found.base = operand;
         found
+    }
+
+    /// `getUnderlyingObjectAggressive` (ValueTracking.cpp:7380,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/ValueTracking.cpp#L7380>):
+    /// the one object every arm of the selects and phis reaches, else the
+    /// plain underlying object.
+    pub(crate) fn underlying_aggressive(
+        &self,
+        operand: Operand,
+    ) -> Operand {
+        const MAX_VISITED: usize = 8;
+        let first = self.underlying(operand);
+        let mut work = vec![operand];
+        let mut visited = Vec::new();
+        let mut object = None;
+        let mut is_first = true;
+        loop {
+            let popped = work.pop().expect("a pending pointer");
+            let pointer = if is_first { first } else { self.underlying(popped) };
+            is_first = false;
+            if !visited.contains(&pointer) {
+                visited.push(pointer);
+                if visited.len() == MAX_VISITED {
+                    return first;
+                }
+                match self.defining(pointer) {
+                    Some(one) if matches!(one.opcode, Opcode::Select) => work.extend_from_slice(&one.operands[1..]),
+                    // A phi's operands are value, block pairs.
+                    Some(one) if matches!(one.opcode, Opcode::Phi) => work.extend(one.operands.iter().step_by(2)),
+                    _ => match object {
+                        None => object = Some(pointer),
+                        Some(found) if found != pointer => return first,
+                        Some(_) => {}
+                    },
+                }
+            }
+            if work.is_empty() {
+                return object.unwrap_or(first);
+            }
+        }
+    }
+
+    /// `isIdentifiedObject`: any global, not only a variable.
+    pub(crate) fn is_identified_object(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.identified(operand)
+            || matches!(
+                operand,
+                Operand::Constant(id) if matches!(self.unit.context.get(id).kind, ConstantKind::Global(_))
+            )
+    }
+
+    pub(crate) fn is_alloca(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.defining(operand).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }))
+    }
+
+    pub(crate) fn is_argument(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        self.argument(operand)
     }
 
     fn global_variable(

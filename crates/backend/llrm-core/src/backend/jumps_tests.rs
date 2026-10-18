@@ -686,6 +686,15 @@ fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
     assert_eq!((sahfs(10), sahfs(20)), (1, 1), "an arm lost its sahf");
 }
 
+/// An unnamed pseudo that clobbers a register emits no bytes but is not an
+/// anchor: `_inert` asked the name alone and would have dropped it.
+#[test]
+fn test_an_unnamed_flag_clobbering_pseudo_is_not_inert() {
+    let pseudo = Insn { clobbers: [RegId::AX].into(), ..(*_inserted(nothing(5, None))).clone() };
+    assert!(!super::_inert(&pseudo));
+    assert!(super::_inert(&_inserted(nothing(5, None))));
+}
+
 /// `jne T; jmp F` left T, a block that only jumps, in place: `recpow` -O2 ran
 /// an extra `jmp` after every taken `jne`, +0.14% clocks and 15 bytes.
 #[test]
@@ -909,8 +918,8 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
     assert!(physical.iter().all(|one| one.op != Operation::Jump));
 }
 
-/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2, 11 procedures), also those whose one return
-/// has nothing to duplicate into.
+/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2,
+/// 11 procedures), also those whose one return has nothing to duplicate into.
 #[test]
 fn test_return_duplication_asks_for_the_overhead_only_for_a_tail_with_two_jumping_parents() {
     let asked = std::cell::Cell::new(0);
