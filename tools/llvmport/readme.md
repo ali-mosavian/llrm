@@ -13,7 +13,7 @@ Regenerate a golden file only with that build; the Rust side and the C++ side mu
 
 `lvi_dump.sh` and `lvicompare.py` compare LazyValueInfo's answers (`lvi_dump.cpp` against the `lvidump` example of llrm-mir) on any `.ll`:
 
-    tools/llvmport/lvicompare.py ~/scratch/llvm-src/llvm/test/Transforms/CorrelatedValuePropagation
+    tools/llvmport/lvicompare.py $LLVM_SRC/llvm/test/Transforms/CorrelatedValuePropagation
 
 A line where llrm is more precise than LLVM is MORE (a bug); less precise is LESS and must trace to a DEVIATE of `lazyvalueinfo.rs`.
 `crates/ir/llrm-mir/tests/lvi/cases` holds the inputs with LLVM's answers pasted (`NAME.expected`, from `lvi_dump.sh NAME.ll`).
