@@ -150,11 +150,12 @@ impl ScalarEvolution {
     /// `applyLoopGuards(Expr, L)`. S5 (guards).
     pub fn apply_loop_guards(
         &mut self,
-        _cx: &Cx,
-        _expr: Scev,
-        _l: llrm_mir::module::BlockId,
+        cx: &Cx,
+        expr: Scev,
+        l: llrm_mir::module::BlockId,
     ) -> Scev {
-        todo!("S5")
+        let guards = super::guards::LoopGuards::collect(self, cx, l);
+        self.apply_loop_guards_with(cx, expr, &guards)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.h#L1158

@@ -87,16 +87,4 @@ impl ScalarEvolution {
     }
 }
 
-impl ScalarEvolution {
-    /// `isKnownPredicateAt(Pred, LHS, RHS, CtxI)`. SEAM (S5): not known.
-    pub fn is_known_predicate_at(
-        &mut self,
-        _cx: &Cx,
-        _pred: llrm_mir::opcode::IntPredicate,
-        _lhs: Scev,
-        _rhs: Scev,
-        _ctx_i: Option<llrm_mir::module::InstId>,
-    ) -> bool {
-        false
-    }
-}
+impl ScalarEvolution {}

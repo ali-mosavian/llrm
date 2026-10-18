@@ -29,7 +29,10 @@ pub mod forget;
 #[cfg(test)]
 mod golden_tests;
 pub mod guards;
+#[cfg(test)]
+mod guards_tests;
 pub mod how_many;
+pub mod implied;
 pub mod minmax;
 pub mod pattern;
 pub mod poison;
@@ -162,6 +165,8 @@ pub struct ScalarEvolution {
     could_not_compute: Scev,
     /// `BackedgeTakenCounts` and `LoopPropertiesCache`.
     pub(super) trips: trip::TripState,
+    /// What the guard queries keep between calls.
+    pub(super) guards: implied::GuardState,
 }
 
 impl Default for ScalarEvolution {
@@ -189,6 +194,7 @@ impl ScalarEvolution {
             fold_cache_user: HashMap::new(),
             could_not_compute: Scev(0),
             trips: trip::TripState::default(),
+            guards: implied::GuardState::default(),
         };
         se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
         se

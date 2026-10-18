@@ -1,0 +1,138 @@
+//! What the conditions that dominate a loop say, against values worked out by
+//! hand: `applyLoopGuards` of a function argument (a `SCEVUnknown`, so
+//! `createSCEV` is not read) and the entry-guard checks.
+
+use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dominators::DominatorTree;
+use llrm_mir::loopinfo::LoopInfo;
+use llrm_mir::module::{BlockId, Operand};
+use llrm_mir::opcode::IntPredicate;
+use llrm_mir::valuetracking::AssumptionCache;
+
+use super::ap::Ap;
+use super::expr::{Scev, Use};
+use super::{Cx, ScalarEvolution};
+
+/// A loop at `%h` entered under the condition `guard` (an `icmp` or a boolean
+/// expression over `%n` and `%m`, i32 arguments).
+fn loop_under(guard: &str) -> String {
+    format!(
+        "define void @f(i32 %n, i32 %m) {{
+entry:
+{guard}
+  br i1 %g, label %h, label %exit
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %i2 = add i32 %i, 1
+  %c = icmp ult i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}}
+"
+    )
+}
+
+/// The test with a `ScalarEvolution`, the context, the loop's header and the
+/// SCEVs of `%n` and `%m`.
+fn with_guard(
+    guard: &str,
+    test: impl FnOnce(&mut ScalarEvolution, &Cx, BlockId, Scev, Scev),
+) {
+    let module = llrm_mir::parse::module(&loop_under(guard)).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let layout = DataLayout::default();
+    let tree = DominatorTree::new(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let mut se = ScalarEvolution::new();
+    let [n, m] = function.parameters()[..] else { panic!("two arguments") };
+    let (n, m) = (se.get_scev(&cx, Operand::Value(n)), se.get_scev(&cx, Operand::Value(m)));
+    test(&mut se, &cx, header, n, m);
+}
+
+fn constant(
+    se: &mut ScalarEvolution,
+    value: u128,
+) -> Scev {
+    se.get_constant(Ap::new(32, value))
+}
+
+/// `%n u< 10` rewrites `%n` to `umin(%n, 9)`.
+#[test]
+#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
+fn test_an_unsigned_less_than_guard_clamps_the_argument() {
+    with_guard("  %g = icmp ult i32 %n, 10", |se, cx, header, n, _| {
+        let want = {
+            let nine = constant(se, 9);
+            se.get_umin_expr(cx, vec![Use::of(n), Use::of(nine)], false)
+        };
+        assert_eq!(se.apply_loop_guards(cx, n, header), want);
+        let range = se.get_unsigned_range(cx, want);
+        assert_eq!(range.get_unsigned_max(), 9);
+    });
+}
+
+/// `%n != 0` rewrites `%n` to `umax(%n, 1)`, and `%n s> 4` to `smax(%n, 5)`.
+#[test]
+#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
+fn test_a_nonzero_and_a_signed_greater_than_guard() {
+    with_guard("  %g = icmp ne i32 %n, 0", |se, cx, header, n, _| {
+        let one = constant(se, 1);
+        let want = se.get_umax_expr(cx, vec![Use::of(n), Use::of(one)]);
+        assert_eq!(se.apply_loop_guards(cx, n, header), want);
+    });
+    with_guard("  %g = icmp sgt i32 %n, 4", |se, cx, header, n, _| {
+        let five = constant(se, 5);
+        let want = se.get_smax_expr(cx, vec![Use::of(n), Use::of(five)]);
+        assert_eq!(se.apply_loop_guards(cx, n, header), want);
+    });
+}
+
+/// A guard on another value leaves `%n` alone.
+#[test]
+fn test_a_guard_on_another_argument_leaves_this_one() {
+    with_guard("  %g = icmp ult i32 %m, 10", |se, cx, header, n, m| {
+        assert_eq!(se.apply_loop_guards(cx, n, header), n);
+        assert_ne!(se.apply_loop_guards(cx, m, header), m);
+    });
+}
+
+/// `%n % 8 == 0` makes `%n` into `(%n /u 8) * 8`.
+#[test]
+#[ignore = "needs createSCEV (S3): a constant is an unknown until then, so the guard's bound is not a SCEVConstant"]
+fn test_a_divisibility_guard_rewrites_the_argument_as_a_multiple() {
+    with_guard("  %r = urem i32 %n, 8\n  %g = icmp eq i32 %r, 0", |se, cx, header, n, _| {
+        let eight = constant(se, 8);
+        let quotient = se.get_udiv_expr(cx, Use::of(n), Use::of(eight));
+        let want = se.get_mul_expr(cx, vec![Use::of(quotient), Use::of(eight)], Default::default(), 0).scev;
+        assert_eq!(se.apply_loop_guards(cx, n, header), want);
+    });
+}
+
+#[test]
+fn test_the_entry_guard_proves_what_the_branch_says() {
+    with_guard("  %g = icmp ult i32 %n, 10", |se, cx, header, n, _| {
+        let (ten, nine, five) = (constant(se, 10), constant(se, 9), constant(se, 5));
+        assert!(se.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ult, n, ten));
+        assert!(se.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ule, n, nine));
+        assert!(!se.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ult, n, five));
+    });
+    with_guard("  %g = icmp ult i32 %m, 10", |se, cx, header, n, _| {
+        let ten = constant(se, 10);
+        assert!(!se.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ult, n, ten));
+    });
+}
