@@ -8,7 +8,7 @@
 //! `llrm_analysis::mssa`.
 
 mod calls;
-mod hoist;
+pub(crate) mod hoist;
 mod promote;
 mod safety;
 mod sink;

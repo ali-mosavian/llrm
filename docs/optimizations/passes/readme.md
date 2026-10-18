@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 88 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 89 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -27,7 +27,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `loadjoins`, `rotate` and | [edges](edges.md) |
 | exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
-| exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps, in place of | [exitvalues](exitvalues.md) |
+| exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr`](lsr.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
 | floatfold | Replaces floating values [`llrm_analysis::floatfacts`] proves exact by their constants, and applies the algebraic freedoms an operation's fast-math flags give. | Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's | [floatfold](floatfold.md) |
@@ -89,6 +89,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
+| twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. |  | [twoentryphi](twoentryphi.md) |
 | unroll | Full unrolling of a loop with an exact trip count of at least two: its trips become one straight line in the latch and the loop is gone. | In the pipeline's fixed point, after each round of scalar passes and when | [unroll](unroll.md) |
 | unroll_jam | Unroll-and-jam: the outer loop of a two-loop nest is unrolled by N and the N copies of the inner loop are fused into one, so what the outer iterations share is used by all N in one pass of the inner loop. | Once per body, after `unswitch`, so an invariant guard is out of the | [unroll_jam](unroll_jam.md) |
 | unswitch | A loop with an invariant branch in its body becomes two loops, one per way the condition goes, chosen by one test before them. | Once per body, after the fixed point and the peel rounds settle and before | [unswitch](unswitch.md) |
