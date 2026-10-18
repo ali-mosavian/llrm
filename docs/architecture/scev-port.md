@@ -171,6 +171,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 12 | `FindValueInExprValueMap` does not call `canReuseInstruction` | the call only answers false for a value whose poison-generating flags cannot be dropped; here that makes a reuse count as a cost where LLVM would price it at zero; the cost query errs towards free |
 | 13 | `ExpansionTti` prices every scalar integer instruction `TCC_Basic` (`UnitCosts`) | the X86 `getArithmeticInstrCost` (#2213) has not merged; it prices a divide above this. Replaced when it does |
 | 14 | `rewriteLoopExitValues` leaves an exit value that contains an add recurrence | the expander's `visitAddRecExpr` is not translated yet (loop-products-slope, S6 round 2); lifted when it is |
+| 15 | `rewriteLoopExitValues` leaves an exit value with a subexpression of a width other than 8, 16, 32 or 64 | the closed form of a quadratic sum is computed in a type one bit wider, which the back end does not legalize (#2497); lifted when it does |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 
