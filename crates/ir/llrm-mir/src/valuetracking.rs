@@ -10,6 +10,9 @@ use crate::types::TypeId;
 
 #[cfg(test)]
 mod boundary_tests;
+pub mod bytewise;
+#[cfg(test)]
+mod bytewise_tests;
 pub mod context;
 #[cfg(test)]
 mod context_tests;
@@ -25,6 +28,7 @@ pub mod range;
 pub mod signbits;
 #[cfg(test)]
 mod signbits_tests;
+pub mod underlying;
 
 #[cfg(test)]
 mod nonzero_tests;

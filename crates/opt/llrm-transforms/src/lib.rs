@@ -87,6 +87,9 @@ mod calleepop_tests;
 pub mod candidate;
 pub mod canonical;
 pub mod cfg;
+pub mod constraintelim;
+#[cfg(test)]
+mod constraintelim_tests;
 #[cfg(test)]
 mod corpus_tests;
 pub mod counting;
@@ -136,6 +139,7 @@ pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
+pub mod loopidiom;
 pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
@@ -143,6 +147,7 @@ pub mod loopnest;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopunroll;
 pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
@@ -169,6 +174,7 @@ pub mod sink;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;
+pub mod switchcg;
 pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:e1904c82f1a24ad462aabcd66e76332d9fb461aec98327127ce9540f99110df5 -->
+<!-- src: crates/opt/llrm-analysis/src/interprocedural.rs sha256:3e99585192c1b60c2eb0704ec8a564c8c549cb8bcf625d6ad694a8a45431ec57 -->
 
 # interprocedural
 
@@ -38,11 +38,7 @@ stamped on each body. `stated_pure` is the exactly defined bodies that state
 no memory effect, `willreturn` and `nounwind`. `erasable` asks the same of
 one call (LLVM's `wouldInstructionBeTriviallyDead`), and
 `remove_dead_pure_calls` erases the calls with no used result that are
-erasable. `returns_without_looping` holds when every CFG path ends in `ret`
-without revisiting a block. `cannot_fault` holds when every access is
-non-volatile and either in a frame object (`frameescape::framed`) or a
-constant offset ([`crate::pointerfacts`](pointerfacts.md)) from an initialized near global
-this module defines.
+erasable.
 
 Noreturn. `noreturn_procedures` and `program_noreturn` are
 [`crate::noreturn`](noreturn.md)'s greatest fixed point over the eligible bodies;
