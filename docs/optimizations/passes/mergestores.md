@@ -1,13 +1,23 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mergestores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mergestores.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mergestores.rs sha256:3d6959ca420a2c3d4bd75bba5bc6481646eec300b10e214fdb18a209500b610e -->
+<!-- src: crates/opt/llrm-transforms/src/mergestores.rs sha256:ac7ece49205f72872f9876c25a68d19a44eeea2595c4154bbf12a2f635e91ce3 -->
 
 # mergestores
 
-Adjacent copies through registers become wider ones: LLVM's
-`DAGCombiner::mergeConsecutiveStores` for stores of loaded values
-(`tryStoreMergeOfLoads`).
+Adjacent stores become wider ones: LLVM's
+`DAGCombiner::mergeConsecutiveStores` for stores of constants
+(`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values
+(`tryStoreMergeOfLoads`, `merged_copies`).
 
 ## How it works
+Constants: stores of integer constants to adjacent cells of one object are
+one store of their bytes, little-endian, when the bytes are a legal integer
+(`getConsecutiveStores` finds the run of cells of one width, the widest
+legal prefix is taken, and a store made is a candidate again, so a byte pair
+and a word beside it become a dword). A load of any of the cells, another
+store, a call or a volatile store ends the span; stores that overlap leave
+the object alone.
+
+Loads:
 In straight-line code, a store of a value another instruction loaded, the
 only use of that load, is a copy of a cell. Copies of adjacent cells to
 adjacent cells, `a[0] = b[0]; a[1] = b[1]`, are one wider load and one wider
@@ -34,6 +44,16 @@ and checks cycles through operands (`getStoreMergeCandidates`,
 straight-line code with no other memory operation, in objects that are told
 apart (`MemRef::object`), is the same fact. Exit: none; MemorySSA could
 widen the span.
+
+DEVIATE M3 (pinned by `constants_that_cannot_be_one_wider_store_are_kept`):
+a wider constant store starts at a multiple of its size. LLVM's
+`allowsMemoryAccess` calls any x86 access fast.
+
+DEVIATE M4 (rows, `sum_three -Os`): tuned for size, a merge is made only
+where the one store is no more code bytes than the ones it replaces, a
+constant stored more than once being held in a register (a dword immediate
+with its operand-size prefix in 16-bit code is more than two register
+stores). LLVM has no such price.
 
 DEVIATE M2 (no number): no vector types, no rotate of a reversed pair, no
 truncating store; the target has none of them for integers here
