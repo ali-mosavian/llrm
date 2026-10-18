@@ -1312,6 +1312,10 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 10. **Floats.** x87 excess precision stays fast by default, like gcc; a float row against clang is measured with llrm at `-fexcess-precision=standard`, and each row records the flag.
 11. **Pushes.** Never rewrite a pushed commit of a PR that is open; kill only the processes a session started.
 
+**Translate first (user, 2026-10-18).** Before implementing anything, check whether LLVM has that pass or analysis at the pin `d1106deb71cc`; if it does, translate it, with the changes we need. Keep the result as close to O(n) as possible. The PR description names the LLVM source file and function translated (permalink), or states "LLVM has no such pass" and why. Any super-linear step needs a stated reason and a slope test. A fix to our own pass that has an LLVM counterpart is a translation row first.
+
+**Parity slot and join step (user, 2026-10-18).** Every port PR names its parity slot (section 2.5) and its join step. A translation is done when it has joined the parity pipeline with its oracle passing, not when it merges off. A PR that joins a translated slot outranks a new translation, and no new translation starts while one of the owner's is translated but not joined.
+
 **Pass rules shared by every step:**
 
 - identical.py 0 differ, or [spec] 4.3's landing rule for output-changing steps;
