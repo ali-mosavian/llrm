@@ -133,3 +133,37 @@ e:
 ");
     assert!(after.contains("ret i1 true"), "{after}");
 }
+
+/// `CallValue::canHandle` takes a call that only reads or only writes memory.
+/// A callee that also touches `inaccessiblemem` is neither, and LLVM's
+/// `early-cse<memssa>` keeps both calls of `@a` and `@b` below (checked with
+/// the pinned `opt`, 24.0.0git d1106deb71cc) while it takes the second of
+/// `@c`'s. `call_key` reads `memory::of`, which counts every location; the
+/// narrower `accessible` summary would take `@b` for a reader and `@a` for a
+/// call that touches nothing, and drop the second call of each.
+#[test]
+fn test_a_call_that_touches_inaccessible_memory_is_not_a_read_only_or_write_only_call() {
+    let after = run("declare i32 @a(ptr) memory(inaccessiblemem: readwrite)
+declare i32 @b(ptr) memory(argmem: read, inaccessiblemem: write)
+declare i32 @c(ptr) memory(argmem: read)
+
+define i32 @f(ptr %p) {
+b0:
+  %a1 = call i32 @a(ptr %p)
+  %a2 = call i32 @a(ptr %p)
+  %b1 = call i32 @b(ptr %p)
+  %b2 = call i32 @b(ptr %p)
+  %c1 = call i32 @c(ptr %p)
+  %c2 = call i32 @c(ptr %p)
+  %s1 = add i32 %a1, %a2
+  %s2 = add i32 %b1, %b2
+  %s3 = add i32 %c1, %c2
+  %s4 = add i32 %s1, %s2
+  %s5 = add i32 %s4, %s3
+  ret i32 %s5
+}
+");
+    assert_eq!(after.matches("call i32 @a").count(), 2, "{after}");
+    assert_eq!(after.matches("call i32 @b").count(), 2, "{after}");
+    assert_eq!(after.matches("call i32 @c").count(), 1, "{after}");
+}

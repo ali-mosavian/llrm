@@ -17,8 +17,9 @@
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
 //!   does it only when poison-generating flags remain); a load's metadata not
 //!   shared by both loads is dropped (`combineMetadataForCSE` merges it).
-//! - DEVIATE a call's attributes are not intersected; calls that touch no
-//!   memory are numbered unless they are `llvm.`/`llrm.` markers.
+//! - DEVIATE a call's attributes are not intersected; a call that only reads or
+//!   only writes memory (`memory::of`, which counts every location including
+//!   `inaccessiblemem`) is numbered unless it is an `llvm.`/`llrm.` marker.
 //! - DEVIATE a GEP's constant offset is taken for byte GEPs only.
 //! - DEVIATE MemorySSA is the manager's, built once for the function as it was
 //!   and not updated (`MSSAUpdater`); an erased store stays a def in it, which
@@ -27,6 +28,14 @@
 //! - DEVIATE the clobber walk is `MemorySSA::clobbers` over the instruction's
 //!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
 //!   access, where LLVM's walker answers one.
+//! - DEVIATE (call walker) the clobbering access of a call is its defining
+//!   access, not LLVM's call-vs-call query (the walker asks the modref of the
+//!   call against each def): any write between two calls blocks the CSE, which
+//!   is only conservative. It rests on the fact that llrm has no call-vs-call
+//!   alias query until basicaa-port's S3 (an unknown callee's footprint omits
+//!   inaccessible memory, #2219). Exit: S3 landed, then translate the walker's
+//!   call query. The eligibility is pinned by
+//!   `test_a_call_that_touches_inaccessible_memory_is_not_a_read_only_or_write_only_call`.
 //!
 //! # How it works
 //! The dominator tree is walked depth first with a scope per node: the scoped
