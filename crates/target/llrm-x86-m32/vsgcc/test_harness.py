@@ -19,6 +19,8 @@ def built(tmp_path_factory):
     import sys
     sys.path.insert(0, str(harness.REPO / "tools"))
     import linkrecipe
+    import pinned_tests
+    pinned_tests.require_pin()
     work = tmp_path_factory.mktemp("vsgcc")
     env = {**os.environ, "VSGCC_WORK": str(work)}
     (work / "o").mkdir()

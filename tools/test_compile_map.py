@@ -1,4 +1,5 @@
 import compile_map as m
+import pinned_tests
 
 STEPS = """[instr] by own work, in Minstr
 [instr]      418.833 Minstr own      418.833 Minstr total     376x split placed
@@ -46,6 +47,7 @@ def test_every_step_has_an_owner_or_is_flagged_by_the_table():
 
 
 def test_the_map_names_its_commit_and_commands_and_flags_unowned_rows():
+    pinned_tests.require_pin()
     result = {
         "header": {"commit": "abc test", "llrm": "llrm-c -m32 -O1 f.c", "gcc": "gcc", "clang": "clang"},
         "total_M": 1000.0, "instrumented_M": 1040.0, "rows_sum_M": 1030.0, "outside_every_step_M": 10.0, "scale": 1000 / 1040,

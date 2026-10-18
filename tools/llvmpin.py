@@ -12,6 +12,7 @@ A shell script takes `bin=$(python3 tools/llvmpin.py dir)`, or `python3 tools/ll
 
 from __future__ import annotations
 
+import os
 import sys
 import shutil
 import subprocess
@@ -56,6 +57,20 @@ def gcc(override: str | None = None, allow_other: bool = False) -> str:
     if not allow_other and GCC_VERSION not in version(path):
         raise SystemExit(f"{path} is {version(path)}, not the pinned gcc {GCC_VERSION}: name it with --allow-other-llvm if that is the one to measure")
     return path
+
+
+def missing() -> str | None:
+    """Why the pinned toolchain is not here (the clang build, gcc of the reference version), else None."""
+    if not pinned("clang").is_file():
+        return f"the pinned clang ({pinned('clang')}) is not built here"
+    if GCC_VERSION not in version(shutil.which("gcc") or "gcc"):
+        return f"gcc is {version(shutil.which('gcc') or 'gcc')}, not {GCC_VERSION}"
+    return None
+
+
+def pin_required() -> bool:
+    """A self-hosted runner (tinytim) has the pin: a test that needs it fails there when it is absent instead of skipping."""
+    return os.environ.get("RUNNER_ENVIRONMENT") == "self-hosted"
 
 
 def header(path: str) -> str:

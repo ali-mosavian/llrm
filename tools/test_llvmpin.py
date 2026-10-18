@@ -70,3 +70,35 @@ def test_a_gcc_that_is_not_the_reference_version_is_refused_unless_named(tmp_pat
 def test_the_vsgcc_build_takes_both_references_from_the_pin():
     build = (Path(__file__).parent.parent / "crates/target/llrm-x86-m32/vsgcc/build.sh").read_text()
     assert 'llvmpin.py" path clang' in build and 'llvmpin.py" path gcc' in build and "\n  clang $F" not in build
+
+
+@pytest.fixture
+def absent(monkeypatch):
+    monkeypatch.setattr(llvmpin, "missing", lambda: "the pinned clang is not built here")
+    monkeypatch.delenv("RUNNER_ENVIRONMENT", raising=False)
+
+
+def test_a_test_needing_the_pin_skips_with_the_line_where_the_pin_is_absent_on_a_hosted_job(absent, monkeypatch):
+    """A hosted runner has gcc 13.3 and no pinned clang: the python group failed on it (#2137). The skip says what it is, so it counts and reads as no pass."""
+    import pinned_tests
+
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    with pytest.raises(pytest.skip.Exception, match="SKIPPED: pinned toolchain absent"):
+        pinned_tests.require_pin()
+
+
+def test_a_test_needing_the_pin_fails_on_a_self_hosted_job_that_lacks_it(absent, monkeypatch):
+    """The jobs that have the pin must run these tests: a skip there would pass a job with no toolchain."""
+    import pinned_tests
+
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    with pytest.raises(pytest.fail.Exception, match="must be present"):
+        pinned_tests.require_pin()
+
+
+def test_a_test_needing_the_pin_runs_where_the_pin_is_present(monkeypatch):
+    import pinned_tests
+
+    monkeypatch.setattr(llvmpin, "missing", lambda: None)
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
+    assert pinned_tests.require_pin() is None

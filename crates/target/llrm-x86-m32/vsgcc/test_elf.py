@@ -9,6 +9,7 @@ import harness
 
 sys.path.insert(0, str(harness.REPO / "tools"))
 import linkrecipe  # noqa: E402
+import pinned_tests  # noqa: E402
 
 EMULATION = linkrecipe.ld_emulation("x86-m32")
 LLRM = harness.LLRM
@@ -78,6 +79,7 @@ def test_an_llrm_object_and_a_gcc_object_link_into_one_program(work):
 
 
 def test_build_sh_links_every_compiler_for_a_program(work, monkeypatch):
+    pinned_tests.require_pin()
     """build.sh read `$EMU`, which nothing set: every gcc/clang link failed, and table.py died on `KeyError: 'gccO2'`."""
     monkeypatch.setenv("VSGCC_WORK", str(work))
     out = sh(Path(__file__).parent / "build.sh", "fib")
