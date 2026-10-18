@@ -214,7 +214,8 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
                     match basicaa.alias(&first, &second, &mut batch, None) {
                         AliasResult::NoAlias => "NoAlias",
                         AliasResult::MustAlias => "MustAlias",
-                        _ => "MayAlias",
+                        AliasResult::PartialAlias { .. } => "PartialAlias",
+                        AliasResult::MayAlias => "MayAlias",
                     }
                 } else {
                     match llrm_analysis::regions::overlapping(&one.2, &other.2, None, None, None) {

@@ -15,7 +15,7 @@
 //! of the lattice).
 
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef, ValueId};
+use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Flags, Opcode};
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, LocationSize, MemoryEffects, MemoryLocation, ModRefInfo};
@@ -564,5 +564,81 @@ impl AAResults for BasicAA<'_> {
     }
 }
 
-#[allow(dead_code)]
-fn _unused(_: ValueId) {}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{layout, parsed, value};
+
+    const M32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
+
+    /// BasicAA's answer for the pointers `%a` and `%b` of `@f`, each accessed
+    /// with `size` bytes.
+    fn answer(
+        body: &str,
+        a: &str,
+        b: &str,
+        size: u64,
+    ) -> AliasResult {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(size));
+        BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None)
+    }
+
+    /// Two inbounds geps off different bases that share a variable index: the
+    /// index cancels, the constant left puts one access past the other's
+    /// base object (`aliasGEP`'s inbounds rule). `opt -passes=aa-eval`
+    /// (24.0.0git d1106deb71cc) says NoAlias for this text and MayAlias with
+    /// the `inbounds` dropped; today's facts say MayAlias for both: 16,000
+    /// of the pairs of the replay set.
+    #[test]
+    fn an_inbounds_gep_past_the_other_base_is_no_alias_and_a_plain_one_is_not() {
+        let body = |gep: &str| {
+            format!(
+                "@g = internal global [820 x i8] zeroinitializer\ndefine i32 @f(ptr %p, i32 %i) {{\nentry:\n  %a = getelementptr {gep} i8, ptr @g, i32 %i\n  %b0 = getelementptr {gep} i8, ptr %p, i32 %i\n  %b = getelementptr {gep} i8, ptr %b0, i32 4\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("inbounds"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body(""), "a", "b", 4), AliasResult::MayAlias);
+    }
+
+    /// A pointer loaded from memory cannot be a local object whose address is
+    /// never stored, passed or returned (`isEscapeSource` against a
+    /// non-captured local); once the address is stored it can.
+    #[test]
+    fn a_loaded_pointer_is_no_alias_with_a_local_that_never_escapes() {
+        let body = |escape: &str| {
+            format!(
+                "@cell = global ptr null\ndefine i32 @f(ptr %p) {{\nentry:\n  %b = alloca i32\n  {escape}\n  %a = load ptr, ptr @cell\n  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body("store i32 0, ptr %b"), "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body("store ptr %b, ptr @cell"), "a", "b", 4), AliasResult::MayAlias);
+    }
+
+    /// CaptureTracking stops at 100 uses and takes the pointer as captured: a
+    /// slot with 150 loads is MayAlias against a pointer loaded from it,
+    /// one with 10 is NoAlias (checked with the pinned opt).
+    #[test]
+    fn capture_tracking_gives_up_after_a_hundred_uses() {
+        let body = |loads: usize| {
+            let reads: String = (0..loads).map(|n| format!("  %w{n} = load ptr, ptr %slot\n")).collect();
+            format!(
+                "define i32 @f(ptr %p, i32 %i) {{\nentry:\n  %slot = alloca ptr\n  store ptr %p, ptr %slot\n  %q = load ptr, ptr %slot\n  %a = getelementptr inbounds i8, ptr %q, i32 %i\n{reads}  ret i32 0\n}}\n"
+            )
+        };
+        assert_eq!(answer(&body(10), "a", "slot", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body(150), "a", "slot", 4), AliasResult::MayAlias);
+    }
+
+    /// Distinct allocas are distinct objects.
+    #[test]
+    fn two_allocas_are_no_alias_and_one_pointer_is_must_alias() {
+        let body = "define i32 @f() {\nentry:\n  %a = alloca i32\n  %b = alloca i32\n  ret i32 0\n}\n";
+        assert_eq!(answer(body, "a", "b", 4), AliasResult::NoAlias);
+        assert_eq!(answer(body, "a", "a", 4), AliasResult::MustAlias);
+    }
+}

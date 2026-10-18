@@ -101,14 +101,14 @@ impl<'a> Verify<'a> {
             self.stack.borrow_mut().push((callee, index));
             let unit = Unit::of(self.module, self.layout, function);
             let mut kept = Vec::new();
-            let captured = captured_by(&unit, root, &mut kept, Some(self), false, false);
+            let captured = captured_by(&unit, root, &mut kept, Some(self), false, false, usize::MAX);
             self.stack.borrow_mut().pop();
             // Kept in a local slot of the callee: read back it is the pointer
             // again (followed), and it is captured if the slot
             // itself is.
-            let slot_captured = kept
-                .iter()
-                .any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self), false, false).is_some());
+            let slot_captured = kept.iter().any(|holder| {
+                captured_by(&unit, *holder, &mut Vec::new(), Some(self), false, false, usize::MAX).is_some()
+            });
             if captured.is_some() || slot_captured { Err(Unproven::Captured) } else { Ok(()) }
         })();
         if top {
@@ -210,15 +210,23 @@ fn captured_by(
     verify: Option<&Verify>,
     joins: bool,
     attr_calls: bool,
+    max_uses: usize,
 ) -> Option<InstId> {
     let function = unit.function;
     let mut seen: IdSet<ValueId> = IdSet::new();
+    let mut explored = 0usize;
     let mut work = vec![root];
     while let Some(value) = work.pop() {
         if !seen.insert(value) {
             continue;
         }
         for used in function.users(value) {
+            // LLVM's cap: past this many uses explored the pointer is taken as
+            // captured.
+            explored += 1;
+            if explored > max_uses {
+                return Some(used.user);
+            }
             let op = function.instruction(used.user);
             let at = used.index as usize;
             match &op.opcode {
@@ -316,6 +324,10 @@ fn captured_by(
     None
 }
 
+/// `capture-tracking-max-uses-to-explore`'s default: past it a pointer is taken
+/// as captured.
+pub const MAX_USES_TO_EXPLORE: usize = 100;
+
 /// Whether the address `root` may be captured, as LLVM's `PointerMayBeCaptured`
 /// with stores counting (`isNonEscapingLocalObject`): a gep, cast, phi or
 /// select of it is followed; stored anywhere, returned, turned into an integer,
@@ -325,7 +337,7 @@ pub(crate) fn may_be_captured(
     root: ValueId,
 ) -> bool {
     let mut held = Vec::new();
-    captured_by(unit, root, &mut held, None, false, true).is_some() || !held.is_empty()
+    captured_by(unit, root, &mut held, None, false, true, MAX_USES_TO_EXPLORE).is_some() || !held.is_empty()
 }
 
 /// Panics on a frame object some use captures that `facts.escaped` lacks.
@@ -349,7 +361,7 @@ pub fn check_with(
         let op = function.instruction(inst);
         let (Opcode::Alloca { .. }, Some(value)) = (&op.opcode, op.result) else { continue };
         let mut held_in = Vec::new();
-        let by = captured_by(unit, value, &mut held_in, verify, true, false);
+        let by = captured_by(unit, value, &mut held_in, verify, true, false, usize::MAX);
         direct.push((value, by, held_in));
     }
     // Held in a captured object is captured, to a fixed point.
