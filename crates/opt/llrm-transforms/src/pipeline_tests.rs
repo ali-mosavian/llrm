@@ -1415,7 +1415,7 @@ x:
 fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
     let on = Applied::default();
     assert!(on.options.llvm_order, "the order is on by default");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
 }
@@ -1456,12 +1456,24 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
-    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    assert_eq!(pipeline::function_stages(&on).len(), 4, "early, cleanup, simplify and late");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
     let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
     assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
+}
+
+/// Old: LLVM's `InstSimplifyPass` (PassBuilderPipelines.cpp#L1662) was Missing
+/// and never ran, so an identity left after the last pass stayed in the body.
+/// Now its slot is Translated and the order ends with it.
+#[test]
+fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let late = pipeline::llvm_order(&on, crate::parity::Phase::Late).iter().map(|one| one.name()).collect::<Vec<_>>();
+    assert_eq!(late, ["instsimplify@1662"]);
+    let kind = crate::parity::REGISTRY.iter().find(|one| one.slot == "instsimplify@1662").map(|one| one.kind);
+    assert_eq!(kind, Some(crate::parity::SlotKind::Translated));
 }
 
 /// A body computes the same answer through LLVM's order.
