@@ -33,7 +33,7 @@ use super::{MAX_ANALYSIS_RECURSION_DEPTH, context, guarantee, known, power2};
 use crate::apint::{ashr, bit, lshr, popcount, sext, signed};
 use crate::constantrange::ConstantRange;
 use crate::context::{ConstantExpr, ConstantKind, mask};
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::knownbits::KnownBits;
 use crate::module::{BlockId, Function, InstId, Instruction, Linkage, MetadataOperand, Operand, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -120,7 +120,7 @@ fn pointer_space(
 }
 
 /// `NullPointerIsDefined(F, AS)`.
-fn null_pointer_is_defined(
+pub(crate) fn null_pointer_is_defined(
     function: Option<&Function>,
     space: u32,
 ) -> bool {
@@ -189,7 +189,7 @@ fn param_has_dereferenceable(
 }
 
 /// `CallBase::paramHasNonNullAttr(ArgNo, AllowUndefOrPoison)`.
-fn param_has_non_null_attr(
+pub(crate) fn param_has_non_null_attr(
     q: &Query,
     instruction: &Instruction,
     arg: usize,
@@ -262,7 +262,7 @@ fn load_store_pointer_operand(instruction: &Instruction) -> Option<Operand> {
 /// `DominatorTree::dominates(Def, User)`.
 fn instruction_dominates(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     def: InstId,
     user: InstId,
 ) -> bool {
@@ -290,7 +290,7 @@ fn instruction_dominates(
 /// `DominatorTree::dominates(Def, UseBB)`.
 fn block_dominates_instructions(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     def: InstId,
     use_block: BlockId,
 ) -> bool {
@@ -318,7 +318,7 @@ fn block_dominates_instructions(
 /// `DominatorTree::dominates(BasicBlockEdge(Start, End), UseBB)`.
 fn dominates_edge(
     q: &Query,
-    dt: &DominatorTree,
+    dt: &DomTree,
     start: BlockId,
     end: BlockId,
     use_block: BlockId,
@@ -444,7 +444,7 @@ fn is_known_non_null_from_dominating_condition(
     q: &Query,
     v: Operand,
     cxt: Option<InstId>,
-    dt: Option<&DominatorTree>,
+    dt: Option<&DomTree>,
 ) -> bool {
     let (Some(cxt), Some(dt)) = (cxt, dt) else { return false };
     let Operand::Value(value) = v else { return false };

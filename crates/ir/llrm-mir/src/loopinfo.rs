@@ -10,7 +10,7 @@
 //! with repeats, as `children<BasicBlock *>` gives them; predecessors are one
 //! per edge, as `inverse_children` gives them.
 
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{BlockId, Function, MetadataNode, MetadataOperand, Operand};
 use crate::opcode::Opcode;
 
@@ -135,7 +135,7 @@ fn tag_loop_header(
 impl LoopInfo {
     /// `LoopInfoBase::analyze`, with `dom_tree` asked for only if a loop is
     /// entered other than through its header.
-    pub fn analyze<D: std::borrow::Borrow<DominatorTree>>(
+    pub fn analyze<D: std::borrow::Borrow<DomTree>>(
         function: &Function,
         dom_tree: impl FnOnce() -> D,
     ) -> Self {
@@ -146,7 +146,7 @@ impl LoopInfo {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericLoopInfoImpl.h#L488
-    fn analyze_impl<D: std::borrow::Borrow<DominatorTree>>(
+    fn analyze_impl<D: std::borrow::Borrow<DomTree>>(
         &mut self,
         function: &Function,
         dom_tree: impl FnOnce() -> D,
@@ -867,7 +867,7 @@ pub fn print_loops(module: &crate::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+        let info = LoopInfo::analyze(function, || DomTree::of(function));
         let labels = crate::print::block_labels(function);
         out += &info.print(function, global.name.as_deref().unwrap_or("?"), &|block| {
             labels.get(&block).cloned().unwrap_or_default()
@@ -912,7 +912,7 @@ pub fn ends_by_promise(
     function: &Function,
     whole: bool,
 ) -> bool {
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     info.get_loops_in_preorder()
         .iter()
         .all(
