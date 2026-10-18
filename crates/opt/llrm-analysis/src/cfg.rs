@@ -667,7 +667,7 @@ impl Analysis for Shape {
 /// Copied from llrm-core's `optimize/transform.rs` `_unreachable`. The old
 /// MIR kept a dead block as an inert byte owner; the rich MIR owns no bytes.
 pub fn _unreachable(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let blocks = graph(function);
@@ -688,7 +688,7 @@ pub fn _unreachable(
                 Operand::Block(one) if reached.contains(&id(*one)) && predecessors.get(&at).is_some_and(|from| from.contains(&id(*one)))
             )
         };
-        for phi in function.block(block(at)).instructions().to_vec() {
+        for phi in function.block(block(at)).iter().collect::<Vec<_>>() {
             if function.instruction(phi).opcode != Opcode::Phi {
                 break;
             }
@@ -703,7 +703,7 @@ pub fn _unreachable(
     let dead: Vec<BlockId> = blocks.iter().filter(|one| !reached.contains(&one.at)).map(|one| block(one.at)).collect();
     // Values defined there are used only there, or by phis on dropped edges.
     for &one in &dead {
-        for inst in function.block(one).instructions().to_vec().into_iter().rev() {
+        for inst in function.block(one).iter().collect::<Vec<_>>().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
                 let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
                 function.replace_all_uses_with(result, Operand::Constant(poison));

@@ -54,12 +54,13 @@ pub fn is_bytewise_value(
             Some(ConstantKind::Int(bits)) => Byte::Constant(*bits as u8),
             Some(ConstantKind::Zero | ConstantKind::Null) => Byte::Constant(0),
             Some(ConstantKind::Poison) => Byte::Poison,
+            Some(ConstantKind::Undef) => Byte::Undef,
             _ => Byte::Value(v),
         });
     }
 
     // Undef don't care.
-    if matches!(kind, Some(ConstantKind::Poison)) {
+    if matches!(kind, Some(ConstantKind::Poison | ConstantKind::Undef)) {
         return Some(Byte::Undef);
     }
 

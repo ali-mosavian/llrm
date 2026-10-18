@@ -301,9 +301,7 @@ fn _replaced(
     };
     let last = function
         .block(function.parent(first.store).expect("a placed store"))
-        .instructions()
         .iter()
-        .copied()
         .rfind(|inst| run.iter().any(|one| one.store == *inst))
         .expect("a run has stores");
     let call = function.create_instruction(

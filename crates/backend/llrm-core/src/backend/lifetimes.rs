@@ -89,7 +89,7 @@ pub fn intervals(
     let in_layout: BTreeSet<BlockId> = layout.iter().copied().collect();
     let mut tracked: BTreeMap<ValueId, Vec<InstId>> = BTreeMap::new();
     for &block in layout {
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             if let Some(Marker { object, .. }) = marker(inst)
                 && matches!(
                     function.value(object).def,
@@ -120,7 +120,7 @@ pub fn intervals(
         let mut changed = false;
         for &block in layout {
             let mut state = entering[&block].clone();
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 step(&mut state, inst);
             }
             for successor in function.successors(block).into_iter().filter(|one| in_layout.contains(one)) {
@@ -138,7 +138,7 @@ pub fn intervals(
     let mut violated: BTreeSet<ValueId> = BTreeSet::new();
     for &block in layout {
         let mut state = entering[&block].clone();
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let at = positions[&inst];
             // Live at a marker that starts it, though it enters the state
             // after.
