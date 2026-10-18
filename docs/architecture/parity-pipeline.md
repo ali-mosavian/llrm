@@ -1,3 +1,7 @@
+---
+architecture-index: the parity pipeline: plan
+architecture-order: 80
+---
 # The parity pipeline
 
 TL;DR: `LLRM_EXP_LLVM` becomes LLVM's -O1/-O2/-Os pipeline built from translated passes and analyses under one analysis manager; a translation joins when its oracle passes, not when it is default.
