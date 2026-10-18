@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 76 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 78 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -22,6 +22,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | deadargs | Dead argument elimination (LLVM's DeadArgumentElimination): a parameter nothing reads goes, and with it the argument at every call. | In the interprocedural step, after the callers' arguments have been | [deadargs](deadargs.md) |
 | decide | Branches whose way is known, decided: LLVM's JumpThreading and SimplifyCFG on known conditions. | Once per pass of the function fixed point, after `fold` and `ports` and | [decide](decide.md) |
 | dse | Dead store elimination: LLVM's DSE. | Once per pass of the function fixed point, after `trivialunswitch` and | [dse](dse.md) |
+| earlycse | LLVM's EarlyCSE with MemorySSA (`early-cse<memssa>`): one walk down the dominator tree, scoped tables of what is available, and a generation count that memory operations advance. | [`crate::pipeline`](pipeline.md)'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`), | [earlycse](earlycse.md) |
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `loadjoins`, `rotate` and | [edges](edges.md) |
 | exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
@@ -46,6 +47,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | lcssa | Puts every natural loop in loop-closed SSA form, so loop passes can change a loop without rewriting the readers of its values elsewhere. | In every body's pipeline after `loopsimplify`, unless `lcssa` is turned off, | [lcssa](lcssa.md) |
 | lcssamerges | Close a loop with several exits: a phi at each exit, merged by phis where the exits' paths join. | Called from [`crate::lcssa`](lcssa.md) for each multi-exit loop, so wherever `lcssa` | [lcssamerges](lcssamerges.md) |
 | loadjoins | Load PRE at joins: a load whose bytes every predecessor already holds becomes a phi of those values, and a predecessor holding none may get a load of its own on its edge. | Not a pass of the pipeline: [`crate::gvn`](gvn.md) calls `reused` after its | [loadjoins](loadjoins.md) |
+| local | The utilities GVN calls on a CSE: patching the surviving instruction, replacing the uses a dominator tree allows, dead and duplicate-phi cleanup, block merging, and the pointer-equality replacement checks. | Nothing yet; `gvn` is the caller this is for. | [local](local.md) |
 | loopclone | Clones loop iterations as CFG, for the passes that peel, unswitch or jam a loop: `peeled` copies whole iterations ahead of a loop, `chained` copies bodies inside it, keeping the loop and every exit. | Called by [`crate::peel`](peel.md) and [`crate::unswitch`](unswitch.md) (`peeled`), | [loopclone](loopclone.md) |
 | loopdistribute | Loop distribution: a loop whose stores do not need each other's trips becomes one loop for each group of them, so each loop is smaller, holds fewer values live and may be an idiom (a fill, a copy) of its own. | Once per body, after `unswitch`, `split` and `fuse`, at -O3 and -Omax | [loopdistribute](loopdistribute.md) |
 | loopexit | Replaces what a counted loop computes, as read after it, by an expression of its trip count, and deletes a loop that only counts, so the code after the loop does not wait for the loop to produce a number the compiler can write down. | Not a pipeline pass of its own: [`crate::indvars`](indvars.md) calls | [loopexit](loopexit.md) |
