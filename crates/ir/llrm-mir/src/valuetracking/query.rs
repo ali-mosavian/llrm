@@ -378,11 +378,6 @@ impl FunctionAnalyses {
         &self.assumptions
     }
 
-    /// The assumptions (`SQ.AC`).
-    pub fn assumption_cache(&self) -> &AssumptionCache {
-        &self.assumptions
-    }
-
     /// A query at `cxt` (`CxtI`), or at no instruction.
     pub fn query<'a>(
         &'a self,

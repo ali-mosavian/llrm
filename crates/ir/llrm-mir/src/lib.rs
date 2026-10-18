@@ -98,7 +98,6 @@ mod interpret_tests;
 mod knownbits_tests;
 #[cfg(test)]
 mod knownfpclass_tests;
-mod lazyvalueinfo_tests;
 #[cfg(test)]
 mod lazyvalueinfo_tests;
 #[cfg(test)]
