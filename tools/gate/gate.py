@@ -34,6 +34,8 @@ import proctree
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE.parent))
+import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
@@ -610,7 +612,7 @@ def missing_capabilities(environ: dict | None = None) -> dict[str, str]:
     for name, cap in load().get("capability", {}).items():
         if allowed != "1" and name not in allowed.split(","):
             continue
-        if any(environ.get(v) for v in cap["require"]):
+        if any(envflag.flag(v, environ) for v in cap["require"]):
             continue
         for need in cap["needs"]:
             if "run" in need:  # a probe: the command must succeed

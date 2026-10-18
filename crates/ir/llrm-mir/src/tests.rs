@@ -35,11 +35,13 @@ fn the_crate_depends_on_nothing() {
     // enforces it.
     let manifest = include_str!("../Cargo.toml");
     let dependencies = manifest.split("[dependencies]").nth(1).expect("a [dependencies] table");
+    // llrm-env is a leaf of its own, with no dependencies: the one reader of an
+    // `LLRM_*` switch.
     let entries: Vec<&str> = dependencies
         .lines()
         .map(str::trim)
         .take_while(|line| !line.starts_with('['))
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("llrm-env "))
         .collect();
     assert!(entries.is_empty(), "{entries:?}");
 }

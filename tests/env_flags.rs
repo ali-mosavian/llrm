@@ -34,7 +34,7 @@ fn reached(
         .collect()
 }
 
-/// One switch of each reader: `STALE` is llrm-mir's own (`llrm_mir::env`),
+/// One switch of each reader: `STALE` is llrm-mir's own (`llrm_env`),
 /// `LIVE` is asked through `llrm_support::env_flag!`.
 #[test]
 fn test_a_check_set_to_an_off_word_does_not_run_and_set_to_one_does() {

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import llrmbin, sizes
+from tools import envflag, llrmbin, sizes
 
 ROOT = Path(__file__).resolve().parents[1]
 BINS = llrmbin.bin_dir()
@@ -58,7 +58,7 @@ def test_every_program_compiles_but_the_known_failures():
     why = _unusable()
     if why:
         message = f"NOT RUN: {why}; cargo build --release --bins"
-        if os.environ.get("LLRM_REQUIRE_BINARIES"):
+        if envflag.flag("LLRM_REQUIRE_BINARIES"):
             pytest.fail(message)
         warnings.warn(message, stacklevel=1)
         pytest.skip(message)

@@ -10,8 +10,9 @@
 //! this: no switch has a second parser.
 //!
 //! # Used by
-//! The pass manager's checks here, and `llrm-support`, which every other crate
-//! asks.
+//! `llrm-mir`'s pass manager checks, and `llrm-support`, which every other
+//! crate asks. A leaf with no dependencies: `llrm-mir` may depend on nothing
+//! else.
 //!
 //! # Example
 //! `LLRM_VERIFY=0 llrm-c f.c` verifies nothing; `LLRM_VERIFY=1` and a bare

@@ -22,9 +22,9 @@ pub use register::PhysicalRegister;
 /// call: the `LLRM_CHECK_*` switches asked in a loop (once for each
 /// instruction's liveness effect) were 2% of a compile of rectwo. The
 /// variables are those the process started with; none is set afterwards. The
-/// parser is `llrm_mir::env`'s, the only one.
+/// parser is `llrm_env`'s, the only one.
 pub fn env_set(name: &str) -> bool {
-    llrm_mir::env::set(name)
+    llrm_env::set(name)
 }
 
 /// `env_set` of a literal name, asked once at the call site that names it:
