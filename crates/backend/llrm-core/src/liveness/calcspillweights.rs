@@ -375,7 +375,6 @@ impl<'a> VirtRegAuxInfo<'a> {
                     .then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
                     .then_with(|| hint_key(&a.0).cmp(&hint_key(&b.0)))
             });
-            if std::env::var("HINTDBG").is_ok() { eprintln!("HINT v{} {:?}", li.reg(), reg_hints); }
             self.hints.insert(li.reg(), reg_hints.into_iter().map(|(h, _)| h).collect());
             // Weakly boost the spill weight of hinted registers.
             total_weight *= 1.01;

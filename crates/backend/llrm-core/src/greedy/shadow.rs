@@ -276,15 +276,6 @@ pub fn decide_with(
     mode: Mode<'_>,
 ) -> Option<Decided> {
     let body = inputs.body;
-    if std::env::var("HINTDBG").is_ok() {
-        for (k, b) in body.blocks.iter().enumerate() {
-            for i in &b.insns {
-                let name = i.what.as_ref().and_then(|w| w.name.clone()).unwrap_or_default();
-                eprintln!("LIR b{k} {name} def {:?} use {:?} pins {:?}", i.defines, i.uses, i.requires);
-            }
-        }
-        eprintln!("PINS {:?}", inputs.pins);
-    }
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
@@ -385,9 +376,11 @@ pub fn decide_with(
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
+            greedy.pinned.insert(reg);
         }
     }
     greedy.allocate_phys_regs();
+    greedy.try_hints_recoloring();
     let mut signature = 0u64;
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
