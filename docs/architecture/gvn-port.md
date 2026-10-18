@@ -147,6 +147,22 @@ Stage-specific:
 5. Load PRE and loop PRE inputs; inserted-load counts equal.
 6. Whole-pass difftest; `gvn.rs`, `loadjoins.rs` and their dead helpers deleted in the same PR.
 
+## Compile-time cost
+
+Stage 1 ([#2179](https://github.com/ali-mosavian/llrm/pull/2179)) costs **+1.4%** instructions on `d_faces` -O2 (callgrind, whole compile 2,487.3 M to 2,522.2 M; geomean +0.7..0.95% over 136 files). This is **temporary**, accepted by oversight.
+
+| | runs | IR instructions | `Gvn::run` inclusive | per unit |
+|---|--:|--:|--:|--:|
+| main before stage 1 | 35 | 7,920 | 228.9 M | 28,904 |
+| stage 1 | 35 | 7,945 | 266.6 M | 33,557 |
+| LLVM at the pin | 11 | 1,250 | 32.1 M | 25,680 |
+
+Instrument: callgrind, inclusive of `<Gvn as FunctionPass>::run` (the analyses the pass asks the manager for are inside it), `d_faces.c` of the tree `53880fe70961`, `-m32 -mabi=sysv -march=i486 -fno-inline-functions -O2`; unit = instructions per IR instruction run over (the `[counts] pass gvn` sum), as the per-pass table in [the redesign plan](redesign-plan.md); the LLVM figure is that table's GVN row at the pin. The translated scalar part alone is 47.8 M, 6,020 per unit; the rest of the 33,557 is the old forwarding and pricing machinery.
+
+- **Exit:** stages 4-6 delete `spill_forecast`, `loadjoins`, `motion_price` and `joined` (and the pricing that calls them, D8).
+- **Target:** `Gvn::run` inclusive per unit at most 25,680 after stage 6, same instrument and scope.
+- **Cycles line** (load under 4, pinned core, min of 11, A/A copy): cgscc-poc's runner, to be entered here when it lands.
+
 ## Out of scope
 
 - `-O1` runs GVN in llrm today; LLVM's `-O1` does not. Removing it loses `x_life` (385k against clang -O1 580k clocks), so the rows rule blocks it. It belongs to the O1-mirror re-test, once EarlyCSE, SROA/mem2reg, InstCombine, SimplifyCFG and LICM are real at their `-O1` slots.
