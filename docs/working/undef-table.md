@@ -12,7 +12,7 @@ N/A.
 | ConstantFold (creation) | [`ConstantFoldBinaryInstruction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/ConstantFold.cpp#L637), `ConstantFoldCastInstruction`, `ConstantFoldCompareInstruction`, `ConstantFoldSelectInstruction` | DONE |
 | ConstantFolding | `isa<UndefValue>` sites that read `is_poison` | OWED (vt-constantfolding) |
 | InstSimplify | `simplifyPHINode`, `simplifySelectInst`, `simplifyICmpInst`, `simplifyDivRem`, `simplifyAdd/Sub/Mul/And/Or/Xor/Shl/RightShift`, `isPoisonShift`, `expandBinOp` (`getWithoutUndef`), `threadBinOpOverSelect`, `simplifyGEPInst` | DONE |
-| InstSimplify (rest) | `simplifyFreezeInst`, `simplifyInsertValueInst` (#2250), `simplifyWithOpsReplaced` (`CanUseUndef`), `simplifyAndOrWithICmpEq`, the intrinsics (#2248) | OWED |
+| InstSimplify (rest) | `simplifyInsertValueInst` (#2250), `simplifyWithOpsReplaced` (`CanUseUndef`), `simplifyAndOrWithICmpEq`, the intrinsics (#2248) | OWED |
 | ValueTracking | `isGuaranteedNotToBeUndefOrPoison` L8154, `computeKnownBits` L2647, phi `hasConstantValue` L2004, `isBytewiseValue` L6744 | DONE |
 | LVI, CVP | `ValueLatticeElement::get` (undef state), `getValueFromICmpCondition` L1390 | DONE |
 | GVN | `analyzeLoadAvailability` L1443 (load of an alloca is undef) | OWED with load PRE (not ported); dead-block poison is the pin's poison: DONE |
