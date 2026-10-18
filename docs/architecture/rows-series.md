@@ -1,5 +1,7 @@
 # Output rows against clang and gcc, by date
 
+> **Void as a reference.** Every ratio and count in this file reads `rows/main` and `rows/base`, built with the Ubuntu clang 20.1.8; `rowcheck.compiler_premise` ([#2226]) refuses 284 of 284 of those objects. The pinned rows are `main24` to `main24d` (clang 24.0.0git `d1106deb71cc`). The llrm-against-llrm statements (objects byte-identical, ablation deltas) are unaffected; every figure against min(gcc, clang) is to be redone on `main24d`.
+
 Each section is one comparison of llrm at two commits of `main`, on the same harness commit, in the vsgcc rows (`crates/target/llrm-x86-m32/vsgcc`): the 71 programs and the `x_` kernels at -O1, -O2, -O3 and -Os, `d_faces` executed on its seeded scene, and QCport's 65 modules by emitted bytes. The goal it checks: output never worse.
 
 Clocks are the emulator's 486 clocks (unicorn), not wall time. The ratio of a row is llrm over the lower of gcc 13.4.0 and clang 20.1.8 on that row's counter; the geometric mean over the rows is read beside the worst row. gcc and clang objects are built once and shared by both sides, so only llrm differs. QCport has no gcc or clang row (Open Watcom headers): its modules are compared llrm with llrm.
@@ -62,3 +64,5 @@ No family is idle precision. Those whose removal costs no output save nothing; t
 | QCport, 65 modules | emitted bytes equal (274,261 / 274,366 / 290,924 / 260,195) |
 | bench cells, all front ends | 848 cells, no counter differs |
 
+
+[#2226]: https://github.com/ali-mosavian/llrm/pull/2226
