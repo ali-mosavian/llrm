@@ -17,7 +17,7 @@ def clocked(costs):
 
 def test_the_declared_selection_fits_the_budget_whatever_the_merge_touches():
     """Every merge pays this: a step added without dropping another, or a crate's tests added on top, pushes the total past the 10 s the user set."""
-    assert ps.BUDGET <= 10.0 and ps.BUDGET - ps.fixed_cost() >= ps.UNIT_FLOOR, (ps.fixed_cost(), "the fixed steps must leave the unit tests their floor")
+    assert ps.BUDGET <= 10.0 and ps.BUDGET - ps.fixed_cost() - ps.CARGO_OVERHEAD * ps.MAX_CRATES >= ps.UNIT_FLOOR / 2, (ps.fixed_cost(), "the fixed steps must leave the unit tests their floor")
     for crates in ([], ["a"], ["a", "b", "c"], [f"c{i}" for i in range(40)]):
         assert ps.declared(crates) <= ps.BUDGET + 1e-9, (len(crates), ps.declared(crates))
 
@@ -66,3 +66,33 @@ def test_the_ranking_is_read_from_the_report_time_listing_cheapest_first():
 def test_a_changed_file_names_the_crate_it_belongs_to():
     assert ps.crate_of("crates/opt/llrm-transforms/src/gvn.rs") == ("llrm-transforms", "crates/opt/llrm-transforms")
     assert ps.crate_of("tools/measure.py") is None and ps.crate_of("crates/opt/nowhere/src/x.rs") is None
+
+
+def test_a_cut_test_run_is_killed_with_its_children_and_charged_its_whole_allowance(tmp_path):
+    """The unit step killed cargo alone: its test binary ran on unseen, and the step read 0.0 s for 1,143 tests."""
+    import time
+
+    marker = tmp_path / "grandchild.pid"
+    script = (
+        f"import subprocess,sys,time\nc=subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'])\nopen({str(marker)!r},'w').write(str(c.pid))\ntime.sleep(60)")
+    before = ps.cpu()
+    code, _ = ps.run_cut([sys.executable, "-c", script], 3.0, tmp_path)
+    assert code is None and ps.cpu() - before >= 3.0, "the cut is charged"
+    pid = int(marker.read_text())
+    def alive() -> bool:
+        try:
+            return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0] != "Z"  # a zombie is dead, waiting for init
+        except FileNotFoundError:
+            return False
+
+    for _ in range(50):
+        if not alive():
+            break
+        time.sleep(0.02)
+    assert not alive(), "the grandchild outlived the cut"
+    assert ps.run_cut([sys.executable, "-c", "print('hi')"], 5.0, tmp_path) == (0, "hi\n")
+
+
+def test_a_merge_touching_many_crates_tests_the_six_with_most_changed_files():
+    """40 crates cost 40 cargo starts before any test ran: the line would fail the merge for the size of the diff."""
+    assert len(ps.plan([f"c{i}" for i in range(40)])) == len(ps.FIXED) + ps.MAX_CRATES

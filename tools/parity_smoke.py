@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,8 @@ import llrmbin  # noqa: E402
 
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
+CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
+MAX_CRATES = 6  # a merge touching more is tested in the 6 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
@@ -42,10 +45,30 @@ DFACES_REPORTS = [1502227429, 443461, -222045, 1788001, 271784, 714164]
 KEYWORDS = "far huge near pascal cdecl __far _far __near _near"
 
 
+_charged = [0.0]  # CPU of process groups killed at their cut: the dead are not reaped by us, so os.times() never counts them
+
+
 def cpu() -> float:
-    """CPU seconds of this process and its children."""
+    """CPU seconds of this process and its children, and of the groups cut short (each charged the whole time it was given)."""
     t = os.times()
-    return t.user + t.system + t.children_user + t.children_system
+    return t.user + t.system + t.children_user + t.children_system + _charged[0]
+
+
+def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, str]:
+    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was killed. A cargo killed alone leaves its test binary
+    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background."""
+    child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+    try:
+        out, _ = child.communicate(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:  # it ended between the timeout and the kill
+            pass
+        child.communicate()
+        _charged[0] += seconds
+        return None, ""
+    return child.returncode, out
 
 
 def selection() -> dict:
@@ -69,8 +92,11 @@ def crate_of(path: str, root: Path = ROOT) -> tuple[str, str] | None:
 
 def touched(base: str, root: Path = ROOT) -> list[str]:
     done = subprocess.run(["git", "diff", "--name-only", base], cwd=root, capture_output=True, text=True)
-    packages = {c[0] for f in done.stdout.split() if (c := crate_of(f, root))}
-    return sorted(packages)
+    counts: dict[str, int] = {}
+    for f in done.stdout.split():
+        if c := crate_of(f, root):
+            counts[c[0]] = counts.get(c[0], 0) + 1
+    return sorted(counts, key=lambda p: (-counts[p], p))
 
 
 # --- the unit tests -------------------------------------------------------------------------------------------------------------------------------------------
@@ -173,18 +199,17 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        try:
-            done = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=allowance + 1.0 if not names else None)
-        except subprocess.TimeoutExpired:
+        code, output = run_cut(command, allowance + CARGO_OVERHEAD, ROOT)
+        if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        if done.returncode:
-            lines = [line for line in (done.stdout + done.stderr).splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
+        if code:
+            lines = [line for line in output.splitlines() if "FAILED" in line or "panicked" in line or "error" in line]
             return "fail", f"{package}: {' / '.join(lines[:3])[:300] or 'cargo test failed'}"
         return "ok", f"{package}: {len(names) or 'all'} tests"
     return step
 
 
-FIXED = [("programs", programs, 1.0), ("sc", sc, 1.0), ("d_faces", d_faces, 2.0), ("run", run_cases, 1.0)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 1.0), ("sc", sc, 1.0), ("d_faces", d_faces, 2.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
@@ -193,7 +218,8 @@ def fixed_cost() -> float:
 
 def plan(packages: list[str], budget: float = BUDGET) -> list:
     """The steps for a merge touching `packages`: the fixed ones, then each crate's unit tests at an equal share of what is left."""
-    left = max(budget - fixed_cost(), 0.0)
+    packages = packages[:MAX_CRATES]
+    left = max(budget - fixed_cost() - CARGO_OVERHEAD * len(packages), 0.0)
     return [*FIXED, *((f"unit {p}", unit_step(p, share(left, len(packages))), share(left, len(packages))) for p in packages)]
 
 
@@ -224,7 +250,7 @@ def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET) -> tuple[boo
 def rank(package: str) -> None:
     """Measure `package`'s unit tests once and write the cheapest into parity_smoke.toml (not per merge)."""
     env = {**os.environ, "RUSTC_BOOTSTRAP": "1"}
-    done = subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
+    done = subprocess.run(["cargo", "test", "--lib", "-p", package, "--", "-Z", "unstable-options", "--report-time", "--test-threads", "1"], cwd=ROOT, capture_output=True, text=True, env=env)
     tests = [(n, s) for n, s in ranked(done.stdout) if s <= 0.5][:40]
     data = selection()
     data.setdefault("units", {})[package] = {"tests": [[n, s] for n, s in tests]}
