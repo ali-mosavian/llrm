@@ -39,6 +39,7 @@ use llrm_lir::registers::RegId;
 use super::virtregmap::{RegUnit, RegisterInfo, VirtRegMap};
 use crate::liveness::liveintervalunion::{LiveIntervalUnion, Query, VReg};
 use crate::liveness::liverange::{LiveInterval, LiveRange};
+use crate::liveness::slotindex::SlotIndex;
 
 /// `LiveRegMatrix::InterferenceKind`.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -72,6 +73,41 @@ pub trait PhysInterference {
         li: &LiveInterval,
         phys: RegId,
     ) -> bool;
+
+    /// `LiveIntervals::getRegUnit`: the fixed live range of `unit`, if any.
+    fn fixed_range(
+        &self,
+        _unit: RegUnit,
+    ) -> Option<&LiveRange> {
+        None
+    }
+
+    /// `getRegMaskSlotsInBlock`: the numbers (for `reg_mask_slot` and
+    /// `reg_mask_clobbers`) of the regmask slots in `[start, stop)`, ascending.
+    fn reg_mask_range(
+        &self,
+        _start: SlotIndex,
+        _stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        0..0
+    }
+
+    /// The slot of regmask number `i`.
+    fn reg_mask_slot(
+        &self,
+        _i: usize,
+    ) -> SlotIndex {
+        unreachable!("no regmask")
+    }
+
+    /// `MachineOperand::clobbersPhysReg(RegMaskBits[i], phys)`.
+    fn reg_mask_clobbers(
+        &self,
+        _i: usize,
+        _phys: RegId,
+    ) -> bool {
+        false
+    }
 }
 
 /// No calls and no fixed ranges.
@@ -132,6 +168,19 @@ impl LiveRegMatrix {
 
     pub fn tri(&self) -> RegisterInfo {
         self.tri
+    }
+
+    /// The fixed constraints (`LIS` regmasks and register units).
+    pub fn fixed(&self) -> &dyn PhysInterference {
+        &*self.fixed
+    }
+
+    /// `Matrix[unit]`, None while no register of it was assigned.
+    pub fn union(
+        &self,
+        unit: RegUnit,
+    ) -> Option<&LiveIntervalUnion> {
+        self.matrix.get(unit as usize)
     }
 
     /// The arrays cover `unit` (`LiveIntervalUnion::Array::init`).
