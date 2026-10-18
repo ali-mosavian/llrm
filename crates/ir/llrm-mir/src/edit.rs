@@ -1010,7 +1010,7 @@ impl Function {
                 return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
             }
         }
-        let gone: std::collections::HashSet<BlockId> = blocks.iter().copied().collect();
+        let gone: crate::dense::IdSet<BlockId> = blocks.iter().copied().collect();
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
         self.layout.retain(|one| !gone.contains(one));
         for &block in blocks {

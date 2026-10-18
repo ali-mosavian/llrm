@@ -68,13 +68,14 @@
 //! ```
 
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
-use llrm_support::hash::{HashMap, IndexMap, IndexSet};
+use llrm_support::hash::IndexSet;
 
 use crate::edges;
 
@@ -786,7 +787,8 @@ impl Lowering<'_, '_> {
             std::cmp::Ordering::Greater => self.put(block, Opcode::Cast(CastOp::Trunc), wide, vec![index]),
             std::cmp::Ordering::Equal => index,
         };
-        let mut landings: IndexMap<BlockId, BlockId> = IndexMap::default();
+        let mut landings: IdMap<BlockId, BlockId> = IdMap::new();
+        let mut lands: Vec<BlockId> = Vec::new();
         let mut operands = vec![index, Operand::Block(default)];
         // The parts are in order and apart: the one that holds an index is at
         // or after the one that held the index before.
@@ -806,6 +808,7 @@ impl Lowering<'_, '_> {
                     let land = self.fresh(block);
                     self.jump(land, target);
                     landings.insert(target, land);
+                    lands.push(land);
                     land
                 }
             };
@@ -816,7 +819,7 @@ impl Lowering<'_, '_> {
         let void = self.unit.context.types.void();
         let inst = self.unit.function.create_instruction(Opcode::Switch, void, operands, Flags::TABLE, None);
         self.unit.function.insert(inst, Position::End(block)).expect("a placed instruction");
-        self.edges.extend(landings.values().map(|&land| (block, land)));
+        self.edges.extend(lands.iter().map(|&land| (block, land)));
     }
 
     /// `find_bit_tests`: the fewest runs of clusters, each narrower than a
@@ -884,9 +887,14 @@ impl Lowering<'_, '_> {
         originals: &[BlockId],
     ) {
         let block = self.switch.block;
-        let mut reached_from: HashMap<BlockId, Vec<BlockId>> = HashMap::default();
+        let mut reached_from: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
         for &(from, to) in &self.edges {
-            reached_from.entry(to).or_default().push(from);
+            match reached_from.get_mut(&to) {
+                Some(sources) => sources.push(from),
+                None => {
+                    reached_from.insert(to, vec![from]);
+                }
+            }
         }
         for &target in originals {
             let sources = reached_from.get(&target).map_or(&[][..], Vec::as_slice);
