@@ -199,3 +199,68 @@ pub fn create_mem_copy(
         vec![align(dest_align), align(source_align), Vec::new(), Vec::new()],
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use llrm_mir::passes::Declared;
+
+    use super::*;
+
+    /// The calls formed carry no `!tbaa` (D10, #2314): TBAA answers may-alias
+    /// for an untagged access, so the call is more conservative than LLVM's,
+    /// never less.
+    #[test]
+    fn test_a_formed_call_carries_no_metadata() {
+        let mut module = llrm_mir::parse::module(
+            "define void @f(ptr %p, ptr %q, i64 %n) {
+  store i8 0, ptr %p, !tbaa !0
+  ret void
+}
+
+!0 = !{!1, !1, i64 0}
+!1 = !{!\"char\", !2, i64 0}
+!2 = !{!\"root\"}
+",
+        )
+        .expect("a module");
+        let mut declared = Declared::of(&module);
+        let mut context = module.context.clone();
+        let function = module
+            .globals
+            .iter_mut()
+            .find_map(|global| match &mut global.kind {
+                llrm_mir::module::GlobalKind::Function(function) => Some(function),
+                _ => None,
+            })
+            .expect("a function");
+        let before = function.layout()[0];
+        let store = function.block(before).instructions()[0];
+        assert!(function.instruction(store).metadata.iter().any(|(kind, _)| kind == "tbaa"), "the store is tagged");
+        let [p, q, n] = function.parameters()[..] else { panic!("three parameters") };
+        let byte = int(&mut context, 8, 0);
+        let set = create_mem_set(
+            &mut context,
+            &mut declared,
+            function,
+            store,
+            Operand::Value(p),
+            byte,
+            Operand::Value(n),
+            None,
+        );
+        let copy = create_mem_copy(
+            &mut context,
+            &mut declared,
+            function,
+            store,
+            Copy::Memmove,
+            Operand::Value(p),
+            None,
+            Operand::Value(q),
+            None,
+            Operand::Value(n),
+        );
+        assert!(function.instruction(set).metadata.is_empty());
+        assert!(function.instruction(copy).metadata.is_empty());
+    }
+}

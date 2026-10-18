@@ -149,7 +149,8 @@ impl LoopIdiomRecognize {
         }
 
         // Attempt to optimize a CRC loop if one is detected by HashRecognize
-        // (D9: not translated).
+        // (D9, temporary, https://github.com/ali-mosavian/llrm/issues/2313:
+        // not translated).
         made_change
     }
 

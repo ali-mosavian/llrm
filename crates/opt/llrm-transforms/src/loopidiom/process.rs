@@ -9,9 +9,11 @@
 //! that query, never held across an edit.
 //!
 //! # Deviations
-//! - D10 No `AAMDNodes` on the new call: `merge` and `extendTo` of TBAA build
-//!   new metadata nodes (`TypeBasedAliasAnalysis.cpp`, not translated), and a
-//!   call without tags assumes nothing. Pending approval.
+//! - D10 (temporary, [#2314](https://github.com/ali-mosavian/llrm/issues/2314))
+//!   No `AAMDNodes` on the new call: `merge` and `extendTo` of TBAA build new
+//!   metadata nodes (`TypeBasedAliasAnalysis.cpp`, not translated). MIR carries
+//!   `!tbaa`, and an untagged call is may-alias to TBAA, so this errs
+//!   conservative. Exit: `AAMDNodes` in MIR.
 //! - No `MemorySSAUpdater`, `OptimizationRemarkEmitter` or debug location: the
 //!   pass keeps no MemorySSA, emits no remarks, and MIR keeps the debug
 //!   locations of statements apart from instructions.

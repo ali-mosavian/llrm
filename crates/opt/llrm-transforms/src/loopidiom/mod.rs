@@ -10,6 +10,9 @@
 //! ScalarEvolution does.
 //!
 //! # Deviations
+//! - D9 (temporary, [#2313](https://github.com/ali-mosavian/llrm/issues/2313)):
+//!   no CRC loops (`HashRecognize`, `optimizeCRCLoop*`).
+//! - D10: see [`process`].
 //! Absent in MIR, so skipped (facts, not choices):
 //! - Atomics: a store or load is simple and unordered unless `volatile`, so
 //!   `UnorderedAtomicMemcpy` has no producer.
