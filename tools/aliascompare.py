@@ -36,7 +36,8 @@ def difftest():
     sys.exit("aliascompare: tools/difftest/difftest.py is not here; set DIFFTEST_DIR to the directory that has it")
 
 
-PAIR = re.compile(r"^\s+(NoAlias|MayAlias|PartialAlias|MustAlias):\s+(?:\S+(?: addrspace\(\d+\))?\*?|ptr(?: addrspace\(\d+\))?)\s+(%\S+?),\s+\S+(?: addrspace\(\d+\))?\s+(%\S+)\s*(?:\(|\[|$)")
+PAIR = re.compile(r"^\s+(NoAlias|MayAlias|PartialAlias|MustAlias):\s+(.*)$")
+NAME = re.compile(r'[%@](?:"[^"]*"|[\w.$-]+)')
 FUNCTION = re.compile(r"^Function: ([^:]+):")
 
 
@@ -52,8 +53,8 @@ def llvm_answers(dt, text: str) -> dict[tuple[str, frozenset[str]], str]:
     for line in done.stderr.splitlines():
         if (head := FUNCTION.match(line)) is not None:
             current = head[1].strip('"')
-        elif (pair := PAIR.match(line)) is not None:
-            found[(current, frozenset((pair[2].strip('"'), pair[3].strip('"'))))] = pair[1]
+        elif (pair := PAIR.match(line)) is not None and len(names := NAME.findall(pair[2])) == 2:
+            found[(current, frozenset(name.replace('"', "") for name in names))] = pair[1]
     return found
 
 

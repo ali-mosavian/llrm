@@ -119,8 +119,9 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
 /// the points-to facts of the body say: `NoAlias` where no object they point
 /// into is shared (offsets and widths not read, as aa-eval asks without a size), `MustAlias` for one value, else `MayAlias`.
 fn aliases(module: &llrm_mir::module::Module) -> String {
-    use llrm_analysis::memory::Unit;
-    use llrm_mir::module::{Operand, ValueId};
+    use llrm_analysis::memory::{MemRef, Provenance, Slice, Unit};
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::module::Operand;
     use llrm_mir::opcode::Opcode;
     let layout = module
         .datalayout
@@ -139,13 +140,29 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         let unit = plain.with_registers(&known).with_shape(&shape);
         let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
         let names = llrm_mir::print::value_names(function);
-        let mut pointers: Vec<ValueId> = Vec::new();
-        let note = |operand: Operand, pointers: &mut Vec<ValueId>| {
-            if let Operand::Value(value) = operand
-                && function.operand_type(&module.context, operand).is_some_and(|ty| matches!(module.context.types.get(ty), llrm_mir::types::Type::Pointer(_)))
-                && !pointers.contains(&value)
+        // A pointer value or a global's address, as aa-eval counts them; what the
+        // text calls it.
+        let label = |operand: Operand| -> Option<String> {
+            match operand {
+                Operand::Value(value) => Some(format!("%{}", names.get(&value)?)),
+                Operand::Constant(id) => match module.context.get(id).kind {
+                    ConstantKind::Global(at) => {
+                        Some(format!("@{}", llrm_mir::print::quoted(module.globals.get(at.0 as usize)?.name.as_deref()?)))
+                    }
+                    _ => None,
+                },
+                Operand::Block(_) => None,
+            }
+        };
+        let mut pointers: Vec<Operand> = Vec::new();
+        let note = |operand: Operand, pointers: &mut Vec<Operand>| {
+            if label(operand).is_some()
+                && function.operand_type(&module.context, operand).is_some_and(|ty| {
+                    matches!(module.context.types.get(ty), llrm_mir::types::Type::Pointer(_))
+                })
+                && !pointers.contains(&operand)
             {
-                pointers.push(value);
+                pointers.push(operand);
             }
         };
         for (_, inst) in function.walk() {
@@ -161,33 +178,33 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
                 _ => {}
             }
         }
+        // aa-eval asks with no size (`beforeOrAfterPointer`): a width no offset
+        // gets past, so only the objects separate two pointers. The reference is
+        // the one the consumers of the facts compare, every byte of each object.
+        let cell = |operand: Operand| {
+            let mut cell = MemRef::at(&unit, operand, 1 << 20);
+            let provenance = match operand {
+                Operand::Value(value) => facts.values.get(&value).cloned(),
+                _ => llrm_analysis::memory::object_of(&unit, operand)
+                    .and_then(|object| Provenance::one_with_slice(object, 0, 1, 1, 1, Default::default()).ok()),
+            };
+            cell.provenance = provenance.map(|provenance| Provenance {
+                slices: provenance.slices.iter().filter_map(|one| Slice::every_byte(one.object)).collect(),
+                restrict: provenance.restrict.clone(),
+            });
+            cell
+        };
         for (at, &one) in pointers.iter().enumerate() {
             for &other in &pointers[at + 1..] {
-                // aa-eval asks with no size (`beforeOrAfterPointer`): a width no
-                // offset gets past, so only the objects separate two pointers. The
-                // reference is the one the consumers of the facts compare.
-                let cell = |value: ValueId| {
-                    let mut cell = llrm_analysis::memory::MemRef::at(&unit, Operand::Value(value), 1 << 20);
-                    // Every byte of each object, not the bytes the slice names.
-                    cell.provenance = facts.values.get(&value).map(|provenance| {
-                        let slices = provenance
-                            .slices
-                            .iter()
-                            .filter_map(|one| llrm_analysis::memory::Slice::every_byte(one.object))
-                            .collect();
-                        llrm_analysis::memory::Provenance { slices, restrict: provenance.restrict.clone() }
-                    });
-                    cell
-                };
                 let answer = match llrm_analysis::regions::overlapping(&cell(one), &cell(other), None, None, None) {
                     Ok(false) => "NoAlias",
                     _ => "MayAlias",
                 };
                 out += &format!(
-                    "{}\t{answer}\t%{}\t%{}\n",
+                    "{}\t{answer}\t{}\t{}\n",
                     global.name.as_deref().unwrap_or("?"),
-                    names[&one],
-                    names[&other]
+                    label(one).expect("a label"),
+                    label(other).expect("a label")
                 );
             }
         }
