@@ -107,11 +107,7 @@ fn function_poison(
                     }
                     let block = function.parent(user).expect("a placed load");
                     let before = |stores: &[InstId]| {
-                        function
-                            .block(block)
-                            .iter()
-                            .take_while(|&one| one != user)
-                            .any(|one| stores.contains(&one))
+                        function.block(block).iter().take_while(|&one| one != user).any(|one| stores.contains(&one))
                     };
                     let whole_first = before(&whole) || after_whole.get(&block).copied().unwrap_or(false);
                     let part_first = before(&parts) || after_part.contains(&block);

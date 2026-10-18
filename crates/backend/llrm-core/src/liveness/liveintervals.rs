@@ -36,6 +36,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::cfg::{Cfg, DomTree};
+use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
@@ -308,6 +309,62 @@ impl LiveIntervals {
             assert!(vni.def().get_base_index() == pos.get_base_index());
             li.remove_val_no(&vni);
         }
+    }
+
+    /// `splitSeparateComponents`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L1866>)
+    /// with `ConnectedVNInfoEqClasses::Distribute`: a register whose values
+    /// are not connected becomes one register per component. Returns the new
+    /// registers (component 0 stays); their intervals are held, their operands
+    /// rewritten.
+    pub fn split_separate_components(
+        &mut self,
+        reg: u32,
+    ) -> Vec<u32> {
+        let mut li = self.take_interval(reg);
+        let mut con = ConnectedVNInfoEqClasses::new();
+        let num_comp = con.classify(&li.range, &self.indexes, &self.cfg);
+        if num_comp <= 1 {
+            self.insert_interval(li);
+            return Vec::new();
+        }
+        let new_regs: Vec<u32> = (1..num_comp).map(|_| self.create_virtual_register()).collect();
+
+        // Rewrite instructions: each goes with the value it reads, else the
+        // one it defines.
+        let mut seen: Vec<(InstrKey, bool)> = Vec::new();
+        for op in self.operands(reg) {
+            match seen.iter_mut().find(|(k, _)| *k == op.instr) {
+                Some(entry) => entry.1 |= op.reads_reg,
+                None => seen.push((op.instr, op.reads_reg)),
+            }
+        }
+        for (key, reads) in seen {
+            let idx = self.indexes.get_instruction_index(key);
+            let q = li.query(&idx);
+            let vni = if reads { q.value_in() } else { q.value_defined() };
+            // An undef use that isn't tied to any def has no value.
+            let Some(vni) = vni else { continue };
+            let class = con.get_eq_class(&vni);
+            if class > 0 {
+                let to = new_regs[class as usize - 1];
+                let block = self.indexes.get_mbb_from_index(&idx);
+                let old = Arc::clone(self.instr(key));
+                let new = old.renamed(&|v| if v == reg { to } else { v });
+                self.rewrite_instr(block, key, new);
+            }
+        }
+
+        // Distribute the main live range.
+        let mut splits: Vec<LiveRange> = (1..num_comp).map(|_| LiveRange::new()).collect();
+        distribute_range(&mut li.range, &mut splits, &|id| con.class_of_id(id));
+        for (&new, range) in new_regs.iter().zip(splits) {
+            let mut made = LiveInterval::new(new, 0.0);
+            made.range = range;
+            self.insert_interval(made);
+        }
+        self.insert_interval(li);
+        new_regs
     }
 
     /// How many intervals are held.
