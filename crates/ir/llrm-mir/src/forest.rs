@@ -444,12 +444,13 @@ pub fn forest(
 impl Forest {
     /// The forest of the loops `info` found in `function`, loop `n` of `info`
     /// being loop `n` of the forest: the form the graph walks and `Body` read,
-    /// until they read `LoopInfo`.
+    /// until they read `LoopInfo`. DEVIATE (temporary): an adapter, not in
+    /// LLVM; it goes with `forest::forest` in #2197. Not counted as a forest
+    /// built: `LoopInfo::analyze` is the finder.
     pub fn of_loop_info(
         function: &crate::module::Function,
         info: &crate::loopinfo::LoopInfo,
     ) -> Self {
-        crate::counts::bump(crate::counts::Event::Forests);
         let all = info.get_loops_in_preorder();
         let mut loops: Vec<TreeLoop> = Vec::new();
         loops.resize_with(all.len(), || TreeLoop {
