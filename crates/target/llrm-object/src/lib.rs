@@ -139,8 +139,7 @@ pub struct Symbol {
     pub name: String,
     pub binding: Binding,
     pub definition: Definition,
-    /// ELF `st_size`: the bytes of a function's body, not the padding before
-    /// it; 0 when unknown.
+    /// ELF `st_size`: the bytes of a function's body, not the padding before it; 0 when unknown.
     pub size: usize,
     /// OMF: the group a symbol this object does not define is addressed in.
     pub group: Option<usize>,

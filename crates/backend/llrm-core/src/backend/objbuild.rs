@@ -1688,8 +1688,7 @@ mod tests {
             let mut symbols = IndexMap::default();
             let mut sizes = IndexMap::default();
             _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, format, body_of).unwrap();
-            // `.size` is the body alone: the padding before a function is no
-            // symbol's.
+            // `.size` is the body alone: the padding before a function is no symbol's.
             assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "{format:?}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };

@@ -610,6 +610,7 @@ b0:
     assert_eq!(joined, [(2, false, true, true)]);
 }
 
+
 /// EarlyCSE's x_hash: one arm of a diamond stores into the table, the other
 /// does not, and two loads of the same slot follow the join. The walker answers
 /// ONE access for both, the join's phi (a set of the nearest stores made the

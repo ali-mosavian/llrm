@@ -728,8 +728,7 @@ mod tests {
                 name: "helper".into(),
                 binding: Binding::Local,
                 definition: Definition::Defined { section: 0, offset: 0 },
-                size: 0,
-                group: None,
+                size: 0, group: None,
             }],
         );
         made.omf_comdat = vec![0];

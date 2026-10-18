@@ -550,8 +550,7 @@ fn written_basic_inner(
     }
     read_segment.fixups.clear();
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
-        .map_err(|error| error.to_string())?;
+    let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs).map_err(|error| error.to_string())?;
     let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
