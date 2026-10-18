@@ -779,8 +779,15 @@ pub fn merge_block_into_predecessor(
     }
 
     // Can't merge if there are multiple distinct successors.
-    let successors = function.successors(pred_bb);
-    if !predecessor_with_two_successors && !(successors.len() == 1 && successors[0] == bb) {
+    // (`getSingleSuccessor`, without listing a switch's N successors for each
+    // of its N targets: a block names one other, and that ends the scan.)
+    let only_bb = function
+        .instruction(pti)
+        .operands
+        .iter()
+        .filter_map(|one| if let Operand::Block(block) = one { Some(*block) } else { None })
+        .all(|block| block == bb);
+    if !predecessor_with_two_successors && !only_bb {
         return false;
     }
 
