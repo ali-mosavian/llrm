@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/effects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/effects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:c9e8390ad45f1f4d22826f8d2064b4ee44c3a309848db0bc0ffec36be831e63e -->
+<!-- src: crates/backend/llrm-core/src/backend/effects.rs sha256:7e457da3708ebed78d4cf64c847c302bd4e8d88907f3b48dd99a4646d4d38099 -->
 
 # effects
 
@@ -47,5 +47,5 @@ The effects of one instruction as register roots and flag masks.
 ## Used by
 `peephole.rs` (`_effects_by_table`), which adds the instruction's
 `requires` and `delivers` and turns the registers into byte lanes. The
-lanes feed `copyprop`, `copysink`, `regthrash`, `exactaddress`, `liveness`,
+lanes feed `machinecp`, `copysink`, `regthrash`, `exactaddress`, `liveness`,
 `parcopy`, `spillforward`, `upperzero` and other post-allocation passes.

@@ -324,9 +324,11 @@ fn test_division_and_variable_shifts() {
             "mov ax, bx",
             "xor dx, dx",
             "div cx",
+            // MachineCopyPropagation leaves the tied `add`/`shl` on `si` and
+            // copies once at the end: the same 19 instructions as before.
+            "add si, dx",
+            "shl si, cl",
             "mov ax, si",
-            "add ax, dx",
-            "shl ax, cl",
             "pop si",
             "pop bp",
             "retf",
@@ -959,9 +961,11 @@ define i16 @f() addrspace(1) {{
             "push di",
             "L0_0:",
             "lea di, [bp-8]",
-            "mov es, ss",
             "mov eax, 16843009",
             "mov cx, 1",
+            // The segment is loaded from `ss` itself (MachineCopyPropagation),
+            // after the counts: the same 16 instructions as before.
+            "mov es, ss",
             "rep stosd",
             "stosw",
             "stosb",

@@ -144,3 +144,45 @@ fn an_unused_guard_declaration_changes_nothing() {
     let with = format!("declare void @llvm.experimental.guard(i1, ...)\n{body}");
     assert_eq!(dump(&with).expect("parses"), dump(body).expect("parses"));
 }
+
+/// `ConstantFoldCompareInstOperands` of two different non-weak globals is
+/// false (`areGlobalsPotentiallyEqual`); LVI's own subset of it left `%p == @b`
+/// unknown on the edge where `%p == @a`.
+#[test]
+fn two_different_globals_are_not_equal_on_the_edge_where_one_of_them_is() {
+    use crate::context::{Constant, ConstantKind, GlobalId};
+    use crate::opcode::IntPredicate;
+    let mut module = parse::module(
+        "@a = global i32 0
+@b = global i32 0
+
+define i1 @f(ptr %p) {
+entry:
+  %c = icmp eq ptr %p, @a
+  br i1 %c, label %t, label %e
+t:
+  %d = icmp eq ptr %p, @b
+  ret i1 %d
+e:
+  ret i1 0
+}
+",
+    )
+    .expect("parses");
+    let layout = DataLayout::default();
+    let at = module.globals.iter().position(|g| g.name.as_deref() == Some("f")).expect("@f");
+    let b = module.globals.iter().position(|g| g.name.as_deref() == Some("b")).expect("@b");
+    let ptr = module.context.types.ptr(0);
+    let b = module.context.constant(Constant { ty: ptr, kind: ConstantKind::Global(GlobalId(b as u32)) });
+    let GlobalKind::Function(function) = &module.globals[at].kind else { unreachable!() };
+    let assumptions = AssumptionCache::new(&module, function);
+    let compare =
+        function.walk().map(|(_, inst)| inst).filter(|&inst| function.instruction(inst).result.is_some()).nth(1);
+    let compare = compare.expect("the second compare");
+    let p = Operand::Value(function.parameters()[0]);
+    let mut lvi = LazyValueInfo::new();
+    let globals = &module.globals;
+    let GlobalKind::Function(function) = &globals[at].kind else { unreachable!() };
+    let mut env = Env::new(&mut module.context, globals, &module.metadata, function, &layout, &assumptions);
+    assert_eq!(lvi.get_predicate_at(&mut env, IntPredicate::Eq, p, b, compare, true), Some(false));
+}
