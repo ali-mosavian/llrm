@@ -331,7 +331,8 @@ mod tests {
         li
     }
 
-    /// A register's units are the lanes of its root it covers: the two low bytes and the upper half.
+    /// A register's units are the lanes of its root it covers: the two low
+    /// bytes and the upper half.
     #[test]
     fn test_registers_share_the_units_they_overlap_in() {
         let tri = info();
@@ -345,11 +346,13 @@ mod tests {
         }
     }
 
-    /// The register units of X86RegisterInfo.td, as `llvm-tblgen -gen-register-info` writes them at
-    /// d1106deb71cc (`X86RegUnitRoots`, decoded through `X86RegDiffLists`): AL, AH and one unit for the
-    /// high half (`HAX`) make EAX three, AX is two, a byte register or a segment register is one. The
-    /// byte-lane model gave EAX four (bytes 2 and 3 are never named apart), so an assignment took four
-    /// union entries where LLVM's takes three.
+    /// The register units of X86RegisterInfo.td, as `llvm-tblgen
+    /// -gen-register-info` writes them at d1106deb71cc (`X86RegUnitRoots`,
+    /// decoded through `X86RegDiffLists`): AL, AH and one unit for the high
+    /// half (`HAX`) make EAX three, AX is two, a byte register or a segment
+    /// register is one. The byte-lane model gave EAX four (bytes 2 and 3
+    /// are never named apart), so an assignment took four union entries
+    /// where LLVM's takes three.
     #[test]
     fn test_the_units_of_a_register_are_the_table_gen_units_of_x86() {
         let tri = info();
