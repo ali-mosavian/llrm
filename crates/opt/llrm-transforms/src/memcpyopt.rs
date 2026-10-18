@@ -17,8 +17,8 @@
 //! references `Unit::annotated` gives) says no source cell and destination cell
 //! of the run can meet, so the order of its loads and stores does not matter.
 //! And it is cheaper: the pairs' loads and stores against what the same
-//! `length` costs (`fill::copy_price`: the loads and stores isel makes of a
-//! short copy, else `rep movs`). Four byte pairs are one dword pair, which is
+//! `length` costs (`loopidioms::copy_price`: the loads and stores isel makes of
+//! a short copy, else `rep movs`). Four byte pairs are one dword pair, which is
 //! a gain; two dword pairs are what isel makes of the copy, which is none.
 //!
 //! ```text
@@ -46,7 +46,7 @@
 //! # Runs
 //! After the function fixed point, beside `Merge` (no pass asks a memcpy what
 //! its destination holds, and `splitcopy` would split the memcpy of a local
-//! again). On and off with `-ftree-loop-distribute-patterns`, as `Fill`.
+//! again). On and off with `-ftree-loop-distribute-patterns`, as `LoopIdioms`.
 //!
 //! # Needs
 //! `regions::overlapping` through `Unit::annotated`; the target's costs.
@@ -55,7 +55,7 @@
 //! The blocks and edges: only instructions change.
 //!
 //! # See also
-//! [`crate::fill`] owns `copy_price` and the loop that copies;
+//! [`crate::loopidioms`] owns `copy_price` and the loop that copies;
 //! [`crate::splitcopy`] is the opposite for a local.
 
 use llrm_analysis::memory::{MemRef, Unit};
@@ -70,7 +70,7 @@ use llrm_mir::opcode::{CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, PreservedAnalyses};
 
 use crate::counting;
-use crate::fill::{_copy, How, copy_price};
+use crate::loopidioms::{_copy, How, copy_price};
 
 /// Pairs one run may take: each is checked against every other's.
 const MAX_PAIRS: usize = 64;
