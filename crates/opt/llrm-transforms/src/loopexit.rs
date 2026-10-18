@@ -570,7 +570,7 @@ fn _aliases(
 /// Each value in `swap`, and the exit phi naming it, read as its number
 /// wherever `following` reads it.
 fn _substituted_exits(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     exit: BlockId,
     following: &BTreeSet<BlockId>,

@@ -288,7 +288,7 @@ pub fn expanded(
         let name = (
             loop_.header,
             loop_.body.iter().copied().collect::<Vec<_>>(),
-            loop_.body.iter().map(|&block| function.block(cfg::block(block)).instructions().len()).sum::<usize>(),
+            loop_.body.iter().map(|&block| function.block(cfg::block(block)).len()).sum::<usize>(),
         );
         if count < BigInt::from(2) || refused.contains(&name) {
             continue;
@@ -324,9 +324,7 @@ fn _phis(
 ) -> Vec<InstId> {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .filter(|&inst| function.instruction(inst).opcode == Opcode::Phi)
         .collect()
 }

@@ -151,7 +151,7 @@ struct Hoisted {
 /// Every loop's exits their counts decide, folded, and those tested once
 /// hoisted; whether any was.
 pub fn folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -161,7 +161,7 @@ pub fn folded(
 
 /// `folded`, what is known of the body without memory given as `standing` says.
 pub fn folded_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -173,7 +173,7 @@ pub fn folded_with(
 /// [`folded_with`], the exits their counts decide found by ScalarEvolution
 /// (`scev`) or by `induction::exits`.
 pub fn folded_by(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,

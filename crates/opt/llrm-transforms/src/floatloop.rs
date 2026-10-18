@@ -288,7 +288,7 @@ struct _Plan {
 /// `solved`, floatfacts' solve of `function` with `calls`. Whether one was.
 #[allow(clippy::too_many_arguments)]
 pub fn specialized(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
@@ -493,7 +493,7 @@ fn _planned(
 
 /// A store of `store`'s constant at `position`.
 fn _store(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     store: _Store,
     position: Position,
@@ -511,7 +511,7 @@ fn _store(
 }
 
 fn _rewritten(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: _Plan,
 ) {

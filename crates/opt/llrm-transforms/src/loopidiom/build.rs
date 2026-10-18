@@ -39,7 +39,7 @@ fn width_of(
 }
 
 fn int(
-    context: &mut Context,
+    context: &Context,
     width: u32,
     value: u128,
 ) -> Operand {
@@ -53,7 +53,7 @@ fn align(value: Option<u64>) -> Vec<Attribute> {
 
 /// A call of `name` (type `ty`) with `arguments`, placed before `before`.
 fn call(
-    context: &mut Context,
+    context: &Context,
     declared: &mut Declared,
     function: &mut Function,
     before: InstId,

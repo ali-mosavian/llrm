@@ -2269,15 +2269,12 @@ impl Selector<'_, '_, '_> {
             return;
         }
         let mut later = std::iter::successors(function.next_in_block(inst), |&one| function.next_in_block(one));
-        let found = later
-            .find(
-                |&one| {
-                    let other = function.instruction(one);
-                    other.opcode == Opcode::Binary(partner)
-                        && other.operands == instruction.operands
-                        && !self.consumed.contains(&one)
-                },
-            );
+        let found = later.find(|&one| {
+            let other = function.instruction(one);
+            other.opcode == Opcode::Binary(partner)
+                && other.operands == instruction.operands
+                && !self.consumed.contains(&one)
+        });
         if let Some(one) = found {
             self.paired.insert(inst, function.instruction(one).result.expect("a result"));
             self.consumed.insert(one);

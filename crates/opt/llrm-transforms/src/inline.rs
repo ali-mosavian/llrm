@@ -1385,7 +1385,7 @@ pub fn peeled_into(
     caller: &mut Function,
     original: &Function,
     budget: i64,
-    context: &mut Context,
+    context: &Context,
     unit: &mut UnitSize,
 ) -> usize {
     if !recursion_admits(original, budget) {
@@ -1421,7 +1421,7 @@ pub fn inlined_into_itself(
     original: &Function,
     budget: i64,
     frequencies: &dyn Fn(&Context, &Function) -> std::collections::BTreeMap<i64, i64>,
-    context: &mut Context,
+    context: &Context,
     unit: &mut UnitSize,
 ) -> usize {
     let own = |function: &Function, context: &Context| -> Vec<InstId> {
