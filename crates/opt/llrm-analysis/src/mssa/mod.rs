@@ -338,7 +338,7 @@ impl Mssa {
         }
         let (a, b) = (self.access(dominator).block, self.access(dominatee).block);
         if a != b {
-            return self.dominance.dominates(crate::cfg::id(a), crate::cfg::id(b));
+            return self.dominance.dominates_resolved(crate::cfg::id(a), crate::cfg::id(b));
         }
         self.locally_dominates(dominator, dominatee)
     }
@@ -360,7 +360,7 @@ impl Mssa {
             if use_block != self.access(dominator).block {
                 return self
                     .dominance
-                    .dominates(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
+                    .dominates_resolved(crate::cfg::id(self.access(dominator).block), crate::cfg::id(use_block));
             }
             // If the use block and the def block are the same, compare locally.
             return self.locally_dominates(dominator, user_access.incoming[at].1);

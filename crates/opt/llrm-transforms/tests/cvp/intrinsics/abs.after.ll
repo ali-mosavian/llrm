@@ -1,4 +1,4 @@
-declare i32 @llvm.abs.i32(i32, i1)
+declare i32 @llvm.abs.i32(i32, i1 immarg) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 define range(i32 1, 512) i32 @f(i32 %x, i32 %y) {
 entry:

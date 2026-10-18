@@ -2,6 +2,10 @@
 //! globals, local places allocas, HIR values SSA values. What MIR cannot
 //! hold yet is refused whole with the reason: a function is left declared,
 //! a data object an external global, so what refers to them still verifies.
+//!
+//! A branch on a comparison tests the comparison's `i1`, as clang's
+//! `EmitBranchOnBoolExpr` does; the comparison's widened result is made only
+//! where something else reads it.
 
 use std::collections::hash_map::Entry;
 
@@ -1056,7 +1060,13 @@ fn declare_data(
     };
     // An external one has no type to lay out, and is constant as declared.
     let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
+    let variable = GlobalVariable {
+        externally_initialized: false,
+        ty: ty.unwrap_or(bytes),
+        constant,
+        initializer: None,
+        align: None,
+    };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = data_space(spaces, object.address);
     global
@@ -1544,7 +1554,8 @@ fn declare_outside(
     for place in &function.places {
         if !matches!(place.storage, Storage::Local | Storage::Parameter) && !tables.data.contains_key(&place.symbol) {
             let ty = stored_type(&mut module.context.types, &tables.spaces, tables.types[&place.r#type])?;
-            let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
+            let variable =
+                GlobalVariable { externally_initialized: false, ty, constant: false, initializer: None, align: None };
             let global = add_unique(module, &place.name, |module, name| {
                 module.add_variable(name, variable.clone(), Linkage::External)
             });
@@ -1987,6 +1998,67 @@ fn operand_type(
 /// `function`'s blocks, each after its dominators -- reverse postorder from
 /// the entry and every external entry, the unreachable ones last -- so a
 /// value is emitted before its uses whatever the HIR's block order.
+/// The results of the comparisons that nothing but a branch reads: C's
+/// `if (a < b)` tests the `i1`, as clang's `EmitBranchOnBoolExpr` does, and
+/// the widened result is never made. Two passes over the body, bit-indexed by
+/// value (a body of a thousand statements pays for no hashing), and none at
+/// all when it compares nothing.
+fn branch_only_comparisons(function: &model::Function) -> HashMap<i64, Option<(Value, CastOp, TypeId)>> {
+    let size = function.values.iter().map(|one| one.id).max().map_or(0, |most| most as usize + 1);
+    let mut compared = vec![false; size];
+    let mut any = false;
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if let Some(&result) = instruction.results.first()
+            && comparison(three_way(instruction.op).unwrap_or(instruction.op)).is_some()
+            && let Some(slot) = compared.get_mut(result as usize)
+        {
+            *slot = true;
+            any = true;
+        }
+    }
+    if !any {
+        return HashMap::default();
+    }
+    fn read(
+        compared: &mut [bool],
+        value: i64,
+    ) {
+        if let Some(slot) = compared.get_mut(value as usize) {
+            *slot = false;
+        }
+    }
+    fn note(
+        compared: &mut [bool],
+        operands: &[Operand],
+    ) {
+        for operand in operands {
+            match operand {
+                Operand::ValueRef(one) => read(compared, one.value),
+                Operand::ArrayElement(one) => note(compared, &one.indices),
+                Operand::ProjectedPlace(one) => note(compared, &one.indices),
+                Operand::IndirectPlace(one) => {
+                    read(compared, one.base);
+                    if let Some(origin) = one.origin {
+                        read(compared, origin);
+                    }
+                }
+                Operand::DescriptorPlace(one) => read(compared, one.base),
+                Operand::Constant(_) | Operand::PlaceRef(_) => {}
+            }
+        }
+    }
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            note(&mut compared, &instruction.operands);
+        }
+        match block.terminator.kind {
+            TerminatorKind::Branch => note(&mut compared, &block.terminator.operands[1..]),
+            _ => note(&mut compared, &block.terminator.operands),
+        }
+    }
+    compared.iter().enumerate().filter(|(_, only)| **only).map(|(value, _)| (value as i64, None)).collect()
+}
+
 fn emission_order(function: &model::Function) -> Vec<&model::Block> {
     let blocks: HashMap<i64, &model::Block> = function.blocks.iter().map(|block| (block.id, block)).collect();
     let successors = |block: &model::Block| {
@@ -2064,6 +2136,10 @@ struct Body<'b, 'm, 'h> {
     /// The `i1` each comparison's result was widened from: what an assumption
     /// is made of.
     truths: HashMap<i64, Value>,
+    /// Comparisons whose widened result only a branch reads: not made, the
+    /// branch takes the `i1` (`truths`). Each is its `i1`, the cast and the
+    /// type it would have been widened to, for a reader that asks anyway.
+    branch_only: HashMap<i64, Option<(Value, CastOp, TypeId)>>,
     /// Each local place's frame object, and its offset in it.
     frame: HashMap<i64, (usize, i64)>,
     /// Where a variadic function's variadic arguments start, if a parameter
@@ -2113,6 +2189,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             blocks: HashMap::default(),
             values,
             truths: HashMap::default(),
+            branch_only: branch_only_comparisons(function),
             frame: HashMap::default(),
             passed: None,
             objects: Vec::new(),
@@ -2377,11 +2454,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         operand: &Operand,
     ) -> Emit<Value> {
         match operand {
-            Operand::ValueRef(one) => self
-                .values
-                .get(&one.value)
-                .copied()
-                .ok_or_else(|| format!("value {} used before its definition", one.value)),
+            Operand::ValueRef(one) => match (self.values.get(&one.value), self.branch_only.get(&one.value)) {
+                (Some(&value), _) => Ok(value),
+                // A reader the scan did not see: widened where it asks.
+                (None, Some(&Some((truth, cast, ty)))) => Ok(self.b.cast(cast, truth, ty, "")),
+                _ => Err(format!("value {} used before its definition", one.value)),
+            },
             Operand::Constant(one) => self.constant(one),
             place => {
                 let (pointer, ty, volatile, tag) = self.place(place)?;
@@ -2815,8 +2893,13 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             let ty = self.result_type(instruction.results[0])?;
             // BASIC's truth is all ones; an unsigned boolean's, as C's, is one.
             let one = self.hir_type(self.value_types[&instruction.results[0]]).signed == Some(false);
-            let result = self.b.cast(if one { CastOp::ZExt } else { CastOp::SExt }, truth, ty, "");
+            let cast = if one { CastOp::ZExt } else { CastOp::SExt };
             self.truths.insert(instruction.results[0], truth);
+            if let Some(deferred) = self.branch_only.get_mut(&instruction.results[0]) {
+                *deferred = Some((truth, cast, ty));
+                return Ok(());
+            }
+            let result = self.b.cast(cast, truth, ty, "");
             self.define(instruction, result);
             return Ok(());
         }
@@ -3414,10 +3497,23 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         match terminator.kind {
             TerminatorKind::Jump => self.b.br(self.block(terminator.targets[0])),
             TerminatorKind::Branch => {
-                let value = self.value(&terminator.operands[0])?;
-                let bits = self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a branch on a non-integer")?;
-                let zero = self.b.int(bits, 0);
-                let condition = self.b.icmp(IntPredicate::Ne, value, zero, "");
+                // A comparison's own `i1`, as clang branches
+                // (`EmitBranchOnBoolExpr`): its widened result
+                // is nonzero exactly when it holds.
+                let truth = match &terminator.operands[0] {
+                    Operand::ValueRef(one) => self.truths.get(&one.value).copied(),
+                    _ => None,
+                };
+                let condition = match truth {
+                    Some(truth) => truth,
+                    None => {
+                        let value = self.value(&terminator.operands[0])?;
+                        let bits =
+                            self.b.context.types.int_bits(self.b.type_of(value)).ok_or("a branch on a non-integer")?;
+                        let zero = self.b.int(bits, 0);
+                        self.b.icmp(IntPredicate::Ne, value, zero, "")
+                    }
+                };
                 self.b.cond_br(condition, self.block(terminator.targets[0]), self.block(terminator.targets[1]));
             }
             TerminatorKind::Switch => {

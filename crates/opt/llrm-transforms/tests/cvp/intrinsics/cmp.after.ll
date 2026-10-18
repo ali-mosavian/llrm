@@ -1,6 +1,6 @@
-declare range(i8 -1, 2) i8 @llvm.scmp.i8.i32(i32, i32)
+declare range(i8 -1, 2) i8 @llvm.scmp.i8.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare range(i8 -1, 2) i8 @llvm.ucmp.i8.i32(i32, i32)
+declare range(i8 -1, 2) i8 @llvm.ucmp.i8.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 define range(i8 -2, 1) i8 @f(i32 %x, i32 %y) {
 entry:

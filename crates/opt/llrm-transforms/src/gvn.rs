@@ -6,18 +6,23 @@
 //! # How it works
 //! `Gvn` runs these steps on a body, in order.
 //!
-//! 1. Branch equality (`propagated`, LLVM's `propagateEquality`). In what the
-//!    edge to a successor dominates, the branch's condition is that edge's
-//!    constant.
-//! 2. Numbering (`transform::forwarded`, `transform::subexpressions`,
+//! 1. The scalar pass (`pass::run_impl`, `table`: LLVM's `GVNPass` and
+//!    `ValueTable` without the load and PRE parts). Blocks with one way in are
+//!    merged into it, then each block is met in reverse postorder, its
+//!    instructions simplified or numbered by opcode, type and operand numbers
+//!    (a commutative pair ordered, a compare's predicate swapped with its
+//!    operands, a GEP by the bytes it adds, flags in no key): one that a
+//!    dominating leader has is replaced, keeping the flags both have. In what
+//!    an edge of a branch, a switch case or an assume dominates, the condition
+//!    is that edge's constant (`propagateEquality`), and the arm of a branch on
+//!    a constant is dead: its join's phis read poison from it. Two calls with
+//!    the same callee and arguments that read and write no memory are one.
+//! 2. Load numbering (`transform::forwarded`, `transform::subexpressions`,
 //!    `transform::equal_calls`). A load a known value serves becomes that
 //!    value: a dominating store of the same bytes and type, or an earlier load
-//!    of them, with nothing between that may write them. Two pure operations on
-//!    the same operands are one, a copy counting as its source and a
-//!    commutative pair ordered. The blocks are met dominators first, not in
-//!    layout order, which a removed join leaves behind the blocks it came to
-//!    dominate. Two calls with the same callee and arguments that read and
-//!    write no memory are one.
+//!    of them, with nothing between that may write them. The blocks are met
+//!    dominators first, not in layout order, which a removed join leaves behind
+//!    the blocks it came to dominate.
 //! 3. Join PRE (`joined`). An expression every predecessor of a join already
 //!    computes becomes a phi of those values. With `pre`, a predecessor that
 //!    lacks it gets the computation inserted before its unconditional `br`, if
@@ -143,6 +148,9 @@ use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_support::hash::IndexMap;
 
+pub mod pass;
+pub mod table;
+
 use crate::lcssa::{arms, from_arms, place_phi};
 use crate::profit::{self, OperationCosts};
 use crate::{edges, loadjoins, transform};
@@ -172,10 +180,25 @@ impl FunctionPass for Gvn {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // The scalar pass first: it may merge blocks and split edges, and what
+        // the rest reads is read of the body it leaves.
+        let blocks = unit.function.layout().len();
+        let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
+        let tree = shape.dominance.tree(unit.function);
+        let (scalar, cfg_changed) =
+            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), Some(tree));
+        drop(shape);
+        // Edits to operands leave what the manager holds of the body whole but
+        // for its registers; a changed CFG leaves none of it.
+        if cfg_changed {
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        } else if scalar {
+            analyses.invalidate(unit.function, &operands_edited());
+        }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
         let pointers = analyses.get::<PointerValues>(unit.context, unit.layout, unit.function);
-        // Only `loadjoins` changes the CFG, and only by splitting an edge.
-        let blocks = unit.function.layout().len();
+        // Only the scalar pass and `loadjoins` change the CFG: by merging
+        // blocks, and by splitting edges.
         let pointers = Result::as_ref(&*pointers).map_err(String::clone);
         // Numbering leaves the CFG alone: every candidate has these trips.
         let registers = analyses.get::<Registers>(unit.context, unit.layout, unit.function);
@@ -193,11 +216,15 @@ impl FunctionPass for Gvn {
             )
         };
         match accesses.and_then(|accesses| {
-            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre)
+            optimized(unit, analyses.outer(), &accesses, pointers?, &trips, &registers, &shape, self.pre, scalar)
         }) {
-            Ok(true) if unit.function.layout().len() != blocks => PreservedAnalyses::none(),
-            Ok(true) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
-            Ok(false) => PreservedAnalyses::all(),
+            Ok((true, numbering_changed_cfg))
+                if cfg_changed || numbering_changed_cfg || unit.function.layout().len() != blocks =>
+            {
+                PreservedAnalyses::none()
+            }
+            Ok((true, _)) => PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
+            Ok((false, _)) => PreservedAnalyses::all(),
             Err(error) => panic!("gvn: {error}"),
         }
     }
@@ -258,22 +285,18 @@ pub fn optimized(
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
     pre: bool,
-) -> Result<bool, String> {
-    let equal = propagated(unit);
-    // What is known of the body the manager saw, unless propagating a branch's
-    // condition changed it.
-    let fresh;
-    let registers = if equal {
-        fresh = llrm_analysis::consts::known(&memory::Unit::within(unit.context, unit.layout, unit.function, outer));
-        &fresh
-    } else {
-        registers
-    };
-    let (numbered, subexpressed) =
+    equal: bool,
+) -> Result<(bool, bool), String> {
+    let (numbered, subexpressed, cfg_numbered) =
         // Without `pre` this is -O1's FRE: gcc's has no profit pricing, so a
         // load is served wherever it is redundant and nothing is numbered
         // twice.
         _numbered(unit, outer, accesses, &profit::costs(outer), if pre { profit::registers(outer) } else { crate::spill::Room::default() }, trips, registers, shape)?;
+    // Numbering merged a block or split an edge: the shape and the accesses
+    // are of the body before, and PRE is the next round's, over fresh ones.
+    if cfg_numbered {
+        return Ok((true, true));
+    }
     // PRE may add work to a previously missing path.  Do that only after
     // local numbering has stabilized.
     let combined = joined(unit.function, pre && !subexpressed)?;
@@ -296,57 +319,7 @@ pub fn optimized(
         pre && !combined,
         shape,
     )?;
-    Ok(equal || numbered || combined || loaded)
-}
-
-/// LLVM GVN's `propagateEquality`, for a branch's condition: in what the
-/// edge to a successor dominates, the condition is that edge's constant.
-/// Whether any use changed.
-fn propagated(unit: &mut Unit) -> bool {
-    let shape = cfg::Shape::of(unit.function);
-    let mut found = Vec::new();
-    for &block in unit.function.layout() {
-        let Some(last) = unit.function.terminator(block) else { continue };
-        let branch = unit.function.instruction(last);
-        let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
-            continue;
-        };
-        if branch.opcode != Opcode::Br || taken == other {
-            continue;
-        }
-        for (target, holds) in [(taken, 1), (other, 0)] {
-            // The edge dominates what its target does only when it is the one
-            // way in, and not back into the branch's own block.
-            if target == block || unit.function.predecessors(target) != [block] {
-                continue;
-            }
-            for one in unit.function.users(condition) {
-                let user = unit.function.instruction(one.user);
-                let at = match user.opcode {
-                    Opcode::Phi => match user.operands[one.index as usize + 1] {
-                        Operand::Block(from) => from,
-                        _ => continue,
-                    },
-                    _ => match unit.function.parent(one.user) {
-                        Some(at) => at,
-                        None => continue,
-                    },
-                };
-                if shape.dominance.dominates(cfg::id(target), cfg::id(at)) {
-                    found.push((*one, condition, holds));
-                }
-            }
-        }
-    }
-    for &(one, condition, holds) in &found {
-        let ty = unit.function.value(condition).ty;
-        let constant = unit.context.int(ty, holds);
-        unit.function.set_operand(one.user, one.index as usize, Operand::Constant(constant));
-    }
-    // The branch's own edge: a phi in an arm that takes the condition from the
-    // branch's block.
-    let on_edges = crate::edges::conditions_decided(unit.context, unit.function);
-    !found.is_empty() || on_edges
+    Ok((equal || numbered || combined || loaded, false))
 }
 
 thread_local! {
@@ -372,18 +345,21 @@ fn _numbered(
     trips: &IndexMap<i64, i64>,
     registers: &IndexMap<ValueId, llrm_analysis::consts::Known>,
     shape: &cfg::Shape,
-) -> Result<(bool, bool), String> {
+) -> Result<(bool, bool, bool), String> {
     // The walk over the function as it comes in: the same for both runs below,
     // each of which changes a copy.
     let forwarding = transform::Forwarding::default();
     // Whether some load was served across a store: the one thing the second
     // numbering does differently from the first.
     let crossed = std::cell::Cell::new(false);
-    let numbered = |function: &Function, avoid_store_crossing: bool| -> Result<(Function, (bool, bool)), String> {
+    let numbered = |context: &mut llrm_mir::context::Context,
+                    function: &Function,
+                    avoid_store_crossing: bool|
+     -> Result<(Function, (bool, bool, bool)), String> {
         NUMBERINGS.with(|runs| runs.set(runs.get() + 1));
         let mut function = function.fork();
         let forwarded = transform::forwarded(
-            unit.context,
+            context,
             unit.layout,
             &mut function,
             outer,
@@ -394,23 +370,51 @@ fn _numbered(
             &forwarding,
             &crossed,
         )?;
-        let subexpressed =
+        let mut subexpressed =
             transform::subexpressions(&mut function, accesses, avoid_store_crossing, Some(outer.program()), &crossed)?;
+        // The scalar numbering, over the loads merged above, and the loads
+        // again over the addresses it merged: `iterateOnFunction`'s
+        // repeat until nothing changes (a few rounds here; a load's
+        // address is one round deep).
+        let (mut scalar, mut cfg) = (false, false);
+        for _ in 0..4 {
+            if !(forwarded || subexpressed) {
+                break;
+            }
+            let tree = shape.dominance.tree(&function);
+            let (changed, split) = pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(tree));
+            scalar |= changed;
+            cfg |= split;
+            if !changed || split {
+                break;
+            }
+            let again = transform::subexpressions(
+                &mut function,
+                accesses,
+                avoid_store_crossing,
+                Some(outer.program()),
+                &crossed,
+            )?;
+            subexpressed |= again;
+            if !again {
+                break;
+            }
+        }
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
-        let called = transform::equal_calls(&mut function, &silent(unit.context, outer))?;
-        Ok((function, (forwarded || subexpressed || called, subexpressed || called)))
+        let called = transform::equal_calls(&mut function, &silent(context, outer))?;
+        Ok((function, (forwarded || subexpressed || called || scalar, subexpressed || called || scalar, cfg)))
     };
-    let crossing = numbered(unit.function, false)?;
+    let crossing = numbered(unit.context, unit.function, false)?;
     // What `one` costs: its work, and the spills it forecasts. The work alone
     // is the lower bound of the price, and is the cheap half.
-    let price = |one: &Function, under: i64| {
-        let frequency = profit::_frequencies(unit.context, unit.metadata, &outer.globals, one, Some(trips))?;
-        let work = profit::weighted(unit.context, unit.layout, one, outer.callees(), costs, &frequency)?;
+    let price = |context: &llrm_mir::context::Context, one: &Function, under: i64| {
+        let frequency = profit::_frequencies(context, unit.metadata, &outer.globals, one, Some(trips))?;
+        let work = profit::weighted(context, unit.layout, one, outer.callees(), costs, &frequency)?;
         if work >= under {
             return Some(work);
         }
-        profit::motion_price(unit.context, unit.layout, outer, one, costs, room, &frequency)
+        profit::motion_price(context, unit.layout, outer, one, costs, room, &frequency)
     };
     // Where no load crossed a store, the second numbering is the first: it is
     // neither made nor priced.
@@ -423,8 +427,12 @@ fn _numbered(
             // is not made.
             Some((_, true)) | None => crossing,
             Some((crossed, false)) => {
-                let careful = numbered(unit.function, true)?;
-                if price(&careful.0, crossed).is_some_and(|kept| kept < crossed) { careful } else { crossing }
+                let careful = numbered(unit.context, unit.function, true)?;
+                if price(unit.context, &careful.0, crossed).is_some_and(|kept| kept < crossed) {
+                    careful
+                } else {
+                    crossing
+                }
             }
         }
     };
@@ -496,7 +504,7 @@ fn _insertion(
 ) -> Option<InstId> {
     let (parent_at, join_at) = (cfg::id(parent), cfg::id(join));
     if function.successors(parent) != [join]
-        || dominance.dominates(join_at, parent_at)
+        || dominance.dominates(function, join_at, parent_at)
         || natural_loops.iter().any(|loop_| loop_.body.contains(&parent_at) != loop_.body.contains(&join_at))
         || op.operands.iter().any(|operand| !matches!(operand, Operand::Value(_) | Operand::Constant(_)))
     {
@@ -512,7 +520,7 @@ fn _insertion(
             continue;
         };
         let (at, index) = *definitions.get(value)?;
-        if !dominance.dominates(at, parent_at) || (at == parent_at && index >= cut_index) {
+        if !dominance.dominates(function, at, parent_at) || (at == parent_at && index >= cut_index) {
             return None;
         }
     }
@@ -604,8 +612,8 @@ pub fn joined(
                         .flatten()
                         .filter(|(provider, _, _)| {
                             *provider != at
-                                && dominance.dominates(*provider, cfg::id(parent))
-                                && !dominance.dominates(at, *provider)
+                                && dominance.dominates(function, *provider, cfg::id(parent))
+                                && !dominance.dominates(function, at, *provider)
                                 && natural_loops
                                     .iter()
                                     .all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
@@ -683,3 +691,31 @@ pub fn joined(
 #[cfg(test)]
 #[path = "gvn_tests.rs"]
 mod tests;
+
+/// What the scalar pass leaves true of a body whose operands it edited and
+/// whose blocks it kept: everything the manager holds but the facts about
+/// values (`Registers`) and the counted-loop proofs built on them (`Counted`).
+fn operands_edited() -> PreservedAnalyses {
+    use llrm_analysis::manager::{
+        Annotated, Bounded, CallEffects, DemandedBits, DominatedEdges, ExposedFrames, FloatFacts, Followers,
+        PlainAccesses, Pointers, TableLoads, ThroughMemory, Writes,
+    };
+    PreservedAnalyses::none()
+        .preserve::<Dominators>()
+        .preserve::<Loops>()
+        .preserve::<llrm_analysis::cfg::Shape>()
+        .preserve::<Accesses>()
+        .preserve::<ExposedFrames>()
+        .preserve::<Pointers>()
+        .preserve::<Annotated>()
+        .preserve::<CallEffects>()
+        .preserve::<TableLoads>()
+        .preserve::<DemandedBits>()
+        .preserve::<Followers>()
+        .preserve::<Writes>()
+        .preserve::<PlainAccesses>()
+        .preserve::<FloatFacts>()
+        .preserve::<ThroughMemory>()
+        .preserve::<DominatedEdges>()
+        .preserve::<Bounded>()
+}
