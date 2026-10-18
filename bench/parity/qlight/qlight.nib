@@ -1,5 +1,6 @@
 const LS_NEUTRAL: i32 = 120
 
+@noipa
 fn ls_scale_byte(raw: i16, sval: i16) -> i16:
     let mut value: i32 = i32(raw) * i32(sval) // LS_NEUTRAL
     if value > 255:

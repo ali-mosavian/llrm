@@ -1,4 +1,4 @@
-reason = "@noipa on the six Nib bench kernels (#2196): the kernel is opaque to the interprocedural passes, so the compiler no longer specialises it on its caller's constants (matmul's seed 0) or reads its body from main. The same measurement as the C and BASIC rows (volatile pointer): the general kernel. +2 or +3 code bytes each (the entry a standalone procedure keeps), matmul +174/+177 instructions and +79/+60 bytes. At -O3 the six rows were 'not in the map' (the call was evaluated at compile time) and are measured now."
+reason = "PR #2210 (@noipa, #2196): the six Nib kernels the compiler evaluated at -O3 are opaque to the interprocedural passes, so the same measurement as the C and BASIC rows (a call the compiler cannot see through): matmul no longer specialised on its seed 0 (+2.8% instructions), crc +3 code bytes, and the four parity kernels call their inner function instead of folding it (+3..+11 instructions, +6..+25 code bytes). At -O3 the rows were 'not in the map' (the call was evaluated at compile time); they are measured now. Clocks are not gated."
 
 [[row]]
 label = "crc nib -O2"
@@ -12,18 +12,13 @@ to = 101
 
 [[row]]
 label = "matmul nib -O2"
-counter = "code_bytes"
-to = 374
-
-[[row]]
-label = "matmul nib -Os"
-counter = "code_bytes"
-to = 342
+counter = "instructions"
+to = 6335
 
 [[row]]
 label = "matmul nib -O2"
-counter = "instructions"
-to = 6335
+counter = "code_bytes"
+to = 374
 
 [[row]]
 label = "matmul nib -Os"
@@ -31,41 +26,86 @@ counter = "instructions"
 to = 6715
 
 [[row]]
+label = "matmul nib -Os"
+counter = "code_bytes"
+to = 342
+
+[[row]]
+label = "parity/algebra nib -O2"
+counter = "instructions"
+to = 40
+
+[[row]]
 label = "parity/algebra nib -O2"
 counter = "code_bytes"
-to = 93
+to = 107
+
+[[row]]
+label = "parity/algebra nib -Os"
+counter = "instructions"
+to = 36
 
 [[row]]
 label = "parity/algebra nib -Os"
 counter = "code_bytes"
-to = 77
+to = 91
+
+[[row]]
+label = "parity/control nib -O2"
+counter = "instructions"
+to = 137
 
 [[row]]
 label = "parity/control nib -O2"
 counter = "code_bytes"
-to = 135
+to = 139
+
+[[row]]
+label = "parity/control nib -Os"
+counter = "instructions"
+to = 138
 
 [[row]]
 label = "parity/control nib -Os"
 counter = "code_bytes"
-to = 111
+to = 115
+
+[[row]]
+label = "parity/loop nib -O2"
+counter = "instructions"
+to = 117
 
 [[row]]
 label = "parity/loop nib -O2"
 counter = "code_bytes"
-to = 108
+to = 122
+
+[[row]]
+label = "parity/loop nib -Os"
+counter = "instructions"
+to = 115
 
 [[row]]
 label = "parity/loop nib -Os"
 counter = "code_bytes"
-to = 86
+to = 100
+
+[[row]]
+label = "parity/qlight nib -O2"
+counter = "instructions"
+to = 124
 
 [[row]]
 label = "parity/qlight nib -O2"
 counter = "code_bytes"
-to = 193
+to = 216
+
+[[row]]
+label = "parity/qlight nib -Os"
+counter = "instructions"
+to = 112
 
 [[row]]
 label = "parity/qlight nib -Os"
 counter = "code_bytes"
-to = 157
+to = 180

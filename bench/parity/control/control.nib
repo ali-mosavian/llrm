@@ -1,4 +1,5 @@
 # Parity kernel; i16 parameters by value (the C original passes pointers).
+@noipa
 fn parity_control(value: i16, limit: i16) -> i32:
     let mut total: i32 = 0
     for index in 0..limit:
