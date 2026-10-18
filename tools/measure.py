@@ -115,8 +115,20 @@ _spec.loader.exec_module(compile_cost)
 NoCounter = compile_cost.NoCounter
 
 
-def tolerances(path: Path = HERE / "gate" / "tiers.toml") -> dict:
-    return tomllib.loads(path.read_text())["measure"]
+def head_branch() -> str:
+    """The branch being measured: the PR's head in CI, else the checked-out one."""
+    if named := os.environ.get("GITHUB_HEAD_REF"):
+        return named
+    done = subprocess.run(["git", "-C", str(ROOT), "branch", "--show-current"], capture_output=True, text=True)
+    return done.stdout.strip()
+
+
+def tolerances(path: Path = HERE / "gate" / "tiers.toml", branch: str | None = None) -> dict:
+    """The `[measure]` table. An accepted row with a `branch` key is a decision for that PR alone: it is dropped for any other."""
+    tol = tomllib.loads(path.read_text())["measure"]
+    here = head_branch() if branch is None else branch
+    tol["accepted"] = [one for one in tol.get("accepted", []) if one.get("branch", here) == here]
+    return tol
 
 
 def row_tolerance(tol: dict, label: str) -> dict:

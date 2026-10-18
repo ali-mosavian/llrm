@@ -831,3 +831,18 @@ def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs
     named = set(re.findall(r"--bin (llrm-[a-z]+)", recipe))
     assert "--bins" in recipe or ran <= named, (measure.BENCH_BASE_PROFILE, recipe, ran)
     assert "--bins" not in measure.MEASURE_BUILDS["dist"], "the dist build is the compiler's cost alone: the bench does not take its base from it"
+
+
+def test_the_gvn_exception_is_for_its_pr_alone_and_has_a_ceiling():
+    """T-1 (#2295): qcport -Os may read up to 1.0145 on the scalar GVN's PR (#2179) only. Another head at the same reading fails on
+    the general limit, and the PR itself fails above the ceiling."""
+    qcport = lambda scale: {f"qcport/m{i} -Os": int(1_000_000 * scale) for i in range(65)}
+    base = made({f"qcport/m{i} -Os": 1_000_000 for i in range(65)}, {}, {})
+    reading = lambda scale: made(qcport(scale), {}, {})
+    mine = measure.tolerances(branch="alim/feat/gvn-scalar-pr")
+    other = measure.tolerances(branch="alim/feat/something-else")
+    assert not any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0140), mine)[1])
+    assert any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0140), other)[1])
+    assert any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0146), mine)[1])
+    assert [one["branch"] for one in mine["accepted"] if one["row"] == "qcport -Os" and "branch" in one] == ["alim/feat/gvn-scalar-pr"]
+    assert not [one for one in other["accepted"] if "branch" in one]
