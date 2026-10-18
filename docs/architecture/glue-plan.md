@@ -27,6 +27,15 @@ LLVM has no module-wide summary table and no whole-program step. A function's ef
 | 9b. `ipa-noreturn.` | `addNoReturnAttrs` (above) infers it; instcombine cuts what follows ([removeInstructionsBeforeUnreachable](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4217)) | Delete after `Stamp` |
 | `globalopt` (module slot) | `GlobalOptPass::run` [GlobalOpt.cpp:2816](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L2816) | Translate; owner cgscc-poc (#2289) |
 
+## Measured: what `initializes` costs
+
+LLVM computes `initializes` only in the full `PostOrderFunctionAttrs` run, after the function pipeline; the early run (`SkipNonRecursive`) and `ArgAttrsOnly` skip it (`addArgumentAttrs(..., SkipInitializes)`, [FunctionAttrs.cpp:2226](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L2226)). llrm computes it in every stamp (`alias::initialized`). Skipping it in all three stamp runs on d_faces -O2 (m32, Minstr): `mir stamp` 46.9 -> 7.6 and `mir interprocedural` 121.0 -> 80.8 total, assembly identical there. Over the corpus (`tools/identical.py`) 1,582 of 1,590 objects are identical; `qcport/client` and `qcport/mdl_ai` differ at all four levels, and computing it only in the last stamp still changes those two. So it is not shipped as a skip: the walk of step 3 runs the full pass once per SCC after simplification, which gives LLVM's result by construction.
+
+## The structural exit for stale attributes
+
+llrm stamps a body several times (the `Stamp` pass, `stamped_all` twice) and rewrites signatures between the stamps (argument promotion, `narrow.`, `ipa-args`, `ipa-cp.`). A stated `memory(...)` split then meets a body whose parameters reach other memory than when it was stated; #2340 found a write lost this way (`sc_face_set_head`, QCport's surface cache) and patches it with `memory::unsplit` and a bounded `_narrowed`. LLVM never meets the case: `PostOrderFunctionAttrsPass` runs once per SCC after `ArgumentPromotion` and the simplification list ([PassBuilderPipelines.cpp:1031-1053](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1031-L1053)); its early run only takes recursive functions and infers no memory. The exit is step 3 of the order below, the CGSCC walk with one stamp per SCC after its rewrites. When it lands `unsplit` and `_narrowed`'s clipping are deleted, and with them the stamps between rewrites.
+
+
 ## Order
 
 1. `PostOrderFunctionAttrs` as a pass over an SCC, behind a flag, oracle: `opt -passes=function-attrs` on the dumped module (basicaa-port's `capturecheck` for `nocapture`, #2146). Replaces `Stamp`; the slope test is the stamping cost against N bodies.
