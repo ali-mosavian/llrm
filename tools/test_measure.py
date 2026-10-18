@@ -833,16 +833,40 @@ def test_the_build_the_bench_takes_its_base_from_makes_every_tool_the_bench_runs
     assert "--bins" not in measure.MEASURE_BUILDS["dist"], "the dist build is the compiler's cost alone: the bench does not take its base from it"
 
 
-def test_the_gvn_exception_is_for_its_pr_alone_and_has_a_ceiling():
-    """T-1 (#2295): qcport -Os may read up to 1.0145 on the scalar GVN's PR (#2179) only. Another head at the same reading fails on
-    the general limit, and the PR itself fails above the ceiling."""
-    qcport = lambda scale: {f"qcport/m{i} -Os": int(1_000_000 * scale) for i in range(65)}
-    base = made({f"qcport/m{i} -Os": 1_000_000 for i in range(65)}, {}, {})
-    reading = lambda scale: made(qcport(scale), {}, {})
-    mine = measure.tolerances(branch="alim/feat/gvn-scalar-pr")
-    other = measure.tolerances(branch="alim/feat/something-else")
-    assert not any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0140), mine)[1])
-    assert any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0140), other)[1])
-    assert any("qcport -Os: geomean" in line for line in measure.rises(base, reading(1.0146), mine)[1])
-    assert [one["branch"] for one in mine["accepted"] if one["row"] == "qcport -Os" and "branch" in one] == ["alim/feat/gvn-scalar-pr"]
-    assert not [one for one in other["accepted"] if "branch" in one]
+MINE = "alim/feat/gvn-scalar-pr"
+
+
+def gvn_readings():
+    """The T-1 classes (#2295, #2179), each as (what it is, a call that says whether it fails under a tolerance table)."""
+    qcport = lambda scale: made({f"qcport/m{i} -Os": int(1_000_000 * scale) for i in range(65)})
+    qbase = made({f"qcport/m{i} -Os": 1_000_000 for i in range(65)})
+    step = lambda key, ratio, whole=400.0: ({key: [50.0, 100.0, 200.0, whole]}, {key: [50.0 * ratio, 100.0 * ratio, 200.0 * ratio, whole]})
+    return {
+        "qcport -Os geomean": (1.0140, 1.0146, lambda tol, x: measure.rises(qbase, qcport(x), tol)[1]),
+        "gvn at 2N": (1.64, 1.66, lambda tol, x: measure.step_rises(*step("cells O1 mir gvn", x), tol)[1]),
+        "gvn step rise": (1.58, 1.70, lambda tol, x: measure.step_rises(*step("straight O1 mir gvn", x), tol)[1]),
+        "straight Os compile": (
+            1.0222,
+            1.0230,
+            lambda tol, x: measure.axis_rises({"straight Os": [500, 1000, 2000]}, {"straight Os": [500, 1000, 2000 * x]}, tol)[1],
+        ),
+        "callers Os call-effects": (1.14, 1.16, lambda tol, x: measure.step_rises(*step("callers Os analysis call-effects", x, 2000.0), tol)[1]),
+    }
+
+
+def test_each_gvn_exception_class_passes_on_its_pr_up_to_its_ceiling_and_fails_above_it_and_elsewhere():
+    """T-1 (#2295): the scalar GVN's PR (#2179) alone may read these up to the ceilings; the same reading on another head fails at the
+    normal limit, and above its ceiling it fails on the PR too."""
+    mine, other = measure.tolerances(branch=MINE), measure.tolerances(branch="alim/feat/something-else")
+    for name, (inside, above, fails) in gvn_readings().items():
+        assert not fails(mine, inside), f"{name}: {inside} is inside the ceiling on its PR"
+        assert fails(other, inside), f"{name}: {inside} fails on any other head"
+        assert fails(mine, above), f"{name}: {above} is above the ceiling on its PR"
+
+
+def test_the_gvn_gvn_exception_leaves_every_other_step_at_the_normal_limits():
+    """The suffix rule is `mir gvn`, not every step: a fold step at the same reading fails on the PR."""
+    mine = measure.tolerances(branch=MINE)
+    base = {"cells O1 mir fold": [50.0, 100.0, 200.0, 400.0]}
+    assert measure.step_rises(base, {"cells O1 mir fold": [80.0, 160.0, 320.0, 400.0]}, mine)[1]
+    assert not [one for one in measure.tolerances(branch="x")["accepted"] if "branch" in one]

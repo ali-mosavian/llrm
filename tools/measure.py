@@ -133,11 +133,23 @@ def tolerances(path: Path = HERE / "gate" / "tiers.toml", branch: str | None = N
 
 def row_tolerance(tol: dict, label: str) -> dict:
     """`tol` as a recorded decision sets it for `label` (`[[measure.accepted]]` in tiers.toml): the limits the entry names replace the
-    general ones for every row at or below its `row` ("nest O1" is also "nest O1 mir lsr"), as ceilings: a row above them fails as ever."""
-    for entry in tol.get("accepted", []):
-        if label == entry["row"] or label.startswith(entry["row"] + " "):
-            return {**tol, **{name: value for name, value in entry.items() if name not in ("row", "why")}}
-    return tol
+    general ones for every row at or below its `row` ("nest O1" is also "nest O1 mir lsr"), as ceilings: a row above them fails as ever.
+    An entry with a `suffix` ("mir gvn") is for every row ending in it. An entry for one PR (`branch`) does not replace the first
+    match: its limits are laid over it, the higher of the two standing."""
+    named = lambda entry: label == entry.get("row") or (
+        "row" in entry and label.startswith(entry["row"] + " ")
+    ) or ("suffix" in entry and (label == entry["suffix"] or label.endswith(" " + entry["suffix"])))
+    own = lambda entry: {name: value for name, value in entry.items() if name not in ("row", "suffix", "why", "branch")}
+    entries = tol.get("accepted", [])
+    found = tol
+    for entry in entries:
+        if "branch" not in entry and named(entry):
+            found = {**tol, **own(entry)}
+            break
+    for entry in entries:
+        if "branch" in entry and named(entry):
+            found = {**found, **{name: max(value, found.get(name, value)) for name, value in own(entry).items()}}
+    return found
 
 
 def method() -> str:
