@@ -223,11 +223,21 @@ impl MemIntrinsic {
         function: &Function,
         inst: InstId,
     ) -> Option<Self> {
+        Self::of_in(&module.context, &module.globals, function, inst)
+    }
+
+    /// `inst` of `function` as one, where `globals` name the callees.
+    pub fn of_in(
+        context: &Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        function: &Function,
+        inst: InstId,
+    ) -> Option<Self> {
         let instruction = function.instruction(inst);
         let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
-        let ConstantKind::Global(callee) = module.context.get(callee).kind else { return None };
+        let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
         let [dest, second, length, ..] = instruction.operands[..] else { return None };
-        match module.global(callee).name.as_deref().and_then(Intrinsic::named)? {
+        match globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named)? {
             Intrinsic::MemSet => Some(Self::Set { dest, value: second, length }),
             Intrinsic::MemCpy | Intrinsic::MemMove => Some(Self::Transfer { dest, source: second, length }),
             _ => None,
@@ -586,7 +596,7 @@ pub fn get_mem_inst_value_for_load(
 /// ([VNCoercion.cpp:463](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L463)):
 /// a `memset` of a constant byte, into an integer type (owed by fold-poc).
 pub fn get_constant_mem_inst_value_for_load(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     src_inst: MemIntrinsic,
     load_ty: TypeId,

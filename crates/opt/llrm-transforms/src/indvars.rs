@@ -286,7 +286,7 @@ impl FunctionPass for IndVars {
 /// replaceCongruentIVs`). Two loops fused, or one written with a counter twice,
 /// leave such a pair, and what is indexed by either is then the same address.
 fn congruent(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -410,7 +410,7 @@ fn _preheader(
 /// old form is a load and a store, the new a memory update, which `costs`
 /// prices. Nothing here names either form.
 pub fn rewound(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &Analyses,
@@ -424,7 +424,7 @@ pub fn rewound(
 /// where the run before it changed nothing, found once for the body where it
 /// did.
 pub fn rewound_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -631,7 +631,7 @@ mod tests;
 /// before it, and what else reads the narrow one reads its low part. Every
 /// counter widened; whether any was.
 pub fn widened(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -646,7 +646,7 @@ pub fn widened(
 /// rolled: one operation fewer in the widened loop was a loop that no longer
 /// fit its own size (bench/lru's three-trip fill).
 pub fn widened_with(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &passes::Outer,
@@ -854,7 +854,7 @@ fn _compares_extended(
 /// `operand` zero- (or, where `signed`, sign-) extended to `ty` at the end of
 /// `preheader`: a number is its own extension.
 fn _extended(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     preheader: BlockId,
     operand: Operand,
@@ -885,7 +885,7 @@ fn _extended(
 }
 
 fn _widen(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     found: &_Found,
 ) {

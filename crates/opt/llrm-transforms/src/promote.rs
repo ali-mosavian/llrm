@@ -467,7 +467,7 @@ pub fn emptied_slots(function: &mut Function) -> bool {
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -478,7 +478,7 @@ pub fn promoted(
 
 /// `promoted`, `analyses` holding what is known of `function`.
 fn _promoted(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -973,7 +973,7 @@ fn live_in(
 /// `function` with each planned load its cell's stored value: phis where
 /// the stores' dominance frontiers put them, named down the dominator tree.
 fn rewrite(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     plan: &Plan,
 ) {

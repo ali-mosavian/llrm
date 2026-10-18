@@ -344,10 +344,7 @@ fn landing_pad(
     function: &Function,
     block: BlockId,
 ) -> Option<InstId> {
-    function
-        .block(block)
-        .iter()
-        .find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    function.block(block).iter().find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
@@ -451,7 +448,7 @@ fn unregistered(
 /// Each ON ERROR a call of B$OEGA with the landing or null; each ON LOCAL
 /// ERROR one of B$OEGP with the landing's offset or 0.
 fn registered(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     routines: &Routines,
 ) -> Result<(), String> {
@@ -516,7 +513,7 @@ fn registered(
 
 /// The pad's selector, ERR, read from what the landing kept.
 fn selected(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
     landed: ConstantId,
@@ -555,7 +552,7 @@ fn selected(
 
 /// A stack slot for a value of `ty`, first in the entry block.
 fn slot(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     ty: TypeId,
 ) -> Result<Operand, String> {
@@ -574,7 +571,7 @@ fn slot(
 }
 
 fn store(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     value: Operand,
     slot: Operand,
@@ -627,15 +624,12 @@ fn body_start(
 /// Each phi of the pad a slot its predecessors store into before they call,
 /// as DemotePHIToStack makes it.
 fn demote_phis(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
-    let phis: Vec<InstId> = function
-        .block(pad)
-        .iter()
-        .filter(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let phis: Vec<InstId> =
+        function.block(pad).iter().filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in phis {
         let instruction = function.instruction(phi).clone();
         let slot = slot(context, function, instruction.ty)?;
@@ -703,7 +697,7 @@ fn live_in(function: &Function) -> BTreeMap<BlockId, BTreeSet<ValueId>> {
 /// Each value live into the pad kept in a slot: stored where it is made,
 /// loaded where it is read, as DemoteRegToStack does.
 fn demote_live(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
@@ -745,9 +739,7 @@ fn demote_live(
                         }
                         body_start(function, normal)
                     }
-                    _ => {
-                        Position::Before(function.next_in_block(def).expect("a successor in its block"))
-                    }
+                    _ => Position::Before(function.next_in_block(def).expect("a successor in its block")),
                 }
             }
         };

@@ -139,7 +139,7 @@ fn delete_dead_instruction(
 
 /// The `i8` constant a `Byte` stands for, as an operand.
 fn byte_operand(
-    context: &mut Context,
+    context: &Context,
     byte: Byte,
 ) -> Operand {
     let ty = context.types.int(8);
@@ -154,7 +154,7 @@ fn byte_operand(
 /// `Builder.CreateMul(TripCount, getIntN(Width, Reps))`, folded as the
 /// `IRBuilder`'s constant folder does.
 fn create_mul(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     before: InstId,
     value: Operand,
