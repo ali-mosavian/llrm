@@ -45,4 +45,10 @@ One analysis owns dominance: the `Dominators` analysis in `llrm-mir`. Every read
 | D1 (#2268) | `DomTreeBase`, oracle | |
 | D2 (with D1, one step), D2b | `Dominators` result is `DomTree`; `Analysis::update` turns the change log into `Update`s for `applyUpdates`; readers in `llrm-mir` (`loopinfo`, `verify`, `valuetracking/*`, `scalarevolution`, `simplify`) and `cfg::Dominance` | `llrm-mir/src/dominators.rs`. Acceptance: `branches` and `unrolled` `analysis dominators` own slope within the limit at 2N |
 | D3-D5 (#2285) | the walks over blocks named by address: `llrm-analysis` `graph::loops`, the LIR back end (`analysis::loops`, `shrinkwrap`, `ssarepair`, `phiconst`, `copysink`), `llrm-hir` `dominance::check`: one `AddressDominance` over `DomTree` | `llrm-support` `graph::{Dominance, dominance, dominators, dominance_work, Dominates}` (the second copy of Cooper-Harvey-Kennedy) |
-| D6 | `analysis dominated-edges` verdict | |
+| D6 | `analysis dominated-edges` verdict below | |
+
+## 5. `analysis dominated-edges`: KEPT
+
+It is the edge-fact solver of `ranger.rs` (GCC's `ranger_cache` form: a value's interval at a block from the dominating edges, worked out when asked). LLVM's counterpart in role is `LazyValueInfo::getValueInBlock`/`getValueOnEdge` (6.2 M of clang's compile in the plan's analysis row), which no port owns, so there is no translation to replace it with and the verdict is KEPT, not REPLACED.
+
+Its slope (`cases`, own Minstr N -> 2N: 2.9 -> 7.1, x2.42, limit x2.3) is not the solver's. Callgrind of `cases` 128 and 256: `update_owned` is 7.1 M, of which `Function::reach_of` is 6.1 M (85%; `keeping` 0.96 M); inside it `touched_with` goes 6.35 M -> 16.78 M (x2.64) as `IdSet<u32>::insert` goes 98.9 k -> 294.7 k calls (x2.98). The cost is the change-log digest every incremental analysis shares, so the fix belongs there (`touched.rs`), not in `ranger.rs`; it is its own stage.
