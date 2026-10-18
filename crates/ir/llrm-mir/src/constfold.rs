@@ -25,7 +25,8 @@
 //! # Used by
 //! `build::Builder::{binary, icmp, cast, select}`.
 
-use crate::context::{Constant, ConstantId, ConstantKind, Context, mask, signed};
+use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
+use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
 use crate::opcode::{BinaryOp, CastOp, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
@@ -318,9 +319,164 @@ pub fn cast(
 }
 
 /// `ConstantFoldCompareInstruction`
-/// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135)).
+/// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
+/// for a caller that has no module: a global is a pointer nothing is known of.
 pub fn compare(
     context: &mut Context,
+    predicate: IntPredicate,
+    c1: ConstantId,
+    c2: ConstantId,
+) -> Option<ConstantId> {
+    compare_in(context, &[], predicate, c1, c2)
+}
+
+/// What `evaluateICmpRelation` finds of two pointer constants (an
+/// `ICmpInst::Predicate`; the others it names cannot come out of its cases).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Relation {
+    Eq,
+    Ne,
+    Ugt,
+    Ult,
+}
+
+impl Relation {
+    fn swapped(self) -> Self {
+        match self {
+            Self::Ugt => Self::Ult,
+            Self::Ult => Self::Ugt,
+            other => other,
+        }
+    }
+}
+
+fn global_of<'a>(
+    context: &Context,
+    globals: &'a [GlobalValue],
+    id: ConstantId,
+) -> Option<&'a GlobalValue> {
+    match context.get(id).kind {
+        ConstantKind::Global(global) => globals.get(global.0 as usize),
+        _ => None,
+    }
+}
+
+/// `Type::isEmptyTy`.
+fn is_empty_type(
+    context: &Context,
+    ty: TypeId,
+) -> bool {
+    match context.types.get(ty) {
+        Type::Struct { fields, .. } => fields.iter().all(|&field| is_empty_type(context, field)),
+        Type::Named(name) => {
+            context.types.body(name).is_some_and(|body| body.fields.iter().all(|&field| is_empty_type(context, field)))
+        }
+        Type::Array { element, count } => *count == 0 || is_empty_type(context, *element),
+        _ => false,
+    }
+}
+
+/// `areGlobalsPotentiallyEqual`
+/// ([ConstantFold.cpp:996](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L996)).
+/// DEVIATE: MIR has no `GlobalAlias` and no semantic-interposition module flag
+/// (`isInterposable` is the linkage test alone).
+fn globals_potentially_equal(
+    context: &Context,
+    a: &GlobalValue,
+    b: &GlobalValue,
+) -> Option<Relation> {
+    let unsafe_for_equality = |global: &GlobalValue| {
+        let interposable =
+            matches!(
+                global.linkage,
+                Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
+            );
+        if interposable || global.unnamed_addr == UnnamedAddr::Global {
+            return true;
+        }
+        match &global.kind {
+            GlobalKind::Variable(variable) => {
+                let sized = !matches!(
+                    context.types.get(variable.ty),
+                    Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. }
+                );
+                !sized || is_empty_type(context, variable.ty)
+            }
+            GlobalKind::Function(_) => false,
+        }
+    };
+    (!unsafe_for_equality(a) && !unsafe_for_equality(b)).then_some(Relation::Ne)
+}
+
+/// `evaluateICmpRelation`
+/// ([ConstantFold.cpp:1026](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1026)).
+/// DEVIATE: MIR has no `BlockAddress`.
+fn evaluate_icmp_relation(
+    context: &Context,
+    globals: &[GlobalValue],
+    v1: ConstantId,
+    v2: ConstantId,
+) -> Option<Relation> {
+    if v1 == v2 {
+        return Some(Relation::Eq);
+    }
+    if !matches!(context.types.get(context.get(v1).ty), Type::Pointer(_)) {
+        return None;
+    }
+    let complexity = |id: ConstantId| match context.get(id).kind {
+        ConstantKind::Expr(_) => 3,
+        ConstantKind::Global(_) => 2,
+        _ => 0,
+    };
+    if complexity(v1) < complexity(v2) {
+        return evaluate_icmp_relation(context, globals, v2, v1).map(Relation::swapped);
+    }
+    let null_is_defined = |global: &GlobalValue| global.address_space != 0;
+    if let Some(global) = global_of(context, globals, v1) {
+        if let Some(other) = global_of(context, globals, v2) {
+            return globals_potentially_equal(context, global, other);
+        }
+        if is_null_value(context, v2) && global.linkage != Linkage::ExternWeak && !null_is_defined(global) {
+            return Some(Relation::Ugt);
+        }
+        return None;
+    }
+    let ConstantKind::Expr(ConstantExpr::GetElementPtr { inbounds, operands, .. }) = &context.get(v1).kind else {
+        return None;
+    };
+    let base = *operands.first()?;
+    let all_zero = |operands: &[ConstantId]| operands[1..].iter().all(|&index| is_null_value(context, index));
+    let gep_base = |id: ConstantId| match &context.get(id).kind {
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => operands.first().copied(),
+        _ => None,
+    };
+    if is_null_value(context, v2) {
+        let global = global_of(context, globals, base)?;
+        return (global.linkage != Linkage::ExternWeak && *inbounds).then_some(Relation::Ugt);
+    }
+    if let Some(other) = global_of(context, globals, v2) {
+        let global = global_of(context, globals, base)?;
+        return if base != v2 && all_zero(operands) { globals_potentially_equal(context, global, other) } else { None };
+    }
+    let other_base = gep_base(v2)?;
+    let (global, other) = (global_of(context, globals, base)?, global_of(context, globals, other_base)?);
+    let ConstantKind::Expr(ConstantExpr::GetElementPtr { operands: other_operands, .. }) = &context.get(v2).kind else {
+        return None;
+    };
+    if base != other_base && all_zero(operands) && all_zero(other_operands) {
+        return globals_potentially_equal(context, global, other);
+    }
+    None
+}
+
+/// `ConstantFoldCompareInstruction`
+/// ([ConstantFold.cpp:1135](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1135))
+/// of the module whose `globals` the constants name. DEVIATE: no `undef`,
+/// vectors, floating point (`FCmpInst::compare`), and `i1` equality, which
+/// the C++ makes an `xor` expression (#2252).
+pub fn compare_in(
+    context: &mut Context,
+    globals: &[GlobalValue],
     predicate: IntPredicate,
     c1: ConstantId,
     c2: ConstantId,
@@ -329,21 +485,47 @@ pub fn compare(
     if is_poison(context, c1) || is_poison(context, c2) {
         return Some(poison(context, i1));
     }
-    let ((x, width), (y, _)) = (number(context, c1)?, number(context, c2)?);
-    let (sx, sy) = (signed(x, width), signed(y, width));
-    let held = match predicate {
-        IntPredicate::Eq => x == y,
-        IntPredicate::Ne => x != y,
-        IntPredicate::Ugt => x > y,
-        IntPredicate::Uge => x >= y,
-        IntPredicate::Ult => x < y,
-        IntPredicate::Ule => x <= y,
-        IntPredicate::Sgt => sx > sy,
-        IntPredicate::Sge => sx >= sy,
-        IntPredicate::Slt => sx < sy,
-        IntPredicate::Sle => sx <= sy,
-    };
-    Some(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) }))
+    // `X uge 0` is true and `X ult 0` false, whatever X is.
+    if is_null_value(context, c2) && matches!(predicate, IntPredicate::Uge | IntPredicate::Ult) {
+        return Some(
+            context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(predicate == IntPredicate::Uge)) }),
+        );
+    }
+    if let (Some((x, width)), Some((y, _))) = (number(context, c1), number(context, c2)) {
+        let (sx, sy) = (signed(x, width), signed(y, width));
+        let held = match predicate {
+            IntPredicate::Eq => x == y,
+            IntPredicate::Ne => x != y,
+            IntPredicate::Ugt => x > y,
+            IntPredicate::Uge => x >= y,
+            IntPredicate::Ult => x < y,
+            IntPredicate::Ule => x <= y,
+            IntPredicate::Sgt => sx > sy,
+            IntPredicate::Sge => sx >= sy,
+            IntPredicate::Slt => sx < sy,
+            IntPredicate::Sle => sx <= sy,
+        };
+        return Some(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) }));
+    }
+    if let Some(relation) = evaluate_icmp_relation(context, globals, c1, c2) {
+        use IntPredicate::*;
+        let result = match (relation, predicate) {
+            (Relation::Eq, p) => Some(matches!(p, Eq | Uge | Ule | Sge | Sle)),
+            (Relation::Ne, Eq) => Some(false),
+            (Relation::Ne, Ne) => Some(true),
+            (Relation::Ult, Ult | Ne | Ule) | (Relation::Ugt, Ugt | Ne | Uge) => Some(true),
+            (Relation::Ult, Ugt | Eq | Uge) | (Relation::Ugt, Ult | Eq | Ule) => Some(false),
+            _ => None,
+        };
+        if let Some(held) = result {
+            return Some(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(held)) }));
+        }
+    }
+    let is_expr = |id: ConstantId| matches!(context.get(id).kind, ConstantKind::Expr(_));
+    if (!is_expr(c1) && is_expr(c2)) || (is_null_value(context, c1) && !is_null_value(context, c2)) {
+        return compare_in(context, globals, predicate.swapped(), c2, c1);
+    }
+    None
 }
 
 /// `ConstantFoldSelectInstruction`
@@ -431,5 +613,69 @@ mod tests {
         assert_eq!(context.get(float).kind, ConstantKind::Float(0x3f80_0000));
         let back = cast(&mut context, CastOp::BitCast, float, i32t).expect("bitcast to int");
         assert_eq!(back, one);
+    }
+}
+
+#[cfg(test)]
+mod relation_tests {
+    use super::*;
+    use crate::context::GlobalId;
+    use crate::module::GlobalVariable;
+
+    fn variable(
+        linkage: Linkage,
+        ty: TypeId,
+    ) -> GlobalValue {
+        GlobalValue {
+            name: None,
+            linkage,
+            unnamed_addr: UnnamedAddr::None,
+            address_space: 0,
+            kind: GlobalKind::Variable(GlobalVariable { ty, constant: false, initializer: None, align: None }),
+        }
+    }
+
+    fn global(
+        context: &mut Context,
+        at: u32,
+    ) -> ConstantId {
+        let ptr = context.types.ptr(0);
+        context.constant(Constant { ty: ptr, kind: ConstantKind::Global(GlobalId(at)) })
+    }
+
+    fn held(
+        context: &Context,
+        folded: Option<ConstantId>,
+    ) -> Option<bool> {
+        folded.map(|id| context.get(id).kind == ConstantKind::Int(1))
+    }
+
+    /// `@a == @b` for two distinct plain globals, `@a ugt null`, and `X uge 0`
+    /// folded in ConstantFold.cpp and stayed instructions here, as the
+    /// compare knew only numbers.
+    #[test]
+    fn globals_compare_by_their_linkage_and_a_null_by_its_order() {
+        let mut context = Context::new();
+        let i32t = context.types.int(32);
+        let globals =
+            [variable(Linkage::Internal, i32t), variable(Linkage::Internal, i32t), variable(Linkage::Weak, i32t)];
+        let ptr = context.types.ptr(0);
+        let null = context.constant(Constant { ty: ptr, kind: ConstantKind::Null });
+        let (a, b, weak) = (global(&mut context, 0), global(&mut context, 1), global(&mut context, 2));
+        let eq = compare_in(&mut context, &globals, IntPredicate::Eq, a, b);
+        assert_eq!(held(&context, eq), Some(false));
+        let same = compare_in(&mut context, &globals, IntPredicate::Eq, a, a);
+        assert_eq!(held(&context, same), Some(true));
+        let weak_eq = compare_in(&mut context, &globals, IntPredicate::Eq, a, weak);
+        assert_eq!(weak_eq, None, "a weak global may be replaced by the other");
+        let ne_null = compare_in(&mut context, &globals, IntPredicate::Ne, null, a);
+        assert_eq!(held(&context, ne_null), Some(true), "the null on the left swaps over");
+        let weak_null = compare_in(&mut context, &globals, IntPredicate::Ne, weak, null);
+        assert_eq!(held(&context, weak_null), Some(true), "weak, not extern_weak: still not null");
+        let none = compare_in(&mut context, &[], IntPredicate::Eq, a, b);
+        assert_eq!(none, None, "with no module a global is unknown");
+        let x = global(&mut context, 0);
+        let uge = compare_in(&mut context, &globals, IntPredicate::Uge, x, null);
+        assert_eq!(held(&context, uge), Some(true), "X uge 0");
     }
 }
