@@ -130,6 +130,7 @@ use std::collections::BTreeSet;
 
 use llrm_analysis::dependence;
 use llrm_analysis::manager::Registers;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{cfg, induction, memory};
 use llrm_mir::dense::IdSet;
 use llrm_mir::edit::Position;
@@ -207,6 +208,7 @@ fn one(
     let mut chosen = None;
     // Computed for the first nest there is: most functions have none.
     let mut facts = None;
+    let mut scevs = None;
     for inner in &shape.loops {
         if shape.loops.iter().any(|other| other.header != inner.header && inner.body.is_superset(&other.body)) {
             continue;
@@ -232,9 +234,22 @@ fn one(
         let memory_unit = memory::Unit::within(unit.context, unit.layout, unit.function, analyses.outer())
             .with_registers(facts)
             .with_shape(&shape);
+        let scev = crate::profit::scev_trips_enabled().then(|| {
+            scevs.get_or_insert_with(|| {
+                ScevSession::within(unit.context, &analyses.outer().globals, &analyses.outer().metadata, unit.function)
+            })
+        });
         let planned = (|| {
-            let trips = induction::trip_count(&memory_unit, outer, facts)?.to_i64()?;
-            let inner_trips = induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64());
+            let (trips, inner_trips) = match scev {
+                Some(session) => (
+                    crate::profit::scev_trips(session, &memory_unit, outer)?,
+                    crate::profit::scev_trips(session, &memory_unit, inner),
+                ),
+                None => (
+                    induction::trip_count(&memory_unit, outer, facts)?.to_i64()?,
+                    induction::trip_count(&memory_unit, inner, facts).and_then(|count| count.to_i64()),
+                ),
+            };
             let list = accesses(&memory_unit, &nest)?;
             if list.is_empty() {
                 return None;
