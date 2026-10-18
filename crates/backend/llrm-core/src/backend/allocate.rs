@@ -1772,6 +1772,12 @@ fn greedy_check(
     }
 }
 
+/// Whether the translated greedy allocator allocates: `LLRM_GREEDY`, or the
+/// parity pipeline (`LLRM_EXP_LLVM`), where the allocate slot is greedy's.
+pub fn greedy_on() -> bool {
+    llrm_support::env_flag!("LLRM_GREEDY") || llrm_support::env_flag!("LLRM_EXP_LLVM")
+}
+
 /// (allocations the greedy allocator made, allocations it left to this one).
 pub fn greedy_runs() -> (usize, usize) {
     GREEDY_RUNS.with(|runs| (runs.get().0, runs.get().1))
@@ -4242,7 +4248,7 @@ impl RegAlloc {
             // Each spill gets a slot of its own; they are shared once, over the
             // allocation kept (`spiller::slots_colored`).
             frame.borrow_mut().defer_colours = true;
-            let allocate = if llrm_support::env_flag!("LLRM_GREEDY")
+            let allocate = if greedy_on()
                 && std::env::var("LLRM_GREEDY_ONLY").map_or(true, |only| only.split(',').any(|n| n == candidate.name))
             {
                 greedy_rewritten
@@ -4280,7 +4286,7 @@ impl RegAlloc {
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
         // LLVM allocates each function once: the translated allocator runs no
         // search over other shapes of the body.
-        if !spilled.is_empty() && cpu.search && !llrm_support::env_flag!("LLRM_GREEDY") {
+        if !spilled.is_empty() && cpu.search && !greedy_on() {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");
