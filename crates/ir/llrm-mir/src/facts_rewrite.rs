@@ -210,7 +210,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 17] = [
+        const CHECKED: [&str; 19] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -231,6 +231,11 @@ mod tests {
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
             "inlinecost.rs",
+            // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
+            // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
+            // LLVM does.
+            "local.rs",
+            "pass.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
