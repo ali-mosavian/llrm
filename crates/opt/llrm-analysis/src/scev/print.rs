@@ -15,8 +15,26 @@ pub struct Labels {
 
 impl Labels {
     pub fn of(function: &llrm_mir::module::Function) -> Self {
-        Self { values: llrm_mir::print::value_labels(function), blocks: llrm_mir::print::block_labels(function) }
+        let mut values = llrm_mir::print::value_labels(function);
+        let mut blocks = llrm_mir::print::block_labels(function);
+        values.retain(|_, label| {
+            *label = printed_name(label);
+            true
+        });
+        blocks.retain(|_, label| {
+            *label = printed_name(label);
+            true
+        });
+        Self { values, blocks }
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/AsmWriter.cpp#L400
+/// `PrintLLVMName`'s quoting of a name `quoted` left bare: MIR's lexer takes
+/// `$` in a bare name, but the printer quotes any name with a character
+/// outside `[A-Za-z0-9-._]`.
+pub fn printed_name(name: &str) -> String {
+    if name.starts_with('"') || !name.contains('$') { name.to_owned() } else { format!("\"{name}\"") }
 }
 
 /// `Type::print`.
@@ -142,6 +160,18 @@ impl ScalarEvolution {
         )
     }
 
+    /// The `%label` of a value.
+    pub(super) fn print_value_name(
+        &self,
+        labels: &Labels,
+        value: Operand,
+    ) -> String {
+        match value {
+            Operand::Value(id) => format!("%{}", labels.values.get(&id).cloned().unwrap_or_default()),
+            _ => unreachable!("a value with a label"),
+        }
+    }
+
     /// `Value::printAsOperand(OS, false)`.
     fn print_value(
         &self,
@@ -155,7 +185,10 @@ impl ScalarEvolution {
                 ConstantKind::Null => "null".to_owned(),
                 ConstantKind::Poison => "poison".to_owned(),
                 ConstantKind::Global(global) => {
-                    format!("@{}", cx.global(*global).name.clone().unwrap_or_default())
+                    format!(
+                        "@{}",
+                        printed_name(&llrm_mir::print::quoted(&cx.global(*global).name.clone().unwrap_or_default()))
+                    )
                 }
                 other => format!("{other:?}"),
             },

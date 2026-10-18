@@ -1060,7 +1060,7 @@ fn known_bits_of_phi(
 }
 
 /// `Value::getPointerAlignment(DL)`.
-fn pointer_alignment(
+pub fn pointer_alignment(
     q: &Query,
     v: Operand,
 ) -> u64 {
@@ -1098,8 +1098,10 @@ fn pointer_alignment(
                     if !strong {
                         return align;
                     }
-                    // `getPreferredAlign`: a large global is 16-byte aligned.
-                    if align < 16 && q.layout.size_bits(types, variable.ty) > 128 { 16 } else { align }
+                    // `getPreferredAlign`: the type's preferred alignment, and
+                    // 16 for a large global.
+                    let pref = q.layout.pref_align(types, variable.ty);
+                    if pref < 16 && q.layout.size_bits(types, variable.ty) > 128 { 16 } else { pref }
                 }
                 _ => 1,
             },
@@ -1151,6 +1153,123 @@ fn pointer_alignment(
         },
         Operand::Block(_) => 1,
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L918
+/// `Value::getPointerDereferenceableBytes(DL, CanBeNull)`: the bytes known
+/// dereferenceable at the pointer `v`, and whether it can be null.
+pub fn pointer_dereferenceable_bytes(
+    q: &Query,
+    v: Operand,
+) -> (u64, bool) {
+    let types = &q.context().types;
+    let int_attr = |attrs: &[Attribute], wanted: &str| {
+        attrs
+            .iter()
+            .find_map(|attr| match attr {
+                Attribute::Int(name, value) if name == wanted => Some(*value),
+                _ => None,
+            })
+            .unwrap_or(0)
+    };
+    // `getMetadata(MD_dereferenceable...)` of a load or `inttoptr`: the first
+    // operand of the node.
+    let metadata_bytes = |inst: InstId, kind: &str| {
+        q.metadata_node(inst, kind)
+            .and_then(|node| match node.operands.first() {
+                Some(MetadataOperand::Constant(id)) => q.int_constant(Operand::Constant(*id)),
+                _ => None,
+            })
+            .map_or(0, |(bits, _)| u64::try_from(bits).unwrap_or(u64::MAX))
+    };
+
+    let mut deref_bytes = 0;
+    let mut can_be_null = false;
+    match v {
+        Operand::Value(id) => match q.function.value(id).def {
+            ValueDef::Argument(index) => {
+                let attrs = q.function.parameter_attrs.get(index as usize).map_or(&[][..], Vec::as_slice);
+                deref_bytes = int_attr(attrs, "dereferenceable");
+                if deref_bytes == 0 {
+                    // Handle byval/byref/inalloca/preallocated arguments
+                    let pointee = attrs
+                        .iter()
+                        .find_map(
+                            |attr| match attr {
+                                Attribute::Type(name, ty)
+                                    if matches!(name.as_str(), "byval" | "byref" | "inalloca" | "preallocated") =>
+                                {
+                                    Some(*ty)
+                                }
+                                _ => None,
+                            },
+                        );
+                    if let Some(ty) = pointee.filter(|ty| is_sized(q, *ty)) {
+                        // FIXME: Why isn't this the type alloc size?
+                        deref_bytes = q.layout.store_size(types, ty);
+                    }
+                }
+                if deref_bytes == 0 {
+                    deref_bytes = int_attr(attrs, "dereferenceable_or_null");
+                    can_be_null = true;
+                }
+            }
+            ValueDef::Instruction(inst) => {
+                let instruction = q.function.instruction(inst);
+                match &instruction.opcode {
+                    Opcode::Call(info) | Opcode::Invoke(info) => {
+                        let callee = super::pattern::called_function(q, instruction);
+                        let ret = |name: &str| {
+                            int_attr(&info.return_attrs, name)
+                                .max(callee.map_or(0, |function| int_attr(&function.return_attrs, name)))
+                        };
+                        deref_bytes = ret("dereferenceable");
+                        if deref_bytes == 0 {
+                            deref_bytes = ret("dereferenceable_or_null");
+                            can_be_null = true;
+                        }
+                    }
+                    Opcode::Load { .. } | Opcode::Cast(CastOp::IntToPtr) => {
+                        deref_bytes = metadata_bytes(inst, "dereferenceable");
+                        if deref_bytes == 0 {
+                            deref_bytes = metadata_bytes(inst, "dereferenceable_or_null");
+                            can_be_null = true;
+                        }
+                    }
+                    Opcode::Alloca { allocated, .. } => {
+                        // `getAllocationSize`: the allocated type's size, times
+                        // a constant array size.
+                        if is_sized(q, *allocated) {
+                            let count = match instruction.operands.first() {
+                                None => Some(1),
+                                Some(count) => q.int_constant(*count).and_then(|(bits, _)| u64::try_from(bits).ok()),
+                            };
+                            if let Some(count) = count {
+                                deref_bytes = q.layout.alloc_size(types, *allocated).saturating_mul(count);
+                                can_be_null = false;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        },
+        Operand::Constant(id) => {
+            if let ConstantKind::Global(global) = q.context().get(id).kind
+                && let Some(GlobalValue { kind: GlobalKind::Variable(variable), linkage, .. }) =
+                    q.globals.get(global.0 as usize)
+                && is_sized(q, variable.ty)
+                && !matches!(linkage, Linkage::ExternWeak)
+            {
+                // TODO: Don't outright reject hasExternalWeakLinkage but set
+                // the CanBeNull flag.
+                deref_bytes = q.layout.store_size(types, variable.ty);
+                can_be_null = false;
+            }
+        }
+        Operand::Block(_) => {}
+    }
+    (deref_bytes, can_be_null)
 }
 
 /// `Log2(Align)` low bits of a pointer of `width` bits are zero.

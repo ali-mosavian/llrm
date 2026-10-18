@@ -11,6 +11,8 @@ pub struct PointerSpec {
     pub bits: u32,
     /// ABI alignment, in bytes.
     pub align: u64,
+    /// Preferred alignment, in bytes: the ABI one unless stated.
+    pub pref: u64,
     pub index_bits: u32,
 }
 
@@ -21,9 +23,14 @@ pub struct DataLayout {
     /// Integer widths with their ABI alignment in bytes.
     ints: BTreeMap<u32, u64>,
     floats: BTreeMap<u32, u64>,
+    /// The preferred alignments of the integer and float widths, in bytes.
+    int_prefs: BTreeMap<u32, u64>,
+    float_prefs: BTreeMap<u32, u64>,
     /// The integer widths the target computes natively: `n`.
     legal: Vec<u32>,
     aggregate_align: u64,
+    /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
+    aggregate_pref: u64,
     pub alloca_space: u32,
 }
 
@@ -32,11 +39,14 @@ impl Default for DataLayout {
     fn default() -> Self {
         Self {
             big_endian: false,
-            pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, index_bits: 64 })]),
+            pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, pref: 8, index_bits: 64 })]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
             floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
+            int_prefs: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 8)]),
+            float_prefs: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
             legal: Vec::new(),
             aggregate_align: 1,
+            aggregate_pref: 8,
             alloca_space: 0,
         }
     }
@@ -76,15 +86,29 @@ impl DataLayout {
                         .pointers
                         .insert(
                             space,
-                            PointerSpec { bits: *size as u32, align: bytes(*abi), index_bits: index as u32 },
+                            PointerSpec {
+                                bits: *size as u32,
+                                align: bytes(*abi),
+                                pref: bytes(rest.first().copied().unwrap_or(*abi)),
+                                index_bits: index as u32,
+                            },
                         );
                 }
                 "i" | "f" | "a" => {
                     let fields = numbers(rest)?;
                     match (head, fields.as_slice()) {
-                        ("i", [size, abi, ..]) => drop(layout.ints.insert(*size as u32, bytes(*abi))),
-                        ("f", [size, abi, ..]) => drop(layout.floats.insert(*size as u32, bytes(*abi))),
-                        ("a", [_, abi, ..]) | ("a", [abi]) => layout.aggregate_align = bytes(*abi).max(1),
+                        ("i", [size, abi, rest @ ..]) => {
+                            layout.ints.insert(*size as u32, bytes(*abi));
+                            layout.int_prefs.insert(*size as u32, bytes(rest.first().copied().unwrap_or(*abi)));
+                        }
+                        ("f", [size, abi, rest @ ..]) => {
+                            layout.floats.insert(*size as u32, bytes(*abi));
+                            layout.float_prefs.insert(*size as u32, bytes(rest.first().copied().unwrap_or(*abi)));
+                        }
+                        ("a", [_, abi, rest @ ..]) | ("a", [abi, rest @ ..]) if rest.len() <= 1 => {
+                            layout.aggregate_align = bytes(*abi).max(1);
+                            layout.aggregate_pref = bytes(rest.first().copied().unwrap_or(*abi)).max(1);
+                        }
                         _ => return Err(format!("`{spec}` in the datalayout")),
                     }
                 }
@@ -193,6 +217,49 @@ impl DataLayout {
             }
             Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 1,
         }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/DataLayout.cpp#L871
+    /// `getPrefTypeAlign`: `getAlignment(Ty, abi_or_pref = false)`, in bytes.
+    pub fn pref_align(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        let wide = |specs: &BTreeMap<u32, u64>, bits: u32| {
+            specs.range(bits..).next().or_else(|| specs.iter().next_back()).map_or(1, |(_, align)| *align)
+        };
+        match types.get(ty) {
+            Type::Int(bits) => wide(&self.int_prefs, *bits),
+            Type::Float(kind) => self.float_prefs[&float_bits(*kind)],
+            Type::Pointer(space) => self.pointer(*space).pref,
+            Type::Array { element, .. } => self.pref_align(types, *element),
+            Type::Vector { .. } => self.store_size(types, ty).next_power_of_two(),
+            Type::Struct { .. } | Type::Named(_) => {
+                // The layout's alignment is the largest ABI one of the
+                // fields, and one for a packed struct.
+                let layout = self.align_of_struct_layout(types, ty);
+                layout.max(self.aggregate_pref)
+            }
+            Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 1,
+        }
+    }
+
+    /// `StructLayout::getAlignment`: the largest ABI alignment of the fields
+    /// (one for a packed struct), at least the aggregate ABI alignment.
+    fn align_of_struct_layout(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> u64 {
+        let packed = match types.get(ty) {
+            Type::Struct { packed, .. } => *packed,
+            Type::Named(name) => types.body(name).is_some_and(|body| body.packed),
+            _ => false,
+        };
+        let fields = types.fields(ty).unwrap_or_default();
+        let largest = if packed { 1 } else { fields.iter().map(|&one| self.align(types, one)).max().unwrap_or(1) };
+        largest.max(self.aggregate_align)
     }
 
     /// The bits a value of `ty` holds.

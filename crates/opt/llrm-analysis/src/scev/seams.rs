@@ -51,13 +51,14 @@ impl ScalarEvolution {
         !cx.assumptions.assumes.is_empty()
     }
 
-    /// `getSCEV(V)`. SEAM (S3): `createSCEV`; an unknown is a valid answer.
-    pub fn get_scev(
+    /// `loopHasNoAbnormalExits`. SEAM (indvars-decide-poc's loop properties):
+    /// the pessimistic answer.
+    pub fn loop_has_no_abnormal_exits(
         &mut self,
-        cx: &Cx,
-        v: llrm_mir::module::Operand,
-    ) -> Scev {
-        self.get_unknown(cx, v)
+        _cx: &Cx,
+        _l: llrm_mir::module::BlockId,
+    ) -> bool {
+        false
     }
 
     /// `proveNoUnsignedWrapViaInduction` (S5).

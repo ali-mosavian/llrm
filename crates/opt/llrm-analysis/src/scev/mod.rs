@@ -18,6 +18,9 @@ pub mod arith;
 pub mod backedge;
 pub mod cast;
 pub mod compare;
+pub mod create;
+pub mod create_addrec;
+pub mod create_phi;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
@@ -37,6 +40,9 @@ pub mod rewrite;
 pub mod scope;
 pub mod seams;
 pub mod sequential;
+pub mod values;
+#[cfg(test)]
+mod values_tests;
 
 use std::collections::{HashMap, HashSet};
 
