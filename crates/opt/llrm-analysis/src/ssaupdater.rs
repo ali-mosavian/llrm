@@ -42,10 +42,9 @@
 //! [`SSAUpdater`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SSAUpdater.cpp),
 //! [`SSAUpdaterImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SSAUpdaterImpl.h).
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::loopinfo::{children, inverse_children};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, Use};
@@ -61,7 +60,7 @@ pub struct SsaUpdater {
     proto_type: TypeId,
     proto_name: Option<String>,
     /// `AV`: the value that reaches the end of each block.
-    available: HashMap<BlockId, Operand>,
+    available: IdMap<BlockId, Operand>,
     /// `InsertedPHIs`.
     inserted: Vec<InstId>,
 }
@@ -83,7 +82,7 @@ struct Impl<'a> {
     context: &'a mut Context,
     function: &'a mut Function,
     infos: Vec<BbInfo>,
-    bb_map: HashMap<BlockId, usize>,
+    bb_map: IdMap<BlockId, usize>,
 }
 
 impl SsaUpdater {
@@ -93,7 +92,7 @@ impl SsaUpdater {
         ty: TypeId,
         name: Option<&str>,
     ) -> Self {
-        Self { proto_type: ty, proto_name: name.map(str::to_owned), available: HashMap::new(), inserted: Vec::new() }
+        Self { proto_type: ty, proto_name: name.map(str::to_owned), available: IdMap::new(), inserted: Vec::new() }
     }
 
     /// `AddAvailableValue`.
@@ -123,7 +122,7 @@ impl SsaUpdater {
         if let Some(&value) = self.available.get(&block) {
             return value;
         }
-        Impl { updater: self, context, function, infos: Vec::new(), bb_map: HashMap::new() }.get_value(block)
+        Impl { updater: self, context, function, infos: Vec::new(), bb_map: IdMap::new() }.get_value(block)
     }
 
     /// `GetValueInMiddleOfBlock`.
@@ -184,7 +183,10 @@ impl SsaUpdater {
 
         // Otherwise, we do need a phi: check to see if we already have one
         // available in this block that produces the right value.
-        let mapping: HashMap<BlockId, Operand> = pred_values.iter().copied().collect();
+        let mut mapping = IdMap::<BlockId, Operand>::new();
+        for &(pred, value) in &pred_values {
+            mapping.insert(pred, value);
+        }
         if first.is_some_and(|one| function.instruction(one).opcode == Opcode::Phi) {
             for phi in phis_of(function, block) {
                 if is_equivalent_phi(function, phi, &mapping) {
@@ -271,7 +273,7 @@ fn phis_of(
 fn is_equivalent_phi(
     function: &Function,
     phi: InstId,
-    mapping: &HashMap<BlockId, Operand>,
+    mapping: &IdMap<BlockId, Operand>,
 ) -> bool {
     let operands = &function.instruction(phi).operands;
     if operands.len() / 2 != mapping.len() {
@@ -328,7 +330,7 @@ impl Impl<'_> {
         self.find_phi_placement(&block_list);
         self.find_available_vals(&block_list);
 
-        let at = self.bb_map[&bb];
+        let at = *self.bb_map.get(&bb).expect("a reached block");
         let def = self.infos[at].def_bb.expect("a defining block");
         self.infos[def].available_val.expect("an available value")
     }
@@ -783,7 +785,7 @@ impl Impl<'_> {
             let bb = self.function.parent(phi).expect("a placed phi");
             let value = Operand::Value(self.function.instruction(phi).result.expect("a phi's value"));
             self.updater.available.insert(bb, value);
-            let at = self.bb_map[&bb];
+            let at = *self.bb_map.get(&bb).expect("a reached block");
             self.infos[at].available_val = Some(value);
         }
     }
