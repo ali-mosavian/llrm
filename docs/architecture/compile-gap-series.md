@@ -1,3 +1,7 @@
+---
+architecture-index: compile-cost gap by date
+architecture-order: 410
+---
 # Compile-cost gap against clang and gcc, by date
 
 Each table is one run of `tools/compile-gap.py` (`-m32 -march=i486 -fno-inline-functions`, an object written by each compiler) with the tree's dist-profile `llrm-c`, on a given commit of `main`. Cost is user-space instructions (`perf stat`, quickest of three by cycles), in millions. The ratio is llrm over the cheaper of clang 20.1.8 and gcc 13.4.0. **Reference note:** every clang column in this file before the section of `5e2e995ef` is the distro clang 20.1.8 (`tools/compile-gap.py` defaults `--clang` to the `PATH` clang), not the pinned 24.0.0git `d1106deb71cc`; those clang figures (for example 553 / 555 M for `d_faces` -O2 / -O3) and the ratios derived from them (5.1x, 5.6x) are void as a reference to clang 24, whose `d_faces` -O2 is 415.5 M. The section of `5e2e995ef` gives both; the scoreboard in the plan uses the pinned binary only. Instructions are the claim: the host is loaded, so cycles are not compared.
