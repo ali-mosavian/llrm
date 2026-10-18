@@ -52,7 +52,7 @@ impl Module {
             function.value_uses.push(Vec::new());
             function.parameter_attrs.push(Vec::new());
         }
-        intrinsics::declare(&mut function, name);
+        intrinsics::declare(&mut function, &self.context.types, name);
         self.add(name, linkage, GlobalKind::Function(Box::new(function)))
     }
 

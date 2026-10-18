@@ -1080,8 +1080,8 @@ impl Function {
         self.erase_blocks(&[block])
     }
 
-    /// Removes empty blocks nothing names, the layout searched once for all of
-    /// them: `erase_block` for each was a scan of the layout per block.
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
     pub fn erase_blocks(
         &mut self,
         blocks: &[BlockId],
@@ -1094,7 +1094,10 @@ impl Function {
                 return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
             }
         }
-        let gone: crate::dense::IdSet<BlockId> = blocks.iter().copied().collect();
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
+        }
         LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
         self.layout.retain(|one| !gone.contains(one));
         for &block in blocks {

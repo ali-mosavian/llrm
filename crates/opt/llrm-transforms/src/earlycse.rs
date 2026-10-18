@@ -77,7 +77,7 @@
 use llrm_analysis::memory::Unit as View;
 use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
 use llrm_mir::context::Context;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
@@ -448,7 +448,7 @@ struct Walk<'a> {
     view: &'a View<'a>,
     mssa: Box<dyn MemorySsaView + 'a>,
     callees: &'a memory::Callees,
-    tree: &'a DominatorTree,
+    tree: &'a DomTree,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
     invariants: Scoped<(Operand, TypeId), u32>,

@@ -2300,3 +2300,46 @@ fn test_a_scan_after_a_rewrite_is_edited_where_it_stands() {
     }
     assert!(checked > 10, "premise: only {checked} bodies had counts to compare");
 }
+
+/// The live intervals built by `LiveRangeCalc` (SlotIndexes, dominator tree,
+/// PHI-def insertion) are live in and out of exactly the blocks the dataflow
+/// liveness says.
+#[test]
+fn test_live_intervals_are_live_where_the_dataflow_says() {
+    use crate::backend::allocate::{LiveAt, live_rows};
+    use crate::liveness::liveintervals::LiveIntervals;
+    let mut checked = 0;
+    let mut multi_def = 0;
+    for seed in 0..120u64 {
+        let (plain, _) = body(seed, &Shape { pool: 6 + (seed % 7) as usize, ops: 6 + (seed % 13) as usize });
+        let rows = live_rows(&plain);
+        let mut lis = LiveIntervals::new(&plain);
+        let values: Vec<u32> = lis.values().collect();
+        for value in values {
+            let li = lis.interval(value).clone();
+            multi_def += usize::from(li.get_num_val_nums() > 1);
+            for (number, block) in plain.blocks.iter().enumerate() {
+                let start = lis.indexes.get_mbb_start_idx(number);
+                let last = lis.indexes.get_mbb_last_idx(number);
+                let live_in = !li.empty() && li.live_at(&start);
+                let live_out = !li.empty() && li.live_at(&last);
+                assert_eq!(
+                    live_in,
+                    rows.live_in(block.at, value),
+                    "seed {seed}: value#{value} live in to block {number}: {li}"
+                );
+                assert_eq!(
+                    live_out,
+                    rows.live_out(block.at, value),
+                    "seed {seed}: value#{value} live out of block {number}: {li}"
+                );
+                checked += 1;
+            }
+            assert!(li.verify(), "seed {seed}: value#{value} {li}");
+        }
+    }
+    assert!(
+        checked > 1000 && multi_def > 0,
+        "premise: bodies with values defined more than once ({checked}, {multi_def})"
+    );
+}
