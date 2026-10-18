@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::PassManager;
+use llrm_mir::target::Machine;
 
 use super::*;
 use crate::inline::Threshold;
@@ -487,13 +489,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn norecurse {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn norecurse {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn nounwind norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind norecurse {",
             "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn norecurse {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
         ],
         "{text}"
     );
@@ -683,8 +685,10 @@ b:
     assert_eq!(pure(text), named(&["local", "h", "leaf", "middle"]));
 }
 
-/// A read of this module's near static data goes unnoticed; a far, an
-/// external or a pointer's may fault, a volatile one is ordered.
+/// A call that only reads, comes back and cannot unwind goes unnoticed, as in
+/// LLVM (`wouldInstructionBeTriviallyDead`): a far, an external or a pointer's
+/// read too, which llrm kept while `nounwind` also meant "cannot fault"
+/// (`cannot_fault`, F1). A volatile one is ordered.
 #[test]
 fn an_unused_call_that_only_reads_static_data_goes() {
     let text = "@g = global i16 0
@@ -745,7 +749,7 @@ b:
   ret void
 }
 ";
-    assert_eq!(dropped(text), named(&["read", "caller"]));
+    assert_eq!(dropped(text), named(&["read", "caller", "far", "external", "pointer"]));
 }
 
 #[test]
@@ -1885,4 +1889,108 @@ b1:
     let loud = cycle("  store volatile i16 1, ptr @sink\n");
     assert!(!memory_of(&loud, "odd") && !memory_of(&loud, "even"), "a member's access is the cycle's");
     assert!(memory_of(&loud, "alone"));
+}
+
+/// `noipa` (GCC's): no constant is pushed into the routine and none of its
+/// returns folded into a caller (the call of a bench kernel with constant
+/// arguments was folded away at compile time), though the same routines
+/// without it are specialised (the premise).
+#[test]
+fn no_constant_reaches_or_leaves_a_noipa_routine() {
+    let marked = STORES.replace("@set(i16 %x) {", "@set(i16 %x) noipa {").replace("@seven() {", "@seven() noipa {");
+    assert_ne!(marked, STORES);
+    let mut plain = parsed(STORES);
+    stepped(&mut plain, &["f"], 40, Threshold::none());
+    assert!(printed(&plain).contains("  store i16 5, ptr @g\n"), "premise: the private routine is specialised");
+    let mut module = parsed(&marked);
+    stepped(&mut module, &["f"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(!text.contains("store i16 5, ptr @g"), "{text}");
+    assert!(!text.contains("add i16 7, %a"), "{text}");
+    assert_eq!(text.matches("call ").count(), 3, "{text}");
+}
+
+/// A `noipa` body is stamped with nothing, so its callers keep its call and
+/// the cell it might write: the same body without the attribute is pure and
+/// its unused call goes, and a read-only callee lets a stored cell stay in a
+/// register.
+#[test]
+fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
+    let leaf = |attribute: &str| {
+        format!(
+            "define internal i16 @leaf(i16 %x) {attribute} {{\nb:\n  ret i16 %x\n}}\n\ndefine i16 @uses() {{\nb:\n  %r = call i16 @leaf(i16 9)\n  ret i16 42\n}}\n"
+        )
+    };
+    assert_eq!(dropped(&leaf("")), named(&["leaf"]), "premise");
+    assert_eq!(dropped(&leaf("noipa")), BTreeSet::new());
+    assert_eq!(pure(&leaf("noipa")), BTreeSet::new());
+    let loads = |attribute: &str| {
+        let text = format!(
+            "@x = global i16 0\n\ndefine internal i16 @read(ptr %p) {attribute} {{\nb:\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n\ndefine i16 @f(i16 %c) {{\nb:\n  store i16 %c, ptr @x\n  %r = call i16 @read(ptr @x)\n  %v = load i16, ptr @x\n  ret i16 %v\n}}\n"
+        );
+        let mut module = parsed(&text);
+        crate::testing::stamped(&mut module).unwrap();
+        managed(&mut module, Promote);
+        let f = module.function_mut("f").unwrap().1;
+        f.walk().filter(|(_, inst)| matches!(f.instruction(*inst).opcode, Opcode::Load { .. })).count()
+    };
+    assert_eq!(loads(""), 0, "premise: the stamped read-only callee leaves the cell alone");
+    assert_eq!(loads("noipa"), 1);
+}
+
+/// `sc_face_set_head` (QCport's surface cache) writes through `sc->faces`, a
+/// pointer it loads from its argument. Stamped `memory(readwrite, argmem:
+/// read)`, correct; argument promotion then takes `sc->faces` as the
+/// parameter, so the write is now through an argument, and the next stamp
+/// narrowed each location by what the old split stated: the write was in
+/// neither (`memory(argmem: read)`), the call in `sc_init`'s loop was erased as
+/// reading only, and the faces kept their old heads.
+#[test]
+fn a_write_that_moves_to_an_argument_when_it_is_promoted_stays_a_write() {
+    let mut module = parsed(&format!(
+        "{}define internal void @set(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) {{
+b1:
+  %3 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 14
+  %4 = load ptr addrspace(1), ptr addrspace(1) %3
+  %5 = mul i16 %1, 8
+  %6 = getelementptr inbounds i8, ptr addrspace(1) %4, i16 %5
+  %7 = load i16, ptr addrspace(1) %6
+  %8 = and i16 %7, 8191
+  %9 = shl i16 %2, 13
+  %10 = or i16 %8, %9
+  store i16 %10, ptr addrspace(1) %6
+  ret void
+}}
+
+define void @init(ptr addrspace(1) %0, i16 %n) {{
+b:
+  call void @set(ptr addrspace(1) %0, i16 %n, i16 0)
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
+    crate::testing::stamped(&mut module).unwrap();
+    crate::argpromotion::promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), false);
+    // Until the next stamp the passes that run on the callers read this.
+    let promoted = printed(&module);
+    let line = promoted.lines().find(|line| line.starts_with("define internal void @set")).expect("set");
+    assert!(!line.contains("argmem: read"), "{line}");
+    crate::testing::stamped(&mut module).unwrap();
+    let text = printed(&module);
+    let line = text.lines().find(|line| line.starts_with("define internal void @set")).expect("set");
+    assert!(!line.contains("memory(argmem: read)") && !line.contains("memory(read"), "{line}");
+    // What the passes ask: the call writes memory, so it is neither erased nor
+    // a load after it forwarded from one before.
+    let callees = llrm_mir::memory::callees(&module);
+    let init = llrm_analysis::testing::function(&module, "init");
+    let call = init
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            init.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ));
+    assert!(llrm_mir::memory::of(&module.context, &callees, init, call.expect("a call")).writes, "{text}");
 }

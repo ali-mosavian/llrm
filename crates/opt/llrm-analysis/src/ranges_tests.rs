@@ -1058,7 +1058,7 @@ fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
     let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
-    let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
+    let result = function.instruction(function.block(function.layout()[0]).first().expect("a block with an instruction")).result.expect("a sum");
     assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");
 }
 
@@ -1509,10 +1509,13 @@ fn the_loops_a_loop_starts_from_are_found_without_asking_every_loop() {
 }
 
 /// `scoped` (instruction selection) proved each loop alone, each finding the
-/// body's congruences again: 3.6 M a proof, 500 M of 23.7 G at 64 loops. The
-/// proofs of a body share them.
+/// body's congruences again: 3.6 M a proof, 500 M of 23.7 G at 64 loops;
+/// shared, the body's were still found for each version of a body of loops (7.2
+/// M, 255 times, 3.4 G of 44.4 G at 128 unrolled loops). A proof asks the
+/// congruence of its two values, which is worked out from what they are made
+/// of, and the body's is not found.
 #[test]
-fn the_proofs_of_a_body_without_proofs_share_its_congruences() {
+fn the_proofs_of_a_body_ask_the_congruences_of_their_values_alone() {
     let parsed = Parsed::new(
         "define i16 @f(i16 %n) {
 b0:
@@ -1541,7 +1544,7 @@ out:
     let (proved, found) = (crate::induction::proved(), crate::alias::congruences_found());
     let _ = bounded(&parsed.unit()).unwrap();
     assert_eq!(crate::induction::proved() - proved, 2, "premise: each loop is proved once");
-    assert_eq!(crate::alias::congruences_found() - found, 1, "the body's congruences found once for both");
+    assert_eq!(crate::alias::congruences_found() - found, 0, "the body's congruences found for two proofs");
 }
 
 /// A block's scope was made for each loop around it, and the dominator chain
@@ -1601,4 +1604,20 @@ fn the_depth_of_each_loop_is_found_without_asking_every_loop() {
     let (small, big) = (asked(150), asked(300));
     assert!(small > 0, "premise: the work is above the budget");
     assert!(big <= 2 * small + 64, "{small} -> {big} questions for 150 -> 300 loops");
+}
+
+/// `LLRM_CHECK_SCOPES` compared an interval of every value the width holds with
+/// the entry being absent and called them different (4 of the 10 vsgcc programs
+/// it failed, x_gcd among them): they say the same, nothing.
+#[test]
+fn an_interval_of_every_value_says_what_an_absent_entry_says() {
+    let full = Interval { low: BigInt::from(-2_147_483_648_i64), high: BigInt::from(2_147_483_647_i64), width: 32 };
+    let some = Interval { low: BigInt::from(0), high: BigInt::from(9), width: 32 };
+    let (mut every, mut scoped) = (Intervals::default(), Intervals::default());
+    every.insert(ValueId(24), full);
+    assert!(super::same_narrowing(&every, &scoped), "a full interval against an absent entry");
+    every.insert(ValueId(25), some.clone());
+    assert!(!super::same_narrowing(&every, &scoped), "a narrowing the other state lacks");
+    scoped.insert(ValueId(25), some);
+    assert!(super::same_narrowing(&every, &scoped));
 }

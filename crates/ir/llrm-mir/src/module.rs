@@ -91,6 +91,83 @@ impl Block {
     pub fn instructions(&self) -> &[InstId] {
         &self.instructions
     }
+
+    /// `BasicBlock::begin` to `end`: the instructions in order.
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = InstId> + ExactSizeIterator + '_ {
+        self.instructions.iter().copied()
+    }
+
+    /// `BasicBlock::front`.
+    pub fn first(&self) -> Option<InstId> {
+        self.instructions.first().copied()
+    }
+
+    /// `BasicBlock::back`.
+    pub fn last(&self) -> Option<InstId> {
+        self.instructions.last().copied()
+    }
+
+    /// `BasicBlock::size`.
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    /// `BasicBlock::empty`.
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+}
+
+/// Each instruction's place in its block, numbered lazily like LLVM's
+/// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
+/// block invalidates it, the next ask renumbers the block once. Not part of
+/// what a function is: a copy starts with none and two functions compare equal
+/// whatever they hold.
+#[derive(Default)]
+pub(crate) struct OrderCache(pub(crate) std::cell::RefCell<OrderNumbers>);
+
+#[derive(Default)]
+pub(crate) struct OrderNumbers {
+    /// By instruction.
+    pub(crate) at: Vec<u32>,
+    /// By block: whether the numbers of its instructions are true.
+    pub(crate) valid: Vec<bool>,
+}
+
+impl OrderCache {
+    pub(crate) fn invalidate(
+        &self,
+        block: BlockId,
+    ) {
+        let mut numbers = self.0.borrow_mut();
+        if let Some(one) = numbers.valid.get_mut(block.0 as usize) {
+            *one = false;
+        }
+    }
+}
+
+impl Clone for OrderCache {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl std::fmt::Debug for OrderCache {
+    fn fmt(
+        &self,
+        out: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        out.write_str("OrderCache")
+    }
+}
+
+impl PartialEq for OrderCache {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
 }
 
 /// What a debugger is told of a source variable, from a point of the code on:
@@ -227,19 +304,27 @@ static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 #[derive(Debug)]
 pub(crate) struct Lineage {
     uid: u64,
+    /// Which fork of the history this is (`Function::fork` makes another).
+    branch: u64,
+    /// The branches this one forked from, each with the position it forked at:
+    /// a mark in one of them, at or before that position, is a point in this
+    /// history too.
+    ancestors: Vec<(u64, usize)>,
     logged: usize,
 }
 
 impl Default for Lineage {
     fn default() -> Self {
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: 0 }
+        let uid = NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { uid, branch: uid, ancestors: Vec::new(), logged: 0 }
     }
 }
 
 impl Clone for Lineage {
     fn clone(&self) -> Self {
         crate::counts::bump(crate::counts::Event::FunctionClones);
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: self.logged }
+        let uid = NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { uid, branch: uid, ancestors: Vec::new(), logged: self.logged }
     }
 }
 
@@ -257,6 +342,9 @@ impl PartialEq for Lineage {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Mark {
     uid: u64,
+    /// The fork of the function this point is in: two forks edited apart share
+    /// a `uid` and can both log a change at one `at`, and are not one point.
+    branch: u64,
     at: usize,
 }
 
@@ -308,6 +396,7 @@ pub struct Function {
     pub(crate) layout: Vec<BlockId>,
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
+    pub(crate) order: OrderCache,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
     pub(crate) epochs: crate::touched::Epochs,
@@ -372,6 +461,7 @@ impl Function {
             layout: Vec::new(),
             value_uses: Vec::new(),
             block_uses: Vec::new(),
+            order: OrderCache::default(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
             taken: 0,
@@ -492,6 +582,60 @@ impl Function {
         &self.blocks[id.0 as usize]
     }
 
+    /// `inst`'s number in its block, the block renumbered if an edit made its
+    /// numbers false.
+    fn number_of(
+        &self,
+        inst: InstId,
+    ) -> Option<(BlockId, u32)> {
+        let block = self.parent(inst)?;
+        let mut numbers = self.order.0.borrow_mut();
+        if numbers.valid.len() < self.blocks.len() {
+            numbers.valid.resize(self.blocks.len(), false);
+        }
+        if numbers.at.len() < self.instructions.len() {
+            numbers.at.resize(self.instructions.len(), 0);
+        }
+        if !numbers.valid[block.0 as usize] {
+            for (at, &one) in self.blocks[block.0 as usize].instructions.iter().enumerate() {
+                numbers.at[one.0 as usize] = at as u32;
+            }
+            numbers.valid[block.0 as usize] = true;
+        }
+        Some((block, numbers.at[inst.0 as usize]))
+    }
+
+    /// `Instruction::getNextNode`: what follows `inst` in its block.
+    pub fn next_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        let (block, at) = self.number_of(inst)?;
+        self.blocks[block.0 as usize].instructions.get(at as usize + 1).copied()
+    }
+
+    /// `Instruction::getPrevNode`: what stands before `inst` in its block.
+    pub fn prev_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<InstId> {
+        let (block, at) = self.number_of(inst)?;
+        self.blocks[block.0 as usize].instructions.get((at as usize).checked_sub(1)?).copied()
+    }
+
+    /// `Instruction::comesBefore`: whether `a` stands before `b` in their one
+    /// block (false for two in different blocks, or one that is not placed).
+    pub fn comes_before(
+        &self,
+        a: InstId,
+        b: InstId,
+    ) -> bool {
+        match (self.number_of(a), self.number_of(b)) {
+            (Some((x, i)), Some((y, j))) => x == y && i < j,
+            _ => false,
+        }
+    }
+
     pub fn layout(&self) -> &[BlockId] {
         &self.layout
     }
@@ -506,6 +650,11 @@ impl Function {
 
     pub fn entry(&self) -> Option<BlockId> {
         self.layout.first().copied()
+    }
+
+    /// One more than the largest block number: LLVM's `getMaxNumber`.
+    pub fn block_capacity(&self) -> usize {
+        self.blocks.len()
     }
 
     /// The block holding `inst`, while it is placed.
@@ -670,7 +819,7 @@ impl Function {
     }
 
     pub fn mark(&self) -> Mark {
-        Mark { uid: self.lineage.uid, at: self.lineage.logged }
+        Mark { uid: self.lineage.uid, branch: self.lineage.branch, at: self.lineage.logged }
     }
 
     /// A copy to edit and put in this function's place, which carries on its
@@ -680,7 +829,14 @@ impl Function {
     pub fn fork(&self) -> Self {
         crate::counts::bump(crate::counts::Event::FunctionForks);
         let mut copy = self.clone();
-        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        let mut ancestors = self.lineage.ancestors.clone();
+        ancestors.push((self.lineage.branch, self.lineage.logged));
+        copy.lineage = Lineage {
+            uid: self.lineage.uid,
+            branch: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ancestors,
+            logged: self.lineage.logged,
+        };
         copy
     }
 
@@ -697,6 +853,12 @@ impl Function {
         history.append(&mut fork.changes.0);
         fork.changes.0 = history;
         fork.taken = self.taken;
+        // A fork that changed nothing is the function: its points are the
+        // function's own.
+        if fork.lineage.ancestors.last() == Some(&(self.lineage.branch, fork.lineage.logged)) {
+            fork.lineage.branch = self.lineage.branch;
+            fork.lineage.ancestors = std::mem::take(&mut self.lineage.ancestors);
+        }
         *self = fork;
     }
 
@@ -707,8 +869,12 @@ impl Function {
         mark: Mark,
     ) -> Option<&[Change]> {
         let kept_from = self.lineage.logged - self.changes.0.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at))
-            .then(|| &self.changes.0[mark.at - kept_from..])
+        // A point of this branch, or of one it forked from at or before where
+        // it forked.
+        let ours = mark.uid == self.lineage.uid
+            && (mark.branch == self.lineage.branch
+                || self.lineage.ancestors.iter().any(|&(branch, at)| branch == mark.branch && mark.at <= at));
+        (ours && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 
@@ -751,6 +917,9 @@ pub enum UnnamedAddr {
 pub struct GlobalVariable {
     pub ty: TypeId,
     pub constant: bool,
+    /// `externally_initialized`: the initializer may change before the program
+    /// runs.
+    pub externally_initialized: bool,
     pub initializer: Option<ConstantId>,
     pub align: Option<u64>,
 }

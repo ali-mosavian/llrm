@@ -1,6 +1,12 @@
+---
+architecture-index: the split path against SplitKit
+architecture-order: 170
+---
 # The split path against SplitKit, SplitAnalysis and SpillPlacement
 
 TL;DR: `d_faces` -O2 spends 58.5 M in `Split::placed` for 489 candidate evaluations, 120 K a candidate against LLVM's at most 36 K for everything a candidate costs it. The count of candidates is not the gap (LLVM evaluates 837); the cost of a candidate is, and it is flat: no row is above 10.5 M. The levers that exist are small, exact, and together about 40 M (1.5%); they go in as one bundle.
+
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, per-decision costs) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
 
 Counts, same function (`D_DRAW_FACES`, 1,876 instructions; LLVM on `d_faces.c` with `llc -O2 -mtriple=i486-pc-linux-gnu`, callgrind; ours CI-mode build of main 7ac662405, same file):
 

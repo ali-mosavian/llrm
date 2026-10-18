@@ -8,6 +8,64 @@ use crate::module::{Function, GlobalKind, GlobalValue, Module, Operand, ValueDef
 use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::TypeId;
 
+#[cfg(test)]
+mod boundary_tests;
+pub mod bytewise;
+#[cfg(test)]
+mod bytewise_tests;
+pub mod context;
+#[cfg(test)]
+mod context_tests;
+pub mod guarantee;
+#[cfg(test)]
+mod guarantee_tests;
+pub mod known;
+pub mod nonzero;
+pub mod pattern;
+pub mod power2;
+mod query;
+pub mod range;
+pub mod signbits;
+#[cfg(test)]
+mod signbits_tests;
+pub mod underlying;
+
+#[cfg(test)]
+mod nonzero_tests;
+#[cfg(test)]
+mod power2_tests;
+
+pub use query::{AssumptionCache, CondContext, DomConditionCache, FunctionAnalyses, Query};
+
+#[cfg(test)]
+mod range_tests;
+
+#[cfg(test)]
+mod known_tests;
+
+/// One column of `examples/vtdump.rs`: ` name=answer`.
+pub fn column(
+    query: &Query,
+    value: Operand,
+    name: &str,
+) -> String {
+    match name {
+        "kb" => known::column(query, value),
+        "nn" => known::column_non_negative(query, value),
+        "ng" => known::column_negative(query, value),
+        "sb" => signbits::column(query, value),
+        "nz" => nonzero::column(query, value),
+        "p2" => power2::column(query, value, false),
+        "p2z" => power2::column(query, value, true),
+        "cru" => range::column(query, value, false),
+        "crs" => range::column(query, value, true),
+        "gp" => guarantee::column(query, value),
+        "pat" => range::pattern_column(query, value),
+        "ov" => range::overflow_column(query, value),
+        other => format!(" {other}=?"),
+    }
+}
+
 /// Where each bit of a shift's or width change's result comes from: result bit
 /// `i` is operand bit `i + offset`, and a result bit with no such operand bit
 /// is a copy of the sign (`Fill::Sign`) or zero. One table, read forward by
@@ -85,6 +143,138 @@ impl Flow {
 
 /// How deep a question recurses, as LLVM's `MaxAnalysisRecursionDepth`.
 const DEPTH: u32 = 6;
+
+// ----------------------------------------------------------------------------
+// The ValueTracking API, in LLVM's names (ValueTracking.h at d1106deb71cc).
+//
+// Every consumer calls these, not `known_zero`/`sign_bits`: InstSimplify,
+// the combine worklist, EarlyCSE, GVN, `fold` and `algebraic`, the range
+// consumers (SCCP, LVI, CVP, SCEV ranges). The bodies are the stub of the
+// translation: they answer from the zero half that `known_zero` proves, and the
+// ValueTracking port replaces each, one C++ function at a time, keeping the
+// signature. `depth` is the C++ `Depth` (a caller passes 0; the recursion stops
+// at [`MAX_ANALYSIS_RECURSION_DEPTH`]); `at` is the C++ `CxtI` (the instruction
+// the question is asked at, for facts that hold only there: assumes and
+// dominating conditions).
+// ----------------------------------------------------------------------------
+
+/// `MaxAnalysisRecursionDepth` (ValueTracking.h).
+pub const MAX_ANALYSIS_RECURSION_DEPTH: u32 = 6;
+
+/// `computeKnownBits(V, Q, Depth)`.
+pub fn compute_known_bits(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> crate::knownbits::KnownBits {
+    let _ = (depth, at);
+    let Some(width) =
+        function.operand_type(context, value).and_then(|ty| context.types.int_bits(ty)).filter(|&width| width <= 128)
+    else {
+        return crate::knownbits::KnownBits::unknown(1);
+    };
+    // Stub: the zero half only (`known_zero`); a constant is exact.
+    if let Operand::Constant(id) = value
+        && let ConstantKind::Int(bits) = context.get(id).kind
+    {
+        return crate::knownbits::KnownBits::constant(width, bits);
+    }
+    crate::knownbits::KnownBits { zero: known_zero(context, function, value), one: 0, width }
+}
+
+/// `computeConstantRange(V, ForSigned, ...)`.
+pub fn compute_constant_range(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    for_signed: bool,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> crate::constantrange::ConstantRange {
+    let known = compute_known_bits(context, function, value, depth, at);
+    let width = known.width;
+    // Stub: `[0, ~Zero]` unsigned; signed is the full set unless the sign bit
+    // is zero.
+    if for_signed && !known.is_non_negative() {
+        return crate::constantrange::ConstantRange::full(width);
+    }
+    let maximum = !known.zero & all_bits(width);
+    crate::constantrange::ConstantRange { lower: 0, upper: maximum.wrapping_add(1) & all_bits(width), width }
+}
+
+/// `isKnownNonNegative`.
+pub fn is_known_non_negative(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> bool {
+    compute_known_bits(context, function, value, depth, at).is_non_negative()
+}
+
+/// `isKnownNegative`.
+pub fn is_known_negative(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> bool {
+    compute_known_bits(context, function, value, depth, at).is_negative()
+}
+
+/// `isKnownNonZero`. Stub: a nonzero constant only.
+pub fn is_known_non_zero(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> bool {
+    let known = compute_known_bits(context, function, value, depth, at);
+    known.one & all_bits(known.width) != 0
+}
+
+/// `ComputeNumSignBits`.
+pub fn compute_num_sign_bits(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> u32 {
+    let _ = (depth, at);
+    sign_bits(context, function, value)
+}
+
+/// `MaskedValueIsZero(V, Mask, ...)`: every bit of `mask` is zero in `value`.
+pub fn masked_value_is_zero(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    mask: u128,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> bool {
+    let known = compute_known_bits(context, function, value, depth, at);
+    mask & all_bits(known.width) & !known.zero == 0
+}
+
+/// `isKnownToBeAPowerOfTwo(V, OrZero, ...)`. Stub: a constant only.
+pub fn is_known_to_be_a_power_of_two(
+    context: &Context,
+    function: &Function,
+    value: Operand,
+    or_zero: bool,
+    depth: u32,
+    at: Option<crate::module::InstId>,
+) -> bool {
+    let known = compute_known_bits(context, function, value, depth, at);
+    known.is_constant() && (known.one.is_power_of_two() || (or_zero && known.one == 0))
+}
 
 /// How many of an integer's top bits are copies of its sign bit, at least
 /// one: LLVM's `ComputeNumSignBits`.
@@ -292,6 +482,33 @@ pub fn underlying(
     function: &Function,
     pointer: Operand,
 ) -> (Operand, Option<i64>) {
+    strip_offsets(context, layout, function, pointer, false)
+}
+
+/// `GetPointerBaseWithConstantOffset`
+/// ([ValueTracking.h:364](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ValueTracking.h#L364)),
+/// over `stripAndAccumulateConstantOffsets`
+/// ([Value.cpp:732](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732)):
+/// `pointer` less every GEP with only constant indices and every address
+/// space cast, and the bytes those added. A GEP with a variable index is the
+/// base, where `underlying` goes on through it.
+pub fn pointer_base_with_constant_offset(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+) -> (Operand, i64) {
+    let (base, offset) = strip_offsets(context, layout, function, pointer, true);
+    (base, offset.expect("a stop at a variable index leaves a constant offset"))
+}
+
+fn strip_offsets(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+    stop_at_variable: bool,
+) -> (Operand, Option<i64>) {
     let int = |one: Operand| match one {
         Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64))),
@@ -327,6 +544,9 @@ pub fn underlying(
         if let Some(source) = source {
             let indices: Vec<Option<i128>> = operands[1..].iter().map(|&one| int(one)).collect();
             let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+            if stop_at_variable && !variable.is_empty() {
+                break;
+            }
             offset = offset.filter(|_| variable.is_empty()).map(|one| one + constant as i64);
         }
         at = operands[0];

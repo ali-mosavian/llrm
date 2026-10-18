@@ -490,9 +490,15 @@ fn written_basic_inner(
         segments.push(stack);
     }
     let every: Vec<usize> = (0..module.procedures.len()).collect();
-    objbuild::_code_by(&mut segments[0], 0, module, &every, &mut symbols, |procedure, number| {
-        _basic_listing(procedure, number)
-    })
+    objbuild::_code_by(
+        &mut segments[0],
+        0,
+        module,
+        &every,
+        &mut symbols,
+        llrm_target::object::Format::Omf,
+        |procedure, number| _basic_listing(procedure, number),
+    )
     .map_err(|error| error.to_string())?;
 
     let code = &mut segments[0];
@@ -745,7 +751,10 @@ pub fn compiled(
         resolved.segments.push(Segment { name: segment.name.clone(), items: items.collect(), size: segment.size });
     }
     super::optimized(&mut mir, options)?;
-    llrm_support::debug::timed("assemble", || assembled(&mir.modules[0], &resolved, program.runtime, options))
+    let module =
+        llrm_support::debug::timed("assemble", || assembled(&mir.modules[0], &resolved, program.runtime, options))?;
+    super::stage_files(options, "", &module)?;
+    Ok(module)
 }
 
 /// A lifter's `module` compiled into the BASIC module object `object` lays
@@ -998,6 +1007,7 @@ pub fn assembled(
         debug,
         stack: 0,
         object: options.arch.object(),
+        padding: Default::default(),
     })
 }
 

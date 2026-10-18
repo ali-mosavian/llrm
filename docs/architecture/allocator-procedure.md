@@ -1,6 +1,12 @@
+---
+architecture-index: the allocator's decision procedure against RAGreedy's
+architecture-order: 190
+---
 # The allocator's decision procedure against RAGreedy's (plan step 3.3, re-planned)
 
 TL;DR: on `d_faces` -O2 the decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78) and a round costs 2.0 M against LLVM's 150 K per decision; on a controlled loop (chain-1) llrm emits about twice the stack operands clang does (83 against 34; 3,172 against 1,535 at 32 copies), so there the decision count is not known to be comparable. Of a round at its smallest (490 K), 34% is recomputing a fact that did not change and 47% is the round itself (facts, the diff, the body rebuilt, the tail). Reshaping the procedure (rows 2, 4, 5) can save at most 107 K of the 490 K, leaving about 380 K, above the 250 K kill: the kill is MET. The per-round cost comes from the model (an immutable body rebuilt per edit, facts derived from a diff), which is invariant A5 of the architecture page, not from the order in which the procedure tries things. Status: a re-plan, nothing built; the slice of section 5 is reduced to its pure part.
+
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, 122, 13/22/33 K per decision) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
 
 ## 1. The accounting that closes
 

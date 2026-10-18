@@ -149,19 +149,18 @@ use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
 use crate::graph::loops;
 use crate::induction;
 use crate::memory::{
-    self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
+    self, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, wrapped,
 };
 use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval, Lookup};
-use crate::regions::{self, ByteRange};
+use crate::regions;
 use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
@@ -176,14 +175,6 @@ pub enum Actual {
     Provenance(Provenance),
     Pointer(ValueId, i64),
     Absent,
-}
-
-/// Python's `_cell_key` tuples: `(object, low, high)`, or a fixed address
-/// and width.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum CellKey {
-    Object(ObjectRef, i64, i64),
-    Address(Addr, i64),
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
@@ -311,7 +302,7 @@ impl Inputs {
     ) -> Built {
         STRUCTURES.with(|built| built.set(built.get() + 1));
         let graph: Vec<cfg::Block> =
-            self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone() }).collect();
+            self.blocks.iter().map(|(at, succ)| cfg::Block { at: *at, succ: succ.clone().into() }).collect();
         let predecessors = loops::predecessors(&graph);
         let none: &[i64] = &[];
         let mut generated: Vec<Bits> = Vec::with_capacity(graph.len());
@@ -682,6 +673,28 @@ fn merged_types(
     }
 }
 
+/// Whether the bytes `fresh` names lie in the bytes some slice of `kept` names:
+/// the one rule of 'is the fresh footprint covered by the kept one', which a
+/// summary and a call's effect (and the replay checks over both) ask. Bytes
+/// past the object's end are no byte of it, and a slice stands for the bytes it
+/// names, not for its shape.
+pub fn slice_covered<'a>(
+    fresh: &Slice,
+    kept: impl IntoIterator<Item = &'a Slice>,
+) -> bool {
+    let clipped = fresh
+        .object
+        .extent
+        .and_then(
+            |extent| {
+                let high = fresh.high.min(extent);
+                let width = fresh.width.min(extent - (high - 1));
+                Slice::new(fresh.object, fresh.low, high, fresh.stride, width.max(1)).ok()
+            },
+        );
+    kept.into_iter().any(|one| one.contains(fresh) || clipped.as_ref().is_some_and(|c| one.contains(c)))
+}
+
 impl Summary {
     /// Whether `fresh` shows a read or write that `self`, held past passes that
     /// add no memory operation, does not state. A fresh summary that gives
@@ -701,7 +714,7 @@ impl Summary {
                 || new
                     .iter()
                     .filter(|one| one.object.kind != MemoryKind::Unknown && !unplaced(one))
-                    .all(|one| old.contains(one))
+                    .all(|one| slice_covered(one, old.iter()))
         };
         within(self.unknown_read, fresh.unknown_read, &self.reads, &fresh.reads)
             && within(self.unknown_write, fresh.unknown_write, &self.writes, &fresh.writes)
@@ -960,12 +973,20 @@ pub(crate) fn only_reads(
         && !allowed.other.writes
 }
 
-fn _borrowed(
+pub(crate) fn borrowed(
     unit: &Unit,
     at: InstId,
     index: usize,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    // What these return is the operand's bytes, followed as a value: the call
+    // keeps nothing (`captures(ret: provenance)` in LLVM).
+    if matches!(
+        unit.intrinsic(at),
+        Some(llrm_mir::intrinsics::Intrinsic::Window | llrm_mir::intrinsics::Intrinsic::Restrict)
+    ) {
+        return true;
+    }
     let nocapture = |attrs: &[Attribute]| llrm_mir::facts::Facts::of(attrs).no_capture();
     let declared = llrm_mir::memory::callee(unit.context, unit.function, at)
         .and_then(|one| unit.globals.get(one.0 as usize))
@@ -2214,6 +2235,46 @@ pub struct Effect {
     pub fills: Vec<MemRef>,
 }
 
+impl Effect {
+    /// Whether `self`, held past edits that keep every value's meaning, still
+    /// states what `fresh` finds. `loads` and `stores` are may-sets: `self`
+    /// covers `fresh` where every reference of `fresh` is one of `self` (a
+    /// value replaced by another found equal leaves a reference the pointer
+    /// analysis had of the first: a global beside the unknown that a fresh run
+    /// of the one value states alone). The unknown object reaches only what
+    /// escaped: a kept `{global}` does not cover a fresh `{unknown}`. `fills`
+    /// are must-writes, a kept one that `fresh` lacks claims bytes the body
+    /// no longer shows: equal.
+    pub fn covers(
+        &self,
+        fresh: &Effect,
+    ) -> bool {
+        // A reference that names no value is its provenance alone: covered
+        // where each of its slices is within a kept slice by the bytes
+        // it names, or within the unknown object's whole range where
+        // its object escaped (the unknown reaches what escaped). One
+        // that names a value is a decomposition, and stays exact.
+        let names_nothing =
+            |one: &MemRef| one.pointer.is_none() && one.root.is_none() && one.base.is_none() && one.segment.is_none();
+        let within = |old: &[MemRef], new: &[MemRef]| {
+            let kept_slices = || old.iter().filter_map(|one| one.provenance.as_ref()).flat_map(|one| one.slices.iter());
+            let unknown_whole = kept_slices().any(|one| {
+                one.object.kind == MemoryKind::Unknown && one.low <= -(1_i64 << 31) && one.high >= 1_i64 << 31
+            });
+            new.iter().all(|one| {
+                old.contains(one)
+                    || (names_nothing(one)
+                        && one.provenance.as_ref().is_some_and(|provenance| {
+                            provenance.slices.iter().all(|slice| {
+                                slice_covered(slice, kept_slices()) || (unknown_whole && slice.object.captured())
+                            })
+                        }))
+            })
+        };
+        within(&self.loads, &fresh.loads) && within(&self.stores, &fresh.stores) && self.fills == fresh.fills
+    }
+}
+
 /// `effects` with each value `to` gives another operand named by it, the
 /// effects of the same calls on the same bytes after a value is replaced by
 /// one found equal. The lists the calls share stay shared. None where a
@@ -2555,7 +2616,7 @@ pub fn initialized(
         }
     };
     let transfer = |at: i64, mut state: State| -> State {
-        for &inst in function.block(cfg::block(at)).instructions().iter().rev() {
+        for inst in function.block(cfg::block(at)).iter().rev() {
             let op = function.instruction(inst);
             if let Some(effect) = effects.get(&inst) {
                 for one in
@@ -2601,7 +2662,7 @@ pub fn initialized(
     };
     let graph = cfg::graph(function);
     let exit = |at: i64| -> State {
-        match function.instruction(*function.block(cfg::block(at)).instructions().last().expect("a block ends")).opcode
+        match function.instruction(function.block(cfg::block(at)).last().expect("a block ends")).opcode
         {
             Opcode::Ret => vec![Some(Vec::new()); count],
             _ => vec![None; count],
@@ -2656,18 +2717,6 @@ fn _widened(provenance: &Provenance) -> Provenance {
     Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
-fn _cell_key(reference: &MemRef) -> Option<CellKey> {
-    if let Some(provenance) = &reference.provenance {
-        if provenance.slices.len() == 1 {
-            let one = provenance.slices.first().expect("one slice");
-            if one.stride == 1 {
-                return Some(CellKey::Object(one.object, one.low, one.high));
-            }
-        }
-    }
-    reference.addr().map(|addr| CellKey::Address(addr, i64::from(reference.width)))
-}
-
 /// Whether the call `inst` returns what its callee states `noalias`: a
 /// pointer to an object no other pointer reaches, as a constructor's.
 fn returns_unique(
@@ -2697,6 +2746,11 @@ fn _direct(
         }
         // The same bytes as its operand, said restrict: what it and what is
         // based on it reach is reached by nothing that is not.
+        // The window of a huge pointer: the same bytes, said by another
+        // pointer.
+        Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Window) => {
+            Ok(_operand(unit, op.operands[0], values))
+        }
         Opcode::Call(_) if unit.intrinsic(inst) == Some(llrm_mir::intrinsics::Intrinsic::Restrict) => {
             let Some(source) = _operand(unit, op.operands[0], values) else { return Ok(None) };
             let restrict = source.restrict.union(&crate::memory::Sorted::from([Identity::Value(result.0)]));
@@ -2885,13 +2939,13 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
-        .filter(|(at, successor)| dominance.dominates(*successor, *at))
+        .filter(|(at, successor)| dominance.dominates(unit.function, *successor, *at))
         .collect::<BTreeSet<_>>();
     // The instructions that can give a pointer a fact, in program order, and
     // the ones that read each value they read.
     let mut order: Vec<InstId> = Vec::new();
     for block in &graph {
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.block(cfg::block(block.at)).iter() {
             let op = function.instruction(inst);
             let pointer_result = op.result.is_some_and(|result| pointer_values.contains(&result));
             let pointer_store = matches!(op.opcode, Opcode::Store { .. }) && is_pointer(unit, op.operands[0]);
@@ -2917,7 +2971,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
         let place: llrm_mir::dense::IdMap<InstId, usize> = function
             .layout()
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().enumerate().map(|(at, &inst)| (inst, at)))
+            .flat_map(|&block| function.block(block).iter().enumerate().map(|(at, inst)| (inst, at)))
             .collect();
         pointer_loads
             .iter()
@@ -3128,7 +3182,11 @@ pub fn points_to(
         }
         None => std::borrow::Cow::Owned(point_values(unit)?),
     };
-    escapes(unit, &solved, arguments, captures)
+    let found = escapes(unit, &solved, arguments, captures)?;
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES") {
+        crate::capturecheck::check(unit, &found);
+    }
+    Ok(found)
 }
 
 /// What `points_to` adds to the value solve: what escapes, and when.
@@ -3268,7 +3326,7 @@ fn escapes(
                     let actual = _resolved_actuals(arguments.get(&inst).map_or(&[][..], Vec::as_slice), &values);
                     let kept = |index: usize| -> Result<bool, String> {
                         match captures.and_then(|captures| captures.get(&inst)).and_then(Option::as_ref) {
-                            None => Ok(!_borrowed(unit, inst, index)),
+                            None => Ok(!borrowed(unit, inst, index)),
                             Some(selected) => Ok(selected
                                 .iter()
                                 .map(_index)
@@ -3295,7 +3353,7 @@ fn escapes(
                     // The callee's own address is no argument.
                     let count = op.operands.len() - if matches!(op.opcode, Opcode::Invoke(_)) { 3 } else { 1 };
                     let kept = (0..count)
-                        .filter(|&index| !_borrowed(unit, inst, index))
+                        .filter(|&index| !borrowed(unit, inst, index))
                         .map(|index| op.operands[index])
                         .collect::<Vec<_>>();
                     newly.extend(provenances(&kept, &values));
@@ -3371,7 +3429,7 @@ fn escapes(
     }
     let named = |bits: &Bits| bits.iter().map(|at| objects[at].clone()).collect::<BTreeSet<_>>();
     let escaped = named(&every);
-    let inputs = Inputs { blocks: graph.iter().map(|block| (block.at, block.succ.clone())).collect(), order };
+    let inputs = Inputs { blocks: graph.iter().map(|block| (block.at, block.succ.to_vec())).collect(), order };
     let escaped_before = EscapedBefore {
         objects: Rc::new(objects),
         inputs: Rc::new(inputs),
@@ -3416,12 +3474,8 @@ fn could_publish(
         Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => return true,
         Opcode::Store { .. } => return is_pointer(unit, op.operands[0]) || names_a_global(unit, op),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. }
-        | Opcode::GetElementPtr { .. }
-        | Opcode::Phi
-        | Opcode::Select
-        | Opcode::Call(_)
-        | Opcode::Invoke(_) => true,
+        Opcode::Phi | Opcode::Select => false,
+        Opcode::Load { .. } | Opcode::GetElementPtr { .. } | Opcode::Call(_) | Opcode::Invoke(_) => true,
         _ => false,
     };
     (!carried && op.operands.iter().any(|&operand| is_pointer(unit, operand))) || names_a_global(unit, op)
@@ -3460,12 +3514,17 @@ fn _lost(
     values: &IndexMap<ValueId, Provenance>,
 ) -> Vec<ObjectRef> {
     let op = unit.function.instruction(inst);
+    // A join with an arm no fact follows is itself no fact (`UNKNOWN`): the
+    // objects of its other arms are no longer followed (a load through
+    // `phi [%slot, %b0], [%q, %b1]` reads the slot).
+    let joins_unknown = matches!(op.opcode, Opcode::Phi | Opcode::Select)
+        && joined(op)
+            .is_some_and(|arms| arms.iter().any(|&arm| is_pointer(unit, arm) && _operand(unit, arm, values).is_none()));
     let carried = match &op.opcode {
         Opcode::ICmp(_) => return Vec::new(),
         Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => !unit.spaces().is_segment(unit.space(op.operands[0])),
-        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } | Opcode::Phi | Opcode::Select => {
-            true
-        }
+        Opcode::Phi | Opcode::Select => !joins_unknown,
+        Opcode::Load { .. } | Opcode::Store { .. } | Opcode::GetElementPtr { .. } => true,
         Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Ret | Opcode::Cast(CastOp::PtrToInt) => true,
         _ => false,
     };
@@ -3502,85 +3561,6 @@ fn _resolved_actuals(
         .collect()
 }
 
-/// The object a cell key lies in: only keys sharing it can overlap.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum KeyBucket {
-    Object(ObjectRef),
-    Address(Operand),
-}
-
-impl Bucket for KeyBucket {
-    // Nothing looks a key bucket up by a component.
-    type Parts = ();
-
-    fn held(
-        &self,
-        _: &mut (),
-    ) {
-    }
-
-    fn released(
-        &self,
-        _: &mut (),
-    ) {
-    }
-}
-
-pub fn _key_bucket(key: &CellKey) -> KeyBucket {
-    match key {
-        CellKey::Object(object, _, _) => KeyBucket::Object(object.clone()),
-        CellKey::Address(addr, _) => KeyBucket::Address(addr.root),
-    }
-}
-
-/// A key's bucket, and no span: Python's map has no `span_of`.
-pub fn _key_place(key: &CellKey) -> (KeyBucket, Option<ByteRange>) {
-    (_key_bucket(key), None)
-}
-
-/// Drop the cells a store to `key` may overwrite, keeping `key` itself.
-pub fn _kill<V>(
-    cells: &mut CellMap<CellKey, V, KeyBucket>,
-    key: Option<&CellKey>,
-) {
-    let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
-    cells.kill(
-        reached,
-        |old| {
-            #[cfg(test)]
-            ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
-            Some(old) != key && _keys_overlap(Some(old), key)
-        },
-        None,
-    );
-}
-
-#[cfg(test)]
-thread_local! {
-    /// The cells `_kill` asked the exact test of.
-    pub static ASKED: RefCell<Vec<CellKey>> = const { RefCell::new(Vec::new()) };
-}
-
-pub fn _keys_overlap(
-    one: Option<&CellKey>,
-    other: Option<&CellKey>,
-) -> bool {
-    let (Some(one), Some(other)) = (one, other) else {
-        return true;
-    };
-    match (one, other) {
-        (CellKey::Address(addr, width), CellKey::Address(other_addr, other_width)) if addr.root == other_addr.root => {
-            addr.disp < other_addr.disp + other_width && other_addr.disp < addr.disp + width
-        }
-        (CellKey::Object(object, low, high), CellKey::Object(other_object, other_low, other_high))
-            if object == other_object =>
-        {
-            low < other_high && other_low < high
-        }
-        _ => one == other,
-    }
-}
-
 /// `value` modulo `modulus`, never negative for a positive modulus.
 fn mod_floor(
     value: &BigInt,
@@ -3594,7 +3574,7 @@ fn mod_floor(
 /// A value wraps at its width, so a modulus holds only where it divides
 /// the width's: each is cut to that divisor, and an exact residue masked.
 pub fn congruences(unit: &Unit) -> Congruences {
-    congruences_with(unit, &unit.registers())
+    congruences_of(unit, &unit.registers(), None, None)
 }
 
 /// Each value's (residue, modulus): what it is congruent to.
@@ -3610,32 +3590,184 @@ pub fn congruences_found() -> usize {
     CONGRUENCES.with(std::cell::Cell::get)
 }
 
-/// `congruences`, given what `consts::known` finds without memory.
-pub fn congruences_with(
+/// What the congruences of one body asked of by value have found: the answers,
+/// the body's order and each loop's counters, kept for the asks of one version
+/// of the body under one set of facts (an ask under others starts it again).
+#[derive(Default)]
+pub struct CongruenceMemo {
+    order: Option<llrm_mir::dense::IdMap<InstId, usize>>,
+    counters: Vec<Option<Rc<Vec<induction::Affine>>>>,
+    answers: llrm_mir::dense::IdMap<ValueId, Option<(BigInt, BigInt)>>,
+    scratch: Congruences,
+    inserted: Vec<ValueId>,
+}
+
+impl CongruenceMemo {
+    /// The map `congruences_of` made of the last ask by value, given back: it
+    /// is the size of the body's last value, and one made for each ask costs as
+    /// much as the body.
+    pub fn recycle(
+        &mut self,
+        mut found: Congruences,
+    ) {
+        for value in self.inserted.drain(..) {
+            found.remove(&value);
+        }
+        self.scratch = found;
+    }
+}
+
+/// Known `value == residue (mod modulus)` facts of the values `wanted` alone,
+/// or of every value where none, given what `consts::known` finds without
+/// memory: what they are congruent to is what the additions, subtractions,
+/// products and shifts they are computed from, and the loops' counters among
+/// them, give. The values nothing else reaches are not worked out (the whole
+/// body's, once for each version of a body of 128 loops, was 7.2 M and 3.9% of
+/// the compile).
+///
+/// The answer for each value asked is the one asked of every value gives: the
+/// values a value is computed from are visited in the body's order, as it
+/// does, so that one visited before its operand is given the operand's
+/// weaker answer in both.
+pub fn congruences_of(
     unit: &Unit,
     constants: &IndexMap<ValueId, Known>,
+    wanted: Option<&[ValueId]>,
+    memo: Option<&std::cell::RefCell<CongruenceMemo>>,
 ) -> Congruences {
-    CONGRUENCES.with(|count| count.set(count.get() + 1));
+    let mut inserted: Vec<ValueId> = Vec::new();
+    let mut result = match memo.filter(|_| wanted.is_some()) {
+        Some(memo) => std::mem::take(&mut memo.borrow_mut().scratch),
+        None => Congruences::default(),
+    };
+    if wanted.is_none() {
+        CONGRUENCES.with(|count| count.set(count.get() + 1));
+    }
     let function = unit.function;
-    let mut result = Congruences::default();
+    let qualifies = |value: ValueId, op: &llrm_mir::module::Instruction| {
+        matches!(
+            op.opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+        )
+            && op.operands.len() == 2
+            && unit.int_bits(Operand::Value(value)).is_some()
+    };
+    let memo = memo.filter(|_| wanted.is_some());
+    // Held answers are for the unit's own registers alone: a map made for one
+    // ask and dropped can be followed at its address by another. The body's
+    // order and its loops' counters hold under any facts.
+    let answers = memo.filter(|_| unit.registers.is_some_and(|own| std::ptr::eq(constants, own)));
+    // The values reached by the operations that make a congruence, and the ones
+    // they stop at: for the whole body, every operation, in the body's order.
+    let mut reached: llrm_mir::dense::IdSet<ValueId> = llrm_mir::dense::IdSet::new();
+    let mut operations: Vec<InstId> = Vec::new();
+    match wanted {
+        None => {
+            operations.extend(function.walk().map(|(_, inst)| inst).filter(|&inst| {
+                let op = function.instruction(inst);
+                op.result.is_some_and(|value| qualifies(value, op))
+            }));
+        }
+        Some(wanted) => {
+            let mut work: Vec<ValueId> = wanted.to_vec();
+            while let Some(value) = work.pop() {
+                if !reached.insert(value) {
+                    continue;
+                }
+                // What is found of a value is found of what it is made of
+                // alone.
+                if let Some(held) = answers.and_then(|memo| memo.borrow().answers.get(&value).cloned()) {
+                    if let Some(fact) = held {
+                        inserted.push(value);
+                        result.insert(value, fact);
+                    }
+                    continue;
+                }
+                let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { continue };
+                let op = function.instruction(inst);
+                if qualifies(value, op) {
+                    operations.push(inst);
+                    work.extend(
+                        op.operands
+                            .iter()
+                            .filter_map(|one| if let Operand::Value(source) = one { Some(*source) } else { None }),
+                    );
+                }
+            }
+            // In the body's order, round after round, as the whole body's goes.
+            let position = |inst: &InstId| -> usize {
+                let order = || -> llrm_mir::dense::IdMap<InstId, usize> {
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect()
+                };
+                match memo {
+                    Some(memo) => {
+                        let mut held = memo.borrow_mut();
+                        held.order.get_or_insert_with(order)[inst]
+                    }
+                    None => order()[inst],
+                }
+            };
+            if memo.is_some() {
+                operations.sort_by_key(position);
+            } else {
+                let order: llrm_mir::dense::IdMap<InstId, usize> =
+                    function.walk().enumerate().map(|(at, (_, inst))| (inst, at)).collect();
+                operations.sort_by_key(|inst| order[inst]);
+            }
+        }
+    }
     let zero = BigInt::from(0);
-    for loop_ in &unit.shape().loops {
-        for affine in induction::basics(unit, loop_).values() {
+    // The loops' counters among the values reached.
+    let shape = unit.shape();
+    let block_of = |value: ValueId| match function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => function.parent(inst).map(cfg::id),
+        _ => None,
+    };
+    for (at, loop_) in shape.loops.iter().enumerate() {
+        if wanted.is_some()
+            && !reached.iter().any(|value| block_of(value).is_some_and(|block| loop_.body.contains(&block)))
+        {
+            continue;
+        }
+        let counters = match memo {
+            Some(memo) => {
+                let held = memo.borrow().counters.get(at).cloned().flatten();
+                held.unwrap_or_else(|| {
+                    let made = Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>());
+                    let mut held = memo.borrow_mut();
+                    if held.counters.len() <= at {
+                        held.counters.resize(at + 1, None);
+                    }
+                    held.counters[at] = Some(Rc::clone(&made));
+                    made
+                })
+            }
+            None => Rc::new(induction::basics(unit, loop_).into_values().collect::<Vec<_>>()),
+        };
+        for affine in counters.iter() {
+            if wanted.is_some() && !reached.contains(&affine.value) {
+                continue;
+            }
+            // A held answer is the last word.
+            if answers.is_some_and(|memo| memo.borrow().answers.contains_key(&affine.value)) {
+                continue;
+            }
             let width = affine.start.width();
             let (Some(start), Some(step)) = (
-                induction::_signed(&affine.start, &constants, width),
-                induction::_signed(&affine.step, &constants, width),
+                induction::_signed(&affine.start, constants, width),
+                induction::_signed(&affine.step, constants, width),
             ) else {
                 continue;
             };
             if step != zero {
+                inserted.push(affine.value);
                 result.insert(affine.value, reduced(step, start, width));
             }
         }
     }
     loop {
         let mut changed = false;
-        for (_, inst) in function.walk() {
+        for &inst in &operations {
             let op = function.instruction(inst);
             let Some(value) = op.result.filter(|value| !result.contains_key(value)) else { continue };
             let (Opcode::Binary(kind), [left, right], Some(width)) =
@@ -3643,8 +3775,6 @@ pub fn congruences_with(
             else {
                 continue;
             };
-            // A value nothing is known of is a multiple of 1: `x << 1` is a
-            // multiple of 2 all the same.
             let fact = |one: Operand| match one {
                 Operand::Value(source) => Some(
                     result
@@ -3679,10 +3809,20 @@ pub fn congruences_with(
             if found.0 == BigInt::from(1) {
                 continue;
             }
+            inserted.push(value);
             result.insert(value, found);
             changed = true;
         }
         if !changed {
+            if let Some(memo) = answers {
+                let mut held = memo.borrow_mut();
+                for value in reached.iter() {
+                    held.answers.insert(value, result.get(&value).cloned());
+                }
+            }
+            if let Some(memo) = memo.filter(|_| wanted.is_some()) {
+                memo.borrow_mut().inserted = inserted;
+            }
             return result;
         }
     }
@@ -3758,7 +3898,7 @@ pub fn annotated_with(
         _ => Bounded::Worked(ranges::bounded_with(unit, known)?),
     };
     // Only an access with a variable index asks: 4,185 lookups in 123 solves.
-    let strides = std::cell::LazyCell::new(|| congruences_with(unit, known));
+    let strides = std::cell::LazyCell::new(|| congruences_of(unit, known, None, None));
     let constants = ranges::intervals(known);
 
     let tag = |reference: &MemRef, at: i64| -> Result<MemRef, String> {

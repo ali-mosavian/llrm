@@ -35,8 +35,9 @@
 //! Frequencies come in two models, both per entry:
 //! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
 //!   (never below one, so a cold arm is near free but ordered), with each
-//!   loop's proven trips (`proven_trips`, from `induction::trip_count`) in
-//!   place of its estimate;
+//!   loop's proven trips (`proven_trips`, from ScalarEvolution's
+//!   `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
+//!   `induction::trip_count`) in place of its estimate;
 //! - `_loop_products`: the trips of each loop around a block multiplied, with
 //!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
 //!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
@@ -77,12 +78,12 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`], [`crate::fill`],
-//! [`crate::window`], [`crate::gepoffset`], [`crate::indvars`],
-//! [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`] and
-//! [`crate::interprocedural`] asks it, before a rewrite that trades code size
-//! or registers for speed, whether the rewrite pays. Not a pass: it runs only
-//! inside those.
+//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
+//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! and [`crate::interprocedural`] asks it, before a rewrite that trades code
+//! size or registers for speed, whether the rewrite pays. Not a pass: it runs
+//! only inside those.
 //!
 //! # Needs
 //! The target's `OperationCosts` and registers, [`crate::spill`] for the
@@ -94,8 +95,9 @@ use llrm_analysis::branchprob;
 use llrm_analysis::cfg;
 use llrm_analysis::consts::Known;
 use llrm_analysis::effects::Declarations;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::{induction, memory};
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -227,13 +229,9 @@ pub fn operation(
         Opcode::Call(_) | Opcode::Invoke(_)
             if callee(context, function, one).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.memset) =>
         {
-            let cells = match instruction.operands[2] {
-                Operand::Constant(id) => match context.get(id).kind {
-                    ConstantKind::Int(count) => i64::try_from(count).expect("a cell count"),
-                    _ => UNKNOWN_TRIPS,
-                },
-                _ => UNKNOWN_TRIPS,
-            };
+            let cells = llrm_mir::intrinsics::length(context, instruction.operands[2])
+                .and_then(|count| i64::try_from(count).ok())
+                .unwrap_or(UNKNOWN_TRIPS);
             return Some(costs.fill + cells * costs.fill_cell);
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,
@@ -355,14 +353,83 @@ pub fn priced(
     r#static(context, layout, function, callees, costs).is_some()
 }
 
-/// Each loop's trips by latch, where induction proves them: the `trips`
-/// that replaces the conventional ten.
+/// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
+/// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
+/// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
 pub fn proven_trips(
     unit: &memory::Unit,
     facts: &IndexMap<ValueId, Known>,
 ) -> IndexMap<i64, i64> {
+    proven_trips_using(unit, facts, scev_trips_enabled())
+}
+
+/// `LLRM_NO_SCEV_TRIPS`, read once: trip counts come from ScalarEvolution
+/// (`proven_trips`, `unroll`), not `induction::trip_count`.
+pub fn scev_trips_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_SCEV_TRIPS")
+}
+
+/// How often `loop_`'s latch runs, where ScalarEvolution proves it
+/// (`getSmallConstantTripCount`): one exit, in the latch or in the header.
+/// The count is the header's runs, one more than the latch's where the header
+/// leaves.
+pub fn scev_trips(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            let natural = cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            let [exiting] = natural.get_exiting_blocks(cx.function)[..] else { return None };
+            let runs = scev.get_small_constant_trip_count(cx, header);
+            if loop_.latches.contains(&cfg::id(exiting)) {
+                Some(runs)
+            } else if exiting == header {
+                Some(runs.saturating_sub(1))
+            } else {
+                None
+            }
+        })?;
+    (count != 0).then_some(i64::from(count))
+}
+
+/// At most how often `loop_`'s latch runs, where ScalarEvolution proves a
+/// bound (`getSmallConstantMaxTripCount`, the header's runs, which the
+/// latch's never exceed): the loop may also leave by another exit.
+pub fn scev_trip_bound(
+    session: &mut ScevSession,
+    unit: &memory::Unit,
+    loop_: &llrm_analysis::graph::loops::Loop,
+) -> Option<i64> {
+    let header = cfg::block(loop_.header);
+    let count =
+        session.ask_within(unit.context, unit.layout, unit.globals, unit.metadata, unit.function, |scev, cx| {
+            cx.loops.get_loop_for(header).filter(|found| found.get_header() == header)?;
+            Some(scev.get_small_constant_max_trip_count(cx, header))
+        })?;
+    (count != 0).then_some(i64::from(count))
+}
+
+/// [`proven_trips`], asking ScalarEvolution (`scev`) or `induction`.
+pub fn proven_trips_using(
+    unit: &memory::Unit,
+    facts: &IndexMap<ValueId, Known>,
+    scev: bool,
+) -> IndexMap<i64, i64> {
     let mut trips = IndexMap::default();
-    for loop_ in &unit.shape().loops {
+    let loops = &unit.shape().loops;
+    if scev && !loops.is_empty() {
+        let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
+        for loop_ in loops {
+            if let Some(count) = scev_trips(&mut session, unit, loop_) {
+                trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
+            }
+        }
+        return trips;
+    }
+    for loop_ in loops {
         if let Some(count) = induction::trip_count(unit, loop_, facts).and_then(|count| count.to_i64()) {
             trips.extend(loop_.latches.iter().map(|&latch| (latch, count)));
         }

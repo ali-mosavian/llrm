@@ -174,6 +174,43 @@ fn adopting_a_fork_keeps_the_marks_taken_before_it() {
     assert_eq!(changed, [named(f, "x").1, named(f, "y").1]);
 }
 
+/// Two forks of one function, edited apart by one change each, were one point
+/// (the same lineage and the same position): a held access, a table kept for
+/// update and any memo keyed by a mark answered one fork with the other's body
+/// (gvn forks two numberings of a body and prices both). A fork's points are
+/// its own, the function's before the fork are its too, and a sibling's do not
+/// resolve.
+#[test]
+fn two_forks_edited_apart_are_not_one_point() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let a = Operand::Value(f.parameters()[0]);
+    let before = f.mark();
+    let (mut one, mut other) = (f.fork(), f.fork());
+    one.set_operand(x, 1, a);
+    other.set_operand(y, 1, a);
+    assert_ne!(one.mark(), other.mark(), "two forks, one change each, are one point");
+    assert!(one.changes_since(before).is_some() && other.changes_since(before).is_some());
+    assert!(one.changes_since(other.mark()).is_none(), "a sibling's point resolved");
+    f.adopt(one);
+    assert!(f.changes_since(before).is_some(), "the function's point before the fork");
+    assert!(f.changes_since(other.mark()).is_none(), "the discarded sibling's point resolved");
+}
+
+/// A fork that changed nothing is the function: adopting it leaves the points
+/// taken of the function equal to the function's now.
+#[test]
+fn adopting_a_fork_that_changed_nothing_keeps_the_mark() {
+    let mut module = module();
+    let f = module.function_mut("f").expect("@f").1;
+    let before = f.mark();
+    let fork = f.fork();
+    f.adopt(fork);
+    assert_eq!(f.mark(), before);
+}
+
 /// A rewrite reached only the blocks of the uses it feeds: the walk the
 /// analyses each kept for themselves marked every block or none.
 #[test]
@@ -286,4 +323,59 @@ fn the_edge_search_reads_the_log_once_not_once_for_each_terminator_touched() {
     let (small, big) = (visits(64), visits(128));
     assert!(small > 0, "premise: the edges were searched");
     assert!(big as f64 <= 2.3 * small as f64, "{small} -> {big} entries and operands read for 64 -> 128 terminators");
+}
+
+/// `reach_of` read every operand of every list an edit replaced, to name the
+/// values the edit touched, which it never reads (`cases(N)` at -O2: `analysis
+/// dominated-edges` read 2.42x a doubling, 85% of it here): a switch of N
+/// arms rewritten whole for each of N edits is N^2 operands, and doubling the
+/// arms now reads none.
+#[test]
+fn reach_does_not_read_the_operand_lists_an_edit_replaced() {
+    let scanned = |arms: usize| {
+        let mut text = String::from("define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n");
+        for k in 0..arms {
+            text += &format!("    i32 {k}, label %b{k}\n");
+        }
+        text += "  ]\nd:\n  ret i32 0\n";
+        for k in 0..arms {
+            text += &format!("b{k}:\n  br label %d\n");
+        }
+        text += "}\n";
+        let mut module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
+        let f = module.function_mut("f").expect("@f").1;
+        let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+        let switch = f.terminator(entry).unwrap();
+        let mark = f.mark();
+        for k in 0..arms {
+            let mut operands = f.instruction(switch).operands.clone();
+            let arm = block(f, &format!("b{k}"));
+            let at = operands.iter().position(|one| *one == Operand::Block(arm)).unwrap();
+            operands[at] = Operand::Block(d);
+            f.set_operands(switch, operands);
+        }
+        let changes = f.changes_since(mark).expect("history").to_vec();
+        crate::touched::SCANNED.with(|scanned| scanned.set(0));
+        let reach = f.reach_of(&changes).expect("no parameters changed");
+        assert!(reach.rewired && reach.blocks.contains(&entry), "premise: the switch was seen rewritten");
+        crate::touched::SCANNED.with(std::cell::Cell::get)
+    };
+    let (small, big) = (scanned(64), scanned(128));
+    assert!(big as f64 <= 2.3 * (small.max(1)) as f64, "{small} -> {big} operands read for 64 -> 128 arms");
+    // The digest that names values still reads them: the counter is alive.
+    let mut text = String::from(
+        "define i32 @f(i32 %a) {\nentry:\n  switch i32 %a, label %d [\n    i32 0, label %b\n  ]\nd:\n  ret i32 0\nb:\n  ret i32 1\n}\n",
+    );
+    let mut module = parse::module(&text).unwrap();
+    text.clear();
+    let f = module.function_mut("f").expect("@f").1;
+    let (entry, d) = (f.entry().unwrap(), block(f, "d"));
+    let (switch, mark) = (f.terminator(entry).unwrap(), f.mark());
+    let mut operands = f.instruction(switch).operands.clone();
+    operands.truncate(2);
+    operands.push(Operand::Block(d));
+    f.set_operands(switch, operands);
+    crate::touched::SCANNED.with(|scanned| scanned.set(0));
+    f.touched_since(mark).expect("history");
+    assert!(crate::touched::SCANNED.with(std::cell::Cell::get) > 0, "premise: the full digest reads the lists");
 }

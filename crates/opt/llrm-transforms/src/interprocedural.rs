@@ -158,9 +158,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::aa::MemoryEffects;
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
+use llrm_analysis::functionattrs;
 use llrm_analysis::interprocedural as facts;
 use llrm_analysis::manager::{Callbacks, GlobalsAA, ProgramSummaries, Summaries};
 use llrm_analysis::memory::{Identity, MemoryKind, Slice, Unit};
@@ -309,6 +311,11 @@ pub struct Interprocedural {
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
+}
+
+thread_local! {
+    /// `LLRM_EXP_INLINECOST` prices the sites once.
+    static SHADOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl ProgramPass for Interprocedural {
@@ -575,7 +582,11 @@ fn unexported(program: &Program) -> BTreeSet<Defined> {
         .collect();
     defined(program)
         .filter(|&one @ (at, id)| {
-            !program.exports.exported(program.modules[at].global(id)) && !addressed.contains(&one)
+            // A `noipa` routine is entered as outside code may enter it: no
+            // constant is pushed into it and it is not cloned.
+            !program.exports.exported(program.modules[at].global(id))
+                && !addressed.contains(&one)
+                && !program.modules[at].global(id).function().is_some_and(llrm_mir::facts::opaque)
         })
         .collect()
 }
@@ -1145,22 +1156,42 @@ pub fn optimized_with<E: From<String>>(
             let addressed = llrm_mir::callgraph::addressed(module);
             bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
             let counts = inline::call_counts(module);
-            let (available, more) = candidates(
-                module,
-                &callees(&mut modules[at], module),
-                &program.layout,
-                &counts,
-                &private[at],
-                costs,
-                loose,
-                reach,
-                threshold,
-                &recursive,
-                &addressed,
-            );
+            if inline_round == 0 && llrm_support::env_flag!("LLRM_EXP_INLINECOST") && !SHADOWED.replace(true) {
+                crate::inlinecost::shadow(
+                    module,
+                    &program.layout,
+                    &counts,
+                    &addressed,
+                    crate::inlinecost::InlineParams {
+                        compute_full_inline_cost: true,
+                        ..crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 })
+                    },
+                );
+            }
+            // `LLRM_EXP_INLINEDECIDE`: LLVM's decision per call site, in place
+            // of the per-callee budget (inlinecost.rs).
+            let llvm = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE");
+            let (available, more) = if llvm {
+                Default::default()
+            } else {
+                candidates(
+                    module,
+                    &callees(&mut modules[at], module),
+                    &program.layout,
+                    &counts,
+                    &private[at],
+                    costs,
+                    loose,
+                    reach,
+                    threshold,
+                    &recursive,
+                    &addressed,
+                )
+            };
             // What only the clocks admit of a callee stays where its copies,
             // as the pipeline over each alone leaves them, come to no more.
-            if loose.is_some()
+            if !llvm
+                && loose.is_some()
                 && estimated_callees(
                     module,
                     &mut modules[at],
@@ -1207,18 +1238,46 @@ pub fn optimized_with<E: From<String>>(
                 }
                 let caller = module.global(id).function().expect("a procedure");
                 let constants = facts::current_call_constants(&module.context, caller);
-                let (constant, constant_more) = constant_sites(
-                    module,
-                    &callees(&mut modules[at], module),
-                    &program.layout,
-                    &recursive,
-                    caller,
-                    &constants,
-                    costs,
-                    loose,
-                    reach,
-                    threshold,
-                );
+                let (constant, constant_more) = if llvm {
+                    let params =
+                        crate::inlinecost::InlineParams::from_level(if threshold.limit >= 250 { 3 } else { 2 });
+                    // clang puts `optsize` on every function at -Os and -Oz and
+                    // no pipeline of its own (D8: -Oz
+                    // shares -Os; no `minsize`).
+                    let size = if threshold.single {
+                        crate::inlinecost::CallerSize::OptSize
+                    } else {
+                        crate::inlinecost::CallerSize::Speed
+                    };
+                    (
+                        crate::inlinecost::sites(
+                            module,
+                            &program.layout,
+                            id,
+                            &counts,
+                            &addressed,
+                            &recursive,
+                            params,
+                            size,
+                            threshold.limit == 0,
+                            program.target.tti().as_deref(),
+                        ),
+                        Default::default(),
+                    )
+                } else {
+                    constant_sites(
+                        module,
+                        &callees(&mut modules[at], module),
+                        &program.layout,
+                        &recursive,
+                        caller,
+                        &constants,
+                        costs,
+                        loose,
+                        reach,
+                        threshold,
+                    )
+                };
                 let mut declared = declared(&mut modules[at], module);
                 let (context, function) = function_mut(module, id);
                 let by = inline::Caller {
@@ -1250,7 +1309,7 @@ pub fn optimized_with<E: From<String>>(
                 // constants its site passes, comes to no more;
                 // and what that refuses is tried with its
                 // neighbours, together, once.
-                if loose.is_some() {
+                if !llvm && loose.is_some() {
                     let (stayed, mut together) = estimated_sites(
                         module,
                         &mut modules[at],
@@ -1416,6 +1475,10 @@ pub fn optimized_with<E: From<String>>(
                 bases[at].insert(id, size);
             }
             for &id in made.added.iter().chain(&made.edited) {
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
                 cloned_now = true;
@@ -1746,13 +1809,11 @@ fn published(
 ///   inaccessible memory. A stated one only narrows.
 /// - on each pointer parameter it keeps no copy of, `nocapture`, then
 ///   `readnone`, `readonly` or `writeonly`, and `initializes`.
-/// - `willreturn` where every path returns without looping and every call
-///   states it, or where the language promises each loop ends (`mustprogress`
-///   on the function, `llvm.loop.mustprogress` on each loop) of a function that
-///   does nothing observable;
-/// - `norecurse` where nothing can enter it again while it runs; `nounwind`
-///   where every call states it and no access can fault
-///   (`interprocedural::cannot_fault`).
+/// - `willreturn` as LLVM's `addWillReturn` (`functionattrs::infer`), or where
+///   a loop's trip count is proved, or the language promises each loop ends
+///   (`mustprogress` on the function, `llvm.loop.mustprogress` on each loop) of
+///   a function that does nothing observable;
+/// - `norecurse` and `nounwind` as `functionattrs::infer` has them.
 ///
 /// Any other attribute already stated stays. The bodies stamped; the
 /// caller drops `analyses` when there are any.
@@ -1772,11 +1833,54 @@ pub fn stamped(
     let mut changed = Vec::new();
     let graph = analyses.get::<CallGraphAnalysis>(module);
     let callees = llrm_mir::memory::callees(module);
-    let never_reentered = graph.cannot_reenter(module);
     let cycles: Vec<Vec<GlobalId>> =
         graph.bottom_up_components().into_iter().filter(|(_, cyclic)| *cyclic).map(|(members, _)| members).collect();
     let cycle: BTreeMap<GlobalId, usize> =
         cycles.iter().enumerate().flat_map(|(at, members)| members.iter().map(move |&member| (member, at))).collect();
+    // `llrm_analysis::functionattrs::infer` of each cycle, from the attributes
+    // as they stand when its first member is reached: LLVM stamps an SCC at
+    // once.
+    let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
+    let shadow_memory = llrm_support::env_set("LLRM_SHADOW_MEMORY");
+    // Shadow of `functionattrs::stamp_memory`: the same bodies stamped
+    // callees first from no memory attribute at all, against what `_narrowed`
+    // states; one line per body that differs.
+    let shadow = shadow_memory.then(|| {
+        let mut copy = module.clone();
+        for global in &mut copy.globals {
+            if let GlobalKind::Function(function) = &mut global.kind {
+                let derived = |one: &Attribute| match one {
+                    Attribute::Memory(_) => true,
+                    other => matches!(
+                        Fact::of_attribute(other),
+                        Some(
+                            Fact::ReadNone
+                                | Fact::ReadOnly
+                                | Fact::WriteOnly
+                                | Fact::NoRecurse
+                                | Fact::NoUnwind
+                                | Fact::WillReturn
+                                | Fact::NoReturn
+                        )
+                    ),
+                };
+                function.attrs.retain(|one| !derived(one));
+                for attrs in &mut function.parameter_attrs {
+                    attrs.retain(|one| {
+                        !matches!(
+                            Fact::of_attribute(one),
+                            Some(Fact::NoCapture | Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
+                        )
+                    });
+                }
+            }
+        }
+        for (members, _) in graph.bottom_up_components() {
+            functionattrs::post_order(&mut copy, &members);
+        }
+        copy
+    });
+    let mut compared = 0_usize;
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1784,6 +1888,11 @@ pub fn stamped(
             Linkage::External | Linkage::Internal | Linkage::Private
         );
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
+        // A `noipa` body is stamped with nothing: callers read what the source
+        // declared.
+        if llrm_mir::facts::opaque(function) {
+            continue;
+        }
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
         let exposed = llrm_analysis::memory::exposed_frames(
@@ -1816,7 +1925,13 @@ pub fn stamped(
                     Opcode::Load { volatile: true, .. } | Opcode::Store { volatile: true, .. }
                 ),
             );
-        let norecurse = never_reentered.contains(&id);
+        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
+        let stamped = *inferred
+            .entry(members.clone())
+            .or_insert_with(|| functionattrs::infer(module, &declarations, &members).into_iter().collect())
+            .get(&id)
+            .unwrap_or(&functionattrs::Inferred::default());
+        let norecurse = stamped.no_recurse || Facts::of(&function.attrs).no_recurse();
         // The language's word that its loops end holds where nothing a loop
         // that never ended could be seen by.
         let unobserved = !volatile
@@ -1824,7 +1939,11 @@ pub fn stamped(
         let promised = norecurse
             && unobserved
             && states(Fact::WillReturn)
-            && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
+            && llrm_mir::loopinfo::ends_by_promise(
+                &module.metadata,
+                function,
+                Facts::of(&function.attrs).must_progress(),
+            );
         let counted = || {
             let shape = Shape::of(function);
             // Found once for the function, not for each loop: the proofs of
@@ -1852,12 +1971,14 @@ pub fn stamped(
                     }),
                 )
         };
-        let returns = ((facts::returns_without_looping(function) || counted()) && states(Fact::WillReturn)) || promised;
-        let nounwind = states(Fact::NoUnwind) && facts::cannot_fault(module, layout, program.target.spaces(), function);
+        // DEVIATE F1: a loop whose trip count induction proves, or the
+        // language's word that it ends, returns too; LLVM's rule is a
+        // body without back edges.
+        let returns = stamped.will_return || (counted() && states(Fact::WillReturn)) || promised;
+        let nounwind = stamped.no_unwind;
         // A cycle of calls is stamped together, as LLVM's
         // PostOrderFunctionAttrs takes an SCC: each member does what
         // all of them do besides calling one another.
-        let members = cycle.get(&id).map_or_else(|| vec![id], |at| cycles[*at].clone());
         let hidden = members
             .iter()
             .fold(Effects::NONE, |all, &member| _either(all, hidden_by(module, member, &declarations, &graph)));
@@ -1869,9 +1990,18 @@ pub fn stamped(
                 Type::Pointer(_)
             ))
             .collect::<Vec<_>>();
+        let shadow = shadow.as_ref().map(|one| one.global(id).function().expect("a procedure").clone());
+        let shown = module.global(id).name.clone().unwrap_or_default();
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
+        if let Some(expected) = shadow.as_ref().map(|one| MemoryEffects::of_attrs(&one.attrs)) {
+            compared += 1;
+            let stated = MemoryEffects::of_attrs(&function.attrs);
+            if stated != expected {
+                eprintln!("shadow-memory disagree @{}: stamp {stated:?} infer_memory {expected:?}", shown);
+            }
+        }
         for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
             if proved && !Facts::of(&function.attrs).contains(fact) {
                 function.attrs.extend(fact.attribute());
@@ -1911,10 +2041,28 @@ pub fn stamped(
                 attrs.push(Attribute::Initializes(initialized[index].clone()));
             }
         }
+        if let Some(expected) = &shadow {
+            for (index, attrs) in function.parameter_attrs.iter().enumerate().filter(|(index, _)| pointers[*index]) {
+                let kind = |attrs: &[Attribute]| {
+                    let facts = Facts::of(attrs);
+                    (facts.no_capture(), facts.read_only(), facts.write_only(), facts.read_none())
+                };
+                if kind(attrs) != kind(&expected.parameter_attrs[index]) {
+                    eprintln!(
+                        "shadow-args disagree @{shown} p{index}: stamp {:?} post_order {:?}",
+                        kind(attrs),
+                        kind(&expected.parameter_attrs[index])
+                    );
+                }
+            }
+        }
         if before != (function.attrs.clone(), function.parameter_attrs.clone()) {
             declarations[id.0 as usize] = module.global(id).declaration();
             changed.push(id);
         }
+    }
+    if shadow_memory {
+        eprintln!("shadow-memory compared {compared} bodies");
     }
     Ok(changed)
 }
@@ -1988,10 +2136,17 @@ fn _narrowed(
         slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
     };
     let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
-    let arguments =
-        _both(stated_arguments, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
+    // What the attribute allows anywhere bounds what is allowed at each
+    // location, but its split between them does not: the body may have been
+    // rewritten since (argument promotion takes `sc->faces` as a parameter, so
+    // a write that was `other` memory is now `argmem`), and a location the
+    // old split forbade would lose the write. LLVM meets the same split
+    // (FunctionAttrs.cpp:298, `ME & OldME`) but runs once per SCC, after
+    // ArgumentPromotion.
+    let stated = _either(_either(stated_arguments, stated_other), llrm_mir::memory::inaccessible(attrs));
+    let arguments = _both(stated, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
     let other = _both(
-        stated_other,
+        stated,
         Effects {
             reads: found(&summary.reads, false) || summary.unknown_read,
             writes: found(&summary.writes, false) || summary.unknown_write,

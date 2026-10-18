@@ -39,7 +39,11 @@
 //!   bytes the overwritten cells together write (`pieced`), is dead; the cell
 //!   then joins the set;
 //! - an instruction that reads or writes anything else removes the cells it may
-//!   touch (`clobber`, using `may_clobber` and `EscapedBefore` where given);
+//!   touch (`clobber`, using `may_clobber` and `EscapedBefore` where given),
+//!   asked of the cells `reaching` names: those of its own object or frame
+//!   whose bytes meet its own, by a sorted index of bytes, not every cell of
+//!   the object (`LLRM_CHECK_REACHED` asserts a cell it leaves out is ruled
+//!   out);
 //! - a fill (what a call writes before it reads) adds its cells.
 //!
 //! At a join the state is the intersection over the successors, computed per
@@ -129,10 +133,12 @@ use llrm_support::hash::{HashMap, IndexMap};
 use crate::alias::EscapedBefore;
 use crate::cellmap::CellMap;
 use crate::cfg;
-use crate::memory::{MemRef, Unit};
+use crate::memory::{AliasClass, MemRef, ObjectRef, Unit, alias_class, classes_may_alias};
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
-use crate::regions::{OverlapBucket, OverlapBuckets, overlap_bucket, overlap_buckets, overlap_span};
+use crate::regions::{
+    Frame, OverlapBucket, OverlapBuckets, displaced_span, overlap_bucket, overlap_buckets, overlap_frame, overlap_span,
+};
 
 /// The cell `inst` purely loads, and the value it lands in.
 pub fn loaded_into(
@@ -226,6 +232,16 @@ struct Stored {
     /// A cell's groups and its bytes in each.
     group_of: Vec<GroupKeys>,
     private: Bits,
+    /// The cells that lie in one object, by object, with the bytes each names
+    /// of it: a write reaches those of its object whose bytes meet its own.
+    by_object: HashMap<ObjectRef, ObjectCells>,
+    /// The objects of `by_object` by alias class.
+    classes: HashMap<AliasClass, Vec<ObjectRef>>,
+    /// Whether the index below is built (`SPARSE_REACH`).
+    sparse: bool,
+    /// The cells of each frame (`overlap_frame`): those at fixed displacements
+    /// by the bytes they name of it, and the rest.
+    by_frame: HashMap<Frame, FrameCells>,
     /// The cells that do not certainly name their own bytes.
     selfless: Bits,
     /// Per cell, lazily: the cells whose store writes all its bytes, the
@@ -239,6 +255,141 @@ struct Stored {
     /// The three relations above by what `placed` reads of a cell, which the
     /// cells of one address share: one set for all of them.
     twins: RefCell<HashMap<(usize, GroupKeys), Rc<Bits>>>,
+}
+
+/// A dead-store solve finds what an access reaches by the bytes it names where
+/// some object or frame holds more than this many cells: the buckets pick
+/// visits each cell of an object's buckets for each access to it. Below it the
+/// pick is cheaper than the index, whatever the number of cells (`cases` at
+/// N=128: 259 cells, one bucket each, +7% of `dse` with the index; the
+/// ladder's 400 cells in one object, 3.7x less with it; `fjoins` at N=128: 128
+/// float cells in one object, +6.5% of `dse` with the index at 64, the dense
+/// pick at 256 is 4 words a set).
+const SPARSE_REACH: usize = 256;
+
+/// The cells in one object: all of them, and by the first byte each names, as
+/// `CellMap`'s spans keep them.
+#[derive(Default)]
+struct ObjectCells {
+    all: Vec<usize>,
+    /// (first byte, cell) to the end of its bytes.
+    by_low: std::collections::BTreeMap<(i128, usize), i128>,
+    /// The widest cell held: a bound on how far below a write a cell meeting
+    /// it can start.
+    widest: i128,
+}
+
+impl ObjectCells {
+    fn add(
+        &mut self,
+        at: usize,
+        (low, high): (i128, i128),
+    ) {
+        self.all.push(at);
+        self.by_low.insert((low, at), high);
+        self.widest = self.widest.max(high - low);
+    }
+
+    /// The cells whose bytes meet [low, high).
+    fn meeting(
+        &self,
+        (low, high): (i128, i128),
+    ) -> impl Iterator<Item = usize> + '_ {
+        self.by_low
+            .range((low - self.widest + 1, 0)..(high, 0))
+            .filter(move |(_, end)| low < **end)
+            .map(|((_, at), _)| *at)
+    }
+}
+
+/// The cells of one frame.
+#[derive(Default)]
+struct FrameCells {
+    spanned: ObjectCells,
+    unspanned: Vec<usize>,
+}
+
+/// The bytes of its one object a slice names: where `Slice::intersects` stops
+/// asking, two slices of one object whose bytes do not meet cannot intersect.
+fn slice_bytes(slice: &crate::memory::Slice) -> (i128, i128) {
+    (i128::from(slice.low), i128::from(slice.high) + i128::from(slice.width) - 1)
+}
+
+thread_local! {
+    static INDEXED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The dead-store solves on this thread that built the index of bytes, for a
+/// test that a body of many small objects does not pay for it.
+pub fn indexed_solves() -> usize {
+    INDEXED.with(std::cell::Cell::get)
+}
+
+thread_local! {
+    static REACHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COUNTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Count, from here on, the cells accesses reach: popcounting each set on every
+/// ask cost the dense path 7% of `dse` on `fjoins` at N=128, so a test asks for
+/// it.
+pub fn count_reached_cells() {
+    COUNTING.with(|on| on.set(true));
+}
+
+/// The cells the accesses of dead-store solves on this thread were found to
+/// reach, summed: for a test that an access reaches the cells its bytes meet
+/// and not every cell of its object.
+pub fn reached_cells() -> usize {
+    REACHED.with(std::cell::Cell::get)
+}
+
+/// A set of cells: all of them, a bit set over them, or the sorted ones named.
+enum CellSet {
+    All,
+    Bits(Bits),
+    Some(Vec<usize>),
+}
+
+impl CellSet {
+    /// How many cells it holds, of `cells` in all.
+    fn count(
+        &self,
+        cells: usize,
+    ) -> usize {
+        match self {
+            CellSet::All => cells,
+            CellSet::Bits(held) => held.len(),
+            CellSet::Some(held) => held.len(),
+        }
+    }
+
+    fn intersects(
+        &self,
+        live: &Bits,
+    ) -> bool {
+        match self {
+            CellSet::All => !live.is_empty(),
+            CellSet::Bits(held) => held.intersects(live),
+            CellSet::Some(cells) => cells.iter().any(|&at| live.contains(at)),
+        }
+    }
+
+    /// The cells of the set that `live` holds, in order.
+    fn live(
+        &self,
+        live: &Bits,
+    ) -> Vec<usize> {
+        match self {
+            CellSet::All => live.iter().collect(),
+            CellSet::Bits(held) => {
+                let mut both = held.clone();
+                both.intersect_with(live);
+                both.iter().collect()
+            }
+            CellSet::Some(cells) => cells.iter().copied().filter(|&at| live.contains(at)).collect(),
+        }
+    }
 }
 
 /// A cell's groups and its bytes in each.
@@ -320,6 +471,43 @@ impl Stored {
         for members in groups.values_mut() {
             members.by_first.sort_unstable();
         }
+        let mut by_object: HashMap<ObjectRef, ObjectCells> = HashMap::default();
+        let mut classes: HashMap<AliasClass, Vec<ObjectRef>> = HashMap::default();
+        let widest = index
+            .parts
+            .objects
+            .values()
+            .chain(index.parts.frames.values())
+            .map(|buckets| {
+                buckets.iter().filter_map(|bucket| index.buckets.get(bucket)).map(IndexMap::len).sum::<usize>()
+            })
+            .max()
+            .unwrap_or(0);
+        let sparse = widest > SPARSE_REACH;
+        if sparse {
+            INDEXED.with(|count| count.set(count.get() + 1));
+        }
+        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
+            // The cells `overlap_bucket` puts in an object's bucket: those of
+            // one slice.
+            let Some(provenance) = cell.provenance.as_ref().filter(|provenance| provenance.slices.len() == 1) else {
+                continue;
+            };
+            let slice = provenance.slices.first().expect("one slice");
+            if !by_object.contains_key(&slice.object) {
+                classes.entry(alias_class(&slice.object)).or_default().push(slice.object);
+            }
+            by_object.entry(slice.object).or_default().add(at, slice_bytes(slice));
+        }
+        let mut by_frame: HashMap<Frame, FrameCells> = HashMap::default();
+        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
+            let Some(frame) = overlap_frame(cell) else { continue };
+            let held = by_frame.entry(frame).or_default();
+            match displaced_span(cell) {
+                Some((_, low, high)) => held.spanned.add(at, (low, high)),
+                None => held.unspanned.push(at),
+            }
+        }
         let mut selfless = Bits::new(size);
         (0..size).filter(|&at| !same_bytes(unit, &cells[at], &cells[at])).for_each(|at| selfless.insert(at));
         Self {
@@ -330,6 +518,10 @@ impl Stored {
             groups,
             group_of,
             private: marked,
+            sparse,
+            by_object,
+            classes,
+            by_frame,
             covering: RefCell::new(vec![None; size]),
             alike: RefCell::new(vec![None; size]),
             alike_cells: RefCell::new(vec![None; size]),
@@ -459,8 +651,8 @@ impl Stored {
 
 /// The cells in the buckets an instruction's accesses reach.
 struct Reached {
-    all: Bits,
-    each: Vec<Bits>,
+    all: CellSet,
+    each: Vec<CellSet>,
 }
 
 /// What a dead-store solve reads of the function besides its instructions.
@@ -476,6 +668,8 @@ struct Solve<'a, 'u> {
     reached: RefCell<HashMap<InstId, Rc<Reached>>>,
     /// Per instruction, lazily: the cell it purely stores to, as numbered.
     cell_of: RefCell<HashMap<InstId, Option<usize>>>,
+    /// `LLRM_CHECK_REACHED`, asked once.
+    checking: bool,
 }
 
 impl Solve<'_, '_> {
@@ -492,7 +686,7 @@ impl Solve<'_, '_> {
         let stored = &self.stored;
         let mut found = Vec::new();
         let mut overwritten = overwritten.clone();
-        for &inst in unit.function.block(cfg::block(block)).instructions().iter().rev() {
+        for inst in unit.function.block(cfg::block(block)).iter().rev() {
             let opcode = &unit.function.instruction(inst).opcode;
             let call = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
             // Nothing can read a private cell but by its name: not a call,
@@ -579,33 +773,166 @@ impl Solve<'_, '_> {
         loads: &[MemRef],
         stores: &[MemRef],
     ) -> Rc<Reached> {
-        let stored = &self.stored;
         self.reached
             .borrow_mut()
             .entry(inst)
             .or_insert_with(|| {
-                let each: Vec<Bits> = loads
+                let each: Vec<CellSet> = loads
                     .iter()
                     .chain(stores)
                     .map(|reference| {
-                        let mut cells = stored.none();
-                        let mut take = |at: &usize| cells.insert(*at);
-                        match overlap_buckets(reference, &stored.index.parts) {
-                            None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(&mut take),
-                            Some(buckets) => buckets
-                                .iter()
-                                .filter_map(|bucket| stored.index.buckets.get(bucket))
-                                .flat_map(IndexMap::keys)
-                                .for_each(&mut take),
+                        let found = self.reaching(reference);
+                        if self.checking {
+                            self.checked_reaching(inst, reference, &found);
                         }
-                        cells
+                        found
                     })
                     .collect();
-                let mut all = stored.none();
-                each.iter().for_each(|cells| all.union_with(cells));
+                if COUNTING.with(std::cell::Cell::get) {
+                    REACHED.with(|count| {
+                        count.set(
+                            count.get() + each.iter().map(|cells| cells.count(self.stored.cells.len())).sum::<usize>(),
+                        )
+                    });
+                }
+                let all = if each.iter().any(|cells| matches!(cells, CellSet::All)) {
+                    CellSet::All
+                } else if each.iter().all(|cells| matches!(cells, CellSet::Bits(_))) {
+                    let mut all = self.stored.none();
+                    for cells in &each {
+                        if let CellSet::Bits(held) = cells {
+                            all.union_with(held);
+                        }
+                    }
+                    CellSet::Bits(all)
+                } else {
+                    let mut all: Vec<usize> = each
+                        .iter()
+                        .flat_map(|cells| match cells {
+                            CellSet::Some(cells) => cells.clone(),
+                            CellSet::Bits(held) => held.iter().collect(),
+                            CellSet::All => Vec::new(),
+                        })
+                        .collect();
+                    all.sort_unstable();
+                    all.dedup();
+                    CellSet::Some(all)
+                };
                 Rc::new(Reached { all, each })
             })
             .clone()
+    }
+
+    /// The cells an access through `reference` may touch: those of the cells
+    /// it shares a frame with or whose object is unknown, those of its own
+    /// object whose bytes meet its bytes of it, and every cell of another
+    /// object of an alias class that may alias the access's. As `overlapping`
+    /// rules the rest out unseen, and without a pass over the cells of the
+    /// object: a store at each of N offsets of one array reached all N before.
+    fn reaching(
+        &self,
+        reference: &MemRef,
+    ) -> CellSet {
+        let stored = &self.stored;
+        let Some(provenance) = reference.provenance.as_ref() else { return CellSet::All };
+        if !stored.sparse {
+            let mut cells = stored.none();
+            match overlap_buckets(reference, &stored.index.parts) {
+                None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(|at| cells.insert(*at)),
+                Some(buckets) => buckets
+                    .iter()
+                    .filter_map(|bucket| stored.index.buckets.get(bucket))
+                    .flat_map(IndexMap::keys)
+                    .for_each(|at| cells.insert(*at)),
+            }
+            return CellSet::Bits(cells);
+        }
+        let mut cells: Vec<usize> = Vec::new();
+        for bucket in &stored.index.parts.objectless {
+            cells.extend(stored.index.buckets.get(bucket).into_iter().flat_map(IndexMap::keys).copied());
+        }
+        if let Some(held) = overlap_frame(reference).and_then(|frame| stored.by_frame.get(&frame)) {
+            cells.extend(held.unspanned.iter().copied());
+            match displaced_span(reference) {
+                Some((_, low, high)) => cells.extend(held.spanned.meeting((low, high))),
+                None => cells.extend(held.spanned.all.iter().copied()),
+            }
+        }
+        let mut objects: Vec<ObjectRef> = Vec::new();
+        for slice in &provenance.slices {
+            if !objects.contains(&slice.object) {
+                objects.push(slice.object);
+            }
+            if let Some(held) = stored.by_object.get(&slice.object) {
+                cells.extend(held.meeting(slice_bytes(slice)));
+            }
+        }
+        let mut seen: Vec<AliasClass> = Vec::new();
+        for object in &objects {
+            let class = alias_class(object);
+            if seen.contains(&class) {
+                continue;
+            }
+            seen.push(class);
+            for (kind, others) in &stored.classes {
+                if classes_may_alias(class, *kind) {
+                    for other in others.iter().filter(|other| !objects.contains(other)) {
+                        cells.extend(stored.by_object[other].all.iter().copied());
+                    }
+                }
+            }
+        }
+        cells.sort_unstable();
+        cells.dedup();
+        CellSet::Some(cells)
+    }
+
+    /// The cells in the buckets `overlap_buckets` picks for `reference`, in
+    /// order; none where it names none (every cell).
+    fn in_buckets(
+        &self,
+        reference: &MemRef,
+    ) -> Option<Vec<usize>> {
+        let stored = &self.stored;
+        let buckets = overlap_buckets(reference, &stored.index.parts)?;
+        let mut cells: Vec<usize> = buckets
+            .iter()
+            .filter_map(|bucket| stored.index.buckets.get(bucket))
+            .flat_map(IndexMap::keys)
+            .copied()
+            .collect();
+        cells.sort_unstable();
+        cells.dedup();
+        Some(cells)
+    }
+
+    /// `LLRM_CHECK_REACHED`: every cell the buckets of `overlap_buckets` hold
+    /// for `reference` and `found` leaves out is one `reaches` rules out.
+    fn checked_reaching(
+        &self,
+        inst: InstId,
+        reference: &MemRef,
+        found: &CellSet,
+    ) {
+        let stored = &self.stored;
+        let dense: Vec<usize> = self.in_buckets(reference).unwrap_or_else(|| (0..stored.cells.len()).collect());
+        for at in dense {
+            let held = match found {
+                CellSet::All => true,
+                CellSet::Bits(held) => held.contains(at),
+                CellSet::Some(cells) => cells.binary_search(&at).is_ok(),
+            };
+            assert!(
+                held || !self.reaches(inst, reference, at, false),
+                "LLRM_CHECK_REACHED: an access reaches a cell the span index left out: {reference:?} -> {:?}",
+                stored.cells[at]
+            );
+        }
+        if let CellSet::Some(cells) = found {
+            for &at in cells {
+                assert!(at < stored.cells.len(), "LLRM_CHECK_REACHED: a cell that does not exist");
+            }
+        }
     }
 
     /// Forget the cells an access through `reference` at `inst` may touch,
@@ -614,20 +941,29 @@ impl Solve<'_, '_> {
         &self,
         overwritten: &mut Bits,
         inst: InstId,
-        reached: &Bits,
+        reached: &CellSet,
         reference: &MemRef,
         unnamed: bool,
     ) {
         if !reached.intersects(overwritten) {
             return;
         }
-        let mut live = reached.clone();
-        live.intersect_with(overwritten);
-        for at in live.iter() {
+        let forget = |overwritten: &mut Bits, at: usize| {
             if self.within(inst, reference, at, unnamed)
                 && may_clobber(self.unit, None, &self.stored.cells[at], reference)
             {
                 overwritten.remove(at);
+            }
+        };
+        if let CellSet::Bits(held) = reached {
+            let mut live = held.clone();
+            live.intersect_with(overwritten);
+            for at in live.iter() {
+                forget(overwritten, at);
+            }
+        } else {
+            for at in reached.live(overwritten) {
+                forget(overwritten, at);
             }
         }
     }
@@ -673,6 +1009,7 @@ pub fn dead_stores_escaping(
         stored: Stored::new(unit, accesses, private),
         reached: RefCell::default(),
         cell_of: RefCell::default(),
+        checking: llrm_support::env_flag!("LLRM_CHECK_REACHED"),
     };
     let stored = &solve.stored;
     let mut every = stored.none();
@@ -864,7 +1201,7 @@ fn memory_providers(
     }
     let available = |source: InstId, site: InstId| -> bool {
         let ((source_block, source_index), (block, index)) = (places[&source], places[&site]);
-        dominance.dominates(source_block, block) && (source_block != block || source_index < index)
+        dominance.dominates(unit.function, source_block, block) && (source_block != block || source_index < index)
     };
 
     // Whether `value` is defined where `site` can read it.
@@ -901,7 +1238,7 @@ fn memory_providers(
     // that dominate a site are found from its block upward, nearest first,
     // where every load of the same bytes was taken and sorted for each site
     // (9.5 M candidates for 7,000 sites at N=1024).
-    let tree = shape.dominance.tree();
+    let tree = shape.dominance.tree(unit.function);
     let nearest = crate::nearest::Nearest::of(
         tree,
         loads

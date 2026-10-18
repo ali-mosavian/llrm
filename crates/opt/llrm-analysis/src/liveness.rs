@@ -118,7 +118,7 @@ fn split(
     function: &Function,
     block: BlockId,
 ) -> (Vec<&Instruction>, Vec<&Instruction>) {
-    function.block(block).instructions().iter().map(|&one| function.instruction(one)).partition(|one| is_phi(one))
+    function.block(block).iter().map(|one| function.instruction(one)).partition(|one| is_phi(one))
 }
 
 /// A phi's value on the edge from `predecessor`, when it is a local value.
@@ -141,7 +141,7 @@ fn _defines(
     function: &Function,
     block: BlockId,
 ) -> IdSet<ValueId> {
-    function.block(block).instructions().iter().filter_map(|&one| function.instruction(one).result).collect()
+    function.block(block).iter().filter_map(|one| function.instruction(one).result).collect()
 }
 
 /// Values the ordinary operations read before writing.
@@ -235,7 +235,7 @@ pub fn live_points(
 ) -> Vec<LivePoint> {
     let mut alive = found.live_out[&id(block)].clone();
     let mut points = Vec::new();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.block(block).iter().rev() {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -263,7 +263,7 @@ pub fn each_across(
     f: &mut dyn FnMut(InstId, &dyn Fn(ValueId) -> bool),
 ) {
     let mut alive = found.live_out[&id(block)].clone();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.block(block).iter().rev() {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -300,7 +300,7 @@ pub fn live_steps(
 ) -> Steps {
     let mut alive = found.live_out[&id(block)].clone();
     let mut steps = Vec::new();
-    for &inst in function.block(block).instructions().iter().rev() {
+    for inst in function.block(block).iter().rev() {
         let op = function.instruction(inst);
         if is_phi(op) {
             continue;
@@ -368,6 +368,13 @@ thread_local! {
 /// a caller asks the one it holds.
 pub fn solves() -> usize {
     SOLVES.with(std::cell::Cell::get)
+}
+
+// Slots the tables of a block's instruction positions took, for a test that a
+// table is the block's size and not the function's.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static POSITION_SLOTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // Facts `live` follows, for a test that its work is the size of the live sets.
@@ -486,7 +493,7 @@ pub fn ranges_of(
     // Each block's instructions by position, worked out once for the blocks a
     // read is asked about in: a scan of the block for every read is the block
     // squared.
-    let mut positions: IdMap<BlockId, IdMap<llrm_mir::module::InstId, usize>> = IdMap::new();
+    let mut positions: IdMap<BlockId, Vec<(llrm_mir::module::InstId, usize)>> = IdMap::new();
     // A block's predecessors, asked once for all the values live into it.
     let mut before = IdMap::<BlockId, Vec<BlockId>>::new();
     let mut pending = Vec::new();
@@ -502,13 +509,24 @@ pub fn ranges_of(
             let exposed = match at {
                 Some((home, false)) if home == block => {
                     let places = positions.get_or_insert_with(block, || {
-                        function.block(block).instructions().iter().enumerate().map(|(at, &one)| (one, at)).collect()
+                        let mut table: Vec<(llrm_mir::module::InstId, usize)> = function
+                            .block(block)
+                            .instructions()
+                            .iter()
+                            .enumerate()
+                            .map(|(at, &one)| (one, at))
+                            .collect();
+                        table.sort_unstable();
+                        #[cfg(test)]
+                        POSITION_SLOTS.with(|slots| slots.set(slots.get() + table.len()));
+                        table
                     });
+                    let place = |inst| places.binary_search_by_key(&inst, |&(one, _)| one).ok().map(|at| &places[at].1);
                     let maker = match function.value(value).def {
-                        ValueDef::Instruction(inst) => places.get(&inst),
+                        ValueDef::Instruction(inst) => place(inst),
                         ValueDef::Argument(_) => None,
                     };
-                    places.get(&user.user).zip(maker).is_some_and(|(&read, &made)| read <= made)
+                    place(user.user).zip(maker).is_some_and(|(&read, &made)| read <= made)
                 }
                 _ => true,
             };
@@ -1289,6 +1307,27 @@ top:
         };
         let (small, large) = (steps(100), steps(200));
         assert!(small > 0 && large <= 2 * small + 8, "{small} steps for 100 blocks, {large} for 200");
+    }
+
+    /// The position table of a block was a slot for every instruction id up to
+    /// the block's last (about 2,000 for a block at the end of a 2,000
+    /// instruction function), made at every `ranges_of` of a value read in the
+    /// block it is made in: 6.6 M instructions a call, 3.6% of an unrolled
+    /// compile.
+    #[test]
+    fn test_ranges_of_position_tables_are_the_size_of_the_block() {
+        let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  %v0 = add i16 %x, 1\n");
+        for at in 1..2000 {
+            text += &format!("  %v{at} = add i16 %v{}, 1\n", at - 1);
+        }
+        text += "  br label %b1\n\nb1:\n  %t = add i16 %v1999, 1\n  %u = add i16 %t, %t\n  ret i16 %u\n}\n";
+        let module = parsed(&text);
+        let function = function(&module, "f");
+        let wanted: IdSet<ValueId> = [value(function, "t")].into_iter().collect();
+        POSITION_SLOTS.with(|slots| slots.set(0));
+        ranges_of(function, &wanted, None);
+        let slots = POSITION_SLOTS.with(std::cell::Cell::get);
+        assert!(slots <= 4, "{slots} slots for a block of 3 instructions");
     }
 
     /// The liveness of the values asked for, followed from their reads without

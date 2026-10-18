@@ -366,7 +366,7 @@ fn unrolled(
                 continue;
             };
             let block = cfg::block(at);
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let op = function.instruction(inst);
                 if op.opcode != Opcode::Phi {
                     continue;
@@ -392,7 +392,7 @@ fn unrolled(
                 };
                 changed.push(result);
             }
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let op = function.instruction(inst);
                 if op.opcode == Opcode::Phi {
                     continue;
@@ -448,12 +448,12 @@ fn unrolled(
                         last.operands[2..].chunks(2).find(|arm| known(arm[0]).is_some_and(|one| one.n == tested.n));
                     vec![target(case.map_or(last.operands[1], |arm| arm[1]))]
                 }),
-                _ => Some(blocks[&at].succ.clone()),
+                _ => Some(blocks[&at].succ.to_vec()),
             };
             let successors = decided.unwrap_or_else(|| {
                 out.branches += 1;
                 out.size += 1;
-                blocks[&at].succ.clone()
+                blocks[&at].succ.to_vec()
             });
             for successor in successors {
                 if successor != loop_.header && loop_.body.contains(&successor) {

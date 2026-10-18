@@ -883,6 +883,7 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         version: 0,
         promotes: true,
         dump: None,
+        inputs: false,
         rounds: 0,
         steps: 0,
         skipped: 0,
@@ -1405,4 +1406,738 @@ x:
     };
     assert!(looped(pipeline::Options::speed()), "-O3 keeps 40 trips rolled");
     assert!(!looped(pipeline::Options::aggressive()), "-Omax copies them out");
+}
+
+/// The LLVM order was off unless an env switch set it, so a default compile ran
+/// the rounds, not the parity pipeline: the default now has the three stages
+/// (early, cleanup, simplify) and the off knob the single fixed-point stage.
+#[test]
+fn test_the_llvm_order_is_the_default_and_its_off_switch_is_the_rounds() {
+    let on = Applied::default();
+    assert!(on.options.llvm_order, "the order is on by default");
+    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
+    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+}
+
+/// With `Options::llvm_order` a body goes through LLVM's early function
+/// pipeline, GlobalCleanup and function simplification once each, in that
+/// order, and `gvn` and `dse` run once; without it the rounds stand. The
+/// EarlyCSE in both of its places is the translated pass.
+#[test]
+fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translated_earlycse() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let off = Applied { options: pipeline::Options { llvm_order: false, ..Default::default() }, ..Applied::default() };
+    assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
+    assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
+    let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
+    let simplify = names(crate::parity::Phase::Simplify);
+    let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
+    assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
+    assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
+}
+
+/// A body computes the same answer through LLVM's order.
+#[test]
+fn test_llvm_order_keeps_a_loop_computing_the_same() {
+    let text = "define i16 @f(i16 %n) {\nb0:\n  %p = alloca i16\n  store i16 0, ptr %p\n  br label %h\nh:\n  %i = phi i16 [ 0, %b0 ], [ %j, %b ]\n  %c = icmp slt i16 %i, %n\n  br i1 %c, label %b, label %x\nb:\n  %s = load i16, ptr %p\n  %t = add i16 %s, %i\n  store i16 %t, ptr %p\n  %j = add i16 %i, 1\n  br label %h\nx:\n  %r = load i16, ptr %p\n  ret i16 %r\n}\n";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let before = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    let after = interpret::run(&module, "f", vec![interpret::Val::Int { bits: 6, width: 16 }], FUEL);
+    assert_eq!(format!("{before:?}"), format!("{after:?}"));
+    assert!(!llrm_mir::print::module(&module).contains("alloca"), "an alloca is left");
+}
+
+/// #2194, x_hanoi2's `mv`: the loop `tailrec` makes of the second call has the
+/// invariant argument `to` as a plain parameter, and its `mul` sits behind the
+/// `n == 0` exit. One speculating `hoist` ahead of any rotate lifted it into
+/// the entry block, before the test, so the frame was needed before the test
+/// (x_hanoi2 -O2 +22.8%). LLVM's LPM1 hoists without speculation, rotates (a
+/// guard before the loop), then hoists with it: the `mul` lands behind the
+/// guard. `rotate_slot: false` holds the order to the failing form (the
+/// premise).
+#[test]
+fn test_llvm_order_hoists_behind_the_guard_the_rotate_makes_not_into_the_entry() {
+    let text = "@top = global [3 x i16] zeroinitializer
+define void @mv(i16 %n, i16 %from, i16 %to, i16 %via) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %body
+body:
+  %m = sub i16 %n, 1
+  call void @mv(i16 %m, i16 %from, i16 %via, i16 %to)
+  %o = mul i16 %to, 2
+  %p = getelementptr i8, ptr @top, i16 %o
+  %t = load i16, ptr %p
+  %t1 = add i16 %t, 1
+  store i16 %t1, ptr %p
+  call void @mv(i16 %m, i16 %from, i16 %to, i16 %via)
+  ret void
+done:
+  ret void
+}
+";
+    let entry_has_mul = |rotate_slot: bool| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied {
+            options: pipeline::Options { llvm_order: true, rotate_slot, ..Default::default() },
+            ..Applied::default()
+        };
+        let printed =
+            crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
+        let entry = printed.split("\n\n").find(|one| one.contains("b0:")).expect("the entry block").to_owned();
+        (entry.contains("mul i16"), printed)
+    };
+    let (without, plain) = entry_has_mul(false);
+    assert!(without, "premise: without the rotate slot the mul is in the entry block\n{plain}");
+    let (with, rotated) = entry_has_mul(true);
+    assert!(!with, "the mul is behind the guard, not in the entry block\n{rotated}");
+}
+
+/// The rotate slot is LLVM's `LoopRotate`: a loop whose latch only increments
+/// (`for (i = 0; ; i++)` with the test in the header after a body block) has
+/// the increment folded into the block that exits (`simplifyLoopLatch`) and
+/// is one block, test last. The stand-in `rotate` copies the header and leaves
+/// the latch a block of its own.
+#[test]
+fn test_the_rotate_slot_folds_a_one_increment_latch_into_the_exit_test() {
+    let text = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  %acc = phi i16 [ %x, %b0 ], [ %s, %b3 ]
+  %s = add i16 %acc, %i
+  %go = icmp slt i16 %s, %n
+  br i1 %go, label %b3, label %b2
+
+b3:
+  %next = add i16 %i, 1
+  br label %b1
+
+b2:
+  %r = phi i16 [ %s, %b1 ]
+  ret i16 %r
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied {
+        options: pipeline::Options { llvm_order: true, rotate_slot: true, ..Default::default() },
+        ..Applied::default()
+    };
+    let printed = crate::testing::managed(&mut module, pipeline::Fixed::linear(&applied, pipeline::Phase::Simplify));
+    let looped = printed.split("\n\n").find(|one| one.contains("phi i16 [ 0")).expect("the loop block");
+    assert!(looped.contains("add i16 %") && looped.contains("icmp slt") && looped.contains("br i1"), "{printed}");
+    assert_eq!(printed.matches("phi i16 [ 0,").count(), 1, "{printed}");
+    assert!(!printed.contains("b3:"), "the latch is folded into the exit test\n{printed}");
+}
+
+/// `LLRM_DUMP_INPUTS` for the POCs of single passes: a pass that finds nothing
+/// to do left no dump, so its input was nowhere to be had. A run that changes
+/// nothing now leaves its input and a manifest line.
+#[test]
+fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
+    use llrm_mir::module::{GlobalKind, Module};
+    use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
+    let directory = std::env::temp_dir().join(format!("llrm-inputs-{}", std::process::id()));
+    let mut module: Module = crate::testing::parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let mut declared = Declared::of(&module);
+    let Module { context, globals, metadata, .. } = &mut module;
+    let GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut run = super::Run {
+        version: 0,
+        promotes: true,
+        inputs: true,
+        dump: Some(directory.clone()),
+        rounds: 0,
+        steps: 0,
+        skipped: 0,
+        fixed: 0,
+        billing: false,
+        idle: 0,
+        useful: 0,
+        idle_with_analyses: 0,
+        useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
+        slice: None,
+        persisted: 0,
+        records: unit.context.extension::<crate::settled::Settled>(),
+        rerun: false,
+        idle_at: Vec::new(),
+    };
+    assert!(!run.step(&mut Idle, "idle", &mut unit, &mut analyses));
+    let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
+    let _ = std::fs::remove_dir_all(&directory);
+    assert_eq!(manifest, "idle 1 0001-in-idle.ll 1\n");
+}
+
+struct Idle;
+
+impl llrm_mir::passes::FunctionPass for Idle {
+    fn name(&self) -> &'static str {
+        "idle"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// Erases the first instruction nothing uses.
+struct EraseUnused;
+
+impl llrm_mir::passes::FunctionPass for EraseUnused {
+    fn name(&self) -> &'static str {
+        "erase-unused"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let unused = unit.function.walk().map(|(_, one)| one).find(|&one| {
+            unit.function.instruction(one).result.is_some_and(|result| unit.function.users(result).is_empty())
+        });
+        let Some(unused) = unused else { return llrm_mir::passes::PreservedAnalyses::all() };
+        unit.function.erase(unused).unwrap();
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The `runs` lines gave no sizes, so the body a slot enters and leaves was
+/// guessed from the IR dumps, which map to the runs lines 12 to 34 on
+/// d_faces. A step now says `in=` and `out=` (an idle one the same), and the
+/// body line names the function.
+#[test]
+fn test_the_runs_lines_carry_the_sizes_a_step_enters_and_leaves_and_the_body_name() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  %y = add i16 %x, 2\n  ret i16 %y\n}\n",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    let (_, lines) = pipeline::capturing_runs(|| crate::testing::managed(&mut module, fixed));
+    let steps: Vec<&String> = lines.iter().filter(|line| line.starts_with("step ")).collect();
+    assert!(steps.first().is_some_and(|line| line.contains(" changed ") && line.ends_with(" in=3 out=2")), "{lines:?}");
+    assert!(steps.last().is_some_and(|line| line.contains(" idle ") && line.ends_with(" in=2 out=2")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
+}
+
+/// Asks the ranger of every value at every block, and the table afresh, and
+/// asserts they agree (`LLRM_CHECK_REPLAY`'s check, run as a pass).
+struct Agree(&'static str);
+
+impl llrm_mir::passes::FunctionPass for Agree {
+    fn name(&self) -> &'static str {
+        self.0
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        use llrm_analysis::manager::Ranges;
+        if unit.function.layout().is_empty() {
+            return llrm_mir::passes::PreservedAnalyses::all();
+        }
+        let held = Ranges::of(unit.context, unit.layout, unit.function, analyses, false);
+        let seen = held.unit(unit.context, unit.layout, unit.function, analyses.outer());
+        let facts = held.registers();
+        let ranger = seen.edges.expect("edges").over(&seen, facts);
+        let table = llrm_analysis::ranges::edges_solved(&seen, facts, None).unwrap();
+        llrm_analysis::ranger::check_against(&ranger, &seen, &table);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// bintree.nib at -O2 -m16 through the LLVM order: after the cleanup stage the
+/// ranger, asked of every value before, gave `[0,32767]` of a value at the
+/// bounds-failure block where the table had no entry (`LLRM_CHECK_REPLAY`
+/// panicked at ranger.rs:925, #2369).
+#[test]
+fn test_the_ranger_and_the_table_agree_between_the_stages_of_the_llvm_order() {
+    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+define internal cc 1005 void @insert(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, i16 %1, i16 %2) addrspace(1) nearcode memory(readwrite, argmem: read) {
+b1:
+  %3 = alloca i16
+  store i16 2, ptr %3, !tbaa !2
+  %4 = mul i16 3, %2
+  %5 = load i16, ptr addrspace(1) %0, !range !5
+  %6 = icmp ult i16 %4, %5
+  br i1 %6, label %b2, label %b3
+
+b2:
+  %7 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %8 = load ptr addrspace(1), ptr addrspace(1) %7
+  %9 = mul i16 %4, 2
+  %10 = getelementptr inbounds i8, ptr addrspace(1) %8, i16 %9
+  %11 = load i16, ptr addrspace(1) %10
+  %12 = mul i16 3, %1
+  %13 = load i16, ptr addrspace(1) %0, !range !6
+  %14 = icmp ult i16 %12, %13
+  br i1 %14, label %b4, label %b5
+
+b3:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b4:
+  %15 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %16 = load ptr addrspace(1), ptr addrspace(1) %15
+  %17 = mul i16 %12, 2
+  %18 = getelementptr inbounds i8, ptr addrspace(1) %16, i16 %17
+  %19 = load i16, ptr addrspace(1) %18
+  %20 = icmp slt i16 %11, %19
+  br i1 %20, label %b6, label %b7
+
+b5:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b6:
+  store i16 1, ptr %3, !tbaa !2
+  br label %b8
+
+b7:
+  br label %b8
+
+b8:
+  %21 = mul i16 3, %1
+  %22 = load i16, ptr %3, !tbaa !2
+  %23 = add i16 %21, %22
+  %24 = load i16, ptr addrspace(1) %0, !range !7
+  %25 = icmp ult i16 %23, %24
+  br i1 %25, label %b9, label %b10
+
+b9:
+  %26 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %27 = load ptr addrspace(1), ptr addrspace(1) %26
+  %28 = mul i16 %23, 2
+  %29 = getelementptr inbounds i8, ptr addrspace(1) %27, i16 %28
+  %30 = load i16, ptr addrspace(1) %29
+  %31 = icmp eq i16 %30, 0
+  br i1 %31, label %b11, label %b12
+
+b10:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b11:
+  %32 = mul i16 3, %1
+  %33 = load i16, ptr %3, !tbaa !2
+  %34 = add i16 %32, %33
+  %35 = load i16, ptr addrspace(1) %0, !range !8
+  %36 = icmp ult i16 %34, %35
+  br i1 %36, label %b14, label %b15
+
+b12:
+  %37 = mul i16 3, %1
+  %38 = load i16, ptr %3, !tbaa !2
+  %39 = add i16 %37, %38
+  %40 = load i16, ptr addrspace(1) %0, !range !9
+  %41 = icmp ult i16 %39, %40
+  br i1 %41, label %b16, label %b17
+
+b13:
+  ret void
+
+b14:
+  %42 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %43 = load ptr addrspace(1), ptr addrspace(1) %42
+  %44 = mul i16 %34, 2
+  %45 = getelementptr inbounds i8, ptr addrspace(1) %43, i16 %44
+  store i16 %2, ptr addrspace(1) %45
+  br label %b13
+
+b15:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b16:
+  %46 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %47 = load ptr addrspace(1), ptr addrspace(1) %46
+  %48 = mul i16 %39, 2
+  %49 = getelementptr inbounds i8, ptr addrspace(1) %47, i16 %48
+  %50 = load i16, ptr addrspace(1) %49
+  call cc 1005 addrspace(1) void @insert(ptr addrspace(1) %0, i16 %50, i16 %2)
+  br label %b13
+
+b17:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+}
+
+define internal cc 1005 i32 @walk(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, i16 %1, i16 %2) addrspace(1) nearcode memory(read, inaccessiblemem: readwrite) {
+b1:
+  %3 = icmp eq i16 %1, 0
+  br i1 %3, label %b2, label %b3
+
+b2:
+  ret i32 0
+
+b3:
+  br label %b4
+
+b4:
+  %4 = mul i16 3, %1
+  %5 = add i16 %4, 1
+  %6 = load i16, ptr addrspace(1) %0, !range !10
+  %7 = icmp ult i16 %5, %6
+  br i1 %7, label %b5, label %b6
+
+b5:
+  %8 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %9 = load ptr addrspace(1), ptr addrspace(1) %8
+  %10 = mul i16 %5, 2
+  %11 = getelementptr inbounds i8, ptr addrspace(1) %9, i16 %10
+  %12 = load i16, ptr addrspace(1) %11
+  %13 = add i16 %2, 1
+  %14 = call cc 1005 addrspace(1) i32 @walk(ptr addrspace(1) %0, i16 %12, i16 %13)
+  %15 = mul i16 3, %1
+  %16 = load i16, ptr addrspace(1) %0, !range !11
+  %17 = icmp ult i16 %15, %16
+  br i1 %17, label %b7, label %b8
+
+b6:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b7:
+  %18 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %19 = load ptr addrspace(1), ptr addrspace(1) %18
+  %20 = mul i16 %15, 2
+  %21 = getelementptr inbounds i8, ptr addrspace(1) %19, i16 %20
+  %22 = load i16, ptr addrspace(1) %21
+  %23 = sext i16 %22 to i32
+  %24 = sext i16 %2 to i32
+  %25 = mul i32 %23, %24
+  %26 = add i32 %14, %25
+  %27 = mul i16 3, %1
+  %28 = add i16 %27, 2
+  %29 = load i16, ptr addrspace(1) %0, !range !12
+  %30 = icmp ult i16 %28, %29
+  br i1 %30, label %b9, label %b10
+
+b8:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b9:
+  %31 = getelementptr i8, ptr addrspace(1) %0, i16 4
+  %32 = load ptr addrspace(1), ptr addrspace(1) %31
+  %33 = mul i16 %28, 2
+  %34 = getelementptr inbounds i8, ptr addrspace(1) %32, i16 %33
+  %35 = load i16, ptr addrspace(1) %34
+  %36 = add i16 %2, 1
+  %37 = call cc 1005 addrspace(1) i32 @walk(ptr addrspace(1) %0, i16 %35, i16 %36)
+  %38 = add i32 %26, %37
+  ret i32 %38
+
+b10:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+}
+
+define internal cc 1005 i32 @bench_bintree(i16 %0) addrspace(1) nearcode memory(readwrite, argmem: none) {
+b1:
+  %1 = alloca [8 x i8]
+  %2 = alloca [8 x i8]
+  %3 = alloca i16
+  %4 = alloca i16
+  %5 = alloca i32
+  %6 = alloca i16
+  %7 = alloca i16
+  %8 = alloca i16
+  %9 = alloca i16
+  %10 = alloca [1806 x i8]
+  %11 = alloca i16
+  store i16 0, ptr %11, !tbaa !2
+  store i16 903, ptr %8, !tbaa !2
+  store i16 903, ptr %9, !tbaa !2
+  store i16 0, ptr %7, !tbaa !2
+  store i16 903, ptr %6, !tbaa !2
+  br label %b2
+
+b2:
+  %12 = load i16, ptr %7, !tbaa !2
+  %13 = load i16, ptr %6, !tbaa !2
+  %14 = icmp slt i16 %12, %13
+  br i1 %14, label %b3, label %b5
+
+b3:
+  %15 = load i16, ptr %7, !tbaa !2
+  %16 = load i16, ptr %11, !tbaa !2
+  %17 = sub i16 %15, 0
+  %18 = getelementptr inbounds i16, ptr %10, i16 %17
+  store i16 %16, ptr %18, !tbaa !2
+  br label %b4
+
+b4:
+  %19 = load i16, ptr %7, !tbaa !2
+  %20 = add nsw i16 %19, 1
+  store i16 %20, ptr %7, !tbaa !2
+  br label %b2
+
+b5:
+  %21 = zext i16 %0 to i32
+  store i32 %21, ptr %5, !tbaa !2
+  store i16 1, ptr %4, !tbaa !2
+  store i16 301, ptr %3, !tbaa !2
+  br label %b6
+
+b6:
+  %22 = load i16, ptr %4, !tbaa !2
+  %23 = load i16, ptr %3, !tbaa !2
+  %24 = icmp slt i16 %22, %23
+  br i1 %24, label %b7, label %b9
+
+b7:
+  %25 = load i32, ptr %5, !tbaa !2
+  %26 = mul i32 %25, 25173
+  %27 = add i32 %26, 13849
+  %28 = and i32 %27, 65535
+  store i32 %28, ptr %5, !tbaa !2
+  %29 = load i16, ptr %4, !tbaa !2
+  %30 = mul i16 3, %29
+  %31 = icmp ult i16 %30, 903
+  br i1 %31, label %b10, label %b11
+
+b8:
+  %32 = load i16, ptr %4, !tbaa !2
+  %33 = add nsw i16 %32, 1
+  store i16 %33, ptr %4, !tbaa !2
+  br label %b6
+
+b9:
+  %34 = addrspacecast ptr %10 to ptr addrspace(1)
+  store i16 903, ptr %1, !tbaa !2
+  %35 = getelementptr inbounds i8, ptr %1, i16 2
+  store i16 903, ptr %35, !tbaa !2
+  %36 = getelementptr inbounds i8, ptr %1, i16 4
+  store ptr addrspace(1) %34, ptr %36, !tbaa !2
+  %37 = addrspacecast ptr %1 to ptr addrspace(1)
+  %38 = call cc 1005 addrspace(1) i32 @walk(ptr addrspace(1) %37, i16 1, i16 1)
+  ret i32 %38
+
+b10:
+  %39 = load i32, ptr %5, !tbaa !2
+  %40 = and i32 %39, 4095
+  %41 = trunc i32 %40 to i16
+  %42 = sub i16 %30, 0
+  %43 = getelementptr inbounds i16, ptr %10, i16 %42
+  store i16 %41, ptr %43, !tbaa !2
+  %44 = load i16, ptr %4, !tbaa !2
+  %45 = icmp sgt i16 %44, 1
+  br i1 %45, label %b12, label %b13
+
+b11:
+  call cc 1005 addrspace(1) void @N$EBND()
+  unreachable
+
+b12:
+  %46 = addrspacecast ptr %10 to ptr addrspace(1)
+  store i16 903, ptr %2, !tbaa !2
+  %47 = getelementptr inbounds i8, ptr %2, i16 2
+  store i16 903, ptr %47, !tbaa !2
+  %48 = getelementptr inbounds i8, ptr %2, i16 4
+  store ptr addrspace(1) %46, ptr %48, !tbaa !2
+  %49 = addrspacecast ptr %2 to ptr addrspace(1)
+  %50 = load i16, ptr %4, !tbaa !2
+  call cc 1005 addrspace(1) void @insert(ptr addrspace(1) %49, i16 1, i16 %50)
+  br label %b14
+
+b13:
+  br label %b14
+
+b14:
+  br label %b8
+}
+
+define cc 1005 i16 @main() addrspace(1) nearcode memory(readwrite, argmem: none) {
+b1:
+  %0 = alloca i32
+  %1 = call cc 1005 addrspace(1) i32 @bench_bintree(i16 1)
+  store i32 %1, ptr %0, !tbaa !2
+  %2 = load i32, ptr %0, !tbaa !2
+  call cc 1005 addrspace(1) void @N$PI4(i32 %2)
+  call cc 1005 addrspace(1) void @N$PN()
+  ret i16 0
+}
+
+declare cc 1005 void @N$EBND() addrspace(1) noreturn memory(inaccessiblemem: readwrite)
+
+declare cc 1005 void @N$PI4(i32) addrspace(1) memory(inaccessiblemem: readwrite)
+
+declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
+
+!0 = !{!\"llrm hir\"}
+!1 = !{!\"place\", !0, i64 0}
+!2 = !{!1, !1, i64 0}
+!3 = !{!\"allocation\", !0, i64 0}
+!4 = !{!3, !3, i64 0}
+!5 = !{i16 0, i16 -32768}
+!6 = !{i16 0, i16 -32768}
+!7 = !{i16 0, i16 -32768}
+!8 = !{i16 0, i16 -32768}
+!9 = !{i16 0, i16 -32768}
+!10 = !{i16 0, i16 -32768}
+!11 = !{i16 0, i16 -32768}
+!12 = !{i16 0, i16 -32768}
+");
+    let applied = Applied::default();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(Agree("input"));
+    for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
+        manager.add(pipeline::Fixed::linear(&applied, phase));
+        manager.add(Agree(match phase {
+            crate::parity::Phase::Early => "after early",
+            crate::parity::Phase::Cleanup => "after cleanup",
+            _ => "after simplify",
+        }));
+    }
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+}
+
+/// GlobalsAA was made 9 times for one compile of d_faces -O2 (8 for the corpus
+/// module below): each of the order's three function stages started from a
+/// dropped one. LLVM keeps it past every function pass, so the stages add no
+/// computation. What is left are the program passes (the first ask, `ports`,
+/// `Stamp`, the interprocedural stage); 6 here, which this holds at.
+#[test]
+fn test_the_llvm_order_does_not_make_globals_aa_again_for_each_function_stage() {
+    let mut files = corpus_files();
+    files.sort_by_key(|(_, path)| std::cmp::Reverse(std::fs::metadata(path).map(|one| one.len()).unwrap_or(0)));
+    let (name, path) = files
+        .iter()
+        .find(|(name, path)| {
+            let module = parse_corpus_entry(name, path);
+            module.functions().filter(|(_, _, one)| !one.is_declaration()).count() >= 3
+        })
+        .expect("a corpus module with three bodies");
+    let mut module = parse_corpus_entry(name, path);
+    let before = llrm_mir::counts::analysed("globals-aa").1;
+    let applied = Applied::default();
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{name}: {error}"));
+    let made = llrm_mir::counts::analysed("globals-aa").1 - before;
+    assert!(made <= 6, "{name}: globals-aa made {made} times, 8 before it was held past the function stages");
+}
+
+/// The fixed point hashed the body before it ran even when its list runs once
+/// (LLVM's order): a hash per body per stage that nothing read, 1.1 M
+/// instructions on d_faces -O2.
+#[test]
+fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
+    let mut files = corpus_files();
+    files.sort_by_key(|(_, path)| std::cmp::Reverse(std::fs::metadata(path).map(|one| one.len()).unwrap_or(0)));
+    let run = |name: &str, path: &std::path::Path, applied: &Applied| {
+        let mut module = parse_corpus_entry(name, path);
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints);
+        let done =
+            Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+                pipeline::applied(program, applied)
+            })
+            .and_then(|done| done);
+        done.map(|()| llrm_mir::counts::get(llrm_mir::counts::Event::Fingerprints) - before)
+    };
+    let order = Applied::default();
+    assert!(order.options.llvm_order, "the order is the default");
+    let (name, path) = files.first().expect("a corpus module");
+    assert_eq!(
+        run(name, path, &order).unwrap_or_else(|error| panic!("{name}: {error}")),
+        0,
+        "{name}: the order hashed bodies it never compares"
+    );
+    let mut rounds = Applied::default();
+    rounds.options.llvm_order = false;
+    // The rounds panic on a body that oscillates (a separate, older fault in
+    // some corpus entries): the smallest entry that converges shows the
+    // history.
+    let kept = files
+        .iter()
+        .rev()
+        .find_map(
+            |(name, path)| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run(name, path, &rounds).ok().filter(|hashed| *hashed > 0)
+            }))
+            .ok()
+            .flatten(),
+        );
+    assert!(kept.is_some(), "the rounds keep the history they compare");
+}
+
+/// `loopsimplify` gives a loop a dedicated exit, a jump alone in a block, and
+/// `simplifycfg` took it out again: round after round the body came back to
+/// the same state, and the `deedlines` demo failed with "cycle after 3 rounds".
+#[test]
+fn simplifycfg_and_loopsimplify_reach_a_fixed_point_on_a_loop_with_a_shared_exit() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %t = icmp ult i16 %n, %x
+  br i1 %t, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  ret i16 %r
+}
+",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
+    crate::testing::managed(&mut module, fixed);
+}
+/// x_life -Os under the LLVM order: the spill forecast kept the inner loop's
+/// invariant address math (`mul`, `getelementptr`) in the loop, 16 ops where
+/// the old rounds left 11, so `unroll` refused the full unroll and the
+/// program ran 1.94x the instructions (clocks 0.807 to 1.448 of min(gcc,
+/// clang)). The order's LICM slot prices no registers, as LLVM's: run alone on
+/// two inner loops that six registers cannot hold, it moves all six loads.
+#[test]
+fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::size() }, ..Applied::default() };
+    let mut module = crate::testing::parsed(&crate::hoist::tests::two_inner_loops());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require::<llrm_analysis::manager::Summaries>();
+    let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+    let slot = slots.into_iter().find(|one| one.name() == "hoist@730").expect("the speculating LICM slot");
+    manager.add_boxed(slot);
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let printed = crate::testing::printed(&module);
+    let f = &printed[printed.find("define i16 @f(").expect("f")..];
+    let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
+    assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
 }

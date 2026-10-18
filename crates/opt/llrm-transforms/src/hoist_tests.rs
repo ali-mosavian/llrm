@@ -20,7 +20,7 @@ fn hoisted(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true, priced: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -396,7 +396,7 @@ fn test_a_load_the_language_says_is_invariant_leaves_past_a_store() {
 
 /// The function of the test below: two loops inside one, each with three
 /// invariant loads past six registers.
-fn two_inner_loops() -> String {
+pub(crate) fn two_inner_loops() -> String {
     let loads = |names: [&str; 3]| {
         names.map(|name| format!("  %{name} = load i16, ptr @{name}\n  %w{name} = shl i16 %{name}, 1\n")).concat()
     };
@@ -455,13 +455,33 @@ fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
     let printed = printed(&after);
     let hoisted = block(&printed, "b0").iter().filter(|line| line.contains("load")).count();
     assert!(hoisted < 6, "{hoisted} of 6 loads left both inner loops\n{printed}");
+}
+
+/// The same two inner loops with the forecast not priced (LLVM's LICM has no
+/// such model): all six loads leave both inner loops, the premise being that
+/// the priced run leaves some.
+#[test]
+fn test_an_unpriced_hoist_moves_what_the_forecast_would_keep() {
+    let text = two_inner_loops();
+    let hoisted = |priced: bool| {
+        let mut after = parsed(&text);
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.require::<Summaries>();
+        passes.add(super::Hoist { size: true, speculate: true, priced });
+        passes
+            .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+            .unwrap_or_else(|error| panic!("{error}\n{text}"));
+        block(&printed(&after), "b0").iter().filter(|line| line.contains("load")).count()
+    };
+    assert!(hoisted(true) < 6, "premise: the priced run keeps some loads in the inner preheader");
+    assert_eq!(hoisted(false), 6);
 }
 
 /// A loop that calls and reads six fields of its argument: each `getelementptr`
@@ -495,7 +515,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     passes
         .run_module(
             &mut after,
@@ -540,7 +560,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size });
+    passes.add(super::Hoist { size, speculate: true, priced: true });
     let prices = crate::profit::OperationCosts { float_release: release, ..Default::default() };
     let machine = crate::testing::Tuned { registers: 6, costs: prices.clone(), sizes: prices, ..Default::default() };
     passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -594,7 +614,7 @@ fn test_a_motion_is_priced_by_one_forecast() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -614,7 +634,7 @@ fn test_a_function_a_motion_was_priced_for_is_not_priced_again_for_the_next() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -635,7 +655,7 @@ fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own()
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     crate::spill::TRAFFIC.with(|count| count.set(0));
     passes
@@ -656,7 +676,7 @@ fn test_a_motion_is_priced_without_solving_the_clone_s_liveness_whole() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     let solved = llrm_analysis::liveness::solves();
     passes
@@ -677,7 +697,7 @@ fn test_a_clone_is_priced_from_the_pressure_of_the_function_after_a_motion() {
     let mut after = parsed(&two_inner_loops());
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true, priced: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -723,7 +743,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true, priced: true });
     let prices = crate::profit::OperationCosts {
         float_load: 3,
         float_load_folded: folded,
@@ -792,7 +812,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true, priced: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_x86_m16::Dos::default()))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -847,4 +867,18 @@ b2:
         some > 0 && text.find("%k = mul").unwrap() < text.find("b1:").unwrap(),
         "premise: an invariant moves\n{text}"
     );
+}
+
+/// The proofs `Hoist` held of its loops were those of the body before it moved
+/// anything out of one, and the next loop's bounds were worked from them: a
+/// bound moved out of a loop makes it counted, and `LLRM_CHECK_COUNTED` found
+/// the held proofs stale (qcport/triggers -O1 and five more modules under the
+/// LLVM order: kept none, fresh the loop counted). The body is `pipeline.body`
+/// of triggers.c as that order hands it to `hoist`.
+#[test]
+fn test_counted_proofs_are_made_again_after_a_loop_is_hoisted_out_of() {
+    llrm_analysis::induction::check_counted(true);
+    let (before, after) = hoisted(include_str!("../tests/fixtures/pipeline_body_before_hoist.ll"));
+    llrm_analysis::induction::check_counted(false);
+    assert_ne!(printed(&before), printed(&after), "the body had nothing to hoist");
 }

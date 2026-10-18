@@ -394,6 +394,10 @@ pub struct Frequencies {
     taken: std::collections::BTreeMap<(i64, i64), f64>,
     /// The blocks and their edges these were worked out on.
     edges: Vec<(BlockId, Vec<BlockId>)>,
+    /// The cold blocks of the function: a function of its edges and calls,
+    /// which `update` leaves as they were, so not found again for each loop
+    /// lsr changes (a nest of N loops scanned the function N times).
+    cold: std::collections::BTreeSet<i64>,
 }
 
 thread_local! {
@@ -432,7 +436,8 @@ impl Analysis for Products {
         let (by_block, taken) =
             profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
                 .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
-        Frequencies { by_block, trips, taken, edges: _graph(function) }
+        let cold = llrm_analysis::branchprob::cold_blocks(context, &outer.globals, function);
+        Frequencies { by_block, trips, taken, edges: _graph(function), cold }
     }
 
     /// They are worked out from the blocks and their edges, the loops, the
@@ -473,13 +478,14 @@ impl Analysis for Products {
         }
         let weighed = reach.conditions.iter().collect::<Vec<_>>();
         let by_header = profit::counted_by_header(&shape, Some(&trips))?;
-        let taken = llrm_analysis::branchprob::taken_from(
+        let taken = llrm_analysis::branchprob::taken_cold(
             view.context,
             view.metadata,
             &outer.globals,
             function,
             &shape,
             &by_header,
+            &previous.cold,
             &weighed,
         );
         let wanted = weighed.iter().map(|&at| cfg::id(at)).collect::<BTreeSet<_>>();
@@ -489,6 +495,7 @@ impl Analysis for Products {
             trips,
             taken: previous.taken.clone(),
             edges: previous.edges.clone(),
+            cold: previous.cold.clone(),
         })
     }
 }
@@ -1296,7 +1303,7 @@ fn _stepped_before_test(
             let all = function.block(block).instructions();
             all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
         } else {
-            view.shape().dominance.dominates(cfg::id(stepped_in), at)
+            view.shape().dominance.dominates(function, cfg::id(stepped_in), at)
         };
         // The counter is read by the step, the compare and its phi alone.
         let readers = function.users(read);
@@ -1394,7 +1401,9 @@ fn _steps_before_test(
             && here.is_some_and(|step| {
                 function
                     .parent(proof.branch)
-                    .is_some_and(|test| cfg::Shape::of(function).dominance.dominates(cfg::id(step), cfg::id(test)))
+                    .is_some_and(
+                        |test| cfg::Shape::of(function).dominance.dominates(function, cfg::id(step), cfg::id(test)),
+                    )
             })
 }
 
@@ -2412,6 +2421,10 @@ impl Problem<'_> {
         let mut rebuilt = Vec::<usize>::new();
         // How often each counter and invariant is read a trip.
         let mut reads = BTreeMap::<Resident, i64>::new();
+        // The counters whose step a use in the body reads, which puts the step
+        // above the body, and the exit tests that cost nothing only beside it.
+        let mut stepped_early = BTreeSet::<usize>::new();
+        let mut free_exits = Vec::<(usize, i64)>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
             let choice = match self.choice(set, index) {
@@ -2425,6 +2438,9 @@ impl Problem<'_> {
             match choice {
                 (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
+                    if exit == 0 {
+                        free_exits.push((one, site.frequency));
+                    }
                     *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
                     if let Some(key) = key {
                         *reads.entry(self.resident(key)).or_default() += site.frequency;
@@ -2434,6 +2450,9 @@ impl Problem<'_> {
                 }
                 (Some((one, fit, price)), None) => {
                     cost += price.cost * site.frequency;
+                    if site.inside && fit.next && site.one.kind == UseKind::Basic {
+                        stepped_early.insert(one);
+                    }
                     if site.inside {
                         if fit.k != BigInt::from(0) {
                             *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
@@ -2479,6 +2498,11 @@ impl Problem<'_> {
                     }
                 }
                 (None, None) => return None,
+            }
+        }
+        for (one, frequency) in free_exits {
+            if stepped_early.contains(&one) {
+                cost += costs.add * frequency;
             }
         }
         // Starts, symbolic steps and invariants, built once a way in.

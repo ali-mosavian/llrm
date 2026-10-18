@@ -282,6 +282,7 @@ fn link(
         linked
             .exports
             .extend(module.exports.into_iter().map(|(function, export)| (own.linked(name, &function), export)));
+        linked.noipa.extend(module.noipa.into_iter().map(|function| own.linked(name, &function)));
     }
     Ok(linked)
 }

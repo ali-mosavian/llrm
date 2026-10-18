@@ -123,10 +123,10 @@ use llrm_analysis::pointerfacts::offsets;
 use llrm_mir::callgraph::{CallGraph, direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
-use llrm_mir::loops::LoopInfo;
+use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::memory;
 use llrm_mir::module::{GlobalKind, InstId, MetadataId, Module, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
@@ -177,6 +177,10 @@ pub fn promoted(
             let Some(plan) = planned(module, layout, &callees, id, parameter, calls, costs, size) else { continue };
             changed.extend(applied(module, id, &plan, calls));
             changed.insert(id);
+            memory::unsplit(
+                &mut crate::interprocedural::function_mut(module, id).1.attrs,
+                memory::Moved::IntoArguments,
+            );
         }
     }
     changed.into_iter().collect()
@@ -335,11 +339,11 @@ fn hoistable(
 ) -> bool {
     let Some(function) = module.global(caller).function() else { return false };
     let Some(block) = function.parent(inst) else { return false };
-    let loops = LoopInfo::new(function, &DominatorTree::new(function));
-    let Some(held) = loops.loop_of(block) else { return false };
+    let loops = LoopInfo::analyze(function, || DomTree::of(function));
+    let Some(held) = loops.get_loop_for(block) else { return false };
     match function.instruction(inst).operands[parameter] {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => function.parent(def).is_none_or(|at| !held.blocks.contains(&at)),
+            ValueDef::Instruction(def) => function.parent(def).is_none_or(|at| !held.contains(at)),
             ValueDef::Argument(_) => true,
         },
         _ => true,

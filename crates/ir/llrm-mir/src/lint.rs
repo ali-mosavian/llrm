@@ -109,10 +109,9 @@ fn function_poison(
                     let before = |stores: &[InstId]| {
                         function
                             .block(block)
-                            .instructions()
                             .iter()
-                            .take_while(|&&one| one != user)
-                            .any(|one| stores.contains(one))
+                            .take_while(|&one| one != user)
+                            .any(|one| stores.contains(&one))
                     };
                     let whole_first = before(&whole) || after_whole.get(&block).copied().unwrap_or(false);
                     let part_first = before(&parts) || after_part.contains(&block);
@@ -182,7 +181,7 @@ fn stored_on_every_path(
     let entry = function.entry();
     let mut at_entry: HashMap<BlockId, bool> =
         function.layout().iter().map(|&block| (block, Some(block) != entry)).collect();
-    let stores_in = |block| function.block(block).instructions().iter().any(|one| stores.contains(one));
+    let stores_in = |block| function.block(block).iter().any(|one| stores.contains(&one));
     let mut changed = true;
     while changed {
         changed = false;
@@ -213,7 +212,7 @@ fn may_follow(
         .layout()
         .iter()
         .copied()
-        .filter(|&block| function.block(block).instructions().iter().any(|one| stores.contains(one)))
+        .filter(|&block| function.block(block).iter().any(|one| stores.contains(&one)))
         .flat_map(|block| function.successors(block))
         .collect();
     while let Some(block) = work.pop() {
@@ -267,12 +266,10 @@ fn is_fill_of(
             (Some(Intrinsic::MemSetPattern), Some(ty)) => u128::from(layout.alloc_size(&module.context.types, ty)),
             _ => 1,
         };
-    let length = match instruction.operands.get(2) {
-        Some(&Operand::Constant(id)) => match module.context.get(id).kind {
-            ConstantKind::Int(bits) => bits,
-            _ => return false,
-        },
-        _ => return false,
+    let Some(length) =
+        instruction.operands.get(2).and_then(|&length| crate::intrinsics::length(&module.context, length))
+    else {
+        return false;
     };
-    memset && at.index == 0 && length * cell >= u128::from(layout.alloc_size(&module.context.types, ty))
+    memset && at.index == 0 && u128::from(length) * cell >= u128::from(layout.alloc_size(&module.context.types, ty))
 }

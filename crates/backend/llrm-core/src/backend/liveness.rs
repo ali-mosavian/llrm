@@ -107,6 +107,12 @@ pub struct Effect {
 }
 
 impl Effect {
+    /// Every lane it may read: `reads` and the sources of a shift's bytes,
+    /// which are read only where live.
+    pub fn all_reads(&self) -> Lanes {
+        self.moved.iter().fold(self.reads, |reads, (_, source)| reads.or(&Lanes::from([*source])))
+    }
+
     /// The lanes live before it, given those live after.
     pub fn live_before(
         &self,

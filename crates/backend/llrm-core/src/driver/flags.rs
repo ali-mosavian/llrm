@@ -54,7 +54,7 @@ impl Level {
             Self::O1 => pipeline::Options::basic(),
             // -O1 less what rewrites a loop a debugger steps through.
             Self::Og => pipeline::Options {
-                fill: false,
+                loopidioms: false,
                 rounds: pipeline::Options::default().rounds,
                 ..pipeline::Options::basic()
             },
@@ -104,7 +104,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("tree-sink", |options, on| options.sink = on),
     ("tree-sra", |options, on| options.promote = on),
     ("move-loop-invariants", |options, on| options.hoist = on),
-    ("tree-loop-distribute-patterns", |options, on| options.fill = on),
+    ("tree-loop-distribute-patterns", |options, on| options.loopidioms = on),
     ("optimize-sibling-calls", |options, on| options.sibcalls = on),
 ];
 

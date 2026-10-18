@@ -252,7 +252,7 @@ fn insertable(
     if !branch || (function.successors(parent) != [join] && !edges::conditional(function, parent, join)) {
         return false;
     }
-    if shape.dominance.dominates(to, from)
+    if shape.dominance.dominates(unit.function, to, from)
         || shape.loops.iter().any(|one| one.body.contains(&from) != one.body.contains(&to))
     {
         return false;
@@ -268,7 +268,7 @@ fn insertable(
         Operand::Value(value) => match function.value(value).def {
             ValueDef::Argument(_) => true,
             ValueDef::Instruction(def) => {
-                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), from))
+                function.parent(def).is_some_and(|block| shape.dominance.dominates(unit.function, cfg::id(block), from))
             }
         },
         Operand::Constant(_) => true,
@@ -313,7 +313,7 @@ fn planned(
     // those and not with all.
     let cfg::Shape { dominance, loops: natural, .. } = unit.shape().into_owned();
     let nearest = llrm_analysis::nearest::Nearest::of(
-        dominance.tree(),
+        dominance.tree(unit.function),
         providers
             .iter()
             .enumerate()
@@ -349,8 +349,8 @@ fn planned(
                 let accepts = |(source, cell, value): &&(InstId, MemRef, Operand)| {
                     let (at, _) = places[source];
                     at != block.at
-                        && shape.dominance.dominates(at, parent)
-                        && !shape.dominance.dominates(at, block.at)
+                        && shape.dominance.dominates(unit.function, at, parent)
+                        && !shape.dominance.dominates(unit.function, at, block.at)
                         && unit.operand_type(*value) == Some(ty)
                         && same_bytes(unit, cell, &translated)
                         && shape.loops.iter().all(|one| !one.body.contains(&at) || one.body.contains(&block.at))
@@ -378,12 +378,14 @@ fn planned(
                 // The deepest source, the latest in its block; the first of
                 // equals: the blocks that dominate `parent` from the nearest,
                 // and in the first with a source, the latest.
-                let best = if shape.dominance.reachable(parent) {
+                let best = if shape.dominance.reachable(unit.function, parent) {
                     let mut best: Option<usize> = None;
                     let mut block = None;
-                    for (enter, at) in
-                        nearest.dominating(shape.dominance.tree(), &keys.iter().collect::<Vec<_>>(), cfg::block(parent))
-                    {
+                    for (enter, at) in nearest.dominating(
+                        shape.dominance.tree(unit.function),
+                        &keys.iter().collect::<Vec<_>>(),
+                        cfg::block(parent),
+                    ) {
                         if block.is_some_and(|had| had != enter) {
                             break;
                         }

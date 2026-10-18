@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:5ce56fc4fb217e98bc484110c65009a0859a50403eb97156d0548ee5ea0aad98 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:238a2eb295df8d58508645849bfa6f7ba73a606df8f632e4217187f47a7bcb66 -->
 
 # memcpyopt
 
@@ -22,8 +22,8 @@ two things hold. The alias owner (`regions::overlapping`, over the
 references `Unit::annotated` gives) says no source cell and destination cell
 of the run can meet, so the order of its loads and stores does not matter.
 And it is cheaper: the pairs' loads and stores against what the same
-`length` costs (`fill::copy_price`: the loads and stores isel makes of a
-short copy, else `rep movs`). Four byte pairs are one dword pair, which is
+`length` costs (`loopidioms::copy_price`: the loads and stores isel makes of
+a short copy, else `rep movs`). Four byte pairs are one dword pair, which is
 a gain; two dword pairs are what isel makes of the copy, which is none.
 
 ```text
@@ -51,7 +51,7 @@ From unit test `ten_dword_pairs_are_one_memcpy` in `memcpyopt_tests.rs`.
 ## Runs
 After the function fixed point, beside `Merge` (no pass asks a memcpy what
 its destination holds, and `splitcopy` would split the memcpy of a local
-again). On and off with `-ftree-loop-distribute-patterns`, as `Fill`.
+again). On and off with `-ftree-loop-distribute-patterns`, as `LoopIdioms`.
 
 ## Needs
 `regions::overlapping` through `Unit::annotated`; the target's costs.
@@ -60,5 +60,5 @@ again). On and off with `-ftree-loop-distribute-patterns`, as `Fill`.
 The blocks and edges: only instructions change.
 
 ## See also
-[`crate::fill`](fill.md) owns `copy_price` and the loop that copies;
+[`crate::loopidioms`](loopidioms.md) owns `copy_price` and the loop that copies;
 [`crate::splitcopy`](splitcopy.md) is the opposite for a local.

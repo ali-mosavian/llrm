@@ -586,3 +586,107 @@ fn a_block_is_placed_from_its_insertion_to_its_erasure() {
     f.delete_body();
     assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
 }
+
+/// The list API of LLVM's `BasicBlock`: ends, neighbours and order of a block's
+/// instructions, true again after an edit.
+#[test]
+fn a_block_answers_ends_neighbours_and_order_after_every_edit() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let entry = f.entry().unwrap();
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    let ret = f.terminator(entry).unwrap();
+    assert_eq!((f.block(entry).len(), f.block(entry).first(), f.block(entry).last()), (3, Some(x), Some(ret)));
+    assert_eq!(f.block(entry).iter().collect::<Vec<_>>(), [x, y, ret]);
+    assert_eq!((f.prev_in_block(x), f.next_in_block(x), f.next_in_block(ret)), (None, Some(y), None));
+    assert!(f.comes_before(x, y) && !f.comes_before(y, x) && !f.comes_before(x, x));
+    // The numbers were taken: an edit must make them false.
+    f.move_to(x, Position::Before(ret)).expect("moved");
+    assert!(f.comes_before(y, x), "x moved after y");
+    assert_eq!((f.prev_in_block(x), f.next_in_block(y)), (Some(y), Some(x)));
+}
+
+#[test]
+fn an_instruction_goes_after_another() {
+    let mut module = module(TEXT);
+    let f = function(&mut module);
+    let (x, _) = named(f, "x");
+    let (y, _) = named(f, "y");
+    f.move_to(x, Position::After(y)).expect("moved");
+    assert_eq!(f.block(f.entry().unwrap()).iter().take(2).collect::<Vec<_>>(), [y, x]);
+}
+
+/// A run moved as one is the run moved one by one, and costs a rewrite of the
+/// block, not one per instruction.
+#[test]
+fn a_run_spliced_is_the_run_moved_one_by_one_in_a_scan_of_the_block() {
+    let run = |together: bool| {
+        let mut module = module(&adds(400));
+        let f = function(&mut module);
+        let moved: Vec<InstId> = (0..100).map(|i| named(f, &format!("x{i}")).0).collect();
+        let entry = f.entry().unwrap();
+        let ret = f.terminator(entry).unwrap();
+        crate::edit::SCANNED.with(|scanned| scanned.set(0));
+        if together {
+            f.splice(&moved, Position::Before(ret)).expect("spliced");
+        } else {
+            moved.iter().for_each(|&one| f.move_to(one, Position::Before(ret)).expect("moved"));
+        }
+        assert!(f.check_uses().is_empty());
+        (print::module(&module), crate::edit::SCANNED.with(|scanned| scanned.get()))
+    };
+    let (one_by_one, many) = run(false);
+    let (together, few) = run(true);
+    assert_eq!(together, one_by_one);
+    assert!(few <= 2 * 401, "{few} instructions scanned splicing 100 of 400");
+    assert!(many > few * 10, "the one-by-one scans no longer show the cost: {many}");
+}
+
+/// Erasing several empty blocks at once leaves the others in order, and a
+/// block that still holds an instruction refuses the whole call.
+#[test]
+fn erase_blocks_removes_each_empty_block_in_one_pass() {
+    let mut module = module("define void @f() {\nentry:\n  br label %c\n\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let (a, b) = (f.create_block(Some("a")), f.create_block(Some("b")));
+    f.insert_block(a, None).expect("placed");
+    f.insert_block(b, None).expect("placed");
+    let entry = f.entry().unwrap();
+    assert!(f.erase_blocks(&[a, entry]).is_err());
+    assert!(f.is_placed(a));
+    f.erase_blocks(&[a, b]).expect("empty and unnamed");
+    assert_eq!(f.layout().len(), 2);
+    assert!(!f.is_placed(a) && !f.is_placed(b));
+}
+/// `set_icmp_predicate` is `CmpInst::setPredicate`: the compare reads the same
+/// operands under another predicate, and the log tells of the rewrite.
+#[test]
+fn an_icmp_takes_another_predicate() {
+    let mut module = module("define i1 @f(i16 %a) {\nentry:\n  %c = icmp slt i16 %a, 5\n  ret i1 %c\n}\n");
+    let f = function(&mut module);
+    let (c, _) = named(f, "c");
+    f.take_changes();
+    f.set_icmp_predicate(c, crate::opcode::IntPredicate::Ult);
+    assert_eq!(f.instruction(c).opcode, Opcode::ICmp(crate::opcode::IntPredicate::Ult));
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(c)]);
+}
+
+/// Taking `!range` off a load changes what is known of its result, so the log
+/// tells of the rewrite: EarlyCSE took it off the surviving load of two and
+/// logged nothing, the manager kept the ranger's answers of the old range and
+/// `LLRM_CHECK_REPLAY` panicked on bintree.nib (#2369).
+#[test]
+fn test_unannotate_logs_the_rewrite_of_the_instruction() {
+    let mut module = module(
+        "define i16 @f(ptr %p) {\nentry:\n  %v = load i16, ptr %p, !range !0\n  ret i16 %v\n}\n\n!0 = !{i16 0, i16 -32768}\n",
+    );
+    let f = function(&mut module);
+    let (v, _) = named(f, "v");
+    f.take_changes();
+    f.unannotate(v, "range");
+    assert!(f.instruction(v).metadata.is_empty(), "premise: the range is gone");
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(v)]);
+    f.unannotate(v, "range");
+    assert!(f.take_changes().is_empty(), "nothing was taken off the second time");
+}

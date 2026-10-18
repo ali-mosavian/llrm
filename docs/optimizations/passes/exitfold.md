@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:06d33f23d1fea87f4a9fc1076ca5ca00e42a83a4f73d6204d1cbbb63e05fb190 -->
+<!-- src: crates/opt/llrm-transforms/src/exitfold.rs sha256:ed10c40c83c8c2f598e7596b36fa43f7f3adc5b15350412dbad069c5654e9bd1 -->
 
 # exitfold
 
@@ -21,6 +21,12 @@ and not an inner one, is decided when
   first, so this one never leaves;
 - some other exit's count is below all of its own, by the constants or by
   the guards on entry (`guards::holds`): it never leaves.
+
+The exits and their counts are ScalarEvolution's (`getExitCount`,
+`isLoopEntryGuardedByCond`: LLVM's `optimizeLoopExits`: zero, below the
+loop's symbolic maximum, a count an earlier exit has).
+`LLRM_NO_SCEV_EXITFOLD` restores `induction::exits`; the two differ on 2 of
+1,590 corpus objects, both smaller.
 
 The branch is given the constant that decides it; `decide` then makes it a
 jump. Nothing else changes, so no effect or value between the exits matters.

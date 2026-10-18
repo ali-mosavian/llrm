@@ -390,7 +390,7 @@ fn survives(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
@@ -408,7 +408,7 @@ fn survives(
     }
     // Blocks reachable from the store's block without passing through it again.
     let mut reached = BTreeSet::new();
-    let mut work: Vec<i64> = paths.by_block[&cfg::id(home)].succ.clone();
+    let mut work: Vec<i64> = paths.by_block[&cfg::id(home)].succ.to_vec();
     while let Some(next) = work.pop() {
         if next == cfg::id(home) || !reached.insert(next) {
             continue;
@@ -543,7 +543,7 @@ fn survives_scanning(
     at: BlockId,
 ) -> bool {
     let home = function.parent(store).expect("a placed store");
-    if !dominance.dominates(cfg::id(home), cfg::id(at)) {
+    if !dominance.dominates(function, cfg::id(home), cfg::id(at)) {
         return false;
     }
     let after = |block: BlockId, from: Option<InstId>| {
@@ -562,7 +562,7 @@ fn survives_scanning(
     let by_block: BTreeMap<i64, &cfg::Block> = graph.iter().map(|block| (block.at, block)).collect();
     // Blocks reachable from the store's block without passing through it again.
     let mut reached = BTreeSet::new();
-    let mut work: Vec<i64> = by_block[&cfg::id(home)].succ.clone();
+    let mut work: Vec<i64> = by_block[&cfg::id(home)].succ.to_vec();
     while let Some(next) = work.pop() {
         if next == cfg::id(home) || !reached.insert(next) {
             continue;

@@ -27,6 +27,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 VSGCC = next((ROOT / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(VSGCC))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpora  # noqa: E402
 import programs  # noqa: E402
 import wrap  # noqa: E402
 
@@ -42,7 +44,7 @@ MODULES = ("host", "render", "model", "game", "sound", "ui")
 # the corpus on main today, and leaves with the fix named.
 #   COLORS, FRAME, SCOPES: fail on the corpus (634, 21 and 102 of 1,323 programs and modules; 0 with the oracle off).
 #   STALE: a pass that says it adds no memory operation outlives a frozen globals-aa (#2094).
-NOT_RUN = frozenset("COLORS FRAME SCOPES STALE".split())
+NOT_RUN = frozenset("COLORS FRAME SCOPES STALE CAPTURES_CALLS CAPTURES_BLIND CAPTURES_COUNT CAPTURES_MODULE".split())
 
 
 def checks(root: Path = ROOT) -> tuple[str, ...]:
@@ -130,7 +132,12 @@ def same(job: tuple[str, str, str, list[str]], old: str, new: str, work: Path) -
     outs = []
     for tag, compiler in (("old", old), ("new", new)):
         out = work / f"{name.replace('/', '_')}{level}.{tag}.obj"
-        env = {**os.environ, **{f"LLRM_CHECK_{one}": "1" for one in CHECKS}} if tag == "new" else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
+        # A value already set (LLRM_CHECK_ORDER=SEED) stays, so a run can be repeated under other seeds.
+        env = (
+            {**os.environ, **{f"LLRM_CHECK_{one}": "1" for one in CHECKS if f"LLRM_CHECK_{one}" not in os.environ}}
+            if tag == "new"
+            else {k: v for k, v in os.environ.items() if not k.startswith("LLRM_CHECK_")}
+        )
         at = len(arguments) - 1 - arguments[::-1].index("-o")
         command = [str(Path(compiler).with_name(tool)), *arguments[:at], "-o", str(out), *arguments[at + 2 :]]
         done = subprocess.run(command, capture_output=True, text=True, env=env)
@@ -152,12 +159,16 @@ def main() -> int:
     parser.add_argument("--no-bench", action="store_true", help="leave out the bench harness's own compiles")
     parser.add_argument("--show", type=int, default=20, help="how many differing objects to name")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
+    parser.add_argument("--allow-other-corpus", action="store_true", help="read a QCport tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     if not args.stale_ok:
         why = stale(args.old, args.old_head, "OLD") or stale(args.new, args.new_head, "NEW")
         if why:
             sys.exit(f"identical: {why}; rebuild it, or say --old-head/--new-head, or --stale-ok")
     qcport, headers = os.environ.get("QCPORT"), os.environ.get("QCPORT_INC")
+    if qcport and not args.programs_only:
+        qcport = str(corpora.resolve("qcport", qcport, args.allow_other_corpus))
+        print(corpora.header("qcport", qcport))
     with tempfile.TemporaryDirectory(dir=os.environ.get("CARGO_TARGET_DIR")) as tmp:
         work = Path(tmp)
         files = corpus(work, Path(qcport).expanduser() if qcport else None, Path(headers).expanduser() if headers else None, args.programs_only)

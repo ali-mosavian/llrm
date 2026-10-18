@@ -189,7 +189,7 @@ fn rewinding_the_corpus_loses_no_trip_count() {
 
 /// `for (unsigned short i = 0; i < n; ++i) a[i] = 0` on a 32-bit address:
 /// the counter's `zext` to the index width is a conversion a trip and its
-/// counted-loop proof was 16 bits against the pointer's 32, so `fill` and
+/// counted-loop proof was 16 bits against the pointer's 32, so `loopidioms` and
 /// `lsr` found no matching counter (m32 sieve, 19277 executed).
 fn clearing(layout: &str) -> String {
     format!(
@@ -569,9 +569,11 @@ b4:
     assert!(text.contains("ret i32 32") && !text.contains("%last"), "{text}");
 }
 
-/// An exit whose count is not a number keeps its value.
+/// An exit whose count is not a number is written from the count, as
+/// `rewriteLoopExitValues` writes it: the loop runs `smax(n, 1)` times, two
+/// instructions, under the budget.
 #[test]
-fn test_an_exit_phi_of_a_loop_with_an_unknown_count_keeps_its_value() {
+fn test_an_exit_phi_of_a_loop_with_an_unknown_count_is_written_from_the_count() {
     let text = with_exit_values(
         "define i32 @f(i32 %n) {
 b0:
@@ -592,7 +594,7 @@ b4:
 }
 ",
     );
-    assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+    assert!(text.contains("llvm.smax.i32(i32 %n, i32 1)") && text.contains("ret i32 %0"), "{text}");
 }
 
 /// bench/sieve: `if (i <= 31)` on the narrow counter of a widened loop read
@@ -756,4 +758,32 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
         managed(module, IndVars { exit_values: true, unrolls: None });
     }));
     assert_eq!(indvars, manager);
+}
+
+/// Each widening dropped what was known of the body and the next loop derived
+/// it afresh: d_faces -O2 widened 12 counters and derived a 1,350-instruction
+/// body 12 times (21.8 M, a third of `indvars`). What stands for the values a
+/// widening did not reach is kept, and only the reached are settled again.
+#[test]
+fn test_a_widening_settles_again_only_the_values_it_reached() {
+    let loops = 6;
+    let mut text = String::from(
+        "target datalayout = \"e-p:32:32-n8:16:32\"\n\ndefine i32 @f(i16 %n) {\nb0:\n  %buf = alloca [64 x i8]\n  br label %h0\n\n",
+    );
+    for at in 0..loops {
+        let next = if at + 1 == loops { "done".to_string() } else { format!("h{}", at + 1) };
+        text += &format!(
+            "h{at}:\n  %i{at} = phi i16 [ 0, %{pre} ], [ %n{at}, %l{at} ]\n  %go{at} = icmp ult i16 %i{at}, %n\n  br i1 %go{at}, label %l{at}, label %{next}\n\nl{at}:\n  %w{at} = zext i16 %i{at} to i32\n  %p{at} = getelementptr inbounds i8, ptr %buf, i32 %w{at}\n  store i8 1, ptr %p{at}\n  %n{at} = add i16 %i{at}, 1\n  br label %h{at}\n\n",
+            pre = if at == 0 { "b0".to_string() } else { format!("h{}", at - 1) },
+        );
+    }
+    text += "done:\n  ret i32 0\n}\n";
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let size = function.walk().count();
+    let before = llrm_analysis::consts::derived_work();
+    assert!(super::widened(context, &layout, function, &outer), "the counters are widened");
+    let work = llrm_analysis::consts::derived_work() - before;
+    assert!(work <= 3 * size, "{work} values settled for {loops} widenings of a body of {size} instructions");
 }

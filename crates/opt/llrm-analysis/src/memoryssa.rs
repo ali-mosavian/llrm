@@ -396,7 +396,16 @@ impl Analysis for Accesses {
         if !unchanged {
             return None;
         }
-        Some(if structure_kept(changes, function) { Ok(Rc::new(held.carried(function))) } else { previous.clone() })
+        Some(if structure_kept(changes, function) {
+            Ok(Rc::new(held.carried(function)))
+        } else {
+            // These accesses stay the result, shared; the structure they hold
+            // is of the body before these edits, and a later edit
+            // that leaves the structure alone would carry it over
+            // as the body's.
+            held.graph.0.borrow_mut().take();
+            previous.clone()
+        })
     }
 }
 
@@ -1357,6 +1366,16 @@ impl MemorySSA<'_> {
         found
     }
 
+    /// Whether `ahead` is `access` or reached from it by `defining` links:
+    /// MemorySSA's `dominates(ahead, access)`.
+    pub fn dominates(
+        &self,
+        ahead: usize,
+        access: usize,
+    ) -> bool {
+        self.behind(access, ahead)
+    }
+
     /// Whether `ahead` is `access` or reached from it by `defining` links.
     fn behind(
         &self,
@@ -1719,7 +1738,7 @@ fn structure_of(
     let mut next_id = entries.len() + 1;
     for block in &graph {
         let mut current = entries[&block.at];
-        for &inst in function.block(cfg::block(block.at)).instructions() {
+        for inst in function.block(cfg::block(block.at)).iter() {
             let writes = accesses.shared_writes(inst, &nothing);
             let defines = writes.as_ref().is_none_or(|stores| !stores.is_empty());
             if !defines && accesses.reads(inst).is_some_and(<[MemRef]>::is_empty) {
