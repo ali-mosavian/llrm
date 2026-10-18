@@ -150,3 +150,63 @@ pub fn compare(unit: &Unit) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// What the translated walker did over every load and store of a function, and
+/// how its answers stand against today's walker.
+#[derive(Debug, Default)]
+pub struct WalkReport {
+    pub queries: usize,
+    /// Accesses stepped over (`MaxCheckLimit` less what was left).
+    pub steps: u64,
+    pub asked: usize,
+    pub worked: usize,
+    /// The clobber is one of today's nearest writes (or live on entry where
+    /// today's walk reaches it).
+    pub in_today: usize,
+    /// The clobber is a phi.
+    pub phi: usize,
+    /// Neither: the translated clobber is a def today's walk did not name.
+    pub elsewhere: usize,
+}
+
+/// `getClobberingMemoryAccess` of every load and store, each checked with
+/// `check_clobber_sanity`.
+pub fn walk(unit: &Unit) -> Result<WalkReport, String> {
+    use super::alias::AliasQuery;
+    use super::walker::MAX_CHECK_LIMIT;
+    let accesses = Accesses::plain(unit, &Default::default());
+    let shape = unit.shape();
+    let mut mssa = Mssa::build(unit.function, &shape.dominance, &effect_of(&accesses, unit.function));
+    let old = memoryssa::built(unit, &accesses);
+    let aa = AliasQuery::new(unit, &accesses);
+    let mut report = WalkReport::default();
+    for (_, inst) in unit.function.walk() {
+        let Some(access) = mssa.get_memory_access(inst) else { continue };
+        let Some(loc) = aa.location_of(inst) else { continue };
+        let started = mssa.access(access).defining.expect("a defining access");
+        let mut limit = MAX_CHECK_LIMIT;
+        let clobber = mssa.get_clobbering_memory_access_base(&aa, access, false, &mut limit);
+        report.queries += 1;
+        report.steps += u64::from(MAX_CHECK_LIMIT - limit);
+        mssa.check_clobber_sanity(&aa, started, clobber, Some(&loc), Some(inst))
+            .map_err(|why| format!("{inst:?}: {why}"))?;
+        if mssa.access(clobber).kind == Kind::Phi {
+            report.phi += 1;
+            continue;
+        }
+        let near = old.clobbers(inst, &accesses.references[&inst]);
+        let named = |id: usize| old.access(id).site;
+        let site = mssa.access(clobber).inst;
+        if (clobber == LIVE_ON_ENTRY && near.iter().any(|id| old.access(*id).kind == Old::Live))
+            || (site.is_some() && near.iter().any(|id| named(*id) == site))
+        {
+            report.in_today += 1;
+        } else {
+            report.elsewhere += 1;
+        }
+    }
+    let (asked, worked) = aa.questions();
+    report.asked = asked;
+    report.worked = worked;
+    Ok(report)
+}

@@ -167,7 +167,7 @@ flowchart TB
   classDef opt fill:#ea580c,stroke:#9a3412,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   sroa["<b>sroa</b>"]:::mid
-  round["<b>One round</b><br/><small>fold ports decide phiopt<br/>equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead fill</small>"]:::opt
+  round["<b>One round</b><br/><small>fold ports simplifycfg decide<br/>phiopt equalcalls tailrec<br/>loopsimplify lcssa floatloop<br/>hoist loopmotion<br/>trivialunswitch inferspace<br/>dse gvn promote indvars<br/>algebraic dead fill</small>"]:::opt
   unroll["<b>unroll</b><br/><small>(a copy goes back<br/>through sroa)</small>"]:::mid
   chg(["<b>changed?</b>"]):::mid
   peel["<b>peel</b><br/><small>(repeat while loops drop)</small>"]:::mid
