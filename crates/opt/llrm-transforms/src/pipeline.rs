@@ -850,8 +850,9 @@ pub fn slot_built(
 ) -> bool {
     let mut options = applied.options.clone();
     options.llvm_order = true;
-    crate::parity::describe(slot)
-        .is_some_and(|(phase, ..)| llvm_order(&Applied { options, ..Applied::default() }, phase).iter().any(|one| one.name() == slot))
+    crate::parity::describe(slot).is_some_and(|(phase, ..)| {
+        llvm_order(&Applied { options, ..Applied::default() }, phase).iter().any(|one| one.name() == slot)
+    })
 }
 
 /// Plugs the pass manager's steps into `LLRM_DEBUG=time` and `runs`, if either

@@ -288,8 +288,9 @@ pub const RUN_COUNTS_OPEN: &[&str] = &[
     "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
 ];
 
-/// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry has it
-/// as a function list's slot: what `llrm-pass --order` reports before it runs.
+/// The phase and kind of the slot named `slot` (`sroa@1179`), if the registry
+/// has it as a function list's slot: what `llrm-pass --order` reports before it
+/// runs.
 pub fn describe(slot: &str) -> Option<(Phase, SlotKind, &'static str)> {
     REGISTRY
         .iter()
