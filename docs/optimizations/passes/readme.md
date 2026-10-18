@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 88 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 89 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -27,7 +27,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | edges | Edge surgery on conditional branches: a new block on one arm of a `br i1`, holding the operations that belong to that edge and not to either arm's block. | Not a pass: a library. `split` is called by `loadjoins`, `rotate` and | [edges](edges.md) |
 | exitfold | Exits their counts decide, folded: LLVM IndVarSimplify's `optimizeLoopExits`, with its exit-test hoisting and exit predication. | Step 2 of [`crate::indvars`](indvars.md), so on whenever `indvars` is, in the fixed | [exitfold](exitfold.md) |
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
-| exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps, in place of | [exitvalues](exitvalues.md) |
+| exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr`](lsr.md) and [`crate::exitfold`](exitfold.md), while they rewrite a loop, and | [expand](expand.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
 | floatfold | Replaces floating values [`llrm_analysis::floatfacts`] proves exact by their constants, and applies the algebraic freedoms an operation's fast-math flags give. | Inside [`crate::fold`](fold.md), every time fold runs, which is the pass list's | [floatfold](floatfold.md) |
@@ -67,6 +67,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | lsr | Strength reduction: replaces a loop's induction variables, and the address arithmetic built from them, with the cheapest set of counters the target can address, so the loop carries few registers and no multiply (LLVM's LoopStrengthReduce, gcc's ivopts). | Once per body, after the interprocedural step and `fixednarrow`, before | [lsr](lsr.md) |
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | Loads and stores that copy adjacent bytes become one `llvm.memcpy` (LLVM's MemCpyOpt, which makes a call of the stores that copy a struct; gcc has no such pass and leaves them to the by-pieces expansion). | After the function fixed point, beside `Merge` (no pass asks a memcpy what | [memcpyopt](memcpyopt.md) |
+| memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: [`crate::lsr`](lsr.md) calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |

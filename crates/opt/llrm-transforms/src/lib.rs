@@ -158,6 +158,7 @@ pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
 pub mod memcpyopt;
+pub mod memcpyoptimizer;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
