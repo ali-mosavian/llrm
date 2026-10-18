@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use llrm_mir::constantrange::ConstantRange;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 
@@ -1030,7 +1031,7 @@ impl ScalarEvolution {
     pub fn get_used_loops(
         &self,
         s: Scev,
-        loops_used: &mut HashSet<BlockId>,
+        loops_used: &mut IdSet<BlockId>,
     ) {
         let mut visited = HashSet::new();
         let mut worklist = vec![s];
