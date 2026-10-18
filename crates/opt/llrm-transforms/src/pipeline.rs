@@ -752,6 +752,9 @@ pub(crate) fn llvm_order(
                 slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
+                // The pin's `default<O1>` has no GVN (`pre` is off exactly at
+                // -O1 and -Og); rows against clang's -O1 are pending, a loss
+                // there becomes a numbered DEVIATE.
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 fold("fold@801"),
                 dead("dead@801"),
@@ -773,7 +776,10 @@ pub(crate) fn llvm_order(
             list
         }
     };
-    list.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+    list.into_iter()
+        .filter(|one| applied.options.wanted(one.name()))
+        .filter(|one| applied.options.pre || one.name() != "gvn@787")
+        .collect()
 }
 
 /// The order, from the pipeline itself rather than beside it, then the
@@ -1186,7 +1192,8 @@ impl Fixed {
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
-        let checked = crate::parity::check_phase(phase, &built);
+        let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let checked = crate::parity::check_phase_at(phase, &built, level);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
