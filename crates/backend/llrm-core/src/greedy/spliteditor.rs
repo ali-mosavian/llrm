@@ -370,8 +370,8 @@ impl<'d> SplitEditor<'d> {
     }
 
     /// The block `idx` falls in and the instruction there. The members of a
-    /// parallel copy share one index (`SlotIndexes`): this is the first of
-    /// them, where code goes before the copy.
+    /// parallel copy share one index (`SlotIndexes`): this is the first of them,
+    /// where code goes before the copy.
     fn instr_at(
         cx: &SplitCx,
         idx: &SlotIndex,

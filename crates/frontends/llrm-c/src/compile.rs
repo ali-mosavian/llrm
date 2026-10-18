@@ -2634,8 +2634,7 @@ mod tests {
     /// `j.a = 200` on a field that fills its byte was a read-modify-write of an
     /// unwritten byte: `load; and 0; or; store`. SROA reads an unwritten
     /// slot as poison, `and poison, 0` is poison, and bitfield_long_long
-    /// printed 0 at -O2. A field filling its container is stored, as clang
-    /// does.
+    /// printed 0 at -O2. A field filling its container is stored, as clang does.
     // It records C through wccq, which only the toolchain feature builds.
     #[cfg(feature = "toolchain")]
     #[test]
