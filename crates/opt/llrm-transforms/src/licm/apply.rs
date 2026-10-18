@@ -3,12 +3,101 @@
 //! `cloneInstructionInExitBlock`, `eraseInstruction`): the edits to one loop.
 
 use llrm_analysis::graph::loops::Loop;
+use llrm_analysis::memoryssa::Accesses;
+use llrm_analysis::mssa::build::Place;
+use llrm_analysis::mssa::updater::{MemorySsaUpdater, MoveTo};
+use llrm_analysis::mssa::{AccessId, Kind, Mssa};
+use llrm_mir::context::Context;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::passes::Outer;
 
 use super::sink::Sinking;
+
+/// The memory graph the edits keep right (`MemorySSAUpdater` and the accesses
+/// it reads the instructions' effects from).
+pub struct Graph<'a> {
+    pub mssa: &'a mut Mssa,
+    pub accesses: &'a mut Accesses,
+    pub updater: &'a mut MemorySsaUpdater,
+    pub outer: &'a Outer,
+    pub layout: &'a DataLayout,
+    /// The access of the last store put in each exit block of the promotion in
+    /// hand: the next goes after it (`MSSAInsertPts`).
+    pub last_store: IdMap<BlockId, AccessId>,
+}
+
+/// Where the access of a new instruction goes in its block.
+#[derive(Clone, Copy)]
+pub enum Created {
+    Beginning,
+    End,
+    After(AccessId),
+}
+
+impl Graph<'_> {
+    /// `eraseInstruction`: the access of `inst` goes (before the instruction
+    /// does).
+    pub fn erase(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+    ) {
+        if let Some(access) = self.mssa.get_memory_access(inst) {
+            self.updater.remove_memory_access(self.mssa, function, access, true);
+        }
+    }
+
+    /// `moveToPlace(..., BeforeTerminator)` after `inst` was moved to the end
+    /// of `block`: no terminator has an access, so the end of its list.
+    pub fn moved_to_end(
+        &mut self,
+        function: &Function,
+        inst: InstId,
+        block: BlockId,
+    ) {
+        if let Some(access) = self.mssa.get_memory_access(inst) {
+            self.updater.move_to_place(self.mssa, function, access, block, MoveTo::End, None);
+        }
+    }
+
+    /// `createMemoryAccessInBB` / `createMemoryAccessAfter`, then `insertDef`
+    /// or `insertUse`: the access of `inst`, new, in `block`.
+    pub fn created(
+        &mut self,
+        context: &Context,
+        function: &Function,
+        inst: InstId,
+        block: BlockId,
+        at: Created,
+    ) -> Option<AccessId> {
+        {
+            let unit = llrm_analysis::memory::Unit::within(context, self.layout, function, self.outer);
+            self.accesses.add_instruction(&unit, inst);
+        }
+        let effect = llrm_analysis::mssa::shadow::effect_of(self.accesses, function);
+        let access = match at {
+            Created::Beginning => {
+                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::Beginning, &effect)?
+            }
+            Created::End => {
+                self.updater.create_memory_access_in_bb(self.mssa, inst, None, block, Place::End, &effect)?
+            }
+            Created::After(previous) => {
+                self.updater.create_memory_access_after(self.mssa, inst, None, previous, &effect)?
+            }
+        };
+        if self.mssa.access(access).kind == Kind::Def {
+            self.updater.insert_def(self.mssa, function, access, true);
+        } else {
+            self.updater.insert_use(self.mssa, function, access, true);
+        }
+        Some(access)
+    }
+}
 
 /// [`hoist`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1460):
 /// `inst` moved before the preheader's terminator. Every fact an instruction
@@ -16,11 +105,14 @@ use super::sink::Sinking;
 /// (`Fact::survives_speculation`), so none is dropped.
 fn hoist(
     function: &mut Function,
+    graph: &mut Graph,
     inst: InstId,
     preheader: BlockId,
 ) -> Result<(), String> {
     let terminator = function.terminator(preheader).ok_or("a preheader with no terminator")?;
-    function.move_to(inst, Position::Before(terminator))
+    function.move_to(inst, Position::Before(terminator))?;
+    graph.moved_to_end(function, inst, preheader);
+    Ok(())
 }
 
 /// The first instruction of `block` that is not a phi.
@@ -87,6 +179,8 @@ fn clone_in_exit_block(
 /// that reads it, the phi replaced by the copy, the original erased.
 fn sink(
     function: &mut Function,
+    context: &Context,
+    graph: &mut Graph,
     loop_: &Loop,
     inst: InstId,
 ) -> Result<(), String> {
@@ -103,6 +197,7 @@ fn sink(
             None => {
                 let phis = lcssa.get_or_insert_with(exit, IdMap::new);
                 let copy = clone_in_exit_block(function, loop_, inst, exit, phis)?;
+                graph.created(context, function, copy, exit, Created::Beginning);
                 copies.insert(exit, copy);
                 copy
             }
@@ -112,6 +207,7 @@ fn sink(
         function.replace_all_uses_with(phi_result, Operand::Value(copy_result));
         function.erase(user)?;
     }
+    graph.erase(function, inst);
     function.erase(inst)
 }
 
@@ -120,6 +216,8 @@ fn sink(
 /// moved. Whether anything changed.
 pub fn apply_loop(
     function: &mut Function,
+    context: &Context,
+    graph: &mut Graph,
     loop_: &Loop,
     preheader: Option<BlockId>,
     sunk: &[(InstId, Sinking)],
@@ -128,14 +226,17 @@ pub fn apply_loop(
     let mut changed = false;
     for &(inst, how) in sunk {
         match how {
-            Sinking::Erased => function.erase(inst)?,
-            Sinking::Sunk => sink(function, loop_, inst)?,
+            Sinking::Erased => {
+                graph.erase(function, inst);
+                function.erase(inst)?;
+            }
+            Sinking::Sunk => sink(function, context, graph, loop_, inst)?,
         }
         changed = true;
     }
     for &(inst, _) in hoisted {
         let preheader = preheader.ok_or("a hoist with no preheader")?;
-        hoist(function, inst, preheader)?;
+        hoist(function, graph, inst, preheader)?;
         changed = true;
     }
     Ok(changed)
@@ -201,6 +302,7 @@ fn maybe_insert_lcssa_phi(
 pub fn promote(
     function: &mut Function,
     context: &mut llrm_mir::context::Context,
+    graph: &mut Graph,
     site: &PromotionSite,
     found: &super::promote::Promotion,
 ) -> Result<(), String> {
@@ -230,6 +332,7 @@ pub fn promote(
         }
         let terminator = function.terminator(site.preheader).ok_or("a preheader with no terminator")?;
         function.insert(load, Position::Before(terminator))?;
+        graph.created(context, function, load, site.preheader, Created::End);
         ssa.add_available_value(site.preheader, Operand::Value(function.instruction(load).result.expect("a load")));
         preheader_load = Some(load);
     } else {
@@ -320,6 +423,13 @@ pub fn promote(
                 function.annotate(store, "tbaa", node);
             }
             function.insert(store, Position::Before(before))?;
+            let at = match graph.last_store.get(&exit) {
+                Some(&previous) => Created::After(previous),
+                None => Created::Beginning,
+            };
+            if let Some(access) = graph.created(context, function, store, exit, at) {
+                graph.last_store.insert(exit, access);
+            }
         }
     }
     // Now that everything is rewritten, delete the instructions.
@@ -342,12 +452,14 @@ pub fn promote(
             }
             function.replace_all_uses_with(result, value);
         }
+        graph.erase(function, inst);
         function.erase(inst)?;
     }
     // If the SSA updater didn't use the load in the preheader, just zap it now.
     if let Some(load) = preheader_load {
         let result = function.instruction(load).result.expect("a load");
         if function.users(result).is_empty() {
+            graph.erase(function, load);
             function.erase(load)?;
         }
     }
