@@ -157,13 +157,13 @@ mod pipeline_ported_tests;
 pub mod ports;
 pub mod profit;
 pub mod promote;
-pub mod sroa;
 pub mod rotate;
 pub mod settled;
 pub mod sink;
 pub mod spares;
 pub mod spill;
 pub mod splitcopy;
+pub mod sroa;
 pub mod switchlower;
 pub mod tailrec;
 #[cfg(test)]

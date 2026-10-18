@@ -1230,9 +1230,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             ))
             .filter(|inst| !declared.contains(inst))
             .collect();
-        let mut queued: HashSet<InstId> = self.worklist.iter().copied().collect();
         for inst in allocas {
-            if queued.insert(inst) {
+            if !self.worklist.contains(&inst) {
                 self.worklist.push(inst);
             }
         }
@@ -1243,12 +1242,13 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     continue;
                 }
                 changed |= self.run_on_alloca(alloca);
-                // The worklists are not pruned of what was deleted (SROA.cpp
-                // `Worklist.set_subtract` is a hash-set pass): an erased id is
-                // skipped where it is popped, so a prune would only add a walk
-                // of the lists per alloca.
                 let mut deleted: HashSet<InstId> = HashSet::default();
                 changed |= self.delete_dead_instructions(&mut deleted);
+                if !deleted.is_empty() {
+                    self.worklist.retain(|one| !deleted.contains(one));
+                    self.post_promotion_worklist.retain(|one| !deleted.contains(one));
+                    self.promotable_allocas.retain(|one| !deleted.contains(one));
+                }
             }
             changed |= self.promote_allocas();
             self.worklist = std::mem::take(&mut self.post_promotion_worklist);
