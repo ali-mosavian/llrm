@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:98d2aeb08961e10c295f63a27acb86ba92ad7b00d1b08b73eff46d3bc4e372fd -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:7e9de207f2bcbe87ee888cd0bab5e5b26950c9bb8a9d816b41801f6262a457bb -->
 
 # local
 
@@ -14,6 +14,7 @@ and the parts of `Dominators.cpp`, `BasicBlockUtils.cpp`, `Loads.cpp`,
 function names the C++ function it translates, keeps its order of checks,
 and uses LLVM's name in snake case. Not called yet.
 
+## How it works
 MIR has no `Use` object: a use is `Use` (user and operand index), and a
 phi's value operand `i` comes in on the block operand `i + 1`. `RAUW` is
 `Function::replace_value`, which also points a debug record at the new
@@ -78,7 +79,8 @@ Two phis with the same arms in one block. Before:
 `eliminate_duplicate_phi_nodes` puts `%q` in the set to remove and makes it
 read `%p`; after the caller erases it only `%p` is left.
 
-From unit test `a_duplicate_phi_is_replaced_by_the_first` in `local_tests.rs`.
+From unit test `a_duplicate_phi_is_replaced_by_the_first` in
+`local_tests.rs`.
 
 ## Used by
 Nothing yet; `gvn` is the caller this is for.

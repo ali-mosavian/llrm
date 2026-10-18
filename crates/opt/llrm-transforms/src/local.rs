@@ -9,6 +9,7 @@
 //! function names the C++ function it translates, keeps its order of checks,
 //! and uses LLVM's name in snake case. Not called yet.
 //!
+//! # How it works
 //! MIR has no `Use` object: a use is [`Use`] (user and operand index), and a
 //! phi's value operand `i` comes in on the block operand `i + 1`. `RAUW` is
 //! `Function::replace_value`, which also points a debug record at the new
