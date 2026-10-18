@@ -136,3 +136,63 @@ fn test_the_entry_guard_proves_what_the_branch_says() {
         assert!(!se.is_loop_entry_guarded_by_cond_pred(cx, header, IntPredicate::Ult, n, ten));
     });
 }
+
+/// A loop whose header starts with `fact` (an assume or a guard of `%g`), and
+/// the answer to whether `%n u< 10` is guarded at the header's entry.
+fn guarded_at_entry_by_header_start(fact: &str) -> bool {
+    let text = format!(
+        "declare void @llvm.assume(i1)
+declare void @llvm.experimental.guard(i1, ...)
+
+define void @f(i32 %n, i1 %go) {{
+entry:
+  %g = icmp ult i32 %n, 10
+  br label %h
+
+h:
+  {fact}
+  br i1 %go, label %h, label %exit
+
+exit:
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("a module");
+    let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("@f");
+    let layout = DataLayout::default();
+    let tree = DominatorTree::new(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let header = *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let mut se = ScalarEvolution::new();
+    let n = se.get_scev(&cx, Operand::Value(function.parameters()[0]));
+    let ten = constant(&mut se, 10);
+    se.is_basic_block_entry_guarded_by_cond(&cx, header, IntPredicate::Ult, n, ten)
+}
+
+/// An `llvm.assume` that opens the header does not hold on the way into the
+/// header (`DT.dominates(Inst, BB)` is false inside `BB`): `%n u< 10` is not
+/// guarded there. A check that counted the first instruction as dominating
+/// its own block answered true, and a loop was entered under a fact it had
+/// not yet assumed.
+#[test]
+fn test_an_assume_that_opens_the_header_is_not_a_guard_of_its_entry() {
+    assert!(!guarded_at_entry_by_header_start("call void @llvm.assume(i1 %g)"));
+}
+
+/// The same for a guard.
+#[test]
+fn test_a_guard_that_opens_the_header_is_not_a_guard_of_its_entry() {
+    assert!(!guarded_at_entry_by_header_start("call void (i1, ...) @llvm.experimental.guard(i1 %g)"));
+}
