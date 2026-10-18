@@ -122,6 +122,7 @@ pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
 pub mod loopaccess;
+pub mod loopunrollanalyzer;
 pub mod manager;
 pub mod memory;
 pub mod memoryssa;
