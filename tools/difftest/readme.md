@@ -1,10 +1,10 @@
 # difftest
 
 A pass of llrm against LLVM's counterpart on the same input. `python3 tools/difftest/difftest.py run gvn` reads the pass inputs of
-`LLRM_DUMP_INPUTS` (default `~/scratch/replay/inputs`, `LLRM_DIFFTEST_INPUTS`), takes llrm's answer from `--llrm-pass llrm-pass` (src/bin/llrm-pass.rs: `llrm-pass -O2 PASS FILE` runs the one pass alone, once, on the dump)
+`LLRM_DUMP_INPUTS` (the directory `LLRM_DIFFTEST_INPUTS` names), takes llrm's answer from `--llrm-pass llrm-pass` (src/bin/llrm-pass.rs: `llrm-pass -O2 PASS FILE` runs the one pass alone, once, on the dump)
 or, without it, from the next run's input of the same function (a proxy: it holds whatever ran between; 3,000 of 3,074 manifest runs
-equal the pass alone, the others are listed by `proxy_equals_isolated`), runs `opt -passes=COUNTERPART` of `$LLVM_BIN` (default the d1106deb71cc build in `~/scratch/llvm-build`) on the input, and
-prints per opcode what only one side wrote, and the first differing lines. `dumps PASS DIR...` does the same for `llrm-c --dump DIR` step
+equal the pass alone, the others are listed by `proxy_equals_isolated`), runs `opt -passes=COUNTERPART` of `$LLVM_BIN` (default the pinned d1106deb71cc build, `tools/llvmpin.py`) on the input, and
+prints per opcode what only one side wrote, and the first differing lines. `run PASS --inputs-of OTHER...` reads the inputs of other passes as PASS's when the manifest has none of its own (bdce); `dumps PASS DIR...` does the same for `llrm-c --dump DIR` step
 files (an order branch's), `pair IN OUT --pass P` for one pair. `COUNTERPART` in the source is the table of llrm passes to opt pipelines.
 
 Both sides are rewritten for LLVM the same way (`normalise`: llrm's calling-convention words, `declare internal`) and named alike

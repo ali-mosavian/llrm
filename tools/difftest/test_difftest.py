@@ -216,3 +216,11 @@ def test_a_comparison_whose_reference_never_acted_or_never_declined_fails_its_pr
     assert difftest.premise(7, 40) == "ok"
     assert difftest.premise(40, 40, differing=11) == "ok", "it disagreed with llrm somewhere: it can say more than one thing"
     assert difftest.premise(0, 1) == "ok", "one function cannot show both answers: not judged"
+
+
+def test_inputs_of_reads_the_runs_of_other_passes_as_the_passes_own():
+    """The replay manifest has no bdce rows: scalar-cleanup-port relabelled fold/algebraic/dead inputs in a private manifest."""
+    rows = [{"config": "c", "fn": "f", "pass": "fold", "run": 1, "file": "a"}, {"config": "c", "fn": "f", "pass": "dead", "run": 2, "file": "b"}, {"config": "c", "fn": "f", "pass": "gvn", "run": 3, "file": "c"}]
+    got = difftest.relabelled(rows, "bdce", ["fold", "dead"])
+    assert [r["pass"] for r in got] == ["bdce", "bdce", "gvn"] and rows[0]["pass"] == "fold"
+    assert difftest.relabelled(rows, "bdce", None) == rows
