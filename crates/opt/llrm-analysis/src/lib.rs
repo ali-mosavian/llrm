@@ -92,11 +92,13 @@
 pub mod aa;
 pub mod access;
 pub mod alias;
+pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;
 pub mod basicaa;
 pub mod branchprob;
 pub mod capturecheck;
+pub mod capturetracking;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;
@@ -141,5 +143,6 @@ pub mod scev;
 pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;
+pub mod ssaupdater;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

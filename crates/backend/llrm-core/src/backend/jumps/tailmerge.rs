@@ -500,6 +500,8 @@ impl Folder {
             succ: _leaving(&block.succ, &block.insns[cut..], None).into(),
             phis: Default::default(),
             cold: block.cold,
+            align: 0,
+            max_skip: 0,
         };
         let last = block.insns[cut..].last().map_or(block.at, |one| one.at);
         let head = LirBlock {

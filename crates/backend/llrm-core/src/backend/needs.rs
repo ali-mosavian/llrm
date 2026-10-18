@@ -8,7 +8,7 @@
 //! for the machine passes.
 //!
 //! ```text
-//!   COPY        register-to-register mov       regthrash, copyprop
+//!   COPY        register-to-register mov       regthrash, machinecp
 //!   INSERTED    inserted instruction defining  secondary_bases
 //!   UNHELD      cell read via an unheld reg32  upperzero
 //!   EXACT_CELL  a cell lowering proved exact   exactaddress

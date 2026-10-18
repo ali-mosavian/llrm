@@ -78,7 +78,7 @@
 //! `splitkit`, `spillplacement`, `spiller`, `spillforward` and `postings` for
 //! live-range splitting and spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
-//! `peephole` calls the sub-passes `regthrash`, `copyprop`, `copysink`,
+//! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
 //! `spillforward`, `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinecse`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
@@ -141,7 +141,6 @@ pub mod coalesce;
 pub mod comparefold;
 pub mod constpool;
 pub mod constrain;
-pub mod copyprop;
 pub mod copysink;
 pub mod cpu;
 pub mod datagroup;
