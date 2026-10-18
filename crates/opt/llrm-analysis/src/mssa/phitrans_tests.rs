@@ -79,14 +79,14 @@ fn test_a_cast_of_a_phi_of_a_constant_folds() {
 }
 
 #[test]
-fn test_the_first_made_of_two_equal_casts_is_returned() {
+fn test_the_newest_of_two_equal_casts_is_returned() {
     let text = diamond(
         "  %c1 = zext i16 %n to i32\n  %c2 = zext i16 %n to i32",
         "",
         "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = zext i16 %p to i32",
     );
-    // LLVM walks a newest-first use list and would find %c2.
-    assert_eq!(translated(&text, "q", "b0", true), "%c1");
+    // LLVM walks a newest-first use list and finds %c2.
+    assert_eq!(translated(&text, "q", "b0", true), "%c2");
 }
 
 #[test]
