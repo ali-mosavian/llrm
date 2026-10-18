@@ -211,6 +211,16 @@ why = "measured 60.3 -> 138.7 Minstr (x2.30)"
 
 [[debt]]
 kind = "steps"
+axis = "cases"
+name = "lir pressuresink"
+ratio = 3.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2243"
+owner = "scev-port"
+why = "slope from #2195 LoopInfo (1187237d6); measured 11.3 -> 37.6 Minstr (x3.33)"
+exit = "pressuresink cases back to x<=2.3 at 2N, slope from #2195 removed"
+
+[[debt]]
+kind = "steps"
 axis = "cells"
 name = "lir coalesce"
 ratio = 3.4
