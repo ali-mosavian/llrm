@@ -10,3 +10,6 @@ identical = true
 identical = false
 llrm_only = { load = 1 }
 llvm_only = {}
+
+[float-f0x]
+identical = true

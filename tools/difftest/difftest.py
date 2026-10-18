@@ -166,6 +166,7 @@ def blocks_in_order(body: list[str]) -> list[list[str]]:
 
 
 HEX_DOUBLE = re.compile(r"(?<![\w.])0x[0-9A-Fa-f]{16}(?![\w.])")
+HEX_FLOAT = re.compile(r"(?<![\w.])f0x([0-9A-Fa-f]{8})(?![\w.])")  # opt's spelling of a float constant that has no short decimal
 
 
 def floats_alike(line: str) -> str:
@@ -185,6 +186,7 @@ def floats_alike(line: str) -> str:
             pass
         return match[0]
 
+    line = HEX_FLOAT.sub(lambda m: "0x%016X" % struct.unpack(">Q", struct.pack(">d", struct.unpack(">f", bytes.fromhex(m[1]))[0]))[0], line)
     return HEX_DOUBLE.sub(spelled, line)
 
 
