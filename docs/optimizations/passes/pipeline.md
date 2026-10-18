@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6cec392f6955474e8faded34975409093a7a61e3d18fe5f09c4917286ca15e8b -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:31f65653306b6b6beac59c163b7cd195bd096a416c9d84ec9c6ca0da1af7afd1 -->
 
 # pipeline
 
@@ -99,9 +99,9 @@ fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
 maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
-`min_size` (`-Og`: `basic` without `fill`). `-f` flags set single fields
-(`PASSES` in the same file). The per-level table, with the gcc and LLVM
-counterpart of each limit, is
+`min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
+fields (`PASSES` in the same file). The per-level table, with the gcc and
+LLVM counterpart of each limit, is
 [docs/reference/levels.md](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/docs/reference/levels.md).
 
 `Options::wanted` gates passes by name, so every pass can be bisected off:
@@ -117,7 +117,7 @@ counterpart of each limit, is
 | `promote` | `sroa`, `promote` |
 | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 | `unroll`, `peel` | the pass of that name |
-| `fill` | `fill`, `merge`, `memcpyopt` |
+| `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
@@ -128,9 +128,9 @@ counterpart of each limit, is
 
 `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 enables `jumpthread`'s state machines and `copy_headers` its correlated
-branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `fill`, `lsr`,
-`window`, `jumpthread` and `calleepop` in bytes; `loop_intervals` lets
-alias and branch decisions use the intervals of counted loops. `limits`
+branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+`lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+lets alias and branch decisions use the intervals of counted loops. `limits`
 are the copy budgets of `unroll` and `peel`.
 
 ## Needs

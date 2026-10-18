@@ -5,11 +5,14 @@ floor. A budget is what an event count or a step's instructions may grow by when
 pass run once for each loop instead of once for the function reads as 4 where it read as 2. Every entry in budgets.toml above the
 default is a debt: it names its issue and its owner, and the file only shrinks (docs/architecture/compile-time-spec.md, section 6).
 
+The budgets are recorded on CI's build (release, CARGO_INCREMENTAL=0; the gate sets it). An incremental or dist binary counts the same step 9% lower or
+higher, enough to cross the share: run it through `gate.py run`, or build with CARGO_INCREMENTAL=0.
+
 Two kinds:
 - events, exact and the same on any host (`LLRM_DEBUG=counts`: analysis misses, copies of a function, allocations, builders of
   dominators, loops, shapes): every count at 2N is at most `linear` times its count at N, plus `slack`, and the counts of a program of
   one function that make one thing per function do not grow at all;
-- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with `share` of the compile's work at 2N is
+- steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with at least `floor_minstr` Minstr of work at 2N (any share of the compile: a share is a cliff that build flags and neighbours move) is
   at most `steps` times its own work at N. Both less the empty file's.
 """
 import os
@@ -36,12 +39,58 @@ import scaling_gate  # noqa: E402
 BUDGETS = tomllib.loads((HERE / "budgets.toml").read_text())
 DEFAULT = BUDGETS["default"]
 # Programs of one function, where a count of copies, selections or allocations is a count of work done per function.
+# A debt is paid only when its step is clearly under the limit: instruction counts move a few thousandths between commits, and a step at x2.30
+# against 2.3 read paid on one build and over on the next (lir twoaddr, lir coalesce).
+PAID_MARGIN = 0.97
 ONE_FUNCTION = ("straight", "mulconst", "branches", "live", "nest", "cells", "cases", "joins", "fjoins", "unrolled")
 PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations")
 # The gate's N per axis, but `branches` larger: its steps are small at the gate's 32 (analysis bounded is 1 Minstr there), and #1771 made
 # `analysis bounded` quadratic in it (108 -> 982 Minstr from N=256 to 512) unseen by a size where the step is under the floor.
 SIZES = {**scaling_gate.SIZES, "branches": 256}
 AXES = tuple(SIZES)
+
+
+def still_rising(work_small: float, work_big: float) -> bool:
+    """Whether a debt's step still grows: not under the limit by the margin. x2.30 against 2.3 is still rising."""
+    return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
+
+
+def onset(work_small: float) -> bool:
+    """A step whose work at N is under `onset_minstr` begins only at 2N: lazily built data (`siblings interference`, 0.0 -> 17.3) or a branch first taken
+    (`peep facts exits`, 0.2 -> 10.2). Its ratio to a base of nothing is a number of the base, not a slope."""
+    return work_small < DEFAULT["onset_minstr"]
+
+
+def test_a_step_that_begins_between_the_two_sizes_has_no_slope_to_judge():
+    """#2260 listed 'siblings interference' (0.0 -> 17.3, x1.7e10) and 'peep facts exits' (0.2 -> 10.2, x63) as debts: both are built on first use and
+    absent at the small size."""
+    assert onset(0.0) and onset(0.2)
+    assert not onset(1.0) and not onset(11.3)
+
+
+def read(work_big: float, total: float) -> bool:
+    """Whether the test reads a step: its own work at 2N reaches the floor, whatever share of the compile that is."""
+    return work_big >= DEFAULT["floor_minstr"]
+
+
+def near_read(work_big: float, total: float) -> bool:
+    """Within 10% under the floor: a step that hovers there is read on one build and not on the next."""
+    return work_big >= 0.9 * DEFAULT["floor_minstr"]
+
+
+def test_a_step_is_judged_by_its_own_slope_whatever_share_of_the_compile_it_is():
+    """lir pressuresink (x3.3) sat at 2.03% of the compile against a 2% share: it entered the test at one commit (blamed on #2195) and read paid on
+    an incremental build (1.72%). The same step at a 1.9% and a 2.1% share, with the same work, gets the same verdict."""
+    work_small, work_big = 11.3, 37.6
+    for total in (work_big / 0.019, work_big / 0.021):
+        assert read(work_big, total) and still_rising(work_small, work_big)
+    assert not read(4.0, 100.0), "under the floor in Minstr: not read, whatever its share"
+
+
+def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
+    """lir twoaddr read x2.30 (60.3 -> 138.8): paid on one build, over on the next, and its debt was deleted as paid (#2191) then needed again."""
+    assert still_rising(60.3, 138.8) and still_rising(60.3, 138.0)
+    assert not still_rising(60.3, 120.0)
 
 
 def run(source: str, axis: str, stage: str) -> str:
@@ -139,10 +188,14 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     grown, rising = [], set()
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
-        if work_big < DEFAULT["share"] * total or work_big < DEFAULT["floor_minstr"]:
+        if onset(work_small):
+            continue  # the step starts between N and 2N: no slope to judge from a base of nothing
+        if not read(work_big, total):
+            if near_read(work_big, total) and work_big > DEFAULT["steps"] * max(work_small, 1e-9):
+                rising.add(name)  # a debt's step that dips under the floor is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
-        if work_big > DEFAULT["steps"] * max(work_small, 1e-9):
+        if still_rising(work_small, work_big):
             rising.add(name)
         if work_big > ratio * max(work_small, 1e-9):
             grown.append(f"{name} {work_small:.1f} -> {work_big:.1f} Minstr (limit {ratio} per doubling{debt})")

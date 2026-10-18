@@ -274,3 +274,39 @@ b4:
     assert_eq!(printed(&module).matches("phi").count(), 1, "{}", printed(&module));
     assert_eq!(results(&module, &[&[1, 5], &[2, 9]]), before);
 }
+
+/// A chain of n folded branches, each leaving a phi of one value, simplified.
+fn chain_time(n: usize) -> std::time::Duration {
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  br i1 true, label %b1, label %d0\n\n");
+    for i in 0..n {
+        let next =
+            if i + 1 < n { format!("br i1 true, label %b{}, label %d{}", i + 2, i + 1) } else { "ret i16 %p".into() };
+        text += &format!(
+            "d{i}:\n  br label %b{}\n\nb{}:\n  %p{} = phi i16 [ %x, %b{} ], [ 0, %d{i} ]\n",
+            i + 1,
+            i + 1,
+            i + 1,
+            i
+        );
+        text += &format!("  {}\n\n", next.replace("%p", &format!("%p{}", i + 1)));
+    }
+    text += "}\n";
+    (0..5)
+        .map(|_| {
+            let mut module = parsed(&text);
+            let start = std::time::Instant::now();
+            simplify(&mut module);
+            start.elapsed()
+        })
+        .min()
+        .unwrap()
+}
+
+/// The fold loop and the phi cleanup after it took time linear in the
+/// function: 4x the blocks must cost well under the 16x of a quadratic one.
+#[test]
+fn test_simplifying_a_chain_of_folds_is_linear_in_its_length() {
+    let small = chain_time(400);
+    let large = chain_time(1600);
+    assert!(large < small * 9, "400 blocks {small:?}, 1600 blocks {large:?}: slope above 1.6");
+}

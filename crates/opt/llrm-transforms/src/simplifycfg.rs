@@ -77,7 +77,7 @@
 //! | [`SimplifyCFGOpt::simplifyOnce`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9303) | `block_simplified` | partly: the steps up to the merge; the rest is not ported yet (D2) |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
-//! | [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446) | `predecessor_removed` | MIRROR (one phi input an edge) |
+//! | [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446) | `Function::predecessor_removed` (`edit.rs`) | MIRROR (one phi input an edge) |
 //! | [`DeleteDeadBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L94) | `dead_blocks_deleted` | MIRROR |
 //! | [`EliminateDuplicatePHINodes`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1527) | `transform::duplicate_phis_in` | MIRROR |
 //! | [`MergeBlockIntoPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L237) | `cfg::merged_into_predecessor` | MIRROR |
@@ -108,7 +108,8 @@
 //!   cleanup is
 //!   [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446)
 //!   (`hasConstantValue`, L468), of the phis of the successor whose edge went
-//!   (here `predecessor_removed`). What `_trivial_phis` does is InstSimplify's
+//!   (here `Function::predecessor_removed`). What `_trivial_phis` does is
+//!   InstSimplify's
 //!   [`simplifyPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5620),
 //!   which InstCombine and EarlyCSE run over the whole function. Whole body,
 //!   not the touched successors, because the phis are not there: gvn leaves
@@ -148,7 +149,6 @@
 //! # See also
 //! [`crate::cfg`], [`crate::decide`].
 
-use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
@@ -157,7 +157,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
-use crate::{cfg, dead, edges, transform};
+use crate::{cfg, dead, transform};
 
 /// LLVM's `SimplifyCFGPass` at the options of the early function pipeline
 /// slot (`SimplifyCFGOptions()`: `PassBuilderPipelines.cpp`).
@@ -298,7 +298,7 @@ fn dead_blocks_deleted(
     for &block in blocks {
         let operands = function.terminator(block).map(|last| function.instruction(last).operands.clone());
         for successor in edges_out_of(&operands.unwrap_or_default()) {
-            predecessor_removed(context, function, successor, block, true);
+            function.predecessor_removed(context, successor, block, true);
         }
         for inst in function.block(block).instructions().to_vec().into_iter().rev() {
             if let Some(result) = function.instruction(inst).result {
@@ -311,60 +311,6 @@ fn dead_blocks_deleted(
     for &block in blocks {
         function.erase_block(block).expect("an emptied block nothing names");
     }
-}
-
-/// One edge from `predecessor` into `block` gone: its phis lose one input from
-/// it. Unless `keep_one_input_phis`, a phi left with one value (or none) is
-/// replaced by it (or by poison). LLVM's `BasicBlock::removePredecessor`.
-pub fn predecessor_removed(
-    context: &mut Context,
-    function: &mut Function,
-    block: BlockId,
-    predecessor: BlockId,
-    keep_one_input_phis: bool,
-) {
-    for phi in edges::phis(function, block) {
-        let mut operands = function.instruction(phi).operands.clone();
-        let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else { continue };
-        operands.drain(2 * at..2 * at + 2);
-        let result = function.instruction(phi).result.expect("a phi's value");
-        let emptied = operands.is_empty();
-        function.set_operands(phi, operands);
-        if keep_one_input_phis {
-            continue;
-        }
-        let only = if emptied {
-            let poison = context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison });
-            Some(Operand::Constant(poison))
-        } else {
-            constant_value(function, phi)
-        };
-        if let Some(only) = only {
-            function.replace_value(result, only);
-            function.set_operands(phi, Vec::new());
-            function.erase(phi).expect("a phi nothing reads");
-        }
-    }
-}
-
-/// The one value all of `phi`'s inputs are, itself not counted: LLVM's
-/// `PHINode::hasConstantValue`.
-fn constant_value(
-    function: &Function,
-    phi: InstId,
-) -> Option<Operand> {
-    let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
-    let mut only = None;
-    for (value, _) in arms(function, phi) {
-        if value == result {
-            continue;
-        }
-        if only.is_some_and(|one| one != value) {
-            return None;
-        }
-        only = Some(value);
-    }
-    only
 }
 
 /// The integer `operand` is, if it is a constant one.
@@ -428,11 +374,11 @@ pub fn terminator_folded(
         (Opcode::Br, &[condition, Operand::Block(first), Operand::Block(second)]) => {
             let destination = if first == second {
                 // `br i1 %c, X, X`: one of the two edges goes.
-                predecessor_removed(context, function, first, block, false);
+                function.predecessor_removed(context, first, block, false);
                 first
             } else if let Some(value) = integer(context, condition) {
                 let (kept, gone) = if value != 0 { (first, second) } else { (second, first) };
-                predecessor_removed(context, function, gone, block, false);
+                function.predecessor_removed(context, gone, block, false);
                 kept
             } else {
                 return false;
@@ -498,7 +444,7 @@ fn switch_folded(
         }
         // A case that goes where the default goes is no explicit compare.
         if target == default {
-            predecessor_removed(context, function, default, block, false);
+            function.predecessor_removed(context, default, block, false);
             cases.remove(at);
             changed = true;
             continue;
@@ -524,7 +470,7 @@ fn switch_folded(
             if successor == destination && !kept {
                 kept = true;
             } else {
-                predecessor_removed(context, function, successor, block, false);
+                function.predecessor_removed(context, successor, block, false);
             }
         }
         terminator_replaced(function, last, Opcode::Br, vec![Operand::Block(destination)]);

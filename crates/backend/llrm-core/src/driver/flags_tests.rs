@@ -84,7 +84,7 @@ fn each_level_selects_gcc_s_passes() {
             o.inline.limit > 0,
             o.pre,
             o.sibcalls,
-            o.fill,
+            o.loopidioms,
             o.peel,
             o.unswitch,
             o.limits.grows,
@@ -100,7 +100,7 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(row("-O3"), (scalar, true, true, true, true, true, true, true, true, true));
     assert_eq!(pipeline(&["-O"]), pipeline(&["-O1"]));
     // -Og keeps the four rounds that only -O1 gave up (two, measured at -O1).
-    assert_eq!(pipeline(&["-Og"]), Options { fill: false, rounds: 4, ..pipeline(&["-O1"]) });
+    assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, rounds: 4, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&["-O1"]).rounds, 2);
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
     // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676).

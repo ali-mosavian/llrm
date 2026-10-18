@@ -45,6 +45,22 @@ def test_a_repeated_string_instruction_is_one_instruction_and_one_with_ecx_zero_
     assert not ran.error and ran.region.instructions == 6, (ran.error, ran.region)
 
 
+def test_the_stack_is_below_the_image_as_the_extenders_is(tmp_path):
+    """The runtime's str_is_tmp_ tests a pointer against the temp-string table in the image: 4 instructions for one below it,
+    6 for one above. The stack sat above the image here and below it in DOSBox, so jpeg_single bq32 counted 56,380,382 here and
+    56,089,617 there (159,522 stack strings, 2 more each)."""
+    # cmp esp, BASE; jae +1 (over the nop); nop; ret
+    elf = image(tmp_path, b"\x81\xfc" + struct.pack("<I", BASE) + b"\x73\x01\x90\xc3")
+    ran = flatcount.run(elf, "BENCHK", tmp_path)
+    assert not ran.error and ran.region.instructions == 4, (ran.error, ran.region)
+
+
+def test_an_image_that_does_not_start_above_the_stack_is_an_error_not_a_drifting_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(flatcount, "STACK", BASE + 0x1000)
+    ran = flatcount.run(image(tmp_path, b"\xc3"), "BENCHK", tmp_path)
+    assert ran.region is None and "above the stack" in ran.error, ran.error
+
+
 def test_a_call_the_emulator_does_not_know_stops_the_run_and_is_named(tmp_path):
     elf = image(tmp_path, b"\xcd\x2f\xc3")  # int 2fh
     ran = flatcount.run(elf, "BENCHK", tmp_path)
