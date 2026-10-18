@@ -302,8 +302,8 @@ pub fn sunk(
                 }
                 // Not nearer to a loop that reads it: that is where `hoist`
                 // left it, and a move there only shuffles the allocation.
-                let gains = loops.depth(candidate) <= loops.depth(home)
-                    && readers.iter().all(|&reader| loops.depth(reader) <= loops.depth(candidate))
+                let gains = loops.get_loop_depth(candidate) <= loops.get_loop_depth(home)
+                    && readers.iter().all(|&reader| loops.get_loop_depth(reader) <= loops.get_loop_depth(candidate))
                     && edges.escapes(home, candidate)
                     && !matches!(
                         trial
