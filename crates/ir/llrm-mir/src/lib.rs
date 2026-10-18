@@ -3,9 +3,12 @@
 //! held in arenas addressed by id.
 
 pub mod alias;
+pub mod apint;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod constantrange;
+pub mod constfold;
 pub mod context;
 pub mod counts;
 pub mod datalayout;
@@ -22,11 +25,13 @@ mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
 pub mod hash;
+pub mod inline;
 pub mod interpret;
 pub mod intrinsics;
+pub mod knownbits;
 pub mod lexer;
 pub mod lint;
-pub mod loops;
+pub mod loopinfo;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -35,6 +40,7 @@ pub mod passes;
 pub mod print;
 pub mod program;
 pub mod scalarevolution;
+pub mod simplify;
 pub mod spaces;
 pub mod splice;
 pub mod target;
@@ -58,11 +64,17 @@ pub use types::{FloatKind, Type, TypeId, Types};
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod constantrange_tests;
+#[cfg(test)]
 mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
 #[cfg(test)]
+mod knownbits_tests;
+#[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod loopinfo_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]

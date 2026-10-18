@@ -877,7 +877,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             op,
             BinaryOp::SDiv | BinaryOp::SRem | BinaryOp::UDiv | BinaryOp::URem
         ) {
-            self.note_pure();
+            self.note_pure(made);
         }
         made
     }
@@ -892,7 +892,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
             return a;
         }
         let made = self.b.cast(op, a, to, "");
-        self.note_pure();
+        self.note_pure(made);
         made
     }
 
@@ -903,13 +903,23 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         b: Operand,
     ) -> Operand {
         let made = self.b.icmp(predicate, a, b, "");
-        self.note_pure();
+        self.note_pure(made);
         made
     }
 
-    pub fn note_pure(&mut self) {
-        let last = *self.b.function.block(self.block).instructions().last().expect("just emitted");
-        self.pure.push(last);
+    /// Records the instruction that defines `made` as one `sweep` may erase.
+    /// The builder folds an operation of numbers into a number and emits
+    /// nothing: only a value has an instruction of this emitter's to
+    /// record.
+    pub fn note_pure(
+        &mut self,
+        made: Operand,
+    ) {
+        if let Operand::Value(value) = made
+            && let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(value).def
+        {
+            self.pure.push(inst);
+        }
     }
 
     fn truth(
@@ -931,7 +941,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let byte = self.b.context.types.int(8);
         let index = self.b.int(16, i128::from(offset));
         let made = self.b.gep(byte, pointer, &[index], Flags::default(), "");
-        self.note_pure();
+        self.note_pure(made);
         made
     }
 
@@ -943,7 +953,7 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
     ) -> Operand {
         let byte = self.b.context.types.int(8);
         let made = self.b.gep(byte, pointer, &[index], Flags::default(), "");
-        self.note_pure();
+        self.note_pure(made);
         made
     }
 
@@ -1186,11 +1196,11 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let inside = self.icmp(IntPredicate::Ult, count, width);
         let last = self.b.int(bits, i128::from(bits - 1));
         let safe = self.b.select(inside, count, last, "");
-        self.note_pure();
+        self.note_pure(safe);
         let shifted = self.binary(op, a, safe);
         let filled = if op == BinaryOp::AShr { shifted } else { self.b.int(bits, 0) };
         let r = self.b.select(inside, shifted, filled, "");
-        self.note_pure();
+        self.note_pure(r);
         self.write(&what.dests[0], r)?;
         // A count of zero leaves the flags alone.
         self.unknown_flags(effects, "a shift by CL");
@@ -1337,9 +1347,9 @@ impl<'b, 'm, 'u> Emitter<'b, 'm, 'u> {
         let full = format!("llvm.{name}.with.overflow.i{bits}");
         let &(callee, ty) = self.unit.intrinsics.get(&full).ok_or_else(|| format!("@{full} undeclared"))?;
         let pair = self.b.call(ty, Operand::Constant(callee), &[a, b], "").expect("a pair");
-        self.note_pure();
+        self.note_pure(pair);
         let flag = self.b.extract_value(pair, 1, "");
-        self.note_pure();
+        self.note_pure(flag);
         Ok(flag)
     }
 

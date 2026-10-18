@@ -1886,3 +1886,50 @@ b1:
     assert!(!memory_of(&loud, "odd") && !memory_of(&loud, "even"), "a member's access is the cycle's");
     assert!(memory_of(&loud, "alone"));
 }
+
+/// `noipa` (GCC's): no constant is pushed into the routine and none of its
+/// returns folded into a caller (the call of a bench kernel with constant
+/// arguments was folded away at compile time), though the same routines
+/// without it are specialised (the premise).
+#[test]
+fn no_constant_reaches_or_leaves_a_noipa_routine() {
+    let marked = STORES.replace("@set(i16 %x) {", "@set(i16 %x) noipa {").replace("@seven() {", "@seven() noipa {");
+    assert_ne!(marked, STORES);
+    let mut plain = parsed(STORES);
+    stepped(&mut plain, &["f"], 40, Threshold::none());
+    assert!(printed(&plain).contains("  store i16 5, ptr @g\n"), "premise: the private routine is specialised");
+    let mut module = parsed(&marked);
+    stepped(&mut module, &["f"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(!text.contains("store i16 5, ptr @g"), "{text}");
+    assert!(!text.contains("add i16 7, %a"), "{text}");
+    assert_eq!(text.matches("call ").count(), 3, "{text}");
+}
+
+/// A `noipa` body is stamped with nothing, so its callers keep its call and
+/// the cell it might write: the same body without the attribute is pure and
+/// its unused call goes, and a read-only callee lets a stored cell stay in a
+/// register.
+#[test]
+fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
+    let leaf = |attribute: &str| {
+        format!(
+            "define internal i16 @leaf(i16 %x) {attribute} {{\nb:\n  ret i16 %x\n}}\n\ndefine i16 @uses() {{\nb:\n  %r = call i16 @leaf(i16 9)\n  ret i16 42\n}}\n"
+        )
+    };
+    assert_eq!(dropped(&leaf("")), named(&["leaf"]), "premise");
+    assert_eq!(dropped(&leaf("noipa")), BTreeSet::new());
+    assert_eq!(pure(&leaf("noipa")), BTreeSet::new());
+    let loads = |attribute: &str| {
+        let text = format!(
+            "@x = global i16 0\n\ndefine internal i16 @read(ptr %p) {attribute} {{\nb:\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n\ndefine i16 @f(i16 %c) {{\nb:\n  store i16 %c, ptr @x\n  %r = call i16 @read(ptr @x)\n  %v = load i16, ptr @x\n  ret i16 %v\n}}\n"
+        );
+        let mut module = parsed(&text);
+        crate::testing::stamped(&mut module).unwrap();
+        managed(&mut module, Promote);
+        let f = module.function_mut("f").unwrap().1;
+        f.walk().filter(|(_, inst)| matches!(f.instruction(*inst).opcode, Opcode::Load { .. })).count()
+    };
+    assert_eq!(loads(""), 0, "premise: the stamped read-only callee leaves the cell alone");
+    assert_eq!(loads("noipa"), 1);
+}
