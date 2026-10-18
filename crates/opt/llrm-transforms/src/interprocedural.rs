@@ -575,7 +575,11 @@ fn unexported(program: &Program) -> BTreeSet<Defined> {
         .collect();
     defined(program)
         .filter(|&one @ (at, id)| {
-            !program.exports.exported(program.modules[at].global(id)) && !addressed.contains(&one)
+            // A `noipa` routine is entered as outside code may enter it: no
+            // constant is pushed into it and it is not cloned.
+            !program.exports.exported(program.modules[at].global(id))
+                && !addressed.contains(&one)
+                && !program.modules[at].global(id).function().is_some_and(llrm_mir::facts::opaque)
         })
         .collect()
 }
@@ -1784,6 +1788,11 @@ pub fn stamped(
             Linkage::External | Linkage::Internal | Linkage::Private
         );
         let (Some(name), Some(function), true) = (global.name.as_ref(), global.function(), exact) else { continue };
+        // A `noipa` body is stamped with nothing: callers read what the source
+        // declared.
+        if llrm_mir::facts::opaque(function) {
+            continue;
+        }
         let Some(summary) = known.get(name) else { continue };
         let shape = analyses.function::<Shape>(module, id);
         let exposed = llrm_analysis::memory::exposed_frames(
