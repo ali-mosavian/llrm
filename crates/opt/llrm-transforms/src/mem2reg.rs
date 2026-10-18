@@ -506,7 +506,7 @@ fn rewrite_single_store_alloca(
                     info.using_blocks.push(store_block);
                     continue;
                 }
-            } else if !dominance.dominates(cfg::id(store_block), cfg::id(load_block)) {
+            } else if !dominance.dominates(function, cfg::id(store_block), cfg::id(load_block)) {
                 info.using_blocks.push(load_block);
                 continue;
             }
@@ -1151,7 +1151,7 @@ fn simplify_phi(
         Operand::Value(id) => match function.value(id).def {
             llrm_mir::module::ValueDef::Instruction(def) => {
                 let defined = function.parent(def)?;
-                defined != at && dominance.dominates(cfg::id(defined), cfg::id(at))
+                defined != at && dominance.dominates(function, cfg::id(defined), cfg::id(at))
             }
             _ => true,
         },

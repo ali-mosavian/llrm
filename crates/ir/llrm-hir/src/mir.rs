@@ -1060,7 +1060,13 @@ fn declare_data(
     };
     // An external one has no type to lay out, and is constant as declared.
     let constant = object.readonly && (ty.is_some() || object.linkage == model::DataLinkage::External);
-    let variable = GlobalVariable { ty: ty.unwrap_or(bytes), constant, initializer: None, align: None };
+    let variable = GlobalVariable {
+        externally_initialized: false,
+        ty: ty.unwrap_or(bytes),
+        constant,
+        initializer: None,
+        align: None,
+    };
     let global = add_unique(module, &object.name, |module, name| module.add_variable(name, variable.clone(), linkage));
     module.globals[global.0 as usize].address_space = data_space(spaces, object.address);
     global
@@ -1548,7 +1554,8 @@ fn declare_outside(
     for place in &function.places {
         if !matches!(place.storage, Storage::Local | Storage::Parameter) && !tables.data.contains_key(&place.symbol) {
             let ty = stored_type(&mut module.context.types, &tables.spaces, tables.types[&place.r#type])?;
-            let variable = GlobalVariable { ty, constant: false, initializer: None, align: None };
+            let variable =
+                GlobalVariable { externally_initialized: false, ty, constant: false, initializer: None, align: None };
             let global = add_unique(module, &place.name, |module, name| {
                 module.add_variable(name, variable.clone(), Linkage::External)
             });
