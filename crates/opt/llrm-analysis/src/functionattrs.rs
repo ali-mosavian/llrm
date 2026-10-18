@@ -482,6 +482,57 @@ pub fn stamp_memory(
     changed
 }
 
+/// `infer`'s flags stated on the members. The members whose attributes
+/// changed.
+fn stamp_flags(
+    module: &mut Module,
+    members: &[GlobalId],
+) -> Vec<GlobalId> {
+    let found = infer(module, &module.globals, members);
+    let mut changed = Vec::new();
+    for (id, one) in found {
+        let llrm_mir::module::GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else {
+            continue;
+        };
+        let before = function.attrs.len();
+        for (stated, fact) in [
+            (one.no_recurse, Fact::NoRecurse),
+            (one.no_unwind, Fact::NoUnwind),
+            (one.will_return, Fact::WillReturn),
+            (one.no_return, Fact::NoReturn),
+        ] {
+            if stated && !Facts::of(&function.attrs).contains(fact) {
+                function.attrs.extend(fact.attribute());
+            }
+        }
+        if function.attrs.len() != before {
+            changed.push(id);
+        }
+    }
+    changed
+}
+
+/// `deriveAttrsInPostOrder` (FunctionAttrs.cpp:2211,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L2211>)
+/// for what is translated, in its order: `addMemoryAttrs`, `addArgumentAttrs`,
+/// then the flags. The members whose attributes changed.
+pub fn post_order(
+    module: &mut Module,
+    members: &[GlobalId],
+) -> Vec<GlobalId> {
+    // DEVIATE F3: a `noipa` body is not a member.
+    let set: BTreeSet<GlobalId> = members
+        .iter()
+        .copied()
+        .filter(|&id| module.global(id).function().is_some_and(|one| !llrm_mir::facts::opaque(one)))
+        .collect();
+    let list: Vec<GlobalId> = set.iter().copied().collect();
+    let mut changed: BTreeSet<GlobalId> = stamp_memory(module, &list).into_iter().collect();
+    changed.extend(crate::argumentattrs::add_argument_attrs(module, &set));
+    changed.extend(stamp_flags(module, &list));
+    changed.into_iter().collect()
+}
+
 #[cfg(test)]
 #[path = "functionattrs_tests.rs"]
 mod tests;

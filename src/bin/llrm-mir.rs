@@ -77,6 +77,13 @@ fn main() -> ExitCode {
             spec
         })
     };
+    let rotate = {
+        let at = arguments.iter().position(|one| one == "--rotate");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -133,6 +140,32 @@ fn main() -> ExitCode {
                 if let Err(error) = unrolled_loop(&mut module, &header, count, &exits) {
                     eprintln!("{path}: {error}");
                     return ExitCode::FAILURE;
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if rotate {
+                let tti = llrm_x86::tti::X86::of_cpu("i486").expect("a cpu");
+                let options = llrm_transforms::looprotate::Options {
+                    max_header_size: 16,
+                    rotation_only: false,
+                    is_util_mode: false,
+                    prepare_for_lto: false,
+                };
+                // Every function with a body.
+                let names: Vec<String> = module
+                    .functions()
+                    .filter(|(_, _, one)| !one.layout().is_empty())
+                    .filter_map(|(_, one, _)| one.name.clone())
+                    .collect();
+                for name in names {
+                    // The caller has made the loops simplified and LCSSA, as
+                    // the loop pass manager does.
+                    if let Err(error) = llrm_transforms::looprotate::rotate_function(&mut module, &name, &tti, options)
+                    {
+                        eprintln!("{path}: @{name}: {error}");
+                        return ExitCode::FAILURE;
+                    }
                 }
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;
