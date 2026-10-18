@@ -490,7 +490,7 @@ fn may_throw(
 
 /// `Instruction::mayHaveSideEffects`
 /// ([Instruction.cpp:1358](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Instruction.cpp#L1358)).
-fn may_have_side_effects(
+pub(crate) fn may_have_side_effects(
     context: &Context,
     callees: &Callees,
     declarations: &Declarations,

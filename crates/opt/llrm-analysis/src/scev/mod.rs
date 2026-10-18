@@ -29,6 +29,9 @@ pub mod evaluate;
 pub mod exit_limit;
 pub mod exit_value;
 pub mod expand;
+pub mod expand_cost;
+#[cfg(test)]
+mod expand_cost_tests;
 #[cfg(test)]
 mod expand_tests;
 pub mod expander;
