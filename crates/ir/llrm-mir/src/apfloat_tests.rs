@@ -6,24 +6,7 @@
 
 use crate::apfloat::*;
 use crate::fpclass::RoundingMode;
-use crate::golden_dump::{Dump, assert_agree, assert_many_answers, formats, inputs};
-
-fn add_f(
-    d: &mut Dump,
-    f: &ApFloat,
-) {
-    let bits = f.to_bits();
-    d.add(bits as u64);
-    d.add((bits >> 64) as u64);
-}
-
-const ROUNDINGS: [RoundingMode; 5] = [
-    RoundingMode::TowardZero,
-    RoundingMode::NearestTiesToEven,
-    RoundingMode::TowardPositive,
-    RoundingMode::TowardNegative,
-    RoundingMode::NearestTiesToAway,
-];
+use crate::golden_dump::{Dump, ROUNDINGS, add_f, assert_agree, assert_many_answers, formats, inputs};
 
 fn each(
     d: &mut Dump,

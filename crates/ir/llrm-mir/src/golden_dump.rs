@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 
 use crate::apfloat::*;
+use crate::fpclass::RoundingMode;
 
 pub(crate) struct Dump {
     hash: u64,
@@ -141,11 +142,10 @@ pub(crate) fn pattern(
     (u128::from(sign) << (f.size - 1)) | (exp << trailing) | (u128::from(int_bit) << f.fb) | frac
 }
 
-pub(crate) fn inputs(f: &Fmt) -> Vec<u128> {
+/// The structured edge values of a format (both signs); not for the 8-bit
+/// formats, which use every value.
+pub(crate) fn fixed_patterns(f: &Fmt) -> Vec<u128> {
     let mut v = Vec::new();
-    if f.tiny {
-        return (0..256).collect();
-    }
     let bias = (1_u128 << (f.eb - 1)) - 1;
     let top = ones(f.eb);
     let fr = ones(f.fb);
@@ -185,6 +185,18 @@ pub(crate) fn inputs(f: &Fmt) -> Vec<u128> {
             v.push(pattern(f, s, top, 3, 0));
         }
     }
+    v
+}
+
+/// The values the dump drivers run on.
+pub(crate) fn inputs(f: &Fmt) -> Vec<u128> {
+    if f.tiny {
+        return (0..256).collect();
+    }
+    let mut v = fixed_patterns(f);
+    let bias = (1_u128 << (f.eb - 1)) - 1;
+    let top = ones(f.eb);
+    let fr = ones(f.fb);
     let mut st = 0x9e3779b97f4a7c15_u64 ^ u64::from(f.size);
     let mut next = || {
         st = st.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -217,4 +229,53 @@ pub(crate) fn inputs(f: &Fmt) -> Vec<u128> {
         v.push(pattern(f, s, e, frac, ib));
     }
     v
+}
+
+/// The 18 values the range tests build ranges from, in increasing order (-0
+/// is below +0): `keyPatterns` of `tools/llvmport/fpinputs.h`.
+pub(crate) fn key_patterns(f: &Fmt) -> Vec<u128> {
+    let bias = (1_u128 << (f.eb - 1)) - 1;
+    let top = ones(f.eb);
+    let fr = ones(f.fb);
+    let half = 1_u128 << (f.fb - 1);
+    let x = u32::from(f.explicit);
+    vec![
+        pattern(f, 1, top, 0, x),
+        pattern(f, 1, top - 1, fr, x),
+        pattern(f, 1, bias + 1, 0, x),
+        pattern(f, 1, bias, 0, x),
+        pattern(f, 1, 1, 0, x),
+        pattern(f, 1, 0, fr, 0),
+        pattern(f, 1, 0, 1, 0),
+        pattern(f, 1, 0, 0, 0),
+        pattern(f, 0, 0, 0, 0),
+        pattern(f, 0, 0, 1, 0),
+        pattern(f, 0, 0, fr, 0),
+        pattern(f, 0, 1, 0, x),
+        pattern(f, 0, bias - 1, half, x),
+        pattern(f, 0, bias, 0, x),
+        pattern(f, 0, bias, half, x),
+        pattern(f, 0, bias + 1, 0, x),
+        pattern(f, 0, top - 1, fr, x),
+        pattern(f, 0, top, 0, x),
+    ]
+}
+
+/// The rounding modes in the order the drivers run them.
+pub(crate) const ROUNDINGS: [RoundingMode; 5] = [
+    RoundingMode::TowardZero,
+    RoundingMode::NearestTiesToEven,
+    RoundingMode::TowardPositive,
+    RoundingMode::TowardNegative,
+    RoundingMode::NearestTiesToAway,
+];
+
+/// A float as the drivers hash it: its bits, low word then high.
+pub(crate) fn add_f(
+    d: &mut Dump,
+    f: &ApFloat,
+) {
+    let bits = f.to_bits();
+    d.add(bits as u64);
+    d.add((bits >> 64) as u64);
 }

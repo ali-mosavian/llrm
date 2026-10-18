@@ -8,6 +8,7 @@ pub mod apint;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod constantfprange;
 pub mod constantrange;
 pub mod constfold;
 pub mod context;
@@ -68,6 +69,8 @@ pub use types::{FloatKind, Type, TypeId, Types};
 mod apfloat_tests;
 #[cfg(test)]
 mod build_tests;
+#[cfg(test)]
+mod constantfprange_tests;
 #[cfg(test)]
 mod constantrange_tests;
 #[cfg(test)]

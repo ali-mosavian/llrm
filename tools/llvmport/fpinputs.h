@@ -33,12 +33,9 @@ static u128 pattern(const Fmt &f, unsigned sign, u128 exp, u128 frac, unsigned i
   return ((u128)sign << (f.size - 1)) | (exp << trailing) | ((u128)intbit << f.fb) | frac;
 }
 
-static std::vector<u128> inputs(const Fmt &f) {
+// The structured edge values of a format (both signs); not for the 8-bit formats, which use every value.
+static std::vector<u128> fixedPatterns(const Fmt &f) {
   std::vector<u128> v;
-  if (f.tiny) {
-    for (unsigned i = 0; i < 256; ++i) v.push_back(i);
-    return v;
-  }
   u128 bias = ((u128)1 << (f.eb - 1)) - 1, top = ones(f.eb), fr = ones(f.fb);
   unsigned x = f.expl ? 1 : 0;
   for (unsigned s = 0; s < 2; ++s) {
@@ -75,6 +72,17 @@ static std::vector<u128> inputs(const Fmt &f) {
       v.push_back(pattern(f, s, top, 3, 0));
     }
   }
+  return v;
+}
+
+static std::vector<u128> inputs(const Fmt &f) {
+  std::vector<u128> v;
+  if (f.tiny) {
+    for (unsigned i = 0; i < 256; ++i) v.push_back(i);
+    return v;
+  }
+  v = fixedPatterns(f);
+  u128 bias = ((u128)1 << (f.eb - 1)) - 1, top = ones(f.eb), fr = ones(f.fb);
   uint64_t st = 0x9e3779b97f4a7c15ULL ^ f.size;
   auto next = [&] { st = st * 6364136223846793005ULL + 1442695040888963407ULL; return st >> 33; };
   for (int i = 0; i < 120; ++i) {
@@ -97,6 +105,18 @@ static std::vector<u128> inputs(const Fmt &f) {
   return v;
 }
 
+
+// The 18 values the range drivers build ranges from, in increasing order (-0 is below +0).
+static std::vector<u128> keyPatterns(const Fmt &f) {
+  u128 bias = ((u128)1 << (f.eb - 1)) - 1, top = ones(f.eb), fr = ones(f.fb), half = (u128)1 << (f.fb - 1);
+  unsigned x = f.expl ? 1 : 0;
+  return {pattern(f, 1, top, 0, x),      pattern(f, 1, top - 1, fr, x), pattern(f, 1, bias + 1, 0, x),
+          pattern(f, 1, bias, 0, x),     pattern(f, 1, 1, 0, x),        pattern(f, 1, 0, fr, 0),
+          pattern(f, 1, 0, 1, 0),        pattern(f, 1, 0, 0, 0),        pattern(f, 0, 0, 0, 0),
+          pattern(f, 0, 0, 1, 0),        pattern(f, 0, 0, fr, 0),       pattern(f, 0, 1, 0, x),
+          pattern(f, 0, bias - 1, half, x), pattern(f, 0, bias, 0, x),  pattern(f, 0, bias, half, x),
+          pattern(f, 0, bias + 1, 0, x), pattern(f, 0, top - 1, fr, x), pattern(f, 0, top, 0, x)};
+}
 
 static std::vector<Fmt> formats() {
   return {
