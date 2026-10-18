@@ -1320,10 +1320,10 @@ def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
 def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
     cfg = gate.load()
-    assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
+    assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-premise"] and cfg["groups"]["oracle"] == ["oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
     assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
-    assert cfg["requires"]["oracle-sweep"] == ["perf"], "the sweep first checks that each oracle ran, which it measures with perf"
+    assert cfg["requires"]["oracle-premise"] == ["perf"], "which oracle ran at all is measured with perf; the sharded compiles need none"
 
 
 def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():
@@ -1384,3 +1384,13 @@ def test_a_push_to_main_makes_no_perf_or_cost_job():
     """Every merge queued a perf and a cost job on the six tinytim runners: 16 of the 20 jobs waiting, and the pull requests' behind them."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "COMPILER: ${{ github.event_name == 'pull_request' && steps.plan.outputs.compiler || 'false' }}" in workflow
+
+
+def test_the_oracle_sweep_is_cut_into_slices_that_run_on_their_own_runners_and_the_premise_stays_on_perf():
+    """No counters needed to compile 1,350 times: hosted, sharded; only 'did each oracle run' reads perf, once, on tinytim."""
+    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"], "full")
+    groups = gate.groups_of(p, {})
+    n = gate.load()["oracle"]["shards"]
+    assert [g for g in groups if g.startswith("oracle")] == [f"oracle-{i}" for i in range(1, n + 1)] and groups["perf"][-1] == "oracle-premise"
+    assert gate.shard_of("oracle-2") == ("oracle", f"2/{n}") and gate.shard_of("bench-1") == ("bench", f"1/{gate.load()['bench']['shards']}")
+    assert "--shard" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"] and "--no-premise" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"]

@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -119,13 +120,20 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "8")))
     parser.add_argument("--levels", default="-O1,-O2,-O3,-Os,-Omax")
     parser.add_argument("--machines", default="-m16,-m32")
+    parser.add_argument("--shard", metavar="I/N", help="only slice I of N of the programs (the gate's oracle-I job): no entry is judged paid by a slice")
+    parser.add_argument("--no-premise", action="store_true", help="skip the check that each oracle ran (it needs perf; the gate's oracle-premise step does it once)")
+    parser.add_argument("--premise-only", action="store_true", help="only the check that each oracle ran")
     parser.add_argument("--allow-unexercised", action="append", default=[], metavar="NAME", help="an oracle the sweep may skip")
     args = parser.parse_args()
     args.bin = args.bin or llrmbin.bin_dir()
     expected = tomllib.loads(args.expected.read_text()).get("expected", []) if args.expected else []
+    started = time.perf_counter()
     found = programs()
     biggest = sorted(found, key=lambda one: -one[1].stat().st_size)[:3]
-    ran = exercised(args.bin, [(t, p, "-O2", "-m32") for t, p in biggest])
+    if args.shard:
+        index, count = (int(x) for x in args.shard.split("/"))
+        found = [one for at, one in enumerate(found) if at % count == index - 1]
+    ran = {} if args.no_premise else exercised(args.bin, [(t, p, "-O2", "-m32") for t, p in biggest])
     unexercised = []
     for name, counts in ran.items():
         if counts is None:
@@ -137,6 +145,9 @@ def main() -> int:
     if unexercised:
         print("never exercised: " + ", ".join(unexercised) + " (a sweep where an oracle did not run proves nothing about it)")
         return 2
+    if args.premise_only:
+        print("every oracle ran")
+        return 0
     jobs = [(t, p, l, m) for t, p in found for l in args.levels.split(",") for m in args.machines.split(",")]
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda job: compile_one(job, args.bin), jobs))
@@ -145,12 +156,15 @@ def main() -> int:
         if why:
             findings[why].add(f"{source.name} {level} {machine}")
     new, seen, unseen = judge(findings, expected)
+    if args.shard:
+        unseen = []  # a slice cannot see every kind the whole sweep sees
     # The line a reader needs first: did every compile run, and what failed that nothing expected.
     print(f"{len(results)} compiles / {len(new)} new finding kinds / {len(seen)} expected / {len(unseen)} expected entries paid (delete them)")
     for why, where in sorted(findings.items(), key=lambda item: -len(item[1])):
         print(f"{len(where):4}  {why}\n      e.g. {sorted(where)[:3]}")
     for one in unseen:
         print(f"paid: {one}: no longer happens; delete the entry from {args.expected}")
+    print(f"wall {time.perf_counter() - started:.0f} s" + (f" (slice {args.shard}: {len(found)} programs)" if args.shard else ""))
     return 1 if new or unseen else 0
 
 

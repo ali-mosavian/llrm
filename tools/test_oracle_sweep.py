@@ -44,3 +44,33 @@ def test_a_finding_nothing_expects_fails_and_an_expected_one_that_stopped_failin
     assert new == ["dataflow: something else"]
     _, _, unseen = oracle_sweep.judge({}, expected)
     assert unseen and "#2193" in unseen[0]
+
+
+def test_a_slice_runs_only_its_programs_and_never_calls_an_expected_entry_paid(tmp_path, monkeypatch, capsys):
+    """Three slices see different programs; an entry the other slices' programs show must not fail this one as 'paid'."""
+    programs = [("llrm-nib", tmp_path / f"p{i}.nib") for i in range(6)]
+    for _, path in programs:
+        path.write_text("x")
+    monkeypatch.setattr(oracle_sweep, "programs", lambda: programs)
+    seen = []
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: seen.append(job[1].name) or (job, None))
+    expected = tmp_path / "e.toml"
+    expected.write_text('[[expected]]\nmatch = "x"\nfix = "#1"\nowner = "o"\n')
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--shard", "2/3", "--levels=-O2", "--machines=-m32", "--expected", str(expected)])
+    assert oracle_sweep.main() == 0
+    assert sorted(seen) == ["p1.nib", "p4.nib"] and "wall " in capsys.readouterr().out
+
+
+def test_a_new_finding_kind_turns_the_sweep_red_and_the_first_line_says_so(tmp_path, monkeypatch, capsys):
+    """The step is red on a finding nothing expects: exit 1, and the census line leads the output."""
+    path = tmp_path / "p.nib"
+    path.write_text("x")
+    monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, "dataflow: a new kind of panic"))
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--levels=-O2", "--machines=-m32"])
+    assert oracle_sweep.main() == 1
+    assert capsys.readouterr().out.splitlines()[0].startswith("1 compiles / 1 new finding kinds / 0 expected")
