@@ -24,9 +24,10 @@
 //! graph.
 //!
 //! Splitting a loop costs a loop's control, so it pays only for a partition
-//! that is no loop: one `fill` takes whole (`fill::takes`: a fill of a value
-//! the loop does not change, or a copy), as in gcc's pattern distribution.
-//! Those stand alone and what lies between them is one loop, as it was.
+//! that is no loop: one `loopidioms` takes whole (`loopidioms::takes`: a fill
+//! of a value the loop does not change, or a copy), as in gcc's pattern
+//! distribution. Those stand alone and what lies between them is one loop, as
+//! it was.
 //!
 //! ```text
 //!   for i: a[i] = 0; b[i] = c[i] * 3        memset(a); for i: b[i] = c[i] * 3
@@ -36,8 +37,8 @@
 //! operands cost, as often as they run (an upper bound on what a split saves),
 //! must be `MIN_PERCENT` of the body's price. The loop is then copied once for
 //! each partition but the last ([`crate::loopclone`]'s `copied`), each copy
-//! keeps its partition's stores and the original the last's, `fill` runs over
-//! the parts and what nothing reads is removed, and the result is priced
+//! keeps its partition's stores and the original the last's, `loopidioms` runs
+//! over the parts and what nothing reads is removed, and the result is priced
 //! beside the body. Only then is the pipeline run over it, as in
 //! [`crate::unswitch`], and [`crate::candidate`] keeps it when its price,
 //! spills included, is `MIN_PERCENT` smaller (`Gain::CheaperBy`). At most
@@ -92,8 +93,9 @@
 //!
 //! # Needs
 //! [`crate::candidate`], [`crate::loopclone`] (`copied`), [`crate::loopshape`],
-//! [`crate::fill`] (`takes`), [`crate::profit`], [`llrm_analysis::access`],
-//! [`llrm_analysis::dependence`] (`meetings`), `induction` (`counted`).
+//! [`crate::loopidioms`] (`takes`), [`crate::profit`],
+//! [`llrm_analysis::access`], [`llrm_analysis::dependence`] (`meetings`),
+//! `induction` (`counted`).
 //!
 //! # Keeps
 //! Nothing when it splits: the function is replaced by the candidate.
@@ -121,8 +123,8 @@ use num_traits::ToPrimitive;
 
 use crate::candidate::{self, Baseline, Gain, Pricing};
 use crate::dead::Dead;
-use crate::fill;
 use crate::lcssa::operations;
+use crate::loopidioms;
 use crate::profit::{self, OperationCosts};
 use crate::{loopclone, loopshape};
 
@@ -272,11 +274,11 @@ fn saved(
 }
 
 /// `split`, the copy `distributed` made of `split.shape`, with what takes a
-/// loop's part out of it done: `fill` over the loops of the parts and what
-/// that leaves unused removed, which is the work of the pipeline that makes a
-/// split pay, and all of it that the pay needs. Splitting pays only so, as in
-/// gcc's pattern distribution: a loop's control costs what a part of the work
-/// saves unless the part is done in one instruction.
+/// loop's part out of it done: `loopidioms` over the loops of the parts and
+/// what that leaves unused removed, which is the work of the pipeline that
+/// makes a split pay, and all of it that the pay needs. Splitting pays only so,
+/// as in gcc's pattern distribution: a loop's control costs what a part of the
+/// work saves unless the part is done in one instruction.
 fn with_idioms(
     unit: &mut Unit,
     analyses: &Analyses,
@@ -291,7 +293,7 @@ fn with_idioms(
         let outer = std::rc::Rc::clone(analyses.outer());
         let registers = analyses.fresh().get::<Registers>(unit.context, unit.layout, function);
         let (callees, declared) = (outer.callees(), &mut *unit.declared);
-        crate::fill::filled_with(
+        crate::loopidioms::filled_with(
             unit.context,
             unit.layout,
             callees,
@@ -323,7 +325,7 @@ fn with_idioms(
 struct Split {
     shape: Canonical,
     partitions: Vec<Vec<InstId>>,
-    /// Which partitions `fill` takes whole.
+    /// Which partitions `loopidioms` takes whole.
     idioms: Vec<bool>,
 }
 
@@ -431,7 +433,7 @@ impl View<'_> {
         // nothing.
         let mut partitions: Vec<(Vec<InstId>, bool)> = Vec::new();
         for part in self.grouped(&shape, &found, trips) {
-            let idiom = fill::takes(self.within, self.outer.callees(), &shape.loop_, &part);
+            let idiom = loopidioms::takes(self.within, self.outer.callees(), &shape.loop_, &part);
             match partitions.last_mut() {
                 Some((last, false)) if !idiom => last.extend(part),
                 _ => partitions.push((part, idiom)),
