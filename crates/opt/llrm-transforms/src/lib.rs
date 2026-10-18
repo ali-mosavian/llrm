@@ -182,6 +182,7 @@ pub mod simplifycfg;
 pub mod simplifyindvar;
 pub mod sink;
 pub mod spares;
+pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
 pub mod sroa;
