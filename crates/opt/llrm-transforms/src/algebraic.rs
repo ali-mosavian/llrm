@@ -2080,17 +2080,19 @@ fn _unsigned_divisions(
     // CVP's `processSDivOrSRem`: LazyValueInfo's range of the dividend first.
     let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
     let mut lvi = LazyValueInfo::new();
-    let mut non_negative: IndexMap<InstId, bool> = IndexMap::default();
-    for &(_, inst, _) in &candidates {
-        let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
-        let range = lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false);
-        non_negative.insert(inst, range.is_all_non_negative());
-    }
+    let non_negative: Vec<bool> = candidates
+        .iter()
+        .map(|&(_, inst, _)| {
+            let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
+            lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
+        })
+        .collect();
     let held = Ranges::of(context, layout, function, analyses, true);
     let unit = held.unit(context, layout, function, outer);
     let made: Vec<(InstId, BinaryOp)> = candidates
         .into_iter()
-        .filter_map(|(block, inst, width)| {
+        .zip(non_negative)
+        .filter_map(|((block, inst, width), non_negative)| {
             let operands = &function.instruction(inst).operands;
             let fact = consts::_operand(&unit, operands[1], facts, None)?;
             let divisor = BigInt::from(consts::masked(&fact.n, width));
@@ -2106,7 +2108,7 @@ fn _unsigned_divisions(
                 && divisor > BigInt::from(1u8)
                 && divisor < BigInt::from(1u8) << (width - 1)
                 && (power || !size);
-            let proved = non_negative[&inst]
+            let proved = non_negative
                 || ranges::operand_at(&unit, operands[0], cfg::id(block))
                     .ok()
                     .flatten()
