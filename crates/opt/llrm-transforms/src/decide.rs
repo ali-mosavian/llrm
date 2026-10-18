@@ -191,7 +191,7 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    settled: &IndexMap<BlockId, bool>,
+    settled: &llrm_mir::dense::IdMap<BlockId, bool>,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -283,11 +283,11 @@ fn _settled(
     layout: &DataLayout,
     function: &Function,
     outer: &Outer,
-) -> IndexMap<BlockId, bool> {
+) -> llrm_mir::dense::IdMap<BlockId, bool> {
     let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
     let mut env = Env::new(context, &outer.globals, &outer.metadata, function, layout, &assumptions);
     let mut lvi = LazyValueInfo::new();
-    let mut settled = IndexMap::default();
+    let mut settled = llrm_mir::dense::IdMap::default();
     for &block in function.layout() {
         let Some(last) = function.terminator(block) else { continue };
         let branch = function.instruction(last);
