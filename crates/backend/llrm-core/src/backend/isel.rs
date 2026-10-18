@@ -228,6 +228,7 @@ pub use matcher::selector;
 #[cfg(test)]
 pub(crate) use matcher::{HOOKED, m16};
 mod expand;
+mod huge;
 mod wide;
 
 /// Where one parameter arrives: a cell in the frame, by its displacement from
@@ -5944,6 +5945,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, source, length, volatile] = arguments else {
             return refuse("a memcpy of other than four operands");
         };
+        if self.is_huge(destination) || self.is_huge(source) {
+            return self.huge_copy(destination, source, length, backward, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let (to, from) = (self.pointer(destination)?, self.pointer(source)?);
         let constant = self.length(length);
@@ -6243,6 +6247,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, length, volatile] = arguments else {
             return refuse("a memset of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, length, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let byte = self.constant(value, 1);
         let pattern = |byte: i64, width: u32| (0..width).fold(0i64, |word, _| (word << 8) | (byte & 0xFF));
@@ -6369,6 +6376,9 @@ impl Selector<'_, '_, '_> {
         let &[destination, value, count, volatile] = arguments else {
             return refuse("a pattern fill of other than four operands");
         };
+        if self.is_huge(destination) {
+            return self.huge_fill(destination, value, count, at, out);
+        }
         let volatile = self.constant(volatile, 1) != Some(0);
         let ty = self.function.operand_type(&self.module.context, value).expect("a typed cell");
         let width = match self.module.context.types.int_bits(ty) {
