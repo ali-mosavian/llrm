@@ -55,3 +55,13 @@ def test_the_default_bench_feeds_a_program_its_ci_bytes_under_the_corpus_name_an
     assert small["want"] == ["1", "2"] and [f.name for f in small["files"]] == ["dickens"] and small["files"][0].stat().st_size == 100
     full = bench.timing_input(variant, directory)
     assert full["want"] == ["9", "9"] and full["files"][0].stat().st_size == 2048, "--time keeps the whole corpus"
+
+
+def test_a_flat_row_measure_flat_already_ran_on_the_whole_corpus_is_not_run_again_beside_the_reduced_ones(monkeypatch, tmp_path):
+    """grep bq32 -O2/-Os printed 115 against 4745 on CI: it was run again here in one DOSBox batch with the reduced copies of the corpus under the same name."""
+    ran = fake(monkeypatch, {"cycles": 5, "ms": 1.0})
+    flat = ("grep", "bq32", "O2")
+    out = {KEY: dict(SIZED), flat: {"instructions": 623}}
+    needs = {KEY: {"files": (), "want": ["1"]}, flat: {"files": (), "want": ["9"]}}
+    bench.run_timed(out, {KEY: Path("a.exe"), flat: Path("b.exe")}, needs, tmp_path, timing=False, already={flat})
+    assert ran == [[KEY]] and out[flat] == {"instructions": 623}

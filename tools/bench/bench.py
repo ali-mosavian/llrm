@@ -569,16 +569,18 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
     out |= measure_flat(flat, folder / "flat")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
-    run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing)
+    run_timed(out, exes, {key: needs[key] for key in exes if needs.get(key)}, folder / "time", timing, already=set(flat))
     return out
 
 
-def run_timed(out: dict, exes: dict, needs: dict, work: Path, timing: bool) -> None:
+def run_timed(out: dict, exes: dict, needs: dict, work: Path, timing: bool, already: frozenset | set = frozenset()) -> None:
     """The timed-only programs run in DOSBox and their output is compared with the expected one, always: a program with no instruction count
     is otherwise sized and never run, and a miscompile there reaches no gate. `timing` also keeps the times (--time); without it a row gets
-    only `checked: true`, or an error row when it prints something else, or `unchecked: why` when its corpus is not here."""
+    only `checked: true`, or an error row when it prints something else, or `unchecked: why` when its corpus is not here. `already`: the flat
+    target's rows, which measure_flat has run on the whole corpus and compared: run again here beside the others, whose files are the reduced
+    corpus under the same DOS name, they read whichever copy the shared volume held (grep bq32 printed the 1 MiB answer, 115, against 4745)."""
     if not timing:
-        exes = {key: path for key, path in exes.items() if key in needs}
+        exes = {key: path for key, path in exes.items() if key in needs and key not in already}
     for key, timed in time_programs(exes, work, needs).items():
         if timing:
             out[key] = out.get(key, {}) | ({"time_error": timed["error"]} if "error" in timed else timed)
