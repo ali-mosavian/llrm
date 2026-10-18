@@ -1834,6 +1834,59 @@ impl Analysis for PlainAccesses {
     }
 }
 
+/// A body's translated MemorySSA with the accesses it was made from.
+pub struct MssaGraph {
+    pub mssa: crate::mssa::Mssa,
+    pub accesses: std::rc::Rc<memoryssa::Accesses>,
+}
+
+/// Two graphs are equal when every access says the same (`shadow::said`): the
+/// manager's check of a preserved set compares a graph with the one made again.
+impl PartialEq for MssaGraph {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        std::ptr::eq(self, other) || crate::mssa::shadow::said(&self.mssa) == crate::mssa::shadow::said(&other.mssa)
+    }
+}
+
+impl std::fmt::Debug for MssaGraph {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("MssaGraph")
+    }
+}
+
+/// `MemorySSAAnalysis`: the graph `mssa::Mssa::build` makes of a body, once per
+/// body state. A pass that edits it takes a clone (`Mssa: Clone`) and updates
+/// that; the manager drops the cached graph with the pass's edit.
+pub struct MemorySsa;
+
+impl Analysis for MemorySsa {
+    type Result = Result<std::rc::Rc<MssaGraph>, String>;
+    const NAME: &'static str = "mssa";
+
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self::Result {
+        let plain = analyses.get::<PlainAccesses>(context, layout, function);
+        let accesses = Result::as_ref(&*plain).map_err(String::clone)?;
+        let shape = analyses.get::<Shape>(context, layout, function);
+        let mssa = crate::mssa::Mssa::build(
+            function,
+            &shape.dominance,
+            &crate::mssa::shadow::effect_of(accesses, function),
+        );
+        Ok(std::rc::Rc::new(MssaGraph { mssa, accesses: std::rc::Rc::clone(accesses) }))
+    }
+}
+
 /// Float values, integers and memory in one solve, each call writing what
 /// `writes` says: `floatfacts::solved_with`.
 pub struct FloatFacts;
