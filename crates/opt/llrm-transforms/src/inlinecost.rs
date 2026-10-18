@@ -51,9 +51,9 @@
 //!
 //! # See also
 //! [`crate::inline`], the decision this is to replace; the plan is
-//! `docs/architecture/cgscc-plan.md`.
+//! the cgscc plan page in docs/architecture.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
@@ -61,6 +61,7 @@ use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::types::{FloatKind, Type};
+use llrm_support::hash::HashMap;
 
 // InlineCost.cpp:58-186, the `cl::opt` defaults.
 /// `inline-instr-cost`.
@@ -396,7 +397,7 @@ impl<'a> Analyzer<'a> {
             enabled_sroa: IdSet::new(),
             offsets: IdMap::new(),
             dead_blocks: BTreeSet::new(),
-            known_successors: HashMap::new(),
+            known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
             recursive_call: false,
@@ -1782,8 +1783,7 @@ impl<'a> Analyzer<'a> {
 
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
-            let loops =
-                loop_headers(self.callee).into_iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
+            let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
             self.add_cost(loops as i64 * LOOP_PENALTY);
         }
         if self.vector_instructions <= self.instructions / 10 {
@@ -1976,11 +1976,7 @@ fn lowered_to_call(
 }
 
 fn only_reads_memory(info: &CallInfo) -> bool {
-    info.attrs.iter().any(|one| match one {
-        Attribute::Flag(flag) => flag == "readnone" || flag == "readonly",
-        Attribute::Memory(locations) => locations.iter().all(|(_, access)| access == "read" || access == "none"),
-        _ => false,
-    })
+    !llrm_mir::memory::stated(&info.attrs).writes
 }
 
 /// `getEstimatedNumberOfCaseClusters` (BasicTTIImpl.h:584), D2: the clusters a
@@ -2011,10 +2007,10 @@ fn case_clusters(
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).
-fn loop_headers(function: &Function) -> BTreeSet<BlockId> {
-    let Some(&entry) = function.layout().first() else { return BTreeSet::new() };
-    let mut headers = BTreeSet::new();
-    let mut state: HashMap<u32, u8> = HashMap::new();
+fn loop_headers(function: &Function) -> IdSet<BlockId> {
+    let Some(&entry) = function.layout().first() else { return IdSet::new() };
+    let mut headers = IdSet::new();
+    let mut state: HashMap<u32, u8> = HashMap::default();
     let mut stack = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>())];
     state.insert(entry.0, 1);
     while let Some((block, successors)) = stack.last_mut() {
@@ -2079,7 +2075,7 @@ pub fn shadow(
                     .iter()
                     .any(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(caller_id)),
             );
-        let mut ordinal: HashMap<GlobalId, usize> = HashMap::new();
+        let mut ordinal: HashMap<GlobalId, usize> = HashMap::default();
         for &block in caller.layout() {
             for &inst in caller.block(block).instructions() {
                 let Some(callee_id) = llrm_mir::memory::callee(&module.context, caller, inst) else { continue };
@@ -2303,8 +2299,8 @@ pub fn sites(
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
-) -> llrm_support::hash::IndexMap<InstId, crate::inline::Candidate> {
-    let mut out = llrm_support::hash::IndexMap::default();
+) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
+    let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let caller_recursive = recursive.contains(&caller_id);
     let frequencies = crate::profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None)
