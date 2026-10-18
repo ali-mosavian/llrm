@@ -5169,6 +5169,8 @@ pub fn applied(
             succ: block.succ.clone(),
             phis: block.phis.clone(),
             cold: block.cold,
+            align: block.align,
+            max_skip: block.max_skip,
         })
         .collect::<Vec<_>>();
     if let Some(error) = failed.into_inner() {

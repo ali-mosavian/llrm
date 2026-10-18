@@ -382,6 +382,7 @@ pub fn assembled_by(
         far_bss: BTreeSet::new(),
         stack: 0,
         object: arch.object(),
+        padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
     })
 }
 
