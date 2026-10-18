@@ -170,6 +170,7 @@ Module `scev/expander.rs`, replacing `llrm-transforms/src/expand.rs`.
 | 11 | `rewriteLoopExitValues` runs with `ReplaceExitVal` at its `cl::opt` default `OnlyCheapRepl`; the other policies (`NeverRepl`, `UnusedIndVarInLoop`, `AlwaysRepl`) are test switches | no llrm caller sets a policy; `NeverRepl` is the switch `LLRM_NO_SCEV_EXITVALUES` |
 | 12 | `FindValueInExprValueMap` does not call `canReuseInstruction` | the call only answers false for a value whose poison-generating flags cannot be dropped; here that makes a reuse count as a cost where LLVM would price it at zero; the cost query errs towards free |
 | 13 | `ExpansionTti` prices every scalar integer instruction `TCC_Basic` (`UnitCosts`) | the X86 `getArithmeticInstrCost` (#2213) has not merged; it prices a divide above this. Replaced when it does |
+| 14 | `rewriteLoopExitValues` leaves an exit value that contains an add recurrence | the expander's `visitAddRecExpr` is not translated yet (loop-products-slope, S6 round 2); lifted when it is |
 
 Container idioms (`FoldingSet` -> interner, `SmallVector` -> `Vec`, `DenseMap` -> `IdMap`) are not DEVIATEs.
 

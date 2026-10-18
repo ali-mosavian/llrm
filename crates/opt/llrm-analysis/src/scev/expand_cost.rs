@@ -222,14 +222,14 @@ impl Expander {
             | Kind::UMin(_)
             | Kind::SMin(_)
             | Kind::SequentialUMin(_) => {
-                debug_assert!(se.operands(s).len() > 1, "Nary expr should have more than 1 operand.");
+                debug_assert!(se.operands_of(s).len() > 1, "Nary expr should have more than 1 operand.");
                 // The simple nary expr will require one less op (or pair of
                 // ops) than the number of it's terms.
                 *cost += cost_and_collect_operands(se, s, tti, worklist);
                 *cost > budget
             }
             Kind::AddRec(..) => {
-                debug_assert!(se.operands(s).len() >= 2, "Polynomial should be at least linear");
+                debug_assert!(se.operands_of(s).len() >= 2, "Polynomial should be at least linear");
                 *cost += cost_and_collect_operands(se, s, tti, worklist);
                 *cost > budget
             }
@@ -333,7 +333,7 @@ fn cost_and_collect_operands(
     worklist: &mut Vec<Operand_>,
 ) -> i64 {
     let ty = se.node(s).ty.expect("a typed expression");
-    let operands: Vec<Scev> = se.operands(s).iter().map(|op| op.scev).collect();
+    let operands: Vec<Scev> = se.operands_of(s).iter().map(|op| op.scev).collect();
     let count = operands.len();
     let mut cost = 0i64;
     // Collect the operations of all the instructions that will be needed to

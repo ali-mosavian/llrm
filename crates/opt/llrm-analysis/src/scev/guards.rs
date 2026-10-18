@@ -679,7 +679,7 @@ fn match_c1_plus_unknown(
 }
 
 /// `containsAddRecurrence`.
-fn contains_add_recurrence(
+pub fn contains_add_recurrence(
     se: &ScalarEvolution,
     s: Scev,
 ) -> bool {

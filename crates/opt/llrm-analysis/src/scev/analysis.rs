@@ -204,6 +204,25 @@ impl ScevSession {
         self.ask_within(context, layout, &outer.globals, &outer.metadata, function, query)
     }
 
+    /// The expressions and the [`Env`] to expand them in, for a pass that
+    /// edits the function between queries (the CFG stays as it was).
+    pub fn split<'a>(
+        &'a mut self,
+        layout: &'a DataLayout,
+        globals: &'a [llrm_mir::module::GlobalValue],
+        metadata: &'a [llrm_mir::module::MetadataNode],
+    ) -> (&'a mut ScalarEvolution, super::expander::Env<'a>) {
+        let env = super::expander::Env {
+            globals,
+            metadata,
+            layout,
+            loops: &self.loops,
+            tree: &self.tree,
+            assumptions: &self.assumptions,
+        };
+        (&mut self.scev, env)
+    }
+
     /// [`ScevSession::ask`] for a caller that holds the globals and metadata.
     pub fn ask_within<R>(
         &mut self,

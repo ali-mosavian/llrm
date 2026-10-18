@@ -106,6 +106,7 @@ pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
+pub mod exitvalues;
 pub mod expand;
 pub mod fixednarrow;
 pub mod floatfold;
