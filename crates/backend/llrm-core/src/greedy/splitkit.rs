@@ -60,6 +60,14 @@ pub trait SplitEnv {
         &self,
         instr: InstrKey,
     ) -> bool;
+
+    /// `BuildMI(MBB, I, DebugLoc(), TII.get(TII.getLiveRangeSplitOpcode(
+    /// FromReg, MF)), ToReg).addReg(FromReg)`: a move of `from` into `to`.
+    fn build_copy(
+        &self,
+        to: u32,
+        from: u32,
+    ) -> std::sync::Arc<crate::model::lir::Insn>;
 }
 
 /// `-enable-split-loopiv-heuristic`
@@ -101,17 +109,27 @@ impl InsertPointAnalysis {
 
     /// `getFirstInsertPoint`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.h#L82>):
-    /// LIR blocks start with no phi, label or debug instruction.
+    /// `SkipPHIsLabelsAndDebug`; a LIR block starts with no phi or label, but
+    /// the entry's arrival instruction is no code and nothing goes before it.
     pub fn get_first_insert_point(
         &self,
         lis: &LiveIntervals,
         mbb: usize,
     ) -> SlotIndex {
-        match lis.block_insns(mbb).first() {
-            Some(first) => lis.indexes.get_instruction_index(first.id()),
+        match first_insert_instr(lis, mbb) {
+            Some(first) => lis.indexes.get_instruction_index(first),
             None => lis.indexes.get_mbb_start_idx(mbb),
         }
     }
+}
+
+/// The first instruction of `mbb` that code may go before (`MBB.
+/// SkipPHIsLabelsAndDebug(MBB.begin())`).
+pub fn first_insert_instr(
+    lis: &LiveIntervals,
+    mbb: usize,
+) -> Option<InstrKey> {
+    lis.block_insns(mbb).iter().find(|insn| !insn.arrival()).map(|insn| insn.id())
 }
 
 /// `SplitAnalysis::BlockInfo`
@@ -545,6 +563,14 @@ mod tests {
             _instr: InstrKey,
         ) -> bool {
             false
+        }
+
+        fn build_copy(
+            &self,
+            _to: u32,
+            _from: u32,
+        ) -> Arc<Insn> {
+            unreachable!("the analysis builds no copy")
         }
     }
 
