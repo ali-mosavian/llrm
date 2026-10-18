@@ -151,6 +151,7 @@ use llrm_mir::print;
 use llrm_mir::program::Program;
 
 use crate::interprocedural::Interprocedural;
+use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
@@ -632,17 +633,6 @@ fn experiment_llvm() -> bool {
     llrm_support::env_flag!("LLRM_EXP_LLVM")
 }
 
-/// Where a list of LLVM's order stands.
-#[derive(Clone, Copy)]
-pub(crate) enum Phase {
-    /// The early function pipeline (l.1178-1180).
-    Early,
-    /// GlobalCleanup (l.1241-1244).
-    Cleanup,
-    /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
-    Simplify,
-}
-
 /// The passes of `phase`, each once in the place LLVM runs it (the line is the
 /// slot's name).
 pub(crate) fn llvm_order(
@@ -672,6 +662,9 @@ pub(crate) fn llvm_order(
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
     let list: Vec<Box<dyn FunctionPass>> = match phase {
+        // Not function lists: their builders call `parity::check_phase`
+        // themselves.
+        Phase::Module | Phase::Backend => Vec::new(),
         Phase::Early => {
             vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
@@ -1141,6 +1134,9 @@ impl Fixed {
         linear.unrollers.clear();
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
+        let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
+        let checked = crate::parity::check_phase(phase, &built);
+        debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
             linear.peelers.clear();
