@@ -5,7 +5,10 @@
 //! prints, per function and innermost loop, how many of the loop's header
 //! phis ScalarEvolution proves step by a nonzero amount: its induction
 //! variables, as tools/loops counts them. `llrm-mir --loops FILE` prints
-//! `print<loops>`'s text for each function.
+//! `print<loops>`'s text for each function. `llrm-mir --unroll N FILE`
+//! writes the module with every innermost loop that leaves from one
+//! conditional block unrolled completely with `N` copies
+//! (`tools/unroll_oracle.py` compares it with the pinned `opt`).
 
 use std::process::ExitCode;
 
@@ -26,6 +29,14 @@ fn main() -> ExitCode {
     if loops {
         arguments.remove(0);
     }
+    let unroll = {
+        let at = arguments.iter().position(|one| one == "--unroll");
+        at.and_then(|at| {
+            let count = arguments.get(at + 1).and_then(|one| one.parse::<u32>().ok());
+            arguments.drain(at..(at + 2).min(arguments.len()));
+            count
+        })
+    };
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -49,11 +60,16 @@ fn main() -> ExitCode {
         }
     };
     match llrm_mir::parse::module(&text) {
-        Ok(module) => {
+        Ok(mut module) => {
             let problems = llrm_mir::verify::verify(&module);
             if !problems.is_empty() {
                 problems.iter().for_each(|one| eprintln!("{path}: {one}"));
                 return ExitCode::FAILURE;
+            }
+            if let Some(count) = unroll {
+                unrolled_innermost(&mut module, count);
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
             }
             if loops {
                 print!("{}", llrm_mir::loopinfo::print_loops(&module));
@@ -109,4 +125,41 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
         }
     }
     out
+}
+
+/// Every innermost loop with one exiting conditional block, unrolled completely
+/// with `count` copies.
+fn unrolled_innermost(
+    module: &mut llrm_mir::module::Module,
+    count: u32,
+) {
+    use llrm_analysis::cfg;
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, one)| !one.layout().is_empty())
+        .filter_map(|(_, one, _)| one.name.clone())
+        .collect();
+    for name in names {
+        let (_, function) = module.function_mut(&name).expect("a function");
+        llrm_transforms::lcssa::closed(function).expect("closed SSA form");
+        let shape = cfg::Shape::of(function);
+        for loop_ in shape.loops.iter().filter(|one| {
+            !shape.loops.iter().any(|other| other.header != one.header && one.body.contains(&other.header))
+        }) {
+            let exiting: Vec<_> = loop_
+                .body
+                .iter()
+                .map(|&at| cfg::block(at))
+                .filter(|&at| function.successors(at).iter().any(|&to| !loop_.body.contains(&cfg::id(to))))
+                .collect();
+            let [block] = exiting[..] else { continue };
+            let options = llrm_transforms::loopunroll::Options {
+                count,
+                max_trip_count: count,
+                max_or_zero: false,
+                exits: vec![llrm_transforms::loopunroll::Exit { block, trip_count: count }],
+            };
+            llrm_transforms::loopunroll::unroll_loop(function, loop_, &options).expect("an unroll");
+        }
+    }
 }

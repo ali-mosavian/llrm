@@ -115,7 +115,7 @@ pub fn merged(function: &mut Function) -> bool {
 }
 
 /// Whether `first` took the block it jumps to, if it alone reaches it.
-fn merged_into(
+pub(crate) fn merged_into(
     function: &mut Function,
     first: llrm_mir::module::BlockId,
     entry: llrm_mir::module::BlockId,

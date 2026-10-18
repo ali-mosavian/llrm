@@ -137,6 +137,7 @@ pub mod loopnest;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
+pub mod loopunroll;
 pub mod loopversion;
 pub mod lsr;
 pub mod mem2reg;
