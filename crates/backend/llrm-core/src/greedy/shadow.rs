@@ -276,6 +276,13 @@ pub fn decide_with(
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
+    if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
+        for (b, block) in body.blocks.iter().enumerate() {
+            for (at, one) in block.insns.iter().enumerate() {
+                eprintln!("IN b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}", one.id(), one.defines, one.uses, one.group, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+            }
+        }
+    }
     let lis = LiveIntervals::new(body);
     // The environment: orders, frequencies, loop exits.
     let busy = Frequency::of(body);
@@ -343,12 +350,12 @@ pub fn decide_with(
             greedy.lis.insert_interval(li);
         }
     }
+    // A value an instruction requires in one register may be given that one only:
+    // its allocation order is the register (`getRegClass` of a one-register
+    // class), and it competes like any other range: it can be evicted or spilled.
     for (&reg, &phys) in inputs.pins {
-        if greedy.lis.has_interval(reg) || !greedy.lis.reg_nodbg_empty(reg) {
-            let li = greedy.lis.interval_rc(reg);
-            greedy.matrix.assign(&li, crate::model::ir::root(phys));
-            greedy.extra.set_stage(reg, LiveRangeStage::Done);
-            greedy.pinned.insert(reg);
+        if !greedy.lis.reg_nodbg_empty(reg) {
+            tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
         }
     }
     greedy.allocate_phys_regs();
@@ -363,6 +370,13 @@ pub fn decide_with(
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
             placed.push((reg, phys));
+        }
+    }
+    if std::env::var("LLRM_PLACED_DEBUG").is_ok() {
+        for reg in greedy.lis.values().collect::<Vec<_>>() {
+            if greedy.matrix.vrm.get_phys(reg).is_none() {
+                eprintln!("v{reg} named, no phys; interval {} stage {:?} original {}", greedy.lis.has_interval(reg), greedy.extra.get_stage(reg), greedy.matrix.vrm.get_original(reg));
+            }
         }
     }
     let spilled = greedy.recorded_spills();

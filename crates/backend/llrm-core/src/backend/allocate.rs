@@ -1627,6 +1627,15 @@ pub fn greedy_rewritten(
                 eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
             }
         }
+        if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
+            if let Some(edited) = &d.edited {
+                for (b, block) in edited.blocks.iter().enumerate() {
+                    for (at, one) in block.insns.iter().enumerate() {
+                        eprintln!("ED b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}", one.id(), one.defines, one.uses, one.group, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                    }
+                }
+            }
+        }
         if let Some(decided) = decided {
             if decided.report.stats.failed == 0 && !decided.spill_failed {
                 if let Some(edited) = decided.edited {
@@ -1738,6 +1747,13 @@ fn greedy_check(
         for (held, register) in one.requires.iter().chain(&one.delivers) {
             if placed.get(&held.value).is_some_and(|got| _whole(*got) != _whole(*register)) {
                 eprintln!("greedy-check {}: v{} must be in {} but is in {}", body.name, held.value, register.repr(), placed[&held.value].repr());
+            }
+        }
+    }
+    for one in body.insns() {
+        for value in one.defines.iter().chain(&one.uses) {
+            if !placed.contains_key(value) && !body.inputs.contains(value) {
+                eprintln!("greedy-check {}: v{value} is named by #{} and has no register: {:?}", body.name, one.id(), one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
             }
         }
     }

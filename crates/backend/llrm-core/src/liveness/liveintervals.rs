@@ -437,6 +437,17 @@ impl LiveIntervals {
             let again = fresh.compute_virt_reg_interval(reg);
             let now = shape(&fresh, &again);
             if was != now {
+                if std::env::var("LLRM_AFRESH_DUMP").is_ok() {
+                    eprintln!("  held interval of v{reg}: {:?}", self.intervals[&reg].segments.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>());
+                    for (b, insns) in self.blocks.iter().enumerate() {
+                        if insns.iter().any(|one| one.uses.contains(&reg) || one.defines.contains(&reg)) {
+                            eprintln!("  block {b} start {:?} end {:?}", self.indexes.get_mbb_start_idx(b), self.indexes.get_mbb_end_idx(b));
+                            for (at, one) in insns.iter().enumerate() {
+                                eprintln!("    [{at}] #{} {:?} d{:?} u{:?} reload {} store {} {:?}", one.id(), self.indexes.get_instruction_index(one.id()), one.defines, one.uses, one.spill_reload, one.spill_store, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                            }
+                        }
+                    }
+                }
                 // The instructions that name the register, for the report.
                 for operand in fresh.operands(reg) {
                     let one = fresh.instr(operand.instr);
