@@ -15,12 +15,12 @@
 //! `analyzeLoadFromClobberingMemInst` for them are not written: no `Type` value
 //! reaches them.
 //!
-//! DEVIATE 9, no `ConstantFoldLoadFromConst`: llrm has no folder of a load
-//! from a constant. `analyze_load_from_clobbering_mem_inst` of a
-//! `memcpy`/`memmove` (which needs it to accept) is none,
-//! `get_constant_value_for_load` is none, and
-//! `get_constant_mem_inst_value_for_load` folds only into an integer type
-//! (the splat itself). Each is a load GVN then leaves in place.
+//! Owed by fold-poc, not a DEVIATE: `ConstantFoldLoadFromConst` and
+//! `ConstantFoldLoadFromConstPtr` (ConstantFolding.cpp). Until they land,
+//! `analyze_load_from_clobbering_mem_inst` of a `memcpy`/`memmove` (which
+//! needs them to accept) is none, `get_constant_value_for_load` is none, and
+//! `get_constant_mem_inst_value_for_load` folds only into an integer type (the
+//! splat itself). Each is a load GVN then leaves in place.
 
 use llrm_mir::constfold;
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -432,7 +432,7 @@ pub fn analyze_load_from_clobbering_mem_inst(
             // A memset needs only that the offset is valid in the size of it.
             analyze_load_from_clobbering_write(context, layout, function, load_ty, load_ptr, dest, mem_size_in_bits)
         }
-        // DEVIATE 9: accepting a copy from constant memory needs
+        // Owed by fold-poc: accepting a copy from constant memory needs
         // `ConstantFoldLoadFromConstPtr`.
         MemIntrinsic::Transfer { .. } => None,
     }
@@ -502,7 +502,7 @@ pub fn get_value_for_load(
 
 /// `getConstantValueForLoad`
 /// ([VNCoercion.cpp:401](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L401)).
-/// DEVIATE 9: none, there is no `ConstantFoldLoadFromConst`.
+/// Owed by fold-poc (`ConstantFoldLoadFromConst`): none until it lands.
 pub fn get_constant_value_for_load(
     context: &Context,
     layout: &DataLayout,
@@ -559,7 +559,7 @@ pub fn get_mem_inst_value_for_load(
 
 /// `getConstantMemInstValueForLoad`
 /// ([VNCoercion.cpp:463](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L463)):
-/// a `memset` of a constant byte, into an integer type (DEVIATE 9).
+/// a `memset` of a constant byte, into an integer type (owed by fold-poc).
 pub fn get_constant_mem_inst_value_for_load(
     context: &mut Context,
     layout: &DataLayout,

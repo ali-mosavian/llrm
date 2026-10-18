@@ -392,15 +392,16 @@ b0:
         panic!("a constant")
     };
     assert_eq!(m.context.get(c).kind, llrm_mir::context::ConstantKind::Int(0xabab_abab));
-    // A float is DEVIATE 9: nothing folds a load of it from a constant.
+    // A float: until fold-poc's load folder lands, nothing folds a load of it
+    // from a constant.
     let float = m.context.types.intern(llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::Float));
     assert_eq!(get_constant_mem_inst_value_for_load(&mut m.context, &layout, mem, float), None);
 }
 
 #[test]
 fn test_a_copy_from_constant_memory_is_not_served_until_loads_fold() {
-    // DEVIATE 9: LLVM serves this load from @c; llrm has no
-    // `ConstantFoldLoadFromConst`, so the load stays.
+    // LLVM serves this load from @c; until fold-poc's
+    // `ConstantFoldLoadFromConst` lands the load stays.
     let body = "define i16 @f() {
 b0:
   %p = alloca [8 x i8]
