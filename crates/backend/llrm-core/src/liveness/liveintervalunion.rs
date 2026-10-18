@@ -86,7 +86,7 @@ impl LiveIntervalUnion {
 
     /// `IntervalMap::find(x)`: the entry with the first stop after `x`: the one
     /// containing it, or the first after the hole it is in. None at the end.
-    fn find(
+    pub fn find(
         &self,
         x: &SlotIndex,
     ) -> Option<SlotIndex> {
@@ -99,11 +99,31 @@ impl LiveIntervalUnion {
     }
 
     /// The entry after the one starting at `key`.
-    fn next(
+    pub fn next(
         &self,
         key: &SlotIndex,
     ) -> Option<SlotIndex> {
         self.segments.range((Bound::Excluded(key.clone()), Bound::Unbounded)).next().map(|(start, _)| start.clone())
+    }
+
+    /// `--I`: the entry before the one starting at `key`; the last entry from
+    /// the end (`None`).
+    pub fn prev(
+        &self,
+        key: Option<&SlotIndex>,
+    ) -> Option<SlotIndex> {
+        match key {
+            Some(key) => self.segments.range(..*key).next_back().map(|(start, _)| *start),
+            None => self.segments.keys().next_back().copied(),
+        }
+    }
+
+    /// `I.stop()` of the entry starting at `key`.
+    pub fn stop_of(
+        &self,
+        key: &SlotIndex,
+    ) -> SlotIndex {
+        self.segments[key].0
     }
 
     /// `IntervalMap::insert(start, stop, reg)`: adjacent entries of the same
