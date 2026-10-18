@@ -21,20 +21,26 @@ pub mod compare;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
+pub mod exit_limit;
+pub mod exit_value;
 pub mod expander;
 pub mod expr;
 #[cfg(test)]
 mod golden_tests;
+#[cfg(test)]
+mod trip_tests;
 pub mod minmax;
 pub mod pattern;
 pub mod poison;
 pub mod predicate;
+pub mod how_many;
 pub mod print;
 pub mod range;
 pub mod rewrite;
 pub mod scope;
 pub mod seams;
 pub mod sequential;
+pub mod trip;
 
 use std::collections::HashMap;
 
@@ -139,6 +145,8 @@ pub struct ScalarEvolution {
     pub(super) block_dispositions: HashMap<(Scev, BlockId), disposition::BlockDisposition>,
     /// `CouldNotCompute`.
     could_not_compute: Scev,
+    /// `BackedgeTakenCounts` and `LoopPropertiesCache`.
+    pub(super) trips: trip::TripState,
 }
 
 impl Default for ScalarEvolution {
@@ -160,6 +168,7 @@ impl ScalarEvolution {
             loop_dispositions: HashMap::new(),
             block_dispositions: HashMap::new(),
             could_not_compute: Scev(0),
+            trips: trip::TripState::default(),
         };
         se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
         se

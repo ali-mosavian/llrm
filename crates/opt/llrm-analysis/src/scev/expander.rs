@@ -162,8 +162,10 @@ impl ScalarEvolution {
     pub fn forget_loop(
         &mut self,
         _cx: &Cx,
-        _l: llrm_mir::module::BlockId,
+        l: llrm_mir::module::BlockId,
     ) {
-        todo!("S3")
+        // Drop any stored trip count value (and the loop's properties); the
+        // other half, the expressions of the loop's phis, is S3.
+        self.trips.forget(l);
     }
 }
