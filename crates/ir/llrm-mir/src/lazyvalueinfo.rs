@@ -18,56 +18,59 @@
 //! [`LazyValueInfo::forget_value`], [`LazyValueInfo::erase_block`] and
 //! [`LazyValueInfo::thread_edge`], as it does with LLVM's.
 //!
-//! DEVIATE (anything MIR or Rust lacks):
+//! DEVIATE, permanent (MIR or Rust lacks the construct):
 //! 1. No vectors: `solveBlockValueInsertElement` (lines 1208-1232), the vector
 //!    arms of `getValueFromICmpCondition`, `isNotCrossLaneOperation` in
-//!    `getValueAtUse` (line 1929). MIR has no `insertelement`.
+//!    `getValueAtUse` (line 1929). MIR types vectors but has no lane operation
+//!    and nothing produces one (#2201).
 //! 2. `undef` does not exist in MIR; `poison` constants are `UndefValue` to the
-//!    lattice, as in LLVM, and the undef states are reachable through them.
+//!    lattice, as in LLVM, and the undef states are reachable through them
+//!    (#2202).
 //! 3. No `TargetLibraryInfo`: LVI's only use is the wrapper pass dependency.
-//! 4. `PerPredRanges` (the hidden `-lvi-per-pred-ranges` option, off by
-//!    default) and its predecessor maps are not translated (lines 63, 143-260,
-//!    792-837, 1100-1165 of the `-lvi-per-pred-ranges` arms).
-//! 5. `LVIValueHandle` (a `CallbackVH` that erases a deleted value) has no Rust
+//! 4. `LVIValueHandle` (a `CallbackVH` that erases a deleted value) has no Rust
 //!    equivalent; a pass calls [`LazyValueInfo::forget_value`] where LLVM's
 //!    value would die (MIR never reuses an id, so a stale entry is harmless).
 //!    `BlockNumberEpoch` is not needed for the same reason.
-//! 6. `assumeBundleImpliesNonNull` and operand-bundle assumes (`AssumeVH.Index
-//!    != ExprResultIdx`, lines 856-863): MIR has no operand bundles, so the
-//!    assumption cache holds expression assumes only.
-//! 7. `GuardDecl->use_empty()` (line 868): the guard loop runs when the module
-//!    declares `llvm.experimental.guard`, whether or not a call uses it; the
-//!    result is the same.
-//! 8. `ConstantFoldCompareInstOperands` of two non-integer constants folds null
-//!    against null, identical constants, `X u>= null` and `X u< null`, and a
-//!    global against null (`ConstantFold.cpp` `evaluateICmpRelation`); constant
-//!    expressions are not folded. The answer is then `None`, never a wrong
-//!    `Some`.
-//! 9. The LVI pass wrappers (`LazyValueInfoWrapperPass`, `LazyValueAnalysis`,
-//!    `invalidate`, the printer pass) are pass-manager glue MIR has no use for.
-//!    `printLVI` prints the annotations alone, not the function around them.
-//! 10. `getConstant`, `getConstantOnEdge` and `getPredicate*` answer in Rust
-//!     values (`Option<LatticeConstant>`, `Option<bool>`) where the C++ returns
-//!     a `Constant *`; for an `i1` compare it is `true`, `false` or null in
-//!     both.
-//! 11. `getUnderlyingObject`, `stripInBoundsOffsets` and `stripPointerCasts`
-//!     are `Value.cpp`/`ValueTracking.cpp` functions MIR lacks; the copies here
-//!     do the GEP, bitcast, addrspacecast, single-input phi and `returned`
-//!     cases of the C++ (MIR has no `GlobalAlias`).
-//! 12. `simplifyExtractValueInst` and `isSafeToSpeculativelyExecuteWith-
-//!     VariableReplaced` are `InstructionSimplify.cpp` and `ValueTracking.cpp`
-//!     functions the MIR does not hold; the copies here translate them.
+//! 5. `assumeBundleImpliesNonNull` and operand-bundle assumes (`AssumeVH.Index
+//!    != ExprResultIdx`, lines 856-863): MIR has no operand bundles (#2203).
+//! 6. The LVI pass wrappers (`LazyValueInfoWrapperPass`, `LazyValueAnalysis`,
+//!    `invalidate`, the printer pass) are pass-manager glue. `printLVI` prints
+//!    the annotations alone, not the function around them.
+//! 7. `getConstant`, `getConstantOnEdge` and `getPredicate*` answer in Rust
+//!    values (`Option<LatticeConstant>`, `Option<bool>`) where the C++ returns
+//!    a `Constant *`; for an `i1` compare it is `true`, `false` or null in
+//!    both.
+//! 8. `Function::predecessors` lists a block once where LLVM's `predecessors`
+//!    repeats it per edge (a `switch` naming it twice); the merge is
+//!    idempotent, only the 500-step throttle could tell.
+//!
+//! Not a difference: the guard loop (line 868) runs when the module declares
+//! `llvm.experimental.guard`, whether or not a call uses it; the result is the
+//! same.
+//!
+//! OWED (MIR can represent it; each has an issue and its exit):
+//! 9. `PerPredRanges` (the hidden `-lvi-per-pred-ranges` option, off by
+//!    default) and its predecessor maps (lines 63, 143-260, 792-837,
+//!    1100-1165): #2341.
+//! 10. `ConstantFoldCompareInstOperands` of two non-integer constants folds
+//!     null against null, identical constants, `X u>= null` and `X u< null`,
+//!     and a global against null; constant expressions are not folded. The
+//!     answer is then `None`, never a wrong `Some`. Exit: call
+//!     `constantfolding.rs` (#2257) once it lands (#2252).
+//! 11. LLVM folds a constant expression when it makes one (`ptrtoint (ptr
+//!     inttoptr (i32 20 to ptr) to i32)` is `i32 20`); MIR keeps the
+//!     expression, which the lattice then holds as a non-integer constant
+//!     (#2252).
+//! 12. `getUnderlyingObject`, `stripInBoundsOffsets`, `stripPointerCasts`,
+//!     `simplifyExtractValueInst` and `isSafeToSpeculativelyExecuteWith-
+//!     VariableReplaced` are copied here (the GEP, bitcast, addrspacecast,
+//!     single-input phi and `returned` cases; MIR has no `GlobalAlias`): #2342.
 //! 13. Intrinsic attributes that LLVM's generated tables give an intrinsic (the
 //!     `range` of `llvm.nvvm.read.ptx.sreg.nctaid.x`, the `returned` argument
 //!     of `llvm.ssa.copy`) are unknown to MIR, which has the `declare`'s own
-//!     attributes. `Call->getRange()` and `getReturnedArgOperand()` answer less
-//!     than LLVM's for those.
-//! 14. LLVM folds a constant expression when it makes one (`ptrtoint (ptr
-//!     inttoptr (i32 20 to ptr) to i32)` is `i32 20`); MIR keeps the
-//!     expression, which the lattice then holds as a non-integer constant.
-//! 15. `Function::predecessors` lists a block once where LLVM's `predecessors`
-//!     repeats it per edge (a `switch` naming it twice); the merge is
-//!     idempotent, only the 500-step throttle could tell.
+//!     attributes; `Call->getRange()` and `getReturnedArgOperand()` answer less
+//!     than LLVM's for those. Exit: #2142 (generated attributes) and the
+//!     verifier accepting unenumerated `llvm.*` names.
 //!
 //! # Example
 //! After `br i1 (icmp ult i32 %x, 10), label %then, label %else`, `%x` on the
@@ -3137,7 +3140,7 @@ impl LazyValueInfoImpl {
             }
             // An instruction with no result is no value MIR can name; LVI
             // gives it nothing to go on (`getFromRangeMetadata`) in its own
-            // block and in every block its block dominates (DEVIATE 9).
+            // block and in every block its block dominates (DEVIATE 6).
             let lattice = match result_id {
                 Some(result) => this.get_value_in_block(env, Operand::Value(result), bb, None),
                 None => Lattice::get_overdefined(),
@@ -3187,7 +3190,7 @@ pub struct Annotation {
 
 impl Annotation {
     /// The line as LLVM writes it, an instruction named by its result or its
-    /// opcode where LLVM writes the whole instruction (DEVIATE 9).
+    /// opcode where LLVM writes the whole instruction (DEVIATE 6).
     fn text(
         &self,
         env: &Env,
@@ -3229,7 +3232,7 @@ fn value_text(
 }
 
 /// `ConstantFoldCompareInstOperands(Pred, C1, C2, DL)` of two constants that
-/// are not integers (DEVIATE 8): true, false, or unfolded.
+/// are not integers (DEVIATE 10): true, false, or unfolded.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1332>
 fn constant_fold_compare_inst_operands(
