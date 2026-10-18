@@ -95,6 +95,7 @@ pub mod alias;
 pub mod assumptions;
 pub mod avail;
 pub mod branchprob;
+pub mod capturecheck;
 pub mod cellmap;
 pub mod cfg;
 pub mod constant_cycles;

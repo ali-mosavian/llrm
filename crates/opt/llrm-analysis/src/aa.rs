@@ -24,7 +24,32 @@ pub enum LocationSize {
     UpperBound(u64),
     /// Any bytes before or after the pointer, within its object.
     BeforeOrAfterPointer,
+    /// Any bytes from the pointer on (`LocationSize::afterPointer()`).
+    AfterPointer,
     Unknown,
+}
+
+impl LocationSize {
+    /// The bytes the location spans, where it says (`hasValue`): an upper bound or a precise size.
+    pub fn value(self) -> Option<u64> {
+        match self {
+            Self::Precise(n) | Self::UpperBound(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    pub fn is_precise(self) -> bool {
+        matches!(self, Self::Precise(_))
+    }
+
+    /// Whether the access may start before its pointer.
+    pub fn may_be_before_pointer(self) -> bool {
+        matches!(self, Self::BeforeOrAfterPointer | Self::Unknown)
+    }
+
+    pub fn is_zero(self) -> bool {
+        self == Self::Precise(0)
+    }
 }
 
 /// Metadata an access carries that alias analysis reads (`AAMDNodes`).

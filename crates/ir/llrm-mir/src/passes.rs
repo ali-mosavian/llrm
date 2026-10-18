@@ -347,6 +347,21 @@ pub trait Analysis: 'static {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
     }
 
+    /// Whether `audit` runs on every result this analysis hands out, kept or
+    /// derived (`LLRM_CHECK_CAPTURES`): a fact is judged where a pass reads it.
+    const AUDITED: bool = false;
+
+    /// An independent check of `result`, made each time it is handed out.
+    #[allow(unused_variables)]
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+    }
+
     /// `previous`, which was true of the function before `changes`, made true
     /// of it now; none where it would be derived afresh. Must give what
     /// `run` gives, as `LLRM_CHECK_REPLAY` asserts.
@@ -1046,6 +1061,11 @@ fn check_modules() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
 }
 
+fn check_captures() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
+}
+
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
@@ -1249,6 +1269,19 @@ impl Analyses {
 
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let result = self.found::<A>(context, layout, function);
+        if A::AUDITED && check_captures() {
+            A::audit(&result, context, layout, function, self);
+        }
+        result
+    }
+
+    fn found<A: Analysis>(
         &mut self,
         context: &Context,
         layout: &DataLayout,
@@ -2408,6 +2441,11 @@ impl PassManager {
             let mut declared = Declared::of(module);
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
+                // The other bodies as they stand, for an audit that reads a
+                // callee.
+                if check_captures() {
+                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+                }
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -2474,6 +2512,9 @@ impl PassManager {
 }
 
 thread_local! {
+    /// The module as it stood before the function pass now running
+    /// (`LLRM_CHECK_CAPTURES`).
+    pub static MODULE_SNAPSHOT: std::cell::RefCell<Option<Rc<Module>>> = const { std::cell::RefCell::new(None) };
     static CHECK_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
