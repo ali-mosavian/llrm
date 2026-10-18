@@ -10,6 +10,7 @@
 pub mod alias;
 pub mod build;
 pub mod edit;
+pub mod phitrans;
 pub mod shadow;
 pub mod updater;
 pub mod verify;
