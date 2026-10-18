@@ -497,14 +497,14 @@ impl Folder {
         let tail = LirBlock {
             at: made,
             insns: block.insns[cut..].to_vec().into(),
-            succ: block.succ.clone(),
+            succ: _leaving(&block.succ, &block.insns[cut..], None).into(),
             phis: Default::default(),
             cold: block.cold,
         };
         let last = block.insns[cut..].last().map_or(block.at, |one| one.at);
         let head = LirBlock {
             insns: block.insns[..cut].iter().cloned().chain([jump_to(last, made)]).collect::<Vec<_>>().into(),
-            succ: vec![made].into(),
+            succ: _leaving(&block.succ, &block.insns[..cut], Some(made)).into(),
             ..block.clone()
         };
         let index = self.pos[&at];
@@ -677,7 +677,7 @@ impl Folder {
             let last = block.insns[cut..].last().map_or(block.at, |one| one.at);
             let ended = LirBlock {
                 insns: block.insns[..cut].iter().cloned().chain([jump_to(last, tail)]).collect::<Vec<_>>().into(),
-                succ: vec![tail].into(),
+                succ: _leaving(&block.succ, &block.insns[..cut], Some(tail)).into(),
                 ..block.clone()
             };
             self.set(ended);
@@ -777,6 +777,29 @@ impl Folder {
             index += 1;
         }
     }
+}
+
+/// The successors of a block cut in two that a part still names: the ways out
+/// of `part` (a branch before its last jump has one), then `onward`, which the
+/// first part jumps to.
+fn _leaving(
+    succ: &[i64],
+    part: &[Arc<Insn>],
+    onward: Option<i64>,
+) -> Vec<i64> {
+    let named: HashSet<i64> = part
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|what| matches!(what.op, Operation::Branch | Operation::Jump))
+        .flat_map(|what| what.target.into_iter().chain(what.table.iter().copied()))
+        .collect();
+    let mut out: Vec<i64> = Vec::new();
+    for one in succ.iter().copied().filter(|one| named.contains(one)).chain(onward) {
+        if !out.contains(&one) {
+            out.push(one);
+        }
+    }
+    out
 }
 
 /// `TailMergeBlocks` to a fixed point on a placed body whose every fall-through

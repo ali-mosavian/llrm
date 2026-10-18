@@ -207,7 +207,13 @@ pub fn optimized(
         };
         placed = machinedce::eliminated(threaded(&merged));
     }
-    Ok(inverted(&if size { placed } else { rotated(&duplicated(&placed, true), &price)? }))
+    let done = inverted(&if size { placed } else { rotated(&duplicated(&placed, true), &price)? });
+    // Every block leaves by a way the printer can read.
+    #[cfg(test)]
+    for block in &done.blocks {
+        masm::_falls_to(block, &done.name).expect("a block with no instruction choosing its way out");
+    }
+    Ok(done)
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -1680,7 +1686,8 @@ fn _arm_bytes(
         .sum()
 }
 
-/// Selected bytes in a source-unowned terminal return block, without the frame teardown the emitter adds.
+/// Selected bytes in a source-unowned terminal return block, without the frame
+/// teardown the emitter adds.
 pub fn _duplicable_return_size(
     bits: u32,
     block: &LirBlock,
@@ -1887,7 +1894,10 @@ pub fn _step(
                 return Some(at.get(&here).unwrap_or(0));
             }
         }
-        if last_what.op == Operation::Jump && target == after {
+        // A block with a branch before the last two keeps its jump: without it,
+        // three ways out and nothing choosing among them.
+        let choosable = block.succ.len() <= 2;
+        if last_what.op == Operation::Jump && target == after && choosable {
             // A fall-through needs no machine jump.  A decoded jump may still
             // own source bytes, though; retain those as an inert anchor so
             // fresh layout can account for the replaced range.  A frontend-
@@ -1909,6 +1919,7 @@ pub fn _step(
             return Some(at.get(&here).unwrap_or(0));
         }
         if last_what.op == Operation::Jump
+            && choosable
             && before.as_ref().is_some_and(|one| one.what.as_ref().expect(NO_OP).op == Operation::Branch)
         {
             let branch = before.as_ref().expect("checked");
