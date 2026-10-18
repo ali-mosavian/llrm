@@ -9,6 +9,7 @@
 
 pub mod alias;
 pub mod build;
+pub mod phitrans;
 pub mod shadow;
 pub mod verify;
 pub mod walker;
