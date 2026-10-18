@@ -274,8 +274,8 @@ pub fn walked(
     mssa: &mut Mssa,
     aa: &super::alias::AliasQuery,
     function: &llrm_mir::module::Function,
-) -> std::collections::BTreeMap<InstId, Name> {
-    let mut answers = std::collections::BTreeMap::new();
+) -> llrm_mir::dense::IdMap<InstId, Name> {
+    let mut answers = llrm_mir::dense::IdMap::new();
     for (_, inst) in function.walk() {
         let Some(access) = mssa.get_memory_access(inst) else { continue };
         if aa.location_of(inst).is_none() {

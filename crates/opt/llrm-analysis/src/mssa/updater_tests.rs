@@ -87,7 +87,7 @@ impl Body {
         let differ: Vec<_> = updated
             .iter()
             .filter(|(inst, name)| expected.get(inst) != Some(name))
-            .map(|(inst, name)| format!("{inst:?}: updated {name:?}, fresh {:?}", expected.get(inst)))
+            .map(|(inst, name)| format!("{inst:?}: updated {name:?}, fresh {:?}", expected.get(&inst)))
             .collect();
         assert!(
             differ.is_empty(),
