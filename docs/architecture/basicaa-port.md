@@ -21,7 +21,7 @@
 ## 3. Oracles
 
 1. **Captures** (done, #2146): every alloca's uses read directly; the points-to facts must list what is captured. On the gate corpus 1,583 objects, 0 differ; module report at -O2: 526 callee parameters verified in the callee's own body, 584 external, 370 captured by the body, 0 under-escapes. It caught #2132's class on main.
-2. **LLVM's answers** (not run): `opt -passes=aa-eval -print-all-alias-modref-info` with the pinned `~/scratch/llvm-build/bin/opt` (24.0.0git `d1106deb71cc`), on llvm-difftest's replay of the dumped pass inputs, pair by pair, every difference classified against today's. The first table of this page is the count of NoAlias-vs-MayAlias, MayAlias-vs-NoAlias and MustAlias differences; wherever today says NoAlias and BasicAA says MayAlias is a candidate miscompile and goes to a program test and a fix PR ahead of the perf work.
+2. **LLVM's answers** (not run): `opt -passes=aa-eval -print-all-alias-modref-info` with the pinned `opt` (24.0.0git `d1106deb71cc`), on llvm-difftest's replay of the dumped pass inputs, pair by pair, every difference classified against today's. The first table of this page is the count of NoAlias-vs-MayAlias, MayAlias-vs-NoAlias and MustAlias differences; wherever today says NoAlias and BasicAA says MayAlias is a candidate miscompile and goes to a program test and a fix PR ahead of the perf work.
 3. **Walker equality** (memoryssa-port): `check_clobber_sanity` on every load and store of 167 `d_faces` bodies must hold with the new AA.
 
 ### Second table: load and store pairs, with the type tags (`--memops`)
@@ -54,7 +54,7 @@ The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `me
 
 ### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 
-`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`), `-aa-pipeline=basic-aa -passes=aa-eval -print-all-alias-modref-info`. Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`, made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps. Both sides list what aa-eval lists: the pointer operand of each load and store with the size of the access, one entry for each pair of pointer and size; llrm's answer is `regions::overlapping` of the two accesses with their provenance, as the consumers ask it, without the type tags (aa-eval's pointer pairs carry none, so TBAA cannot show in them). Failed rows: 0. Pairs one side printed that the other did not: 0.
+`opt` 24.0.0git `d1106deb71cc`, `-aa-pipeline=basic-aa -passes=aa-eval -print-all-alias-modref-info`. Inputs: the hoist, gvn and dse pass inputs of the replay set (the replay inputs, made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps. Both sides list what aa-eval lists: the pointer operand of each load and store with the size of the access, one entry for each pair of pointer and size; llrm's answer is `regions::overlapping` of the two accesses with their provenance, as the consumers ask it, without the type tags (aa-eval's pointer pairs carry none, so TBAA cannot show in them). Failed rows: 0. Pairs one side printed that the other did not: 0.
 
 | ours | LLVM BasicAA | pairs |
 |---|---|---|
@@ -80,7 +80,7 @@ How the column was found right: two earlier readings of the same inputs gave 22,
 | S1 | `MemoryLocation`/`LocationSize`; BasicAA over identified objects; `CaptureTracking`; `isNonEscapingLocalObject` | oracle 1 equal; oracle 2 table filled |
 | S2 | `aliasGEP`, `aliasPHI`, `aliasSelect`, TBAA, scoped noalias | oracle 2 differences classified; no new NoAlias that LLVM says May |
 | S3 | call ModRef and `MemoryEffects` | needs function-attrs; `capturecheck` agrees with each derived `nocapture` |
-| S4 | `GlobalsModRef` | the 19 `d_faces` -O2 hoists LLVM does and ours does not (`~/scratch/s28-work/licm_llvm_only_d_faces-O2.txt`) all hoist, no hoist LLVM does not do; rows per metric and level, worse counts first |
+| S4 | `GlobalsModRef` | the 19 `d_faces` -O2 hoists LLVM does and ours does not all hoist, no hoist LLVM does not do; rows per metric and level, worse counts first |
 | S5 | clients, one PR each: the MemorySSA walker, MemDep (gvn-port), LICM, DSE | each PR states "LLVM structure: X; ours: Y; mirror or deviate because Z"; objects identical or classified; the per-IR-instruction cost of the memory path against the 3.9 K instructions of `Accesses::plain` plus `Shape` today |
 | S6 | delete the tower and its tests | no caller left; dense-key ratchet lowered |
 

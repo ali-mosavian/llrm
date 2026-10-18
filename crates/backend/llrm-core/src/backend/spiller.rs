@@ -337,8 +337,18 @@ pub fn materialized(
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
     let first = fresh;
+    // A value made again where it is read cannot take the place of a stored
+    // one.
+    let again: BTreeSet<u32> = constants
+        .keys()
+        .chain(addresses.keys())
+        .chain(extensions.keys())
+        .chain(frame_loads.keys())
+        .chain(rebuilt.keys())
+        .copied()
+        .collect();
     let (body, next) =
-        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, frame, fresh))?;
+        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, &again, frame, fresh))?;
     fresh = next;
     let (body, next) =
         llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
@@ -740,6 +750,7 @@ fn _sunk_whole(
 fn _short_update_runs<'b>(
     body: &'b LirBody,
     stored: &BTreeSet<u32>,
+    again: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
 ) -> Result<(Cow<'b, LirBody>, u32), Error> {
@@ -764,7 +775,7 @@ fn _short_update_runs<'b>(
     if starts.is_empty() {
         return Ok((Cow::Borrowed(body), fresh));
     }
-    let (made, next) = _short_update_runs_whole(body, stored, frame, fresh, &starts)?;
+    let (made, next) = _short_update_runs_whole(body, stored, again, frame, fresh, &starts)?;
     Ok((made.map_or(Cow::Borrowed(body), Cow::Owned), next))
 }
 
@@ -774,6 +785,7 @@ fn _short_update_runs<'b>(
 fn _short_update_runs_whole(
     body: &LirBody,
     stored: &BTreeSet<u32>,
+    again: &BTreeSet<u32>,
     frame: &mut Frame,
     fresh: u32,
     starts: &[(u32, u32)],
@@ -810,6 +822,7 @@ fn _short_update_runs_whole(
             let after = Segment { start: ranges::def_point(slot), end: ranges::def_point(slot) + 1 };
             let eligible = stored.contains(&into)
                 && !stored.contains(&outof)
+                && !again.contains(&outof)
                 && !live.get(&outof).expect("live").segments.iter().any(|segment| segment.overlaps(&after))
                 && first.covers == Some((first.at, first.at))
                 && second.group.is_none()
@@ -4875,7 +4888,8 @@ fn _memory_source_read_first(
     fresh: u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if one.group.is_some() {
+    // A lea's cell is an address: nothing is read from it.
+    if one.group.is_some() || what.op == Operation::Address {
         return None;
     }
     let tied: Vec<u32> =
@@ -5258,7 +5272,7 @@ mod tests {
         let body = _body(vec![copied, shifted]);
         crate::analysis::intervals::indexed_shared(&body);
         let mut frame = crate::backend::frame::Frame::new(0);
-        super::_short_update_runs(&body, &BTreeSet::from([2]), &mut frame, 100).expect("runs");
+        super::_short_update_runs(&body, &BTreeSet::from([2]), &BTreeSet::new(), &mut frame, 100).expect("runs");
         super::_local_updates(&body, &BTreeSet::from([2]), &mut frame, 100).expect("updates");
         // One ask above, then one by each pass.
         assert_eq!(body.facts.0.counted("indexed-remembered"), 2, "the passes numbered the body again");
@@ -5597,6 +5611,91 @@ mod tests {
 
     fn _recreated(insns: &[Arc<Insn>]) -> Vec<&Arc<Insn>> {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
+    }
+
+    /// `x = x * 5` as `lea x, [x + x*4]` with `x` spilled: the spill wrote
+    /// `mov r, [r]` then `lea r2, r`, which the assembler refuses (N$PQ4 of the
+    /// Nib runtime at -m32 -O2 under the translated greedy allocator).
+    #[test]
+    fn test_a_lea_that_redefines_its_own_spilled_base_and_index_still_leas_a_cell() {
+        let cell = Mem {
+            base: Some(Held { value: 1, width: 4 }),
+            index: Some(Held { value: 1, width: 4 }),
+            scale: 4,
+            ..Mem::new(None, 4)
+        };
+        let first = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(8, 4)]), &[1], &[]);
+        let times_five =
+            insn(4, (4, 6), semantics(Operation::Address, "lea", vec![held(1, 4)], vec![Loc::Mem(cell)]), &[1], &[1]);
+        let store = insn(8, (8, 10), semantics(Operation::Move, "mov", vec![held(3, 4)], vec![held(1, 4)]), &[3], &[1]);
+        let result = _out(&_body(vec![first, times_five, store]), &[1]);
+        for one in &result {
+            let w = what(one);
+            if w.op == Operation::Address {
+                assert!(matches!(w.sources.as_slice(), [Loc::Mem(_) | Loc::Address(_)]), "a lea of a register: {w:?}");
+            }
+        }
+    }
+
+    /// `q = load [param]; x = q; x = x + 5` with `q` and `x` both spilled: the
+    /// short update renamed `x` to `q`, and `q` is made again from its cell, so
+    /// the store into `x`'s slot wrote the cell's value, not the sum (digits of
+    /// `decimal` inlined into `print_float` read as NULs under the translated
+    /// greedy allocator).
+    #[test]
+    fn test_a_short_update_does_not_rename_into_a_value_made_again_from_its_cell() {
+        let parameter = mem(Addr::new(Space::Frame, 6), 2, RegId::BP, 0, 2);
+        let load = insn(
+            0x100,
+            (0x100, 0x100),
+            semantics(Operation::Move, "mov", vec![held(1, 2)], vec![Loc::Mem(parameter.clone())]),
+            &[1],
+            &[],
+        );
+        let copy = insn(
+            0x102,
+            (0x102, 0x102),
+            semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]),
+            &[2],
+            &[1],
+        );
+        let add = insn(
+            0x104,
+            (0x104, 0x104),
+            semantics(Operation::Binary, "add", vec![held(2, 2)], vec![held(2, 2), imm(5, 2)]),
+            &[2],
+            &[2],
+        );
+        let user = insn(
+            0x106,
+            (0x106, 0x106),
+            semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]),
+            &[3],
+            &[2],
+        );
+        let mut frame = Frame::new(0);
+        let (result, _made) = spilled(
+            &_body(vec![load, copy, add, user]),
+            &set(&[1, 2]),
+            Some(&mut frame),
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("spills");
+        let mut values: Vec<(Loc, i64)> = vec![(Loc::Mem(parameter), 100)];
+        let value = |values: &Vec<(Loc, i64)>, arg: &Loc| match arg {
+            Loc::Imm(imm) => imm.value,
+            _ => values.iter().rev().find(|(key, _)| key == arg).map(|(_, value)| *value).expect("a value"),
+        };
+        for one in result.insns() {
+            let args: Vec<i64> = what(&one).sources.iter().map(|arg| value(&values, arg)).collect();
+            let result = match name(&one) {
+                Some("mov") => args[0],
+                Some("add") => args[0] + args[1],
+                other => panic!("{other:?}"),
+            };
+            values.push((what(&one).dests[0].clone(), result));
+        }
+        assert_eq!(value(&values, &held(3, 2)), 105);
     }
 
     /// `p = *p` with `p` spilled: the load read its own base from a register
