@@ -25,6 +25,20 @@
 //! module asks `inline_cost` and acts on the verdict; nothing is changed
 //! here.
 //!
+//! # Example
+//! A callee of one block, `%a = load @g; %b = add %a, %x; store %b, @g; ret
+//! %b`, called from `@f` (not the only call): the single-block bonus raises the
+//! threshold to 337 and the load, add and store cost 5 each less the call
+//! they replace, which comes to -20, as `opt -passes=inline` says.
+//!
+//! From unit test `test_a_single_block_callee_costs_what_opt_says` in
+//! `inlinecost_tests.rs`.
+//!
+//! # Runs
+//! Off by default. With `LLRM_EXP_INLINECOST` the interprocedural stage prints
+//! each site's cost and threshold beside the existing decision; with
+//! `LLRM_EXP_INLINEDECIDE` it decides each call site by them.
+//!
 //! # Deviations from LLVM (numbered, measured when the diff against
 //! `opt -passes=inline` has rows)
 //! - D1: block frequencies: LLVM's `BlockFrequencyInfo` decides a cold or hot
@@ -34,8 +48,8 @@
 //!   `getFPOpCost`, `getEstimatedNumberOfCaseClusters` are the generic
 //!   (BasicTTIImpl) answers with the x86 legal addressing modes, in
 //!   `free_instruction`, `lowered_to_call` and `case_clusters`.
-//! - D3: constant folding is integer and `select` only (`fold`); floats,
-//!   vectors and constant expressions are not folded.
+//! - D3: constant folding is integer, float and `select`; vectors and constant
+//!   expressions are not folded.
 //! - D4: no PGO, ThinLTO, ML advisor, `optnone`, `flatten`, coroutines, strict
 //!   FP or target-feature checks, no `call-inline-cost` style string
 //!   attributes, no cost-benefit analysis (off by default in LLVM).
@@ -94,7 +108,7 @@ pub const INDIRECT_CALL_THRESHOLD: i64 = 100;
 pub const LOOP_PENALTY: i64 = 25;
 pub const COLDCC_PENALTY: i64 = 2000;
 pub const TOTAL_ALLOCA_SIZE_RECURSIVE_CALLER: u64 = 1024;
-pub const MAX_SIMPLIFIED_DYNAMIC_ALLOCA_TO_INLINE: u64 = 65536;
+pub const MAX_SIMPLIFIED_DYNAMIC_ALLOCA_TO_INLINE: u64 = 1 << 16;
 // TargetTransformInfoImpl.h:91-111, the generic answers.
 const LAST_CALL_TO_STATIC_BONUS: i64 = 15000;
 const VECTOR_BONUS_PERCENT: i64 = 150;
@@ -2000,7 +2014,7 @@ fn case_clusters(
     let range = (high - low) as u64 + 1;
     // isSuitableForJumpTable: density 10% (40% for size), at most 64K entries.
     let density = if for_size { 40 } else { 10 };
-    if range <= 65536 && count * 100 >= range * density {
+    if range <= 1 << 16 && count * 100 >= range * density {
         return (1, range);
     }
     (count, 0)
