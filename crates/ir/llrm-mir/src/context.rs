@@ -1,5 +1,8 @@
 //! LLVM's context: the uniqued types and constants a module's code refers to.
 
+use std::cell::RefCell;
+
+use crate::arena::Arena;
 use crate::hash::HashMap;
 use crate::opcode::CastOp;
 use crate::types::{TypeId, Types};
@@ -52,8 +55,8 @@ pub struct Constant {
 #[derive(Clone, Debug, Default)]
 pub struct Context {
     pub types: Types,
-    constants: Vec<Constant>,
-    interned: HashMap<Constant, ConstantId>,
+    constants: Arena<Constant>,
+    interned: RefCell<HashMap<Constant, ConstantId>>,
     extensions: Extensions,
 }
 
@@ -85,16 +88,19 @@ impl Context {
         std::rc::Rc::clone(found).downcast::<T>().unwrap_or_else(|_| unreachable!("keyed by its type"))
     }
 
+    /// LLVM's `ConstantInt::get` and kin: `constant`, made on the first ask.
+    /// The table is borrowed for the lookup and again for the insert, never
+    /// across a call.
     pub fn constant(
-        &mut self,
+        &self,
         constant: Constant,
     ) -> ConstantId {
-        if let Some(&id) = self.interned.get(&constant) {
+        let found = self.interned.borrow().get(&constant).copied();
+        if let Some(id) = found {
             return id;
         }
-        let id = ConstantId(self.constants.len() as u32);
-        self.constants.push(constant.clone());
-        self.interned.insert(constant, id);
+        let id = ConstantId(self.constants.push(constant.clone()) as u32);
+        self.interned.borrow_mut().insert(constant, id);
         id
     }
 
@@ -108,13 +114,13 @@ impl Context {
         &self,
         id: ConstantId,
     ) -> &Constant {
-        &self.constants[id.0 as usize]
+        self.constants.get(id.0 as usize)
     }
 
     /// `constant` of `from`, interned here: none for one that names a
     /// global or a type only `from` defines.
     pub fn imported(
-        &mut self,
+        &self,
         from: &Context,
         constant: ConstantId,
     ) -> Option<ConstantId> {
@@ -137,18 +143,19 @@ impl Context {
         &mut self,
         renumbered: &dyn Fn(GlobalId) -> Option<GlobalId>,
     ) {
-        for constant in &mut self.constants {
+        for constant in self.constants.iter_mut() {
             if let ConstantKind::Global(global) = constant.kind {
                 constant.kind = renumbered(global).map_or(ConstantKind::Poison, ConstantKind::Global);
             }
         }
-        self.interned =
+        let interned =
             self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
+        self.interned = RefCell::new(interned);
     }
 
     /// `value` modulo the width of the integer type `ty`.
     pub fn int(
-        &mut self,
+        &self,
         ty: TypeId,
         value: i128,
     ) -> ConstantId {
