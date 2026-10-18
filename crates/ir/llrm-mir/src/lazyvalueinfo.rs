@@ -65,6 +65,9 @@
 //! 14. LLVM folds a constant expression when it makes one (`ptrtoint (ptr
 //!     inttoptr (i32 20 to ptr) to i32)` is `i32 20`); MIR keeps the
 //!     expression, which the lattice then holds as a non-integer constant.
+//! 15. `Function::predecessors` lists a block once where LLVM's `predecessors`
+//!     repeats it per edge (a `switch` naming it twice); the merge is
+//!     idempotent, only the 500-step throttle could tell.
 //!
 //! # Example
 //! After `br i1 (icmp ult i32 %x, 10), label %then, label %else`, `%x` on the
