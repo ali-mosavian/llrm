@@ -1,6 +1,6 @@
 //! `EdgeBundles`: the equivalence classes of block borders. Translated from
-//! llvm/lib/CodeGen/EdgeBundles.cpp and llvm/lib/Support/IntEqClasses.cpp at
-//! d1106deb71cc.
+//! llvm/lib/CodeGen/EdgeBundles.cpp at d1106deb71cc, over
+//! [`crate::liveness::eqclasses::IntEqClasses`].
 //!
 //! # How it works
 //! Block `n` has an entry node `2n` and an exit node `2n + 1`. A block's exit
@@ -14,11 +14,12 @@
 //! # Used by
 //! [`super::spillplacement`].
 
+use crate::liveness::eqclasses::IntEqClasses;
+
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/EdgeBundles.h#L26>
 pub struct EdgeBundles {
     /// `EC`, compressed: node -> bundle.
-    ec: Vec<u32>,
-    num_bundles: u32,
+    ec: IntEqClasses,
     /// `Blocks`: bundle -> block numbers.
     blocks: Vec<Vec<u32>>,
 }
@@ -29,36 +30,28 @@ impl EdgeBundles {
     /// `succs[n]` are the successors of block `n`.
     pub fn new(succs: &[Vec<usize>]) -> Self {
         let nblocks = succs.len();
-        let mut ec: Vec<u32> = (0..2 * nblocks as u32).collect();
+        let mut ec = IntEqClasses::default();
+        ec.grow(2 * nblocks);
         for (n, ss) in succs.iter().enumerate() {
             let out_e = 2 * n + 1;
             // Join the outgoing bundle with the ingoing bundles of all
             // successors.
             for &s in ss {
-                join(&mut ec, out_e as u32, 2 * s as u32);
+                ec.join(out_e as u32, 2 * s as u32);
             }
         }
-        // `IntEqClasses::compress`.
-        let mut num_bundles = 0u32;
-        for i in 0..ec.len() {
-            ec[i] = if ec[i] as usize == i {
-                num_bundles += 1;
-                num_bundles - 1
-            } else {
-                ec[ec[i] as usize]
-            };
-        }
+        ec.compress();
         // Compute the reverse mapping.
-        let mut blocks: Vec<Vec<u32>> = vec![Vec::new(); num_bundles as usize];
-        for i in 0..nblocks {
-            let b0 = ec[2 * i];
-            let b1 = ec[2 * i + 1];
-            blocks[b0 as usize].push(i as u32);
+        let mut blocks: Vec<Vec<u32>> = vec![Vec::new(); ec.get_num_classes() as usize];
+        for i in 0..nblocks as u32 {
+            let b0 = ec.get(2 * i);
+            let b1 = ec.get(2 * i + 1);
+            blocks[b0 as usize].push(i);
             if b1 != b0 {
-                blocks[b1 as usize].push(i as u32);
+                blocks[b1 as usize].push(i);
             }
         }
-        Self { ec, num_bundles, blocks }
+        Self { ec, blocks }
     }
 
     /// `getBundle`: the ingoing (`out` false) or outgoing bundle of block `n`.
@@ -67,12 +60,12 @@ impl EdgeBundles {
         n: u32,
         out: bool,
     ) -> u32 {
-        self.ec[2 * n as usize + out as usize]
+        self.ec.get(2 * n + out as u32)
     }
 
     /// `getNumBundles`.
     pub fn get_num_bundles(&self) -> u32 {
-        self.num_bundles
+        self.ec.get_num_classes()
     }
 
     /// `getBlocks`: the blocks connected to `bundle`.
@@ -81,31 +74,6 @@ impl EdgeBundles {
         bundle: u32,
     ) -> &[u32] {
         &self.blocks[bundle as usize]
-    }
-}
-
-/// `IntEqClasses::join`
-/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Support/IntEqClasses.cpp#L32>).
-fn join(
-    ec: &mut [u32],
-    mut a: u32,
-    mut b: u32,
-) {
-    let mut eca = ec[a as usize];
-    let mut ecb = ec[b as usize];
-    // Update pointers while searching for the leaders, compressing the paths
-    // incrementally. The larger leader will eventually be updated, joining the
-    // classes.
-    while eca != ecb {
-        if eca < ecb {
-            ec[b as usize] = eca;
-            b = ecb;
-            ecb = ec[b as usize];
-        } else {
-            ec[a as usize] = ecb;
-            a = eca;
-            eca = ec[a as usize];
-        }
     }
 }
 

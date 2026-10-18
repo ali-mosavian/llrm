@@ -1425,11 +1425,6 @@ impl<'d> SplitEditor<'d> {
     /// values to the new ranges, rewrite the operands, and weigh the new
     /// intervals. `lr_map` gets, for each register of the edit, the index it
     /// came from.
-    ///
-    /// DEVIATE D-SE7: `ConnectedVNInfoEqClasses` / `splitSeparateComponents`
-    /// are not translated, so a register that falls into several components
-    /// stays one register. Exit: issue to be opened with the translation of
-    /// `ConnectedVNInfoEqClasses` (LiveInterval.cpp).
     pub fn finish(
         &mut self,
         cx: &mut SplitCx,
@@ -1490,9 +1485,19 @@ impl<'d> SplitEditor<'d> {
         }
 
         // Provide a reverse mapping from original indices to Edit ranges.
-        if let Some(map) = lr_map {
-            map.clear();
-            map.extend(0..regs.len());
+        let mut map: Vec<usize> = (0..regs.len()).collect();
+
+        // Now check if any registers were separated into multiple components.
+        for (i, &reg) in regs.iter().enumerate() {
+            let split = cx.lis.split_separate_components(reg);
+            for new in split {
+                // The new intervals all map back to i.
+                self.edit_mut().create_from(cx.lis, cx.vrm, new, reg);
+                map.push(i);
+            }
+        }
+        if let Some(out) = lr_map {
+            *out = map;
         }
     }
 }
@@ -1748,19 +1753,22 @@ mod tests {
         let mut map = Vec::new();
         ed.finish_values(&mut cx, Some(&mut map));
         let (c0, c1) = (ed.edit().get(0), ed.edit().get(1));
-        assert_eq!(map, vec![0, 1]);
+        // The complement is dead between the copy in and the copy out: two
+        // components, so a third register that maps back to index 0.
+        assert_eq!(map, vec![0, 1, 0]);
+        let c2 = ed.edit().get(2);
 
         assert!(lis.reg_nodbg_empty(1), "nothing names the parent any more");
         let names = |b: usize| -> Vec<(Vec<u32>, Vec<u32>)> {
             lis.block_insns(b).iter().map(|i| (i.defines.clone(), i.uses.clone())).collect()
         };
         assert_eq!(names(0), vec![(vec![c0], vec![])]);
-        assert_eq!(names(1), vec![(vec![c1], vec![c0]), (vec![], vec![c1]), (vec![], vec![c1]), (vec![c0], vec![c1])]);
-        assert_eq!(names(2), vec![(vec![], vec![c0])]);
+        assert_eq!(names(1), vec![(vec![c1], vec![c0]), (vec![], vec![c1]), (vec![], vec![c1]), (vec![c2], vec![c1])]);
+        assert_eq!(names(2), vec![(vec![], vec![c2])]);
 
         lis.remove_interval(1);
         let compared = lis.assert_intervals_equal_afresh(&lis.body_like(&body));
-        assert_eq!(compared, 2, "both new intervals were compared");
+        assert_eq!(compared, 3, "all three new intervals were compared");
     }
 
     /// The spill modes copy out before the last use and recompute the ranges

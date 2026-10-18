@@ -75,7 +75,7 @@
 //!
 //! # Used by
 //! [`crate::pipeline`]: the round's `Promote` is swapped for `Mem2Reg` when
-//! `Options::mem2reg` (`LLRM_EXP_MEM2REG`) is set; off by default.
+//! `Options::mem2reg` is set (on by default; `LLRM_NO_MEM2REG` turns it off).
 
 use llrm_analysis::cfg;
 use llrm_mir::datalayout::DataLayout;

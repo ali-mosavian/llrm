@@ -3295,7 +3295,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let mut queue: Vec<Use> = Vec::new();
         let mut visited: llrm_mir::dense::IdSet<InstId> = Default::default();
         let root = self.function().instruction(alloca).result.expect("an alloca has a result");
-        let enqueue = |function: &Function, queue: &mut Vec<Use>, visited: &mut llrm_mir::dense::IdSet<InstId>, value: ValueId| {
+        let enqueue = |function: &Function,
+                       queue: &mut Vec<Use>,
+                       visited: &mut llrm_mir::dense::IdSet<InstId>,
+                       value: ValueId| {
             for &used in function.users(value) {
                 if visited.insert(used.user) {
                     queue.push(used);
