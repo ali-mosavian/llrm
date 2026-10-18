@@ -376,6 +376,7 @@ pub fn decide_with(
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
+            greedy.pinned.insert(reg);
         }
     }
     greedy.allocate_phys_regs();
