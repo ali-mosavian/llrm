@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/aa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/aa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/aa.rs sha256:eb0b1eafbdb657a76107768af840f6d6a3d3725e4ca873276cf998904855be8c -->
+<!-- src: crates/opt/llrm-analysis/src/aa.rs sha256:31232007549c69b96d5fd781b3e4a79667c794d654b837e38b684a549dfc1dfa -->
 
 # aa
 
@@ -31,7 +31,7 @@ if aa.alias(&load, &store, &mut batch, None) == AliasResult::NoAlias { /* indepe
 ## Provides
 `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`,
 `IRMemLocation`, `MemoryEffects`, `AAQueryInfo`, the `AAResults` trait and
-`BatchAAResults`. Implemented by `crate::basicaa` (S1); no client reads
+`BatchAAResults`. Implemented by [`crate::basicaa`](basicaa.md) (S1); no client reads
 it yet.
 
 ## See also
