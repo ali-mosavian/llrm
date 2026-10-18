@@ -4,6 +4,8 @@
 # cached per commit under ~/.cache/llrm): its bootstrap makefile and the host compiler, a second on a bootstrapped tree.
 # OWROOT is an Open Watcom tree: the user's own when set. Nothing of Open Watcom's is copied into this repository.
 set -eu
+# stdout is the path, alone: the callers capture it (`wdump=$(sh toolchain/wdump.sh)` in the setup action). Every build log goes to stderr.
+exec 3>&1 1>&2
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 . "$HERE/cache.sh"
@@ -40,4 +42,4 @@ wdump() {
     cp "$built" "$1/wdump"
 }
 cached "$CACHE/wdump-$OW_COMMIT" wdump
-echo "$CACHE/wdump-$OW_COMMIT/wdump"
+echo "$CACHE/wdump-$OW_COMMIT/wdump" >&3

@@ -145,6 +145,7 @@ impl Parser {
         let mut statics = Vec::new();
         let mut externs = Vec::new();
         let mut exports = BTreeMap::new();
+        let mut noipa = std::collections::BTreeSet::new();
         while !matches!(self.peek().kind, TokenKind::Eof) {
             if self.take(|kind| matches!(kind, TokenKind::Newline)).is_some() {
                 continue;
@@ -172,7 +173,7 @@ impl Parser {
                 let applies = match attribute.name.as_str() {
                     "repr" => matches!(next, Some(TokenKind::Struct)),
                     "extern" => header,
-                    "export" => matches!(next, Some(TokenKind::Fn)),
+                    "export" | "noipa" => matches!(next, Some(TokenKind::Fn)),
                     _ => false,
                 };
                 if !applies {
@@ -181,6 +182,7 @@ impl Parser {
             }
             // `pub` names the declaration that follows, whichever kind it is.
             let exported = self.take(|kind| matches!(kind, TokenKind::Pub)).is_some();
+            let no_ipa = attributes.iter().any(|one| one.name == "noipa");
             if let Some(Foreign { imported, abi, symbol }) = foreign {
                 let function = if imported { self.foreign_header()? } else { self.function()? };
                 if exported {
@@ -190,6 +192,9 @@ impl Parser {
                     externs.push(Extern { abi, symbol, function });
                 } else {
                     exports.insert(function.name.clone(), Export { abi, symbol });
+                    if no_ipa {
+                        noipa.insert(function.name.clone());
+                    }
                     functions.push(function);
                 }
                 continue;
@@ -242,6 +247,9 @@ impl Parser {
                 }
                 _ => {
                     functions.push(self.function()?);
+                    if no_ipa {
+                        noipa.extend(functions.last().map(|one| one.name.clone()));
+                    }
                     functions.last().map(|one| one.name.clone())
                 }
             };
@@ -254,6 +262,7 @@ impl Parser {
             public,
             externs,
             exports,
+            noipa,
             consts,
             statics,
             fixed_types,

@@ -1655,6 +1655,54 @@ impl Selector<'_, '_, '_> {
         // Every alloca whose address is exposed, in one pass: the scan for each
         // asked the whole body of it.
         let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
+        // An object lies on its type's alignment, or its size's largest power
+        // of two where the front end typed it as bytes, at most the stack slot
+        // or where the function keeps the stack, which is wider: a local
+        // `double[4]` at 4 mod 8 costs a 486 3 clocks an access (nbody -O2:
+        // 18,404), and so does a `long[8]` at 2 mod 4.
+        let kept = self.callee_facts.stack_alignment(self.arch, name);
+        let mut align_of = IndexMap::<usize, i64>::default();
+        for &block in layout {
+            for &inst in function.block(block).instructions() {
+                if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
+                    let size = self.layout.alloc_size(self.types(), allocated) as i64;
+                    let align = natural_align(&self.module.context.types, &self.layout, allocated)
+                        .max(size & size.wrapping_neg())
+                        .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
+                        .max(1);
+                    let widest = align_of.entry(group_of[&inst]).or_insert(1);
+                    *widest = (*widest).max(align);
+                }
+            }
+        }
+        let order: Vec<(usize, i64)> = align_of.into_iter().collect();
+        // An object that needs more alignment than the one above it leaves a
+        // gap; a later, smaller one takes it.
+        let mut holes = Vec::<(i64, i64)>::new();
+        for (group, align) in order {
+            let size = capacity[group];
+            let fit = holes.iter().position(|&(low, high)| (high - size).div_euclid(align) * align >= low);
+            let disp = if let Some(at) = fit {
+                let (low, high) = holes.remove(at);
+                let disp = (high - size).div_euclid(align) * align;
+                if disp + size < high {
+                    holes.insert(at, (disp + size, high));
+                }
+                if low < disp {
+                    holes.insert(at, (low, disp));
+                }
+                disp
+            } else {
+                let above = -self.depth;
+                self.depth = (self.depth + size + align - 1).div_euclid(align) * align;
+                if -self.depth + size < above {
+                    holes.push((-self.depth + size, above));
+                }
+                -self.depth
+            };
+            self.extents.push((disp, size));
+            homes.insert(group, disp);
+        }
         for &block in layout {
             block_at.insert(block, at);
             for &inst in function.block(block).instructions() {
@@ -1662,30 +1710,7 @@ impl Selector<'_, '_, '_> {
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
-                    let group = group_of[&inst];
-                    // Where the function keeps the stack aligned beyond a slot,
-                    // an object lies on its type's alignment, or its size's
-                    // where the front end typed it as bytes: a local
-                    // `double[4]` at 4 mod 8 costs a 486 3 clocks an access
-                    // (nbody -O2: 18,404). Else the layout is the slot's.
-                    let kept = self.callee_facts.stack_alignment(self.arch, name);
-                    let align = if kept > i64::from(self.arch.stack_slot_bytes()) {
-                        natural_align(&self.module.context.types, &self.layout, allocated)
-                            .max(1 << size.clamp(1, 8).ilog2())
-                            .min(kept)
-                            .max(1)
-                    } else {
-                        1
-                    };
-                    let disp = *homes
-                        .entry(group)
-                        .or_insert_with(
-                            || {
-                                self.depth = (self.depth + capacity[group] + align - 1).div_euclid(align) * align;
-                                self.extents.push((-self.depth, capacity[group]));
-                                -self.depth
-                            },
-                        );
+                    let disp = homes[&group_of[&inst]];
                     let address = function.instruction(inst).result.expect("an address");
                     self.pointers.insert(address, Pointer::Frame { disp, index: None, scale: 1, home: Some(disp) });
                     self.frame_objects.push((disp, size));
@@ -6732,8 +6757,11 @@ impl Selector<'_, '_, '_> {
         };
         // As LLVM's x87 lowering: +0 and +1 are `fldz` and `fld1`, and any
         // other constant loads from the pool.
-        let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
-            return refuse("a float constant of no bits");
+        // Poison is any value: +0.0.
+        let bits = match self.module.context.get(id).kind {
+            ConstantKind::Float(bits) => bits,
+            ConstantKind::Poison => 0,
+            _ => return refuse("a float constant of no bits"),
         };
         let size = self.size(self.module.context.get(id).ty)?;
         let held = self.fresh_held(FLOAT);

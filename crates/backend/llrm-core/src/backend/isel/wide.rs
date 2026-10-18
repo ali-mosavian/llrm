@@ -170,7 +170,12 @@ impl Selector<'_, '_, '_> {
         at: i64,
         out: &mut Vec<Arc<Insn>>,
     ) -> Result<Pair, Unselected> {
-        if let Some(bits) = self.constant(operand, 8) {
+        // Poison is any value: zero, as a float and an address are.
+        let poison = matches!(
+            operand,
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Poison)
+        );
+        if let Some(bits) = if poison { Some(0) } else { self.constant(operand, 8) } {
             let [low, high] = self.immediates(bits)?;
             let low = self.made(Operation::Move, "mov", vec![low], at, out);
             let high = self.made(Operation::Move, "mov", vec![high], at, out);
