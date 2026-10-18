@@ -231,7 +231,7 @@ fn control(
     latch: llrm_mir::module::BlockId,
     entry: &dyn Fn(llrm_mir::module::BlockId) -> bool,
 ) -> Result<Control, &'static str> {
-    let [phi, test, branch] = function.block(header).instructions()[..] else {
+    let [phi, test, branch] = function.block(header).iter().collect::<Vec<_>>()[..] else {
         return Err("a header holds more than a counter and its test");
     };
     if function.instruction(phi).opcode != Opcode::Phi || function.instruction(branch).opcode != Opcode::Br {
@@ -399,12 +399,7 @@ fn apply(
         .into_iter()
         .find(|to| nest.inner.body.contains(&cfg::id(*to)))
         .expect("the inner body's first block");
-    let at = function
-        .block(first)
-        .instructions()
-        .iter()
-        .copied()
-        .find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
+    let at = function.block(first).iter().find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
     for &inst in &plan.moved {
         match at {
             Some(at) => function.move_to(inst, Position::Before(at)).expect("a placed instruction"),

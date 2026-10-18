@@ -8,10 +8,11 @@
 //! intervals, whether it keeps, is merged into a value of the other side
 //! (a copy that becomes an identity, or a copy of a value the other side
 //! already holds), or replaces the other side's value where it is redefined.
-//! `driver` is `joinAllIntervals`: the order copies are tried in; `shadow` runs
-//! it beside the old coalescer. `join_copy` runs `RegisterCoalescer::joinCopy`
-//! for one copy: refuse, or join the intervals, erase the copies that became
-//! identities and rename the absorbed value in every instruction.
+//! `driver` is `joinAllIntervals`: the order copies are tried in; `env` is the
+//! target's answers and the pass over a body. `join_copy` runs
+//! `RegisterCoalescer::joinCopy` for one copy: refuse, or join the intervals,
+//! erase the copies that became identities and rename the absorbed value in
+//! every instruction.
 //!
 //! DEVIATE C1 (no number): sub-registers. A value here is one lane: a copy
 //! between values of different widths is not a move `CoalescerPair` accepts.
@@ -47,13 +48,13 @@
 //! larger one stays), the copy goes and every `v1` is `v2`.
 //!
 //! # Used by
-//! `backend::coalesce`, in shadow (`LLRM_SHADOW_COALESCE`, see `shadow`).
+//! `backend::coalesce`.
 
 pub mod driver;
+pub mod env;
 pub mod joinvals;
 pub mod pair;
 pub mod register_coalescer;
-pub mod shadow;
 
 #[cfg(test)]
 mod tests;

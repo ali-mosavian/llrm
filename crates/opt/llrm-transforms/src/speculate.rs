@@ -145,7 +145,7 @@ fn selects_priced(
 /// `then` (reached only by the branch ending `block`, and jumping to `end`,
 /// the branch's other target) run before the branch. Whether it was.
 pub fn executed(
-    context: &mut Context,
+    context: &Context,
     spec: &Speculation,
     function: &mut Function,
     block: BlockId,

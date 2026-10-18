@@ -2367,6 +2367,25 @@ pub fn calls_annotated(
                 // A body does no more than its call states.
                 let allowed = _allowed(&procedure.unit, at);
                 let mut effect = callee.instantiated(&actual);
+                // A byval parameter is written as the callee's copy: what the
+                // callee writes through it is not the caller's object.
+                if (0..actual.len()).any(|index| _by_value(&procedure.unit, at, index)) {
+                    let copies = actual
+                        .iter()
+                        .enumerate()
+                        .map(|(index, one)| {
+                            if _by_value(&procedure.unit, at, index) {
+                                Provenance {
+                                    slices: crate::memory::Sorted::new(),
+                                    restrict: crate::memory::Sorted::new(),
+                                }
+                            } else {
+                                one.clone()
+                            }
+                        })
+                        .collect::<Vec<_>>();
+                    effect.writes = callee.instantiated(&copies).writes;
+                }
                 if !(allowed.arguments.reads || allowed.other.reads) {
                     (effect.reads, effect.unknown_read) = (SliceSet::new(), false);
                 }
@@ -2432,6 +2451,30 @@ pub fn calls_annotated(
     Ok(out)
 }
 
+/// Whether argument `argument` of the call `at` is passed byval: the callee's
+/// own copy, which its writes do not carry back.
+fn _by_value(
+    unit: &Unit,
+    at: InstId,
+    argument: usize,
+) -> bool {
+    let named = |attrs: &[llrm_mir::opcode::Attribute]| {
+        attrs.iter().any(|one| {
+            matches!(
+                one,
+                llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+            )
+        })
+    };
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &unit.function.instruction(at).opcode else { return false };
+    info.argument_attrs.get(argument).is_some_and(|attrs| named(attrs))
+        || llrm_mir::memory::callee(unit.context, unit.function, at)
+            .and_then(|one| unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function())
+            .and_then(|one| one.parameter_attrs.get(argument))
+            .is_some_and(|attrs| named(attrs))
+}
+
 /// The bytes the call `at` writes through an argument before it reads
 /// any: `initializes` at the site or on the callee's parameter.
 fn _fills(
@@ -2447,19 +2490,7 @@ fn _fills(
     let mut out = Vec::new();
     for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
         let parameter = declared.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
-        // A byval parameter is the callee's own copy: the caller's object is
-        // not written.
-        let by_value = |attrs: &[llrm_mir::opcode::Attribute]| {
-            attrs
-                .iter()
-                .any(
-                    |one| matches!(
-                        one,
-                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
-                    ),
-                )
-        };
-        if by_value(&info.argument_attrs[argument]) || by_value(parameter) {
+        if _by_value(unit, at, argument) {
             continue;
         }
         let declared = llrm_mir::memory::initializes(parameter);
@@ -3213,7 +3244,7 @@ fn escapes(
     let function = unit.function;
     let graph = cfg::graph(function);
     let values = &solved.values;
-    let instructions = |at: i64| function.block(cfg::block(at)).instructions();
+    let instructions = |at: i64| function.block(cfg::block(at)).iter();
     // Escape is flow-sensitive separately from pointer contents. A pointer
     // published after a call must not make the earlier call reach its frame.
     let mut pointer_fields: IndexMap<ObjectRef, BTreeSet<ObjectRef>> = IndexMap::default();
@@ -3316,7 +3347,7 @@ fn escapes(
         // What a block holds of its cells on entry is not carried between
         // blocks: what a cell held anywhere is `pointer_fields`'.
         let mut mine: HashMap<InstId, Vec<usize>> = HashMap::default();
-        for &inst in instructions(block.at) {
+        for inst in instructions(block.at) {
             let op = function.instruction(inst);
             // What publishes an object: a call, a return, a store of a pointer,
             // an integer made of a pointer, a pointer an
@@ -3420,7 +3451,7 @@ fn escapes(
         let mut steps = Vec::new();
         for inst in instructions(block.at) {
             let publishes = publishes[&block.at]
-                .get(inst)
+                .get(&inst)
                 .map(
                     |objects| {
                         objects.iter().for_each(|one| every.insert(*one));
@@ -3429,13 +3460,13 @@ fn escapes(
                         sorted
                     },
                 );
-            let asked = calls.contains(inst)
+            let asked = calls.contains(&inst)
                 || matches!(
-                    function.instruction(*inst).opcode,
+                    function.instruction(inst).opcode,
                     Opcode::Load { .. } | Opcode::Store { .. }
                 );
             if publishes.is_some() || asked {
-                steps.push(Step { inst: *inst, publishes, asked });
+                steps.push(Step { inst, publishes, asked });
             }
         }
         order.push(steps);

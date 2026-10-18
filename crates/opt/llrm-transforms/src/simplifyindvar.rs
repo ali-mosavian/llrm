@@ -87,7 +87,7 @@ pub fn widening_enabled() -> bool {
 /// Every comparison with an induction variable that ScalarEvolution decides,
 /// replaced by what it decides; whether any was.
 pub fn simplified(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -103,9 +103,7 @@ pub fn simplified(
                 let phis: Vec<InstId> = cx
                     .function
                     .block(header)
-                    .instructions()
                     .iter()
-                    .copied()
                     .take_while(|inst| cx.function.instruction(*inst).opcode == Opcode::Phi)
                     .collect();
                 for phi in phis {
@@ -382,9 +380,7 @@ fn simplify_and_extend(
     let mut loop_phis: Vec<InstId> = e
         .function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .take_while(|inst| e.function.instruction(*inst).opcode == Opcode::Phi)
         .collect();
 

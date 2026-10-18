@@ -296,12 +296,7 @@ fn planned(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let providers: Vec<(InstId, MemRef, Operand)> = memory
@@ -333,7 +328,7 @@ fn planned(
             continue;
         }
         let join = cfg::block(block.at);
-        for (index, &load) in function.block(join).instructions().iter().enumerate() {
+        for (index, load) in function.block(join).iter().enumerate() {
             let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };
@@ -466,7 +461,7 @@ fn applied(
         let result = function.instruction(load).result.expect("a load's value");
         let (ty, name) = (function.value(result).ty, function.value(result).name.clone());
         let phi = function.create_instruction(Opcode::Phi, ty, arms, Flags::default(), name.as_deref());
-        function.insert(phi, Position::Before(function.block(join).instructions()[0]))?;
+        function.insert(phi, Position::Before(function.block(join).first().expect("a block with an instruction")))?;
         let value = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         function.replace_all_uses_with(result, value);
         function.erase(load)?;
