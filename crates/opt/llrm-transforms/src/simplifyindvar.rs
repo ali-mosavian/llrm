@@ -57,12 +57,12 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::Kind;
 use llrm_analysis::scev::expr::Ty;
+use llrm_analysis::scev::expr::Use;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, IntPredicate, Opcode};
-use llrm_analysis::scev::expr::Use;
 use llrm_mir::passes::Outer;
 
 use crate::counting;
@@ -325,11 +325,9 @@ fn nearest_common_dominator(
 /// `dead`'s.
 ///
 /// Not translated of `SimplifyIndvar::simplifyUsers` (DEVIATE 17):
-/// `replaceIVUserWithLoopInvariant`, `foldIVUser`,
-/// `eliminateOverflowIntrinsic`, `eliminateSaturatingIntrinsic` (MIR lacks
-/// them, D9), `eliminateTrunc`, `eliminateSDiv`, `simplifyIVRemainder`,
-/// `eliminateIdentitySCEV`, `strengthenBinaryOp`, `replaceFloatIVWithIntegerIV`
-/// and `makeIVComparisonInvariant`.
+/// `replaceIVUserWithLoopInvariant`, `replaceFloatIVWithIntegerIV`,
+/// `makeIVComparisonInvariant`, and the overflow and saturating intrinsic
+/// eliminations (MIR lacks them, D9).
 pub fn simplified_and_extended(
     context: &mut Context,
     layout: &DataLayout,
@@ -655,9 +653,12 @@ fn fold_iv_user(
     use crate::widen::{defining, operand_type, result_of, value_op};
     let instruction = e.function.instruction(use_inst);
     let (opcode, use_operands, use_ty, exact) = match instruction.opcode {
-        Opcode::Binary(op @ (BinaryOp::UDiv | BinaryOp::LShr)) => {
-            (op, instruction.operands.clone(), instruction.ty, instruction.flags.contains(llrm_mir::opcode::Flags::EXACT))
-        }
+        Opcode::Binary(op @ (BinaryOp::UDiv | BinaryOp::LShr)) => (
+            op,
+            instruction.operands.clone(),
+            instruction.ty,
+            instruction.flags.contains(llrm_mir::opcode::Flags::EXACT),
+        ),
         _ => return None,
     };
     // We're only interested in the case where we know something about the
@@ -696,10 +697,9 @@ fn fold_iv_user(
         // correct after we make the replacement.
         let mut must_drop_exact = false;
         if exact {
-            let product = e
-                .se
-                .get_mul_expr(&cx, vec![Use::of(folded), Use::of(rhs)], llrm_analysis::scev::Flags::default(), 0)
-                .scev;
+            let product =
+                e.se.get_mul_expr(&cx, vec![Use::of(folded), Use::of(rhs)], llrm_analysis::scev::Flags::default(), 0)
+                    .scev;
             must_drop_exact = lhs != product;
         }
         // We have something that might fold it's operand. Compare SCEVs.
@@ -843,7 +843,8 @@ fn simplify_iv_remainder(
         let cx = e.env.cx(&*e.context, &*e.function);
         let n = e.se.get_scev(&cx, n_value);
         // Simplify unnecessary loops away.
-        let rem_loop = cx.function.parent(rem).and_then(|block| cx.loops.get_loop_for(block)).map(|one| one.get_header());
+        let rem_loop =
+            cx.function.parent(rem).and_then(|block| cx.loops.get_loop_for(block)).map(|one| one.get_header());
         let n = e.se.get_scev_at_scope(&cx, n, rem_loop);
         let is_numerator_non_negative = !is_signed || e.se.is_known_non_negative(&cx, n);
         // Do not proceed if the Numerator may be negative
@@ -885,36 +886,42 @@ fn simplify_iv_remainder(
         // (i+1) % n  -->  (i+1)==n?0:(i+1)  if i is in [0,n).
         2 => {
             let bit = e.context.types.int(1);
-            let icmp = e.function.create_instruction(
-                Opcode::ICmp(IntPredicate::Eq),
-                bit,
-                vec![n_value, d_value],
-                llrm_mir::opcode::Flags::default(),
-                None,
-            );
+            let icmp = e
+                .function
+                .create_instruction(
+                    Opcode::ICmp(IntPredicate::Eq),
+                    bit,
+                    vec![n_value, d_value],
+                    llrm_mir::opcode::Flags::default(),
+                    None,
+                );
             e.function.insert(icmp, llrm_mir::edit::Position::Before(rem)).expect("a placed instruction");
             let zero = Operand::Constant(e.context.int(ty, 0));
             let icmp_op = value_op(e, icmp);
-            let select = e.function.create_instruction(
-                Opcode::Select,
-                ty,
-                vec![icmp_op, zero, n_value],
-                llrm_mir::opcode::Flags::default(),
-                Some("iv.rem"),
-            );
+            let select = e
+                .function
+                .create_instruction(
+                    Opcode::Select,
+                    ty,
+                    vec![icmp_op, zero, n_value],
+                    llrm_mir::opcode::Flags::default(),
+                    Some("iv.rem"),
+                );
             e.function.insert(select, llrm_mir::edit::Position::Before(rem)).expect("a placed instruction");
             let select_op = value_op(e, select);
             e.function.replace_all_uses_with(result, select_op);
         }
         // i %s n -> i %u n if i >= 0 and n >= 0
         3 => {
-            let urem = e.function.create_instruction(
-                Opcode::Binary(BinaryOp::URem),
-                ty,
-                vec![n_value, d_value],
-                llrm_mir::opcode::Flags::default(),
-                None,
-            );
+            let urem = e
+                .function
+                .create_instruction(
+                    Opcode::Binary(BinaryOp::URem),
+                    ty,
+                    vec![n_value, d_value],
+                    llrm_mir::opcode::Flags::default(),
+                    None,
+                );
             e.function.insert(urem, llrm_mir::edit::Position::Before(rem)).expect("a placed instruction");
             let urem_op = value_op(e, urem);
             e.function.replace_all_uses_with(result, urem_op);
@@ -935,15 +942,16 @@ fn eliminate_trunc(
     trunc: InstId,
     changed: &mut bool,
 ) -> bool {
-    use crate::widen::{build_cast, operand_type, result_of, value_op};
     use llrm_mir::opcode::Flags as IrFlags;
+
+    use crate::widen::{build_cast, operand_type, result_of, value_op};
     // It is always legal to replace
     //   icmp <pred> i32 trunc(iv), n
     // with
     //   icmp <pred> i64 sext(trunc(iv)), sext(n), if pred is signed predicate.
     // Or with
-    //   icmp <pred> i64 zext(trunc(iv)), zext(n), if pred is unsigned predicate.
-    // Or with either of these if pred is an equality predicate.
+    //   icmp <pred> i64 zext(trunc(iv)), zext(n), if pred is unsigned
+    // predicate. Or with either of these if pred is an equality predicate.
     //
     // If we can prove that iv == sext(trunc(iv)) or iv == zext(trunc(iv)) for
     // every comparison which uses trunc, it means that we can replace each of
@@ -993,8 +1001,15 @@ fn eliminate_trunc(
             {
                 return false;
             }
-            let signed = matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
-            let unsigned = matches!(pred, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule);
+            let signed = matches!(
+                pred,
+                IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+            );
+            let unsigned =
+                matches!(
+                    pred,
+                    IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+                );
             // If we cannot get rid of trunc, bail.
             if signed && !does_sext_collapse {
                 return false;
@@ -1025,7 +1040,11 @@ fn eliminate_trunc(
         // argument. If we can use either sext or zext (i.e. we are dealing
         // with equality predicate), then prefer zext as a more canonical form.
         let mut pred = if is_swapped { pred.swapped() } else { pred };
-        let unsigned_pred = matches!(pred, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule);
+        let unsigned_pred =
+            matches!(
+                pred,
+                IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+            );
         let can_use_zext = unsigned_pred
             || (does_zext_collapse && {
                 if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
@@ -1072,10 +1091,9 @@ fn eliminate_trunc(
 
     // Trunc no longer needed.
     let trunc_ty = e.function.instruction(trunc).ty;
-    let poison = Operand::Constant(e.context.constant(llrm_mir::context::Constant {
-        ty: trunc_ty,
-        kind: llrm_mir::context::ConstantKind::Poison,
-    }));
+    let poison = Operand::Constant(
+        e.context.constant(llrm_mir::context::Constant { ty: trunc_ty, kind: llrm_mir::context::ConstantKind::Poison }),
+    );
     e.function.replace_all_uses_with(result_of(e.function, trunc), poison);
     e.dead.push(trunc);
     *changed = true;
@@ -1092,7 +1110,11 @@ fn strengthen_binary_op(
     iv_operand: InstId,
 ) -> bool {
     let Opcode::Binary(op) = e.function.instruction(bo).opcode else { return false };
-    (matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl) && strengthen_overflowing_operation(e, bo))
+    (matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+    )
+        && strengthen_overflowing_operation(e, bo))
         || (op == BinaryOp::Shl && strengthen_right_shift(e, bo, iv_operand))
 }
 
@@ -1117,11 +1139,12 @@ fn strengthen_overflowing_operation(
         held.insert(IrFlags::NSW);
     }
     e.function.set_flags(bo, held);
-    // The getStrengthenedNoWrapFlagsFromBinOp() check inferred additional nowrap
-    // flags on addrecs while performing zero/sign extensions. We could call
-    // forgetValue() here to make sure those flags also propagate to any other
-    // SCEV expressions based on the addrec. However, this can have pathological
-    // compile-time impact, see https://bugs.llvm.org/show_bug.cgi?id=50384.
+    // The getStrengthenedNoWrapFlagsFromBinOp() check inferred additional
+    // nowrap flags on addrecs while performing zero/sign extensions. We
+    // could call forgetValue() here to make sure those flags also propagate
+    // to any other SCEV expressions based on the addrec. However, this can
+    // have pathological compile-time impact, see
+    // https://bugs.llvm.org/show_bug.cgi?id=50384.
     true
 }
 
@@ -1133,8 +1156,9 @@ fn strengthen_right_shift(
     bo: InstId,
     iv_operand: InstId,
 ) -> bool {
-    use crate::widen::{result_of, value_op};
     use llrm_mir::opcode::Flags as IrFlags;
+
+    use crate::widen::{result_of, value_op};
     let iv_op = value_op(e, iv_operand);
     // `m_Shl(m_Value(), m_Specific(IVOperand))`.
     if e.function.instruction(bo).operands[1] != iv_op {
@@ -1150,7 +1174,12 @@ fn strengthen_right_shift(
     let users: Vec<InstId> = e.function.users(result_of(e.function, bo)).iter().map(|used| used.user).collect();
     for user in users {
         let instruction = e.function.instruction(user);
-        if !matches!(instruction.opcode, Opcode::Binary(BinaryOp::AShr | BinaryOp::LShr)) || instruction.operands[0] != bo_op {
+        if !matches!(
+            instruction.opcode,
+            Opcode::Binary(BinaryOp::AShr | BinaryOp::LShr)
+        )
+            || instruction.operands[0] != bo_op
+        {
             continue;
         }
         let Operand::Constant(constant) = instruction.operands[1] else { continue };
