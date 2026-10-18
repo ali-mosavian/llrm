@@ -140,7 +140,7 @@ fn int(
 }
 
 fn undef(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> ConstantId {
     context.constant(Constant { ty, kind: ConstantKind::Undef })
