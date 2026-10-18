@@ -1,0 +1,82 @@
+# The perf tests on main, which hosted CI cannot run (no perf counters: GATE_ALLOW_MISSING lets a hosted gate skip them), so a red there is
+# unseen: tools/test_budgets.py went red at #1948 and nobody knew for a day. Every 3 hours on tinytim, skipped when the machine is busy or a
+# quiet window is declared; one comment on one issue, only when the state changes (tools/ci/perf_main.py).
+#
+# Quiet window: the runners stop (their containers see no host path, so a lock file cannot be read here); a window owner can also set the
+# repository variable QUIET_WINDOW to 1, which this workflow honours. State: the label perf-main-red on the issue titled below.
+name: perf-main
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: perf-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  ISSUE_TITLE: "perf on main (scheduled run, tinytim)"
+
+jobs:
+  perf:
+    runs-on: [self-hosted, tinytim]
+    timeout-minutes: 120
+    if: ${{ vars.QUIET_WINDOW != '1' }}
+    steps:
+      - id: load
+        run: |
+          load=$(cut -d' ' -f1 /proc/loadavg)
+          echo "load $load"
+          if awk -v l="$load" 'BEGIN { exit !(l >= 4) }'; then echo "busy=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.load.outputs.busy != 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - if: steps.load.outputs.busy != 'true'
+        uses: ./.github/actions/setup
+      - if: steps.load.outputs.busy != 'true'
+        run: |
+          echo "GATE_ALLOW_MISSING=" >> "$GITHUB_ENV"
+          cargo build --release --bins -q
+      - id: perf
+        if: steps.load.outputs.busy != 'true'
+        run: |
+          set +e
+          JOBS=$(nproc) python3 tools/gate/gate.py run --group perf > "$RUNNER_TEMP/perf.log" 2>&1
+          code=$?
+          tail -n 40 "$RUNNER_TEMP/perf.log"
+          echo "state=$([ $code -eq 0 ] && echo green || echo red)" >> "$GITHUB_OUTPUT"
+      - name: Tell the issue, on a change only
+        if: steps.load.outputs.busy != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOW: ${{ steps.perf.outputs.state }}
+        run: |
+          number=$(gh issue list --state open --search "$ISSUE_TITLE in:title" --json number,title -q ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
+          if [ -z "$number" ]; then
+            number=$(gh issue create --title "$ISSUE_TITLE" --body "Every 3 hours (.github/workflows/perf-main.yml). Comments only when the state changes." | sed 's#.*/##')
+          fi
+          previous=$(gh issue view "$number" --json labels -q '[.labels[].name] | if index("perf-main-red") then "red" else "green" end')
+          action=$(python3 tools/ci/perf_main.py decide "$previous" "$NOW")
+          last_green=$(gh issue view "$number" --json body -q .body | sed -n 's/^last-green: \([0-9a-f]\{40\}\)$/\1/p' | tail -1)
+          intro="Every 3 hours (.github/workflows/perf-main.yml). Comments only when the state changes."
+          case "$action" in
+            comment-red)
+              gh label create perf-main-red --force >/dev/null 2>&1 || true
+              gh issue edit "$number" --add-label perf-main-red
+              python3 tools/ci/perf_main.py report "$last_green" "$GITHUB_SHA" "$RUNNER_TEMP/perf.log" | gh issue comment "$number" --body-file - ;;
+            comment-green)
+              gh issue edit "$number" --remove-label perf-main-red
+              gh issue comment "$number" --body "perf on main is green again at ${GITHUB_SHA:0:9}." ;;
+          esac
+          # The last green is kept in the issue body (an edit, no notification): the range a red report names starts there.
+          if [ "$NOW" = green ]; then
+            gh issue edit "$number" --body "$(printf '%s\n\nlast-green: %s' "$intro" "$GITHUB_SHA")"
+          fi
