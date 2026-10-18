@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's MemorySSA walker against llrm's frontier walk
+architecture-order: 340
+---
 # LLVM's MemorySSA clobber walker against llrm's frontier walk
 
 TL;DR: LLVM answers a memory query from a field the access keeps, and walks at most 100 stores when it does not; llrm walks from the site for every query, 4,787 on d_faces `-O2` at 27,750 instructions each against LLVM's 286 at about 11,000.

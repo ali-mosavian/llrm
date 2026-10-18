@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's BasicAA against llrm's `regions::overlapping`
+architecture-order: 350
+---
 # LLVM's BasicAA against llrm's `regions::overlapping`
 
 TL;DR: LLVM answers alias on demand from the pointers, looking through at most 10 steps and caching each pair; llrm answers from a provenance it built for every access, with no cache, and asks 10 times as often: 104,236 overlap queries (58.8 M) against 10,624 alias queries (19.6 M) on d_faces `-O2`.

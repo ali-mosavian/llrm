@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM measured
+architecture-order: 310
+---
 # LLVM measured: what bounds its optimizer's work
 
 TL;DR: on d_faces `-O2`, LLVM runs about as many passes as llrm (856 against 746) and spends 7x to 17x fewer instructions per run (0.21 M against 1.4 M with analyses; 11 M against 0.63 M on `d_draw_faces`). The number of runs is not the gap; the cost of a run is. It is small because each pass is one worklist walk over a function that SROA and EarlyCSE have already cut to 42% of its size, because analyses are computed a handful of times and thrown away only after a pass changes the IR, and because every query-driven walk has a cap.

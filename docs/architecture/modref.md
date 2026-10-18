@@ -1,3 +1,7 @@
+---
+architecture-index: call effects
+architecture-order: 70
+---
 # Call effects
 
 For contributors working on interprocedural analyses or their compile time.
