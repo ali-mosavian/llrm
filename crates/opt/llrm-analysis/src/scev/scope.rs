@@ -222,9 +222,15 @@ impl ScalarEvolution {
 
         values.push((l, None));
 
-        // Otherwise compute it.
+        #[cfg(test)]
+        if let Some(hook) = self.compute_hook.take() {
+            hook(self, cx, v);
+        }
+
+        // Otherwise compute it. Computing may forget `v` (`ValuesAtScopes[V]`
+        // below makes the entry again, as the C++ `operator[]` does).
         let c = self.compute_scev_at_scope(cx, v, l);
-        let values = self.values_at_scopes.get_mut(&v).expect("held");
+        let values = self.values_at_scopes.entry(v).or_default();
         if let Some(ls) = values.iter_mut().rev().find(|ls| ls.0 == l) {
             ls.1 = Some(c);
             // Record the dependency under the bare expression: invalidation
