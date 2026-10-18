@@ -860,6 +860,10 @@ pub fn recorded(
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
+    // DEVIATE from LLVM: `ipa-range` runs after the function pipeline here,
+    // LLVM's `ipsccp` before it, so a body it changes runs the Simplify list a
+    // second time (d_faces -O2: one body, `gvn` 12 runs over 11 functions
+    // against clang's 11, `parity::RUNS_PER_BODY`).
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = if applied.options.llvm_order {

@@ -117,3 +117,49 @@ fn test_a_partial_slot_states_its_criterion_and_exit() {
         assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
     }
 }
+
+const TWO_FUNCTIONS: &str = "define i16 @h(ptr %p) {\nb0:\n  store i16 1, ptr %p\n  %v = load i16, ptr %p\n  ret i16 %v\n}\n\ndefine i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 1\n  %b = add i16 %x, 1\n  %c = mul i16 %a, %b\n  ret i16 %c\n}\n\ndefine i16 @g(i16 %x) {\nb0:\n  %a = mul i16 %x, 3\n  ret i16 %a\n}\n";
+
+fn runs_of(applied: &Applied) -> Vec<String> {
+    let mut module = crate::testing::parsed(TWO_FUNCTIONS);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for stage in pipeline::function_stages(applied) {
+        manager.add(stage);
+    }
+    pipeline::capturing_runs(|| {
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap()
+    })
+    .1
+}
+
+/// d_faces -O2 ran `gvn` 35 times over 12 bodies in the rounds (the fixed point
+/// repeats a body until nothing changes), clang 11: once per function. Under
+/// the LLVM order it is once per body.
+#[test]
+fn test_the_llvm_order_runs_gvn_once_per_body_and_the_rounds_do_not() {
+    let order = runs_of(&Applied::default());
+    assert_eq!(parity::check_run_counts(&order, 3), Ok(()), "{order:?}");
+    let rounds = runs_of(&Applied {
+        options: pipeline::Options { llvm_order: false, ..Default::default() },
+        ..Applied::default()
+    });
+    assert!(
+        parity::check_run_counts(&rounds, 3).is_err(),
+        "premise: the rounds run gvn more than once per body: {rounds:?}"
+    );
+}
+
+/// `LLRM_DEBUG=counts` said nothing of who asked for an analysis under the
+/// parity pipeline (the plan page called the counter "not built yet"). The
+/// default order tells the counts its Translated slots and a `callers` line
+/// splits each analysis between them and the old passes; the rounds have none.
+#[test]
+fn test_the_default_order_prints_callers_lines_split_by_joined_slots() {
+    llrm_mir::counts::per_pass();
+    let _ = runs_of(&Applied::default());
+    let callers = llrm_mir::counts::callers();
+    assert!(
+        callers.iter().any(|line| line.starts_with("[counts] callers ") && !line.contains(" 0 joined ")),
+        "no analysis was computed by a joined slot under the default order: {callers:?}"
+    );
+}
