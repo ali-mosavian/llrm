@@ -29,7 +29,7 @@ use llrm_mir::passes::Declared;
 use llrm_mir::types::{Type as MirType, TypeId};
 
 use super::expander::{Env, Expander};
-use super::expr::{flags, Kind, Scev, Ty, Type, Use};
+use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Flags, ScalarEvolution};
 
 /// One call of the expander.
@@ -92,7 +92,10 @@ impl Run<'_> {
         &self,
         v: Operand,
     ) -> bool {
-        matches!(self.context.types.get(self.ty_of_operand(v)), MirType::Pointer(_))
+        matches!(
+            self.context.types.get(self.ty_of_operand(v)),
+            MirType::Pointer(_)
+        )
     }
 
     fn constant(
@@ -254,9 +257,14 @@ impl Run<'_> {
         }
         // Fold a binop with constant operands.
         if self.is_constant(lhs) && self.is_constant(rhs) {
-            if let Some(folded) =
-                llrm_mir::simplify::simplify_binop_operands(self.context, self.function, op, IrFlags::default(), lhs, rhs)
-            {
+            if let Some(folded) = llrm_mir::simplify::simplify_binop_operands(
+                self.context,
+                self.function,
+                op,
+                IrFlags::default(),
+                lhs,
+                rhs,
+            ) {
                 return folded;
             }
         }
@@ -267,9 +275,13 @@ impl Run<'_> {
         let here = all.iter().position(|&one| one == ip).expect("in its block");
         for &before in all[..here].iter().rev().take(6) {
             let one = self.function.instruction(before);
-            let overflowing = matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl);
-            let incompatible = (overflowing && (one.flags.contains(IrFlags::NSW) != (wrap & flags::NSW != 0)
-                || one.flags.contains(IrFlags::NUW) != (wrap & flags::NUW != 0)))
+            let overflowing = matches!(
+                op,
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl
+            );
+            let incompatible = (overflowing
+                && (one.flags.contains(IrFlags::NSW) != (wrap & flags::NSW != 0)
+                    || one.flags.contains(IrFlags::NUW) != (wrap & flags::NUW != 0)))
                 || one.flags.contains(IrFlags::EXACT);
             if one.opcode == Opcode::Binary(op) && one.operands == [lhs, rhs] && !incompatible {
                 return Operand::Value(one.result.expect("a value"));
@@ -337,8 +349,10 @@ impl Run<'_> {
                     .find(|&&one| {
                         let inst = self.function.instruction(one);
                         let argument_cast = matches!(inst.opcode, Opcode::Cast(CastOp::BitCast))
-                            && matches!(inst.operands[0], Operand::Value(o)
-                                if matches!(self.function.value(o).def, ValueDef::Argument(_)) && inst.operands[0] != v);
+                            && matches!(
+                                inst.operands[0],
+                                Operand::Value(o) if matches!(self.function.value(o).def, ValueDef::Argument(_)) && inst.operands[0] != v
+                            );
                         !matches!(inst.opcode, Opcode::Phi) && !argument_cast
                     })
                     .expect("a terminator")
@@ -534,7 +548,8 @@ impl Run<'_> {
         false
     }
 
-    /// The operands in reverse with their loops, stably sorted by `LoopCompare`.
+    /// The operands in reverse with their loops, stably sorted by
+    /// `LoopCompare`.
     fn ops_and_loops(
         &mut self,
         ops: &[Use],

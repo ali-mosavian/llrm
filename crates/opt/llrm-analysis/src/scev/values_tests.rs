@@ -24,7 +24,8 @@ fn test_a_global_is_aligned_to_its_types_preferred_alignment() {
 
 /// `for (i = 0; ; i++)` with a loop-invariant bound: the PHI is the add
 /// recurrence `{0,+,1}`, and the post-increment `{1,+,1}`; the `mul` after
-/// the loop is `{4,+,4}` and its value after the loop, `(4 * (1 umax %n))`, from the trip count (opt's text).
+/// the loop is `{4,+,4}` and its value after the loop, `(4 * (1 umax %n))`,
+/// from the trip count (opt's text).
 #[test]
 fn test_a_counted_loop_phi_is_an_add_recurrence() {
     let text = "define i32 @f(i32 %n) {\n\

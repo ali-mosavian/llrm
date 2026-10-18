@@ -14,8 +14,8 @@ use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand};
 use llrm_mir::passes::Declared;
-use llrm_support::hash::HashMap;
 use llrm_mir::valuetracking::AssumptionCache;
+use llrm_support::hash::HashMap;
 
 use super::expr::{Scev, Ty};
 use super::{Cx, ScalarEvolution};
