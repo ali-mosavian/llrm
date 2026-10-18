@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 75 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 76 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -82,4 +82,5 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | unswitch | A loop with an invariant branch in its body becomes two loops, one per way the condition goes, chosen by one test before them. | Once per body, after the fixed point and the peel rounds settle and before | [unswitch](unswitch.md) |
 | versionalias | A loop version's second reason: the pointers a loop reads and writes may be one object, and where the bytes they reach do not meet, they are not. | `Disjoint`, an [`crate::loopversion::Assumption`](loopversion.md). | [versionalias](versionalias.md) |
 | versionstride | A loop version's first reason: an address that steps by an unknown stride is contiguous where the stride is 1. | `Stride`, an [`crate::loopversion::Assumption`](loopversion.md). | [versionstride](versionstride.md) |
+| vncoercion | A value stored or loaded in one type, made the value a load of another type at a must-aliased address reads: GVN's `VNCoercion`, a translation of [`VNCoercion.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp) at d1106deb71cc. |  | [vncoercion](vncoercion.md) |
 | window | A counted loop's huge pointers are split into windows, inside each of which the loop runs on far pointers that never carry into the segment selector. | Once per function, after LSR chose the pointers (the windows are made over | [window](window.md) |

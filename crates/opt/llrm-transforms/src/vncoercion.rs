@@ -21,6 +21,26 @@
 //! needs them to accept) is none, `get_constant_value_for_load` is none, and
 //! `get_constant_mem_inst_value_for_load` folds only into an integer type (the
 //! splat itself). Each is a load GVN then leaves in place.
+//!
+//! # Example
+//! A word stored, its upper half loaded. Before:
+//!
+//! ```mir
+//! store i32 %x, ptr %p
+//! %q = getelementptr i8, ptr %p, i16 2
+//! %v = load i16, ptr %q
+//! ```
+//!
+//! `analyze_load_from_clobbering_store` says the load starts at byte 2 of the
+//! store, and `get_value_for_load` builds what it reads:
+//!
+//! ```mir
+//! %s = lshr i32 %x, 16
+//! %v = trunc i32 %s to i16
+//! ```
+//!
+//! From unit test `test_a_half_of_a_word_is_shifted_and_truncated` in
+//! `vncoercion_tests.rs`.
 
 use llrm_mir::constfold;
 use llrm_mir::context::{Constant, ConstantKind, Context};
