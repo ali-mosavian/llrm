@@ -92,6 +92,7 @@
 pub mod aa;
 pub mod access;
 pub mod alias;
+pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
 pub mod avail;

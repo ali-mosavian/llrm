@@ -347,6 +347,7 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
     if options.arch.expands("select") {
         timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
     }

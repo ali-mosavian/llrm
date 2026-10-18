@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitvalues.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitvalues.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitvalues.rs sha256:ddb510cf743705b1d57d725fc1bca33fb8204a927c44c11cd2a697dc542382ef -->
+<!-- src: crates/opt/llrm-transforms/src/exitvalues.rs sha256:4c64df04454d90b191e6c8eb3717798ff0baca27663703cdd80e3d66f4f046fe -->
 
 # exitvalues
 
@@ -27,8 +27,8 @@ by it.
 phi reads `shl n, 1` written in the exit block, and the loop's `s` is dead.
 
 ## Used by
-[`crate::indvars`](indvars.md), first of its steps, in place of
-[`crate::indvars::exit_values`](indvars.md) when `LLRM_NO_SCEV_EXITVALUES` is not set.
+[`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own
+`exit_values`, which asked only the header for its exit.
 
 ## See also
 `rewriteLoopExitValues`, `canLoopBeDeleted`, `hasHardUserWithinLoop`,

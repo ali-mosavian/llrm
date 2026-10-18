@@ -40,7 +40,7 @@ pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
 /// What an access is, without the numbers of either graph: the live state, a
 /// phi of a block, or the instruction.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum Name {
+pub enum Name {
     Live,
     Phi(i64),
     Site(InstId),
@@ -141,7 +141,7 @@ pub fn compare(unit: &Unit) -> Result<(), String> {
         }
     }
     let phis: BTreeSet<Name> = (0..mssa.accesses.len() as u32)
-        .filter(|one| mssa.access(*one).kind == Kind::Phi && resolved(&mssa, *one) == *one)
+        .filter(|one| !mssa.access(*one).dead && mssa.access(*one).kind == Kind::Phi && resolved(&mssa, *one) == *one)
         .map(|one| name_new(&mssa, one))
         .collect();
     let today: BTreeSet<Name> = old.phis.keys().map(|at| Name::Phi(*at)).collect();
@@ -209,4 +209,87 @@ pub fn walk(unit: &Unit) -> Result<WalkReport, String> {
     report.asked = asked;
     report.worked = worked;
     Ok(report)
+}
+
+/// What a graph says, in names that do not depend on how it was made: for each
+/// memory instruction, whether it is a def and the access it reads, a trivial
+/// phi taken for what it stands for; and for each phi that stands, the access
+/// each of its edges reads.
+#[derive(Debug, PartialEq)]
+pub struct Said {
+    pub instructions: llrm_mir::dense::IdMap<InstId, (bool, Name)>,
+    pub phis: std::collections::BTreeMap<Name, Vec<(i64, Name)>>,
+}
+
+pub fn said(mssa: &Mssa) -> Said {
+    let mut instructions = llrm_mir::dense::IdMap::new();
+    let mut phis = std::collections::BTreeMap::new();
+    for at in 0..mssa.accesses.len() as u32 {
+        let one = mssa.access(at);
+        if one.dead || at == LIVE_ON_ENTRY {
+            continue;
+        }
+        if let Some(inst) = one.inst {
+            let defining = resolved(mssa, one.defining.expect("a defining access"));
+            instructions.insert(inst, (one.kind == Kind::Def, name_new(mssa, defining)));
+        } else if one.kind == Kind::Phi && resolved(mssa, at) == at {
+            let mut edges: Vec<(i64, Name)> = one
+                .incoming
+                .iter()
+                .map(|&(from, value)| (cfg::id(from), name_new(mssa, resolved_value(mssa, value, at))))
+                .collect();
+            edges.sort();
+            phis.insert(name_new(mssa, at), edges);
+        }
+    }
+    Said { instructions, phis }
+}
+
+/// `updated` says what a graph made afresh of `function` says: the check of the
+/// updater, edit by edit.
+/// The walker has answered for every load and store of both first: a use's
+/// defining access is what the walker found, so a graph the walker has been
+/// asked of is compared with one it has been asked of.
+pub fn same_as_fresh(
+    updated: &mut Mssa,
+    function: &llrm_mir::module::Function,
+    dominance: &crate::cfg::Dominance,
+    effect: &dyn Fn(InstId) -> Effect,
+    aa: &super::alias::AliasQuery,
+) -> Result<(), String> {
+    updated.verify_memory_ssa(function, Level::Full)?;
+    let mut fresh = Mssa::build(function, dominance, effect);
+    walked(updated, aa, function);
+    walked(&mut fresh, aa, function);
+    let updated = &*updated;
+    let (left, right) = (said(updated), said(&fresh));
+    if left == right {
+        return Ok(());
+    }
+    let wrong = left.instructions.iter().find(|(inst, said)| right.instructions.get(inst) != Some(said));
+    Err(format!(
+        "the updated graph differs from a fresh one: instruction {wrong:?} against {:?}; phis {:?} against {:?}",
+        wrong.and_then(|(inst, _)| right.instructions.get(&inst)),
+        left.phis,
+        right.phis
+    ))
+}
+
+/// What the walker answers for every load and store of `function`, in names:
+/// the clobbering access of each, a trivial phi taken for what it stands for.
+pub fn walked(
+    mssa: &mut Mssa,
+    aa: &super::alias::AliasQuery,
+    function: &llrm_mir::module::Function,
+) -> llrm_mir::dense::IdMap<InstId, Name> {
+    let mut answers = llrm_mir::dense::IdMap::new();
+    for (_, inst) in function.walk() {
+        let Some(access) = mssa.get_memory_access(inst) else { continue };
+        if aa.location_of(inst).is_none() {
+            continue;
+        }
+        let clobber = mssa.get_clobbering_memory_access(aa, access);
+        answers.insert(inst, name_new(mssa, resolved(mssa, clobber)));
+    }
+    answers
 }

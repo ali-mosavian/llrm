@@ -569,11 +569,8 @@ impl Checker<'_> {
     ) {
         let operands = &self.function.instruction(inst).operands;
         let Operand::Block(unwind) = operands[operands.len() - 2] else { return };
-        let first = self
-            .function
-            .block(unwind)
-            .iter()
-            .find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
+        let first =
+            self.function.block(unwind).iter().find(|&one| self.function.instruction(one).opcode != Opcode::Phi);
         if !first.is_some_and(|one| matches!(
             self.function.instruction(one).opcode,
             Opcode::LandingPad { .. }

@@ -83,6 +83,17 @@ pub fn running_function() -> String {
     RUNNING_FUNCTION.with(|name| name.borrow().clone())
 }
 
+/// Tells the debug lines which function a body is about to run over: for a
+/// run outside the manager's loop over a pass's functions (the interprocedural
+/// stage's reruns), which would otherwise print the last function it set.
+pub fn set_running_function(name: &str) {
+    RUNNING_FUNCTION.with(|running| {
+        let mut running = running.borrow_mut();
+        running.clear();
+        running.push_str(name);
+    });
+}
+
 pub(crate) fn counted(
     what: &'static str,
     hit: bool,
@@ -2540,11 +2551,7 @@ impl PassManager {
                 if function.is_declaration() || !bisected(name, global.name.as_deref().unwrap_or_default()) {
                     continue;
                 }
-                RUNNING_FUNCTION.with(|running| {
-                    let mut running = running.borrow_mut();
-                    running.clear();
-                    running.push_str(global.name.as_deref().unwrap_or_default());
-                });
+                set_running_function(global.name.as_deref().unwrap_or_default());
                 let cache = analyses.manager(id, &outer);
                 let before = function.mark();
                 let running = crate::counts::pass_run_over(name, function);

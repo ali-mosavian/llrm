@@ -36,6 +36,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::cfg::{Cfg, DomTree};
+use super::eqclasses::{ConnectedVNInfoEqClasses, distribute_range};
 use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
@@ -227,6 +228,8 @@ impl LiveIntervals {
         &mut self,
         reg: u32,
     ) -> LiveInterval {
+        #[cfg(test)]
+        COMPUTED.with(|one| one.borrow_mut().push(reg));
         let mut li = LiveInterval::new(reg, 0.0);
         self.calc.calc.reset(self.cfg.len());
         let ctx = Ctx { cfg: &self.cfg, indexes: &self.indexes, dom: &self.dom };
@@ -286,6 +289,84 @@ impl LiveIntervals {
         reg: u32,
     ) -> &mut LiveInterval {
         Rc::make_mut(self.intervals.get_mut(&reg).expect("an interval is held"))
+    }
+
+    /// Takes the interval of `reg` out of the map, to edit it beside the maps.
+    pub fn take_interval(
+        &mut self,
+        reg: u32,
+    ) -> LiveInterval {
+        let rc = self.intervals.remove(&reg).expect("an interval is held");
+        Rc::try_unwrap(rc).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// `removeVRegDefAt`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L1848>),
+    /// without sub-ranges.
+    pub fn remove_vreg_def_at(
+        li: &mut LiveInterval,
+        pos: &SlotIndex,
+    ) {
+        if let Some(vni) = li.get_vn_info_at(pos) {
+            assert!(vni.def().get_base_index() == pos.get_base_index());
+            li.remove_val_no(&vni);
+        }
+    }
+
+    /// `splitSeparateComponents`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L1866>)
+    /// with `ConnectedVNInfoEqClasses::Distribute`: a register whose values
+    /// are not connected becomes one register per component. Returns the new
+    /// registers (component 0 stays); their intervals are held, their operands
+    /// rewritten.
+    pub fn split_separate_components(
+        &mut self,
+        reg: u32,
+    ) -> Vec<u32> {
+        let mut li = self.take_interval(reg);
+        let mut con = ConnectedVNInfoEqClasses::new();
+        let num_comp = con.classify(&li.range, &self.indexes, &self.cfg);
+        if num_comp <= 1 {
+            self.insert_interval(li);
+            return Vec::new();
+        }
+        let new_regs: Vec<u32> = (1..num_comp).map(|_| self.create_virtual_register()).collect();
+
+        // Rewrite instructions: each goes with the value it reads, else the
+        // one it defines.
+        let mut seen: Vec<(InstrKey, bool)> = Vec::new();
+        for op in self.operands(reg) {
+            match seen.iter_mut().find(|(k, _)| *k == op.instr) {
+                Some(entry) => entry.1 |= op.reads_reg,
+                None => seen.push((op.instr, op.reads_reg)),
+            }
+        }
+        for (key, reads) in seen {
+            let idx = self.indexes.get_instruction_index(key);
+            let q = li.query(&idx);
+            let vni = if reads { q.value_in() } else { q.value_defined() };
+            // An undef use that isn't tied to any def has no value.
+            let Some(vni) = vni else { continue };
+            let class = con.get_eq_class(&vni);
+            if class > 0 {
+                let to = new_regs[class as usize - 1];
+                let block = self.indexes.get_mbb_from_index(&idx);
+                let old = Arc::clone(self.instr(key));
+                let new = old.renamed(&|v| if v == reg { to } else { v });
+                self.rewrite_instr(block, key, new);
+            }
+        }
+
+        // Distribute the main live range.
+        let mut splits: Vec<LiveRange> = (1..num_comp).map(|_| LiveRange::new()).collect();
+        distribute_range(&mut li.range, &mut splits, &|id| con.class_of_id(id));
+        for (&new, range) in new_regs.iter().zip(splits) {
+            let mut made = LiveInterval::new(new, 0.0);
+            made.range = range;
+            self.insert_interval(made);
+        }
+        self.insert_interval(li);
+        new_regs
     }
 
     /// How many intervals are held.
@@ -446,7 +527,19 @@ impl LiveIntervals {
     ) -> LirBody {
         let blocks =
             body.blocks.iter().enumerate().map(|(n, block)| block.with_insns(self.blocks[n].clone())).collect();
-        body.with_blocks(blocks)
+        LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
+    }
+
+    /// A parameter that joined another value is that value now (the rename
+    /// `updateRegDefsUses` makes in every instruction, for the entry's def).
+    pub fn rename_input(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        if self.inputs.remove(&from) {
+            self.inputs.insert(to);
+        }
     }
 
     /// `extendToIndices` (LiveIntervals.cpp#L695): extends `lr` to reach each
@@ -960,4 +1053,11 @@ mod tests {
         let edited = body(&[def, read, last, late]);
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
+}
+
+// The registers `compute_virt_reg_interval` worked out, for a test that a spill
+// works out only the registers it makes.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static COMPUTED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
 }

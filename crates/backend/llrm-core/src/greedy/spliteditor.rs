@@ -46,11 +46,16 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
+use llrm_mir::blockfrequency::frequency::BlockFrequency;
+
 use super::liverangeedit::LiveRangeEdit;
 use super::splitkit::{BlockInfo, SplitAnalysis, SplitEnv, first_insert_instr};
 use super::virtregmap::VirtRegMap;
+use crate::liveness::blockfrequency::MachineBlockFrequencyInfo;
+use crate::liveness::calcspillweights::VirtRegAuxInfo;
 use crate::liveness::liveintervals::LiveIntervals;
-use crate::liveness::liverange::{LiveInterval, Vn};
+use crate::liveness::liverange::{LiveInterval, Segment, Vn};
+use crate::liveness::liverangecalc::{Ctx, LiveIntervalCalc};
 use crate::liveness::slotindex::{InstrKey, SlotIndex};
 
 /// What the editor works on (the C++ editor holds references to them, which
@@ -60,6 +65,8 @@ pub struct SplitCx<'a> {
     pub vrm: &'a mut VirtRegMap,
     pub sa: &'a mut SplitAnalysis,
     pub env: &'a dyn SplitEnv,
+    /// `MBFI`, for the spill modes that hoist copies.
+    pub mbfi: Option<&'a MachineBlockFrequencyInfo>,
 }
 
 /// `SplitEditor::ComplementSpillMode`
@@ -134,6 +141,27 @@ impl RegAssignMap {
         }
     }
 
+    /// `find(x)`: the range holding `x`, or None (`I.valid()` false or
+    /// `I.start() > x`: the caller asks the start).
+    pub fn find(
+        &self,
+        x: SlotIndex,
+    ) -> Option<(SlotIndex, SlotIndex, u32)> {
+        match self.map.range(..=x).next_back() {
+            Some((&start, &(stop, value))) if stop > x => Some((start, stop, value)),
+            _ => self.map.range(x..).next().map(|(&start, &(stop, value))| (start, stop, value)),
+        }
+    }
+
+    /// `setStop` of the range starting at `start`.
+    pub fn set_stop(
+        &mut self,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) {
+        self.map.get_mut(&start).expect("a range starts there").0 = stop;
+    }
+
     /// The ranges in order: (start, stop, value).
     pub fn iter(&self) -> impl Iterator<Item = (SlotIndex, SlotIndex, u32)> + '_ {
         self.map.iter().map(|(&start, &(stop, value))| (start, stop, value))
@@ -161,6 +189,9 @@ pub struct SplitEditor<'d> {
     pub reg_assign: RegAssignMap,
     /// (register index, parent value id) -> the value defining it there.
     values: HashMap<(usize, u32), ValueForce>,
+    /// `LICalc[2]`: the second serves the registers after the complement in the
+    /// spill modes.
+    lical: [LiveIntervalCalc; 2],
 }
 
 impl<'d> Default for SplitEditor<'d> {
@@ -178,6 +209,7 @@ impl<'d> SplitEditor<'d> {
             spill_mode: ComplementSpillMode::Partition,
             reg_assign: RegAssignMap::default(),
             values: HashMap::new(),
+            lical: [LiveIntervalCalc::new(), LiveIntervalCalc::new()],
         }
     }
 
@@ -195,6 +227,11 @@ impl<'d> SplitEditor<'d> {
         self.open_idx = 0;
         self.reg_assign.clear();
         self.values.clear();
+        // Reset the LiveIntervalCalc instances needed for this spill mode.
+        self.lical[0].calc.reset(lis.cfg.len());
+        if sm != ComplementSpillMode::Partition {
+            self.lical[1].calc.reset(lis.cfg.len());
+        }
     }
 
     /// `Edit`.
@@ -792,6 +829,679 @@ impl<'d> SplitEditor<'d> {
     }
 }
 
+impl<'d> SplitEditor<'d> {
+    /// `getLICalc`: the calculator that serves register `reg_idx`.
+    fn lic_of(
+        &self,
+        reg_idx: usize,
+    ) -> usize {
+        (self.spill_mode != ComplementSpillMode::Partition && reg_idx != 0) as usize
+    }
+
+    /// The registers of the edit, in order.
+    fn regs(&self) -> Vec<u32> {
+        (0..self.edit().size()).map(|i| self.edit().get(i)).collect()
+    }
+
+    /// `removeBackCopies`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L898>).
+    fn remove_back_copies(
+        &mut self,
+        cx: &mut SplitCx,
+        copies: &[Vn],
+    ) {
+        let li_reg = self.edit().get(0);
+        let parent = self.parent();
+
+        for c in copies {
+            let def = c.def();
+            let mi = cx.lis.indexes.get_instruction_from_index(&def).expect("No instruction for back-copy");
+            let mbb = cx.lis.indexes.get_mbb_from_index(&def);
+            let insns = cx.lis.block_insns(mbb);
+            let at = insns.iter().position(|i| i.id() == mi).expect("an instruction of the block");
+            // The previous instruction (`--MBBI`, no debug instructions here).
+            let prev = if at == 0 { None } else { Some(insns[at - 1].id()) };
+
+            LiveIntervals::remove_vreg_def_at(cx.lis.interval_mut(li_reg), &def);
+            cx.lis.remove_instr(mbb, mi);
+
+            // Adjust RegAssign if a register assignment is killed at Def. We
+            // want to avoid calculating the live range of the source register
+            // if possible.
+            let Some((a_start, a_stop, reg_idx)) = self.reg_assign.find(def.get_prev_slot()) else { continue };
+            if a_start >= def {
+                continue;
+            }
+            // If MI doesn't kill the assigned register, just leave it.
+            if a_stop != def {
+                continue;
+            }
+            // We could hoist back-copy right after another back-copy. As a
+            // result the previous instruction is actually dead now. We cannot
+            // set its stop to it, which would be the same as start.
+            let kill = prev.map(|k| cx.lis.indexes.get_instruction_index(k).get_reg_slot(false));
+            let reads = prev.is_some_and(|k| cx.lis.instr(k).uses.contains(&self.edit().get_reg()));
+            match kill {
+                Some(kill) if reads && kill > a_start => {
+                    self.reg_assign.set_stop(a_start, kill);
+                }
+                _ => {
+                    let vni = parent.get_vn_info_at(&def).expect("the parent is live at the back-copy");
+                    self.force_recompute(cx, reg_idx as usize, &vni);
+                }
+            }
+        }
+    }
+
+    /// `findShallowDominator`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L950>).
+    fn find_shallow_dominator(
+        &self,
+        cx: &SplitCx,
+        mut mbb: usize,
+        def_mbb: usize,
+    ) -> usize {
+        if mbb == def_mbb {
+            return mbb;
+        }
+        assert!(cx.lis.dom.dominates(def_mbb, mbb), "MBB must be dominated by the def.");
+
+        let def_loop = cx.env.loop_of(def_mbb);
+
+        // Best candidate so far.
+        let mut best_mbb = mbb;
+        let mut best_depth = u32::MAX;
+
+        loop {
+            let l = cx.env.loop_of(mbb);
+
+            // MBB isn't in a loop, it doesn't get any better. All dominators
+            // have a higher frequency by definition.
+            let Some(l) = l else { return mbb };
+
+            // We'll never be able to exit the DefLoop.
+            if Some(l) == def_loop {
+                return mbb;
+            }
+
+            // Least busy dominator seen so far.
+            let depth = cx.env.loop_depth(l);
+            if depth < best_depth {
+                best_mbb = mbb;
+                best_depth = depth;
+            }
+
+            // Leave loop by going to the immediate dominator of the loop
+            // header. This is a bigger stride than simply walking up the
+            // dominator tree.
+            let idom = cx.lis.dom.idom(cx.env.loop_header(l));
+
+            // Too far up the dominator tree?
+            match idom {
+                Some(idom) if cx.lis.dom.dominates(def_mbb, idom) => mbb = idom,
+                _ => return best_mbb,
+            }
+        }
+    }
+
+    /// `computeRedundantBackCopies`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1004>).
+    fn compute_redundant_back_copies(
+        &mut self,
+        cx: &mut SplitCx,
+        not_to_hoist: &std::collections::HashSet<u32>,
+        back_copies: &mut Vec<Vn>,
+    ) {
+        let li_reg = self.edit().get(0);
+        let parent = self.parent();
+        let n = parent.get_num_val_nums() as usize;
+        let mut equal_vns: Vec<Vec<Vn>> = vec![Vec::new(); n];
+        let mut dominated: Vec<Vn> = Vec::new();
+
+        // Aggregate VNIs having the same value as ParentVNI.
+        for vni in cx.lis.get_interval(li_reg).valnos.clone() {
+            if vni.is_unused() {
+                continue;
+            }
+            let pvni = parent.get_vn_info_at(&vni.def()).expect("the parent is live at a complement def");
+            equal_vns[pvni.id() as usize].push(vni);
+        }
+
+        // For VNI aggregation of each ParentVNI, collect dominated, i.e.,
+        // redundant VNIs to BackCopies.
+        for i in 0..n {
+            let pvni = parent.get_val_num_info(i as u32);
+            if !not_to_hoist.contains(&pvni.id()) {
+                continue;
+            }
+            let group = &equal_vns[pvni.id() as usize];
+            for (a, it1) in group.iter().enumerate() {
+                for it2 in &group[a + 1..] {
+                    let in_dom = |v: &Vn, d: &[Vn]| d.iter().any(|x| Rc::ptr_eq(x, v));
+                    if in_dom(it1, &dominated) || in_dom(it2, &dominated) {
+                        continue;
+                    }
+                    let mbb1 = cx.lis.indexes.get_mbb_from_index(&it1.def());
+                    let mbb2 = cx.lis.indexes.get_mbb_from_index(&it2.def());
+                    if mbb1 == mbb2 {
+                        dominated.push(if it1.def() < it2.def() { it2.clone() } else { it1.clone() });
+                    } else if cx.lis.dom.dominates(mbb1, mbb2) {
+                        dominated.push(it2.clone());
+                    } else if cx.lis.dom.dominates(mbb2, mbb1) {
+                        dominated.push(it1.clone());
+                    }
+                }
+            }
+            if !dominated.is_empty() {
+                self.force_recompute(cx, 0, &pvni);
+                back_copies.append(&mut dominated);
+            }
+        }
+    }
+
+    /// `hoistCopies`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1057>):
+    /// for the size mode, find a common dominator for all the back-copies of
+    /// the same parent value and hoist them there; for the speed mode, if the
+    /// common dominator is hot, remove the dominated back-copies instead.
+    fn hoist_copies(
+        &mut self,
+        cx: &mut SplitCx,
+    ) {
+        // Get the complement interval, always RegIdx 0.
+        let li_reg = self.edit().get(0);
+        let parent = self.parent();
+        let nvn = parent.get_num_val_nums() as usize;
+        let mbfi = cx.mbfi.expect("the spill modes hoist by block frequency");
+
+        // Track the nearest common dominator for all back-copies for each
+        // ParentVNI. If a single back-copy dominates, put it in the second.
+        let mut nearest_dom: Vec<(Option<usize>, SlotIndex)> = vec![(None, SlotIndex::default()); nvn];
+        // The total cost of all the back-copies for each ParentVNI.
+        let mut costs: Vec<BlockFrequency> = vec![BlockFrequency(0); nvn];
+        // The ParentVNI->id set for which hoisting back-copies are not
+        // beneficial for Speed.
+        let mut not_to_hoist: std::collections::HashSet<u32> = std::collections::HashSet::new();
+
+        // Find the nearest common dominator for parent values with multiple
+        // back-copies.
+        for vni in cx.lis.get_interval(li_reg).valnos.clone() {
+            if vni.is_unused() {
+                continue;
+            }
+            let pvni = parent.get_vn_info_at(&vni.def()).expect("Parent not live at complement def");
+            let val_mbb = cx.lis.indexes.get_mbb_from_index(&vni.def());
+            let id = pvni.id() as usize;
+
+            // Keep directly defined parent values. This is either a PHI or an
+            // instruction in the complement range. All other copies of
+            // ParentVNI should be eliminated.
+            if vni.def() == pvni.def() {
+                nearest_dom[id] = (Some(val_mbb), vni.def());
+                continue;
+            }
+            // Skip the singly mapped values. There is nothing to gain from
+            // hoisting a single back-copy.
+            if self.values.get(&(0, pvni.id())).is_some_and(|v| v.value.is_some()) {
+                continue;
+            }
+
+            match nearest_dom[id].0 {
+                // First time we see ParentVNI. VNI dominates itself.
+                None => nearest_dom[id] = (Some(val_mbb), vni.def()),
+                // Two defs in the same block. Pick the earlier def.
+                Some(first) if first == val_mbb => {
+                    let second = nearest_dom[id].1;
+                    if !second.is_valid() || vni.def() < second {
+                        nearest_dom[id].1 = vni.def();
+                    }
+                    costs[id] = costs[id] + mbfi.get_block_freq(val_mbb);
+                }
+                // Different basic blocks. Check if one dominates.
+                Some(first) => {
+                    let near = cx.lis.dom.find_nearest_common_dominator(first, val_mbb);
+                    if near == val_mbb {
+                        // Def ValMBB dominates.
+                        nearest_dom[id] = (Some(val_mbb), vni.def());
+                    } else if near != first {
+                        // None dominate. Hoist to common dominator, need new
+                        // def.
+                        nearest_dom[id] = (Some(near), SlotIndex::default());
+                    }
+                    costs[id] = costs[id] + mbfi.get_block_freq(val_mbb);
+                }
+            }
+        }
+
+        // Insert the hoisted copies.
+        for i in 0..nvn {
+            let (Some(dom_mbb), second) = nearest_dom[i] else { continue };
+            if second.is_valid() {
+                continue;
+            }
+            // This value needs a hoisted copy inserted at the end of dom_mbb.
+            let pvni = parent.get_val_num_info(i as u32);
+            let def_mbb = cx.lis.indexes.get_mbb_from_index(&pvni.def());
+            // Get a less loopy dominator than dom_mbb.
+            let dom_mbb = self.find_shallow_dominator(cx, dom_mbb, def_mbb);
+            nearest_dom[i].0 = Some(dom_mbb);
+            if self.spill_mode == ComplementSpillMode::Speed && mbfi.get_block_freq(dom_mbb) > costs[i] {
+                not_to_hoist.insert(pvni.id());
+                continue;
+            }
+            let lsp = cx.sa.get_last_split_point(cx.lis, cx.env, dom_mbb);
+            if lsp <= pvni.def() {
+                not_to_hoist.insert(pvni.id());
+                continue;
+            }
+            let before = last_split_point_instr(cx, dom_mbb, lsp);
+            nearest_dom[i].1 = self.def_from_parent(cx, 0, &pvni, lsp, dom_mbb, before).def();
+        }
+
+        // Remove redundant back-copies that are now known to be dominated by
+        // another def with the same value.
+        let mut back_copies: Vec<Vn> = Vec::new();
+        for vni in cx.lis.get_interval(li_reg).valnos.clone() {
+            if vni.is_unused() {
+                continue;
+            }
+            let pvni = parent.get_vn_info_at(&vni.def()).expect("Parent not live at complement def");
+            let (dom_mbb, second) = nearest_dom[pvni.id() as usize];
+            if dom_mbb.is_none() || second == vni.def() || not_to_hoist.contains(&pvni.id()) {
+                continue;
+            }
+            back_copies.push(vni);
+            self.force_recompute(cx, 0, &pvni);
+        }
+
+        // If it is not beneficial to hoist all the BackCopies, simply remove
+        // redundant BackCopies in speed mode.
+        if self.spill_mode == ComplementSpillMode::Speed && !not_to_hoist.is_empty() {
+            self.compute_redundant_back_copies(cx, &not_to_hoist, &mut back_copies);
+        }
+
+        self.remove_back_copies(cx, &back_copies);
+    }
+
+    /// `transferValues`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1180>):
+    /// transfer all possible values to the new live ranges. Values with forced
+    /// recomputation are left alone, they need `LICalc.extend()`.
+    fn transfer_values(
+        &mut self,
+        cx: &mut SplitCx,
+    ) -> bool {
+        let regs = self.regs();
+        let mut ints: Vec<LiveInterval> = regs.iter().map(|&r| cx.lis.take_interval(r)).collect();
+        let parent = self.parent();
+        let assigned: Vec<(SlotIndex, SlotIndex, u32)> = self.reg_assign.iter().collect();
+        let mut assign_i = 0usize;
+        let mut skipped = false;
+
+        for s in &parent.segments {
+            let parent_vni = s.valno.clone().expect("a segment has a value");
+            // RegAssign has holes where RegIdx 0 should be used.
+            let mut start = s.start;
+            // `AssignI.advanceTo(Start)`.
+            while assign_i < assigned.len() && assigned[assign_i].1 <= start {
+                assign_i += 1;
+            }
+            loop {
+                let reg_idx: usize;
+                let mut end = s.end;
+                if assign_i >= assigned.len() {
+                    reg_idx = 0;
+                } else if assigned[assign_i].0 <= start {
+                    reg_idx = assigned[assign_i].2 as usize;
+                    if assigned[assign_i].1 < end {
+                        end = assigned[assign_i].1;
+                        assign_i += 1;
+                    }
+                } else {
+                    reg_idx = 0;
+                    end = end.min(assigned[assign_i].0);
+                }
+
+                // The interval [Start;End) is continuously mapped to RegIdx,
+                // ParentVNI.
+
+                // Check for a simply defined value that can be blitted
+                // directly.
+                let vfp = self.values.get(&(reg_idx, parent_vni.id())).cloned().unwrap_or_default();
+                if let Some(vni) = vfp.value {
+                    ints[reg_idx].add_segment(Segment::new(start, end, Some(vni)));
+                    start = end;
+                    if start == s.end {
+                        break;
+                    }
+                    continue;
+                }
+
+                // Skip values with forced recomputation.
+                if vfp.force {
+                    skipped = true;
+                    start = end;
+                    if start == s.end {
+                        break;
+                    }
+                    continue;
+                }
+
+                let lic = self.lic_of(reg_idx);
+
+                // This value has multiple defs in RegIdx, but it wasn't
+                // rematerialized, so the live range is accurate. Add live-in
+                // blocks in [Start;End) to the LiveInBlocks.
+                let mut mbb = cx.lis.indexes.get_mbb_from_index(&start);
+                let (mut block_start, mut block_end) = *cx.lis.indexes.get_mbb_range(mbb);
+
+                // The first block may be live-in, or it may have its own def.
+                if start != block_start {
+                    let vni = ints[reg_idx]
+                        .extend_in_block(&block_start, &block_end.min(end))
+                        .expect("Missing def for complex mapped value");
+                    // MBB has its own def. Is it also live-out?
+                    if block_end <= end {
+                        self.lical[lic].calc.set_live_out_value(mbb, Some(vni));
+                    }
+                    // Skip to the next block for live-in.
+                    mbb += 1;
+                    block_start = block_end;
+                }
+
+                // Handle the live-in blocks covered by [Start;End).
+                assert!(start <= block_start, "Expected live-in block");
+                while block_start < end {
+                    block_end = cx.lis.indexes.get_mbb_end_idx(mbb);
+                    if block_start == parent_vni.def() {
+                        // This block has the def of a parent PHI, so it isn't
+                        // live-in.
+                        assert!(parent_vni.is_phi_def(), "Non-phi defined at block start?");
+                        let vni = ints[reg_idx]
+                            .extend_in_block(&block_start, &block_end.min(end))
+                            .expect("Missing def for complex mapped parent PHI");
+                        if end >= block_end {
+                            // Live-out as well.
+                            self.lical[lic].calc.set_live_out_value(mbb, Some(vni));
+                        }
+                    } else if end < block_end {
+                        // This block needs a live-in value. The last block
+                        // covered may not be live-out.
+                        self.lical[lic].calc.add_live_in_block(reg_idx, mbb, end);
+                    } else {
+                        // Live-through, and we don't know the value.
+                        self.lical[lic].calc.add_live_in_block(reg_idx, mbb, SlotIndex::default());
+                        self.lical[lic].calc.set_live_out_value(mbb, None);
+                    }
+                    block_start = block_end;
+                    mbb += 1;
+                }
+                start = end;
+                if start == s.end {
+                    break;
+                }
+            }
+        }
+
+        {
+            let ctx = Ctx { cfg: &cx.lis.cfg, indexes: &cx.lis.indexes, dom: &cx.lis.dom };
+            let mut ranges: Vec<&mut crate::liveness::liverange::LiveRange> =
+                ints.iter_mut().map(|l| &mut l.range).collect();
+            self.lical[0].calc.calculate_values(&mut ranges, &ctx);
+            if self.spill_mode != ComplementSpillMode::Partition {
+                self.lical[1].calc.calculate_values(&mut ranges, &ctx);
+            }
+        }
+        for li in ints {
+            cx.lis.insert_interval(li);
+        }
+        skipped
+    }
+
+    /// `removeDeadSegment`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1288>).
+    fn remove_dead_segment(
+        def: SlotIndex,
+        lr: &mut crate::liveness::liverange::LiveRange,
+    ) -> bool {
+        let at = lr.find_segment_containing(&def);
+        if at == lr.segments.len() {
+            return true;
+        }
+        if lr.segments[at].end != def.get_dead_slot() {
+            return false;
+        }
+        // This is a dead PHI. Remove it.
+        lr.remove_segment_at(at, true);
+        true
+    }
+
+    /// `extendPHIKillRanges`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1317>):
+    /// extend live ranges to be live-out for successor PHI values.
+    fn extend_phi_kill_ranges(
+        &mut self,
+        cx: &mut SplitCx,
+    ) {
+        // Visit each PHI def slot in the parent live interval. If the def is
+        // dead, remove it. Otherwise, extend the live interval to reach the
+        // end indexes of all predecessor blocks.
+        let parent = self.parent();
+        let regs = self.regs();
+        let mut ints: Vec<LiveInterval> = regs.iter().map(|&r| cx.lis.take_interval(r)).collect();
+        for v in &parent.valnos {
+            if v.is_unused() || !v.is_phi_def() {
+                continue;
+            }
+            let reg_idx = self.reg_assign.lookup(v.def()) as usize;
+            let lic = self.lic_of(reg_idx);
+            let b = cx.lis.indexes.get_mbb_from_index(&v.def());
+            if !Self::remove_dead_segment(v.def(), &mut ints[reg_idx].range) {
+                // `extendPHIRange`
+                // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1299>).
+                for &p in &cx.lis.cfg.preds[b] {
+                    let end = cx.lis.indexes.get_mbb_end_idx(p);
+                    let last_use = end.get_prev_slot();
+                    // The predecessor may not have a live-out value. That is
+                    // OK, like an undef PHI operand.
+                    if parent.live_at(&last_use) {
+                        let ctx = Ctx { cfg: &cx.lis.cfg, indexes: &cx.lis.indexes, dom: &cx.lis.dom };
+                        self.lical[lic].calc.extend(&mut ints[reg_idx].range, end, &ctx);
+                    }
+                }
+            }
+        }
+        for li in ints {
+            cx.lis.insert_interval(li);
+        }
+    }
+
+    /// `rewriteAssigned`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1361>):
+    /// rewrite all uses of the parent register to the register `RegAssign`
+    /// gives at the operand, extending ranges where asked.
+    ///
+    /// DEVIATE D-SE5: one instruction names a value once for all its
+    /// operands, so every operand of the parent in it goes to one register. An
+    /// instruction that both reads and defines the parent (a tied pair) must
+    /// find the same register at its read and at its def; the assert is the
+    /// boundary.
+    fn rewrite_assigned(
+        &mut self,
+        cx: &mut SplitCx,
+        extend_ranges: bool,
+    ) {
+        let parent_reg = self.edit().get_reg();
+        // (instruction, reads, defines) in order of first mention.
+        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        for op in cx.lis.operands(parent_reg) {
+            match seen.iter_mut().find(|(k, ..)| *k == op.instr) {
+                Some(entry) => {
+                    entry.1 |= !op.is_def;
+                    entry.2 |= op.is_def;
+                }
+                None => seen.push((op.instr, !op.is_def, op.is_def)),
+            }
+        }
+
+        let mut extend: Vec<(usize, SlotIndex)> = Vec::new();
+        for (key, reads, defines) in seen {
+            let base = cx.lis.indexes.get_instruction_index(key);
+            let block = cx.lis.indexes.get_mbb_from_index(&base);
+            // Reads look up at the instruction, defs at its register slot.
+            let read_idx = reads.then(|| self.reg_assign.lookup(base) as usize);
+            let def_idx = defines.then(|| self.reg_assign.lookup(base.get_reg_slot(false)) as usize);
+            if let (Some(r), Some(d)) = (read_idx, def_idx) {
+                assert!(r == d, "a tied pair is split over registers {r} and {d} (D-SE5)");
+            }
+            let reg_idx = read_idx.or(def_idx).expect("an operand");
+            let new_reg = self.edit().get(reg_idx);
+
+            let old = std::sync::Arc::clone(cx.lis.instr(key));
+            let new = old.renamed(&|v| if v == parent_reg { new_reg } else { v });
+            cx.lis.rewrite_instr(block, key, new);
+
+            // Extend liveness to the instruction if it reads the register.
+            if extend_ranges && reads {
+                extend.push((reg_idx, base.get_reg_slot(false)));
+            }
+        }
+
+        if extend.is_empty() {
+            return;
+        }
+        let regs = self.regs();
+        let mut ints: Vec<LiveInterval> = regs.iter().map(|&r| cx.lis.take_interval(r)).collect();
+        {
+            let ctx = Ctx { cfg: &cx.lis.cfg, indexes: &cx.lis.indexes, dom: &cx.lis.dom };
+            for (reg_idx, next) in extend {
+                let lic = self.lic_of(reg_idx);
+                self.lical[lic].calc.extend(&mut ints[reg_idx].range, next, &ctx);
+            }
+        }
+        for li in ints {
+            cx.lis.insert_interval(li);
+        }
+    }
+
+    /// `deleteRematVictims`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1484>).
+    ///
+    /// DEVIATE D-SE6: `eliminateDeadDefs` is not translated (D-E1); only the
+    /// copies this editor made whose value nothing reads are erased. The fact:
+    /// without rematerialization (D-SE1) the instructions that lose every use
+    /// here are the editor's own copies.
+    fn delete_remat_victims(
+        &mut self,
+        cx: &mut SplitCx,
+    ) {
+        let mut dead: Vec<InstrKey> = Vec::new();
+        for reg in self.regs() {
+            for s in &cx.lis.get_interval(reg).segments {
+                let vni = s.valno.as_ref().expect("a segment has a value");
+                // Dead defs end at the dead slot.
+                if s.end != vni.def().get_dead_slot() || vni.is_phi_def() {
+                    continue;
+                }
+                let mi =
+                    cx.lis.indexes.get_instruction_from_index(&vni.def()).expect("Missing instruction for dead def");
+                if cx.env.is_copy_like(mi) && cx.lis.instr(mi).defines.len() == 1 {
+                    dead.push(mi);
+                }
+            }
+        }
+        for mi in dead {
+            let block = cx.lis.indexes.get_mbb_from_index(&cx.lis.indexes.get_instruction_index(mi));
+            let reg = cx.lis.instr(mi).defines[0];
+            let def = cx.lis.indexes.get_instruction_index(mi).get_reg_slot(false);
+            LiveIntervals::remove_vreg_def_at(cx.lis.interval_mut(reg), &def);
+            cx.lis.remove_instr(block, mi);
+        }
+    }
+
+    /// `finish`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1545>):
+    /// complete the split: define the original values, hoist copies, move the
+    /// values to the new ranges, rewrite the operands, and weigh the new
+    /// intervals. `lr_map` gets, for each register of the edit, the index it
+    /// came from.
+    pub fn finish(
+        &mut self,
+        cx: &mut SplitCx,
+        vrai: &mut VirtRegAuxInfo,
+        lr_map: Option<&mut Vec<usize>>,
+    ) {
+        self.finish_values(cx, lr_map);
+        // Calculate spill weight and allocation hints for new intervals.
+        for reg in self.regs() {
+            let mut li = cx.lis.take_interval(reg);
+            vrai.calculate_spill_weight_and_hint(&mut li, cx.lis);
+            cx.lis.insert_interval(li);
+        }
+    }
+
+    /// `finish` but for the weights: the values, operands and live ranges.
+    pub fn finish_values(
+        &mut self,
+        cx: &mut SplitCx,
+        lr_map: Option<&mut Vec<usize>>,
+    ) {
+        // At this point, the live intervals in Edit contain VNInfos
+        // corresponding to the inserted copies.
+
+        // Add the original defs from the parent interval.
+        let parent = self.parent();
+        for pvni in &parent.valnos {
+            if pvni.is_unused() {
+                continue;
+            }
+            let reg_idx = self.reg_assign.lookup(pvni.def()) as usize;
+            self.def_value(cx, reg_idx, pvni, pvni.def(), true);
+        }
+
+        // Hoist back-copies to the complement interval when in spill mode.
+        match self.spill_mode {
+            // Leave all back-copies as is.
+            ComplementSpillMode::Partition => {}
+            ComplementSpillMode::Size | ComplementSpillMode::Speed => self.hoist_copies(cx),
+        }
+
+        // Transfer the simply mapped values, check if any are skipped.
+        let skipped = self.transfer_values(cx);
+
+        // Rewrite virtual registers, possibly extending ranges.
+        self.rewrite_assigned(cx, skipped);
+
+        if skipped {
+            self.extend_phi_kill_ranges(cx);
+            // Delete defs that were rematted everywhere.
+            self.delete_remat_victims(cx);
+        }
+
+        // Get rid of unused values and set phi-kill flags.
+        let regs = self.regs();
+        for &reg in &regs {
+            cx.lis.interval_mut(reg).renumber_values();
+        }
+
+        // Provide a reverse mapping from original indices to Edit ranges.
+        let mut map: Vec<usize> = (0..regs.len()).collect();
+
+        // Now check if any registers were separated into multiple components.
+        for (i, &reg) in regs.iter().enumerate() {
+            let split = cx.lis.split_separate_components(reg);
+            for new in split {
+                // The new intervals all map back to i.
+                self.edit_mut().create_from(cx.lis, cx.vrm, new, reg);
+                map.push(i);
+            }
+        }
+        if let Some(out) = lr_map {
+            *out = map;
+        }
+    }
+}
+
 /// `std::min(To, LeaveBefore)` where `LeaveBefore` may be invalid (an invalid
 /// index compares below every valid one in C++ only by identity, and the
 /// caller has asserted it valid on this path).
@@ -840,6 +1550,27 @@ mod tests {
             false
         }
 
+        fn loop_of(
+            &self,
+            _block: usize,
+        ) -> Option<usize> {
+            None
+        }
+
+        fn loop_depth(
+            &self,
+            _l: usize,
+        ) -> u32 {
+            0
+        }
+
+        fn loop_header(
+            &self,
+            _l: usize,
+        ) -> usize {
+            0
+        }
+
         fn is_copy_like(
             &self,
             _instr: InstrKey,
@@ -871,6 +1602,11 @@ mod tests {
 
     /// `b0: v1 = ..`, `b1: use v1; use v1`, `b2: use v1`, in a chain.
     fn three_blocks() -> (LiveIntervals, Vec<Vec<Arc<Insn>>>) {
+        let (lis, insns, _) = three_blocks_body();
+        (lis, insns)
+    }
+
+    fn three_blocks_body() -> (LiveIntervals, Vec<Vec<Arc<Insn>>>, LirBody) {
         let insns = vec![vec![insn(&[1], &[])], vec![insn(&[], &[1]), insn(&[], &[1])], vec![insn(&[], &[1])]];
         let lir = insns
             .iter()
@@ -884,7 +1620,7 @@ mod tests {
             })
             .collect();
         let body = LirBody::new("edit", 0, lir, IndexMap::default(), IndexMap::default());
-        (LiveIntervals::new(&body), insns)
+        (LiveIntervals::new(&body), insns, body)
     }
 
     fn copies(
@@ -911,7 +1647,7 @@ mod tests {
         let mut delegate = NoDelegate;
         let mut ed = SplitEditor::new();
         ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
-        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env };
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
         ed.split_single_block(&mut cx, &bi);
 
         let (complement, open) = (ed.edit().get(0), ed.edit().get(1));
@@ -947,7 +1683,7 @@ mod tests {
         let mut delegate = NoDelegate;
         let mut ed = SplitEditor::new();
         ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
-        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env };
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
         let intv = ed.open_intv(&mut cx);
         let none = SlotIndex::default();
         ed.split_live_through_block(&mut cx, 1, intv, none, intv, none);
@@ -967,7 +1703,7 @@ mod tests {
         let mut delegate = NoDelegate;
         let mut ed = SplitEditor::new();
         ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
-        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env };
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
         let intv = ed.open_intv(&mut cx);
         let none = SlotIndex::default();
         ed.split_live_through_block(&mut cx, 1, intv, none, 0, none);
@@ -994,5 +1730,76 @@ mod tests {
             r.insert(e0, e1, 2);
         }));
         assert!(result.is_err());
+    }
+
+    /// After `finish` no instruction names the parent, every operand names the
+    /// register `RegAssign` gave it, and the live ranges built by the editor
+    /// are the ones computed afresh from the edited function: a wrong range
+    /// here makes the allocator interfere where nothing is live, or miss where
+    /// something is.
+    #[test]
+    fn finish_rewrites_the_operands_and_leaves_the_ranges_computed_afresh() {
+        let (mut lis, _, body) = three_blocks_body();
+        let mut vrm = VirtRegMap::new();
+        let li = lis.interval_rc(1);
+        let mut sa = SplitAnalysis::new(3);
+        sa.analyze(&lis, &Env, li);
+        let bi = sa.get_use_blocks()[1];
+        let mut delegate = NoDelegate;
+        let mut ed = SplitEditor::new();
+        ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), ComplementSpillMode::Partition);
+        let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: None };
+        ed.split_single_block(&mut cx, &bi);
+        let mut map = Vec::new();
+        ed.finish_values(&mut cx, Some(&mut map));
+        let (c0, c1) = (ed.edit().get(0), ed.edit().get(1));
+        // The complement is dead between the copy in and the copy out: two
+        // components, so a third register that maps back to index 0.
+        assert_eq!(map, vec![0, 1, 0]);
+        let c2 = ed.edit().get(2);
+
+        assert!(lis.reg_nodbg_empty(1), "nothing names the parent any more");
+        let names = |b: usize| -> Vec<(Vec<u32>, Vec<u32>)> {
+            lis.block_insns(b).iter().map(|i| (i.defines.clone(), i.uses.clone())).collect()
+        };
+        assert_eq!(names(0), vec![(vec![c0], vec![])]);
+        assert_eq!(names(1), vec![(vec![c1], vec![c0]), (vec![], vec![c1]), (vec![], vec![c1]), (vec![c2], vec![c1])]);
+        assert_eq!(names(2), vec![(vec![], vec![c2])]);
+
+        lis.remove_interval(1);
+        let compared = lis.assert_intervals_equal_afresh(&lis.body_like(&body));
+        assert_eq!(compared, 3, "all three new intervals were compared");
+    }
+
+    /// The spill modes copy out before the last use and recompute the ranges
+    /// the copy cuts: the live ranges must still be the ones computed afresh.
+    #[test]
+    fn the_size_mode_recomputes_forced_values_and_still_matches_a_fresh_build() {
+        for mode in [ComplementSpillMode::Size, ComplementSpillMode::Speed] {
+            let (mut lis, _, body) = three_blocks_body();
+            let mbfi = MachineBlockFrequencyInfo::of(&body);
+            let mut vrm = VirtRegMap::new();
+            let li = lis.interval_rc(1);
+            let mut sa = SplitAnalysis::new(3);
+            sa.analyze(&lis, &Env, li);
+            let bi = sa.get_use_blocks()[1];
+            let mut delegate = NoDelegate;
+            let mut ed = SplitEditor::new();
+            ed.reset(&lis, LiveRangeEdit::new(1, &mut delegate), mode);
+            let mut cx = SplitCx { lis: &mut lis, vrm: &mut vrm, sa: &mut sa, env: &Env, mbfi: Some(&mbfi) };
+            ed.split_single_block(&mut cx, &bi);
+            ed.finish_values(&mut cx, None);
+            assert!(lis.reg_nodbg_empty(1), "{mode:?}: nothing names the parent");
+            // The copy out is redundant: the complement is defined by the
+            // original def in b0 and live across, so the back-copy is removed.
+            let (c0, c1) = (ed.edit().get(0), ed.edit().get(1));
+            let b1 = lis.block_insns(1);
+            assert_eq!(b1.len(), 3, "{mode:?}: the back-copy is gone");
+            assert_eq!(b1[0].defines, vec![c1], "{mode:?}");
+            assert_eq!(lis.block_insns(2)[0].uses, vec![c0], "{mode:?}");
+            lis.remove_interval(1);
+            let compared = lis.assert_intervals_equal_afresh(&lis.body_like(&body));
+            assert_eq!(compared, 2, "{mode:?}");
+        }
     }
 }
