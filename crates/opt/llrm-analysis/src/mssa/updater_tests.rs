@@ -143,19 +143,6 @@ impl Body {
             .unwrap_or_else(|| panic!("no {name}"))
     }
 
-    fn memory_instructions(&self) -> Vec<InstId> {
-        self.function()
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| {
-                matches!(
-                    self.function().instruction(inst).opcode,
-                    Opcode::Load { .. } | Opcode::Store { .. }
-                )
-            })
-            .collect()
-    }
-
     /// `inst` taken out: the access leaves first, as `eraseInstruction` does.
     fn erase(
         &mut self,
