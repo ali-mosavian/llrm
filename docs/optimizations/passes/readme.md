@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 76 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 77 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -70,6 +70,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | promote | Write-through promotion: a load of a cell that a store left its value in on every path becomes that value, a phi where paths join. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point: `Sroa` at the boundaries of | [promote](promote.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
+| simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), with `LLRM_EXP_SCEV_IVCMP`; off by default. | [simplifyindvar](simplifyindvar.md) |
 | sink | Work moved down to the one place that needs it, so the paths that skip that place no longer run it: gcc's `-ftree-sink` (`pass_sink_code`), LLVM's `Sink` and `MachineSink`. | Last of the function passes before `switchconv`, after `addresssink`; off | [sink](sink.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
