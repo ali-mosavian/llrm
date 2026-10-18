@@ -750,7 +750,7 @@ impl GvnPass<'_> {
         ) {
             None
         } else {
-            llrm_mir::simplify::simplify_instruction(self.context, self.function, inst)
+            llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
         };
         if let Some(simplified) = simplified {
             let mut changed = false;
