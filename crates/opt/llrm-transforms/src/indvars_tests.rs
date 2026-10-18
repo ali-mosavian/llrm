@@ -787,3 +787,35 @@ fn test_a_widening_settles_again_only_the_values_it_reached() {
     let work = llrm_analysis::consts::derived_work() - before;
     assert!(work <= 3 * size, "{work} values settled for {loops} widenings of a body of {size} instructions");
 }
+
+/// A rotated loop leaves from its latch. The step that took the exit values
+/// before asked only the header for its exit (`_exit`), so it left a rotated
+/// loop's sum computed by the loop; `rewriteLoopExitValues` asks every exit.
+#[test]
+fn test_a_rotated_loops_exit_value_is_rewritten_from_its_latch() {
+    let text = with_exit_values(
+        "define i16 @f(i16 %n) {
+entry:
+  %any = icmp ne i16 %n, 0
+  br i1 %any, label %pre, label %done
+pre:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %pre ], [ %inc, %loop ]
+  %s = phi i16 [ 0, %pre ], [ %s2, %loop ]
+  %s2 = add i16 %s, 2
+  %inc = add i16 %i, 1
+  %c = icmp ne i16 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %out = phi i16 [ %s2, %loop ]
+  br label %done
+done:
+  %r = phi i16 [ 0, %entry ], [ %out, %exit ]
+  ret i16 %r
+}
+",
+    );
+    assert!(text.contains("shl i16 %n, 1") || text.contains("mul i16 %n, 2"), "{text}");
+    assert!(!text.contains("%s2 = add"), "the loop's sum is dead: {text}");
+}
