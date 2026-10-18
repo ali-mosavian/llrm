@@ -7,7 +7,7 @@ use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{BlockId, InstId, Module, Operand};
+use llrm_mir::module::{BlockId, InstId, Module};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::AssumptionCache;
 

@@ -2820,7 +2820,7 @@ fn simplify_icmp(
 ) -> Option<Operand> {
     if let Some(left) = q.constant(lhs) {
         if let Some(right) = q.constant(rhs) {
-            return constfold::compare(q.context, pred, left, right).map(Operand::Constant);
+            return constfold::compare_in(q.context, q.globals, pred, left, right).map(Operand::Constant);
         }
         std::mem::swap(&mut lhs, &mut rhs);
         pred = swapped(pred);

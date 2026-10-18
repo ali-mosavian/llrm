@@ -139,6 +139,13 @@ pub fn _comparison(
         .filter(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
 }
 
+// Blocks `_trivial_phis` looked at on this thread, for a test that a pass
+// calling it does not call it once per change.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static BLOCKS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Resolve single-valued joins after an edge disappears: each phi keeps
 /// only its predecessors' inputs, one naming a single other value is that
 /// value, and one with an earlier phi's arms is that phi (LLVM's
@@ -149,6 +156,8 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
     loop {
         let mut changed = false;
         for block in function.layout().to_vec() {
+            #[cfg(test)]
+            BLOCKS_VISITED.with(|visited| visited.set(visited.get() + 1));
             for phi in edges::phis(function, block) {
                 let result = function.instruction(phi).result.expect("a phi's value");
                 let incoming = arms(function, phi)
@@ -311,7 +320,9 @@ pub fn subexpressions(
             let first = candidates
                 .iter()
                 .rev()
-                .find(|candidate| _reaches(candidate.0, candidate.1, here, index, &dominance, function.layout(), block))
+                .find(|candidate| {
+                    _reaches(candidate.0, candidate.1, here, index, &dominance, function, function.layout(), block)
+                })
                 .copied();
             let Some((at, where_, earlier)) = first else {
                 candidates.push((here, index, inst));
@@ -413,7 +424,7 @@ pub fn equal_calls(
             let earlier = leaders
                 .iter()
                 .rev()
-                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, &layout, layout[at]))
+                .find(|leader| _reaches(leader.0, leader.1, at, index, &dominance, function, &layout, layout[at]))
                 .copied();
             match earlier {
                 Some((_, _, leader)) => {
@@ -516,13 +527,14 @@ pub fn _reaches(
     then: usize,
     index: usize,
     dominance: &cfg::Dominance,
+    function: &Function,
     layout: &[BlockId],
     block: BlockId,
 ) -> bool {
     if at == then {
         return where_ < index;
     }
-    dominance.dominates(cfg::id(layout[at]), cfg::id(block))
+    dominance.dominates(function, cfg::id(layout[at]), cfg::id(block))
 }
 
 thread_local! {

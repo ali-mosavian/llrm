@@ -636,6 +636,56 @@ fn test_an_anchor_before_the_shared_tail_leaves_the_arm_with_it() {
     assert_eq!(anchors, 1, "the arm that now jumps still holds its anchor");
 }
 
+/// The stackifier's `sahf` is an inserted `Nothing` that emits a byte, and was
+/// taken for an anchor: the shared tail began after it, one arm lost its
+/// `sahf`, and `d_faces` -Os computed other results (feat/parity bisect).
+#[test]
+fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
+    let sahf = |at: i64| {
+        let what = Semantics { name: Some("sahf".into()), ..Semantics::new(Operation::Nothing) };
+        _inserted(Arc::new(Insn::new(at, None, Some(what), Vec::new(), Vec::new())))
+    };
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![
+            _inserted(_move(at, first)),
+            sahf(at + 1),
+            _inserted(_move(at + 2, bx())),
+            _inserted(_jump(at + 9, 40)),
+        ];
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, true).unwrap().expect("nothing was merged");
+
+    let sahfs = |at: i64| {
+        let mut path = 0;
+        let mut at = at;
+        loop {
+            let block = result.blocks.iter().find(|one| one.at == at).expect("a block");
+            path += block
+                .insns
+                .iter()
+                .filter(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("sahf")))
+                .count();
+            match block.succ.as_slice() {
+                [next] => at = *next,
+                _ => return path,
+            }
+        }
+    };
+    assert_eq!((sahfs(10), sahfs(20)), (1, 1), "an arm lost its sahf");
+}
+
 /// `jne T; jmp F` left T, a block that only jumps, in place: `recpow` -O2 ran
 /// an extra `jmp` after every taken `jne`, +0.14% clocks and 15 bytes.
 #[test]

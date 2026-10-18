@@ -1859,7 +1859,7 @@ impl LazyValueInfoImpl {
             // condition.
             if succ0 != succ1 {
                 let is_true_dest = succ0 == bb_to;
-                debug_assert!(if is_true_dest { succ1 } else { succ0 } == bb_to || is_true_dest);
+                assert!(if is_true_dest { succ0 } else { succ1 } == bb_to, "BBTo isn't a successor of BBFrom");
                 let condition = term.operands[0];
 
                 // If V is the condition of the branch itself, then we know

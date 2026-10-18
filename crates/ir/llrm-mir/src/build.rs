@@ -41,18 +41,7 @@ impl Module {
         ty: TypeId,
         linkage: Linkage,
     ) -> Result<GlobalId, String> {
-        let Type::Function { parameters, .. } = self.context.types.get(ty).clone() else {
-            return Err(format!("@{name}'s type is no function's"));
-        };
-        let void = self.context.types.void();
-        let mut function = Function::new(ty, void);
-        for (at, ty) in parameters.into_iter().enumerate() {
-            function.parameters.push(ValueId(function.values.len() as u32));
-            function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
-            function.value_uses.push(Vec::new());
-            function.parameter_attrs.push(Vec::new());
-        }
-        intrinsics::declare(&mut function, &self.context.types, name);
+        let function = function_declaration(&mut self.context, name, ty)?;
         self.add(name, linkage, GlobalKind::Function(Box::new(function)))
     }
 
@@ -79,7 +68,13 @@ impl Module {
                 let Some(ty) = self.context.types.imported(&from.context.types, variable.ty) else { return Ok(None) };
                 self.add_variable(
                     name,
-                    GlobalVariable { ty, constant: variable.constant, initializer: None, align: variable.align },
+                    GlobalVariable {
+                        externally_initialized: false,
+                        ty,
+                        constant: variable.constant,
+                        initializer: None,
+                        align: variable.align,
+                    },
                     Linkage::External,
                 )?
             }
@@ -122,6 +117,28 @@ impl Module {
             pending: Vec::new(),
         }
     }
+}
+
+/// The declaration `@name` of type `ty` is, as `Module::add_function` makes it
+/// and a pass that declares a function sees it before the module has it.
+pub fn function_declaration(
+    context: &mut Context,
+    name: &str,
+    ty: TypeId,
+) -> Result<Function, String> {
+    let Type::Function { parameters, .. } = context.types.get(ty).clone() else {
+        return Err(format!("@{name}'s type is no function's"));
+    };
+    let void = context.types.void();
+    let mut function = Function::new(ty, void);
+    for (at, ty) in parameters.into_iter().enumerate() {
+        function.parameters.push(ValueId(function.values.len() as u32));
+        function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });
+        function.value_uses.push(Vec::new());
+        function.parameter_attrs.push(Vec::new());
+    }
+    intrinsics::declare(&mut function, &context.types, name);
+    Ok(function)
 }
 
 /// Appends instructions at the end of one block.

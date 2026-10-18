@@ -4,7 +4,7 @@
 //! answer until its stage lands; the stack that lands S1 lands them with it.
 //! A seam never makes a fold unsound, only less eager than LLVM's.
 
-use super::expr::{Scev, flags};
+use super::expr::Scev;
 use super::{Cx, ScalarEvolution};
 
 impl ScalarEvolution {
@@ -51,31 +51,39 @@ impl ScalarEvolution {
         !cx.assumptions.assumes.is_empty()
     }
 
-    /// `getSCEV(V)`. SEAM (S3): `createSCEV`; an unknown is a valid answer.
-    pub fn get_scev(
+    /// `loopHasNoAbnormalExits`. SEAM (indvars-decide-poc's loop properties):
+    /// the pessimistic answer.
+    pub fn loop_has_no_abnormal_exits(
         &mut self,
-        cx: &Cx,
-        v: llrm_mir::module::Operand,
+        _cx: &Cx,
+        _l: llrm_mir::module::BlockId,
+    ) -> bool {
+        false
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L11464
+    /// `isKnownPredicateAt(Pred, LHS, RHS, CtxI)`. SEAM (the guard
+    /// translation, which holds the body).
+    pub fn is_known_predicate_at(
+        &mut self,
+        _cx: &Cx,
+        _pred: llrm_mir::opcode::IntPredicate,
+        _lhs: Scev,
+        _rhs: Scev,
+        _ctx_i: Option<llrm_mir::module::InstId>,
+    ) -> bool {
+        false
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L14040
+    /// `SCEVAddRecExpr::getPostIncExpr`. SEAM (the guard translation, which
+    /// holds the body).
+    pub fn get_post_inc_expr(
+        &mut self,
+        _cx: &Cx,
+        _add_rec: Scev,
     ) -> Scev {
-        self.get_unknown(cx, v)
-    }
-
-    /// `proveNoUnsignedWrapViaInduction` (S5).
-    pub fn prove_no_unsigned_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
-    }
-
-    /// `proveNoSignedWrapViaInduction` (S5).
-    pub fn prove_no_signed_wrap_via_induction(
-        &mut self,
-        _cx: &Cx,
-        _ar: Scev,
-    ) -> u8 {
-        flags::NONE
+        todo!("implied.rs")
     }
 
     /// The type of an IR type id, for the folds that build integer types.

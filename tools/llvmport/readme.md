@@ -22,3 +22,5 @@ Regenerate a golden file only with that build; the Rust side and the C++ side mu
 
 A line where llrm is more precise than LLVM is MORE (a bug); less precise is LESS and must trace to a DEVIATE of `lazyvalueinfo.rs`.
 `crates/ir/llrm-mir/tests/lvi/cases` holds the inputs with LLVM's answers pasted (`NAME.expected`, from `lvi_dump.sh NAME.ll`).
+
+`constfold_dump.sh FILE.ll` prints what `ConstantFoldInstruction` makes of each instruction whose operands are all constants; `cfcompare.py PATH...` runs it beside `cargo run --release -p llrm-mir --example cfdump` and names every line that differs (`--write-expected` writes the `tests/cf/fold/NAME.expected` and `.deviates` that `constantfolding_tests` reads).

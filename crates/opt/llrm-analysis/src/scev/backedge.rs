@@ -6,7 +6,7 @@
 
 use llrm_mir::module::BlockId;
 
-use super::expr::{Scev, Ty};
+use super::expr::{Scev, Ty, Use};
 use super::{Cx, ScalarEvolution};
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.h#L1062
@@ -116,5 +116,32 @@ impl ScalarEvolution {
         _l: BlockId,
     ) -> u32 {
         1
+    }
+}
+
+impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L986
+    /// `SCEVAddRecExpr::evaluateAtIteration(Operands, It, SE, UseFlags)`: the
+    /// chain `{A,+,B,+,C,...}` at iteration `it`. Translated with the trip
+    /// counts (`how_many.rs`).
+    pub fn evaluate_at_iteration_ops(
+        &mut self,
+        _cx: &Cx,
+        _operands: &[Use],
+        _it: Scev,
+        _use_flags: u8,
+    ) -> Use {
+        todo!("BackedgeCounts")
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L981
+    /// `SCEVAddRecExpr::evaluateAtIteration(It, SE)`.
+    pub fn evaluate_at_iteration(
+        &mut self,
+        _cx: &Cx,
+        _add_rec: Scev,
+        _it: Scev,
+    ) -> Scev {
+        todo!("BackedgeCounts")
     }
 }

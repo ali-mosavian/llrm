@@ -2,6 +2,7 @@
 //! computable, uniform, variant) and to a block (does it dominate it).
 //! A loop is named by its header.
 
+use llrm_mir::hash::HashSet;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
 
@@ -320,7 +321,7 @@ impl ScalarEvolution {
         root: Scev,
         pred: &dyn Fn(Scev) -> bool,
     ) -> bool {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = vec![root];
         visited.insert(root);
         // `follow` runs when a node is pushed: a node that satisfies the
