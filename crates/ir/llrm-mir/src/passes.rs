@@ -362,6 +362,21 @@ pub trait Analysis: 'static {
         Self::depends().is_some_and(|depends| depends.unaffected(changes, context, function))
     }
 
+    /// Whether `audit` runs on every result this analysis hands out, kept or
+    /// derived (`LLRM_CHECK_CAPTURES`): a fact is judged where a pass reads it.
+    const AUDITED: bool = false;
+
+    /// An independent check of `result`, made each time it is handed out.
+    #[allow(unused_variables)]
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+    }
+
     /// `previous`, which was true of the function before `changes`, made true
     /// of it now; none where it would be derived afresh. Must give what
     /// `run` gives, as `LLRM_CHECK_REPLAY` asserts.
@@ -1101,6 +1116,11 @@ fn check_modules() -> bool {
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_MODULES").is_some())
 }
 
+fn check_captures() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_CAPTURES").is_some())
+}
+
 fn check_replay() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LLRM_CHECK_REPLAY").is_some())
@@ -1316,6 +1336,19 @@ impl Analyses {
 
     /// `A`'s result for `function`, computed once until invalidated.
     pub fn get<A: Analysis>(
+        &mut self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Rc<A::Result> {
+        let result = self.found::<A>(context, layout, function);
+        if A::AUDITED && check_captures() {
+            A::audit(&result, context, layout, function, self);
+        }
+        result
+    }
+
+    fn found<A: Analysis>(
         &mut self,
         context: &Context,
         layout: &DataLayout,
@@ -2202,6 +2235,7 @@ pub(crate) enum Pass {
     /// Not a pass: from here the module analyses it names are not dropped by a
     /// pass that adds no memory operation.
     Freeze(Vec<Kind>),
+    Hold(Vec<Kind>),
 }
 
 impl Pass {
@@ -2211,6 +2245,7 @@ impl Pass {
             Pass::Module(pass) => pass.name(),
             Pass::Program(pass) => pass.name(),
             Pass::Freeze(_) => "freeze",
+            Pass::Hold(_) => "hold",
         }
     }
 }
@@ -2268,6 +2303,15 @@ impl PassManager {
     /// stays conservative.
     pub fn freeze<M: ModuleAnalysis>(&mut self) {
         self.passes.push(Pass::Freeze(vec![Kind::of::<M>()]));
+    }
+
+    /// From this point `M` is held past every function pass, whatever it adds,
+    /// as LLVM's `GlobalsAAResult::invalidate` (GlobalsModRef.cpp:825): the
+    /// result is stateless, kept unless a pass abandons it, and only module
+    /// passes do. Held past a function pass it is rechecked under
+    /// `LLRM_CHECK_STALE` like a frozen one.
+    pub fn hold<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Hold(vec![Kind::of::<M>()]));
     }
 
     pub fn add_module(
@@ -2426,6 +2470,7 @@ impl PassManager {
             running
         };
         let mut frozen: Vec<Kind> = Vec::new();
+        let mut held: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
@@ -2434,6 +2479,10 @@ impl PassManager {
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
                 Pass::Freeze(kinds) => {
                     frozen.extend(kinds.iter().copied());
+                    continue;
+                }
+                Pass::Hold(kinds) => {
+                    held.extend(kinds.iter().copied());
                     continue;
                 }
                 Pass::Module(pass) => {
@@ -2480,6 +2529,11 @@ impl PassManager {
             let mut declared = Declared::of(module);
             for at in 0..module.globals.len() {
                 let id = GlobalId(at as u32);
+                // The other bodies as they stand, for an audit that reads a
+                // callee.
+                if check_captures() {
+                    MODULE_SNAPSHOT.with(|held| *held.borrow_mut() = Some(Rc::new(module.clone())));
+                }
                 let Module { context, globals, metadata, .. } = &mut *module;
                 let global = &mut globals[at];
                 let GlobalKind::Function(function) = &mut global.kind else { continue };
@@ -2538,12 +2592,15 @@ impl PassManager {
             if !pass.adds_memory_operations() {
                 kept.extend(frozen.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             }
+            kept.extend(held.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
+            let mut checked = held.clone();
             if !pass.adds_memory_operations() {
-                checked_stale(module, analyses, &frozen, name);
+                checked.extend(frozen.iter().copied());
             }
+            checked_stale(module, analyses, &checked, name);
             after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
@@ -2551,6 +2608,9 @@ impl PassManager {
 }
 
 thread_local! {
+    /// The module as it stood before the function pass now running
+    /// (`LLRM_CHECK_CAPTURES`).
+    pub static MODULE_SNAPSHOT: std::cell::RefCell<Option<Rc<Module>>> = const { std::cell::RefCell::new(None) };
     static CHECK_STALE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 

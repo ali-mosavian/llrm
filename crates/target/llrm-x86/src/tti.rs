@@ -338,7 +338,49 @@ fn int_imm_chunk(value: i64) -> i64 {
     }
 }
 
+/// Intrinsic prices by (profile, kind, callee name), as the pinned `opt` gives
+/// them (T7).
+fn intrinsic_prices() -> &'static std::collections::HashMap<(&'static str, &'static str, &'static str), Option<i64>> {
+    static PRICES: std::sync::OnceLock<
+        std::collections::HashMap<(&'static str, &'static str, &'static str), Option<i64>>,
+    > = std::sync::OnceLock::new();
+    PRICES.get_or_init(|| {
+        include_str!("tti_intrinsics.txt")
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .filter_map(|line| {
+                let mut words = line.split(' ');
+                let (profile, kind, name, cost) = (words.next()?, words.next()?, words.next()?, words.next()?);
+                Some(((profile, kind, name), cost.parse().ok()))
+            })
+            .collect()
+    })
+}
+
 impl Tti for X86 {
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        let _ = (ret, args);
+        let profile = if self.sse2 { "sse2" } else { "nosse" };
+        let kind = match kind {
+            CostKind::RecipThroughput => "throughput",
+            CostKind::Latency => "latency",
+            CostKind::CodeSize => "code-size",
+            CostKind::SizeAndLatency => "size-latency",
+        };
+        match intrinsic_prices().get(&(profile, kind, name)) {
+            Some(Some(cost)) => Cost::of(*cost),
+            Some(None) => Cost::INVALID,
+            None if is_free_intrinsic(name) => Cost::FREE,
+            None => Cost::INVALID,
+        }
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,

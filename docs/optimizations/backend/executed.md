@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/executed.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:f6162defad11370ca416a1ff46101d41fe476e91ce5763e500f13960890ef4e7 -->
+<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:41d02ca56074bac39ab9b73f71d08190feba09bd9e1e4dbdf9a1b23be0127a8c -->
 
 # executed
 
@@ -77,7 +77,7 @@ between routes, at every -O level; `LLRM_DEBUG=cost` and
 Consumers: `allocate.rs`, `assemble.rs`.
 
 ## Needs
-`crate::analysis::frequency`, `crate::analysis::loops` and
+[`crate::analysis::frequency`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs), [`crate::analysis::loops`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/analysis.rs) and
 [`crate::backend::cpu`](cpu.md) for jump prices.
 
 ## See also

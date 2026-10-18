@@ -2,6 +2,7 @@
 //! llvm/include/llvm/CodeGen at d1106deb71cc (see each file for the C++ it
 //! translates and its DEVIATEs).
 
+pub mod blockfrequency;
 pub mod calcspillweights;
 pub mod cfg;
 pub mod liveintervals;

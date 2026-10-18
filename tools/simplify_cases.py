@@ -55,7 +55,7 @@ for k in range(N):
             if not a.startswith('%') and not b.startswith('%'): a='%'+random.choice(names)
             return f'  %k{k} = icmp {pr} {ty} {a}, {b}\n'
         extra+=cmp(1)+cmp(2)
-        extra=extra.replace('%dsub','%dsub') 
+        extra=extra.replace('%dsub','%dsub')
         t=f'{random.choice(["and","or"])} i1 %k1, %k2'; rty='i1'
     elif op=='icmp':
         pred=random.choice(['eq','ne','ult','ule','ugt','uge','slt','sle','sgt','sge'])

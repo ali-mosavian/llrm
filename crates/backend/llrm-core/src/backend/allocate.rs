@@ -404,6 +404,16 @@ pub fn live(body: &LirBody) -> (Live, Live) {
     (rows.sets(true), rows.sets(false))
 }
 
+/// `live` for the values `keep` names only: no other value is numbered,
+/// followed or put in a set.
+pub fn live_among(
+    body: &LirBody,
+    keep: impl Fn(u32) -> bool,
+) -> (Live, Live) {
+    let rows = live_rows_by(body, keep);
+    (rows.sets(true), rows.sets(false))
+}
+
 /// What is live at each block's entry and exit as the fixed point leaves it:
 /// rows of bits, which a reader that only walks the values need not turn into
 /// sets.
@@ -1811,13 +1821,14 @@ fn greedy_check(
 
 /// Whether the translated greedy allocator allocates: by default, the allocate
 /// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
-/// unless `LLRM_GREEDY` is set.
+/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
 pub fn greedy_on() -> bool {
     #[cfg(test)]
     if OLD_ALLOCATOR.with(std::cell::Cell::get) {
         return false;
     }
-    llrm_support::env_flag!("LLRM_GREEDY") || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
+    llrm_support::env_flag!("LLRM_GREEDY")
+        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
 }
 
 #[cfg(test)]

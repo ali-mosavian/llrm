@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cvp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cvp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cvp.rs sha256:86222672f1ed35bf580db658dce3895f3080fa0754959874e867d90ad8542dda -->
+<!-- src: crates/opt/llrm-transforms/src/cvp.rs sha256:27f35b586d63d1c5075e89fc1bd8489067b9616c28adb2a833625497f9f05d3d -->
 
 # cvp
 
@@ -25,7 +25,7 @@ Beside the pass, the C++ it calls that MIR does not hold is translated
 here with its permalink: `BasicBlock::removePredecessor`,
 `PHINode::removeIncomingValue`, `PHINode::hasConstantValue`, the `switch`
 arm of `ConstantFoldTerminator`, `SwitchInst::removeCase`,
-`SwitchInstProfUpdateWrapper`, `DominatorTree::dominates(Instruction,
+`SwitchInstProfUpdateWrapper`, `DomTree::dominates(Instruction,
 BasicBlock)` and `GlobalValue::hasExactDefinition`.
 
 DEVIATE, permanent (MIR or Rust lacks the construct):
