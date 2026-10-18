@@ -13,3 +13,6 @@ llvm_only = {}
 
 [float-f0x]
 identical = true
+
+[double-f0x]
+identical = true
