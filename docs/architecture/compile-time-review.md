@@ -1,3 +1,7 @@
+---
+architecture-index: compile time against gcc and clang
+architecture-order: 110
+---
 # llrm compile time against gcc 13.4 and clang 20: review and design
 
 > **Reference note.** The clang figures and the "x clang" ratios in this review are from the distro clang 20.1.8; they are void as a cost reference to the pinned 24.0.0git `d1106deb71cc` (`d_faces` -O2 415.5 M) and are re-derived in the plan's scoreboard.
