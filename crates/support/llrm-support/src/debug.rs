@@ -372,6 +372,24 @@ pub fn counted(
     });
 }
 
+/// The last row of the `[instr]` report. A timed span costs about 6-7 K
+/// instructions of its own, counted in the step above it, so the span count
+/// says how much of the figures is the report: quote deltas from a plain
+/// `perf stat`, not from this report.
+fn work_total_line(
+    work: u64,
+    top: u64,
+    unit: &str,
+    spans: usize,
+) -> String {
+    format!(
+        "[instr] total {:.3} {unit}, outermost steps {:.3} {unit}, outside every step {:.3} {unit}, {spans} timed spans (about 6-7 K instructions each are in the rows)",
+        work as f64 / 1e6,
+        top as f64 / 1e6,
+        work.saturating_sub(top) as f64 / 1e6
+    )
+}
+
 fn ms(spent: Duration) -> f64 {
     spent.as_secs_f64() * 1e3
 }
@@ -421,12 +439,8 @@ pub fn report_times() {
                 stat.calls
             );
         }
-        eprintln!(
-            "[instr] total {:.3} {unit}, outermost steps {:.3} {unit}, outside every step {:.3} {unit}",
-            work as f64 / 1e6,
-            clock.work_top as f64 / 1e6,
-            work.saturating_sub(clock.work_top) as f64 / 1e6
-        );
+        let spans: usize = flat.iter().map(|(_, stat)| stat.calls).sum();
+        eprintln!("{}", work_total_line(work, clock.work_top, &unit, spans));
         let floor = wall / 200;
         eprintln!("[time] nesting (own / total ms, steps under 0.5% left out):");
         let mut tree = clock.tree;
@@ -490,7 +504,7 @@ pub fn run_main(main: impl FnOnce() -> i32) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{work_fd, work_now};
+    use super::{work_fd, work_now, work_total_line};
 
     fn spin(rounds: u64) -> u64 {
         let mut sum = 0u64;
@@ -557,5 +571,20 @@ mod tests {
             idle.abs_diff(loaded) * 100 <= idle,
             "the loop read {idle} instructions in {idle_time:?} idle and {loaded} in {loaded_time:?} under load"
         );
+    }
+
+    /// The `[instr]` total row said nothing of how many spans it timed, so the
+    /// 6-7 K instructions each costs hid in the rows: the old allocator's
+    /// d_faces -O2 read 50 M worse than greedy's on the delta from the report
+    /// than from `perf stat`. The row keeps the prefix `tools/compile_map.py`
+    /// reads and now ends with the span count.
+    #[test]
+    fn test_the_instr_total_row_names_how_many_spans_it_timed() {
+        let row = work_total_line(2_602_704_000, 2_573_426_000, "Minstr", 12075);
+        assert!(
+            row.starts_with("[instr] total 2602.704 Minstr, outermost steps 2573.426 Minstr, outside every step 29.278 Minstr"),
+            "{row}"
+        );
+        assert!(row.contains("12075 timed spans"), "{row}");
     }
 }
