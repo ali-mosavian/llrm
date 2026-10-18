@@ -346,7 +346,7 @@ pub fn _cannot_return(
 /// Already-truncated blocks are unchanged, making it safe to use at the
 /// no-return fixed point boundary.
 pub fn after_terminal_calls(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     terminal_calls: &BTreeSet<InstId>,
 ) -> bool {
