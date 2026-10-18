@@ -202,6 +202,7 @@ dependencies = [
  "llrm-object",
  "llrm-qb",
  "llrm-target",
+ "llrm-transforms",
  "llrm-x86",
  "llrm-x86-m16",
  "llrm-x86-m32",
