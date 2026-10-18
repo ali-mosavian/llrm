@@ -2,7 +2,7 @@
 //! low `width` of a `u128`.
 //!
 //! Only what the SCEV translation reads; widths past 128 are not SCEVable
-//! (DEVIATE 7 of docs/architecture/scev-port.md: no MIR integer type in the
+//! (DEVIATE 7 of the SCEV port plan: no MIR integer type in the
 //! corpus is wider, and `ConstantRange` stops there too).
 
 use llrm_mir::context::{mask, signed};
