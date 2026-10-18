@@ -67,9 +67,8 @@ def test_a_badly_formatted_rust_file_turns_the_fmt_step_red(damaged):
     source = damaged / "src/bin/llrm-c.rs"
     source.write_text(source.read_text() + "\nfn   unformatted ( ) { let x   =  1 ; }\n")
     done = prepushed(damaged, "fmt")
-    assert done.stdout.splitlines()[0] in ("PREPUSH FAIL: fmt", "PREPUSH PASS"), done.stdout
-    if gate.load()["fmt"]["enforced"]:
-        assert done.stdout.splitlines()[0] == "PREPUSH FAIL: fmt", done.stdout
+    assert gate.load()["fmt"]["enforced"], "the fmt step must be enforced for prepush to be able to turn red on it"
+    assert done.stdout.splitlines()[0] == "PREPUSH FAIL: fmt", done.stdout
 
 
 def test_a_local_path_in_a_tracked_markdown_turns_the_scan_red(damaged, tmp_path):

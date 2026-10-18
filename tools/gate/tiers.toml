@@ -164,6 +164,7 @@ slow_pytest = [
     "tools/dosbatch/test_qbrt.py",
     "tools/dosbatch/test_qb32.py",
     "tools/gate/test_gate.py",
+    "tools/gate/test_prepush.py",
     "tools/dosbatch/test_qbgfxfill.py",
     "tools/bench/test_bench.py",
     "tools/dosbatch/test_qbgfxspeed.py",
