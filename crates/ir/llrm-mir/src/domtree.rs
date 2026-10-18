@@ -731,6 +731,50 @@ impl<const POST: bool> DomTreeBase<POST> {
         self.dominates_nodes(self.node(Some(a)), self.node(Some(b)))
     }
 
+    /// `dominates(const BasicBlockEdge &, const BasicBlock *)`: whether every
+    /// path to `use_block` takes the edge `start` -> `end`.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162>
+    pub fn dominates_edge(
+        &self,
+        function: &Function,
+        start: BlockId,
+        end: BlockId,
+        use_block: BlockId,
+    ) -> bool {
+        assert!(!POST, "an edge dominates in a dominator tree");
+        // If the end of the edge does not dominate the use block, nothing on
+        // the edge does.
+        if !self.dominates(end, use_block) {
+            return false;
+        }
+        // The edge dominates the block if it is the only way in, or if every
+        // other way in comes from a block `end` dominates.
+        let predecessors: Vec<BlockId> = function
+            .block_users(end)
+            .iter()
+            .filter(|one| function.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| function.parent(one.user))
+            .collect();
+        if predecessors.len() == 1 {
+            return true;
+        }
+        let mut duplicates = 0;
+        for from in predecessors {
+            if from == start {
+                duplicates += 1;
+                if duplicates > 1 {
+                    return false;
+                }
+                continue;
+            }
+            if !self.dominates(end, from) {
+                return false;
+            }
+        }
+        true
+    }
+
     /// `properlyDominates`.
     ///
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericDomTree.h#L969>
