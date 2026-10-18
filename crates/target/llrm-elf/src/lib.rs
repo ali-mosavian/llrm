@@ -192,26 +192,26 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     let mut strings = Strings::new();
     let symbol_size = if M::WIDE { 24 } else { 16 };
     let mut symtab: Vec<u8> = vec![0; symbol_size];
-    let symbol = |out: &mut Vec<u8>, name: u32, value: u64, info: u8, section: u16| {
+    let symbol = |out: &mut Vec<u8>, name: u32, value: u64, size: u64, info: u8, section: u16| {
         put32(out, name);
         if M::WIDE {
             out.push(info);
             out.push(0);
             put16(out, section);
             out.extend(value.to_le_bytes());
-            out.extend(0u64.to_le_bytes());
+            out.extend(size.to_le_bytes());
         } else {
             put32(out, value as u32);
-            put32(out, 0);
+            put32(out, size as u32);
             out.push(info);
             out.push(0);
             put16(out, section);
         }
     };
     let file = strings.add(&object.name);
-    symbol(&mut symtab, file, 0, STB_LOCAL << 4 | STT_FILE, SHN_ABS);
+    symbol(&mut symtab, file, 0, 0, STB_LOCAL << 4 | STT_FILE, SHN_ABS);
     for index in 0..object.sections.len() {
-        symbol(&mut symtab, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
+        symbol(&mut symtab, 0, 0, 0, STB_LOCAL << 4 | STT_SECTION, index as u16 + 1);
     }
     let first_global = 2 + object.sections.len();
     // The ELF symbol of each object symbol that is global.
@@ -228,9 +228,9 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
-                symbol(&mut symtab, name, offset as u64, STB_GLOBAL << 4 | kind, section as u16 + 1);
+                symbol(&mut symtab, name, offset as u64, one.size as u64, STB_GLOBAL << 4 | kind, section as u16 + 1);
             }
-            Definition::Undefined => symbol(&mut symtab, name, 0, STB_GLOBAL << 4, 0),
+            Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
         }
         elf_symbol[index] = Some(next);
         next += 1;
