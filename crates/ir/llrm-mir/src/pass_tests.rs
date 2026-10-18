@@ -131,18 +131,19 @@ fn an_analysis_is_computed_once_until_a_pass_drops_it() {
     assert_eq!(COMPUTED.get(), 2);
 }
 
-/// A pass that says it dropped everything and edited nothing (1272 of 17,000
-/// drops in QCport, `gvn` and `dead` the most) cost every analysis a fresh run,
-/// and the next to ask got no more than the one before.
+/// LLVM's model: a pass that changed nothing says `all`; one that says `none`
+/// drops what it did not name, edited or not (1272 of 17,000 drops in QCport
+/// were of passes that edited nothing and said `none`, `gvn` and `dead` the
+/// most: they return `all` when they change nothing, or pay the fresh run).
 #[test]
-fn a_pass_that_edited_nothing_drops_nothing_whatever_it_says() {
+fn a_pass_that_says_none_drops_what_it_did_not_name_edited_or_not() {
     COMPUTED.set(0);
     let mut passes = PassManager::default();
     passes.add(Look(PreservedAnalyses::all()));
     passes.add(Look(PreservedAnalyses::none()));
     passes.add(Look(PreservedAnalyses::all()));
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
-    assert_eq!(COMPUTED.get(), 1, "a pass that logged no change dropped an analysis");
+    assert_eq!(COMPUTED.get(), 2, "a pass that said none kept an analysis");
 }
 
 /// Asks, drops as a rule that edited would, and asks again, the body unedited.
@@ -174,11 +175,12 @@ impl FunctionPass for AsksTwice {
 /// `algebraic` dropped the shape and ranges before each rule that asks for
 /// them, edited or not: 9 of its 16 range computations on d_faces -O1 followed
 /// no edit since the one before, 4 of them 1.4 M each. A drop for an edit
-/// nobody made costs nothing now, whichever way it is asked: `invalidate`
-/// itself keeps a result derived from the body as it stands.
+/// nobody made costs a fresh run when it is asked plainly (the pass named
+/// nothing: `all` is what a pass that changed nothing returns), and nothing
+/// when it is asked `if_edited`.
 #[test]
-fn a_drop_for_an_edit_nobody_made_keeps_what_is_held() {
-    for (if_edited, computed) in [(false, 1), (true, 1)] {
+fn a_drop_for_an_edit_nobody_made_computes_again_what_was_not_named() {
+    for (if_edited, computed) in [(false, 2), (true, 1)] {
         COMPUTED.set(0);
         let mut passes = PassManager::default();
         passes.add(Look(PreservedAnalyses::all()));
@@ -591,12 +593,11 @@ fn module_analyses_of_the_declarations_stand_until_a_declaration_changes() {
     );
 }
 
-/// A pass that invalidated and changed nothing since the result was derived
-/// left it true: it is kept, not worked out again to what it was (383 of the
-/// 2,248 results dropped at one d_faces -O2 compile were derived from the body
-/// as it stood; `LLRM_WHY` called their reruns `same-untouched`).
+/// A pass that named nothing loses the result though the body did not move:
+/// the rerun is told `same-untouched` (383 of the 2,248 results dropped at one
+/// d_faces -O2 compile were of that kind on main, which kept them).
 #[test]
-fn a_result_the_body_has_not_moved_from_is_not_worked_out_again() {
+fn a_result_the_body_has_not_moved_from_is_worked_out_again_when_not_named() {
     let module = module();
     let function = module.global(module.named("f").unwrap()).function().unwrap();
     let layout = DataLayout::default();
@@ -608,7 +609,7 @@ fn a_result_the_body_has_not_moved_from_is_not_worked_out_again() {
     analyses.get::<Counted>(&module.context, &layout, function);
     let counts = crate::passes::recomputes();
     crate::passes::trace_recomputes(false);
-    assert_eq!(counts, vec![("counted", "", "first", 1)]);
+    assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "retarget", "same-untouched", 1)]);
 }
 
 /// Told apart: a rerun on a body no pass touched since the result was made
@@ -636,23 +637,49 @@ fn a_rerun_is_told_untouched_from_after_an_edit_that_changed_nothing_it_reads() 
     assert_eq!(counts, vec![("counted", "", "first", 1), ("counted", "edited", "same", 1)]);
 }
 
-/// A pass that changed what only one analysis reads gives up that one: hoist's
-/// motion invalidated everything (`none`) to let go of the dominated edges
-/// and `Bounded`, which hid the next stale-analysis bug and recomputed the
-/// rest.
+/// LLVM's model: a pass names what it kept and the manager drops the rest. A
+/// pass that forgot to name an analysis got it kept on main whenever the log
+/// showed the function as it was when the result was derived; now it is
+/// computed again, whatever the log says.
 #[test]
-fn all_but_one_analysis_stand_where_a_pass_gives_up_that_one() {
+fn a_pass_that_names_nothing_loses_the_analysis_it_forgot() {
+    let module = module();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    analyses.get::<Counted>(&module.context, &layout, function);
+    COMPUTED.set(0);
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    assert!(analyses.cached::<Counted>().is_none(), "an analysis the pass did not name stands");
+    analyses.get::<Counted>(&module.context, &layout, function);
+    assert_eq!(COMPUTED.get(), 1, "the forgotten analysis was not computed again");
+}
+
+/// The analysis a pass names stands, and one it does not name goes.
+#[test]
+fn a_pass_keeps_what_it_names_and_only_that() {
     let module = module();
     let function = module.global(module.named("f").unwrap()).function().unwrap();
     let layout = DataLayout::default();
     let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
     analyses.get::<Counted>(&module.context, &layout, function);
     analyses.get::<Steady>(&module.context, &layout, function);
-    let given_up = PreservedAnalyses::all().except::<Counted>();
-    assert!(!given_up.are_all_preserved());
-    analyses.invalidate(function, &given_up);
-    assert!(analyses.cached::<Counted>().is_none(), "the analysis given up stands");
-    assert!(analyses.cached::<Steady>().is_some(), "an analysis not given up went with it");
+    analyses.invalidate(function, &PreservedAnalyses::none().preserve::<Steady>());
+    assert!(analyses.cached::<Steady>().is_some(), "the analysis named went");
+    assert!(analyses.cached::<Counted>().is_none(), "an analysis not named stands");
+}
+
+/// A pass that changed nothing returns `all` and everything stands.
+#[test]
+fn a_pass_that_changed_nothing_keeps_everything() {
+    let module = module();
+    let function = module.global(module.named("f").unwrap()).function().unwrap();
+    let layout = DataLayout::default();
+    let mut analyses = Analyses::new(Rc::new(crate::passes::Outer::of(&module, None)));
+    analyses.get::<Counted>(&module.context, &layout, function);
+    analyses.get::<Steady>(&module.context, &layout, function);
+    analyses.invalidate(function, &PreservedAnalyses::all());
+    assert!(analyses.cached::<Counted>().is_some() && analyses.cached::<Steady>().is_some());
 }
 
 /// A late pass: rewrites a branch, adds no memory operation.
@@ -1112,4 +1139,72 @@ fn the_attributes_are_hashed_once_per_invalidation_not_once_per_result() {
     analyses.get::<ReadsOuter>(&module.context, &layout, function);
     analyses.invalidate(function, &PreservedAnalyses::none());
     assert!(crate::module::attribute_stamps() - before <= 2, "{}", crate::module::attribute_stamps() - before);
+}
+
+thread_local! {
+    static BASE_RUNS: Cell<usize> = const { Cell::new(0) };
+    static ABOVE_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The number of instructions of the body.
+struct Base;
+
+impl Analysis for Base {
+    type Result = usize;
+    const NAME: &'static str = "base";
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        BASE_RUNS.set(BASE_RUNS.get() + 1);
+        function.walk().count()
+    }
+}
+
+/// Twice `Base`.
+struct Above;
+
+impl Analysis for Above {
+    type Result = usize;
+    const NAME: &'static str = "above";
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> usize {
+        ABOVE_RUNS.set(ABOVE_RUNS.get() + 1);
+        2 * *analyses.get::<Base>(context, layout, function)
+    }
+}
+
+/// A pass edited and then asked, without invalidating: `above` was derived from
+/// the `base` the body had before the edit, and took the mark of the edit. An
+/// invalidation does not keep a result derived from the body as it stands when
+/// what it was derived from was not: `sroa` did this after a split and the
+/// manager held `points-to` stale (`LLRM_CHECK_ORDER` found it).
+#[test]
+fn a_result_derived_from_one_held_from_before_the_edit_is_not_kept_as_current() {
+    let mut module = module();
+    let layout = DataLayout::default();
+    let id = module.named("f").unwrap();
+    let outer = Rc::new(crate::passes::Outer::of(&module, None));
+    let mut analyses = Analyses::new(outer);
+    let function = module.global(id).function().unwrap();
+    let context = &module.context;
+    let before = *analyses.get::<Base>(context, &layout, function);
+    let (context, function) = module.function_mut("f").unwrap();
+    let entry = function.entry().unwrap();
+    let branch = function.terminator(entry).unwrap();
+    let at = function.instruction(branch).operands.len() - 2;
+    let target = function.instruction(branch).operands[at + 1];
+    function.set_operand(branch, at, target);
+    // The edit moved the mark; the pass asks `above` without invalidating.
+    ABOVE_RUNS.set(0);
+    assert_eq!(*analyses.get::<Above>(context, &layout, function), 2 * before, "derived from the base it held");
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    analyses.get::<Above>(context, &layout, function);
+    assert_eq!(ABOVE_RUNS.get(), 2, "kept as derived from the body as it stands");
 }

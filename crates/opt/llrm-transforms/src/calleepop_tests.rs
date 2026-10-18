@@ -209,3 +209,21 @@ b0:
     assert_eq!(after.matches("call cc 1002 i16 @down").count(), 2, "{after}");
     assert!(after.contains("define internal cc 1002 i16 @down"), "{after}");
 }
+
+/// A `noipa` routine keeps the convention it was given; the same internal
+/// function without the attribute pops its own arguments (the premise).
+#[test]
+fn a_noipa_routine_keeps_its_calling_convention() {
+    let caller = "define i16 @f(i16 %x) {
+b0:
+  %p = call i16 @work(i16 %x, i16 2, i16 3)
+  %q = call i16 @work(i16 3, i16 %x, i16 1)
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+";
+    let plain = run(&format!("{CALLEE}{caller}"));
+    assert!(plain.contains("define internal fastcc i16 @work"), "premise: {plain}");
+    let marked = run(&format!("{}{caller}", CALLEE.replace("%c) {", "%c) noipa {")));
+    assert!(!marked.contains("fastcc"), "{marked}");
+}

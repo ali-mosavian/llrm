@@ -220,3 +220,17 @@ b0:
     assert!(!unsound(plain), "a constant is dropped: nothing becomes dead");
     assert!(unsound(&computed), "%k was computed for the call alone");
 }
+
+/// A `noipa` routine keeps the arguments it is called with: the same body
+/// without the attribute loses the one nothing reads (the premise).
+#[test]
+fn a_noipa_routine_keeps_its_unread_parameter() {
+    let text = |attribute: &str| {
+        format!(
+            "define internal i16 @f(i16 %a, i16 %unused) {attribute} {{\nb0:\n  %r = add i16 %a, 1\n  ret i16 %r\n}}\n{CALLER}"
+        )
+    };
+    assert!(run(&text("")).contains("call i16 @f(i16 %x)"), "premise");
+    let after = run(&text("noipa"));
+    assert!(after.contains("call i16 @f(i16 %x, i16 12)"), "{after}");
+}
