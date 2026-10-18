@@ -478,6 +478,33 @@ pub fn underlying(
     function: &Function,
     pointer: Operand,
 ) -> (Operand, Option<i64>) {
+    strip_offsets(context, layout, function, pointer, false)
+}
+
+/// `GetPointerBaseWithConstantOffset`
+/// ([ValueTracking.h:364](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ValueTracking.h#L364)),
+/// over `stripAndAccumulateConstantOffsets`
+/// ([Value.cpp:732](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L732)):
+/// `pointer` less every GEP with only constant indices and every address
+/// space cast, and the bytes those added. A GEP with a variable index is the
+/// base, where `underlying` goes on through it.
+pub fn pointer_base_with_constant_offset(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+) -> (Operand, i64) {
+    let (base, offset) = strip_offsets(context, layout, function, pointer, true);
+    (base, offset.expect("a stop at a variable index leaves a constant offset"))
+}
+
+fn strip_offsets(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    pointer: Operand,
+    stop_at_variable: bool,
+) -> (Operand, Option<i64>) {
     let int = |one: Operand| match one {
         Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(signed(bits, context.types.int_bits(context.get(id).ty).unwrap_or(64))),
@@ -513,6 +540,9 @@ pub fn underlying(
         if let Some(source) = source {
             let indices: Vec<Option<i128>> = operands[1..].iter().map(|&one| int(one)).collect();
             let (constant, variable) = layout.collect_offset(&context.types, source, &indices);
+            if stop_at_variable && !variable.is_empty() {
+                break;
+            }
             offset = offset.filter(|_| variable.is_empty()).map(|one| one + constant as i64);
         }
         at = operands[0];

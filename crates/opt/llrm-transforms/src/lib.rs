@@ -180,6 +180,9 @@ pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;
 pub mod versionstride;
+pub mod vncoercion;
+#[cfg(test)]
+mod vncoercion_tests;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
