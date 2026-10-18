@@ -4,6 +4,7 @@
 pub mod effects;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
+pub mod lowering;
 pub mod parse;
 pub mod select;
 pub mod tti;

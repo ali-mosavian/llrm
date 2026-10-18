@@ -30,6 +30,7 @@ pub mod intrinsics;
 pub mod knownbits;
 pub mod lexer;
 pub mod lint;
+pub mod lowering;
 pub mod loops;
 pub mod memory;
 pub mod module;

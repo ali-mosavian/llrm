@@ -245,6 +245,7 @@ impl llrm_target::Target for M32 {
                 // the x87 tables.
                 llrm_x86::tti::X86::of_cpu("i486")
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
+                Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
             )
         }
     }

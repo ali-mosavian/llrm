@@ -984,6 +984,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.tti()
     }
 
+    fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.machine.lowering()
+    }
+
     fn registers(&self) -> i64 {
         self.machine.registers()
     }

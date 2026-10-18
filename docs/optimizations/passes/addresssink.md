@@ -19,11 +19,11 @@ only where the target has a single condition register
 
 An `and` that only compares of it with zero read (`x & mask == 0`), some in
 other blocks than its own, is made again before each of those compares,
-where the target makes one instruction of the pair
-(`OperationCosts::mask_test`) and the copy would not stretch two values read
-nowhere else (`sinkAndCmp0Expression`). Numbering made one value of the
-repeated tests of a bit; the compares sunk into the blocks that branch on it
-left the `and` held across all of them.
+where the target's lowering says the pair folds
+(`Lowering::is_mask_and_cmp0_folding_beneficial`) and the copy would not
+stretch two values read nowhere else (`sinkAndCmp0Expression`). Numbering made
+one value of the repeated tests of a bit; the compares sunk into the blocks that
+branch on it left the `and` held across all of them.
 
 A phi read only as an address (`spill::address_only`: loads, stores through
 it, and GEPs of up to three levels that are themselves only addresses) whose

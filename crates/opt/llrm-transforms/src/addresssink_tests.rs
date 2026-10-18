@@ -292,7 +292,7 @@ b3:
 /// Machine that tests `x & mask` against zero in one instruction.
 fn testing() -> crate::testing::Tuned {
     crate::testing::Tuned {
-        costs: crate::profit::OperationCosts { add: 1, mask_test: 1, ..Default::default() },
+        folds_masks: true,
         ..Default::default()
     }
 }

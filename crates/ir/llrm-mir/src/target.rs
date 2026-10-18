@@ -33,6 +33,12 @@ pub trait Machine {
         None
     }
 
+    /// The target's `TargetLowering` facts, for the passes that translate
+    /// code reading them; none: the base class's answers.
+    fn lowering(&self) -> Option<std::rc::Rc<dyn crate::lowering::Lowering>> {
+        None
+    }
+
     /// What each operation costs in code bytes, for a decision made for
     /// size; by default the same prices.
     fn size_costs(&self) -> OperationCosts {
@@ -248,10 +254,6 @@ pub struct OperationCosts {
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
     /// and the pass's own is used.
     pub unroll_budget: i64,
-    /// What a compare of `x & mask` with zero costs as the one instruction a
-    /// target that has one makes of it (x86 `test`), the `and` and the compare
-    /// folded; 0: the target states none, and the two are separate operations.
-    pub mask_test: i64,
     /// gcc's by-pieces ratios for a constant memset (`SET_RATIO` for a
     /// nonzero byte, `CLEAR_RATIO` for zero; the `_size` ones when tuned for
     /// size): stores while their number is under it, else a fill. 0: the
@@ -364,7 +366,6 @@ impl Default for OperationCosts {
             copy_cell: 1,
             direction: 1,
             unroll_budget: 0,
-            mask_test: 0,
             pieces_set: 0,
             pieces_clear: 0,
             pieces_set_size: 0,

@@ -147,7 +147,7 @@ pub fn described_by_size(
     prices: &CpuPrices,
     sizes: Option<OperationCosts>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
-    described_with(prices, sizes, None)
+    described_with(prices, sizes, None, None)
 }
 
 /// `described_by_size`, with the target's LLVM cost model (`Machine::tti`).
@@ -155,9 +155,11 @@ pub fn described_with(
     prices: &CpuPrices,
     sizes: Option<OperationCosts>,
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
 ) -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Described {
         tti,
+        lowering,
         registers: prices.registers,
         call_registers: prices.call_registers,
         float_registers: prices.float_registers,
@@ -181,6 +183,7 @@ pub fn described_with(
 
 struct Described {
     tti: Option<Rc<dyn llrm_mir::tti::Tti>>,
+    lowering: Option<Rc<dyn llrm_mir::lowering::Lowering>>,
     registers: i64,
     call_registers: i64,
     float_registers: i64,
@@ -252,6 +255,10 @@ impl llrm_mir::target::Machine for Described {
 
     fn tti(&self) -> Option<Rc<dyn llrm_mir::tti::Tti>> {
         self.tti.clone()
+    }
+
+    fn lowering(&self) -> Option<Rc<dyn llrm_mir::lowering::Lowering>> {
+        self.lowering.clone()
     }
 
     fn size_costs(&self) -> OperationCosts {
