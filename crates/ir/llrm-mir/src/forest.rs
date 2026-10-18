@@ -413,26 +413,35 @@ impl Forest {
         address: impl Fn(G::Block) -> i64,
     ) -> Self {
         let preorder = info.get_loops_in_preorder();
-        let mut place: Vec<u32> = vec![NONE; preorder.len()];
-        let mut first: Vec<usize> = Vec::with_capacity(preorder.len());
-        let mut at_block: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-        for (position, block) in order.enumerate() {
-            at_block.insert(block.number(), position);
-            for successor in graph.children(block) {
-                let Some(one) = info.get_loop_for(successor).filter(|one| one.get_header() == successor) else {
-                    continue;
-                };
-                if one.contains(block) && place[one.id().0 as usize] == NONE {
-                    place[one.id().0 as usize] = first.len() as u32;
-                    first.push(one.id().0 as usize);
-                }
-            }
+        // Where each block comes in `order`, by number.
+        let mut position = vec![u32::MAX; graph.max_number()];
+        for (at, block) in order.enumerate() {
+            position[block.number()] = at as u32;
         }
-        debug_assert_eq!(first.len(), preorder.len(), "every loop has a latch among the blocks");
+        let at_block = |block: G::Block| position[block.number()];
+        // A loop's first back edge in `order`: the earliest latch, and among
+        // its edges the one to the header.
+        let mut first: Vec<usize> = (0..preorder.len()).collect();
+        let key = |one: &crate::loopinfo::Loop<'_, G::Block>| {
+            one.get_loop_latches(graph)
+                .into_iter()
+                .map(|latch| {
+                    let edge = graph.children(latch).position(|child| child == one.get_header()).unwrap_or(0);
+                    (at_block(latch), edge)
+                })
+                .min()
+        };
+        let keys: Vec<_> = preorder.iter().map(key).collect();
+        first.sort_by_key(|&one| keys[one]);
+        debug_assert!(keys.iter().all(Option::is_some), "every loop has a latch among the blocks");
+        let mut place: Vec<u32> = vec![NONE; preorder.len()];
+        for (index, &one) in first.iter().enumerate() {
+            place[preorder[one].id().0 as usize] = index as u32;
+        }
         let mut loops: Vec<TreeLoop> = Vec::with_capacity(first.len());
         for (preorder_number, one) in preorder.iter().enumerate() {
             let mut latches = one.get_loop_latches(graph);
-            latches.sort_by_key(|latch| at_block.get(&latch.number()).copied().unwrap_or(usize::MAX));
+            latches.sort_by_key(|&latch| at_block(latch));
             latches.dedup();
             let index = place[one.id().0 as usize] as usize;
             if loops.len() <= index {
