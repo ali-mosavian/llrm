@@ -366,15 +366,24 @@ fn hoisted_into(
     let body = function.block(arm).instructions().to_vec();
     for &inst in &body[..body.len() - 1] {
         function.move_to(inst, Position::Before(before)).expect("a placed instruction");
-        let kinds: Vec<String> = function
-            .instruction(inst)
-            .metadata
-            .iter()
-            .filter(|(kind, _)| !KEPT_METADATA.contains(&kind.as_str()))
-            .map(|(kind, _)| kind.clone())
-            .collect();
-        for kind in kinds {
-            function.set_metadata(inst, &kind, None);
-        }
+        metadata_dropped(function, inst);
+    }
+}
+
+/// `dropUBImplyingAttrsAndMetadata`: `inst` keeps the metadata kinds that
+/// cannot make a speculated instruction undefined.
+pub(crate) fn metadata_dropped(
+    function: &mut Function,
+    inst: InstId,
+) {
+    let kinds: Vec<String> = function
+        .instruction(inst)
+        .metadata
+        .iter()
+        .filter(|(kind, _)| !KEPT_METADATA.contains(&kind.as_str()))
+        .map(|(kind, _)| kind.clone())
+        .collect();
+    for kind in kinds {
+        function.set_metadata(inst, &kind, None);
     }
 }

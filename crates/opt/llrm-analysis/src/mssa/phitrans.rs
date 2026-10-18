@@ -200,6 +200,11 @@ impl PhiTransAddr {
         value
     }
 
+    /// The translation is lost: there is no address.
+    pub fn make_unavailable(&mut self) {
+        self.addr = None;
+    }
+
     /// `needsPHITranslationFromBlock`.
     pub fn needs_phi_translation_from_block(
         &self,
