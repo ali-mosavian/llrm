@@ -103,8 +103,7 @@ pub fn run_impl_cfg(
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
-    let dt =
-        dominators.map_or_else(|| std::borrow::Cow::Owned(DomTree::of(function)), std::borrow::Cow::Borrowed);
+    let dt = dominators.map_or_else(|| std::borrow::Cow::Owned(DomTree::of(function)), std::borrow::Cow::Borrowed);
     let mut pass = GvnPass {
         context,
         layout,
