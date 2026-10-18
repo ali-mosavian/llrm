@@ -214,8 +214,8 @@ b2:
     check(text, text, &[&[1], &[2]]);
 }
 
-/// The jump that closes a loop keeps its `!llvm.loop`, on the branch that
-/// now closes it.
+/// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
+/// latch, so it stays).
 #[test]
 fn test_the_new_jump_keeps_the_loop_metadata() {
     let mut module = parsed(
@@ -240,7 +240,7 @@ b3:
 ",
     );
     assert!(simplify(&mut module));
-    assert!(printed(&module).contains("br i1 %c, label %b1, label %b3, !llvm.loop"), "{}", printed(&module));
+    assert!(printed(&module).contains("br label %b1, !llvm.loop"), "{}", printed(&module));
 }
 
 /// `decide` took out `phi [%x, entry], [%self, latch]` (gvn leaves them) when

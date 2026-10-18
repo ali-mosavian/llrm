@@ -2050,3 +2050,31 @@ fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
         );
     assert!(kept.is_some(), "the rounds keep the history they compare");
 }
+
+/// `loopsimplify` gives a loop a dedicated exit, a jump alone in a block, and
+/// `simplifycfg` took it out again: round after round the body came back to
+/// the same state, and the `deedlines` demo failed with "cycle after 3 rounds".
+#[test]
+fn simplifycfg_and_loopsimplify_reach_a_fixed_point_on_a_loop_with_a_shared_exit() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %t = icmp ult i16 %n, %x
+  br i1 %t, label %b1, label %b2
+
+b2:
+  %r = phi i16 [ 0, %b0 ], [ %n, %b1 ]
+  ret i16 %r
+}
+",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(crate::simplifycfg::SimplifyCfg), Box::new(crate::loopsimplify::LoopSimplify)];
+    crate::testing::managed(&mut module, fixed);
+}

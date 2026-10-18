@@ -619,18 +619,11 @@ pub fn _phi_threaded(
     Ok(changed)
 }
 
-/// Blocks holding only a jump bypassed, where what they jump to has no
-/// phis to tell the edges apart. Whether anything changed.
-///
-/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
-/// its dedicated exits as blocks of their own.
-pub fn _threaded(
-    context: &mut Context,
-    function: &mut Function,
-) -> bool {
-    if function.entry().is_none() {
-        return false;
-    }
+/// The blocks that hold a loop's simple form up: a jump alone in the block
+/// before the header (its one entry), the one latch, or an exit block only the
+/// loop reaches. A pass that takes them out meets `loopsimplify` putting them
+/// back, round after round.
+pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
     let graph = cfg::graph(function);
     let predecessors = loops::predecessors(&graph);
     let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
@@ -654,20 +647,36 @@ pub fn _threaded(
         {
             loop_edges.insert(latch);
         }
-        loop_edges.extend(
-            graph
-                .iter()
-                .filter(|block| {
-                    let parents = predecessors.get(&block.at).unwrap_or(none);
-                    !loop_.body.contains(&block.at)
-                        && !parents.is_empty()
-                        && parents.iter().all(|at| loop_.body.contains(at))
-                        && block.succ.len() == 1
-                        && !loop_.body.contains(&block.succ[0])
-                })
-                .map(|block| block.at),
-        );
+        // Only a successor of the body can have all its predecessors in it.
+        for &inside in &loop_.body {
+            for &exit in known[&inside].iter() {
+                let parents = predecessors.get(&exit).unwrap_or(none);
+                if !loop_.body.contains(&exit)
+                    && parents.iter().all(|at| loop_.body.contains(at))
+                    && known[&exit].len() == 1
+                    && !loop_.body.contains(&known[&exit][0])
+                {
+                    loop_edges.insert(exit);
+                }
+            }
+        }
     }
+    loop_edges
+}
+
+/// Blocks holding only a jump bypassed, where what they jump to has no
+/// phis to tell the edges apart. Whether anything changed.
+///
+/// Loop-simplify form keeps a loop's one entry edge, its one back edge and
+/// its dedicated exits as blocks of their own.
+pub fn _threaded(
+    context: &mut Context,
+    function: &mut Function,
+) -> bool {
+    if function.entry().is_none() {
+        return false;
+    }
+    let loop_edges = loop_form_blocks(function);
     let mut redirects = BTreeMap::new();
     for &block in function.layout() {
         let at = cfg::id(block);
