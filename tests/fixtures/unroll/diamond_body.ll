@@ -1,3 +1,4 @@
+; unroll b1 count 6 exits b1=6
 define i16 @f(i16 %x, i16 %n) {
 b0:
   br label %b1
