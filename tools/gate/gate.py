@@ -234,10 +234,32 @@ def strays(names: list[str]) -> list[str]:
     return [n for n in names if n.rpartition(".")[2].lower() in PRODUCTS and "." in n and not n.startswith(FIXTURES)]
 
 
+def link_strays(root: Path) -> list[str]:
+    """What `git add -A` takes from a build tree: a tracked symlink pointing outside the repository or at an absolute path (a `target` link to a
+    cargo target dir made #2171 red for hours: "tree differs from HEAD"), or a build dir at the root. Relative links inside the tree are fine
+    (tests/run/nib/errors.nib)."""
+    entries = subprocess.run(["git", "ls-files", "-s"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    found = []
+    for entry in entries:
+        meta, _, name = entry.partition("\t")
+        if meta.startswith("120000"):
+            target = os.readlink(root / name)
+            inside = not os.path.isabs(target) and (root / name).parent.joinpath(target).resolve().is_relative_to(root.resolve())
+            if not inside:
+                found.append(f"tracked symlink {name} -> {target}")
+        elif name == "target" or name.startswith("target/"):
+            found.append(f"tracked build dir {name}")
+    return found
+
+
 def products_main(root: Path | None = None) -> int:
-    listed = subprocess.run(["git", "ls-files"], cwd=root or ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    root = root or ROOT
+    listed = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
     if found := strays([n for n in listed if n]):
         print(f"build products are tracked: {found}")
+        return 1
+    if links := link_strays(root):
+        print("\n".join(links))
         return 1
     return 0
 

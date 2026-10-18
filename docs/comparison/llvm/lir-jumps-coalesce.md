@@ -1,3 +1,7 @@
+---
+architecture-index: LIR jumps and coalescing against LLVM's
+architecture-order: 380
+---
 # LIR jumps and coalescing against BranchFolding, block placement and RegisterCoalescer
 
 TL;DR: on `d_faces` `-O2` (11 functions, 2,250 LIR instructions) `jumps` costs 57.9 M and the coalescer 55.2 M, against 5.9 M and 10.1 M for LLVM's counterparts on 1,594 machine instructions: 6.9x and 3.9x per instruction. Both run once per function; the extra is structure, not repeats. The coalescer builds a whole-function interference graph and every interval up front (29.7 M of its 55.2 M) where LLVM joins live ranges pairwise; `jumps` spends 33 M on duplication, threading and clock pricing that LLVM's branch folding does not do, and only 10 M on the merge-and-DCE loop. Peephole and x87 are on [their own page](lir-cleanup.md); today's numbers for them are in the table.
