@@ -171,3 +171,25 @@ fn test_forgetting_a_value_forgets_everything_computed_from_it() {
         assert!(se.get_existing_scev(v).is_none(), "%{name} is computed from %i");
     }
 }
+
+/// `phi [poison, %i]` where `%i` is a phi of the same block, after it: `%i`
+/// does not dominate the phi (the value it holds on the back edge is the
+/// previous trip's), so the phi is not `%i`. `createSCEV` took it for `%i`'s
+/// recurrence and the exit value of LICM's promoted store was the counter
+/// after the last trip, 8 where the last store was 7.
+#[test]
+fn test_a_phi_of_poison_and_a_later_phi_of_its_block_is_not_that_phi() {
+    let text = "define i32 @f(i32 %n) {\n\
+        entry:\n  br label %loop\n\
+        loop:\n\
+          %a = phi i32 [ poison, %entry ], [ %i, %loop ]\n\
+          %i = phi i32 [ 0, %entry ], [ %inc, %loop ]\n\
+          %inc = add nuw nsw i32 %i, 1\n\
+          %cmp = icmp ult i32 %inc, %n\n\
+          br i1 %cmp, label %loop, label %exit\n\
+        exit:\n  ret i32 %a\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let a = printed.lines().find(|line| line.starts_with("%a\t")).expect("a line for %a");
+    assert!(!a.contains("{0,+,1}"), "{printed}");
+}
