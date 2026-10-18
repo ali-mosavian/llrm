@@ -224,10 +224,7 @@ impl ScalarEvolution {
 
         // Otherwise compute it.
         let c = self.compute_scev_at_scope(cx, v, l);
-        // Computing it can forget `v` (a PHI made on the way replaces its
-        // symbolic name): `ValuesAtScopes[V]` makes the entry again, and then
-        // there is no record of this scope to complete.
-        let values = self.values_at_scopes.entry(v).or_default();
+        let values = self.values_at_scopes.get_mut(&v).expect("held");
         if let Some(ls) = values.iter_mut().rev().find(|ls| ls.0 == l) {
             ls.1 = Some(c);
             // Record the dependency under the bare expression: invalidation

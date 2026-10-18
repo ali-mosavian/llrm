@@ -138,7 +138,9 @@ impl Run<'_> {
         flags: IrFlags,
     ) -> Operand {
         if flags.is_empty() {
-            if let Some(folded) = llrm_mir::simplify::simplify_cast_operand(self.context, self.function, op, v, to) {
+            if let Some(folded) =
+                llrm_mir::simplify::simplify_cast_operand(self.context, self.env.layout, self.function, op, v, to)
+            {
                 return folded;
             }
         }
@@ -259,6 +261,7 @@ impl Run<'_> {
         if self.is_constant(lhs) && self.is_constant(rhs) {
             if let Some(folded) = llrm_mir::simplify::simplify_binop_operands(
                 self.context,
+                self.env.layout,
                 self.function,
                 op,
                 IrFlags::default(),
@@ -314,7 +317,9 @@ impl Run<'_> {
             (MirType::Int(_), MirType::Pointer(_)) => CastOp::IntToPtr,
             _ => CastOp::BitCast,
         };
-        if let Some(folded) = llrm_mir::simplify::simplify_cast_operand(self.context, self.function, op, v, to) {
+        if let Some(folded) =
+            llrm_mir::simplify::simplify_cast_operand(self.context, self.env.layout, self.function, op, v, to)
+        {
             return folded;
         }
         // A cast of a cast back to the original type is the original.

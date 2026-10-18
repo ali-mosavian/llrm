@@ -17,11 +17,11 @@
 //! - some other exit's count is below all of its own, by the constants or by
 //!   the guards on entry (`guards::holds`): it never leaves.
 //!
-//! With `LLRM_EXP_SCEV_EXITFOLD` the exits and their counts are
-//! ScalarEvolution's (`getExitCount`, `isLoopEntryGuardedByCond`: LLVM's
-//! `optimizeLoopExits`: zero, below the loop's symbolic maximum, a count an
-//! earlier exit has); off by default, it differs from `induction::exits` on 2
-//! of 1,590 corpus objects, both smaller.
+//! The exits and their counts are ScalarEvolution's (`getExitCount`,
+//! `isLoopEntryGuardedByCond`: LLVM's `optimizeLoopExits`: zero, below the
+//! loop's symbolic maximum, a count an earlier exit has). `LLRM_NO_SCEV_EXITFOLD`
+//! restores `induction::exits`; the two differ on 2 of 1,590 corpus objects,
+//! both smaller.
 //!
 //! The branch is given the constant that decides it; `decide` then makes it a
 //! jump. Nothing else changes, so no effect or value between the exits matters.
@@ -852,7 +852,7 @@ fn _hoisted(
             continue;
         }
         'candidate: {
-            if !shape.dominance.dominates(exit.block, latch) {
+            if !shape.dominance.dominates(unit.function, exit.block, latch) {
                 break 'candidate;
             }
             let Some((counter, right, predicate)) = _tested(unit, exit, &counters, &still) else { break 'candidate };
@@ -913,11 +913,11 @@ fn _hoisted(
     found
 }
 
-/// `LLRM_EXP_SCEV_EXITFOLD`, read once: the exits their counts decide are
-/// found by ScalarEvolution's exit counts (LLVM's `optimizeLoopExits`), not
-/// by `induction::exits`. Off by default.
+/// Read once: the exits their counts decide are found by ScalarEvolution's
+/// exit counts (LLVM's `optimizeLoopExits`), not by `induction::exits`;
+/// `LLRM_NO_SCEV_EXITFOLD` turns that off.
 fn scev_enabled() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_SCEV_EXITFOLD")
+    !llrm_support::env_flag!("LLRM_NO_SCEV_EXITFOLD")
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/IndVarSimplify.cpp#L1661

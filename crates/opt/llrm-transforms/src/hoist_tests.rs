@@ -20,7 +20,7 @@ fn hoisted(text: &str) -> (Module, Module) {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -455,7 +455,7 @@ fn test_invariants_past_the_registers_stay_in_the_inner_preheader() {
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -495,7 +495,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     passes
         .run_module(
             &mut after,
@@ -540,7 +540,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size });
+    passes.add(super::Hoist { size, speculate: true });
     let prices = crate::profit::OperationCosts { float_release: release, ..Default::default() };
     let machine = crate::testing::Tuned { registers: 6, costs: prices.clone(), sizes: prices, ..Default::default() };
     passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
@@ -594,7 +594,7 @@ fn test_a_motion_is_priced_by_one_forecast() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -614,7 +614,7 @@ fn test_a_function_a_motion_was_priced_for_is_not_priced_again_for_the_next() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -635,7 +635,7 @@ fn test_a_motion_that_makes_no_spilled_value_cross_finds_no_traffic_of_its_own()
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     crate::spill::TRAFFIC.with(|count| count.set(0));
     passes
@@ -656,7 +656,7 @@ fn test_a_motion_is_priced_without_solving_the_clone_s_liveness_whole() {
     let mut after = parsed(&text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     let solved = llrm_analysis::liveness::solves();
     passes
@@ -677,7 +677,7 @@ fn test_a_clone_is_priced_from_the_pressure_of_the_function_after_a_motion() {
     let mut after = parsed(&two_inner_loops());
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: true });
+    passes.add(super::Hoist { size: true, speculate: true });
     crate::profit::PRICED.with(|count| count.set((0, 0)));
     passes
         .run_module(&mut after, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
@@ -723,7 +723,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true });
     let prices = crate::profit::OperationCosts {
         float_load: 3,
         float_load_folded: folded,
@@ -792,7 +792,7 @@ b2:
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.require::<Summaries>();
-    passes.add(super::Hoist { size: false });
+    passes.add(super::Hoist { size: false, speculate: true });
     passes
         .run_module(&mut after, std::rc::Rc::new(llrm_x86_m16::Dos::default()))
         .unwrap_or_else(|error| panic!("{error}\n{text}"));

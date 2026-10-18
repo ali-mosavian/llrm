@@ -6,7 +6,7 @@
 
 use llrm_mir::constantrange::ConstantRange;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::BlockId;
 use llrm_mir::valuetracking::AssumptionCache;
@@ -35,7 +35,7 @@ fn with_loop(test: impl FnOnce(&mut ScalarEvolution, &Cx, BlockId)) {
     let module = llrm_mir::parse::module(LOOP).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {

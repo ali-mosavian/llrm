@@ -3,7 +3,7 @@
 //! `createSCEV` is not read) and the entry-guard checks.
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::IntPredicate;
@@ -44,7 +44,7 @@ fn with_guard(
     let module = llrm_mir::parse::module(&loop_under(guard)).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {
@@ -158,7 +158,7 @@ exit:
     let module = llrm_mir::parse::module(&text).expect("a module");
     let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("@f");
     let layout = DataLayout::default();
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
     let cx = Cx {

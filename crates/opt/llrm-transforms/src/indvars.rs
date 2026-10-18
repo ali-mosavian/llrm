@@ -214,6 +214,11 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
+        let compared = crate::simplifyindvar::enabled()
+            && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer);
+        if compared {
+            standing.changed();
+        }
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -251,11 +256,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued || merged)
+        let dead = (compared || sunk || rewound || widened || valued || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded || valued {
             PreservedAnalyses::none()
-        } else if sunk || rewound || widened || merged || dead {
+        } else if compared || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
@@ -699,7 +704,10 @@ fn _rewinding(
         };
         let sources = exiting.iter().map(|(source, _)| *source).collect::<BTreeSet<_>>();
         let exit_preds = function.predecessors(cfg::block(exit)).into_iter().map(cfg::id).collect::<BTreeSet<_>>();
-        if !parent.body.contains(&exit) || exit_preds != sources || !dominance.dominates(exit, *parent_latch) {
+        if !parent.body.contains(&exit)
+            || exit_preds != sources
+            || !dominance.dominates(unit.function, exit, *parent_latch)
+        {
             continue;
         }
         let Some(count) = induction::trip_count(unit, inner, facts) else { continue };
@@ -729,7 +737,7 @@ fn _rewinding(
             // already `start + count * step`; a post-tested one from its
             // latch, where the update is.
             let updated = _block_of(function, stepping);
-            let exit_value = if sources.iter().all(|&source| dominance.dominates(updated, source)) {
+            let exit_value = if sources.iter().all(|&source| dominance.dominates(unit.function, updated, source)) {
                 Operand::Value(update)
             } else if sources == BTreeSet::from([inner.header]) {
                 Operand::Value(counter.value)

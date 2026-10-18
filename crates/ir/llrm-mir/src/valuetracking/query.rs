@@ -10,7 +10,7 @@
 
 use crate::context::{ConstantKind, Context};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::HashMap;
 use crate::intrinsics::Intrinsic;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, MetadataNode, Module, Operand, ValueDef};
@@ -29,7 +29,7 @@ pub struct Query<'a> {
     pub metadata: &'a [MetadataNode],
     pub function: &'a Function,
     pub layout: &'a DataLayout,
-    pub dt: Option<&'a DominatorTree>,
+    pub dt: Option<&'a DomTree>,
     pub assumptions: Option<&'a AssumptionCache>,
     /// `DC`: the conditional branches each value is tested by.
     pub dom_conditions: Option<&'a DomConditionCache>,
@@ -365,7 +365,7 @@ impl DomConditionCache {
 /// AC}`.
 pub struct FunctionAnalyses {
     layout: DataLayout,
-    dt: DominatorTree,
+    dt: DomTree,
     assumptions: AssumptionCache,
 }
 
@@ -375,7 +375,32 @@ impl FunctionAnalyses {
         function: &Function,
     ) -> Self {
         let layout = module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).unwrap_or_default();
-        Self { layout, dt: DominatorTree::new(function), assumptions: AssumptionCache::new(module, function) }
+        Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
+    }
+
+    /// The same from the parts of a module a pass holds, not the module.
+    pub fn of(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Self {
+        Self {
+            layout: layout.clone(),
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::of(context, globals, metadata, function),
+        }
+    }
+
+    /// The dominator tree (`SQ.DT`).
+    pub fn dominator_tree(&self) -> &DomTree {
+        &self.dt
+    }
+
+    /// The assumptions (`SQ.AC`).
+    pub fn assumption_cache(&self) -> &AssumptionCache {
+        &self.assumptions
     }
 
     /// A query at `cxt` (`CxtI`), or at no instruction.
