@@ -69,6 +69,10 @@ Each rests on a fact of llrm; the LLVM code it leaves out is linked at d1106deb7
   [`getIntImmCostInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6927),
   [`isLegalAddressingMode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621). Their tests quote the source lines and are marked
   unverified by oracle.
+- T6 `addresssink` has no price gate on the sink of a masked compare. Fact: x86 priced `test` under the pair on every
+  CPU, so no object changed (1,587 compared: vsgcc, QCport, bench bas/nib; 7,547 queries reached the hook). LLVM:
+  [`sinkAndCmp0Expression`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2341-L2395)
+  asks `isMaskAndCmp0FoldingBeneficial` alone.
 
 ## What the oracle found
 
@@ -76,6 +80,12 @@ Each rests on a fact of llrm; the LLVM code it leaves out is linked at d1106deb7
 `pentiumpro`, `k6` and `athlon`; only `core2` differs (its SSE tables). So the per-`-march` features of `X86Subtarget`
 change a scalar price in LLVM only for SSE: CMOV (from `pentiumpro`) and the multiply and shift latencies are not in
 the cost model's scalar rows. Nothing here needs a table per CPU but `core2`'s, and no m32 target reaches it.
+
+TLI hooks are not `Tti` queries. LLVM answers them from `TargetLowering` (`isMaskAndCmp0FoldingBeneficial`, the
+`MaxStoresPer*` values); here `llrm_mir::lowering::Lowering` carries them, `Machine::lowering()` hands it out and
+`llrm_x86::lowering::X86` answers for every x86 target, whatever its word size. `Tti` keeps the cost queries only, and
+the 16-bit target may stay without one. First user: `addresssink` (`masks_sunk`), which dropped `mask_test` and its
+gcc-shaped gate `mask_test < 2 * add` (T6).
 
 ## Migration owed: MIR passes read `Tti`, LIR keeps `OperationCosts`
 

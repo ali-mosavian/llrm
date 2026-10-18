@@ -126,7 +126,8 @@ impl FunctionPass for AddressSink {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
-        let masks = one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
+        let masks =
+            one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         if sunk(unit.function) || sunk_compares || masks {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
@@ -324,9 +325,9 @@ fn compares_sunk(function: &mut Function) -> bool {
 /// where a test at each branch has none).
 ///
 /// Only where the target's lowering says the pair folds
-/// (`isMaskAndCmp0FoldingBeneficial`; none: the base class's `false`), and not where
-/// both operands of the `and` are values read nowhere else, whose live ranges
-/// the copy would stretch to the compare (CodeGenPrepare.cpp:2224).
+/// (`isMaskAndCmp0FoldingBeneficial`; none: the base class's `false`), and not
+/// where both operands of the `and` are values read nowhere else, whose live
+/// ranges the copy would stretch to the compare (CodeGenPrepare.cpp:2224).
 fn masks_sunk(
     context: &Context,
     function: &mut Function,
