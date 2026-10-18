@@ -609,6 +609,31 @@ fn test_a_body_with_no_store_asks_nothing() {
     assert!(asked.is_empty(), "{asked:?}");
 }
 
+/// A store at each of 128 offsets of one array and a load at another between
+/// them: with the index built only for an object of more than 256 cells, each
+/// access of this 128-cell array was found to reach all 128, N^2 in all (the
+/// `mem` ladder at N=128 lost 4.6% of its compile, 7.8% at 256). An access that
+/// would visit more than 64 cells is answered by the index, built by the first
+/// such query, whatever the object's size.
+#[test]
+fn an_access_that_would_visit_many_cells_asks_the_index_of_a_small_array() {
+    let n = 128;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
+        text += &format!(
+            "  %l{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  %x{i} = load i32, ptr %l{i}\n",
+            4 * ((i * 7 + 3) % n)
+        );
+    }
+    text += "  ret void\n}\n";
+    llrm_analysis::avail::count_reached_cells();
+    let before = llrm_analysis::avail::reached_cells();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    let reached = llrm_analysis::avail::reached_cells() - before;
+    assert!(reached <= 3 * n as usize, "{n} stores and {n} loads reached {reached} cells in all");
+}
+
 /// A store at each of N offsets of one array (past the cells a body is indexed
 /// at), and a load at another between them: each access was found to reach
 /// every one of the N cells, N^2 in all. On a ladder of 1,600 such statements

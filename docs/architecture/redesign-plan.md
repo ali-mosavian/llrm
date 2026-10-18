@@ -643,6 +643,7 @@ Checklist: the shared list. Its own metric boxes:
 ### 1.7 dse slope ([#2013], [#2015])
 
 - **(a) Effect:**
+  - follow-up, a per-query rule instead of the global 256-cell threshold (an access whose pick of buckets would visit more than 64 cells asks the index, built on the first such query): `mem` N=64 / 128 / 256 cells -2.1% / -4.6% / -7.8% of the compile, N=32 +0.4%, N=512 / 1024 +0.0%; `fjoins` N=32..256 -0.01% to -0.06%; objects identical (1,587 compiled, 0 differ); instruction counts of the whole process, cycles not claimed;
   - `dse` mem N=1600: 1,907 to 179 M;
   - distinct-offset shape: 3,395 to 162 M;
   - arith: 818 to 52 M;

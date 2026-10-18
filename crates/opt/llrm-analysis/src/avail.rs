@@ -41,9 +41,10 @@
 //! - an instruction that reads or writes anything else removes the cells it may
 //!   touch (`clobber`, using `may_clobber` and `EscapedBefore` where given),
 //!   asked of the cells `reaching` names: those of its own object or frame
-//!   whose bytes meet its own, by a sorted index of bytes, not every cell of
-//!   the object (`LLRM_CHECK_REACHED` asserts a cell it leaves out is ruled
-//!   out);
+//!   whose bytes meet its own, by a sorted index of bytes where the pick of
+//!   buckets would visit more than `DENSE_VISITS` cells (the index is built by
+//!   the first such query), by the cells of the pick otherwise
+//!   (`LLRM_CHECK_REACHED` asserts a cell it leaves out is ruled out);
 //! - a fill (what a call writes before it reads) adds its cells.
 //!
 //! At a join the state is the intersection over the successors, computed per
@@ -137,8 +138,8 @@ use crate::memory::{AliasClass, MemRef, ObjectRef, Unit, alias_class, classes_ma
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
 use crate::regions::{
-    Frame, OverlapBucket, OverlapBuckets, displaced_span, overlap_bucket, overlap_bucket_count, overlap_buckets,
-    overlap_frame, overlap_span,
+    Frame, OverlapBucket, OverlapBuckets, Pick, displaced_span, overlap_bucket, overlap_buckets,
+    overlap_buckets_within, overlap_frame, overlap_span,
 };
 
 /// The cell `inst` purely loads, and the value it lands in.
@@ -833,27 +834,34 @@ impl Solve<'_, '_> {
         let Some(provenance) = reference.provenance.as_ref() else { return CellSet::All };
         // Counting the buckets takes no list: the pick is made only where there
         // are few.
-        let few = overlap_bucket_count(reference, &stored.index.parts).is_none_or(|buckets| buckets <= DENSE_VISITS);
-        let picked = few.then(|| overlap_buckets(reference, &stored.index.parts)).flatten();
-        let visits = match &picked {
-            _ if !few => usize::MAX,
-            None => stored.cells.len(),
-            Some(buckets) => {
-                buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).map(IndexMap::len).sum()
+        // A pick of few buckets that holds few cells is the answer; of many it
+        // is not made, and the index answers.
+        let mut dense: Option<Vec<usize>> = None;
+        match overlap_buckets_within(reference, &stored.index.parts, DENSE_VISITS) {
+            Pick::Many => {}
+            Pick::Every => {
+                if stored.cells.len() <= DENSE_VISITS {
+                    dense = Some((0..stored.cells.len()).collect());
+                }
             }
-        };
-        if visits <= DENSE_VISITS {
-            let mut cells: Vec<usize> = match picked {
-                None => stored.index.buckets.values().flat_map(IndexMap::keys).copied().collect(),
-                Some(buckets) => buckets
-                    .iter()
-                    .filter_map(|bucket| stored.index.buckets.get(bucket))
-                    .flat_map(IndexMap::keys)
-                    .copied()
-                    .collect(),
-            };
-            cells.sort_unstable();
-            cells.dedup();
+            Pick::Few(buckets) => {
+                let mut cells: Vec<usize> = Vec::new();
+                let mut small = true;
+                for held in buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)) {
+                    if cells.len() + held.len() > DENSE_VISITS {
+                        small = false;
+                        break;
+                    }
+                    cells.extend(held.keys().copied());
+                }
+                if small {
+                    cells.sort_unstable();
+                    cells.dedup();
+                    dense = Some(cells);
+                }
+            }
+        }
+        if let Some(cells) = dense {
             return CellSet::Some(cells);
         }
         let sparse = stored.sparse();
