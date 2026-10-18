@@ -205,15 +205,17 @@ pub fn hoisted(
     for one in found {
         let Some(into) = _preheader(&graph, one) else { continue };
         // The intervals of the loops, asked once a loop has been moved out of:
-        // the edges they stand on follow where a value is defined, so
-        // those and what is made of them are let go first and the rest
-        // stands (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
+        // the edges they stand on follow where a value is defined, and a
+        // bound moved out of a loop makes it counted, so those and what is
+        // made of them are let go first and the rest stands
+        // (`LLRM_CHECK_REPLAY`, `LLRM_CHECK_UNREPORTED`).
         let mut bounds = || {
             if moved && !asked_after_moving {
                 analyses.invalidate(
                     unit.function,
                     &PreservedAnalyses::all()
                         .except::<llrm_analysis::manager::DominatedEdges>()
+                        .except::<llrm_analysis::manager::Counted>()
                         .except::<llrm_analysis::manager::Bounded>(),
                 );
             }

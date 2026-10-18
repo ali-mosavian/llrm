@@ -26,6 +26,23 @@ use crate::model::ir::{Operation, Semantics};
 use crate::model::lir;
 use crate::support::hash::HashMap;
 
+/// The assembled listing and the executed-cost summary beside the stage dumps,
+/// where `options` names a directory: every front end's compile writes them
+/// here, whatever path it took to the assembled module.
+pub(crate) fn stage_files(
+    options: &Options,
+    suffix: &str,
+    assembled: &masm::Module,
+) -> Result<(), String> {
+    let Some(directory) = &options.dump else { return Ok(()) };
+    let written = |name: &str, text: String| {
+        std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string())
+    };
+    written("listing.asm", masm::text(assembled).map_err(|error| error.to_string())?)?;
+    let cpu = options.cpu()?;
+    written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body, cpu) + "\n").collect())
+}
+
 /// What a compile is for: the machine, whose CPU prices the choices, the
 /// passes that run, and where the pipeline writes each stage.
 #[derive(Clone)]
@@ -185,15 +202,8 @@ pub fn compiled(
                 options.arch.layout().segment_bytes(),
             )
         })?;
-        if let Some(directory) = &options.dump {
-            let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
-            let written = |name: &str, text: String| {
-                std::fs::write(directory.join(format!("{name}{suffix}")), text).map_err(|error| error.to_string())
-            };
-            written("listing.asm", masm::text(&assembled).map_err(|error| error.to_string())?)?;
-            let cpu = options.cpu()?;
-            written("cost", assembled.procedures.iter().map(|one| executed::summary(&one.body, cpu) + "\n").collect())?;
-        }
+        let suffix = if program.modules.len() > 1 { format!("-{}", hir.name) } else { String::new() };
+        stage_files(options, &suffix, &assembled)?;
         out.push(assembled);
     }
     if options.stack_usage || options.stack_limit.is_some() {

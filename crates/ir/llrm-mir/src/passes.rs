@@ -933,6 +933,10 @@ struct Entry<A: Analysis> {
     bits: u8,
     /// The function's attributes when the result was derived.
     stamp: u64,
+    /// It was derived while a result it read was older than the body: a pass
+    /// edited and then asked without invalidating. It is as true as what it
+    /// read, not as the body stands.
+    from_older: bool,
 }
 
 impl<A: Analysis> Cached for Entry<A> {
@@ -995,7 +999,10 @@ impl<A: Analysis> Cached for Entry<A> {
         attributes: u64,
         outer: &Rc<Outer>,
     ) -> bool {
-        self.mark == function.mark() && self.stamp == attributes && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
+        !self.from_older
+            && self.mark == function.mark()
+            && self.stamp == attributes
+            && (!A::READS_OUTER || Rc::ptr_eq(&self.outer, outer))
     }
 }
 
@@ -1009,6 +1016,9 @@ pub struct Analyses {
     /// (`invalidate`): a result derived before and held is as true now as
     /// then.
     vouched: Option<crate::module::Mark>,
+    /// Something asked for since the last derivation began was older than the
+    /// body (`Entry::from_older`).
+    read_older: bool,
     /// Results kept past edits that only keep what they say true, not derived
     /// afresh: dropped at the next named point (`refresh_soft`).
     soft: HashSet<TypeId>,
@@ -1207,6 +1217,7 @@ impl Analyses {
             kept: HashMap::default(),
             evicted: HashMap::default(),
             vouched: None,
+            read_older: false,
             soft: HashSet::default(),
             tainted: false,
             attributes: None,
@@ -1267,6 +1278,7 @@ impl Analyses {
                 mark: function.mark(),
                 bits: if A::READS_OUTER { read::ALL } else { 0 },
                 stamp,
+                from_older: false,
             }),
         );
     }
@@ -1306,9 +1318,15 @@ impl Analyses {
                 read::note(entry.bits);
             }
             counted(A::NAME, true);
-            return Rc::clone(&entry.result);
+            let result = Rc::clone(&entry.result);
+            // Held from before an edit the pass made since it last invalidated.
+            if entry.from_older || (entry.mark != function.mark() && self.vouched != Some(function.mark())) {
+                self.read_older = true;
+            }
+            return result;
         }
         counted(A::NAME, false);
+        let outside_older = std::mem::replace(&mut self.read_older, false);
         let before_reads = read::swap(0);
         let had_kept = self.kept.contains_key(&key);
         let mut old_reads = 0;
@@ -1462,8 +1480,10 @@ impl Analyses {
                 mark: function.mark(),
                 bits,
                 stamp,
+                from_older: self.read_older,
             }),
         );
+        self.read_older |= outside_older;
         result
     }
 
@@ -1619,6 +1639,17 @@ impl Analyses {
                 self.evicted.insert(key, entry);
             }
         }
+    }
+
+    /// The held results a fresh computation disagrees with, for a test of what
+    /// a pass leaves in the manager.
+    pub fn held_stale(
+        &self,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+    ) -> Vec<&'static str> {
+        self.stale(context, layout, function)
     }
 
     /// The cached analyses a fresh computation disagrees with.
