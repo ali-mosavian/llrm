@@ -31,6 +31,10 @@
 //! `reMaterializeAll` ahead of the spill: they need SplitKit's sibling
 //! relations (step 2). Exit: SplitKit translated.
 //!
+//! DEVIATE D-G: a spilled phi value is not read from its home cell
+//! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
+//! once over the edited function. Costs memory operands where a home held.
+//!
 //! DEVIATE D-C: a spill slot is a `Frame` cell per original register, shared
 //! afterwards by `slots_colored`; LLVM shares through `LiveStacks` as it goes.
 //! Exit: `LiveStacks` translated with SplitKit.
@@ -351,7 +355,7 @@ impl<'a> InlineSpiller<'a> {
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
         self.named.extend(old.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().filter(|value| *value != reg));
-        if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
+        if std::env::var("LLRM_ISP_NOFOLD").is_err() && let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
             return Some(folded);
         }
         // The plan of the spiller reads the definitions of a register it can see:
@@ -380,6 +384,10 @@ impl<'a> InlineSpiller<'a> {
         let mut mini = self.template.with_blocks(vec![Block::from(LirBlock::new(0, seen))]);
         mini.entry = 0;
         mini.inputs.clear();
+        // A home cell holds the value only where nothing redefined it since
+        // (`storedhomes::held` drops a value with another definition); a body
+        // of one unit does not show the definitions, so no home is used.
+        mini.homes = Arc::default();
         mini.frequencies = None;
         let values = std::iter::once(reg).collect();
         let floor = lis.next_virtual_register();
@@ -488,6 +496,11 @@ impl Spiller for InlineSpiller<'_> {
     ) {
         let SpillContext { lis, vrm, vrai } = ctx;
         self.spilled.push(reg);
+        // Bisection aid: only the first N spills are written inline.
+        if std::env::var("LLRM_GREEDY_SPILLS").ok().and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| self.spilled.len() > n) {
+            self.failed = true;
+            return;
+        }
         // The cell is as wide as the widest access anywhere in the function: a
         // unit asks for the width of its own accesses only, and a narrow cell
         // made by the first would be written whole by a wider one.
@@ -499,7 +512,7 @@ impl Spiller for InlineSpiller<'_> {
         }
         let mut delegate = NoDelegate;
         let mut edit = LiveRangeEdit::new(reg, &mut delegate);
-        if let Some(made) = self.rematerialize_all(lis, reg) {
+        if std::env::var("LLRM_ISP_NOREMAT").is_err() && let Some(made) = self.rematerialize_all(lis, reg) {
             for value in made {
                 edit.create_from(lis, vrm, value, reg);
                 let mut li = lis.compute_virt_reg_interval(value);

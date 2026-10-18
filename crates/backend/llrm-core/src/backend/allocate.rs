@@ -4276,7 +4276,9 @@ impl RegAlloc {
         let spilled = best.spilled.clone();
         let base_stats = LAST_STATS.with(std::cell::Cell::get);
         BASE_SPLITS.with(|splits| splits.set(base_stats.0));
-        if !spilled.is_empty() && cpu.search {
+        // LLVM allocates each function once: the translated allocator runs no
+        // search over other shapes of the body.
+        if !spilled.is_empty() && cpu.search && !llrm_support::env_flag!("LLRM_GREEDY") {
             // Other shapes of the same body, which the base allocation's spills
             // suggest: each is kept only if its output is cheaper.
             let building = llrm_support::debug::span("regalloc candidates");

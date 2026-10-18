@@ -54,3 +54,71 @@ fn a_register_an_inline_spill_redefines_gets_its_interval_again() {
     assert!(output.status.success(), "{said}");
     assert!(!said.contains("greedy-check"), "{said}");
 }
+
+/// nbody_fixed at -O3 printed 191828 (want 38421): a spilled `pos_x[i] += vel_x[i]` kept in its slot was written
+/// back to `pos_x[i]` as `pos_x[i]`'s old value, because the one-instruction body the inline spiller hands the
+/// spiller showed no definition of the value, so its home cell `pos_x[i]` looked current.
+const HOME_UPDATE: &str = "/* Six-body Q9 fixed-point integrator, 1000 steps; long is 32-bit, / truncates toward zero. */\n\
+\n\
+#define BODIES 6\n\
+#define ONE 512L\n\
+\n\
+static long pos_x[BODIES], pos_y[BODIES], vel_x[BODIES], vel_y[BODIES];\n\
+\n\
+long bench_nbr(void)\n\
+{\n\
+    long delta_x, delta_y, dist2, falloff, acc_x, acc_y, sum;\n\
+    int body, other, step;\n\
+\n\
+    for (body = 0; body < BODIES; ++body) {\n\
+        pos_x[body] = (body * 7 - 15) * ONE;\n\
+        vel_x[body] = 0;\n\
+        vel_y[body] = 0;\n\
+    }\n\
+    for (step = 0; step < 1; ++step) {\n\
+        for (body = 0; body < BODIES; ++body) {\n\
+            acc_x = 0;\n\
+            acc_y = 0;\n\
+            for (other = 0; other < BODIES; ++other) {\n\
+                if (other != body) {\n\
+                    delta_x = pos_x[other] - pos_x[body];\n\
+                    delta_y = pos_y[other] - pos_y[body];\n\
+                    dist2 = delta_x * delta_x + delta_y * delta_y + ONE * ONE;\n\
+                    falloff = ONE / (dist2 / (ONE * ONE) + 1);\n\
+                    acc_x += (delta_x * falloff) / ONE;\n\
+                }\n\
+            }\n\
+            vel_x[body] += acc_x;\n\
+        }\n\
+        for (body = 0; body < BODIES; ++body) {\n\
+            pos_x[body] += vel_x[body];\n\
+            pos_y[body] += vel_y[body];\n\
+        }\n\
+    }\n\
+    sum = 0;\n\
+    for (body = 0; body < BODIES; ++body)\n\
+        sum += (body + 1) * (pos_x[body] + 3 * pos_y[body] + 5 * vel_x[body] + 7 * vel_y[body]);\n\
+    return sum;\n\
+}\n\
+";
+
+#[test]
+fn a_spilled_update_is_stored_back_from_its_slot_not_its_stale_home() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), HOME_UPDATE).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .env("LLRM_GREEDY", "1")
+        .args(["-m32", "-mabi=sysv", "-march=i486", "-O3", "-S", "-o", "a.s", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    for pair in lines.windows(2) {
+        let (Some(load), Some(store)) = (pair[0].strip_prefix("mov eax, dword ptr "), pair[1].strip_prefix("mov dword ptr ")) else {
+            continue;
+        };
+        assert!(store != format!("{load}, eax"), "a global stored with its own old value: {} / {}", pair[0], pair[1]);
+    }
+}
