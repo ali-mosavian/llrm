@@ -29,6 +29,13 @@ Source of every LLVM link: `https://github.com/llvm/llvm-project/blob/d1106deb71
 - T8 instructions are equal on operation, clobbers, frame effect and register fields, not on value names (the allocator's names), which `merge` renames to the kept tail's after. LLVM compares physical registers only. Fact: LIR carries SSA value names next to registers.
 - T9 the kept tail's edge odds are set as LLVM does, but its block frequency is not stored: the table forgets the tail and the frequency is worked out from its predecessors. Fact: LIR frequencies derive from the odds; the sum is the same by construction.
 - T10 no `OptimizeBranches` between rounds; `jumps::optimized` runs `threaded` and `machinedce::eliminated` between calls to `merged`. Fact: `_explicit` leaves fall-throughs as jumps, and a stale one made the merge see the wrong layout (found on `x_primes`).
-- T11 no re-placement after a change; the tail duplication and rotation that follow are gcc's, the translation of `MachineBlockPlacement` being steps 2 and 3. Fact: running them before the merge (`LLRM_TM_LATE`, reverted) gave `hanoi` +21.9% clocks.
+- T11 no re-placement after a change; the rotation and the `returns` copies that follow are gcc's, the translation of `MachineBlockPlacement` being steps 2 and 3. Tail duplication runs before the merge, as LLVM places with it. Fact: merge first gave `x_cordic` -O3 +5.0% clocks (the join could no longer be copied into an arm); moving duplication and rotation both before the merge (`LLRM_TM_LATE`, reverted) gave `hanoi` +21.9%.
+- T12 anchors (an inserted `Nothing` with a virtual definition and no bytes) do not count as instructions of a tail. Fact: LLVM has none after allocation (`ExpandPostRAPseudos`); counted, three of them made a "common tail" of no code and split an empty join block (`x_cordic` -O3, +4.25% clocks of the 5.0%).
+- T13 anchors just before the tail leave with it. Fact: left, the arm that now only jumps keeps a non-threadable block (`_passage` refuses around an anchor).
+- T14 `threaded` also takes the branch of `Bcc T; B F` through a block that only jumps, as `OptimizeBlock` does for TBB; before, only the last instruction was. Fact: `recpow` -O2 ran a `jmp` after every taken `jne` (+0.53% clocks, +25 bytes).
+
+## What is left
+
+`x_switch` is the one row the faithful merge leaves worse in clocks: -O2/-O3 43,048 to 43,462 (+0.96%) with code 1,130 to 1,040 bytes, -Os 120,827 to 121,435 (+0.50%) with code 228 to 188. The middle end gives its three arms the 5-instruction latch inline; the merge shares it again. The old pass kept the copies by pricing the executed work (`preferred`); the faithful pass has no such test.
 
 Removed from the old pass with no LLVM home: the hotness guard (`preferred`, plan D1). No row ends above min(gcc, pin) without it.
