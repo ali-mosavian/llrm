@@ -209,3 +209,23 @@ fn the_parity_pipeline_allocates_with_greedy() {
     assert!(output.status.success(), "{said}");
     assert!(said.contains("greedy-inline f_"), "{said}");
 }
+
+/// `LLRM_NO_GREEDY` under LLVM's order runs the old allocator alone: without
+/// it, a rows loss could not be put on greedy rather than on the order.
+#[test]
+fn no_greedy_turns_greedy_off_under_the_order() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), "int f(int a, int b) { return a * b + a; }\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .env_remove("LLRM_GREEDY")
+        .env_remove("LLRM_NO_LLVM_ORDER")
+        .env("LLRM_NO_GREEDY", "1")
+        .env("LLRM_GREEDY_TRACE", "1")
+        .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+    assert!(!said.contains("greedy-inline"), "{said}");
+}
