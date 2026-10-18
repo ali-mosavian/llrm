@@ -71,6 +71,63 @@ impl Body {
         });
     }
 
+    /// The walker's answers on the updated graph (its cache kept from before
+    /// the edit) are those on a fresh one.
+    fn check_walks(
+        &self,
+        mssa: &mut Mssa,
+        what: &str,
+    ) {
+        let unit = Unit::of(&self.module, &self.layout, self.function());
+        let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+        let aa = super::alias::AliasQuery::new(&unit, &accesses);
+        let mut fresh = self.fresh();
+        let (updated, expected) =
+            (shadow::walked(mssa, &aa, self.function()), shadow::walked(&mut fresh, &aa, self.function()));
+        let differ: Vec<_> = updated
+            .iter()
+            .filter(|(inst, name)| expected.get(inst) != Some(name))
+            .map(|(inst, name)| format!("{inst:?}: updated {name:?}, fresh {:?}", expected.get(inst)))
+            .collect();
+        assert!(
+            differ.is_empty(),
+            "after {what}: the walker's answers differ: {differ:?}\n{}\nupdated:\n{}\nfresh:\n{}",
+            llrm_mir::print::module(&self.module),
+            self.dump(mssa),
+            self.dump(&fresh)
+        );
+    }
+
+    fn dump(
+        &self,
+        mssa: &Mssa,
+    ) -> String {
+        let mut out = String::new();
+        for &block in self.function().layout() {
+            out += &format!("{}:", self.function().block(block).name.clone().unwrap_or_default());
+            for &access in mssa.get_block_accesses(block).unwrap_or(&[]) {
+                let one = mssa.access(access);
+                out += &format!(
+                    " [{access} {:?} inst={:?} def={:?} opt={:?} in={:?}]",
+                    one.kind, one.inst, one.defining, one.optimized, one.incoming
+                );
+            }
+            out += "\n";
+        }
+        out
+    }
+
+    /// Asks the walker of every load and store, so that its cache is filled.
+    fn warm(
+        &self,
+        mssa: &mut Mssa,
+    ) {
+        let unit = Unit::of(&self.module, &self.layout, self.function());
+        let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+        let aa = super::alias::AliasQuery::new(&unit, &accesses);
+        shadow::walked(mssa, &aa, self.function());
+    }
+
     fn block(
         &self,
         name: &str,
@@ -107,6 +164,7 @@ impl Body {
         updater.remove_memory_access(mssa, self.function(), access, true);
         self.mutate(|function| function.erase(inst)).expect("erased");
         self.check(mssa, &format!("erasing {inst:?}"));
+        self.check_walks(mssa, &format!("erasing {inst:?}"));
     }
 
     /// `inst` moved to `block`, before the instruction at `index` of it (the
@@ -132,6 +190,7 @@ impl Body {
             Where::End => updater.move_to_place(mssa, self.function(), access, block, MoveTo::End, None),
         }
         self.check(mssa, &format!("moving {inst:?} to {block:?}:{index}"));
+        self.check_walks(mssa, &format!("moving {inst:?} to {block:?}:{index}"));
     }
 
     /// A copy of `like` placed in `block` before the instruction at `index`,
@@ -162,6 +221,7 @@ impl Body {
             updater.insert_use(mssa, self.function(), access, true);
         }
         self.check(mssa, &format!("inserting a copy of {like:?} at {block:?}:{index}"));
+        self.check_walks(mssa, &format!("inserting a copy of {like:?} at {block:?}:{index}"));
         copy
     }
 }
@@ -285,6 +345,7 @@ fn test_random_edits_leave_the_graph_a_fresh_one_would_be() {
         }
         let mut mssa = body.fresh();
         let mut updater = MemorySsaUpdater::new();
+        body.warm(&mut mssa);
         for _step in 0..10 {
             let memory = body.memory_instructions();
             if memory.is_empty() {

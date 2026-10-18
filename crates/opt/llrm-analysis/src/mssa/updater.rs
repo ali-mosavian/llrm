@@ -144,7 +144,7 @@ impl MemorySsaUpdater {
                 Resume::EnterBlock => {
                     // First, do a cache lookup.
                     if let Some(&found) = cached.get(&current) {
-                        returned = Some(found);
+                        returned = Some(self.current(mssa, found));
                         stack.pop();
                         continue;
                     }
@@ -187,12 +187,12 @@ impl MemorySsaUpdater {
                 }
                 Resume::ResumeSinglePred => {
                     // The single predecessor's result is in `returned`.
-                    cached.insert(current, returned.expect("a result"));
+                    cached.insert(current, self.current(mssa, returned.expect("a result")));
                     stack.pop();
                 }
                 Resume::RunPredLoop => {
                     if stack[top].pending_incoming {
-                        let incoming = returned.expect("a result");
+                        let incoming = self.current(mssa, returned.expect("a result"));
                         stack[top].incorporate(incoming);
                         stack[top].pending_incoming = false;
                         stack[top].pred_at += 1;
@@ -223,9 +223,13 @@ impl MemorySsaUpdater {
                     // may return none if we never created a
                     // phi yet, that's okay.
                     let mut phi = mssa.get_memory_phi(current);
-                    let phi_ops = std::mem::take(&mut stack[top].phi_ops);
+                    // Handles on phis removed since follow them.
+                    let phi_ops: Vec<AccessId> = std::mem::take(&mut stack[top].phi_ops)
+                        .into_iter()
+                        .map(|one| self.current(mssa, one))
+                        .collect();
                     let unique = stack[top].unique_incoming_access;
-                    let single = stack[top].single_access;
+                    let single = stack[top].single_access.map(|one| self.current(mssa, one));
                     let predecessors = std::mem::take(&mut stack[top].predecessors);
                     // See if we can avoid the phi by simplifying it.
                     let mut result = self.try_remove_trivial_phi_ops(mssa, function, phi, &phi_ops);
@@ -237,6 +241,7 @@ impl MemorySsaUpdater {
                         let single = single.expect("a single access");
                         if let Some(phi) = phi {
                             assert!(mssa.access(phi).incoming.is_empty(), "expected empty phi");
+                            self.replaced_by.insert(phi, single);
                             mssa.replace_all_uses_with(phi, single);
                             self.remove_memory_access(mssa, function, phi, true);
                         }
@@ -285,7 +290,7 @@ impl MemorySsaUpdater {
                 }
             }
         }
-        returned.expect("a definition")
+        self.current(mssa, returned.expect("a definition"))
     }
 
     /// [`getPreviousDef`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemorySSAUpdater.cpp#L252):
@@ -405,6 +410,8 @@ impl MemorySsaUpdater {
         // Never found a non-self reference, the phi is undef.
         let Some(same) = same else { return Some(LIVE_ON_ENTRY) };
         if let Some(phi) = phi {
+            // The handles on the phi follow it to what replaces it.
+            self.replaced_by.insert(phi, same);
             mssa.replace_all_uses_with(phi, same);
             self.remove_memory_access(mssa, function, phi, true);
         }
@@ -594,6 +601,8 @@ impl MemorySsaUpdater {
                 self.try_remove_trivial_phi(mssa, function, phi);
             }
         }
+        // The answers the walker kept for defs may now pass a clobber.
+        mssa.reset_optimized_defs();
         // Now that all fixups are done, rename all uses if we are asked. The
         // defs are guaranteed to be in reachable code due to the check
         // at the method entry.

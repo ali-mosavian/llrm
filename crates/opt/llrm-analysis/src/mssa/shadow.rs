@@ -267,3 +267,22 @@ pub fn same_as_fresh(
         right.phis
     ))
 }
+
+/// What the walker answers for every load and store of `function`, in names:
+/// the clobbering access of each, a trivial phi taken for what it stands for.
+pub fn walked(
+    mssa: &mut Mssa,
+    aa: &super::alias::AliasQuery,
+    function: &llrm_mir::module::Function,
+) -> std::collections::BTreeMap<InstId, Name> {
+    let mut answers = std::collections::BTreeMap::new();
+    for (_, inst) in function.walk() {
+        let Some(access) = mssa.get_memory_access(inst) else { continue };
+        if aa.location_of(inst).is_none() {
+            continue;
+        }
+        let clobber = mssa.get_clobbering_memory_access(aa, access);
+        answers.insert(inst, name_new(mssa, resolved(mssa, clobber)));
+    }
+    answers
+}

@@ -115,6 +115,21 @@ impl Mssa {
         self.replace_uses_with_if(old, new, &|_, _| false);
     }
 
+    /// The cached optimized access of every def is dropped. DEVIATE
+    /// (soundness): a def inserted on a path between a def and the access
+    /// its walk found leaves that answer too optimistic, and LLVM's updater
+    /// renames uses only (`insertDef`: "Defs are automatically unoptimized
+    /// when the user is set ..." covers the defs that read the new one, not
+    /// the ones that merely pass it).
+    pub(crate) fn reset_optimized_defs(&mut self) {
+        for at in 0..self.accesses.len() {
+            let one = &self.accesses[at];
+            if !one.dead && one.kind == Kind::Def && one.optimized.is_some() {
+                self.reset_optimized(at as AccessId);
+            }
+        }
+    }
+
     /// Whether anything takes `access` as an operand (`use_empty` is false).
     pub fn has_uses(
         &self,
