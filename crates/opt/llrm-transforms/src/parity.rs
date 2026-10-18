@@ -50,6 +50,8 @@ pub(crate) struct Entry {
     pub kind: SlotKind,
     /// For `Old`: the translation that will replace it.
     pub replaced_by: &'static str,
+    /// For `Partial`, required: "criterion: ...; exit: ...".
+    pub note: &'static str,
 }
 
 const fn entry(
@@ -59,7 +61,16 @@ const fn entry(
     kind: SlotKind,
     replaced_by: &'static str,
 ) -> Entry {
-    Entry { slot, phase, llvm, kind, replaced_by }
+    Entry { slot, phase, llvm, kind, replaced_by, note: "" }
+}
+
+const fn partial(
+    slot: &'static str,
+    phase: Phase,
+    llvm: &'static str,
+    note: &'static str,
+) -> Entry {
+    Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
 use Phase::{Backend, Cleanup, Early, Simplify};
@@ -151,12 +162,11 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("peephole@14", Backend, "peephole-opt, machine-cse, machine-dce", Old, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
-    entry(
+    partial(
         "jumps@17",
         Backend,
         "branch-folder, block-placement, tailduplication",
-        Partial,
-        "TailMergeBlocks only (#2241); placement and tail duplication are gcc's; exit in #2307",
+        "TailMergeBlocks only (#2241); criterion: rows vs min(gcc,pin) + oracle sweep (J1, #2307); exit: identity vs llc after placement and tail duplication",
     ),
     entry("early-tailduplication", Backend, "early-tailduplication", Missing, ""),
     entry("stack-coloring", Backend, "stack-coloring", Missing, ""),
@@ -277,7 +287,7 @@ pub fn report() -> String {
         count.translated, count.partial, count.old, count.missing
     );
     for one in REGISTRY.iter().filter(|one| one.kind == Partial) {
-        out += &format!("{} ({}) partial: {}\n", one.slot, one.llvm, one.replaced_by);
+        out += &format!("{} ({}) partial: {}\n", one.slot, one.llvm, one.note);
     }
     for one in REGISTRY.iter().filter(|one| one.kind == Old && !one.replaced_by.is_empty()) {
         out += &format!("{} ({}) -> {}\n", one.slot, one.llvm, one.replaced_by);

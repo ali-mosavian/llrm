@@ -21,6 +21,7 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
         llvm: "ghost",
         kind: SlotKind::Translated,
         replaced_by: "",
+        note: "",
     });
     let why = parity::check(&registry, Phase::Simplify, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@999"), "{why}");
@@ -75,6 +76,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
         llvm: "ghost",
         kind: SlotKind::Translated,
         replaced_by: "",
+        note: "",
     });
     let built: Vec<&str> = parity::REGISTRY
         .iter()
@@ -102,4 +104,13 @@ fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined()
     // jumps@17 and allocate@11 (greedy under the parity switch).
     assert_eq!(count.partial, 2);
     assert!(parity::report().contains("jumps@17") && parity::report().contains("2 partial"));
+}
+
+/// A Partial slot without its criterion and exit says what is done and not what
+/// is left.
+#[test]
+fn test_a_partial_slot_states_its_criterion_and_exit() {
+    for one in parity::REGISTRY.iter().filter(|one| one.kind == SlotKind::Partial) {
+        assert!(one.note.contains("criterion:") && one.note.contains("exit:"), "{}: {:?}", one.slot, one.note);
+    }
 }
