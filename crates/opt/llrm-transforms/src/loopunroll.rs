@@ -76,14 +76,13 @@
 //! # See also
 //! [`UnrollLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUnroll.cpp#L929).
 
-use std::collections::BTreeSet;
-
 use llrm_analysis::cfg;
 use llrm_analysis::graph::loops::Loop;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_support::hash::HashMap;
+use llrm_mir::types::TypeId;
 
 use crate::edges;
 use crate::lcssa::{self, arms, from_arms};
@@ -176,16 +175,16 @@ pub fn unroll_loop(
     let order = _reverse_postorder(function, header, &inside);
     let mut headers = vec![header];
     let mut latches = vec![latch];
-    let mut last_value = HashMap::<ValueId, Operand>::default();
-    let mut last_block = HashMap::<BlockId, BlockId>::default();
-    let mut anchor = latch;
+    let mut last_value = IdMap::<ValueId, Operand>::new();
+    let mut last_block = IdMap::<BlockId, BlockId>::new();
+    // Set once per phi after the copies: a phi rewritten per copy is quadratic.
+    let mut exit_arms = IdMap::<InstId, Vec<(Operand, BlockId)>>::new();
 
     for it in 1..count {
         let mut fresh = Vec::<BlockId>::new();
         for &at in &order {
             let new = function.create_block(None);
-            function.insert_block(new, Some(anchor))?;
-            anchor = new;
+            function.insert_block(new, None)?;
             let mut map = Vec::<(ValueId, Operand)>::new();
             if at == header {
                 // The header's phis take what the latch gave them last
@@ -227,14 +226,14 @@ pub fn unroll_loop(
                     continue;
                 }
                 for phi in edges::phis(function, to) {
-                    let mut incoming = arms(function, phi);
-                    let Some(&(value, _)) = incoming.iter().find(|&&(_, source)| source == at) else { continue };
+                    let Some(&(value, _)) = arms(function, phi).iter().find(|&&(_, source)| source == at) else {
+                        continue;
+                    };
                     let value = match value {
                         Operand::Value(one) => last_value.get(&one).copied().unwrap_or(value),
                         other => other,
                     };
-                    incoming.push((value, new));
-                    function.set_operands(phi, from_arms(&incoming));
+                    exit_arms.get_or_insert_with(phi, Vec::new).push((value, new));
                 }
             }
             if at == header {
@@ -250,20 +249,27 @@ pub fn unroll_loop(
         }
         for &new in &fresh {
             for inst in function.block(new).instructions().to_vec() {
-                let operands = function
-                    .instruction(inst)
-                    .operands
-                    .iter()
-                    .map(|&operand| match operand {
+                // Only the operands that change: `set_operands` scans the
+                // use list of each, and a value every copy reads has `count`.
+                let operands = function.instruction(inst).operands.clone();
+                for (index, operand) in operands.into_iter().enumerate() {
+                    let renamed = match operand {
                         Operand::Value(one) => last_value.get(&one).copied().unwrap_or(operand),
                         Operand::Block(one) => Operand::Block(last_block.get(&one).copied().unwrap_or(one)),
                         other => other,
-                    })
-                    .collect();
-                function.set_operands(inst, operands);
+                    };
+                    if renamed != operand {
+                        function.set_operand(inst, index, renamed);
+                    }
+                }
             }
         }
         debug_assert_eq!(headers.len(), it + 1);
+    }
+    for (phi, added) in exit_arms.iter() {
+        let mut incoming = arms(function, phi);
+        incoming.extend(added.iter().copied());
+        function.set_operands(phi, from_arms(&incoming));
     }
 
     // The original header's phis are the preheader's values.
@@ -289,6 +295,8 @@ pub fn unroll_loop(
 
     // Branches whose way the iteration knows.
     let preserve_only_first = options.max_or_zero;
+    let mut folded = Vec::<Folded>::new();
+    let mut forgotten = IdMap::<BlockId, IdSet<BlockId>>::new();
     for info in &infos {
         let is_latch = info.block == latch;
         let size = info.copies.len();
@@ -307,8 +315,13 @@ pub fn unroll_loop(
             if leaves && !is_latch {
                 continue;
             }
-            _decided(function, source, leaves, info.exit_on_true)?;
+            folded.push(_decided(function, source, leaves, info.exit_on_true, &mut forgotten)?);
         }
+    }
+
+    _jumps(function, &folded)?;
+    for (block, sources) in forgotten.iter() {
+        _without_arms_from(function, block, sources);
     }
 
     // The last copy's jump back to the header can no longer be taken.
@@ -319,17 +332,20 @@ pub fn unroll_loop(
 
     // A block only the latch before it reaches is part of it.
     let entry = function.entry().expect("a function with a body");
+    let mut emptied = Vec::<BlockId>::new();
     for index in 0..latches.len() {
         let at = latches[index];
         let Some(jump) = function.terminator(at) else { continue };
         if function.instruction(jump).opcode == Opcode::Br && function.instruction(jump).operands.len() == 1 {
-            if let Some(gone) = crate::cfg::merged_into(function, at, entry) {
+            if let Some(gone) = crate::cfg::emptied_into(function, at, entry) {
                 for one in latches.iter_mut().filter(|one| **one == gone) {
                     *one = at;
                 }
+                emptied.push(gone);
             }
         }
     }
+    function.erase_blocks(&emptied)?;
 
     lcssa::closed(function)?;
     Ok(Unrolled::Fully)
@@ -340,7 +356,7 @@ fn _exit_blocks(
     function: &Function,
     blocks: &[BlockId],
     inside: &impl Fn(BlockId) -> bool,
-) -> BTreeSet<BlockId> {
+) -> IdSet<BlockId> {
     blocks.iter().flat_map(|&at| function.successors(at)).filter(|&to| !inside(to)).collect()
 }
 
@@ -363,7 +379,7 @@ fn _conditional(
 fn _closed(
     function: &Function,
     blocks: &[BlockId],
-    exits: &BTreeSet<BlockId>,
+    exits: &IdSet<BlockId>,
     inside: &impl Fn(BlockId) -> bool,
 ) -> bool {
     blocks.iter().all(|&at| {
@@ -383,7 +399,7 @@ fn _reverse_postorder(
     header: BlockId,
     inside: &impl Fn(BlockId) -> bool,
 ) -> Vec<BlockId> {
-    let mut seen = BTreeSet::from([header]);
+    let mut seen = IdSet::from_iter([header]);
     let mut post = Vec::new();
     let mut stack = vec![(header, function.successors(header).into_iter().collect::<Vec<_>>())];
     while let Some((at, pending)) = stack.last_mut() {
@@ -404,34 +420,57 @@ fn _reverse_postorder(
 /// `source`'s conditional branch made the jump it takes where the exit is
 /// taken (`leaves`) or not; the other target loses `source`'s phi arms.
 fn _decided(
-    function: &mut Function,
+    function: &Function,
     source: BlockId,
     leaves: bool,
     exit_on_true: bool,
-) -> Result<(), String> {
+    forgotten: &mut IdMap<BlockId, IdSet<BlockId>>,
+) -> Result<Folded, String> {
     let branch = _conditional(function, source).ok_or("a folded exit is a conditional branch")?;
-    let operands = function.instruction(branch).operands.clone();
+    let operands = &function.instruction(branch).operands;
     let index = usize::from(exit_on_true ^ leaves);
     let (Operand::Block(to), Operand::Block(dead)) = (operands[1 + index], operands[2 - index]) else {
         return Err("a branch's targets are blocks".to_owned());
     };
     if to != dead {
-        _without_arms_from(function, dead, source);
+        forgotten.get_or_insert_with(dead, IdSet::new).insert(source);
     }
-    let void = function.instruction(branch).ty;
-    function.erase(branch)?;
-    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
-    function.insert(jump, Position::End(source))
+    Ok(Folded { source, branch, to, void: function.instruction(branch).ty })
 }
 
-/// `block`'s phis without their arms from `source`.
+/// A conditional `branch` of `source` that is to become a jump to `to`.
+struct Folded {
+    source: BlockId,
+    branch: InstId,
+    to: BlockId,
+    void: TypeId,
+}
+
+/// The `folded` branches made jumps: the old ones erased together, since
+/// erasing each scans the use list of the exit that all of them name.
+fn _jumps(
+    function: &mut Function,
+    folded: &[Folded],
+) -> Result<(), String> {
+    let branches = folded.iter().map(|one| one.branch).collect::<Vec<_>>();
+    function.erase_all(&branches)?;
+    for one in folded {
+        let jump =
+            function.create_instruction(Opcode::Br, one.void, vec![Operand::Block(one.to)], Flags::default(), None);
+        function.insert(jump, Position::End(one.source))?;
+    }
+    Ok(())
+}
+
+/// `block`'s phis without their arms from `sources`, in one pass over each:
+/// a join of `count` copies rewritten once per copy is quadratic.
 fn _without_arms_from(
     function: &mut Function,
     block: BlockId,
-    source: BlockId,
+    sources: &IdSet<BlockId>,
 ) {
     for phi in edges::phis(function, block) {
-        let kept = arms(function, phi).into_iter().filter(|&(_, from)| from != source).collect::<Vec<_>>();
+        let kept = arms(function, phi).into_iter().filter(|(_, from)| !sources.contains(from)).collect::<Vec<_>>();
         function.set_operands(phi, from_arms(&kept));
     }
 }
@@ -442,7 +481,7 @@ fn _unreachable(
     block: BlockId,
 ) -> Result<(), String> {
     for to in function.successors(block) {
-        _without_arms_from(function, to, block);
+        _without_arms_from(function, to, &IdSet::from_iter([block]));
     }
     let jump = function.terminator(block).ok_or("a block without a terminator")?;
     let void = function.instruction(jump).ty;

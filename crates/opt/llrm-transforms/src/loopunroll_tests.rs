@@ -223,3 +223,27 @@ fn test_a_count_below_the_maximum_trip_count_is_refused() {
     let partial = Options { count: 2, max_trip_count: 4, max_or_zero: false, exits: Vec::new() };
     assert!(unroll_loop(function, &loop_, &partial).is_err());
 }
+
+fn rotated_with(trips: u32) -> String {
+    ROTATED.replace("i16 %next, 4", &format!("i16 %next, {trips}"))
+}
+
+/// Seconds `unroll_loop` takes on the rotated loop at `trips`, least of three.
+fn unroll_seconds(trips: u32) -> f64 {
+    (0..3)
+        .map(|_| {
+            let mut module = parsed(&rotated_with(trips));
+            let start = std::time::Instant::now();
+            assert_eq!(unrolled(&mut module, "b1", trips, &[("b2", trips)]), Unrolled::Fully);
+            start.elapsed().as_secs_f64()
+        })
+        .fold(f64::MAX, f64::min)
+}
+
+/// Placing each copy by scanning the layout made the unroll quadratic: each
+/// doubling of the count took about four times as long.
+#[test]
+fn test_unroll_time_doubles_with_the_count() {
+    let (a, b, c) = (unroll_seconds(1024), unroll_seconds(2048), unroll_seconds(4096));
+    assert!(b / a <= 2.6 && c / b <= 2.6, "1024: {a:.4}s, 2048: {b:.4}s, 4096: {c:.4}s");
+}
