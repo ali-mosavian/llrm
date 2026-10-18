@@ -44,3 +44,14 @@ def test_a_size_only_cell_is_failed_unless_its_output_was_checked():
     text = bench_table.render({"a/c/O2": ran}, {"a/c/O2": ran})
     assert text.startswith("rows total 1 / with counters 2 of 2 / failed 0")
     assert "base: 1 rows with no instructions (run and output-checked): a/c/O2" in text
+
+
+def test_a_kernel_folded_away_is_an_unmeasured_row_counted_missing_and_named_not_failed():
+    """crc/nib -O3 compiles to `mov eax, <the crc>`: no kernel to find. It reads 'not in the map', which looked like any failure."""
+    import pytest
+
+    folded = {"error": "unmeasured: kernel folded away: bench_crc is not in the map, and main does not call one function of its own"}
+    base = {"crc/nib/O3": cell(10, 20)}
+    main = {"crc/nib/O3": folded}
+    with pytest.raises(SystemExit, match=r"0 rows failed, 1 missing(.|\n)*failed 0 / missing 1(.|\n)*crc/nib/O3 \(unmeasured in main: kernel folded away"):
+        bench_table.render(base, main)

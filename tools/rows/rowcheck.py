@@ -26,18 +26,20 @@ def census(sides: dict[str, dict], counters=COUNTERS, checked: bool = False) -> 
         for side, rows in sides.items():
             if name not in rows:
                 bad.append(f"{name} (missing in {side})")
+            elif str(rows[name].get("error", "")).startswith("unmeasured:"):
+                bad.append(f"{name} (unmeasured in {side}: {rows[name]['error'][len('unmeasured: '):]})")
             elif failed(rows[name], counters, checked):
                 bad.append(f"{name} (failed in {side}: {rows[name].get('error') or ('unchecked: ' + rows[name]['unchecked'] if 'unchecked' in rows[name] else 'sized only, never run')})")
     wanted = len(names) * len(sides)
     failures = sum("failed in" in one for one in bad)
-    missing = sum("missing in" in one for one in bad)
+    missing = sum("missing in" in one or "unmeasured in" in one for one in bad)
     line = f"rows total {len(names)} / with counters {wanted - failures - missing} of {wanted} / failed {failures} / missing {missing}"
     return line, bad
 
 
 def require(line: str, bad: list[str], allow_failed: bool) -> list[str]:
     """The lines to print: the census, and the failed rows when allowed. SystemExit naming them when not."""
-    n = sum("failed in" in one for one in bad)
+    n = sum("failed in" in one for one in bad)  # a row that was not measured is missing, not failed
     lead = f"{n} rows failed, {len(bad) - n} missing\n" if bad else ""
     if bad and not allow_failed:
         raise SystemExit(lead + line + "\nrefusing a geomean or a worse-count over a table with failed or missing rows (--allow-failed prints it anyway):\n  " + "\n  ".join(bad))

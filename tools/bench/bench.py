@@ -301,7 +301,7 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
         return {"code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
     entry = maps.locate(exe, listing, region)
     if entry is None:
-        return {"error": f"{region} is not in the map, and main does not call one function of its own"}
+        return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
     result = icount.run(exe, entry, exe.parent)
     if result.error:
         return {"error": result.error}

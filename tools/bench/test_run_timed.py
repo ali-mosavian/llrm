@@ -65,3 +65,10 @@ def test_a_flat_row_measure_flat_already_ran_on_the_whole_corpus_is_not_run_agai
     needs = {KEY: {"files": (), "want": ["1"]}, flat: {"files": (), "want": ["9"]}}
     bench.run_timed(out, {KEY: Path("a.exe"), flat: Path("b.exe")}, needs, tmp_path, timing=False, already={flat})
     assert ran == [[KEY]] and out[flat] == {"instructions": 623}
+
+
+def test_a_kernel_the_compiler_folded_away_reads_as_unmeasured_not_as_a_failure(monkeypatch, tmp_path):
+    """`mov eax, <crc>` is all that is left of crc/nib at -O3: maps.locate finds no kernel and no single call from main."""
+    monkeypatch.setattr(bench.maps, "locate", lambda exe, listing, region: None)
+    done = bench.measure(("V000", tmp_path / "x.exe", tmp_path / "x.map", "bench_crc", ["1"], tmp_path / "x.obj"))
+    assert done["error"].startswith("unmeasured: kernel folded away: bench_crc is not in the map")
