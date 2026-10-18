@@ -160,6 +160,7 @@ pub mod lsr;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod mergestores;
 pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
