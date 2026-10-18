@@ -15,3 +15,11 @@ as a large hunk with equal histograms.
 `test_difftest.py` checks the output on a hand-made input where the answers agree and one where they differ.
 
 `inlinediff.py BEFORE.ll AFTER.ll` (or `dumps DIR...`) compares the call sites llrm's inline stage inlined with those of `opt -passes=inline` at the same module, with LLVM's cost, threshold and reason (see its docstring); `test_inlinediff.py` has a module where a call over the threshold must show as llrm-only and one where both agree.
+
+## Joining a slot to parity
+
+A translation joins the parity pipeline when this oracle reads clean on its pass. Run it for your pass, with the order branch's dumps (`llrm-c --dump DIR`) or the replay inputs, and the `llrm-pass` of your tree:
+
+    python3 tools/difftest/difftest.py dumps PASS DIR/* [--llrm-pass target/release/llrm-pass]      # PASS: a key of COUNTERPART, e.g. earlycse, gvn, sroa
+
+The first lines name the `opt` and its version (the pinned 24.0.0git d1106deb71cc, `tools/llvmpin.py`), then: `inputs N; failed (LLVM or llrm) 0; functions compared N; where either side changed the function: M, identical M; LLVM changed K of N; premise ok`. Clean is `identical` equal to the changed count, `failed 0`, `premise ok`, exit 0; the table under it then has no opcode rows. A premise failure (exit 3) means LLVM changed none or all of the functions and agreed everywhere: the run proves nothing. Quote the line and the opcode table in the PR; a remaining difference is listed with the first hunk of each function.
