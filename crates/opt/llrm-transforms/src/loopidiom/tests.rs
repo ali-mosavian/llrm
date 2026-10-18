@@ -73,11 +73,15 @@ exit:
 !0 = !{i32 1}
 ";
 
-/// A volatile store, a nontemporal one, and a plain one whose address is not
-/// an add recurrence (before `createSCEV`): none is a memset candidate.
+/// A volatile store and a nontemporal one are not memset candidates; the plain
+/// byte store of zero at `%p + i` is (it was `None` while `getSCEV` was an
+/// unknown for every address).
 #[test]
-fn test_a_store_that_is_volatile_nontemporal_or_not_strided_is_not_legal() {
-    assert_eq!(kinds(STORES, Options::default(), LIBRARY), vec![LegalStoreKind::None; 3]);
+fn test_a_store_that_is_volatile_or_nontemporal_is_not_legal() {
+    assert_eq!(
+        kinds(STORES, Options::default(), LIBRARY),
+        vec![LegalStoreKind::None, LegalStoreKind::None, LegalStoreKind::Memset]
+    );
 }
 
 #[test]
@@ -276,9 +280,27 @@ fn test_a_function_named_memset_is_left_alone() {
     assert_eq!(run_on_loop(FILL, "strlen"), Some(false));
 }
 
+const UNCOUNTED: &str = "define void @f(ptr %p, ptr %q) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  store i8 0, ptr %a
+  %i2 = add i32 %i, 1
+  %l = load i32, ptr %q
+  %c = icmp ne i32 %l, 0
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+
 /// Without a count the pass does not decide: `runOnNoncountableLoop` is the
-/// C++'s next step (stage L4).
+/// C++'s next step (stage L4). The exit tests a load, so there is no count.
 #[test]
 fn test_a_loop_without_an_invariant_count_is_left_to_the_noncountable_half() {
-    assert_eq!(run_on_loop(FILL, "f"), None);
+    assert_eq!(run_on_loop(UNCOUNTED, "f"), None);
 }

@@ -25,7 +25,8 @@ fn test_a_global_is_aligned_only_as_llrm_places_it() {
 
 /// `for (i = 0; ; i++)` with a loop-invariant bound: the PHI is the add
 /// recurrence `{0,+,1}`, and the post-increment `{1,+,1}`; the `mul` after
-/// the loop is `{4,+,4}` (opt's text, with the trip count it adds after).
+/// the loop is `{4,+,4}` and its value after the loop, `(4 * (1 umax %n))`,
+/// from the trip count (opt's text).
 #[test]
 fn test_a_counted_loop_phi_is_an_add_recurrence() {
     let text = "define i32 @f(i32 %n) {\n\
@@ -38,7 +39,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
         exit:\n  %r = mul i32 %inc, 4\n  ret i32 %r\n}\n";
     let module = llrm_mir::parse::module(text).expect("parses");
     let printed = print_module_values(&module);
-    // The text up to the exit values, which the trip counts decide.
+    // Up to the `Exits:` column; the value after the loop is opt's own.
     let heads: Vec<&str> = printed.lines().map(|line| line.split("\t\t").next().expect("a line")).collect();
     assert_eq!(
         heads,
@@ -46,7 +47,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
             "@f",
             "%i\t{0,+,1}<nuw><nsw><%loop> U: [0,-2147483648) S: [0,-2147483648)",
             "%inc\t{1,+,1}<nuw><nsw><%loop> U: [1,-2147483648) S: [1,-2147483648)",
-            "%r\t{4,+,4}<%loop> U: [0,-3) S: [-2147483648,2147483645)",
+            "%r\t{4,+,4}<%loop> U: [0,-3) S: [-2147483648,2147483645)  -->  (4 * (1 umax %n)) U: [0,-3) S: [-2147483648,2147483645)",
         ]
     );
 }

@@ -283,4 +283,106 @@ pub trait Tti {
         first: OperandInfo,
         second: OperandInfo,
     ) -> Cost;
+
+    /// `isLoweredToCall` of a named function that is not an intrinsic
+    /// (`TargetTransformInfoImplBase`): the libm functions that become one
+    /// selection node, and `abs`, `pow`... that are likely to be optimized
+    /// into something smaller, are not calls.
+    fn is_lowered_to_call(
+        &self,
+        name: Option<&str>,
+        local_linkage: bool,
+    ) -> bool {
+        let Some(name) = name else { return true };
+        if local_linkage {
+            return true;
+        }
+        // A libm function that becomes one selection node, and the functions
+        // "likely to be optimized into something smaller"; the suffixes are
+        // LLVM's, `exp10`'s lacking `l`.. as listed there.
+        const ONE_NODE: &[&str] = &[
+            "copysign",
+            "copysignf",
+            "copysignl",
+            "fabs",
+            "fabsf",
+            "fabsl",
+            "fmin",
+            "fminf",
+            "fminl",
+            "fmax",
+            "fmaxf",
+            "fmaxl",
+            "sin",
+            "sinf",
+            "sinl",
+            "cos",
+            "cosf",
+            "cosl",
+            "tan",
+            "tanf",
+            "tanl",
+            "asin",
+            "asinf",
+            "asinl",
+            "acos",
+            "acosf",
+            "acosl",
+            "atan",
+            "atanf",
+            "atanl",
+            "atan2",
+            "atan2f",
+            "atan2l",
+            "sinh",
+            "sinhf",
+            "sinhl",
+            "cosh",
+            "coshf",
+            "coshl",
+            "tanh",
+            "tanhf",
+            "tanhl",
+            "sqrt",
+            "sqrtf",
+            "sqrtl",
+            "exp10",
+            "exp10l",
+            "exp10f",
+            "pow",
+            "powf",
+            "powl",
+            "exp2",
+        ];
+        const SMALLER: &[&str] = &["exp2l", "exp2f", "floor", "floorf", "ceil", "round", "ffs", "ffsl"];
+        const MORE: &[&str] = &["abs", "labs", "llabs"];
+        !(ONE_NODE.contains(&name) || SMALLER.contains(&name) || MORE.contains(&name))
+    }
+
+    /// `getIntrinsicInstrCost` of the call `name(args)` returning `ret`
+    /// (none for `void`): invalid where the target has no answer (T7).
+    fn intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        let _ = (ret, args, kind);
+        if is_free_intrinsic(name) { Cost::FREE } else { Cost::INVALID }
+    }
+}
+
+/// An intrinsic that makes no code: `assume`, `lifetime`, the scope marks of
+/// `noalias` (`getIntrinsicInstrCost` returns `TCC_Free` for them).
+pub fn is_free_intrinsic(name: &str) -> bool {
+    const FREE: [&str; 6] = [
+        "llvm.assume",
+        "llvm.lifetime.start",
+        "llvm.lifetime.end",
+        "llvm.noalias.scope.decl",
+        "llvm.experimental.noalias.scope.decl",
+        "llrm.noalias.scope.decl",
+    ];
+    FREE.iter().any(|one| name == *one || name.strip_prefix(one).is_some_and(|rest| rest.starts_with('.')))
 }

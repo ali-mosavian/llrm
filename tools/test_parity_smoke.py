@@ -96,3 +96,10 @@ def test_a_cut_test_run_is_killed_with_its_children_and_charged_its_whole_allowa
 def test_a_merge_touching_many_crates_tests_the_six_with_most_changed_files():
     """40 crates cost 40 cargo starts before any test ran: the line would fail the merge for the size of the diff."""
     assert len(ps.plan([f"c{i}" for i in range(40)])) == len(ps.FIXED) + ps.MAX_CRATES
+
+
+def test_the_smoke_names_no_target_so_the_prepush_facts_check_stays_green():
+    """tests/target_facts.rs failed feat/parity's prepush: tools/parity_smoke.py spelled the m32 target's crate directory (1 copy of a target fact)."""
+    import re
+
+    assert not re.search(r"llrm-x86-m\d+|x86_m\d+", Path(ps.__file__).read_text())
