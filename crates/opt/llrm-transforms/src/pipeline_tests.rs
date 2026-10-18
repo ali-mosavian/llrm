@@ -2050,3 +2050,28 @@ fn test_the_llvm_order_hashes_no_body_for_a_cycle_history_it_never_reads() {
         );
     assert!(kept.is_some(), "the rounds keep the history they compare");
 }
+
+/// x_life -Os under the LLVM order: the spill forecast kept the inner loop's
+/// invariant address math (`mul`, `getelementptr`) in the loop, 16 ops where
+/// the old rounds left 11, so `unroll` refused the full unroll and the
+/// program ran 1.94x the instructions (clocks 0.807 to 1.448 of min(gcc,
+/// clang)). The order's LICM slot prices no registers, as LLVM's: run alone on
+/// two inner loops that six registers cannot hold, it moves all six loads.
+#[test]
+fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
+    let applied =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::size() }, ..Applied::default() };
+    let mut module = crate::testing::parsed(&crate::hoist::tests::two_inner_loops());
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require::<llrm_analysis::manager::Summaries>();
+    let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
+    let slot = slots.into_iter().find(|one| one.name() == "hoist@730").expect("the speculating LICM slot");
+    manager.add_boxed(slot);
+    manager
+        .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
+        .unwrap();
+    let printed = crate::testing::printed(&module);
+    let f = &printed[printed.find("define i16 @f(").expect("f")..];
+    let b0 = f[f.find("\nb0:\n").unwrap() + 5..].lines().take_while(|line| line.starts_with("  ")).collect::<Vec<_>>();
+    assert_eq!(b0.iter().filter(|line| line.contains("load")).count(), 6, "{printed}");
+}

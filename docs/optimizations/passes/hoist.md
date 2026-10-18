@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoist.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoist.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:be7ec02091976ff5c91b93a107621cb34944b113985ae1c46d49098c7073b083 -->
+<!-- src: crates/opt/llrm-transforms/src/hoist.rs sha256:1946fc4629135cc2d29881f9c9a5546957e668f4c8b0f76f324e40f07e4ac8b3 -->
 
 # hoist
 
@@ -37,6 +37,10 @@ across the loop is charged its release. At -Os the run is priced in bytes,
 every block once. The moved function's liveness is the kept one's with the
 values the run moved solved again (`profit::spill_forecast_after`;
 `LLRM_CHECK_VIEW` holds it to the forecast of the function on its own).
+The LLVM order's slots do not price registers (`Hoist::priced` off): LLVM's
+LICM has no such model, and a spilled invariant is left to rematerialisation
+(x_life -Os ran 1.94x the instructions with the forecast keeping its address
+math in the loop).
 
 A hoisted load is priced by what it saves each trip. A floating load its one
 reader takes from memory (x87 `fmul m32`) is not an instruction of the loop
