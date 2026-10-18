@@ -19,7 +19,7 @@
 //!    `ConstantFoldFixedVectorCall`, the vector intrinsics, `masked_load`
 //!    (L1776-L1801); `is_constant` of a vector. MIR types vectors but has no
 //!    lane operation and nothing produces one (#2201).
-//! 2. `undef`, `ptrtoaddr`: MIR has `poison`/`freeze` and no `ptrtoaddr` opcode
+//! 2. `ptrtoaddr`: MIR has no `ptrtoaddr` opcode
 //!    (#2202, #2204). Byte types and `inrange`: MIR has no byte type and its
 //!    constant GEP has no `inrange`.
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
