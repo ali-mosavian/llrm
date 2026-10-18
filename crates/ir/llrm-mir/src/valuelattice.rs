@@ -555,7 +555,7 @@ impl ValueLatticeElement {
         &self,
         pred: IntPredicate,
         other: &ValueLatticeElement,
-        fold: &dyn Fn(IntPredicate, &LatticeConstant, &LatticeConstant) -> Option<bool>,
+        fold: &mut dyn FnMut(IntPredicate, &LatticeConstant, &LatticeConstant) -> Option<bool>,
     ) -> Option<bool> {
         // Not yet resolved.
         if self.is_unknown() || other.is_unknown() {

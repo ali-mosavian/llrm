@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinecp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinecp.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinecp.rs sha256:ad2c420358a0d52f2f060afebdd8ce9cdb219580d8b7b07c31c1fe7330e315b4 -->
+<!-- src: crates/backend/llrm-core/src/backend/machinecp.rs sha256:84143d6b468ec5a6d6abee99397303ab0ffd7c51e9aef7aca31b655f2cedbe15 -->
 
 # machinecp
 
@@ -33,7 +33,7 @@ rewrite is kept only when the new spelling still selects and the decoded
 effects are the old ones with the renamed lanes replaced.
 
 LLVM's `CopyTracker` is one `DenseMap` of units; here the units are 28
-slots of an array and a set of units is a `u32` mask.
+slots of an array and a set of units is a `u64` mask.
 
 DEVIATE 1: LLVM asks a machine operand whether it is `renamable` and
 whether `getRegClassConstraint` admits the new register; llrm has neither
@@ -50,8 +50,10 @@ No honest example: it runs inside the peephole phase, whose dump mixes it
 with every other rewrite. The tests build the bodies.
 
 ## Runs
-In place of `regthrash` and `copyprop` in the peephole phase under
-`LLRM_EXP_MCP`.
+In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename
+are gone from the pipeline). Skipped when the body holds no register copy
+(`needs::COPY`); again after the zero-extension rewrite on targets that
+have one.
 
 ## See also
 LLVM `MachineCopyPropagation`

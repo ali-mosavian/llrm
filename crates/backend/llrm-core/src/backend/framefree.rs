@@ -2,7 +2,12 @@
 //! register, which is then one more value register.
 //!
 //! # How it works
-//! This is LLVM's `hasFP`. The frame register is free when `masm` can address
+//! `has_fp` is LLVM's `X86FrameLowering::hasFPImpl`: a function keeps its
+//! frame register when `MachineFrameInfo` says so, and `pinned_by` names which
+//! fact does ([`Pinned`]): the frame address is taken, there are variable
+//! sized objects, or the stack adjustment is opaque. The rest of the
+//! function's facts (`far`, inline code, a landing pad) are read by `has_fp`.
+//! The register is free when `masm` can address
 //! every frame cell through the stack pointer, which needs the stack depth at
 //! every instruction. The depth is computed here from the LIR before
 //! allocation, reading the same things `masm::stack_addressed` reads; spill
@@ -112,9 +117,36 @@ thread_local! {
     pub static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Whether the function described by `body` (its calls' popped bytes in `pops`)
-/// can have no frame register.
-pub fn without_frame_register(
+/// What keeps a function's frame register, as `MachineFrameInfo` names it:
+/// the facts `X86FrameLowering::hasFPImpl` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pinned {
+    /// `isFrameAddressTaken`: the frame register is read or written as a
+    /// value, is the base or index of anything but a frame cell, or a `leave`
+    /// reads it.
+    FrameAddressTaken,
+    /// `hasVarSizedObjects`: the stack pointer moves by an amount that is not
+    /// a constant.
+    VarSizedObjects,
+    /// `hasOpaqueSPAdjustment`: the stack depth at some instruction cannot be
+    /// modelled: the stack pointer is written another way, a push or pop is
+    /// of a width but 2 or 4, an indirect call's callee may pop, an escape or
+    /// barrier may move it, or two edges into a block disagree on the depth.
+    OpaqueSpAdjustment,
+}
+
+/// `X86FrameLowering::hasFPImpl`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86FrameLowering.cpp#L124-L134>):
+/// whether the function described by `body` (its calls' popped bytes in
+/// `pops`) keeps a dedicated frame register.
+///
+/// DEVIATE F1: the target allows freeing the register only in 32-bit code
+/// (`registers.optional`, `body.bits`): real mode has no stack-pointer
+/// addressing. DEVIATE F2: `returns_twice` keeps it, as `longjmp` restores the
+/// register as a value. DEVIATE F3: debug variables not located by the CFA
+/// keep it. `inline` code is `hasInlineAsm`'s opaque stack effect; `landing`
+/// is `callsUnwindInit`.
+pub fn has_fp(
     body: &LirBody,
     registers: &llrm_target::FrameRegisters,
     pops: &BTreeMap<i64, i64>,
@@ -123,8 +155,6 @@ pub fn without_frame_register(
     landing: bool,
     size: bool,
 ) -> bool {
-    let regs = body.regs();
-    let pointer = registers.pointer;
     if !registers.optional
         || body.bits != 32
         || far
@@ -133,8 +163,28 @@ pub fn without_frame_register(
         || body.returns_twice
         || (!body.variables.is_empty() && !body.cfa_variables)
     {
-        return false;
+        return true;
     }
+    let pinned = pinned_by(body, registers, pops, size);
+    llrm_support::debug!(
+        "frame",
+        "{}: {}",
+        body.name,
+        pinned.map_or_else(|| "freed".to_string(), |why| format!("kept: {why:?}"))
+    );
+    pinned.is_some()
+}
+
+/// What `MachineFrameInfo` would say pins the frame register of `body`, read
+/// from its instructions: the first fact found.
+pub fn pinned_by(
+    body: &LirBody,
+    registers: &llrm_target::FrameRegisters,
+    pops: &BTreeMap<i64, i64>,
+    size: bool,
+) -> Option<Pinned> {
+    let regs = body.regs();
+    let pointer = registers.pointer;
     // The depth at the top of each block, and each block's effect.
     let mut effects: BTreeMap<i64, Option<i64>> = BTreeMap::new();
     // The depth within a block at which it returns.
@@ -145,12 +195,16 @@ pub fn without_frame_register(
             let Some(what) = &one.what else { continue };
             for place in what.dests.iter().chain(&what.sources) {
                 match place {
-                    Loc::Reg(reg) if is_frame(reg.register, pointer) => return false,
-                    Loc::Mem(cell) if is_frame(cell.index_through, pointer) => return false,
-                    Loc::Address(address) if is_frame(address.index_through, pointer) => return false,
+                    Loc::Reg(reg) if is_frame(reg.register, pointer) => return Some(Pinned::FrameAddressTaken),
+                    Loc::Mem(cell) if is_frame(cell.index_through, pointer) => return Some(Pinned::FrameAddressTaken),
+                    Loc::Address(address) if is_frame(address.index_through, pointer) => {
+                        return Some(Pinned::FrameAddressTaken);
+                    }
                     // A register-based cell is fine; the frame register as a
                     // base is only a frame cell.
-                    Loc::Mem(cell) if is_frame(cell.through, pointer) && !cell.in_frame() => return false,
+                    Loc::Mem(cell) if is_frame(cell.through, pointer) && !cell.in_frame() => {
+                        return Some(Pinned::FrameAddressTaken);
+                    }
                     Loc::Address(address)
                         if is_frame(address.through, pointer)
                             && address
@@ -158,7 +212,7 @@ pub fn without_frame_register(
                                 .as_ref()
                                 .is_none_or(|addr| addr.space != crate::model::ir::Space::Frame) =>
                     {
-                        return false;
+                        return Some(Pinned::FrameAddressTaken);
                     }
                     _ => {}
                 }
@@ -166,7 +220,7 @@ pub fn without_frame_register(
             match what.op {
                 Operation::Push | Operation::Pop => {
                     let (places, sign) = if what.op == Operation::Push { (&what.sources, 1) } else { (&what.dests, -1) };
-                    let [place] = &places[..] else { return false };
+                    let [place] = &places[..] else { return Some(Pinned::OpaqueSpAdjustment) };
                     let width = match place {
                         Loc::Reg(reg) => reg.register.size() as i64,
                         // Tuned for size a push of a value keeps the frame, for
@@ -174,10 +228,10 @@ pub fn without_frame_register(
                         Loc::Held(held) if !size => i64::from(held.width),
                         Loc::Imm(imm) => i64::from(imm.width),
                         Loc::Mem(cell) => i64::from(cell.width),
-                        _ => return false,
+                        _ => return Some(Pinned::OpaqueSpAdjustment),
                     };
                     if width != 2 && width != 4 {
-                        return false;
+                        return Some(Pinned::OpaqueSpAdjustment);
                     }
                     depth += sign * width;
                 }
@@ -192,15 +246,16 @@ pub fn without_frame_register(
                     what.name.as_deref(),
                     Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")
                 ) => {}
-                Operation::Leave | Operation::Exchange | Operation::Escape | Operation::Barrier => return false,
-                Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return false,
+                Operation::Leave => return Some(Pinned::FrameAddressTaken),
+                Operation::Exchange | Operation::Escape | Operation::Barrier => return Some(Pinned::OpaqueSpAdjustment),
+                Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Call => {
                     if what.indirect {
-                        return false;
+                        return Some(Pinned::OpaqueSpAdjustment);
                     }
                     depth -= pops.get(&one.at).copied().unwrap_or(0);
                 }
-                Operation::Jump | Operation::Branch if what.indirect => return false,
+                Operation::Jump | Operation::Branch if what.indirect => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Return => leaves.insert(block.at, depth).map_or((), |_| ()),
                 _ if what.dests.iter().any(|place| matches!(
                     place,
@@ -209,12 +264,19 @@ pub fn without_frame_register(
                     // Only `add sp, n` and `sub sp, n` are understood.
                     let amount = match (&what.dests[..], &what.sources[..]) {
                         ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Imm(imm)]) if dest.register == source.register && imm.address.is_none() => imm.value,
-                        _ => return false,
+                        // `sub sp, reg`: stack the size of which is run time.
+                        ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
+                            if dest.register == source.register
+                                && matches!(what.name.as_deref(), Some("add" | "sub")) =>
+                        {
+                            return Some(Pinned::VarSizedObjects);
+                        }
+                        _ => return Some(Pinned::OpaqueSpAdjustment),
                     };
                     match what.name.as_deref() {
                         Some("add") => depth -= amount,
                         Some("sub") => depth += amount,
-                        _ => return false,
+                        _ => return Some(Pinned::OpaqueSpAdjustment),
                     }
                 }
                 _ => {}
@@ -231,7 +293,7 @@ pub fn without_frame_register(
     let by_number: BTreeMap<i64, &crate::model::lir::Block> = body.blocks.iter().map(|one| (one.at, one)).collect();
     while let Some((block, here)) = pending.pop() {
         match at.get(&block) {
-            Some(&there) if there != here => return false,
+            Some(&there) if there != here => return Some(Pinned::OpaqueSpAdjustment),
             Some(_) => continue,
             None => {
                 at.insert(block, here);
@@ -239,7 +301,7 @@ pub fn without_frame_register(
         }
         seen.insert(block);
         if leaves.get(&block).is_some_and(|within| here + within != 0) {
-            return false;
+            return Some(Pinned::OpaqueSpAdjustment);
         }
         let Some(Some(effect)) = effects.get(&block) else { continue };
         LOOKED.with(|looked| looked.set(looked.get() + 1));
@@ -248,8 +310,7 @@ pub fn without_frame_register(
             pending.push((next, here + effect));
         }
     }
-    llrm_support::debug!("frame", "{}: freed", body.name);
-    true
+    None
 }
 
 #[cfg(test)]

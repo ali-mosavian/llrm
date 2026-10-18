@@ -5,10 +5,12 @@
 //! allocator in `backend::allocate` and is compared with it; nothing selects it
 //! yet.
 
+pub mod edgebundles;
 pub mod greedy;
 pub mod inlinespiller;
 pub mod liverangeedit;
 pub mod matrix;
 pub mod shadow;
 pub mod spill;
+pub mod spillplacement;
 pub mod virtregmap;

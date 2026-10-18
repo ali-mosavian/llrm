@@ -97,6 +97,16 @@ impl llrm_target::Target for M16 {
         timings::TABLE.default_cpu().expect("timings.times states a default CPU")
     }
 
+    /// X86ISelLowering.cpp: `setPrefFunctionAlignment(Align(16))`.
+    fn pref_function_alignment(&self) -> u8 {
+        4
+    }
+
+    /// 16-bit mode has the four forms of `Nops16Bit`.
+    fn max_nop_bytes(&self) -> u8 {
+        4
+    }
+
     fn cpu_table(
         &self,
         name: &str,

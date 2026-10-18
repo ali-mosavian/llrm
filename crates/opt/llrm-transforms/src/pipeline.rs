@@ -863,6 +863,13 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
+    // LLVM keeps GlobalsAA past every function pass
+    // (`GlobalsAAResult::invalidate`, GlobalsModRef.cpp:825, d1106deb71cc):
+    // made once, not again after each pass that changed a body. Only the
+    // order has it so; the rounds keep theirs.
+    if applied.options.llvm_order {
+        manager.hold::<GlobalsAA>();
+    }
     for stage in function_stages(applied) {
         manager.add(stage);
     }
@@ -1323,7 +1330,9 @@ impl Fixed {
         let mut unroll_settled = None;
         // Separately reject a repeated state, so an oscillator fails at once
         // instead of consuming the limit.
-        let mut history = BTreeSet::from([print::fingerprint(unit.function)]);
+        // Only a list that rounds more than once can come back to a state, so
+        // only that one hashes the body (LLVM's order runs its lists once).
+        let mut history = (self.rounds > 1).then(|| BTreeSet::from([print::fingerprint(unit.function)]));
         run.fixed += 1;
         // The last round unrolled a loop: the straight line it made is cleaned
         // by the round after the budget, as gcc's cleanup follows its complete
@@ -1381,7 +1390,7 @@ impl Fixed {
             // A list that runs once (LLVM's order) may end where it began:
             // EarlyCSE drops the LCSSA phis that `lcssa` makes
             // again.
-            if self.rounds > 1 && !history.insert(print::fingerprint(unit.function)) {
+            if history.as_mut().is_some_and(|seen| !seen.insert(print::fingerprint(unit.function))) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }

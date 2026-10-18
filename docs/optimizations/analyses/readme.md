@@ -2,18 +2,20 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 50 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
 | aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
 | access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and | [access](access.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
+| argumentattrs | `nocapture`, `readonly`, `writeonly` and `readnone` of the pointer parameters of one call-graph SCC, as `addArgumentAttrs` infers them (FunctionAttrs.cpp:1238). | `functionattrs::post_order` once per SCC, callees first. | [argumentattrs](argumentattrs.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
 | avail | Available loads and dead stores, as LLVM's GVN load forwarding and DSE find them through MemoryDependence. | `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the | [avail](avail.md) |
 | basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). | `BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet. | [basicaa](basicaa.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
 | capturecheck | # How it works `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. | `may_be_captured` and the check behind `LLRM_CHECK_CAPTURES`. | [capturecheck](capturecheck.md) |
+| capturetracking | `CaptureTracking.cpp` at d1106deb71cc: which components of a pointer a use of it keeps (`DetermineUseCaptureKind`), and the walk over the uses of a value that asks a tracker about each (`PointerMayBeCaptured`). | `CaptureComponents`, `UseCaptureInfo`, `CaptureTracker`, | [capturetracking](capturetracking.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
 | cfg | A function's blocks as the graph walks see them: block ids, successors, dominance, natural loops and reachability, built once per body. | `Shape` (a `Analysis` named `shape`), the | [cfg](cfg.md) |
 | constant_cycles | Sparse value propagation over phis, with distinct pending and overdefined states, to find constants that only a cycle proves. | `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md) | [constant_cycles](constant_cycles.md) |
@@ -25,7 +27,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undoc
 | floatbounds | Floating operations that are exact over bounded, not necessarily known, integers. | `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's | [floatbounds](floatbounds.md) |
 | floatfacts | Exact finite values of floating-point operations, and the memory they pass through. | `Solved { integers, facts }`, `solved_with`, `solved_over`, `known`, | [floatfacts](floatfacts.md) |
 | frameescape | Which frame objects' addresses reach where, and which are exposed. | `exposed_allocas`, `exposes`, `framed`, `analysed`. Consumers: | [frameescape](frameescape.md) |
-| functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` once per SCC, callees first. | [functionattrs](functionattrs.md) |
+| functionattrs | `norecurse`, `nounwind`, `willreturn` and `noreturn` of one call-graph SCC, as LLVM's `PostOrderFunctionAttrs` infers them from a body and the attributes of its callees. | `interprocedural::stamped` once per SCC, callees first, for the four flags. | [functionattrs](functionattrs.md) |
 | generated | Random loops for checking the recurrence form (`induction::Scev`) against the interpreter. | `case`, `seeds`, `observed`, `Inputs`, `Rng`, `Tracked`, built only for | [generated](generated.md) |
 | globalsaa | Which globals no code outside the program reaches but by name: LLVM's GlobalsAA, GCC's ipa-reference. | `Globals` (`tracked`, `unsummarized`, `entries`, `covers`), `analysis`, | [globalsaa](globalsaa.md) |
 | graph | Block-graph algorithms (loops, depth, reducibility, dominators) over any IR whose blocks implement `loops::Node`. | The algorithms of `loops`. Consumers: [`crate::cfg`](cfg.md) (`Loop`, `Node`, | [graph](graph.md) |
@@ -53,3 +55,4 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undoc
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
+| ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. |  | [ssaupdater](ssaupdater.md) |

@@ -3,7 +3,7 @@
 //! block's input from the outputs that flow into it and the transfer across the
 //! block. A block is worked again when the output of one it depends on changed,
 //! not every block each round until none does: a fact crosses one block a
-//! round, so a loop nest d deep took d rounds of every block (copyprop and
+//! round, so a loop nest d deep took d rounds of every block (machinecp and
 //! spillforward were a third of `lir peephole` on a nest 8 deep). GCC's `df`
 //! and LLVM's dataflow solvers iterate on a worklist the same way.
 //!

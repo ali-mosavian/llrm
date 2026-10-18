@@ -306,7 +306,9 @@ pub fn check_run_counts(
 
 /// `built`, the slot names a list of `phase` runs, against the registry: the
 /// first Translated slot of the phase that it lacks, or slot it has that the
-/// registry does not know, is the error.
+/// registry does not know, is the error. The tests call it on registries of
+/// their own; the pipeline goes through [`check_phase`].
+#[cfg(test)]
 pub(crate) fn check(
     registry: &[Entry],
     phase: Phase,

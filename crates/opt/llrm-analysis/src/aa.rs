@@ -309,6 +309,62 @@ impl MemoryEffects {
         result
     }
 
+    /// `MemoryEffects::operator|`.
+    pub fn union(
+        self,
+        other: Self,
+    ) -> Self {
+        Self { effects: std::array::from_fn(|at| self.effects[at].union(other.effects[at])) }
+    }
+
+    /// `MemoryEffects::argMemOnly(MR)`.
+    pub fn arg_mem_only(info: ModRefInfo) -> Self {
+        Self::none().with(IRMemLocation::ArgMem, info)
+    }
+
+    /// `MemoryEffects::getWithoutLoc`.
+    pub fn without_loc(
+        self,
+        at: IRMemLocation,
+    ) -> Self {
+        self.with(at, ModRefInfo::NoModRef)
+    }
+
+    /// The same `info` at every location (`MemoryEffects(MR)`).
+    pub fn everywhere(info: ModRefInfo) -> Self {
+        Self { effects: [info; 4] }
+    }
+
+    /// The `memory(...)` attribute that states `self`, as LLVM prints it: the
+    /// default is `Other`'s, and a location is named when it differs.
+    pub fn attribute(self) -> llrm_mir::opcode::Attribute {
+        let word = |info: ModRefInfo| {
+            match info {
+                ModRefInfo::NoModRef => "none",
+                ModRefInfo::Ref => "read",
+                ModRefInfo::Mod => "write",
+                ModRefInfo::ModRef => "readwrite",
+            }
+            .to_owned()
+        };
+        let other = self.mod_ref(IRMemLocation::Other);
+        let named = [
+            (IRMemLocation::ArgMem, "argmem"),
+            (IRMemLocation::InaccessibleMem, "inaccessiblemem"),
+            (IRMemLocation::ErrnoMem, "errnomem"),
+        ]
+        .into_iter()
+        .filter(|&(at, _)| self.mod_ref(at) != other)
+        .map(|(at, name)| (Some(name.to_owned()), word(self.mod_ref(at))))
+        .collect::<Vec<_>>();
+        let mut locations = Vec::new();
+        if other != ModRefInfo::NoModRef || named.is_empty() {
+            locations.push((None, word(other)));
+        }
+        locations.extend(named);
+        llrm_mir::opcode::Attribute::Memory(locations)
+    }
+
     /// `MemoryEffects::operator&`.
     pub fn intersect(
         self,

@@ -291,8 +291,9 @@ pub fn assembled_by(
                             )
                         })
                     };
-                    let body =
-                        timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), &overhead));
+                    let body = timed("lir duplicated returns", || {
+                        jumps::duplicated_returns(procedure.body.clone(), &overhead)
+                    });
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
@@ -381,6 +382,7 @@ pub fn assembled_by(
         far_bss: BTreeSet::new(),
         stack: 0,
         object: arch.object(),
+        padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
     })
 }
 
@@ -1033,7 +1035,7 @@ fn staged(
     // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
     // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
-        && crate::backend::framefree::without_frame_register(
+        && !crate::backend::framefree::has_fp(
             &body,
             &registers,
             &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),

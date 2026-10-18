@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 85 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 86 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -57,6 +57,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopinterchange | Loop interchange: the two loops of a nest swap places, so the inner loop walks the memory the outer one did (gcc's `gimple-loop-interchange.cc`, LLVM's `LoopInterchange`). | Once per body, before `unroll-jam`; a swapped nest goes through `sroa` and | [loopinterchange](loopinterchange.md) |
 | loopmotion | Sinks the stores nothing in a loop observes to the loop's single exit, so a counter or accumulator is written once, not every trip: the store half of LICM, as `promoteLoopAccessesToScalars` leaves one store after the loop. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `hoist` and | [loopmotion](loopmotion.md) |
 | loopnest | Where a loop holds exactly one other loop: the nest's blocks, and what may be asked of it (an inner loop that counts the same in every outer trip, the accesses of its body). | `Nest`, `nest_of`, `inner_is_invariant`, `accesses`. Consumers: `unroll_jam` | [loopnest](loopnest.md) |
+| looprotate | `LoopRotate`: a loop with its exit test in the header becomes a loop with its exit test in the latch, behind a copy of the test that guards the entry. | The `loop-rotate` slot of the pipeline. | [looprotate](looprotate.md) |
 | loopshape | What loop fusion and loop distribution ask of a loop alike: that one counter's test is the loop's only exit, that its body only reads and writes memory and cannot trap, and that nothing it computes is read outside it. | `controls`, `quiet`, `header_quiet`, `read_outside`. | [loopshape](loopshape.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
 | loopsplit | A loop with a test of its counter against an invariant in its body becomes two loops, one for the trips before the test flips and one for those after, neither with the test. | Once per body, after unswitching and before unroll-jam, at -O3 and -Omax | [loopsplit](loopsplit.md) |
@@ -82,7 +83,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |
 | splitcopy | A `memcpy` into a local nothing else can reach becomes the loads and stores of the bytes the local is read as. | Inside [`crate::promote`](promote.md)'s `Sroa`, before it scalarizes the aggregate's | [splitcopy](splitcopy.md) |
 | switchcg | LLVM's switch clusters: which cases are one range, a jump table or a bit test, and where the tree of what is left splits. |  | [switchcg](switchcg.md) |
-| switchlower | A switch lowered as gcc 13.4 lowers one: a lookup table where every case only picks constants, bit tests for few targets in a narrow range, and otherwise a balanced tree of range tests. | As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
+| switchlower | A switch lowered as LLVM's SelectionDAG lowers one: the likeliest range peeled off, jump tables and bit tests for what is dense, and a balanced tree of range tests over the rest. | As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up), | [switchlower](switchlower.md) |
 | tailrec | A call a function makes to itself as the last thing it does becomes a branch to its own entry with the arguments rewritten. | In the function pipeline after `gvn::EqualCalls`, so two equal calls are | [tailrec](tailrec.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], [`crate::unswitch`] and [`crate::loopexit`] share: value reuse, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `subexpressions`, `equal_calls` and `forwarded` on each | [transform](transform.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |

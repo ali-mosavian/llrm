@@ -135,9 +135,9 @@ llrm targets i386 real mode and flat 32-bit. Six places differ from LLVM on purp
 | # | DEVIATE | why | where |
 |---|---|---|---|
 | D1 | Segments and far/huge pointers: MIR states a huge pointer in the target's huge address space; isel gives it its representation; `window` splits huge recurrences | LLVM's x86 has no 16-bit segmented model | MIR, isel, loop passes |
-| D2 | temporary. Front-end shapes: the front ends emit branch conditions, scaled indices and aggregate copies as word runs that clang does not ([frontend-aggregates.md](frontend-aggregates.md)) | no clang front end for Nib, QB or Open Watcom C | front ends, HIR; exit: the front-end shapes plan (C translate step 1, [#2306]; owner hir-branch-icmp-2211) brings the shapes to clang's |
-| D3 | temporary. x87 as register-stack code: `floatassign` stands in for the RFP register classes until slot 60 joins; `floatalloc` is already translated from `X86FloatingPoint.cpp` | float registers are a stack | backend slot 60; exit: slot 60 joined with FPS ON by default (backend-slopes) |
-| D4 | temporary. Emission: llrm relaxes a flat item list at one fixpoint instead of `MCAssembler` layout; the OMF writer has no LLVM counterpart and stays | relax and write is about 2.7 M of the 22.5 M emission on `d_faces` -O2 (backend-slopes split); no measurement of `MCAssembler` layout yet | backend slot 64; exit: measure clang's layout on the same input, keep only if llrm's is at most 1.5x |
+| D2 ([#2418]) | temporary. Front-end shapes: the front ends emit branch conditions, scaled indices and aggregate copies as word runs that clang does not ([frontend-aggregates.md](frontend-aggregates.md)) | no clang front end for Nib, QB or Open Watcom C | front ends, HIR; exit: the front-end shapes plan (C translate step 1, [#2306]; owner hir-branch-icmp-2211) brings the shapes to clang's |
+| D3 ([#2419]) | temporary. x87 as register-stack code: `floatassign` stands in for the RFP register classes until slot 60 joins; `floatalloc` is already translated from `X86FloatingPoint.cpp` | float registers are a stack | backend slot 60; exit: slot 60 joined with FPS ON by default (backend-slopes) |
+| D4 ([#2420]) | temporary. Emission: llrm relaxes a flat item list at one fixpoint instead of `MCAssembler` layout; the OMF writer has no LLVM counterpart and stays | relax and write is about 2.7 M of the 22.5 M emission on `d_faces` -O2 (backend-slopes split); no measurement of `MCAssembler` layout yet | backend slot 64; exit: measure clang's layout on the same input, keep only if llrm's is at most 1.5x |
 | D5 | Operands as `Vec<Operand>` per instruction, not co-allocated `User` operands | inline operands are at most 2.7% of allocations and 0.2% of instructions ([architecture-parity.md](architecture-parity.md)) | IR core; revisit when use lists and ilist ([#2322]) have landed: re-measure, adopt if above 1% |
 | D6 | `noipa` on Nib bench kernels, honoured by every IPO pass | GCC's `noipa` precedent | CGSCC, IPO |
 
@@ -156,6 +156,9 @@ The registry in `parity.rs` (`crates/opt/llrm-transforms`) is the source of trut
 
 Translations written and not yet joined (SROA, mem2reg, GVN, InstSimplify, DomTree, LVI, BackedgeTakenInfo, DSE) are in the road in [parity-pipeline.md](parity-pipeline.md). A box turns from Old to Translated only when its slot joins with its oracle passing. The count is part of each status report: regenerate it from `parity.rs` every time.
 
+[#2418]: https://github.com/ali-mosavian/llrm/issues/2418
+[#2419]: https://github.com/ali-mosavian/llrm/issues/2419
+[#2420]: https://github.com/ali-mosavian/llrm/issues/2420
 [#2306]: https://github.com/ali-mosavian/llrm/pull/2306
 [#2312]: https://github.com/ali-mosavian/llrm/pull/2312
 [#2288]: https://github.com/ali-mosavian/llrm/pull/2288
