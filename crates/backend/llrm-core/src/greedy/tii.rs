@@ -33,13 +33,18 @@ pub fn fold_memory_operand(
     }
     for (place, _) in classes.requirements(what) {
         let side = if place.side == "dest" { &what.dests } else { &what.sources };
-        if matches!(side.get(place.index), Some(Loc::Held(held)) if held.value == reg) {
+        if matches!(
+            side.get(place.index),
+            Some(Loc::Held(held)) if held.value == reg
+        ) {
             return None;
         }
     }
     let direct = |loc: &Loc| matches!(loc, Loc::Held(held) if held.value == reg);
     for loc in what.dests.iter().chain(&what.sources) {
-        if !direct(loc) && (matches!(loc, Loc::Mem(_)) || crate::model::ir::values(loc).iter().any(|held| held.value == reg)) {
+        if !direct(loc)
+            && (matches!(loc, Loc::Mem(_)) || crate::model::ir::values(loc).iter().any(|held| held.value == reg))
+        {
             return None;
         }
     }
@@ -58,8 +63,11 @@ pub fn fold_memory_operand(
         Loc::Held(held) if held.value == reg => Loc::Mem(Mem { width: held.width, ..cell.clone() }),
         _ => loc.clone(),
     };
-    let made =
-        Semantics { dests: what.dests.iter().map(swap).collect(), sources: what.sources.iter().map(swap).collect(), ..what.clone() };
+    let made = Semantics {
+        dests: what.dests.iter().map(swap).collect(),
+        sources: what.sources.iter().map(swap).collect(),
+        ..what.clone()
+    };
     if !crate::backend::spiller::_encodable(bits, &made, classes).ok()? {
         return None;
     }

@@ -449,9 +449,18 @@ fn written_narrower(
     reg: u32,
     width: u32,
 ) -> bool {
-    one.what.as_ref().is_some_and(|what| {
-        what.dests.iter().any(|loc| matches!(loc, Loc::Held(held) if held.value == reg && held.width < width))
-    })
+    one.what
+        .as_ref()
+        .is_some_and(
+            |what| what.dests
+                .iter()
+                .any(
+                    |loc| matches!(
+                        loc,
+                        Loc::Held(held) if held.value == reg && held.width < width
+                    ),
+                ),
+        )
 }
 
 // Registers a spill worked out the interval of without making them.
