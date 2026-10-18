@@ -56,16 +56,16 @@
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::Kind;
+use llrm_analysis::scev::expr::Ty;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{CastOp, IntPredicate, Opcode};
-use llrm_analysis::scev::expr::Ty;
-use crate::widen::{Edit, WideIvInfo, WidenIv};
 use llrm_mir::passes::Outer;
 
 use crate::counting;
+use crate::widen::{Edit, WideIvInfo, WidenIv};
 
 /// Read once; `LLRM_NO_SCEV_IVCMP` turns the step off.
 pub fn enabled() -> bool {
@@ -320,11 +320,11 @@ fn nearest_common_dominator(
 /// `dead`'s.
 ///
 /// Not translated of `SimplifyIndvar::simplifyUsers` (DEVIATE 17):
-/// `replaceIVUserWithLoopInvariant`, `foldIVUser`, `eliminateOverflowIntrinsic`,
-/// `eliminateSaturatingIntrinsic` (MIR lacks them, D9), `eliminateTrunc`,
-/// `eliminateSDiv`, `simplifyIVRemainder`, `eliminateIdentitySCEV`,
-/// `strengthenBinaryOp`, `replaceFloatIVWithIntegerIV` and
-/// `makeIVComparisonInvariant`.
+/// `replaceIVUserWithLoopInvariant`, `foldIVUser`,
+/// `eliminateOverflowIntrinsic`, `eliminateSaturatingIntrinsic` (MIR lacks
+/// them, D9), `eliminateTrunc`, `eliminateSDiv`, `simplifyIVRemainder`,
+/// `eliminateIdentitySCEV`, `strengthenBinaryOp`, `replaceFloatIVWithIntegerIV`
+/// and `makeIVComparisonInvariant`.
 pub fn simplified_and_extended(
     context: &mut Context,
     layout: &DataLayout,
@@ -354,11 +354,13 @@ pub fn simplified_and_extended(
         // form.
         let simple = {
             let cx = e.env.cx(&*e.context, &*e.function);
-            cx.loops.get_loop_for(header).is_some_and(|found| {
-                found.get_loop_preheader(cx.function).is_some()
-                    && found.get_loop_latch(cx.function).is_some()
-                    && found.has_dedicated_exits(cx.function)
-            })
+            cx.loops
+                .get_loop_for(header)
+                .is_some_and(
+                    |found| found.get_loop_preheader(cx.function).is_some()
+                        && found.get_loop_latch(cx.function).is_some()
+                        && found.has_dedicated_exits(cx.function),
+                )
         };
         if simple {
             changed |= simplify_and_extend(&mut e, header, has_guards);
@@ -559,14 +561,16 @@ fn eliminate_iv_comparison_edit(
         let users: Vec<InstId> = cx.function.users(result).iter().map(|used| used.user).collect();
         let decided = common_dominator(&cx, &users).and_then(|ctx| e.se.evaluate_predicate_at(&cx, pred, s, x, ctx));
         let flags = instruction.flags;
-        let signed = matches!(
-            original_pred,
-            IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
-        );
-        let unsigned = matches!(
-            original_pred,
-            IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
-        );
+        let signed =
+            matches!(
+                original_pred,
+                IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+            );
+        let unsigned =
+            matches!(
+                original_pred,
+                IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+            );
         let same_sign = decided.is_none()
             && (signed || (unsigned && !flags.contains(llrm_mir::opcode::Flags::SAMESIGN)))
             && e.se.have_same_sign(&cx, s, x);
@@ -653,7 +657,13 @@ fn visit_iv_cast(
             Operand::Block(_) => unreachable!("a block is not a value"),
         };
         let source_bits = e.context.types.int_bits(source).unwrap_or(width);
-        let wide = tti.arithmetic_cost(ArithOp::Add, TtiTy::Int(width), CostKind::RecipThroughput, OperandInfo::ANY, OperandInfo::ANY);
+        let wide = tti.arithmetic_cost(
+            ArithOp::Add,
+            TtiTy::Int(width),
+            CostKind::RecipThroughput,
+            OperandInfo::ANY,
+            OperandInfo::ANY,
+        );
         let narrow = tti.arithmetic_cost(
             ArithOp::Add,
             TtiTy::Int(source_bits),

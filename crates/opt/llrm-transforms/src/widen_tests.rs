@@ -6,7 +6,12 @@ use crate::testing::{managed, parsed, printed, results};
 
 /// `for (i = 0; i < n; i++) buf[ext i] = 1` with `i` of 16 bits and the
 /// extension to 32.
-fn clearing(extension: &str, predicate: &str, start: &str, step: &str) -> String {
+fn clearing(
+    extension: &str,
+    predicate: &str,
+    start: &str,
+    step: &str,
+) -> String {
     format!(
         "target datalayout = \"e-p:32:32-n8:16:32\"
 
@@ -76,13 +81,16 @@ fn test_an_unsigned_counter_read_through_sext_is_not_widened() {
     assert!(!after.contains("phi i32"), "{after}");
 }
 
+/// The 16-bit target states no cost model and `n8:16:32` calls `i32` legal: a
+/// counter is not widened past the pointer's 16 bits there (D18), where its
+/// `i32` add costs two.
 #[test]
-fn tmp_dos() {
-    let mut module = parsed(&clearing("zext", "ult", "0", "nsw"));
+fn test_a_counter_is_not_widened_past_the_pointer_width_without_a_cost_model() {
+    let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
+    let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(IndVars { exit_values: true, unrolls: None });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
-    eprintln!("DOS: {}", printed(&module));
-    let m32 = llrm_x86_m16::Dos::default();
-    eprintln!("tti: {}", llrm_mir::target::Machine::tti(&m32).is_some());
+    let after = printed(&module);
+    assert!(!after.contains("phi i32"), "{after}");
 }

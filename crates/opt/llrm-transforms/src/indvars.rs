@@ -251,13 +251,13 @@ impl FunctionPass for IndVars {
         }
         let widened = !extending
             && widened_with(
-            unit.context,
-            unit.layout,
-            unit.function,
-            &outer,
-            &mut standing,
-            if self.exit_values { None } else { self.unrolls },
-        );
+                unit.context,
+                unit.layout,
+                unit.function,
+                &outer,
+                &mut standing,
+                if self.exit_values { None } else { self.unrolls },
+            );
         let merged = congruent(unit.context, unit.layout, unit.function, &outer, &mut standing);
         let rewound = rewound_with(
             unit.context,

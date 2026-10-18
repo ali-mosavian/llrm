@@ -20,7 +20,8 @@
 //! A narrow definition known not to be negative may use either extension.
 //! Where an increment `x + c` (nsw, c >= 0) is guarded by a compare of `x`
 //! inside the loop, the range that compare leaves the increment is kept per
-//! use (`calculatePostIncRanges`), so a use below the guard proves non-negative.
+//! use (`calculatePostIncRanges`), so a use below the guard proves
+//! non-negative.
 //!
 //! # Example
 //! `for (short i = 0; i < n; i++) a[i]` reads `sext i` to the index width on
@@ -31,7 +32,8 @@
 //! [`crate::simplifyindvar`] (`simplifyAndExtend`), from [`crate::indvars`].
 //!
 //! # See also
-//! LLVM `WidenIV`, `createWideIV`, `visitIVCast`; `docs/architecture/scev-port.md`.
+//! LLVM `WidenIV`, `createWideIV`, `visitIVCast`;
+//! `docs/architecture/scev-port.md`.
 
 use llrm_analysis::scev::expander::{Env, Expander};
 use llrm_analysis::scev::expr::{Kind, Scev, Ty, Use};
@@ -196,7 +198,8 @@ fn build_cast(
         return value;
     }
     if let Operand::Constant(constant) = value {
-        if let Some(folded) = llrm_mir::constantfolding::constant_fold_cast_operand(e.context, e.layout, op, constant, to)
+        if let Some(folded) =
+            llrm_mir::constantfolding::constant_fold_cast_operand(e.context, e.layout, op, constant, to)
         {
             return Operand::Constant(folded);
         }
@@ -317,10 +320,8 @@ fn match_binary_op(
             let is_nuw = flags.contains(Flags::NUW);
             let is_nsw = flags.contains(Flags::NSW) && (is_nuw || amount < u128::from(bit_width - 1));
             let ty = operand_type(e, rhs);
-            let one_bit = e.context.constant(llrm_mir::context::Constant {
-                ty,
-                kind: ConstantKind::Int(1u128 << amount),
-            });
+            let one_bit =
+                e.context.constant(llrm_mir::context::Constant { ty, kind: ConstantKind::Int(1u128 << amount) });
             Some(IvBinaryOp { opcode: BinaryOp::Mul, operands: [lhs, Operand::Constant(one_bit)], is_nsw, is_nuw })
         }
         _ => None,
@@ -336,11 +337,17 @@ fn is_non_negative(
 }
 
 fn is_signed_predicate(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 fn is_unsigned_predicate(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule)
+    matches!(
+        pred,
+        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+    )
 }
 
 /// `replaceUsesOfWith`: every operand of `user` that is `old` reads `new`.
@@ -519,7 +526,8 @@ impl WidenIv {
 
         // We're trying to find X such that
         //
-        //  Widen(NarrowDef `op` NonIVNarrowDef) == WideAR == WideDef `op.wide` X
+        //  Widen(NarrowDef `op` NonIVNarrowDef) == WideAR == WideDef `op.wide`
+        // X
         //
         // We guess two solutions to X, sext(NonIVNarrowDef) and
         // zext(NonIVNarrowDef), and check using SCEV if any of them are
@@ -929,8 +937,7 @@ impl WidenIv {
                 return false;
             }
             let negative = e.se.get_negative_scev(&cx, rhs, 0);
-            let proved_sub_nuw =
-                e.se.is_known_predicate_at(&cx, IntPredicate::Uge, lhs, negative, Some(ctx_inst));
+            let proved_sub_nuw = e.se.is_known_predicate_at(&cx, IntPredicate::Uge, lhs, negative, Some(ctx_inst));
             if !proved_sub_nuw {
                 return false;
             }
@@ -977,13 +984,15 @@ impl WidenIv {
                 let arm = llrm_analysis::occurrence::arms(e.function, user)[0];
                 (arm.1, e.function.instruction(user).ty)
             };
-            let wide_phi = e.function.create_instruction(
-                Opcode::Phi,
-                wide_ir,
-                vec![wide_bo_op, Operand::Block(value_block)],
-                Flags::default(),
-                None,
-            );
+            let wide_phi = e
+                .function
+                .create_instruction(
+                    Opcode::Phi,
+                    wide_ir,
+                    vec![wide_bo_op, Operand::Block(value_block)],
+                    Flags::default(),
+                    None,
+                );
             e.function.insert(wide_phi, Position::Before(user)).expect("a placed phi");
             let block = e.function.parent(user).expect("placed");
             let first = first_insertion_point(e.function, block);
@@ -1008,13 +1017,9 @@ impl WidenIv {
                 };
             }
             let bit = e.context.types.int(1);
-            let wide_cmp = e.function.create_instruction(
-                Opcode::ICmp(pred),
-                bit,
-                vec![extended[0], extended[1]],
-                Flags::default(),
-                None,
-            );
+            let wide_cmp = e
+                .function
+                .create_instruction(Opcode::ICmp(pred), bit, vec![extended[0], extended[1]], Flags::default(), None);
             e.function.insert(wide_cmp, Position::Before(user)).expect("a placed compare");
             let wide_cmp_op = value_op(e, wide_cmp);
             let result = result_of(e.function, user);
@@ -1062,13 +1067,15 @@ impl WidenIv {
                 } else {
                     let wide_ir = operand_type(e, wide_def_op);
                     let incoming_block = llrm_analysis::occurrence::arms(e.function, du.narrow_use)[0].1;
-                    let wide_phi = e.function.create_instruction(
-                        Opcode::Phi,
-                        wide_ir,
-                        vec![wide_def_op, Operand::Block(incoming_block)],
-                        Flags::default(),
-                        None,
-                    );
+                    let wide_phi = e
+                        .function
+                        .create_instruction(
+                            Opcode::Phi,
+                            wide_ir,
+                            vec![wide_def_op, Operand::Block(incoming_block)],
+                            Flags::default(),
+                            None,
+                        );
                     e.function.insert(wide_phi, Position::Before(du.narrow_use)).expect("a placed phi");
                     let block = e.function.parent(wide_phi).expect("placed");
                     let first = first_insertion_point(e.function, block);
@@ -1130,8 +1137,9 @@ impl WidenIv {
             // Now that the extend is gone, we want to expose it's uses for
             // potential further simplification. We don't need to directly
             // inform SimplifyIVUsers of the new users, because their parent IV
-            // will be processed later as a new loop phi. If we preserved IVUsers
-            // analysis, we would also want to push the uses of WideDef here.
+            // will be processed later as a new loop phi. If we preserved
+            // IVUsers analysis, we would also want to push the uses
+            // of WideDef here.
 
             // No further widening is needed. The deceased [sz]ext had done it
             // for us.
@@ -1189,14 +1197,10 @@ impl WidenIv {
             let wide_phi = this.wide_phi.expect("the wide phi");
             let narrow_flags = e.function.instruction(du.narrow_use).flags;
             let wide_flags = e.function.instruction(wide_inc).flags;
-            let need_to_recompute_flags = !seam::can_reuse_flags_from_original_iv_inc(
-                e,
-                this.orig_phi,
-                wide_phi,
-                du.narrow_use,
-                wide_inc,
-            ) || narrow_flags.contains(Flags::NUW) != wide_flags.contains(Flags::NUW)
-                || narrow_flags.contains(Flags::NSW) != wide_flags.contains(Flags::NSW);
+            let need_to_recompute_flags =
+                !seam::can_reuse_flags_from_original_iv_inc(e, this.orig_phi, wide_phi, du.narrow_use, wide_inc)
+                    || narrow_flags.contains(Flags::NUW) != wide_flags.contains(Flags::NUW)
+                    || narrow_flags.contains(Flags::NSW) != wide_flags.contains(Flags::NSW);
             Some(wide_add_rec_scev) == this.wide_inc_expr
                 && seam::hoist_iv_inc(e, wide_inc, du.narrow_use, need_to_recompute_flags)
         };
@@ -1322,15 +1326,8 @@ impl WidenIv {
         // part of the phi-SCC dominates the loop entry.
         let insert_pt = first_insertion_point(e.function, self.l);
         e.rewriter.set_insert_point(insert_pt);
-        let expand_inst = e.rewriter.expand_code_for(
-            &e.env,
-            e.context,
-            e.declared,
-            e.function,
-            e.se,
-            add_rec,
-            Some(self.wide_type),
-        );
+        let expand_inst =
+            e.rewriter.expand_code_for(&e.env, e.context, e.declared, e.function, e.se, add_rec, Some(self.wide_type));
         // If the wide phi is not a phi node, for example a cast node, like
         // bitcast, inttoptr, ptrtoint, just skip for now.
         let expand_def = defining(e.function, expand_inst);
@@ -1385,7 +1382,10 @@ impl WidenIv {
                 // expansion may have yielded a more simplified wider
                 // increment.
                 let overflowing = |inst: InstId, e: &Edit| {
-                    matches!(e.function.instruction(inst).opcode, Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl))
+                    matches!(
+                        e.function.instruction(inst).opcode,
+                        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+                    )
                 };
                 if seam::can_reuse_flags_from_original_iv_inc(e, self.orig_phi, wide_phi, orig_inc, wide_inc)
                     && overflowing(orig_inc, e)
@@ -1625,7 +1625,10 @@ fn first_insertion_point(
         .instructions()
         .iter()
         .copied()
-        .find(|&inst| !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::LandingPad { .. }))
+        .find(|&inst| !matches!(
+            function.instruction(inst).opcode,
+            Opcode::Phi | Opcode::LandingPad { .. }
+        ))
         .expect("a terminated block")
 }
 
