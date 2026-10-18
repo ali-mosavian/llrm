@@ -1019,7 +1019,7 @@ fn staged(
     // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
     // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
-        && crate::backend::framefree::without_frame_register(
+        && !crate::backend::framefree::has_fp(
             &body,
             &registers,
             &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),

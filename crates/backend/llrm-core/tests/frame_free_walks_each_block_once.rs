@@ -1,10 +1,10 @@
-//! `without_frame_register` found the body's block for each way that reached
+//! `has_fp` found the body's block for each way that reached
 //! one by a search of all the blocks: N^2 steps in `assemble`'s own time,
 //! x2.60 per doubling on the `branches` scaling row (#2260).
 
 use std::sync::Arc;
 
-use llrm_core::backend::framefree::{LOOKED, without_frame_register};
+use llrm_core::backend::framefree::{LOOKED, has_fp};
 use llrm_core::model::lir::{Block, Insn, LirBlock, LirBody};
 use llrm_core::support::hash::IndexMap;
 use llrm_target::Target;
@@ -33,8 +33,8 @@ fn test_each_block_is_looked_up_once_not_searched_for_by_every_way_into_it() {
     let looked = |blocks: i64| {
         let body = chain(blocks);
         let before = LOOKED.with(std::cell::Cell::get);
-        let freed = without_frame_register(&body, &registers, &Default::default(), false, false, false, false);
-        assert!(freed, "premise: a chain of nops needs no frame register");
+        let kept = has_fp(&body, &registers, &Default::default(), false, false, false, false);
+        assert!(!kept, "premise: a chain of nops needs no frame register");
         LOOKED.with(std::cell::Cell::get) - before
     };
     let (small, big) = (looked(500), looked(1000));
