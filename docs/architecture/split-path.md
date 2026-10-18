@@ -1,3 +1,7 @@
+---
+architecture-index: the split path against SplitKit
+architecture-order: 170
+---
 # The split path against SplitKit, SplitAnalysis and SpillPlacement
 
 TL;DR: `d_faces` -O2 spends 58.5 M in `Split::placed` for 489 candidate evaluations, 120 K a candidate against LLVM's at most 36 K for everything a candidate costs it. The count of candidates is not the gap (LLVM evaluates 837); the cost of a candidate is, and it is flat: no row is above 10.5 M. The levers that exist are small, exact, and together about 40 M (1.5%); they go in as one bundle.

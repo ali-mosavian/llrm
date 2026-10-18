@@ -1,3 +1,7 @@
+---
+architecture-index: ConstraintElimination as a translation of LLVM's
+architecture-order: 275
+---
 # ConstraintElimination as a translation of LLVM's: the plan
 
 TL;DR: `ConstraintSystem.h/.cpp` (Fourier-Motzkin on sparse rows) is translated into `crates/ir/llrm-mir/src/constraintsystem.rs`; the pass `ConstraintElimination.cpp` follows and replaces `difference` (a Floyd-Warshall closure, O(n^3), 24 M on d_faces) and the `guards::Given::holds` path (12 M).

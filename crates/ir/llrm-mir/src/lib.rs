@@ -17,6 +17,7 @@ pub mod debuginfo;
 pub mod dense;
 pub mod depends;
 pub mod dominators;
+pub mod domtree;
 pub mod dumpdir;
 pub mod edit;
 pub mod facts;
