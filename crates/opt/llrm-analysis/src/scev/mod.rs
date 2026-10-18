@@ -25,6 +25,7 @@ pub mod create_phi;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
+pub mod evaluate;
 pub mod exit_limit;
 pub mod exit_value;
 pub mod expand;
@@ -244,6 +245,14 @@ impl ScalarEvolution {
         s: Scev,
     ) -> Ty {
         self.node(s).ty.expect("a SCEV that has a type")
+    }
+
+    /// `isa<SCEVCouldNotCompute>`.
+    pub fn is_could_not_compute(
+        &self,
+        s: Scev,
+    ) -> bool {
+        matches!(self.node(s).kind, Kind::CouldNotCompute)
     }
 
     /// `getCouldNotCompute`.

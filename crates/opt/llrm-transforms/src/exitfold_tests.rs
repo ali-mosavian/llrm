@@ -6,7 +6,7 @@ use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use crate::testing::{managed, parsed, results};
 
 /// `exitfold::folded` as a pass of its own.
-struct Folded;
+struct Folded(bool);
 
 impl FunctionPass for Folded {
     fn name(&self) -> &'static str {
@@ -19,7 +19,14 @@ impl FunctionPass for Folded {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
-        if super::folded(unit.context, unit.layout, unit.function, &outer) {
+        if super::folded_by(
+            unit.context,
+            unit.layout,
+            unit.function,
+            &outer,
+            &mut llrm_analysis::memory::Standing::underived(),
+            self.0,
+        ) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -34,7 +41,20 @@ fn folded(
 ) -> String {
     let before = parsed(&format!("{DOS}{text}"));
     let mut after = before.clone();
-    let printed = managed(&mut after, Folded);
+    let printed = managed(&mut after, Folded(false));
+    assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
+    printed
+}
+
+/// `folded`, the exits their counts decide found by ScalarEvolution
+/// (the default; `LLRM_NO_SCEV_EXITFOLD` turns it off).
+fn folded_by_scev(
+    text: &str,
+    inputs: &[&[i128]],
+) -> String {
+    let before = parsed(&format!("{DOS}{text}"));
+    let mut after = before.clone();
+    let printed = managed(&mut after, Folded(true));
     assert_eq!(results(&after, inputs), results(&before, inputs), "{printed}");
     printed
 }
@@ -393,4 +413,30 @@ fn the_assumptions_of_a_body_are_found_once_for_all_the_guards_its_exits_ask() {
     folded(&checked("%len"), INPUTS);
     let built = llrm_analysis::assumptions::built() - before;
     assert!(built <= 2, "{built} assumption tables built for one body");
+}
+
+/// The exits their counts decide, found by ScalarEvolution's exit counts as
+/// LLVM's `optimizeLoopExits` does: the same four decisions as the old engine.
+#[test]
+fn test_scev_decides_the_exits_their_counts_decide() {
+    let guard = folded_by_scev(&checked("%len"), INPUTS);
+    assert!(guard.contains("br i1 true, label %body"), "the guard proves the later exit never leaves: {guard}");
+    let same = folded_by_scev(&checked("%n"), INPUTS);
+    assert!(same.contains("br i1 true, label %body"), "the same count as an earlier exit: {same}");
+    let higher = folded_by_scev(&checked("7").replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 3"), INPUTS);
+    assert!(higher.contains("br i1 true, label %body"), "a higher constant count: {higher}");
+    let zero = folded_by_scev(&checked("0").replace("icmp ult i16 %i, %n", "icmp ult i16 %i, 3"), INPUTS);
+    assert!(zero.contains("br i1 false, label %body"), "a count of zero leaves at once: {zero}");
+}
+
+/// Nothing orders the two lengths, so ScalarEvolution keeps both tests, as the
+/// old engine does.
+#[test]
+fn test_scev_keeps_exits_nothing_orders() {
+    let text = checked("%len").replace(
+        "  %fits = icmp ult i16 %n, %len\n  br i1 %fits, label %head, label %done",
+        "  %fits = icmp ult i16 %n, 1000\n  br i1 %fits, label %head, label %done",
+    );
+    let printed = folded_by_scev(&text, INPUTS);
+    assert!(printed.contains("br i1 %inside"), "{printed}");
 }

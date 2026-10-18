@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 45 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -11,7 +11,9 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 45 documented, 0 undoc
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
 | avail | Available loads and dead stores, as LLVM's GVN load forwarding and DSE find them through MemoryDependence. | `forwardable_walk`, `dead_stores`, `dead_stores_escaping`, and the | [avail](avail.md) |
+| basicaa | BasicAA, a translation of `BasicAliasAnalysis.cpp` at d1106deb71cc behind the interface of [`crate::aa`] (stage S1/S2 of docs/architecture/basicaa-port.md). |  | [basicaa](basicaa.md) |
 | branchprob | Static branch probabilities and block frequencies, as LLVM's `BranchProbabilityInfo` and `BlockFrequencyInfo` estimate them when no profile says otherwise. | `Odds { taken, frequency, by }` from `estimated`, `propagated` and | [branchprob](branchprob.md) |
+| capturecheck | `LLRM_CHECK_CAPTURES`: the frame objects the pointer facts say never escape, checked against LLVM's capture tracking read straight off the uses, with no fact followed: a pointer is captured when any use of it, or of what is made of it by a gep, a cast, a phi or a select (every arm), stores it, returns it, turns it into an integer or passes it where the callee keeps no copy is not promised. |  | [capturecheck](capturecheck.md) |
 | cellmap | A map from memory cell to fact, indexed by the object each cell lies in, so a write is tested only against the cells it can reach. | The container. Consumers: [`crate::alias`](alias.md), [`crate::consts`](consts.md), | [cellmap](cellmap.md) |
 | cfg | A function's blocks as the graph walks see them: block ids, successors, dominance, natural loops and reachability, built once per body. | `Shape` (a `Analysis` named `shape`), the | [cfg](cfg.md) |
 | constant_cycles | Sparse value propagation over phis, with distinct pending and overdefined states, to find constants that only a cycle proves. | `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md) | [constant_cycles](constant_cycles.md) |

@@ -47,7 +47,6 @@
 //! `shadow::decide_inline`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -62,6 +61,7 @@ use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
 use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
+use crate::support::hash::HashMap;
 
 /// What the allocator keeps per register and the spiller must extend for the
 /// registers it makes: the allocation order and the widest access.
@@ -71,7 +71,7 @@ pub struct Tables {
     pub widths: RefCell<HashMap<u32, u32>>,
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
-    pub remat: RefCell<std::collections::HashSet<u32>>,
+    pub remat: RefCell<crate::support::hash::HashSet<u32>>,
 }
 
 // DEVIATE D-I: `isTriviallyReMaterializable` is answered by the spiller's own
