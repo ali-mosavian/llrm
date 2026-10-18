@@ -1115,7 +1115,7 @@ impl Function {
     /// input per edge, so one call drops one input.
     pub fn predecessor_removed(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         block: BlockId,
         predecessor: BlockId,
         keep_one_input_phis: bool,
