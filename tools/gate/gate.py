@@ -234,10 +234,32 @@ def strays(names: list[str]) -> list[str]:
     return [n for n in names if n.rpartition(".")[2].lower() in PRODUCTS and "." in n and not n.startswith(FIXTURES)]
 
 
+def link_strays(root: Path) -> list[str]:
+    """What `git add -A` takes from a build tree: a tracked symlink pointing outside the repository or at an absolute path (a `target` link to a
+    cargo target dir made #2171 red for hours: "tree differs from HEAD"), or a build dir at the root. Relative links inside the tree are fine
+    (tests/run/nib/errors.nib)."""
+    entries = subprocess.run(["git", "ls-files", "-s"], cwd=root, capture_output=True, text=True, check=True).stdout.splitlines()
+    found = []
+    for entry in entries:
+        meta, _, name = entry.partition("\t")
+        if meta.startswith("120000"):
+            target = os.readlink(root / name)
+            inside = not os.path.isabs(target) and (root / name).parent.joinpath(target).resolve().is_relative_to(root.resolve())
+            if not inside:
+                found.append(f"tracked symlink {name} -> {target}")
+        elif name == "target" or name.startswith("target/"):
+            found.append(f"tracked build dir {name}")
+    return found
+
+
 def products_main(root: Path | None = None) -> int:
-    listed = subprocess.run(["git", "ls-files"], cwd=root or ROOT, capture_output=True, text=True, check=True).stdout.split("\n")
+    root = root or ROOT
+    listed = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
     if found := strays([n for n in listed if n]):
         print(f"build products are tracked: {found}")
+        return 1
+    if links := link_strays(root):
+        print("\n".join(links))
         return 1
     return 0
 
@@ -430,7 +452,9 @@ WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
 # "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
 # RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
 # crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
-STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
+# CARGO_INCREMENTAL=0 as CI builds: profile.release is incremental (256 units), and the same commit counts 10.3 -> 33.3 Minstr in lir pressuresink
+# there, 11.3 -> 37.6 built as CI does, 11.9 -> 40.7 under dist: test_budgets (budgets recorded in CI's build) read a debt as paid locally (#2240).
+STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENTAL": "0"}
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "

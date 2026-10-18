@@ -2114,7 +2114,7 @@ impl MemRef {
             Intrinsic::MemSetPattern => unit.int_bits(instruction.operands[1])? / 8,
             _ => return None,
         };
-        let width = u32::try_from(unit.int_constant(instruction.operands[2])?)
+        let width = u32::try_from(llrm_mir::intrinsics::length(unit.context, instruction.operands[2])?)
             .ok()?
             .checked_mul(cell)
             .filter(|&one| one > 0)?;
