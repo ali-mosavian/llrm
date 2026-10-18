@@ -237,17 +237,20 @@ pub const ANALYSES: &[AnalysisEntry] = &[
         key: "mssa",
         llvm: "MemorySSAAnalysis",
         kind: Translated,
-        off: true,
+        off: false,
         deps: &["aa"],
         oracle: "shadow_mssa equality on dumped pass inputs",
     },
 ];
 
-/// Vocabulary the manager does not have yet. `PreservedAnalyses` keeps an
-/// analysis or drops it; LLVM's passes that keep MemorySSA do so by updating it
-/// (`MemorySSAUpdater`), which the manager cannot tell from "unchanged".
-pub const TODO: &[&str] =
-    &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
+/// What is still open in the parity pipeline's use of the manager. A pass that
+/// keeps MemorySSA by updating it says `PreservedAnalyses::preserve_updated`
+/// and puts the result back (`Analyses::replace`); EarlyCSE does. LLVM's LICM
+/// and GVN keep MemorySSA the same way at the pin; here they do not yet.
+pub const TODO: &[&str] = &[
+    "LICM updates its clone of MemorySSA (MemorySSAUpdater) and the manager drops it with the pass: it does not `replace` it yet",
+    "GVN (memoryssa mode) does not ask for MemorySSA",
+];
 
 /// How many times LLVM runs a slot's pass over one body in one visit of the
 /// function (`PassBuilderPipelines.cpp`: the function simplification pipeline

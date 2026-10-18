@@ -332,7 +332,7 @@ fn applied(
     let void = function.instruction(last).ty;
     let at = Position::Before(last);
     for Rewrite { phi, ty, otherwise, form } in plan.rewrites {
-        let mut number = |function: &mut Function, op: BinaryOp, left: Operand, right: i128| {
+        let number = |function: &mut Function, op: BinaryOp, left: Operand, right: i128| {
             let right = Operand::Constant(context.int(ty, right));
             placed(function, Opcode::Binary(op), ty, vec![left, right], at)
         };
