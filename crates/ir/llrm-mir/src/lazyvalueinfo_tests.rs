@@ -126,7 +126,7 @@ fn an_intrinsics_builtin_range_is_unknown() {
     assert!(dump(text).expect("parses").contains("val f 0 cr=i32:full-set"));
 }
 
-/// DEVIATE 14: `ptrtoint (ptr inttoptr (i32 20 to ptr) to i32)` is `i32 20` in
+/// DEVIATE 11: `ptrtoint (ptr inttoptr (i32 20 to ptr) to i32)` is `i32 20` in
 /// LLVM; MIR keeps the expression, so the `and` with it is not folded to a
 /// range (LLVM: `[0, 21)` here).
 #[test]
@@ -136,8 +136,8 @@ fn a_constant_expression_is_not_folded() {
     assert!(lines.contains("val f 1 cr=i32:full-set"), "{lines}");
 }
 
-/// DEVIATE 7: a module that declares `llvm.experimental.guard` and calls it
-/// nowhere answers as one that does not.
+/// the guard note: a module that declares `llvm.experimental.guard` and calls
+/// it nowhere answers as one that does not.
 #[test]
 fn an_unused_guard_declaration_changes_nothing() {
     let body = "define i32 @f(i32 %x) {\nentry:\n  %c = icmp ult i32 %x, 10\n  br i1 %c, label %a, label %b\na:\n  %r = add i32 %x, 1\n  ret i32 %r\nb:\n  ret i32 0\n}\n";
