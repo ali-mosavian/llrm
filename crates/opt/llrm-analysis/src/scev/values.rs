@@ -119,7 +119,7 @@ pub fn print_module_values(module: &llrm_mir::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let tree = llrm_mir::dominators::DominatorTree::new(function);
+        let tree = llrm_mir::domtree::DomTree::of(function);
         let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
         let assumptions = llrm_mir::valuetracking::AssumptionCache::new(module, function);
         let cx = Cx {

@@ -4,4 +4,4 @@ fn_params_layout = "Vertical"
 group_imports = "StdExternalCrate"
 wrap_comments = true
 comment_width = 80
-ignore = ["crates/target/llrm-x86/src/select_sweep.rs"]
+ignore = ["crates/target/llrm-x86/src/select_sweep.rs", "crates/ir/llrm-mir/src/intrinsic_attrs.rs"]

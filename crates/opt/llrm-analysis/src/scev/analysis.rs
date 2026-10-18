@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::Function;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops};
@@ -90,7 +90,7 @@ pub struct ScevView {
     outer: Rc<llrm_mir::passes::Outer>,
     scevs: Rc<ScevCache>,
     loops: Rc<LoopInfo>,
-    tree: Rc<DominatorTree>,
+    tree: Rc<DomTree>,
     assumptions: Rc<AssumptionCache>,
 }
 
