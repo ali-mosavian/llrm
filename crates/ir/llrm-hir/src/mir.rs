@@ -1993,46 +1993,63 @@ fn operand_type(
 /// value is emitted before its uses whatever the HIR's block order.
 /// The results of the comparisons that nothing but a branch reads: C's
 /// `if (a < b)` tests the `i1`, as clang's `EmitBranchOnBoolExpr` does, and
-/// the widened result is never made.
+/// the widened result is never made. Two passes over the body, bit-indexed by
+/// value (a body of a thousand statements pays for no hashing), and none at
+/// all when it compares nothing.
 fn branch_only_comparisons(function: &model::Function) -> HashMap<i64, Option<(Value, CastOp, TypeId)>> {
-    let mut compared: HashSet<i64> = HashSet::default();
-    let mut read: HashSet<i64> = HashSet::default();
+    let size = function.values.iter().map(|one| one.id).max().map_or(0, |most| most as usize + 1);
+    let mut compared = vec![false; size];
+    let mut any = false;
+    for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+        if let Some(&result) = instruction.results.first()
+            && comparison(three_way(instruction.op).unwrap_or(instruction.op)).is_some()
+            && let Some(slot) = compared.get_mut(result as usize)
+        {
+            *slot = true;
+            any = true;
+        }
+    }
+    if !any {
+        return HashMap::default();
+    }
+    fn read(
+        compared: &mut [bool],
+        value: i64,
+    ) {
+        if let Some(slot) = compared.get_mut(value as usize) {
+            *slot = false;
+        }
+    }
     fn note(
-        read: &mut HashSet<i64>,
+        compared: &mut [bool],
         operands: &[Operand],
     ) {
         for operand in operands {
             match operand {
-                Operand::ValueRef(one) => {
-                    read.insert(one.value);
-                }
-                Operand::ArrayElement(one) => note(read, &one.indices),
-                Operand::ProjectedPlace(one) => note(read, &one.indices),
+                Operand::ValueRef(one) => read(compared, one.value),
+                Operand::ArrayElement(one) => note(compared, &one.indices),
+                Operand::ProjectedPlace(one) => note(compared, &one.indices),
                 Operand::IndirectPlace(one) => {
-                    read.extend([one.base]);
-                    read.extend(one.origin);
+                    read(compared, one.base);
+                    if let Some(origin) = one.origin {
+                        read(compared, origin);
+                    }
                 }
-                Operand::DescriptorPlace(one) => {
-                    read.insert(one.base);
-                }
+                Operand::DescriptorPlace(one) => read(compared, one.base),
                 Operand::Constant(_) | Operand::PlaceRef(_) => {}
             }
         }
     }
     for block in &function.blocks {
         for instruction in &block.instructions {
-            if comparison(three_way(instruction.op).unwrap_or(instruction.op)).is_some() {
-                compared.extend(instruction.results.first().copied());
-            }
-            note(&mut read, &instruction.operands);
+            note(&mut compared, &instruction.operands);
         }
         match block.terminator.kind {
-            TerminatorKind::Branch => note(&mut read, &block.terminator.operands[1..]),
-            _ => note(&mut read, &block.terminator.operands),
+            TerminatorKind::Branch => note(&mut compared, &block.terminator.operands[1..]),
+            _ => note(&mut compared, &block.terminator.operands),
         }
     }
-    compared.retain(|one| !read.contains(one));
-    compared.into_iter().map(|one| (one, None)).collect()
+    compared.iter().enumerate().filter(|(_, only)| **only).map(|(value, _)| (value as i64, None)).collect()
 }
 
 fn emission_order(function: &model::Function) -> Vec<&model::Block> {
