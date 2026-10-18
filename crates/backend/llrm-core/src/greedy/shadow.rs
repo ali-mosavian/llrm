@@ -286,7 +286,10 @@ pub fn decide_with(
     let lis = LiveIntervals::new(body);
     // The environment: orders, frequencies, loop exits.
     let busy = Frequency::of(body);
-    let freq: Vec<f32> = body.blocks.iter().map(|block| busy.block(block.at) as f32).collect();
+    // `MachineBlockFrequencyInfo` keeps a frequency in 64 bits and saturates:
+    // a deep loop nest reaches the top, never infinity, which the spill weights
+    // read as a range that cannot be spilled.
+    let freq: Vec<f32> = body.blocks.iter().map(|block| (busy.block(block.at) as f64).min(u64::MAX as f64) as f32).collect();
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let exiting: Vec<bool> = body
         .blocks

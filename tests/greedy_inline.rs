@@ -122,3 +122,30 @@ fn a_spilled_update_is_stored_back_from_its_slot_not_its_stale_home() {
         assert!(store != format!("{load}, eax"), "a global stored with its own old value: {} / {}", pair[0], pair[1]);
     }
 }
+
+/// tools/test_budgets.py's `nest` axis at 2N (32 loops deep) cost 21 G instructions under `LLRM_GREEDY=1`: the
+/// innermost block's frequency overflowed f32 to infinity, every range there weighed infinity (not spillable), 54
+/// ranges found no register, and the function went to the rounds and then to the old allocator.
+#[test]
+fn a_deep_loop_nest_is_allocated_inline() {
+    let depth = 40;
+    let counters: Vec<String> = (0..depth).map(|k| format!("i{k}")).collect();
+    let mut source = format!("unsigned f(unsigned n) {{\n    unsigned s = 0, {};\n", counters.join(", "));
+    for k in 0..depth {
+        source += &format!("    for (i{k} = 0; i{k} < n; i{k}++) {{ s += i{k};\n");
+    }
+    source += &"}".repeat(depth);
+    source += "\n    return s;\n}\n";
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), source).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .env("LLRM_GREEDY", "1")
+        .env("LLRM_GREEDY_TRACE", "1")
+        .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+    assert!(!said.contains("left for the rounds"), "{said}");
+}
