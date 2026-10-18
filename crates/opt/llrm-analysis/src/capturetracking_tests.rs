@@ -84,7 +84,10 @@ b0:
   ret i1 %a
 }
 ";
-    assert_eq!(found(text, "p", 0).without_ret, CaptureComponents::ADDRESS);
+    // The use list runs newest first and the worklist pops from its back, as in
+    // LLVM: `%a`, the oldest use, is explored first and the stop function
+    // halts at it, before `%b` keeps the address.
+    assert_eq!(found(text, "p", 0).without_ret, CaptureComponents::ADDRESS_IS_NULL);
     let only_null = "define i1 @f(ptr %p) {
 b0:
   %a = icmp eq ptr %p, null

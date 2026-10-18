@@ -807,6 +807,84 @@ fn no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id() {
     assert!(over.is_empty(), "use llrm_mir::dense::{{IdMap, IdSet}} for ids: {over:?}");
 }
 
+/// Reads of a value's use list that treat it as a slice: `users(..)` followed
+/// by `.len()`, `.to_vec()` or `.contains(`. LLVM has no O(1) count, no copy
+/// and no search of a use list; `Users` has them only until the readers go.
+fn slice_user_counts(sources: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for (name, text) in sources {
+        let mut found = 0;
+        for (at, _) in text.match_indices(".users(") {
+            let mut depth = 0;
+            let mut end = None;
+            for (i, c) in text[at + ".users".len()..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = Some(at + ".users".len() + i + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let rest = end.map_or("", |end| text[end..].trim_start());
+            found += [".len()", ".to_vec()", ".contains("].iter().filter(|one| rest.starts_with(**one)).count();
+        }
+        if found > 0 {
+            counts.insert(name.clone(), found);
+        }
+    }
+    counts
+}
+
+#[test]
+fn no_file_gains_a_slice_read_of_a_use_list() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let ceilings: std::collections::BTreeMap<&str, usize> = include_str!("../slice-users.txt")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(file, count)| (file, count.parse().expect("a count")))
+        .collect();
+    let mut sources = Vec::new();
+    let mut stack = vec![root.join("crates")];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("a directory reads").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let name = path.strip_prefix(&root).expect("under the root").to_string_lossy().into_owned();
+            if name.ends_with(".rs")
+                && !name.ends_with("_tests.rs")
+                && !name.ends_with("/tests.rs")
+                && !name.contains("/tests/")
+            {
+                sources.push((name, std::fs::read_to_string(&path).expect("a source reads")));
+            }
+        }
+    }
+    let over: Vec<String> = slice_user_counts(&sources)
+        .into_iter()
+        .filter(|(name, found)| *found > ceilings.get(name.as_str()).copied().unwrap_or(0))
+        .map(|(name, found)| format!("{name}: {found} > {}", ceilings.get(name.as_str()).copied().unwrap_or(0)))
+        .collect();
+    assert!(over.is_empty(), "walk the use list (`users(v).iter()`, `.only()`, `is_empty()`) instead: {over:?}");
+}
+
+/// A scan that finds nothing in a tree full of such reads is the broken
+/// instrument: the three shapes count, an iteration and a nested call do not.
+#[test]
+fn a_slice_read_of_a_use_list_is_counted_and_a_walk_is_not() {
+    let source = |text: &str| vec![("a.rs".to_owned(), text.to_owned())];
+    let text = "f.users(v).len(); f.users(g(v)).to_vec(); f.users(v)\n    .contains(&u); f.users(v).iter(); f.users(v).only();";
+    assert_eq!(slice_user_counts(&source(text)).get("a.rs"), Some(&3));
+}
+
 /// `pub type Intervals = IndexMap<ValueId, Interval>` once let two files hold
 /// keyed maps the text scan could not see; each use of the alias is one.
 #[test]
