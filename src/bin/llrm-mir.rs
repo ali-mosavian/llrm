@@ -163,23 +163,16 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
         }
         for (at, &one) in pointers.iter().enumerate() {
             for &other in &pointers[at + 1..] {
-                // aa-eval asks with no size (`beforeOrAfterPointer`), so any byte of an
-                // object a pointer is into may be the one: NoAlias is a pair with no
-                // object in common, offsets and widths not read.
-                let objects = |value: &ValueId| {
-                    facts.values.get(value).map(|provenance| {
-                        provenance.slices.iter().map(|one| one.object).collect::<std::collections::BTreeSet<_>>()
-                    })
+                // aa-eval asks with no size (`beforeOrAfterPointer`): a width no
+                // offset gets past, so only the objects separate two pointers. The
+                // reference is the one the consumers of the facts compare.
+                let cell = |value: ValueId| {
+                    let mut cell = llrm_analysis::memory::MemRef::at(&unit, Operand::Value(value), 1 << 20);
+                    cell.provenance = facts.values.get(&value).cloned();
+                    cell
                 };
-                let answer = match (objects(&one), objects(&other)) {
-                    (Some(left), Some(right))
-                        if left.is_disjoint(&right)
-                            && !left.iter().chain(&right).any(|object| {
-                                matches!(object.kind, llrm_analysis::memory::MemoryKind::Unknown)
-                            }) =>
-                    {
-                        "NoAlias"
-                    }
+                let answer = match llrm_analysis::regions::overlapping(&cell(one), &cell(other), None, None, None) {
+                    Ok(false) => "NoAlias",
                     _ => "MayAlias",
                 };
                 out += &format!(
