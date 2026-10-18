@@ -6,7 +6,7 @@ architecture-order: 5
 
 TL;DR: the end state is LLVM's structure at `d1106deb71cc` (IR core, four pass managers, the pipeline as data, per-pass analysis contracts, the backend chain), with six numbered DEVIATEs for the 16-bit target. Every port PR names its box here.
 
-Status: design, reviewed by oversight. Mirror rule: each box is `MIRROR` unless a DEVIATE below says otherwise. Reference: [pinned pipeline per level](parity-pipeline-slots.md), [slot table](redesign-plan.md), [road to parity](parity-pipeline.md).
+Status: design. Mirror rule: each box is `MIRROR` unless a DEVIATE below says otherwise. Reference: [pinned pipeline per level](parity-pipeline-slots.md), [slot table](redesign-plan.md), [road to parity](parity-pipeline.md).
 
 ## The boxes
 
@@ -135,10 +135,10 @@ llrm targets i386 real mode and flat 32-bit. Six places differ from LLVM on purp
 | # | DEVIATE | why | where |
 |---|---|---|---|
 | D1 | Segments and far/huge pointers: MIR states a huge pointer in the target's huge address space; isel gives it its representation; `window` splits huge recurrences | LLVM's x86 has no 16-bit segmented model | MIR, isel, loop passes |
-| D2 | Front-end shapes: the front ends emit branch conditions, scaled indices and aggregate copies as word runs that clang does not; the plan translates them toward clang's shapes ([frontend-aggregates.md](frontend-aggregates.md)) | no clang front end for Nib, QB or Open Watcom C | front ends, HIR |
-| D3 | x87 as register-stack code: `floatassign`/`floatalloc` stand in for the RFP classes plus `X86FloatingPoint.cpp` until slot 60 joins | float registers are a stack | backend slot 60 |
-| D4 | Emission: llrm relaxes a flat item list at one fixpoint instead of `MCAssembler` layout; the OMF writer has no LLVM counterpart | cost; the target's object format | backend slot 64 |
-| D5 | Operands as `Vec<Operand>` per instruction, not co-allocated `User` operands | Rust ownership; revisit after use lists | IR core |
+| D2 | temporary. Front-end shapes: the front ends emit branch conditions, scaled indices and aggregate copies as word runs that clang does not ([frontend-aggregates.md](frontend-aggregates.md)) | no clang front end for Nib, QB or Open Watcom C | front ends, HIR; exit: the front-end shapes plan (C translate step 1, [#2306]; owner hir-branch-icmp-2211) brings the shapes to clang's |
+| D3 | temporary. x87 as register-stack code: `floatassign` stands in for the RFP register classes until slot 60 joins; `floatalloc` is already translated from `X86FloatingPoint.cpp` | float registers are a stack | backend slot 60; exit: slot 60 joined with FPS ON by default (backend-slopes) |
+| D4 | temporary. Emission: llrm relaxes a flat item list at one fixpoint instead of `MCAssembler` layout; the OMF writer has no LLVM counterpart and stays | relax and write is about 2.7 M of the 22.5 M emission on `d_faces` -O2 (backend-slopes split); no measurement of `MCAssembler` layout yet | backend slot 64; exit: measure clang's layout on the same input, keep only if llrm's is at most 1.5x |
+| D5 | Operands as `Vec<Operand>` per instruction, not co-allocated `User` operands | inline operands are at most 2.7% of allocations and 0.2% of instructions ([architecture-parity.md](architecture-parity.md)) | IR core; revisit when use lists and ilist ([#2322]) have landed: re-measure, adopt if above 1% |
 | D6 | `noipa` on Nib bench kernels, honoured by every IPO pass | GCC's `noipa` precedent | CGSCC, IPO |
 
 A new DEVIATE takes the next number, a reason, and a measured number, or it is not allowed.
@@ -154,8 +154,9 @@ The registry in `parity.rs` (`crates/opt/llrm-transforms`) is the source of trut
 | Missing | constraint-elimination, loop-instsimplify, loop-simplifycfg, sccp and bdce, dfa-jump-threading, vector-combine, early-tailduplication, stack-coloring and shrink-wrap (Backend) |
 | Old | everything else: simplifycfg, instcombine, sroa, mem2reg, gvn, licm, loop passes, indvars, dse and the machine passes, each naming the translation that replaces it |
 
-Translations written and not yet joined (SROA, mem2reg, GVN, InstSimplify, DomTree, LVI, BackedgeTakenInfo, DSE) are in the road in [parity-pipeline.md](parity-pipeline.md). A box turns from Old to Translated only when its slot joins with its oracle passing. Regenerate this count from the registry on each refresh.
+Translations written and not yet joined (SROA, mem2reg, GVN, InstSimplify, DomTree, LVI, BackedgeTakenInfo, DSE) are in the road in [parity-pipeline.md](parity-pipeline.md). A box turns from Old to Translated only when its slot joins with its oracle passing. The count is part of each status report: regenerate it from `parity.rs` every time.
 
+[#2306]: https://github.com/ali-mosavian/llrm/pull/2306
 [#2312]: https://github.com/ali-mosavian/llrm/pull/2312
 [#2288]: https://github.com/ali-mosavian/llrm/pull/2288
 [#2322]: https://github.com/ali-mosavian/llrm/pull/2322
