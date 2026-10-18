@@ -181,6 +181,16 @@ struct CallMasks {
     widths: Rc<Tables>,
 }
 
+thread_local! {
+    static CALLS_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The calls `reg_mask_clobbered` has looked at on this thread, for a test that
+/// a range with a hole does not look at the calls in it.
+pub fn calls_visited() -> usize {
+    CALLS_VISITED.with(std::cell::Cell::get)
+}
+
 impl PhysInterference for CallMasks {
     /// `LiveIntervals::checkRegMaskInterference`: the slots are ascending, so
     /// the calls the range is live across are found by one merge with its
@@ -197,6 +207,7 @@ impl PhysInterference for CallMasks {
         let mut at = self.calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         let mut segment = 0usize;
         while at < self.calls.len() && segment < li.segments.len() {
+            CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
             let (slot, destroyed, high, read) = &self.calls[at];
             if li.segments[segment].end < *slot {
                 segment = li.advance_to(segment, slot);
@@ -205,6 +216,12 @@ impl PhysInterference for CallMasks {
                 }
             }
             let s = &li.segments[segment];
+            // A call before the segment is across none of the later ones
+            // either: the hole is crossed by a search, not a step per call.
+            if *slot <= s.start {
+                at += self.calls[at..].partition_point(|(slot, ..)| *slot <= s.start);
+                continue;
+            }
             // Live across: defined before the call, read after it.
             // An instruction that reads a register it names not (the data
             // segment) also takes it from a range that ends at it.
@@ -554,5 +571,34 @@ mod tests {
         assert_eq!(masks.reg_mask_clobbered(&live(5)), Some(vec![ds]), "ends at the instruction");
         assert_eq!(masks.reg_mask_clobbered(&live(8)), Some(vec![ds]), "goes on past it");
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
+    }
+
+    /// A range live at the two ends of a function and not between them was
+    /// checked against every call between: a step per call in the hole
+    /// (`reg_mask_clobbered`: 8.4 M of d_faces' register allocation). The calls
+    /// in the hole are skipped by a search.
+    #[test]
+    fn test_a_hole_in_a_range_is_not_walked_call_by_call() {
+        let insns: Vec<Arc<Insn>> = (0..2000).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let calls = (10..1990).map(|n| (at(n), vec![], vec![esi], vec![])).collect();
+        let masks = CallMasks { calls, widths: widths(&[(1, 4)]) };
+        let mut li = LiveInterval::new(1, 1.0);
+        let v = li.get_next_value(at(2));
+        li.add_segment(Segment::new(at(2), at(4), Some(v.clone())));
+        li.add_segment(Segment::new(at(1995), at(1998), Some(v)));
+        let before = calls_visited();
+        assert!(masks.reg_mask_clobbered(&li).is_none_or(|roots| roots.is_empty()));
+        let visited = calls_visited() - before;
+        assert!(visited <= 10, "{visited} calls looked at for a range with no call in it");
     }
 }

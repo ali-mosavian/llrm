@@ -386,3 +386,96 @@ pub fn is_free_intrinsic(name: &str) -> bool {
     ];
     FREE.iter().any(|one| name == *one || name.strip_prefix(one).is_some_and(|rest| rest.starts_with('.')))
 }
+
+/// The generic profile: `TargetTransformInfoImplBase`'s defaults, what a target
+/// with no cost model of its own is priced by (T10): one unit for an operation,
+/// nothing for a `phi` (unless throughput is asked), a constant, or a
+/// truncation; no addressing mode folds.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Basic;
+
+impl Tti for Basic {
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: Ty,
+        _: CostKind,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: Ty,
+        _: CostKind,
+        _: bool,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> Cost {
+        if phi && kind != CostKind::RecipThroughput { Cost::FREE } else { Cost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> Cost {
+        Cost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: Ty,
+        _: Ty,
+    ) -> bool {
+        false
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        _: bool,
+        _: i64,
+        _: bool,
+        _: i64,
+    ) -> bool {
+        false
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: Ty,
+        _: Ty,
+        _: CostKind,
+    ) -> Cost {
+        Cost::BASIC
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: Ty,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> Cost {
+        Cost::BASIC
+    }
+}

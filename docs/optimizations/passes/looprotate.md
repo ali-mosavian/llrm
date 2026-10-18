@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looprotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looprotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:1f580a327640ebe3f66fe6f0b610353e0d144f0d0804d9bec1444c6d3112c74d -->
+<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:5349f89a9ae29a675200716c98bc12493a324f02fc0074a4619bd2e8df20e2dc -->
 
 # looprotate
 
@@ -44,6 +44,8 @@ latch if they are joined by a jump.
   and no coroutines.
 - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
   sits in a preheader whose analyses the rotation is changing.
+- R6 A target with no cost model (`Machine::tti`) is priced by the generic
+  profile, `llrm_mir::tti::Basic`: a pass names no target crate.
 
 ## Example
 Before:
