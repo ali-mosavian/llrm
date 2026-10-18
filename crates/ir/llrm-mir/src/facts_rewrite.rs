@@ -45,6 +45,8 @@
 //! the operands of the instruction it simplifies, as LLVM's
 //! `InstructionSimplify` does (`(X <<nuw Y) >> Y` is `X`): each is an operand,
 //! so it ran wherever the user does, and the answer replaces that user only.
+//! `constantfolding` reads the flags of the GEP it folds to flag the constant
+//! that replaces that GEP, in its place and for its users only.
 //! `ranges`, `guards` and `consts` read no flag. Value tracking
 //! (`valuetracking/`: `context`, `guarantee`, `known`, `nonzero`, `power2`,
 //! `range`, and the matchers in `pattern`) reads a promise of the instruction
@@ -210,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 19] = [
+        const CHECKED: [&str; 22] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -227,6 +229,9 @@ mod tests {
             "pattern.rs",
             "power2.rs",
             "range.rs",
+            // ConstantFolding.cpp reads a GEP's `inbounds`, `nusw` and `nuw`
+            // to flag the constant that replaces it.
+            "constantfolding.rs",
             // InlineCost.cpp reads a GEP's `inbounds` where LLVM does
             // (`stripAndAccumulateInBoundsConstantOffsets`,
             // `visitGetElementPtr`).
@@ -236,6 +241,13 @@ mod tests {
             // LLVM does.
             "local.rs",
             "pass.rs",
+            // LazyValueInfo.cpp's `binaryOp(BO)`, `Trunc->getNoWrapKind()`,
+            // `m_NUWMul` and `m_AddLike`, and `stripInBoundsOffsets`, read
+            // them where LLVM does.
+            "lazyvalueinfo.rs",
+            // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
+            // does (`decompose`, `getFlagsFor...`).
+            "constraintelim.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

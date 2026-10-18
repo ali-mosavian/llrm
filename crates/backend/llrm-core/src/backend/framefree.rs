@@ -106,6 +106,12 @@ pub fn x87_registers_only(bytes: &[u8]) -> bool {
     bytes.len() % 2 == 0 && bytes.chunks(2).all(|pair| (0xd8..=0xdf).contains(&pair[0]) && pair[1] >= 0xc0)
 }
 
+thread_local! {
+    /// Blocks `without_frame_register` has looked over to find the blocks it
+    /// follows, for a test of its slope.
+    pub static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Whether the function described by `body` (its calls' popped bytes in `pops`)
 /// can have no frame register.
 pub fn without_frame_register(
@@ -220,6 +226,9 @@ pub fn without_frame_register(
     let mut at: BTreeMap<i64, i64> = BTreeMap::new();
     let mut pending = vec![(body.entry, 0i64)];
     let mut seen = BTreeSet::new();
+    // A block is found by its number once, not by a search of the body each
+    // time a way reaches it.
+    let by_number: BTreeMap<i64, &crate::model::lir::Block> = body.blocks.iter().map(|one| (one.at, one)).collect();
     while let Some((block, here)) = pending.pop() {
         match at.get(&block) {
             Some(&there) if there != here => return false,
@@ -233,7 +242,8 @@ pub fn without_frame_register(
             return false;
         }
         let Some(Some(effect)) = effects.get(&block) else { continue };
-        let Some(found) = body.blocks.iter().find(|one| one.at == block) else { continue };
+        LOOKED.with(|looked| looked.set(looked.get() + 1));
+        let Some(found) = by_number.get(&block) else { continue };
         for &next in &found.succ {
             pending.push((next, here + effect));
         }

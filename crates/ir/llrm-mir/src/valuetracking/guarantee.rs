@@ -560,7 +560,7 @@ pub fn implies_poison(
 /// `stripPointerCastsSameRepresentation()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
-fn strip_pointer_casts_same_representation(
+pub(crate) fn strip_pointer_casts_same_representation(
     q: &Query,
     v: Operand,
 ) -> Operand {
@@ -840,7 +840,7 @@ pub fn must_execute_ub_if_poison_on_path_to(
     q: &Query,
     root: InstId,
     on_path_to: InstId,
-    dt: &crate::dominators::DominatorTree,
+    dt: &crate::domtree::DomTree,
 ) -> bool {
     let mut known_poison: HashSet<Operand> = HashSet::default();
     let mut worklist = vec![root];
