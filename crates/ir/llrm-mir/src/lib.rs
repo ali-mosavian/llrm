@@ -11,6 +11,7 @@ pub mod callgraph;
 pub mod constantfprange;
 pub mod constantrange;
 pub mod constfold;
+pub mod constraintsystem;
 pub mod context;
 pub mod counts;
 pub mod datalayout;
