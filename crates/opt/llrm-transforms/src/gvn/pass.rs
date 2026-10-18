@@ -36,13 +36,14 @@
 
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
-use llrm_support::hash::{HashMap, HashSet, IndexMap};
+use llrm_support::hash::HashSet;
 
 use super::table::{Env, ExprOp, LeaderMap, ValueTable};
 use crate::local;
@@ -70,7 +71,7 @@ pub struct GvnPass<'a> {
     dt: std::borrow::Cow<'a, DominatorTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
-    dead_blocks: IndexMap<BlockId, ()>,
+    dead_blocks: IdSet<BlockId>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
 }
@@ -104,7 +105,7 @@ pub fn run_impl_cfg(
         dt,
         vn: ValueTable::new(),
         leader_table: LeaderMap::default(),
-        dead_blocks: IndexMap::default(),
+        dead_blocks: IdSet::new(),
         cfg_changed: false,
     };
     let mark = pass.function.mark();
@@ -189,15 +190,15 @@ impl GvnPass<'_> {
         &mut self,
         block: BlockId,
     ) -> bool {
-        if self.dead_blocks.contains_key(&block) {
+        if self.dead_blocks.contains(&block) {
             return false;
         }
         // Since we may not have visited the input blocks of the phis, we can't
         // use our normal hash approach for phis. Instead, simply look for
         // obvious duplicates.
-        let mut to_remove = std::collections::BTreeSet::new();
+        let mut to_remove = llrm_mir::dense::IdSet::new();
         let mut changed = local::eliminate_duplicate_phi_nodes(self.function, block, &mut to_remove);
-        for phi in to_remove {
+        for phi in to_remove.iter() {
             self.remove_instruction(phi);
         }
         for inst in self.function.block(block).instructions().to_vec() {
@@ -801,10 +802,10 @@ impl GvnPass<'_> {
         if instruction.opcode == Opcode::Switch {
             let operands = instruction.operands.clone();
             let condition = operands[0];
-            let mut edges: HashMap<BlockId, u32> = HashMap::default();
+            let mut edges: IdMap<BlockId, u32> = IdMap::new();
             for operand in &operands {
                 if let Operand::Block(block) = operand {
-                    *edges.entry(*block).or_default() += 1;
+                    *edges.get_or_insert_with(*block, || 0) += 1;
                 }
             }
             let mut changed = false;
@@ -813,7 +814,7 @@ impl GvnPass<'_> {
                 let Operand::Block(destination) = case[1] else { continue };
                 // If there is only a single edge, propagate the case value into
                 // it.
-                if edges[&destination] == 1 {
+                if edges.get(&destination) == Some(&1) {
                     changed |= self.propagate_equality(condition, case[0], Root::Edge(parent, destination));
                 }
             }
@@ -942,7 +943,7 @@ impl GvnPass<'_> {
         }
         let Some(cond) = self.const_int(condition) else { return false };
         let mut dead_root = if cond & 1 == 1 { false_succ } else { true_succ };
-        if self.dead_blocks.contains_key(&dead_root) {
+        if self.dead_blocks.contains(&dead_root) {
             return false;
         }
         if crate::edges::single_predecessor(self.function, dead_root).is_none() {
@@ -974,9 +975,10 @@ impl GvnPass<'_> {
         block: BlockId,
     ) {
         let mut new_dead = vec![block];
-        let mut frontier: IndexMap<BlockId, ()> = IndexMap::default();
+        let mut frontier: Vec<BlockId> = Vec::new();
+        let mut in_frontier: IdSet<BlockId> = IdSet::new();
         while let Some(dead) = new_dead.pop() {
-            if self.dead_blocks.contains_key(&dead) {
+            if self.dead_blocks.contains(&dead) {
                 continue;
             }
             // All blocks dominated by D are dead.
@@ -988,20 +990,22 @@ impl GvnPass<'_> {
                 .filter(|&b| self.dt.is_reachable(b) && self.dt.dominates(dead, b))
                 .collect();
             for &b in &dominated {
-                self.dead_blocks.insert(b, ());
+                self.dead_blocks.insert(b);
             }
             // Figure out the dominance-frontier(D).
             for &b in &dominated {
                 for successor in self.function.successors(b) {
-                    if self.dead_blocks.contains_key(&successor) {
+                    if self.dead_blocks.contains(&successor) {
                         continue;
                     }
                     let all_pred_dead =
-                        self.function.predecessors(successor).iter().all(|p| self.dead_blocks.contains_key(p));
+                        self.function.predecessors(successor).iter().all(|p| self.dead_blocks.contains(p));
                     if !all_pred_dead {
                         // S could be proved dead later on. That is why we don't
                         // update phi operands at this moment.
-                        frontier.insert(successor, ());
+                        if in_frontier.insert(successor) {
+                            frontier.push(successor);
+                        }
                     } else {
                         // While S is not dominated by D, it is dead by now.
                         // This could take place if S already have a dead
@@ -1014,25 +1018,25 @@ impl GvnPass<'_> {
 
         // For the dead blocks' live successors, update their phi nodes by
         // replacing the operands corresponding to dead blocks with poison.
-        for (b, ()) in frontier {
-            if self.dead_blocks.contains_key(&b) {
+        for b in frontier {
+            if self.dead_blocks.contains(&b) {
                 continue;
             }
             // First, split the critical edges.
             let preds: Vec<BlockId> = self.function.predecessors(b).to_vec();
             for p in preds {
-                if !self.dead_blocks.contains_key(&p) {
+                if !self.dead_blocks.contains(&p) {
                     continue;
                 }
                 if self.function.successors(p).contains(&b) && crate::edges::is_critical_edge(self.function, p, b) {
                     if let Some(split) = self.split_critical_edges(p, b) {
-                        self.dead_blocks.insert(split, ());
+                        self.dead_blocks.insert(split);
                     }
                 }
             }
             // Now poison the incoming values from the dead predecessors.
             for p in self.function.predecessors(b).to_vec() {
-                if !self.dead_blocks.contains_key(&p) {
+                if !self.dead_blocks.contains(&p) {
                     continue;
                 }
                 for phi in crate::edges::phis(self.function, b) {
@@ -1053,7 +1057,7 @@ impl GvnPass<'_> {
 /// The reachable blocks in reverse postorder, `ReversePostOrderTraversal`.
 fn reverse_postorder(function: &Function) -> Vec<BlockId> {
     let Some(entry) = function.entry() else { return Vec::new() };
-    let mut seen: HashSet<BlockId> = HashSet::default();
+    let mut seen: IdSet<BlockId> = IdSet::new();
     let mut order = Vec::new();
     let mut stack = vec![(entry, function.successors(entry).to_vec(), 0_usize)];
     seen.insert(entry);

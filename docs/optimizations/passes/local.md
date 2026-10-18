@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:98d2aeb08961e10c295f63a27acb86ba92ad7b00d1b08b73eff46d3bc4e372fd -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:eb3f493f0aeff7d1d175b2c25d3555b50445fbdef3f6a31ce8ac91e5f76e3739 -->
 
 # local
 
@@ -78,7 +78,8 @@ Two phis with the same arms in one block. Before:
 `eliminate_duplicate_phi_nodes` puts `%q` in the set to remove and makes it
 read `%p`; after the caller erases it only `%p` is left.
 
-From unit test `a_duplicate_phi_is_replaced_by_the_first` in `local_tests.rs`.
+From unit test `a_duplicate_phi_is_replaced_by_the_first` in
+`local_tests.rs`.
 
 ## Used by
 Nothing yet; `gvn` is the caller this is for.
