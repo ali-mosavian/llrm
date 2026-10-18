@@ -111,6 +111,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
 pub mod indvars;

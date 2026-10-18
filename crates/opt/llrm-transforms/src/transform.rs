@@ -3,19 +3,15 @@
 //! values, and cleanup of phis after an edge goes.
 //!
 //! # How it works
-//! `subexpressions` is common-subexpression elimination. Blocks are taken in
-//! layout order; each instruction whose whole answer is in its operands gets a
-//! key (`_computation`): the opcode with its predicate, cast and flags, the
-//! type, and the operands as they stand once earlier replacements are made. A
-//! commutative pair (`add`, `mul`, `and`, `or`, `xor`, `icmp eq` and `ne`) is
-//! sorted and a pair of equal operands is one. The pure kinds are in `_PURE`,
-//! plus floating arithmetic and its conversions, which have no exceptions
-//! here. An instruction whose key an earlier one has, where that one has
-//! certainly run (`_reaches`: in the same block before it, or in a dominating
-//! block), reads the earlier result and is erased. A load is reused only
-//! within its block and only if nothing between the two may write its bytes
-//! (`_undisturbed`, from `memoryssa::Accesses`); with `avoid_store_crossing` a
-//! store between them refuses it too.
+//! `subexpressions` reuses a load: blocks are taken in layout order, and a
+//! non-volatile load gets a key (`_computation`): its opcode, flags and type,
+//! and its pointer as earlier replacements leave it. A load whose key an
+//! earlier one has in its block, with nothing between the two that may write
+//! its bytes (`_undisturbed`, from `memoryssa::Accesses`), reads the earlier
+//! result and is erased; with `avoid_store_crossing` a store between them
+//! refuses it too. Arithmetic, comparisons, addresses and casts are numbered
+//! by `gvn::table`, as LLVM's GVN does; `joined` keys them with `_computation`
+//! until scalar PRE replaces it.
 //!
 //! `equal_calls` makes two calls with one callee and arguments one when the
 //! caller's `silent` says they touch no memory: the later takes the earlier's
@@ -29,8 +25,6 @@
 //!
 //! ```text
 //!   before                        after
-//!   %a = add %x, %y               %a = add %x, %y
-//!   %c = add %y, %x               (uses of %c read %a)
 //!   %b = load %p                  %b = load %p
 //!   store %v, %q                  store %v, %q   ; may not write %p's bytes
 //!   %d = load %p                  (uses of %d read %b)
@@ -295,6 +289,11 @@ pub fn subexpressions(
         let instructions = function.block(block).instructions();
         for (index, &inst) in instructions.iter().enumerate() {
             let op = function.instruction(inst);
+            // Arithmetic is `gvn::table`'s; `joined` still keys it, with
+            // `_computation`, until scalar PRE replaces it.
+            if !matches!(op.opcode, Opcode::Load { .. }) {
+                continue;
+            }
             let Some(key) = _computation(op, &swap) else {
                 continue;
             };
@@ -923,264 +922,6 @@ b0:
         }
     }
 
-    #[test]
-    fn test_a_repeated_expression_is_computed_once() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = mul i16 %x, %y
-  %b = mul i16 %x, %y
-  %r = sub i16 %a, %b
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert_eq!(
-            text,
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = mul i16 %x, %y
-  %r = sub i16 %a, %a
-  ret i16 %r
-}
-"
-        );
-    }
-
-    #[test]
-    fn test_operands_in_either_order_are_one_commutative_expression() {
-        for (op, ty) in [("add", "i16"), ("xor", "i16"), ("icmp eq", "i1"), ("icmp ne", "i1")] {
-            let text = format!(
-                "define i32 @f(i16 %x, i16 %y) {{
-b0:
-  %a = {op} i16 %x, %y
-  %b = {op} i16 %y, %x
-  %s = zext {ty} %a to i32
-  %t = zext {ty} %b to i32
-  %r = add i32 %s, %t
-  ret i32 %r
-}}
-"
-            );
-            let (text, changed) = numbered(&text, XY);
-            assert!(changed, "{op}");
-            // and so are the two widenings
-            assert!(text.contains("%r = add i32 %s, %s"), "{text}");
-        }
-    }
-
-    #[test]
-    fn test_an_ordered_expression_with_its_operands_swapped_stays() {
-        for (op, ty) in [("sub", "i16"), ("shl", "i16"), ("icmp slt", "i1")] {
-            kept(&format!(
-                "define i32 @f(i16 %x, i16 %y) {{
-b0:
-  %a = {op} i16 %x, %y
-  %b = {op} i16 %y, %x
-  %s = zext {ty} %a to i32
-  %t = zext {ty} %b to i32
-  %r = add i32 %s, %t
-  ret i32 %r
-}}
-"
-            ));
-        }
-    }
-
-    /// Same opcode, but one operand, the flags or the type differs.
-    #[test]
-    fn test_expressions_differing_in_an_operand_flags_or_type_stay() {
-        for (first, second) in [
-            ("%a = add i16 %x, 1", "%b = add i16 %x, 2"),
-            ("%a = add nsw i16 %x, 1", "%b = add i16 %x, 1"),
-            ("%a = udiv exact i16 %x, 2", "%b = udiv i16 %x, 2"),
-            ("%a = sext i8 %n to i16", "%b = zext i8 %n to i16"),
-        ] {
-            kept(&format!(
-                "define i16 @f(i16 %x, i8 %n) {{
-b0:
-  {first}
-  {second}
-  %r = add i16 %a, %b
-  ret i16 %r
-}}
-"
-            ));
-        }
-        kept(
-            "define i32 @f(i8 %n) {
-b0:
-  %a = zext i8 %n to i16
-  %b = zext i8 %n to i32
-  %w = zext i16 %a to i32
-  %r = add i32 %w, %b
-  ret i32 %r
-}
-",
-        );
-    }
-
-    #[test]
-    fn test_a_dominated_repeat_reads_the_dominating_value() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %a = and i16 %x, %y
-  %c = icmp eq i16 %x, 0
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %b = and i16 %y, %x
-  ret i16 %b
-
-b2:
-  ret i16 %a
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(text.contains("b1:\n  ret i16 %a\n"), "{text}");
-    }
-
-    /// Neither arm runs before the other.
-    #[test]
-    fn test_a_repeat_in_a_sibling_block_is_kept() {
-        kept(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %c = icmp eq i16 %x, 0
-  br i1 %c, label %b1, label %b2
-
-b1:
-  %a = or i16 %x, %y
-  ret i16 %a
-
-b2:
-  %b = or i16 %x, %y
-  ret i16 %b
-}
-",
-        );
-    }
-
-    /// matrix printed T=0 for T=380 after CSE deleted a zero still named by
-    /// its loop phi.
-    #[test]
-    fn test_cse_replaces_phi_uses_of_a_deleted_initializer() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %first = add i16 %x, 7
-  br label %b1
-
-b1:
-  %second = add i16 %x, 7
-  br label %b2
-
-b2:
-  %result = phi i16 [ %second, %b1 ]
-  %r = add i16 %result, %second
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%second"), "{text}");
-        assert!(text.contains("%result = phi i16 [ %first, %b1 ]\n  %r = add i16 %result, %first"), "{text}");
-    }
-
-    /// Descriptor addresses encoded as zero must not become the same value.
-    #[test]
-    fn test_cse_keeps_distinct_linker_addresses() {
-        for other in ["@b", "null"] {
-            kept(&format!(
-                "@a = global i16 0
-@b = global i16 0
-
-define i16 @f() {{
-b0:
-  %first = ptrtoint ptr @a to i16
-  %second = ptrtoint ptr {other} to i16
-  %r = add i16 %first, %second
-  ret i16 %r
-}}
-"
-            ));
-        }
-    }
-
-    #[test]
-    fn test_cse_reuses_one_frame_object_address() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %frame = alloca [66 x i16]
-  %first = getelementptr i8, ptr %frame, i16 4
-  %duplicate = getelementptr i8, ptr %frame, i16 4
-  store i16 %x, ptr %first
-  %r = load i16, ptr %duplicate
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%duplicate"), "{text}");
-        assert!(text.contains("%r = load i16, ptr %first"), "{text}");
-    }
-
-    /// An address took its cell for a read, so no two addresses of one
-    /// descriptor were ever one value and no load through them was shared.
-    #[test]
-    fn test_cse_reuses_one_cell_address() {
-        let (text, changed) = numbered(
-            "@descriptor = global [20 x i8] zeroinitializer
-
-define i16 @f(i16 %x, i16 %y) {
-b0:
-  %first = getelementptr i8, ptr @descriptor, i16 18
-  %duplicate = getelementptr i8, ptr @descriptor, i16 18
-  store i16 %x, ptr %first
-  %r = load i16, ptr %duplicate
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(!text.contains("%duplicate"), "{text}");
-    }
-
-    /// lngmix under SROA refused 0x0071: "mov ... defines [v24_1] through no
-    /// operand": the third divide was served the second's quotient, which
-    /// the second no longer computed.
-    #[test]
-    fn test_a_third_equal_divide_reads_the_answer_the_first_computed() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %q0 = sdiv i16 %x, %y
-  %r0 = srem i16 %x, %y
-  %q1 = sdiv i16 %x, %y
-  %r1 = srem i16 %x, %y
-  %q2 = sdiv i16 %x, %y
-  %r2 = srem i16 %x, %y
-  %a = add i16 %r1, %q2
-  %b = add i16 %a, %q0
-  ret i16 %b
-}
-",
-            &[&[7, 2], &[-9, 4], &[100, -3]],
-        );
-        assert!(changed);
-        assert!(text.contains("  %a = add i16 %r0, %q0\n  %b = add i16 %a, %q0\n"), "{text}");
-        assert_eq!(text.matches("sdiv").count() + text.matches("srem").count(), 2, "{text}");
-    }
-
     /// `%a` and `%b` load `%p` with `between` in between, in @f of `head`,
     /// which starts with `pointers`.
     fn loads(
@@ -1284,26 +1025,6 @@ b1:
 }
 ",
         );
-    }
-
-    #[test]
-    fn test_floating_arithmetic_is_one_expression() {
-        let (text, changed) = numbered(
-            "define i16 @f(i16 %x, i16 %y) {
-b0:
-  %u = sitofp i16 %x to double
-  %v = sitofp i16 %x to double
-  %a = fdiv double %u, 3.0
-  %b = fdiv double %v, 3.0
-  %s = fadd double %a, %b
-  %r = fptosi double %s to i16
-  ret i16 %r
-}
-",
-            XY,
-        );
-        assert!(changed);
-        assert!(text.contains("%s = fadd double %a, %a"), "{text}");
     }
 
     /// A dead arm and the block it came from go; the join it leaves with one
