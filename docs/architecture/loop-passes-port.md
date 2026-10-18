@@ -1,3 +1,7 @@
+---
+architecture-index: loop passes as translations of LLVM's
+architecture-order: 480
+---
 # Loop passes as translations of LLVM's: the plan
 
 TL;DR: LoopUnroll (full unroll, which replaces both `peel` and `unroll`), LoopPeel, SimpleLoopUnswitch (trivial), LoopRotate and LoopDeletion are translated from `d1106deb71cc` (clang 24.0.0git), one small PR each, and the translations accept a rotated loop. That turns each row of the rotate refusals table (PR #2235; linked once merged) into an acceptance row; the rotate slot of `llvm_order` stays off until all are green. Owner: loop-passes-port. No rotated-form shim and no reordering of `hoist` around rotate.
