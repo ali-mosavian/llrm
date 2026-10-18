@@ -122,7 +122,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::{cfg, induction, ranges};
 use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context, mask, signed};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::lazyvalueinfo::{Env, LazyValueInfo};
@@ -1890,7 +1890,7 @@ fn _redundant_masks(
     }
     // CVP's `processAnd`: LazyValueInfo's range at the use first.
     let assumptions = AssumptionCache::of(context, &outer.globals, &outer.metadata, function);
-    let tree = DominatorTree::new(function);
+    let tree = DomTree::of(function);
     let mut lvi = LazyValueInfo::new();
     let mut settled: Vec<(InstId, Operand)> = Vec::new();
     let mut candidates = candidates;
