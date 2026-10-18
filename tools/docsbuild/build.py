@@ -7,6 +7,7 @@
     python3 tools/docsbuild/build.py --fix-style       give the figures of docs/ (not the generated pages) the shared init line
     python3 tools/docsbuild/build.py --check --render  also draw each figure with mmdc ($MMDC or PATH; skipped if absent)
 
+--sync also rewrites the Contents list of docs/architecture/readme.md from the pages' front matter (archindex.py).
 --sync writes one page per documented source file under docs/optimizations/{passes,analyses,backend}/ from its
 `//!` header, with an index in each. Commit what it writes: docs/ is read as committed. Only a page whose header
 (or whose link targets) changed is written again. --check lints every ```mermaid fence of a tracked Markdown
@@ -23,7 +24,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE.parent))
 
-from docsbuild import lint, sync  # noqa: E402
+from docsbuild import archindex, lint, sync  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,11 +44,13 @@ def main(argv: list[str] | None = None) -> int:
     errors = list(p.errors)
     if args.sync and not errors:
         sync.apply(ROOT, p)
-        print(f"synced {len(p.writes)} written, {len(p.deletes)} deleted")
+        print(f"synced {len(p.writes)} written, {len(p.deletes)} deleted" + ("; architecture index written" if archindex.sync(ROOT) else ""))
     if args.check:
         if p.drift:
             errors.append(sync.drift_message(p))
         errors += sync.missing_example(ROOT)
+        if archindex.drift(ROOT):
+            errors.append("docs/architecture/readme.md: the Contents list is stale; run python3 tools/docsbuild/build.py --sync")
         errors += lint.check_tree(ROOT)
         if args.render:
             errors += lint.render_errors(ROOT)
