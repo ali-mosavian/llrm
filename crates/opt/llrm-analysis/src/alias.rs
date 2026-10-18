@@ -149,19 +149,18 @@ use llrm_mir::types::Type;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap, IndexSet};
 
-use crate::cellmap::{Bucket, CellMap};
 use crate::cfg;
 use crate::consts::Known;
 use crate::globalsaa;
 use crate::graph::loops;
 use crate::induction;
 use crate::memory::{
-    self, Addr, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
+    self, Identity, Key, MemRef, MemoryKind, MemoryObject, ObjectInterner, ObjectRef, Provenance, Slice, Unit,
     object_of, wrapped,
 };
 use crate::num::Num as BigInt;
 use crate::ranges::{self, Interval, Lookup};
-use crate::regions::{self, ByteRange};
+use crate::regions;
 use crate::sliceset::{self, Shared, SliceSet};
 
 pub static UNKNOWN: LazyLock<Provenance> = LazyLock::new(|| Provenance::one(ObjectRef::UNKNOWN));
@@ -176,14 +175,6 @@ pub enum Actual {
     Provenance(Provenance),
     Pointer(ValueId, i64),
     Absent,
-}
-
-/// Python's `_cell_key` tuples: `(object, low, high)`, or a fixed address
-/// and width.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum CellKey {
-    Object(ObjectRef, i64, i64),
-    Address(Addr, i64),
 }
 
 /// Whole objects an unknown callee can reach through pointers it owns.
@@ -2675,18 +2666,6 @@ fn _widened(provenance: &Provenance) -> Provenance {
     Provenance { slices, restrict: provenance.restrict.clone() }
 }
 
-fn _cell_key(reference: &MemRef) -> Option<CellKey> {
-    if let Some(provenance) = &reference.provenance {
-        if provenance.slices.len() == 1 {
-            let one = provenance.slices.first().expect("one slice");
-            if one.stride == 1 {
-                return Some(CellKey::Object(one.object, one.low, one.high));
-            }
-        }
-    }
-    reference.addr().map(|addr| CellKey::Address(addr, i64::from(reference.width)))
-}
-
 /// Whether the call `inst` returns what its callee states `noalias`: a
 /// pointer to an object no other pointer reaches, as a constructor's.
 fn returns_unique(
@@ -3520,85 +3499,6 @@ fn _resolved_actuals(
             Actual::Absent => EMPTY.clone(),
         })
         .collect()
-}
-
-/// The object a cell key lies in: only keys sharing it can overlap.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum KeyBucket {
-    Object(ObjectRef),
-    Address(Operand),
-}
-
-impl Bucket for KeyBucket {
-    // Nothing looks a key bucket up by a component.
-    type Parts = ();
-
-    fn held(
-        &self,
-        _: &mut (),
-    ) {
-    }
-
-    fn released(
-        &self,
-        _: &mut (),
-    ) {
-    }
-}
-
-pub fn _key_bucket(key: &CellKey) -> KeyBucket {
-    match key {
-        CellKey::Object(object, _, _) => KeyBucket::Object(object.clone()),
-        CellKey::Address(addr, _) => KeyBucket::Address(addr.root),
-    }
-}
-
-/// A key's bucket, and no span: Python's map has no `span_of`.
-pub fn _key_place(key: &CellKey) -> (KeyBucket, Option<ByteRange>) {
-    (_key_bucket(key), None)
-}
-
-/// Drop the cells a store to `key` may overwrite, keeping `key` itself.
-pub fn _kill<V>(
-    cells: &mut CellMap<CellKey, V, KeyBucket>,
-    key: Option<&CellKey>,
-) {
-    let reached = key.map(|key| std::iter::once(_key_bucket(key)).collect());
-    cells.kill(
-        reached,
-        |old| {
-            #[cfg(test)]
-            ASKED.with(|asked| asked.borrow_mut().push(old.clone()));
-            Some(old) != key && _keys_overlap(Some(old), key)
-        },
-        None,
-    );
-}
-
-#[cfg(test)]
-thread_local! {
-    /// The cells `_kill` asked the exact test of.
-    pub static ASKED: RefCell<Vec<CellKey>> = const { RefCell::new(Vec::new()) };
-}
-
-pub fn _keys_overlap(
-    one: Option<&CellKey>,
-    other: Option<&CellKey>,
-) -> bool {
-    let (Some(one), Some(other)) = (one, other) else {
-        return true;
-    };
-    match (one, other) {
-        (CellKey::Address(addr, width), CellKey::Address(other_addr, other_width)) if addr.root == other_addr.root => {
-            addr.disp < other_addr.disp + other_width && other_addr.disp < addr.disp + width
-        }
-        (CellKey::Object(object, low, high), CellKey::Object(other_object, other_low, other_high))
-            if object == other_object =>
-        {
-            low < other_high && other_low < high
-        }
-        _ => one == other,
-    }
 }
 
 /// `value` modulo `modulus`, never negative for a positive modulus.
