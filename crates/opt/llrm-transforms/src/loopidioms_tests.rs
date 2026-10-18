@@ -767,9 +767,8 @@ fn a_pair_of_constants_is_one_store_tuned_for_size_where_the_bytes_are_fewer() {
         let (layout, outer) =
             (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
         let callees = llrm_mir::memory::callees(&module);
-        let mut declared = Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
-        super::merged(context, &layout, &callees, function, &outer, &mut declared, size);
+        super::merged(context, &layout, &callees, function, &outer, size);
         let after = printed(&module);
         assert_eq!(results(&module, BYTES), results(&before, BYTES), "{after}");
         after.matches("store").count()
