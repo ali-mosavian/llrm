@@ -80,3 +80,14 @@ def test_a_clean_head_with_its_own_changes_passes(tmp_path):
 def test_removed_test_functions_are_counted_in_rust_and_python():
     diff = "-#[test]\n-fn a() {}\n+x\n-def test_b():\n-    pass\n- def helper():\n"
     assert ps.deleted_tests(diff) == 2
+
+
+def test_known_red_names_a_smoke_step_and_an_issue_and_goes_in_the_body_as_one_line():
+    known = ps.parse_known_red(["sc=2438"])
+    assert known == {"sc": "#2438"} and ps.known_red_line(known) == "Known red: sc (#2438)" and ps.known_red_line({}) == ""
+    for bad in ("sc", "nope=2438", "sc=x"):
+        try:
+            ps.parse_known_red([bad])
+        except SystemExit:
+            continue
+        raise AssertionError(f"{bad!r} was accepted")
