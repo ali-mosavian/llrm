@@ -1,3 +1,7 @@
+---
+architecture-index: what the rotate slot changes
+architecture-order: 90
+---
 # What the rotate slot (rotate@728, header copy) changes, llvm_order, branch alim/feat/llvm-order-rotate
 
 Corpus: 71 programs at -O2 and -O3 (-m32 -mabi=sysv -march=i486) + d_faces -O1/-O2/-Os (145 compiles, none failed).
