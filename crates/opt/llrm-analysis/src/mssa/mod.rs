@@ -13,6 +13,7 @@ pub mod edit;
 pub mod shadow;
 pub mod updater;
 pub mod verify;
+pub mod view;
 pub mod walker;
 
 #[cfg(test)]
