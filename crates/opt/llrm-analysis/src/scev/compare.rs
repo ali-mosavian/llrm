@@ -67,7 +67,7 @@ impl ScalarEvolution {
         let is_pointer = |v: Operand| -> bool {
             match v {
                 Operand::Value(id) => self.ty_of(cx, cx.function.value(id).ty).is_some_and(|ty| ty.is_pointer()),
-                Operand::Constant(id) => self.ty_of(cx, cx.module.context.get(id).ty).is_some_and(|ty| ty.is_pointer()),
+                Operand::Constant(id) => self.ty_of(cx, cx.context.get(id).ty).is_some_and(|ty| ty.is_pointer()),
                 Operand::Block(_) => false,
             }
         };
@@ -91,9 +91,9 @@ impl ScalarEvolution {
 
         if let (Operand::Constant(l), Operand::Constant(r)) = (lv, rv)
             && let (llrm_mir::context::ConstantKind::Global(l), llrm_mir::context::ConstantKind::Global(r)) =
-                (&cx.module.context.get(l).kind, &cx.module.context.get(r).kind)
+                (&cx.context.get(l).kind, &cx.context.get(r).kind)
         {
-            let (lg, rg) = (cx.module.global(*l), cx.module.global(*r));
+            let (lg, rg) = (cx.global(*l), cx.global(*r));
             let difference = linkage_rank(lg.linkage) - linkage_rank(rg.linkage);
             if difference != 0 {
                 return difference;

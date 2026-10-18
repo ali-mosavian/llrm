@@ -23,7 +23,16 @@ fn run_file(file: &str) -> Vec<(String, String, String)> {
     let tree = DominatorTree::new(function);
     let loops = LoopInfo::analyze(function, || &tree);
     let assumptions = AssumptionCache::new(&module, function);
-    let cx = Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
     let labels = Labels::of(function);
     file.lines()
         .map(|line| {

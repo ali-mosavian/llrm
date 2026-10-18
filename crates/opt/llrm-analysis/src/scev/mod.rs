@@ -38,10 +38,11 @@ pub mod sequential;
 
 use std::collections::HashMap;
 
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef};
 use llrm_mir::types::Type as MirType;
 use llrm_mir::valuetracking::{AssumptionCache, Query};
 
@@ -52,7 +53,11 @@ use self::expr::{Kind, Node, Scev, Ty, Type, Use, flags};
 /// loops and dominator tree, and the data layout.
 #[derive(Clone, Copy)]
 pub struct Cx<'a> {
-    pub module: &'a Module,
+    /// The module's context, globals and metadata, held apart so a pass that
+    /// has a `&mut Context` and no `Module` can build one (as `Query` does).
+    pub context: &'a Context,
+    pub globals: &'a [GlobalValue],
+    pub metadata: &'a [MetadataNode],
     pub function: &'a Function,
     pub layout: &'a DataLayout,
     pub loops: &'a LoopInfo,
@@ -69,10 +74,20 @@ impl<'a> Cx<'a> {
         cxt: Option<llrm_mir::module::InstId>,
     ) -> Query<'a> {
         Query {
+            globals: self.globals,
+            metadata: self.metadata,
             dt: Some(self.tree),
             assumptions: Some(self.assumptions),
-            ..Query::new(self.module, self.function, self.layout).with_cxt(cxt)
+            ..Query::bare(self.context, self.function, self.layout).with_cxt(cxt)
         }
+    }
+
+    /// `Module::global`.
+    pub fn global(
+        &self,
+        id: llrm_mir::context::GlobalId,
+    ) -> &'a GlobalValue {
+        &self.globals[id.0 as usize]
     }
 }
 
@@ -329,7 +344,7 @@ impl ScalarEvolution {
         cx: &Cx,
         id: llrm_mir::types::TypeId,
     ) -> Option<Ty> {
-        match cx.module.context.types.get(id) {
+        match cx.context.types.get(id) {
             MirType::Int(bits) if (1..=128).contains(bits) => Some(Ty::Int(*bits)),
             MirType::Pointer(space) => Some(Ty::Ptr(*space)),
             _ => None,
@@ -344,7 +359,7 @@ impl ScalarEvolution {
     ) -> Ty {
         let id = match v {
             Operand::Value(value) => cx.function.value(value).ty,
-            Operand::Constant(constant) => cx.module.context.get(constant).ty,
+            Operand::Constant(constant) => cx.context.get(constant).ty,
             Operand::Block(_) => unreachable!("a block is not a SCEVable value"),
         };
         self.ty_of(cx, id).expect("a SCEVable value")
@@ -477,19 +492,19 @@ pub fn value_id(
     use llrm_mir::context::ConstantKind as K;
     use llrm_mir::module::GlobalKind;
     match v {
-        Operand::Constant(id) => match &cx.module.context.get(id).kind {
+        Operand::Constant(id) => match &cx.context.get(id).kind {
             K::Poison => 1,
             K::Zero => 2,
             K::Bytes(_) => 3,
             K::Int(_) => 5,
             K::Float(_) => 7,
             K::Null => 9,
-            K::Aggregate(_) => match cx.module.context.types.get(cx.module.context.get(id).ty) {
+            K::Aggregate(_) => match cx.context.types.get(cx.context.get(id).ty) {
                 MirType::Array { .. } => 11,
                 MirType::Vector { .. } => 13,
                 _ => 12,
             },
-            K::Global(global) => match cx.module.global(*global).kind {
+            K::Global(global) => match cx.global(*global).kind {
                 GlobalKind::Function(_) => 14,
                 _ => 17,
             },

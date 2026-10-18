@@ -151,11 +151,11 @@ impl ScalarEvolution {
     ) -> String {
         match value {
             Operand::Value(id) => format!("%{}", labels.values.get(&id).cloned().unwrap_or_default()),
-            Operand::Constant(id) => match &cx.module.context.get(id).kind {
+            Operand::Constant(id) => match &cx.context.get(id).kind {
                 ConstantKind::Null => "null".to_owned(),
                 ConstantKind::Poison => "poison".to_owned(),
                 ConstantKind::Global(global) => {
-                    format!("@{}", cx.module.global(*global).name.clone().unwrap_or_default())
+                    format!("@{}", cx.global(*global).name.clone().unwrap_or_default())
                 }
                 other => format!("{other:?}"),
             },
