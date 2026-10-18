@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/basicaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/basicaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:0d7f89293bd9a8549bcdcb7eb6928ed7ba5a47341a2f009d9c44c16f57bee7b1 -->
+<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:926672a5722689045edb5559ca2ba178267616fca3ef022bd98897eeb1d0945a -->
 
 # basicaa
 
@@ -17,16 +17,19 @@ variable indices by value and scale), `subtractDecomposedGEPs` and
 `aliasGEP` as far as it needs no value ranges: the inbounds and
 constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
-the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
-read the attributes.
+ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
+other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
+the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
+attributes.
 
 ## Example
-Two allocas never alias:
+Two allocas never alias, and a call cannot touch an alloca nobody holds a
+pointer to:
 
 ```text
 %a = alloca i32
 %b = alloca i32        ; alias(%a, %b) = NoAlias
+call void @g()         ; getModRefInfo(call, %a) = NoModRef
 ```
 
 ## Provides
