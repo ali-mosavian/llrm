@@ -28,9 +28,9 @@ sys.path.insert(0, str(next((Path(__file__).resolve().parents[2] / "crates" / "t
 
 import icount  # noqa: E402
 
-TOP = 0x0A000000  # the emulated memory: the image sits at 0x08048000, the heap above it, the stack below the top
+TOP = 0x0A000000  # the emulated memory: the image sits at 0x08048000, the heap above it, the stack below the image
 HEAP = 0x08800000
-STACK = 0x09F00000
+STACK = 0x07F00000  # below the image (0x08048000), as the extender's is: a pointer test against the image's tables takes the path DOSBox does
 GDT = 0x9000
 FLAT_CODE, FLAT_DATA = 0x00CF9A000000FFFF, 0x00CF92000000FFFF  # base 0, 4 GiB, 32-bit: the stack is ESP, not SP
 
