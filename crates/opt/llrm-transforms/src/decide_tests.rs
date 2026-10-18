@@ -619,6 +619,60 @@ fn test_an_index_that_follows_the_counter_is_left_to_the_loop_passes_by_scev() {
     assert_eq!(results(&module, INPUTS), before);
 }
 
+/// The loop-exit check of a counted loop (`rectwo`'s `_paths`, seven deep:
+/// -O2 and -O3 +10% clocks with ScalarEvolution on). `%k` is the loop's count,
+/// the loop is entered only with `%n != 0`, and it continues only with
+/// `%k - 1 != 0`, so `%k` is not zero where the loop is left from its header.
+/// The old engine decides it. The pinned `opt` drops it in
+/// `correlated-propagation` (LazyValueInfo), `instcombine` and `sccp`, and
+/// keeps it through `simplifycfg`, `loop-simplifycfg`, `simple-loop-unswitch`
+/// and `indvars`; ScalarEvolution has no fact about `%k` there, so the check
+/// stays.
+const COUNT_NOT_ZERO_AT_THE_EXIT: &str = "define i16 @f(i16 %inv, i16 %n) {
+entry:
+  %z0 = icmp eq i16 %n, 0
+  br i1 %z0, label %zero, label %pre
+pre:
+  br label %h
+h:
+  %c = phi i16 [ 0, %pre ], [ %c2, %l ]
+  %k = phi i16 [ %n, %pre ], [ %dec, %l ]
+  %t = icmp eq i16 %inv, 1
+  br i1 %t, label %l, label %x
+l:
+  %dec = sub nsw i16 %k, 1
+  %c2 = add i16 %c, 1
+  %d = icmp eq i16 %dec, 0
+  br i1 %d, label %out, label %h
+x:
+  %z = icmp eq i16 %k, 0
+  br i1 %z, label %zero, label %nz
+out:
+  ret i16 %c2
+nz:
+  ret i16 7
+zero:
+  ret i16 0
+}
+";
+
+#[test]
+fn test_a_count_checked_nonzero_before_its_loop_is_nonzero_at_the_loops_exit_by_the_old_engine() {
+    let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
+    let before = results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]);
+    assert!(printed(&module).contains("br i1 %z,"), "premise: the check is in the body");
+    assert!(decide(&mut module));
+    assert!(!printed(&module).contains("br i1 %z,"), "{}", printed(&module));
+    assert_eq!(results(&module, &[&[1, 3], &[0, 3], &[1, 0], &[0, 0]]), before);
+}
+
+#[test]
+fn test_scev_keeps_the_count_check_at_the_loops_exit() {
+    let mut module = parsed(&format!("{DOS}{COUNT_NOT_ZERO_AT_THE_EXIT}"));
+    decide_by_scev(&mut module);
+    assert!(printed(&module).contains("br i1 %z,"), "{}", printed(&module));
+}
+
 /// A condition a dominating branch implies is decided by either engine:
 /// `n > 5` taken, `n > 3` is true.
 #[test]

@@ -116,10 +116,11 @@ use crate::transform;
 
 /// `LLRM_EXP_SCEV_DECIDE`, read once: `decide` asks ScalarEvolution
 /// (`isKnownPredicateAt`) what the guards over a branch prove, not the old
-/// guard engine. Off by default: it decides more of some loops and less of
-/// the nested counted loops of `rectwo` (-O2, -O3 clocks +10%), where LLVM's
-/// own pipeline leaves it to `simple-loop-unswitch` and `simplifycfg`, which
-/// are not joined.
+/// guard engine. Off by default: it decides more of some loops and keeps the
+/// `count == 0` check at the exit of `rectwo`'s nested counted loops (-O2, -O3
+/// clocks +10%). The pinned `opt` drops that check in `correlated-propagation`
+/// (LazyValueInfo), `instcombine` and `sccp`, not in ScalarEvolution's users
+/// (see `COUNT_NOT_ZERO_AT_THE_EXIT` in the tests).
 fn scev_enabled() -> bool {
     llrm_support::env_flag!("LLRM_EXP_SCEV_DECIDE")
 }

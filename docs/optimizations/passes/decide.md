@@ -85,9 +85,12 @@ edges.
 With `LLRM_EXP_SCEV_DECIDE` set, a branch the other engines leave is asked of
 ScalarEvolution (`isKnownPredicateAt` at the branch, then its inverse) in place
 of the `guards` engine; off by default. It moves 60 of 1,590 objects, and the
-nested counted loops of `rectwo` are 10% slower at -O2 and -O3, so it stays off
-until `simple-loop-unswitch` and `simplifycfg`, which LLVM leaves them to, are
-joined.
+nested counted loops of `rectwo` are 10% slower at -O2 and -O3: the old engine
+proves a loop's count nonzero where the loop is left from its header, and
+ScalarEvolution has no fact about it. On the reduced loop the pinned `opt` drops
+the check in `correlated-propagation` (LazyValueInfo), `instcombine` and `sccp`,
+and keeps it through `simplifycfg`, `loop-simplifycfg`, `simple-loop-unswitch`
+and `indvars`. It stays off until a LazyValueInfo-based slot joins.
 
 ## Needs
 `consts`, `constant_cycles`, `ranges`, `guards`, `induction`, points-to
