@@ -1,3 +1,7 @@
+---
+architecture-index: analyses gcc and LLVM do not compute
+architecture-order: 400
+---
 # Analyses gcc and LLVM do not compute
 
 TL;DR: analyses are 1,278 M of d_faces -O1's 6,246 M (20%). About 320 M of that is recomputes that came out equal. gcc and LLVM keep most pointer and range facts on the IR or answer them per query. For the three largest tables (annotated, through-memory, float-facts) that does not apply: their consumers sweep everything. The next structural step is the pointer facts on the IR.
