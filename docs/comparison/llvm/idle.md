@@ -147,7 +147,7 @@ By pass (llrm, idle runs then changing runs, M with analyses):
 | `hoist` | 30 | 44.7 | 5 | 43.9 |
 | `dse` | 22 | 12.9 | 12 | 39.8 |
 | `sroa` | 12 | 35.6 | 0 | 0 |
-| `fill` | 26 | 29.0 | 0 | 0 |
+| `loopidioms` | 26 | 29.0 | 0 | 0 |
 | `unroll` | 26 | 16.3 | 0 | 0 |
 
 The 722 itemised runs are 24 fewer than the 746 the pass counter reports; the steps without a name in the log are left out.

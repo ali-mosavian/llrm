@@ -63,7 +63,7 @@ What: compute `through-memory`, `annotated`, `accesses`, `globals-aa` and `regis
 
 ## 3. Idle pass runs
 
-What: log why idle runs are not skipped, narrow `reads()` for `promote`, `hoist`, `decide`, `sroa`, `fold`, `fill` (idle 226 M), and test for work before asking for analyses. Where: [`pipeline.rs#L1026`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L1026); LLVM [`LastRunTrackingAnalysis.cpp#L30`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30), [`InstructionCombining.cpp#L6258`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L6258). Page: [idle runs](idle.md).
+What: log why idle runs are not skipped, narrow `reads()` for `promote`, `hoist`, `decide`, `sroa`, `fold`, `loopidioms` (idle 226 M), and test for work before asking for analyses. Where: [`pipeline.rs#L1026`](https://github.com/ali-mosavian/llrm/blob/21f5c9fc8e67b5bf405cf9ecdaf65247a26c0450/crates/opt/llrm-transforms/src/pipeline.rs#L1026); LLVM [`LastRunTrackingAnalysis.cpp#L30`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LastRunTrackingAnalysis.cpp#L30), [`InstructionCombining.cpp#L6258`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L6258). Page: [idle runs](idle.md).
 
 ## 4. Mask test at each branch
 

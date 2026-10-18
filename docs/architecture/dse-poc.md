@@ -1,3 +1,7 @@
+---
+architecture-index: DSE in LLVM's shape on the memory SSA
+architecture-order: 300
+---
 # DSE in LLVM's shape on llrm's memory SSA: what it costs, and which part is the gap
 
 TL;DR: a POC of LLVM's DSE on llrm's memory SSA costs 27,300 instructions per IR instruction on `d_faces` -O2 against LLVM's 2,923. Per store it is 4.1x, not 9x: llrm's `dse` sees 13x the stores in 3x the runs because `promote` leaves them. Of the POC's 190.5 M, 106.5 M (56%) is the facts it asks for (Accesses with `Annotated`, `Pointers`, `Published`, the memory graph), and the walk is 84.0 M at 2,870 instructions a step. A cache of alias pairs keyed by cell value saves 21% of the walk. The walker layer is a fifth of the pass; the fact set and the input volume are the rest.

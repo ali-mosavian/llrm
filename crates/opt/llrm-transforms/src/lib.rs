@@ -54,7 +54,7 @@
 //! `trivialunswitch`, `unswitch`, `loopsplit`, `loopfuse`, `loopdistribute`
 //! (with `loopshape`), `indvars` (with `loopexit`, `exitfold`, `exitsink`),
 //! `lsr` (with `mirror`), `window`, `rotate`, `unroll`, `peel`, `unroll_jam`,
-//! `fill`, `floatloop`, `tailrec`.
+//! `loopidioms`, `floatloop`, `tailrec`.
 //!
 //! Whole program: `globalopt`, `globaldce`, `availableexternally`, `inline`,
 //! `ipacp`, `argpromotion`, `deadargs`, `narrowspace`, `calleepop`; and
@@ -96,11 +96,11 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod decide;
 pub mod dse;
+pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
 pub mod expand;
-pub mod fill;
 pub mod fixednarrow;
 pub mod floatfold;
 pub mod floatloop;
@@ -127,11 +127,15 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod local;
+#[cfg(test)]
+mod local_tests;
 pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
 pub mod loopfuse;
 pub mod loopidiom;
+pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
 pub mod loopnest;
