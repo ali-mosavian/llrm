@@ -1160,6 +1160,23 @@ impl Analysis for Pointers {
     type Result = Result<PointsTo, String>;
     const NAME: &'static str = "points-to";
     const SKIPS: bool = true;
+    const AUDITED: bool = true;
+    fn audit(
+        result: &Self::Result,
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) {
+        if let Ok(facts) = result {
+            let unit = Unit::within(context, layout, function, analyses.outer());
+            // A callee the module defines is read in its body as it stood
+            // before this pass.
+            let snapshot = llrm_mir::passes::MODULE_SNAPSHOT.with(|held| held.borrow().clone());
+            let verify = snapshot.as_ref().map(|module| crate::capturecheck::Verify::new(module, layout, 8));
+            crate::capturecheck::check_with(&unit, facts, verify.as_ref());
+        }
+    }
     fn depends() -> Option<Depends> {
         Some(Depends { models: models_scalars, keyed: models_scalars, flows: Some(stops_at) })
     }

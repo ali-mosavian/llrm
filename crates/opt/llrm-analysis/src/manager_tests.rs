@@ -1455,3 +1455,23 @@ b0:
         "what was brought up to date is what deriving it afresh gives"
     );
 }
+
+/// `LLRM_CHECK_CAPTURES` judges the points-to facts each time `get` hands them
+/// out, so a fact a pass reads (dse dropping a store behind `phi [%slot, %q]`)
+/// is checked where it is used: a planted result that forgot the escape of
+/// the slot is refused by the audit `get` runs.
+#[test]
+fn the_audit_of_points_to_refuses_facts_that_forgot_a_join_with_an_unknown_arm() {
+    let module = parsed(&format!(
+        "{DOS}define i32 @f(i1 %c, ptr %cell) {{\nentry:\n  %s = alloca i32\n  %q = load ptr, ptr %cell\n  br i1 %c, label %a, label %b\na:\n  br label %j\nb:\n  br label %j\nj:\n  %p = phi ptr [ %s, %a ], [ %q, %b ]\n  %v = load i32, ptr %p\n  ret i32 %v\n}}\n"
+    ));
+    let layout = layout(&module);
+    let f = function(&module, "f");
+    let mut analyses = Analyses::new(Rc::new(Outer::of(&module, None)));
+    let mut facts = (*analyses.get::<Pointers>(&module.context, &layout, f)).clone().expect("facts");
+    facts.escaped.clear();
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Pointers::audit(&Ok(facts), &module.context, &layout, f, &mut analyses)
+    }));
+    assert!(refused.is_err(), "facts that lost the slot behind the join were accepted by the audit");
+}

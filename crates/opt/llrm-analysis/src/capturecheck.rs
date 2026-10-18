@@ -52,6 +52,27 @@ impl<'a> Verify<'a> {
         }
     }
 
+    /// `parameter`, for a callee as the unit names it: a clone the pass now
+    /// running is making (`name@N`, a specialisation of `name`) is not in the
+    /// module yet, so its original's body answers.
+    pub fn parameter_named(
+        &self,
+        unit: &Unit,
+        callee: llrm_mir::context::GlobalId,
+        index: usize,
+    ) -> Result<(), Unproven> {
+        let named = unit.globals.get(callee.0 as usize).and_then(|global| global.name.as_deref());
+        let held = self.module.globals.get(callee.0 as usize).and_then(|global| global.name.as_deref());
+        if named.is_none() || named == held {
+            return self.parameter(callee, index);
+        }
+        let base = named.and_then(|name| name.split('@').next()).unwrap_or_default();
+        match self.module.globals.iter().position(|global| global.name.as_deref() == Some(base)) {
+            Some(found) => self.parameter(llrm_mir::context::GlobalId(found as u32), index),
+            None => Err(Unproven::Undefined),
+        }
+    }
+
     /// `Ok` when parameter `index` of `callee` is shown uncaptured by its body,
     /// recursively through the module's other bodies.
     pub fn parameter(
@@ -81,7 +102,12 @@ impl<'a> Verify<'a> {
             let mut kept = Vec::new();
             let captured = captured_by(&unit, root, &mut kept, Some(self));
             self.stack.borrow_mut().pop();
-            if captured.is_some() || !kept.is_empty() { Err(Unproven::Captured) } else { Ok(()) }
+            // Kept in a local slot of the callee: read back it is the pointer
+            // again (followed), and it is captured if the slot
+            // itself is.
+            let slot_captured =
+                kept.iter().any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self)).is_some());
+            if captured.is_some() || slot_captured { Err(Unproven::Captured) } else { Ok(()) }
         })();
         if top {
             match found {
@@ -211,7 +237,29 @@ fn captured_by(
                 Opcode::Store { .. } if at == 1 => {}
                 // Kept in another frame object: captured if that one is.
                 Opcode::Store { .. } if frame_base(unit, op.operands[1]).is_some() => {
-                    held_in.extend(frame_base(unit, op.operands[1]));
+                    let holder = frame_base(unit, op.operands[1]).expect("a frame base");
+                    held_in.push(holder);
+                    // What is read back from the slot is the pointer again.
+                    let mut slots = vec![holder];
+                    let mut walked: IdSet<ValueId> = IdSet::new();
+                    while let Some(slot) = slots.pop() {
+                        if !walked.insert(slot) {
+                            continue;
+                        }
+                        for read in function.users(slot) {
+                            let reader = function.instruction(read.user);
+                            match &reader.opcode {
+                                Opcode::Load { .. } if read.index == 0 => work.extend(reader.result),
+                                Opcode::GetElementPtr { .. }
+                                | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
+                                    if read.index == 0 =>
+                                {
+                                    slots.extend(reader.result);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
                 Opcode::Call(_) | Opcode::Invoke(_) => {
                     let args = match op.opcode {
@@ -228,7 +276,7 @@ fn captured_by(
                     // long, keeps the pointer unless the declaration says
                     // nocapture.
                     match (callee, verify) {
-                        (Some(callee), Some(verify)) => match verify.parameter(callee, at) {
+                        (Some(callee), Some(verify)) => match verify.parameter_named(unit, callee, at) {
                             Ok(()) => {}
                             Err(Unproven::Undefined) if crate::alias::borrowed(unit, used.user, at) => {}
                             Err(_) => return Some(used.user),
