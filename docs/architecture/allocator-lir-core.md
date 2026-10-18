@@ -222,7 +222,7 @@ Acceptance at 4N ([#2265], debts in [#2260]): each step within its limit under g
 
 Owners of the callers of `intervals walk` and `intervals liveness` under greedy at 4N: `coalesce::joined` and `twoaddr` (lir-cleanup-poc: RegisterCoalescer, TwoAddressInstructionPass); `Facts::of` in the greedy driver and `slots_colored` (regalloc-core-poc: LiveIntervals, LiveStacks); spiller short updates (regalloc-core-poc: InlineSpiller without `spiller.rs`).
 
-x87 ([#2304], slot 60 split): `floatassign` and `float-facts` are replaced by greedy allocating x87 values as RFP32/RFP64/RFP80 virtual registers onto FP0-FP6, as LLVM does before `X86FloatingPoint`; acceptance: under greedy those steps are gone and the float rows hold. The stackifier stays in slot 60 (lir-cleanup-poc).
+x87 ([#2304], slot 60 split): `floatassign` and `float-facts` are replaced by greedy allocating x87 values as RFP32/RFP64/RFP80 virtual registers onto FP0-FP6, as LLVM does before `X86FloatingPoint`; acceptance: under greedy those steps are gone and the float rows hold. The stackifier is slot 60's (backend-slopes); greedy keeps its contract: calls end with the x87 stack empty (results as unnamed FloatLoad, returns as unnamed FloatStore), and no x87 value is live across a call (every FP register in the call's regmask).
 
 [#2260]: https://github.com/ali-mosavian/llrm/issues/2260
 [#2304]: https://github.com/ali-mosavian/llrm/pull/2304
