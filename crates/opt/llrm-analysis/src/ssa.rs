@@ -376,7 +376,7 @@ impl SsaUpdater {
             return value;
         }
         let phi = function.create_instruction(Opcode::Phi, self.ty, Vec::new(), Flags::default(), self.name.as_deref());
-        let first = function.block(block).instructions().first().copied();
+        let first = function.block(block).first();
         function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
         let result = Operand::Value(function.instruction(phi).result.expect("a phi's value"));
         self.entered.insert(block, result);

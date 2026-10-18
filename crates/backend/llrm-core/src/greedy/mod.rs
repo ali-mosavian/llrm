@@ -15,5 +15,6 @@ pub mod shadow;
 pub mod spill;
 pub mod tii;
 pub mod spillplacement;
+pub mod spliteditor;
 pub mod splitkit;
 pub mod virtregmap;

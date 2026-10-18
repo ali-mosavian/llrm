@@ -29,6 +29,7 @@
 
 use super::virtregmap::VirtRegMap;
 use crate::liveness::liveintervals::LiveIntervals;
+use crate::liveness::liverange::LiveInterval;
 
 /// `LiveRangeEdit::Delegate`: what the allocator wants told as ranges are made
 /// and erased.
@@ -73,6 +74,48 @@ impl<'d> LiveRangeEdit<'d> {
     /// `getParent`.
     pub fn parent(&self) -> u32 {
         self.parent
+    }
+
+    /// `getReg`: the register being edited.
+    pub fn get_reg(&self) -> u32 {
+        self.parent
+    }
+
+    /// `size`.
+    pub fn size(&self) -> usize {
+        self.new_regs.len()
+    }
+
+    /// `empty`.
+    pub fn empty(&self) -> bool {
+        self.new_regs.is_empty()
+    }
+
+    /// `get(idx)`: the `idx`th register created.
+    pub fn get(
+        &self,
+        idx: usize,
+    ) -> u32 {
+        self.new_regs[idx]
+    }
+
+    /// `createEmptyIntervalFrom(getReg())`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveRangeEdit.cpp#L43>):
+    /// a new register, split from the parent, with an empty interval that is
+    /// unspillable when the parent is.
+    pub fn create_empty_interval(
+        &mut self,
+        lis: &mut LiveIntervals,
+        vrm: &mut VirtRegMap,
+    ) -> u32 {
+        let new = lis.create_virtual_register();
+        self.create_from(lis, vrm, new, self.parent);
+        let mut li = LiveInterval::new(new, 0.0);
+        if lis.has_interval(self.parent) && !lis.get_interval(self.parent).is_spillable() {
+            li.mark_not_spillable();
+        }
+        lis.insert_interval(li);
+        new
     }
 
     /// `regs()`: the registers created so far.

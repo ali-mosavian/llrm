@@ -67,7 +67,7 @@ b3:
     let join = crate::testing::block(unit.function, "b3");
     let phi = mssa.get_memory_phi(join).expect("a phi at the join");
     assert_eq!(mssa.access(phi).incoming.len(), 2);
-    let load = unit.function.block(join).instructions()[0];
+    let load = unit.function.block(join).first().expect("a block with an instruction");
     let access = mssa.get_memory_access(load).expect("an access");
     assert_eq!(mssa.access(access).kind, Kind::Use);
     assert_eq!(mssa.get_defining_access(access), Some(phi));

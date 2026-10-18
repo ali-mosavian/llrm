@@ -174,6 +174,19 @@ impl DomTree {
         self.reachable[block]
     }
 
+    /// `findNearestCommonDominator`: the closest block that dominates both.
+    pub fn find_nearest_common_dominator(
+        &self,
+        a: usize,
+        b: usize,
+    ) -> usize {
+        let mut x = a;
+        while !self.dominates(x, b) {
+            x = self.idom[x].expect("a block with a dominator, or the entry dominates everything reachable");
+        }
+        x
+    }
+
     /// `dominates(A, B)`: every path from the entry to `b` goes through `a`
     /// (a block dominates itself).
     pub fn dominates(

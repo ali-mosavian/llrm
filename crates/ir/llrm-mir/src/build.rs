@@ -244,7 +244,7 @@ impl Builder<'_> {
         node: MetadataId,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted instruction");
+        let inst = self.function.block(block).last().expect("an emitted instruction");
         self.function.annotate(inst, kind, node);
     }
 
@@ -255,7 +255,7 @@ impl Builder<'_> {
         attr: crate::opcode::Attribute,
     ) {
         let block = self.block.expect("a position");
-        let inst = *self.function.block(block).instructions().last().expect("an emitted call");
+        let inst = self.function.block(block).last().expect("an emitted call");
         self.function.add_argument_attr(inst, index, attr);
     }
 
@@ -390,9 +390,7 @@ impl Builder<'_> {
         let first = self
             .function
             .block(entry)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| !matches!(self.function.instruction(one).opcode, Opcode::Alloca { .. }));
         let position = first.map_or(Position::End(entry), Position::Before);
         self.function.insert(inst, position).expect("the entry block");
