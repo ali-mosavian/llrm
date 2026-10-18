@@ -37,7 +37,9 @@
 //! `case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
 //! low` behind its range test and a `switch table` over the indices `0..n`,
 //! every index a block that only jumps on; the backend makes it a jump through
-//! a table of code addresses. `-fno-jump-tables` leaves them in the tree.
+//! a table of code addresses. `-fno-jump-tables` leaves them in the tree. A run
+//! dense as a whole is one table without the search for the fewest runs
+//! (LLVM's `findJumpTables` "cheap case").
 //!
 //! # Runs
 //! As two passes, gcc's: `switchconv` (`pass_convert_switch`, -O2 and up),
@@ -72,6 +74,7 @@ use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::target::OperationCosts;
 use llrm_mir::types::{Type, TypeId};
+use llrm_support::hash::{HashMap, IndexMap, IndexSet};
 
 use crate::edges;
 
@@ -502,13 +505,10 @@ impl Lowering<'_, '_> {
 
     /// The targets the switch had, once each.
     fn originals(&self) -> Vec<BlockId> {
-        let mut all = vec![self.switch.default];
-        for &(_, target) in &self.switch.cases {
-            if !all.contains(&target) {
-                all.push(target);
-            }
-        }
-        all
+        let mut all = IndexSet::default();
+        all.insert(self.switch.default);
+        all.extend(self.switch.cases.iter().map(|&(_, target)| target));
+        all.into_iter().collect()
     }
 
     fn value_of(
@@ -786,20 +786,26 @@ impl Lowering<'_, '_> {
             std::cmp::Ordering::Greater => self.put(block, Opcode::Cast(CastOp::Trunc), wide, vec![index]),
             std::cmp::Ordering::Equal => index,
         };
-        let mut landings: Vec<(BlockId, BlockId)> = Vec::new();
+        let mut landings: IndexMap<BlockId, BlockId> = IndexMap::default();
         let mut operands = vec![index, Operand::Block(default)];
+        // The parts are in order and apart: the one that holds an index is at
+        // or after the one that held the index before.
+        let mut part = 0;
         for at in 0..=span {
+            while cluster.parts.get(part).is_some_and(|&(_, high, _)| high - cluster.low < at) {
+                part += 1;
+            }
             let target = cluster
                 .parts
-                .iter()
-                .find(|&&(low, high, _)| low - cluster.low <= at && at <= high - cluster.low)
+                .get(part)
+                .filter(|&&(low, _, _)| low - cluster.low <= at)
                 .map_or(default, |&(_, _, target)| target);
-            let land = match landings.iter().find(|&&(to, _)| to == target) {
-                Some(&(_, land)) => land,
+            let land = match landings.get(&target) {
+                Some(&land) => land,
                 None => {
                     let land = self.fresh(block);
                     self.jump(land, target);
-                    landings.push((target, land));
+                    landings.insert(target, land);
                     land
                 }
             };
@@ -810,7 +816,7 @@ impl Lowering<'_, '_> {
         let void = self.unit.context.types.void();
         let inst = self.unit.function.create_instruction(Opcode::Switch, void, operands, Flags::TABLE, None);
         self.unit.function.insert(inst, Position::End(block)).expect("a placed instruction");
-        self.edges.extend(landings.iter().map(|&(_, land)| (block, land)));
+        self.edges.extend(landings.values().map(|&land| (block, land)));
     }
 
     /// `find_bit_tests`: the fewest runs of clusters, each narrower than a
@@ -878,9 +884,12 @@ impl Lowering<'_, '_> {
         originals: &[BlockId],
     ) {
         let block = self.switch.block;
+        let mut reached_from: HashMap<BlockId, Vec<BlockId>> = HashMap::default();
+        for &(from, to) in &self.edges {
+            reached_from.entry(to).or_default().push(from);
+        }
         for &target in originals {
-            let sources: Vec<BlockId> =
-                self.edges.iter().filter(|&&(_, to)| to == target).map(|&(from, _)| from).collect();
+            let sources = reached_from.get(&target).map_or(&[][..], Vec::as_slice);
             for phi in edges::phis(self.unit.function, target) {
                 let operands = self.unit.function.instruction(phi).operands.clone();
                 let mut out = Vec::new();
@@ -928,6 +937,11 @@ fn cell_width(
     (bits, CastOp::ZExt)
 }
 
+thread_local! {
+    /// Partitions `tabled_runs` has tried, for a test of its slope.
+    static TRIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `jump_table_cluster::find_jump_tables` over `run`, clusters in order.
 fn tabled_runs(
     run: Vec<Cluster>,
@@ -940,16 +954,34 @@ fn tabled_runs(
     // left out of tables on the way.
     let mut best = vec![(usize::MAX, 0usize, usize::MAX); count + 1];
     best[0] = (0, 0, 0);
-    for end in 1..=count {
-        let mut compares: u128 = run[..end].iter().map(comparisons).sum();
-        for start in 0..end {
-            let left = best[start].2 + if end - start < threshold { end - start } else { 0 };
-            let handled = start + 1 == end || 100 * (run[end - 1].high - run[start].low + 1) <= ratio * compares;
-            let (fewer, tied) = (best[start].0 + 1 < best[end].0, best[start].0 + 1 == best[end].0);
-            if (fewer || (tied && left < best[end].2)) && handled {
-                best[end] = (best[start].0 + 1, start, left);
+    // `compared[i]` is the comparisons of the clusters before `i`.
+    let compared: Vec<u128> = std::iter::once(0)
+        .chain(run.iter().scan(0, |sum, one| {
+            *sum += comparisons(one);
+            Some(*sum)
+        }))
+        .collect();
+    let dense = |start: usize, end: usize| {
+        start + 1 == end || 100 * (run[end - 1].high - run[start].low + 1) <= ratio * (compared[end] - compared[start])
+    };
+    // MIRROR `findJumpTables`, "Cheap case"
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SwitchLoweringUtils.cpp#L83-L96):
+    // a run dense as a whole is one table, the fewest partitions there are,
+    // and the quadratic search below is skipped.
+    // DEVIATE 1: density is gcc's span against comparisons, not the pin's
+    // `isSuitableForJumpTable` percentage, as this pass lowers as gcc 13.4.
+    if count > 0 && dense(0, count) {
+        best[count] = (1, 0, if count < threshold { count } else { 0 });
+    } else {
+        for end in 1..=count {
+            for start in 0..end {
+                TRIED.with(|tried| tried.set(tried.get() + 1));
+                let left = best[start].2 + if end - start < threshold { end - start } else { 0 };
+                let (fewer, tied) = (best[start].0 + 1 < best[end].0, best[start].0 + 1 == best[end].0);
+                if (fewer || (tied && left < best[end].2)) && dense(start, end) {
+                    best[end] = (best[start].0 + 1, start, left);
+                }
             }
-            compares -= comparisons(&run[start]);
         }
     }
     if best[count].0 == count {
