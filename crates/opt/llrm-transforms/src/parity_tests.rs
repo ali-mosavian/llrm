@@ -138,13 +138,13 @@ fn runs_of(applied: &Applied) -> Vec<String> {
 #[test]
 fn test_the_llvm_order_runs_gvn_once_per_body_and_the_rounds_do_not() {
     let order = runs_of(&Applied::default());
-    assert_eq!(parity::check_run_counts(&order, 3), Ok(()), "{order:?}");
+    assert_eq!(parity::check_run_counts(&order, 3, parity::Level::O2), Ok(()), "{order:?}");
     let rounds = runs_of(&Applied {
         options: pipeline::Options { llvm_order: false, ..Default::default() },
         ..Applied::default()
     });
     assert!(
-        parity::check_run_counts(&rounds, 3).is_err(),
+        parity::check_run_counts(&rounds, 3, parity::Level::O2).is_err(),
         "premise: the rounds run gvn more than once per body: {rounds:?}"
     );
 }
@@ -162,4 +162,20 @@ fn test_the_default_order_prints_callers_lines_split_by_joined_slots() {
         callers.iter().any(|line| line.starts_with("[counts] callers ") && !line.contains(" 0 joined ")),
         "no analysis was computed by a joined slot under the default order: {callers:?}"
     );
+}
+
+/// The pin's `default<O1>` has no GVN, and the -O1 list had it: `gvn@787` ran
+/// over every body at -O1 where LLVM runs none. At -O1 the order builds no
+/// GVN and the registry does not require the Translated slot; -O2 keeps one
+/// per body.
+#[test]
+fn test_the_llvm_order_has_no_gvn_at_o1_as_the_pin_has_none() {
+    let o1 =
+        Applied { options: pipeline::Options { llvm_order: true, ..pipeline::Options::basic() }, ..Applied::default() };
+    let lines = runs_of(&o1);
+    assert_eq!(parity::check_run_counts(&lines, 3, parity::Level::O1), Ok(()), "{lines:?}");
+    let o2 = runs_of(&Applied::default());
+    let gvn = |lines: &[String]| lines.iter().filter(|line| line.contains("-gvn@787")).count();
+    assert_eq!(gvn(&lines), 0, "-O1 ran gvn: {lines:?}");
+    assert!(gvn(&o2) > 0, "premise: the -O2 order runs gvn: {o2:?}");
 }

@@ -900,13 +900,49 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
         ],
     );
 
-    let result = duplicated_returns(source, 1);
+    let result = duplicated_returns(source, &|| 1);
     let physical: Vec<Semantics> =
         result.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.clone()).collect();
 
     assert!(result.blocks.iter().all(|block| block.at != 30));
     assert_eq!(physical.iter().filter(|one| one.op == Operation::Return).count(), 2);
     assert!(physical.iter().all(|one| one.op != Operation::Jump));
+}
+
+/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2, 11 procedures), also those whose one return
+/// has nothing to duplicate into.
+#[test]
+fn test_return_duplication_asks_for_the_overhead_only_for_a_tail_with_two_jumping_parents() {
+    let asked = std::cell::Cell::new(0);
+    let counted = || {
+        asked.set(asked.get() + 1);
+        1
+    };
+    let single = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, ax())], vec![30]).into(),
+            block(20, vec![_move(20, bx())], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+        ],
+    );
+    duplicated_returns(single, &counted);
+    assert_eq!(asked.get(), 0);
+
+    let joined = body(
+        "g",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
+        ],
+    );
+    duplicated_returns(joined, &counted);
+    assert_eq!(asked.get(), 1);
 }
 
 /// A larger return tail, or one owning source bytes, stays shared.
@@ -929,8 +965,8 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
     let owned = candidate(vec![_return(30)]);
 
     // Python `is`: nothing changed, so the result equals the input.
-    assert_eq!(duplicated_returns(large.clone(), 1), large);
-    assert_eq!(duplicated_returns(owned.clone(), 1), owned);
+    assert_eq!(duplicated_returns(large.clone(), &|| 1), large);
+    assert_eq!(duplicated_returns(owned.clone(), &|| 1), owned);
 }
 
 /// The raise lays a C loop out test first, so entered at its body the

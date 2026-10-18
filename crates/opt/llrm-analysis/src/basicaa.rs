@@ -12,9 +12,9 @@
 //! `aliasGEP` as far as it needs no value ranges: the inbounds and
 //! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-//! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries but
-//! `getModRefInfoMask` and `getModRefInfo(Call, Loc)`, which answer the top of
-//! the lattice. `getMemoryEffects(Call)` and `getArgModRefInfo` read the
+//! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
+//! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
+//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
 //! attributes.
 //!
 //! # Example
