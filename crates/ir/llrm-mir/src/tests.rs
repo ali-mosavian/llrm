@@ -418,6 +418,25 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
     assert_eq!(round(&once), once);
 }
 
+/// `noipa` is a function attribute (GCC's: no interprocedural pass uses the
+/// body for anyone else); it is read, written back and found by `opaque`.
+#[test]
+fn a_noipa_routine_round_trips_through_text() {
+    let text = format!(
+        "{DATALAYOUT}\ndefine internal i16 @f(i16 %a) noipa {{\nb0:\n  ret i16 %a\n}}\n\ndefine internal i16 @g(i16 %a) {{\nb0:\n  ret i16 %a\n}}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("noipa"), "{once}");
+    assert_eq!(round(&once), once);
+    let module = crate::parse::module(&once).expect("parses");
+    let opaque: Vec<_> = module
+        .functions()
+        .filter(|(_, _, function)| crate::facts::opaque(function))
+        .map(|(_, global, _)| global.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(opaque, vec!["f".to_owned()]);
+}
+
 /// `nearcode` is a function attribute the Nib frontend and `nearcode::placed`
 /// write (callgraph::NEAR_CODE); the parser refused it ("expected `{`, found
 /// `nearcode`"), so llrm-mir --run could not read any module the compiler
