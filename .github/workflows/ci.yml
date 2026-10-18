@@ -327,8 +327,34 @@ jobs:
           path: ${{ runner.temp }}/bench-base
           key: ${{ steps.basecounts.outputs.head }}
 
+  # The one job that asks for tinytim without being a perf job (docs/working/ci.md): the pinned clang and gcc exist only on the host, mounted read-only at
+  # /opt/llrm-pin (tools/ci/selfhosted/supervisor.py). It runs the tests that need the pin, and a skip there is a failure (tools/pinned_tests.py).
+  # Taken only where `plan` chose tinytim for the build (fresh heartbeat, an idle runner), so a dead tinytim never holds the run.
+  pin:
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && contains(needs.plan.outputs.runner_build, 'tinytim') }}
+    runs-on: [self-hosted, tinytim]
+    timeout-minutes: 20
+    env:
+      LLRM_PIN_DIR: /opt/llrm-pin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          name: target
+          path: ${{ runner.temp }}
+      - name: Restore the target dir
+        run: |
+          zstd -dc -T0 "$RUNNER_TEMP/target.tar.zst" | tar -C "$GITHUB_WORKSPACE" -xf -
+          python3 tools/ci/restore_mtime.py . "$(cat target/.built-from)"
+      - run: echo "/opt/llrm-pin/gcc/bin" >> "$GITHUB_PATH"
+      - run: >-
+          uv run -q --project tools python -m pytest -q -rs
+          tools/test_compile_map.py crates/target/llrm-x86-m32/vsgcc/test_elf.py crates/target/llrm-x86-m32/vsgcc/test_harness.py
+
   ci:
-    needs: [plan, static, build, gate, bench-merge, setup-check]
+    needs: [plan, static, build, gate, bench-merge, setup-check, pin]
     if: always()
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     env:
@@ -363,7 +389,7 @@ jobs:
             echo "$line  [runners: ${{ needs.plan.outputs.runner_summary }}]" | tee -a "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
+          if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.pin.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
           else
             line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
