@@ -9,8 +9,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+pub use llrm_mir::domtree_address::AddressDominance as Dominance;
 pub use llrm_mir::forest::{Body, Forest, TreeLoop};
-pub use llrm_support::graph::{Dominance, Node, Predecessors, predecessors};
+pub use llrm_support::graph::{Node, Predecessors, predecessors};
 
 use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
@@ -124,7 +125,7 @@ pub fn dominance<N: Node>(
         entry,
         |one| one.dominance.clone(),
         |one, found| one.dominance = Some(found),
-        || llrm_support::graph::dominance(blocks, entry),
+        || Rc::new(Dominance::of(blocks.iter().map(|block| (block.at(), block.succ())), entry)),
     )
 }
 
