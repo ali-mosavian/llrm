@@ -1,0 +1,16 @@
+# Failure kinds of tools/qcport_sweep.py already filed: `match` is a substring of the kind (digits as N), `issue` its number. Delete an entry when the issue closes.
+[[known]]
+match = "with no instruction choosing"
+issue = 2454
+
+[[known]]
+match = "a jump to L, which is nowhere"
+issue = 2455
+
+[[known]]
+match = "a byte division"
+issue = 2456
+
+[[known]]
+match = "freeze"
+issue = 2457
