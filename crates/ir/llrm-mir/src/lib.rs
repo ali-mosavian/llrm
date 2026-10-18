@@ -9,6 +9,7 @@ pub mod blockfrequency;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
+pub mod codemetrics;
 pub mod constantfolding;
 pub mod constantfolding_dump;
 pub mod constantfprange;

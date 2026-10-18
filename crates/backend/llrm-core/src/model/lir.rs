@@ -712,6 +712,12 @@ pub struct LirBlock {
     /// Laid out after the hot code: every path from it ends in `unreachable`,
     /// isel finds.
     pub cold: bool,
+    /// The code of the block starts at a multiple of `1 << align` bytes
+    /// (`MachineBasicBlock::setAlignment`); 0: any address.
+    pub align: u8,
+    /// Where padding it would take more bytes than this, none
+    /// (`MaxBytesForAlignment`); 0: no limit.
+    pub max_skip: u8,
 }
 
 /// A block's instructions, shared: a copy of the block is the same
@@ -902,6 +908,8 @@ impl Clone for LirBlock {
             succ: self.succ.clone(),
             phis: self.phis.clone(),
             cold: self.cold,
+            align: self.align,
+            max_skip: self.max_skip,
         }
     }
 }
@@ -912,7 +920,15 @@ impl LirBlock {
         at: i64,
         insns: Vec<Arc<Insn>>,
     ) -> Self {
-        Self { at, insns: insns.into(), succ: Shared::default(), phis: Shared::default(), cold: false }
+        Self {
+            at,
+            insns: insns.into(),
+            succ: Shared::default(),
+            phis: Shared::default(),
+            cold: false,
+            align: 0,
+            max_skip: 0,
+        }
     }
 
     /// Python's `replace(block, insns=insns)`: the old insns are never copied.
@@ -921,8 +937,16 @@ impl LirBlock {
         &self,
         insns: Vec<Arc<Insn>>,
     ) -> Block {
-        Self { at: self.at, insns: insns.into(), succ: self.succ.clone(), phis: self.phis.clone(), cold: self.cold }
-            .into()
+        Self {
+            at: self.at,
+            insns: insns.into(),
+            succ: self.succ.clone(),
+            phis: self.phis.clone(),
+            cold: self.cold,
+            align: self.align,
+            max_skip: self.max_skip,
+        }
+        .into()
     }
 
     /// Python `LirBlock.arrives`.

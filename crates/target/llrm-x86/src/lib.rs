@@ -1,6 +1,8 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+#[cfg(test)]
+mod codemetrics_tests;
 pub mod effects;
 #[cfg(test)]
 mod instructioncost_tests;

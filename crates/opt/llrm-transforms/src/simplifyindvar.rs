@@ -58,10 +58,10 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::Kind;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::Outer;
-use llrm_support::hash::HashSet;
 
 use crate::counting;
 
@@ -82,7 +82,7 @@ pub fn simplified(
         let mut session = ScevSession::of(context, function, outer);
         session.ask(context, layout, function, outer, |scev, cx| {
             let mut decided: Vec<(InstId, bool)> = Vec::new();
-            let mut done: HashSet<InstId> = HashSet::default();
+            let mut done: IdSet<InstId> = IdSet::new();
             let loops = cx.loops.get_loops_in_preorder();
             for loop_ in loops.into_iter().rev() {
                 let header = loop_.get_header();
@@ -123,10 +123,10 @@ fn simplify_users(
     loop_: &llrm_mir::loopinfo::Loop,
     curr_iv: InstId,
     decided: &mut Vec<(InstId, bool)>,
-    done: &mut HashSet<InstId>,
+    done: &mut IdSet<InstId>,
 ) {
     // Instructions processed for CurrIV.
-    let mut simplified: HashSet<InstId> = HashSet::default();
+    let mut simplified: IdSet<InstId> = IdSet::new();
     // Use-def pairs of IV users waiting to be processed for CurrIV.
     let mut simple_iv_users: Vec<(InstId, InstId)> = Vec::new();
 
@@ -172,7 +172,7 @@ fn push_iv_users(
     cx: &llrm_analysis::scev::Cx,
     loop_: &llrm_mir::loopinfo::Loop,
     def: InstId,
-    simplified: &mut HashSet<InstId>,
+    simplified: &mut IdSet<InstId>,
     simple_iv_users: &mut Vec<(InstId, InstId)>,
 ) {
     let Some(result) = cx.function.instruction(def).result else { return };

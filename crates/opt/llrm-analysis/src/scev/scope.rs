@@ -227,9 +227,11 @@ impl ScalarEvolution {
             hook(self, cx, v);
         }
 
-        // Otherwise compute it. Computing may forget `v` (`ValuesAtScopes[V]`
-        // below makes the entry again, as the C++ `operator[]` does).
+        // Otherwise compute it.
         let c = self.compute_scev_at_scope(cx, v, l);
+        // Computing can forget `v` (its exit count asks for the expressions
+        // that use it), so the entry is looked up again, as LLVM's
+        // `ValuesAtScopes[V]` does.
         let values = self.values_at_scopes.entry(v).or_default();
         if let Some(ls) = values.iter_mut().rev().find(|ls| ls.0 == l) {
             ls.1 = Some(c);
