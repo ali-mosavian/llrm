@@ -6,8 +6,7 @@
 //! `ValuesAtScopes`, `BECountUsers`, the wrap-via-induction sets) are
 //! cleared here when they land with their stage.
 
-use std::collections::HashSet;
-
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand};
 
 use super::expr::Scev;

@@ -13,9 +13,8 @@
 //! # Example
 //! Under `if (n != 0)` the preheader's guards rewrite `%n` to `umax(1, %n)`.
 
-use std::collections::HashMap;
-
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
+use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
