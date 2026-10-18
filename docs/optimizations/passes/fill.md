@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fill.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fill.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:2e22e2e7307feca6e5fa80da10242eb213e98b676453e34f82b95462d43843e5 -->
+<!-- src: crates/opt/llrm-transforms/src/fill.rs sha256:840fbe51bc46440f437a01ab89bee1040f59b12d96e22f7445453238339d66e5 -->
 
 # fill
 
@@ -33,7 +33,9 @@ arithmetic is stores, loads and memsets that follow one of these forms:
 The count in bytes must not wrap the index: a byte's trips never do, and
 wider cells need `inbounds` GEPs or the proof's `maximum`. The counter must
 not be wider than the index. A huge pointer, which carries into its
-selector, is refused. A volatile access, a call, or a value the loop changes
+selector, is taken like any other: the intrinsic carries its address space,
+and instruction selection splits the fill at each 64K segment
+(`isel/huge.rs`). A volatile access, a call, or a value the loop changes
 keeps the loop.
 
 A loop with one fill of constant bytes is rewritten always. A pattern, a
