@@ -1542,10 +1542,7 @@ fn capped_from(
 ) -> Option<usize> {
     let work: usize = nest
         .iter()
-        .map(|one| {
-            one.body.len()
-                * one.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum::<usize>()
-        })
+        .map(|one| one.body.len() * one.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum::<usize>())
         .sum();
     (work > CAP_WORK).then_some(CAP_DEPTH)
 }
