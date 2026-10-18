@@ -324,9 +324,9 @@ fn captured_by(
     None
 }
 
-/// `capture-tracking-max-uses-to-explore`'s default: past it a pointer is taken
-/// as captured.
-pub const MAX_USES_TO_EXPLORE: usize = 100;
+/// `capture-tracking-max-uses-to-explore`'s default (150): past it a pointer is
+/// taken as captured.
+pub const MAX_USES_TO_EXPLORE: usize = 150;
 
 /// Whether the address `root` may be captured, as LLVM's `PointerMayBeCaptured`
 /// with stores counting (`isNonEscapingLocalObject`): a gep, cast, phi or

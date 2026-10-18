@@ -619,19 +619,22 @@ mod tests {
         assert_eq!(answer(&body("store ptr %b, ptr @cell"), "a", "b", 4), AliasResult::MayAlias);
     }
 
-    /// CaptureTracking stops at 100 uses and takes the pointer as captured: a
-    /// slot with 150 loads is MayAlias against a pointer loaded from it,
-    /// one with 10 is NoAlias (checked with the pinned opt).
+    /// CaptureTracking explores 150 uses
+    /// (`capture-tracking-max-uses-to-explore`) and then takes the
+    /// pointer as captured. The slot has two uses besides its loads; the pinned
+    /// opt (24.0.0git d1106deb71cc) answers NoAlias with 148 loads and
+    /// MayAlias with 149. A cap of 100 gave 32 MayAlias where LLVM said
+    /// NoAlias on d_faces-O1 (an alloca with 123 uses).
     #[test]
-    fn capture_tracking_gives_up_after_a_hundred_uses() {
+    fn capture_tracking_gives_up_after_a_hundred_and_fifty_uses() {
         let body = |loads: usize| {
             let reads: String = (0..loads).map(|n| format!("  %w{n} = load ptr, ptr %slot\n")).collect();
             format!(
                 "define i32 @f(ptr %p, i32 %i) {{\nentry:\n  %slot = alloca ptr\n  store ptr %p, ptr %slot\n  %q = load ptr, ptr %slot\n  %a = getelementptr inbounds i8, ptr %q, i32 %i\n{reads}  ret i32 0\n}}\n"
             )
         };
-        assert_eq!(answer(&body(10), "a", "slot", 4), AliasResult::NoAlias);
-        assert_eq!(answer(&body(150), "a", "slot", 4), AliasResult::MayAlias);
+        assert_eq!(answer(&body(148), "a", "slot", 4), AliasResult::NoAlias);
+        assert_eq!(answer(&body(149), "a", "slot", 4), AliasResult::MayAlias);
     }
 
     /// Distinct allocas are distinct objects.
