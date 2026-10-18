@@ -92,13 +92,6 @@ pub fn body(
     Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
 }
 
-/// The name each value of `function` prints under (`%name` or its number), as
-/// `body` prints it: a report that is compared with another tool's reading of
-/// the same text names values alike.
-pub fn value_names(function: &Function) -> HashMap<ValueId, String> {
-    Slots::new(function).values
-}
-
 /// A 128-bit digest (not a cryptographic one) of what `body` prints, without
 /// printing it: the same for two bodies that print alike (up to value and block
 /// numbering), and, but for a collision of 2^-128, different for two that do
