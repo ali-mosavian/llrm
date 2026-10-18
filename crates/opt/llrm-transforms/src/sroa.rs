@@ -40,8 +40,9 @@
 //!   MIR's does.
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
-//! - Offsets are `i128` and do not wrap at the index width; an offset below
-//!   zero is outside the alloca.
+//! - Offsets are `i128` kept in `0..2^index width` after each GEP, as the
+//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it,
+//!   and so is a negative one, which wraps to a large number.
 //! - `IRBuilder` here makes what it is told and does not fold constants
 //!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
 //!   after.
@@ -501,7 +502,14 @@ fn build_slices(
                     instruction.operands[1..].iter().map(|&one| constant_index(context, one)).collect();
                 let (known, offset) = if known && indices.iter().all(Option::is_some) {
                     let (constant, variable) = layout.collect_offset(&context.types, *source, &indices);
-                    if variable.is_empty() { (true, offset + constant) } else { (false, 0) }
+                    if variable.is_empty() {
+                        // `Offset += GEPOffset` on an `APInt` of the index
+                        // width: it wraps, and every range check is unsigned.
+                        let bits = layout.pointer(pointer_space(context, instruction.ty)).index_bits;
+                        (true, (offset + constant).rem_euclid(1i128 << bits))
+                    } else {
+                        (false, 0)
+                    }
                 } else {
                     (false, 0)
                 };
