@@ -1351,9 +1351,11 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
             if let Some(result) = self.function().instruction(inst).result {
                 if !self.function().users(result).is_empty() {
+                    // `UndefValue::get` (SROA.cpp#L6393), the zero here as in
+                    // mem2reg (DEVIATE 1).
                     let ty = self.function().value(result).ty;
-                    let poison = self.poison_of(ty);
-                    self.unit.function.replace_value(result, poison);
+                    let zero = Operand::Constant(llrm_mir::constfold::null_value(&mut self.unit.context, ty));
+                    self.unit.function.replace_value(result, zero);
                 }
             }
             let operands: Vec<InstId> = self

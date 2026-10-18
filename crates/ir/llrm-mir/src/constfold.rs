@@ -60,7 +60,7 @@ pub(crate) fn is_null_value(
 }
 
 /// `Constant::getNullValue`.
-pub(crate) fn null_value(
+pub fn null_value(
     context: &mut Context,
     ty: TypeId,
 ) -> ConstantId {
