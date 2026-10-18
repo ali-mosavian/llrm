@@ -141,12 +141,11 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("decide@809", Simplify, "jump-threading, correlated-propagation", Old, "simplifycfg-port"),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("memcpyopt@818", Simplify, "memcpyopt", Old, "backend-slopes"),
-    entry(
+    partial(
         "merge@818",
         Simplify,
         "memcpyopt (tryMergingIntoMemset), MergeConsecutiveStores (backend)",
-        Old,
-        "backend-slopes",
+        "criterion: the memsets are MemCpyOpt's (memcpyoptimizer.rs, checked against opt by tools/llvmport/mccompare.py); exit: the wider constant stores of loopidioms::Merge go with the backend MergeConsecutiveStores (lir-cleanup-port)",
     ),
     entry("dse@820", Simplify, "dse", Old, "backend-slopes (after memcpyopt)"),
     entry("loopsimplify@823", Simplify, "loop-simplify", Old, "loopsimplify-port"),
