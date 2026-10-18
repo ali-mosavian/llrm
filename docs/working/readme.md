@@ -14,7 +14,6 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [figures](figures.md) | Drawing a figure as mermaid, and the generated pass pages |
 | [codegen-improvements](codegen-improvements.md) | Backend ideas drawn from other compilers |
 | [value-tracking-port](value-tracking-port.md) | Evidence for the ValueTracking, KnownBits and ConstantRange port: agreement with LLVM, deviations, owed work |
-| [analysis-cost](analysis-cost.md) | llrm_analysis cost on d_faces by module, owner, replacement and largest consumer |
 
 ## Docs with the change
 

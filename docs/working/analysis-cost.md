@@ -1,3 +1,7 @@
+---
+architecture-index: llrm_analysis cost on d_faces by module, owner and consumer
+architecture-order: 520
+---
 # Analysis cost, d_faces -O2
 
 Self cost of `llrm_analysis::*` frames, order tree, callgrind `--separate-callers=30`
