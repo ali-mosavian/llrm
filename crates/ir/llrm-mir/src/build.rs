@@ -137,7 +137,7 @@ pub fn function_declaration(
         function.value_uses.push(Vec::new());
         function.parameter_attrs.push(Vec::new());
     }
-    intrinsics::declare(&mut function, name);
+    intrinsics::declare(&mut function, &context.types, name);
     Ok(function)
 }
 
