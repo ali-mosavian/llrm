@@ -63,3 +63,13 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
     assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
 }
+
+/// BDCE stands where LLVM runs it, after GVN and before the InstCombine of
+/// that run (`PassBuilderPipelines.cpp` l.786-801).
+#[test]
+fn test_bdce_stands_between_gvn_and_the_instcombine_after_it() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} not built"));
+    assert_eq!((at("gvn@787") + 1, at("bdce@797") + 1), (at("bdce@797"), at("fold@801")));
+}

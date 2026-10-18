@@ -120,7 +120,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     entry("loop-rotate@728", Simplify, "loop-rotate<header-duplication>", Missing, ""),
-    entry("sccp-bdce", Simplify, "sccp, bdce", Missing, ""),
+    entry("sccp@792", Simplify, "sccp", Missing, ""),
+    entry("bdce@797", Simplify, "bdce", Translated, ""),
     entry("dfa-jump-threading", Simplify, "dfa-jump-threading", Missing, ""),
     entry("vector-combine", Simplify, "vector-combine", Missing, ""),
 ];
