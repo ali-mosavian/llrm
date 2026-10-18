@@ -787,6 +787,34 @@ fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
     assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
 }
 
+/// GlobalsAA was computed 9 times for one compile of d_faces -O2: every
+/// function pass that may add a memory operation dropped it and the next pass
+/// made it again. LLVM keeps it past every function pass
+/// (`GlobalsAAResult::invalidate` drops it only when a pass abandons it), so a
+/// held analysis stands whatever a function pass may add.
+#[test]
+fn a_held_module_analysis_is_kept_past_function_passes_that_may_add_memory_operations() {
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.hold::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 1, "a function pass that may add a memory operation dropped the held analysis");
+
+    SUMMED.set(0);
+    let mut passes = PassManager::default();
+    passes.require::<Bodies>();
+    passes.freeze::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add(Counts(PreservedAnalyses::all()));
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 3, "premise: a frozen one is dropped by each such pass");
+}
+
 /// What a body holds, as a number: a summary that can only be an upper bound.
 struct Size;
 

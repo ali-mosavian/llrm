@@ -39,7 +39,8 @@
 //! `simplifyindvar_tests.rs`.
 //!
 //! # Runs
-//! Step 0 of [`crate::indvars`], on by default; `LLRM_NO_SCEV_IVCMP` turns it off.
+//! Step 0 of [`crate::indvars`], on by default; `LLRM_NO_SCEV_IVCMP` turns it
+//! off.
 //!
 //! # Needs
 //! `llrm_analysis::scev` (`ScevSession`): `evaluatePredicateAt`,

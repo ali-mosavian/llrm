@@ -857,6 +857,13 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
+    // LLVM keeps GlobalsAA past every function pass
+    // (`GlobalsAAResult::invalidate`, GlobalsModRef.cpp:825, d1106deb71cc):
+    // made once, not again after each pass that changed a body. Only the
+    // order has it so; the rounds keep theirs.
+    if applied.options.llvm_order {
+        manager.hold::<GlobalsAA>();
+    }
     for stage in function_stages(applied) {
         manager.add(stage);
     }
