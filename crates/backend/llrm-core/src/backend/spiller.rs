@@ -1951,6 +1951,8 @@ fn homes_by_sparse_body(
             succ: block.succ.clone(),
             phis: block.phis.clone(),
             cold: block.cold,
+            align: block.align,
+            max_skip: block.max_skip,
         })
         .collect();
     let mut sparse_insns: Vec<Vec<Arc<Insn>>> = vec![Vec::new(); body.blocks.len()];
