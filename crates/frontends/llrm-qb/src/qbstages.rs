@@ -1,5 +1,6 @@
-//! `llrm-qb --dump DIR`: the source and its HIR, as adjacent text files.
-//! The MIR passes are dumped by `LLRM_MIR_STAGES`.
+//! `llrm-qb --dump DIR`: the source and its HIR, as adjacent text files, and
+//! the MIR after each pass in `DIR/mir` (as the Nib front end's;
+//! `LLRM_MIR_STAGES` still names a directory too).
 
 use std::path::{Path, PathBuf};
 
@@ -59,6 +60,11 @@ pub fn dumped(
     let mut observe = |program: &llrm_core::hir::model::Program| -> Result<(), String> {
         write(&output.join("01-hir.json"), &codec::encode(program, None).map_err(|error| error.0)?)
     };
-    compile::object_bytes(&program, source, Some(&mut observe), codegen).map_err(|error| error.to_string())?;
+    // The MIR after each pass, where the Nib front end writes it: the dump
+    // belongs to the shared pipeline.
+    let stages = output.join("mir");
+    std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
+    let codegen = llrm_core::driver::Options { dump: Some(stages), ..codegen.clone() };
+    compile::object_bytes(&program, source, Some(&mut observe), &codegen).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())
 }

@@ -2427,6 +2427,7 @@ fn _allocated(
         // The intervals the facts hold are edited where they are: the copy
         // that stood for them here is only of the values the rewrite named.
         let before_ranges = changes.as_ref().map(|changes| facts.live.snapshot(&changes.touched));
+        let numbered = facts.index.epoch;
         crate::backend::live::release();
         let carried = changes
             .as_ref()
@@ -2507,8 +2508,9 @@ fn _allocated(
             );
         }
         claims = Claims::default();
-        match &changes {
-            // Only the intervals of the values the rewrite named moved.
+        match changes.as_ref().filter(|_| facts.index.epoch == numbered) {
+            // Only the intervals of the values the rewrite named moved: a fresh
+            // numbering moves every one.
             Some(changes) => {
                 union.refresh_among(
                     &changes.touched,

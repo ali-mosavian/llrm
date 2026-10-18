@@ -375,6 +375,10 @@ fn run(
     // A copy of an aggregate is its leaves' loads and stores before they are
     // promoted.
     let split = aggregate_only && crate::splitcopy::split(unit.context, unit.layout, unit.function, analyses.outer());
+    // What is asked of the manager next is asked of the body the split left.
+    if split {
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+    }
     match _promoted(unit.context, unit.layout, unit.function, analyses, aggregate_only) {
         Ok(true) => PreservedAnalyses::none(),
         Ok(false) if split => PreservedAnalyses::none(),

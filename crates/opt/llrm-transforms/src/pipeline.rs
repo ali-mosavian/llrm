@@ -155,8 +155,8 @@ use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
     gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, memcpyopt, peel, phiopt, ports,
-    promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt,
+    ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -226,6 +226,9 @@ pub struct Options {
     /// [`llvm_order`]), not in the rounds; `LLRM_EXP_LLVM` sets it, off by
     /// default.
     pub llvm_order: bool,
+    /// The round's `Promote` is the translated `PromoteMemToReg`
+    /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
+    pub mem2reg: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -290,6 +293,7 @@ impl Default for Options {
             version: false,
             unroll_jam: false,
             interchange: false,
+            mem2reg: experiment_mem2reg(),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -481,6 +485,12 @@ pub struct Applied {
     pub dump: Option<PathBuf>,
 }
 
+/// `LLRM_EXP_MEM2REG`, read once: the round's `Promote` is the translated
+/// `PromoteMemToReg` ([`crate::mem2reg`]). Off by default.
+fn experiment_mem2reg() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_MEM2REG")
+}
+
 /// The passes, in order, that `applied` leaves on.
 ///
 /// A pass that is off is not in it, rather than in it and skipped, so what
@@ -519,8 +529,9 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(inferspace::InferAddressSpaces),
         Box::new(dse::Dse),
         Box::new(gvn::Gvn { pre: applied.options.pre }),
-        // Ordinary scalar write-through promotion remains after memory GVN.
-        Box::new(promote::Promote),
+        // Ordinary scalar write-through promotion remains after memory GVN;
+        // `LLRM_EXP_MEM2REG` swaps in the translated PromoteMemToReg.
+        if applied.options.mem2reg { Box::new(mem2reg::Mem2Reg) } else { Box::new(promote::Promote) },
         Box::new(indvars::IndVars {
             exit_values: false,
             unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
@@ -1573,6 +1584,17 @@ impl Run {
         }
         self.steps += 1;
         self.input(name, unit, analyses);
+        // `LLRM_CHECK_ORDER=SEED`: some analyses asked at this pass's entry,
+        // which ones by the seed, the step and the body, so that each
+        // is first asked earlier than a pass needs it, somewhere else
+        // on every seed. A result a pass reads is a function of the
+        // body: the object is the lazy one's.
+        if let Some(seed) = order_seed() {
+            let mix = seed
+                ^ (self.steps as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (unit.function.mark().position() as u64);
+            llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
+        }
         let before = unit.function.mark();
         let outside = llrm_mir::passes::read::swap(0);
         let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
@@ -1721,3 +1743,9 @@ impl Run {
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod pipeline_tests;
+
+/// The seed of `LLRM_CHECK_ORDER`, where it is a number.
+fn order_seed() -> Option<u64> {
+    static SEED: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *SEED.get_or_init(|| std::env::var("LLRM_CHECK_ORDER").ok().and_then(|value| value.parse().ok()))
+}

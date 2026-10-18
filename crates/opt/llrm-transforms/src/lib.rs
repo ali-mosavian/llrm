@@ -137,6 +137,7 @@ pub mod loopsimplify;
 pub mod loopsplit;
 pub mod loopversion;
 pub mod lsr;
+pub mod mem2reg;
 pub mod memcpyopt;
 pub mod mirror;
 pub mod narrowspace;

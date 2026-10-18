@@ -396,7 +396,16 @@ impl Analysis for Accesses {
         if !unchanged {
             return None;
         }
-        Some(if structure_kept(changes, function) { Ok(Rc::new(held.carried(function))) } else { previous.clone() })
+        Some(if structure_kept(changes, function) {
+            Ok(Rc::new(held.carried(function)))
+        } else {
+            // These accesses stay the result, shared; the structure they hold
+            // is of the body before these edits, and a later edit
+            // that leaves the structure alone would carry it over
+            // as the body's.
+            held.graph.0.borrow_mut().take();
+            previous.clone()
+        })
     }
 }
 
