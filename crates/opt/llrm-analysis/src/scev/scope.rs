@@ -224,7 +224,10 @@ impl ScalarEvolution {
 
         // Otherwise compute it.
         let c = self.compute_scev_at_scope(cx, v, l);
-        let values = self.values_at_scopes.get_mut(&v).expect("held");
+        // Computing can forget `v` (its exit count asks for the expressions
+        // that use it), so the entry is looked up again, as LLVM's
+        // `ValuesAtScopes[V]` does.
+        let values = self.values_at_scopes.entry(v).or_default();
         if let Some(ls) = values.iter_mut().rev().find(|ls| ls.0 == l) {
             ls.1 = Some(c);
             // Record the dependency under the bare expression: invalidation
