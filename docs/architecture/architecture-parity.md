@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's architecture against llrm's
+architecture-order: 210
+---
 # Architecture parity with LLVM: what carries the gap, and how to prove it early
 
 Pinned sources: LLVM at [`d1106deb71cc`][llvm], llrm main at [`bd6e647f6`][llrm]. The redesign plan is [PR #2040][plan] at `bd88740dc`. Numbers are `d_faces` -O2, `-m32 -march=i486 -fno-inline-functions`, callgrind instructions, unless stated. A number with no repo or [#1994] source is marked `unmeasured`; a session's report that is not yet in the repo is marked "session report".
@@ -5,6 +9,8 @@ Pinned sources: LLVM at [`d1106deb71cc`][llvm], llrm main at [`bd6e647f6`][llrm]
 ## 1. TL;DR
 
 `d_faces` -O2 costs 2,903 M instructions in llrm and 415 M in LLVM (6.8x) ([synthesis]). Six architectural differences carry it. They are ranked here by measured cost; the pools overlap.
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, per-decision costs) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
+
 
 | # | difference | llrm, measured | LLVM | decision |
 |---:|---|---|---|---|

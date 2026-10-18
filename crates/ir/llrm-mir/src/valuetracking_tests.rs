@@ -91,3 +91,36 @@ fn test_known_zero_low_bits_follow_products_and_sums() {
     assert_eq!(zeros("  %m = mul i64 %w, 4\n  %x = sub i64 %m, 1\n  ret i64 %x"), 0);
     assert_eq!(zeros("  %x = mul i64 %w, 3\n  ret i64 %x"), 0);
 }
+
+/// The ValueTracking API answers from what the stub proves: a constant exactly,
+/// a masked value by its zero bits, a shifted one by the sign bit.
+#[test]
+fn the_stub_api_answers_from_the_zero_bits_it_proves() {
+    use crate::valuetracking::{
+        compute_constant_range, compute_known_bits, is_known_non_negative, is_known_to_be_a_power_of_two,
+        masked_value_is_zero,
+    };
+    let module = crate::parse::module(
+        "define i16 @f(i16 %x) {\nb0:\n  %m = and i16 %x, 255\n  %s = lshr i16 %x, 4\n  ret i16 %m\n}\n",
+    )
+    .expect("parses");
+    let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else { unreachable!() };
+    let named = |name: &str| {
+        let result = function
+            .walk()
+            .map(|(_, inst)| function.instruction(inst))
+            .find(|one| one.result.is_some_and(|value| function.value(value).name.as_deref() == Some(name)))
+            .and_then(|one| one.result)
+            .expect("a named value");
+        crate::module::Operand::Value(result)
+    };
+    let context = &module.context;
+    let (m, s) = (named("m"), named("s"));
+    assert_eq!(compute_known_bits(context, function, m, 0, None).zero, 0xFF00);
+    assert!(masked_value_is_zero(context, function, m, 0xFF00, 0, None));
+    assert!(is_known_non_negative(context, function, m, 0, None));
+    assert!(is_known_non_negative(context, function, s, 0, None));
+    let range = compute_constant_range(context, function, m, false, 0, None);
+    assert_eq!((range.lower, range.upper), (0, 256));
+    assert!(!is_known_to_be_a_power_of_two(context, function, m, false, 0, None));
+}

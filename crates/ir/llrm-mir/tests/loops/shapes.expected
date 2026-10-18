@@ -1,0 +1,16 @@
+Loop info for function 'self':
+Loop at depth 1 containing: %l<header><latch><exiting>
+Loop info for function 'two_latches':
+Loop at depth 1 containing: %h<header>,%b<latch>,%a<latch><exiting>
+Loop info for function 'repeated_exit':
+Loop at depth 1 containing: %h<header><latch><exiting>
+Loop info for function 'switch_exits':
+Loop at depth 1 containing: %h<header><latch><exiting>,%body<latch>
+Loop info for function 'forever':
+Loop at depth 1 containing: %l<header><latch>
+Loop info for function 'unreachable_cycle':
+Loop info for function 'nest':
+Loop at depth 1 containing: %j<header>,%k,%jl<latch><exiting>
+    Loop at depth 2 containing: %k<header><latch><exiting>
+Loop at depth 1 containing: %o<header>,%i,%ol<latch><exiting>
+    Loop at depth 2 containing: %i<header><latch><exiting>

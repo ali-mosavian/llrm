@@ -480,10 +480,10 @@ d:
     let counted = |name: &str| {
         let (_, _, function) =
             module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
-        let tree = crate::dominators::DominatorTree::new(function);
-        let loops = crate::loops::LoopInfo::new(function, &tree);
+        let loops = crate::loopinfo::LoopInfo::analyze(function, || crate::dominators::DominatorTree::new(function));
         let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
-        evolution.counted(&module.context, function, &loops, loops.loops[0].header)
+        let header = loops.get_loops_in_preorder()[0].get_header();
+        evolution.counted(&module.context, function, &loops, header)
     };
     assert_eq!(
         (counted("f"), counted("g")),
@@ -515,6 +515,25 @@ fn noretain_is_a_parameter_attribute_that_round_trips() {
         "{once}"
     );
     assert_eq!(round(&once), once);
+}
+
+/// `noipa` is a function attribute (GCC's: no interprocedural pass uses the
+/// body for anyone else); it is read, written back and found by `opaque`.
+#[test]
+fn a_noipa_routine_round_trips_through_text() {
+    let text = format!(
+        "{DATALAYOUT}\ndefine internal i16 @f(i16 %a) noipa {{\nb0:\n  ret i16 %a\n}}\n\ndefine internal i16 @g(i16 %a) {{\nb0:\n  ret i16 %a\n}}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("noipa"), "{once}");
+    assert_eq!(round(&once), once);
+    let module = crate::parse::module(&once).expect("parses");
+    let opaque: Vec<_> = module
+        .functions()
+        .filter(|(_, _, function)| crate::facts::opaque(function))
+        .map(|(_, global, _)| global.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(opaque, vec!["f".to_owned()]);
 }
 
 /// `nearcode` is a function attribute the Nib frontend and `nearcode::placed`
@@ -819,18 +838,19 @@ fn nested(depth: usize) -> String {
 /// Every loop's blocks were a flood from its latches, and its parent the
 /// nearest larger loop holding all of them: a nest of d loops took d times its
 /// blocks and d squared times the loops' sets (quicksort -O3, five deep: a 20 x
-/// slope in `analysis loops`). The forest names the same loops, parents and
+/// slope in `analysis loops`). `LoopInfo` names the same loops, parents and
 /// innermost loops.
 #[test]
 fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
     use crate::dominators::DominatorTree;
-    use crate::loops::LoopInfo;
+    use crate::loopinfo::LoopInfo;
     let depth = 12;
     let module = parse::module(&nested(depth)).expect("a module");
     let function = module.functions().next().expect("@f").2;
-    let info = LoopInfo::new(function, &DominatorTree::new(function));
-    assert_eq!(info.loops.len(), depth);
-    for (at, one) in info.loops.iter().enumerate() {
+    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let loops = info.get_loops_in_preorder();
+    assert_eq!(loops.len(), depth);
+    for (at, one) in loops.iter().enumerate() {
         // Outermost first: loop `at` is the one whose header is `h{at}`, and
         // holds the `depth - at` loops from there in, each `h`, `l`
         // pair, and the innermost's body.
@@ -838,15 +858,15 @@ fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
             function.layout().iter().copied().find(|&block| function.block(block).name.as_deref() == Some(name))
         };
         let header = named(&format!("h{at}")).expect("a header");
-        assert_eq!(one.header, header);
-        assert_eq!(one.blocks.len(), 2 * (depth - at) + 1, "loop {at}");
-        assert_eq!(one.parent, at.checked_sub(1), "loop {at}");
+        assert_eq!(one.get_header(), header);
+        assert_eq!(one.get_num_blocks(), 2 * (depth - at) + 1, "loop {at}");
+        assert_eq!(one.get_parent_loop().as_ref(), at.checked_sub(1).map(|up| &loops[up]), "loop {at}");
         let latch = named(&format!("l{at}")).expect("a latch");
-        assert_eq!(one.latches, vec![latch]);
-        assert!(one.blocks.contains(&latch) && one.blocks.contains(&header));
-        assert_eq!(info.depth(latch), (at + 1) as u32);
+        assert_eq!(one.get_loop_latch(function), Some(latch));
+        assert!(one.contains(latch) && one.contains(header));
+        assert_eq!(info.get_loop_depth(latch), (at + 1) as u32);
     }
-    assert!(info.loops[depth - 1].blocks.iter().any(|&block| function.block(block).name.as_deref() == Some("body")));
+    assert!(loops[depth - 1].get_blocks().iter().any(|&block| function.block(block).name.as_deref() == Some("body")));
 }
 
 /// Twice the nest, twice the walk: the blocks a function's loops are found in
@@ -854,16 +874,15 @@ fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
 #[test]
 fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
     use crate::dominators::DominatorTree;
-    use crate::forest::forest_visits;
-    use crate::loops::LoopInfo;
-    let visits = |depth: usize| {
+    use crate::loopinfo::{LoopInfo, visits};
+    let visited = |depth: usize| {
         let module = parse::module(&nested(depth)).expect("a module");
         let function = module.functions().next().expect("@f").2;
-        let before = forest_visits();
-        LoopInfo::new(function, &DominatorTree::new(function));
-        forest_visits() - before
+        let before = visits();
+        LoopInfo::analyze(function, || DominatorTree::new(function));
+        visits() - before
     };
-    let (small, large) = (visits(40), visits(80));
+    let (small, large) = (visited(40), visited(80));
     assert!(large < 3 * small, "{small} blocks walked for 40 loops, {large} for 80");
 }
 

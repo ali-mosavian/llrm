@@ -20,6 +20,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import corpora  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
 LEVELS = ("-O1", "-O2", "-O3", "-Os")
 KEYWORDS = [f"-D{k}=" for k in "far huge near pascal cdecl __far _far __near _near".split()]
@@ -96,9 +99,11 @@ def main() -> None:
         "--distro-clang",
         help="a second clang column, what users run (the distro's shared-libLLVM clang: +20% of startup and calls into libLLVM)",
     )
+    parser.add_argument("--allow-other-corpus", action="store_true", help="measure a source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     args.llrm = args.llrm or dist_build()
-    qc = Path(os.environ["QCPORT"]).expanduser()
+    qc = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
+    print(corpora.header("dfaces", qc))
     includes = [flag for d in ("", "render", "game", "host", "qgl") for flag in ("-I", str(qc / d))]
     inputs = {"d_faces": (str(qc / "render/d_faces.c"), KEYWORDS + includes)}
     for name in filter(None, args.programs.split(",")):

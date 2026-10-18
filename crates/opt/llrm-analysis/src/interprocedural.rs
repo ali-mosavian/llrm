@@ -310,7 +310,9 @@ pub fn specialize_parameters(
 /// and folded expressions need no special cases here.
 pub fn constant_returns(module: &Module) -> Returns {
     let mut out = Returns::default();
-    for (name, _, function) in module.functions().filter(|(_, global, _)| _exact(global.linkage)) {
+    for (name, _, function) in
+        module.functions().filter(|(_, global, function)| _exact(global.linkage) && !llrm_mir::facts::opaque(function))
+    {
         let mut returned = Vec::new();
         let mut complete = true;
         for (_, inst) in function.walk() {

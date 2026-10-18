@@ -227,19 +227,27 @@ static NEXT_LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 #[derive(Debug)]
 pub(crate) struct Lineage {
     uid: u64,
+    /// Which fork of the history this is (`Function::fork` makes another).
+    branch: u64,
+    /// The branches this one forked from, each with the position it forked at:
+    /// a mark in one of them, at or before that position, is a point in this
+    /// history too.
+    ancestors: Vec<(u64, usize)>,
     logged: usize,
 }
 
 impl Default for Lineage {
     fn default() -> Self {
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: 0 }
+        let uid = NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { uid, branch: uid, ancestors: Vec::new(), logged: 0 }
     }
 }
 
 impl Clone for Lineage {
     fn clone(&self) -> Self {
         crate::counts::bump(crate::counts::Event::FunctionClones);
-        Self { uid: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed), logged: self.logged }
+        let uid = NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { uid, branch: uid, ancestors: Vec::new(), logged: self.logged }
     }
 }
 
@@ -257,6 +265,9 @@ impl PartialEq for Lineage {
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Mark {
     uid: u64,
+    /// The fork of the function this point is in: two forks edited apart share
+    /// a `uid` and can both log a change at one `at`, and are not one point.
+    branch: u64,
     at: usize,
 }
 
@@ -508,6 +519,11 @@ impl Function {
         self.layout.first().copied()
     }
 
+    /// One more than the largest block number: LLVM's `getMaxNumber`.
+    pub fn block_capacity(&self) -> usize {
+        self.blocks.len()
+    }
+
     /// The block holding `inst`, while it is placed.
     pub fn parent(
         &self,
@@ -670,7 +686,7 @@ impl Function {
     }
 
     pub fn mark(&self) -> Mark {
-        Mark { uid: self.lineage.uid, at: self.lineage.logged }
+        Mark { uid: self.lineage.uid, branch: self.lineage.branch, at: self.lineage.logged }
     }
 
     /// A copy to edit and put in this function's place, which carries on its
@@ -680,7 +696,14 @@ impl Function {
     pub fn fork(&self) -> Self {
         crate::counts::bump(crate::counts::Event::FunctionForks);
         let mut copy = self.clone();
-        copy.lineage = Lineage { uid: self.lineage.uid, logged: self.lineage.logged };
+        let mut ancestors = self.lineage.ancestors.clone();
+        ancestors.push((self.lineage.branch, self.lineage.logged));
+        copy.lineage = Lineage {
+            uid: self.lineage.uid,
+            branch: NEXT_LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            ancestors,
+            logged: self.lineage.logged,
+        };
         copy
     }
 
@@ -697,6 +720,12 @@ impl Function {
         history.append(&mut fork.changes.0);
         fork.changes.0 = history;
         fork.taken = self.taken;
+        // A fork that changed nothing is the function: its points are the
+        // function's own.
+        if fork.lineage.ancestors.last() == Some(&(self.lineage.branch, fork.lineage.logged)) {
+            fork.lineage.branch = self.lineage.branch;
+            fork.lineage.ancestors = std::mem::take(&mut self.lineage.ancestors);
+        }
         *self = fork;
     }
 
@@ -707,8 +736,12 @@ impl Function {
         mark: Mark,
     ) -> Option<&[Change]> {
         let kept_from = self.lineage.logged - self.changes.0.len();
-        (mark.uid == self.lineage.uid && (kept_from..=self.lineage.logged).contains(&mark.at))
-            .then(|| &self.changes.0[mark.at - kept_from..])
+        // A point of this branch, or of one it forked from at or before where
+        // it forked.
+        let ours = mark.uid == self.lineage.uid
+            && (mark.branch == self.lineage.branch
+                || self.lineage.ancestors.iter().any(|&(branch, at)| branch == mark.branch && mark.at <= at));
+        (ours && (kept_from..=self.lineage.logged).contains(&mark.at)).then(|| &self.changes.0[mark.at - kept_from..])
     }
 }
 

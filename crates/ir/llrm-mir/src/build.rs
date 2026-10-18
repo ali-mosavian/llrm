@@ -1,6 +1,7 @@
 //! LLVM's `IRBuilder`: a module constructed in code, each instruction's
 //! result type derived as LLVM derives it.
 
+use crate::constfold;
 use crate::context::{Constant, ConstantId, ConstantKind, Context, GlobalId};
 use crate::edit::Position;
 use crate::intrinsics;
@@ -270,6 +271,12 @@ impl Builder<'_> {
         name: &str,
     ) -> Operand {
         let ty = self.type_of(a);
+        if flags == Flags::default()
+            && let (Operand::Constant(x), Operand::Constant(y)) = (a, b)
+            && let Some(folded) = constfold::binary(self.context, op, x, y)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::Binary(op), ty, vec![a, b], flags, name)
     }
 
@@ -290,6 +297,11 @@ impl Builder<'_> {
         name: &str,
     ) -> Operand {
         let ty = self.context.types.int(1);
+        if let (Operand::Constant(x), Operand::Constant(y)) = (a, b)
+            && let Some(folded) = constfold::compare(self.context, predicate, x, y)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::ICmp(predicate), ty, vec![a, b], Flags::default(), name)
     }
 
@@ -311,6 +323,11 @@ impl Builder<'_> {
         to: TypeId,
         name: &str,
     ) -> Operand {
+        if let Operand::Constant(c) = a
+            && let Some(folded) = constfold::cast(self.context, op, c, to)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::Cast(op), to, vec![a], Flags::default(), name)
     }
 
@@ -322,6 +339,11 @@ impl Builder<'_> {
         name: &str,
     ) -> Operand {
         let ty = self.type_of(a);
+        if let (Operand::Constant(c), Operand::Constant(x), Operand::Constant(y)) = (condition, a, b)
+            && let Some(folded) = constfold::select(self.context, c, x, y)
+        {
+            return Operand::Constant(folded);
+        }
         self.value(Opcode::Select, ty, vec![condition, a, b], Flags::default(), name)
     }
 

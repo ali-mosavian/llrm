@@ -112,6 +112,47 @@ pub enum FloatPredicate {
     True,
 }
 
+impl FloatPredicate {
+    /// `CmpInst::getInversePredicate`: the predicate that holds where this one
+    /// does not (an ordered one becomes the unordered of its complement).
+    pub fn inverse(self) -> Self {
+        match self {
+            Self::False => Self::True,
+            Self::True => Self::False,
+            Self::Oeq => Self::Une,
+            Self::Ogt => Self::Ule,
+            Self::Oge => Self::Ult,
+            Self::Olt => Self::Uge,
+            Self::Ole => Self::Ugt,
+            Self::One => Self::Ueq,
+            Self::Ord => Self::Uno,
+            Self::Ueq => Self::One,
+            Self::Ugt => Self::Ole,
+            Self::Uge => Self::Olt,
+            Self::Ult => Self::Oge,
+            Self::Ule => Self::Ogt,
+            Self::Une => Self::Oeq,
+            Self::Uno => Self::Ord,
+        }
+    }
+
+    /// `CmpInst::getSwappedPredicate`: the predicate that holds with the
+    /// operands exchanged.
+    pub fn swapped(self) -> Self {
+        match self {
+            Self::Ogt => Self::Olt,
+            Self::Oge => Self::Ole,
+            Self::Olt => Self::Ogt,
+            Self::Ole => Self::Oge,
+            Self::Ugt => Self::Ult,
+            Self::Uge => Self::Ule,
+            Self::Ult => Self::Ugt,
+            Self::Ule => Self::Uge,
+            same => same,
+        }
+    }
+}
+
 /// Keyword spellings, shared by the parser and the printer.
 pub const BINARY: [(BinaryOp, &str); 18] = [
     (BinaryOp::Add, "add"),
@@ -318,7 +359,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 42] = [
+pub const FLAG_ATTRIBUTES: [&str; 43] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -339,6 +380,7 @@ pub const FLAG_ATTRIBUTES: [&str; 42] = [
     "nocapture",
     "nofree",
     "noinline",
+    "noipa",
     "nomerge",
     "nonnull",
     "norecurse",

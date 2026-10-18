@@ -2412,6 +2412,10 @@ impl Problem<'_> {
         let mut rebuilt = Vec::<usize>::new();
         // How often each counter and invariant is read a trip.
         let mut reads = BTreeMap::<Resident, i64>::new();
+        // The counters whose step a use in the body reads, which puts the step
+        // above the body, and the exit tests that cost nothing only beside it.
+        let mut stepped_early = BTreeSet::<usize>::new();
+        let mut free_exits = Vec::<(usize, i64)>::new();
 
         for (index, site) in self.sites.iter().enumerate() {
             let choice = match self.choice(set, index) {
@@ -2425,6 +2429,9 @@ impl Problem<'_> {
             match choice {
                 (_, Some((one, (exit, key)))) => {
                     cost += exit * site.frequency;
+                    if exit == 0 {
+                        free_exits.push((one, site.frequency));
+                    }
                     *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
                     if let Some(key) = key {
                         *reads.entry(self.resident(key)).or_default() += site.frequency;
@@ -2434,6 +2441,9 @@ impl Problem<'_> {
                 }
                 (Some((one, fit, price)), None) => {
                     cost += price.cost * site.frequency;
+                    if site.inside && fit.next && site.one.kind == UseKind::Basic {
+                        stepped_early.insert(one);
+                    }
                     if site.inside {
                         if fit.k != BigInt::from(0) {
                             *reads.entry(Resident::Counter(one)).or_default() += site.frequency;
@@ -2479,6 +2489,11 @@ impl Problem<'_> {
                     }
                 }
                 (None, None) => return None,
+            }
+        }
+        for (one, frequency) in free_exits {
+            if stepped_early.contains(&one) {
+                cost += costs.add * frequency;
             }
         }
         // Starts, symbolic steps and invariants, built once a way in.

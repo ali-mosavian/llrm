@@ -3,10 +3,25 @@
 //! attributes, as LLVM does on creating it; the verifier checks its
 //! signature; the interpreter runs it.
 
+use crate::Operand;
+use crate::context::{ConstantKind, Context, mask};
 use crate::intrinsic_attrs;
 use crate::module::Function;
 use crate::opcode::{Attribute, BinaryOp};
 use crate::types::{FloatKind, Type, TypeId, Types};
+
+/// The constant length (or cell count) operand of a memory intrinsic: a size,
+/// so unsigned at the width of its own type. Every reader of the operand asks
+/// this one, none sign-extends it: a 16-bit 40000 is not -25536.
+pub fn length(
+    context: &Context,
+    operand: Operand,
+) -> Option<u64> {
+    let Operand::Constant(id) = operand else { return None };
+    let constant = context.get(id);
+    let ConstantKind::Int(bits) = constant.kind else { return None };
+    u64::try_from(bits & mask(context.types.int_bits(constant.ty)?)).ok()
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
@@ -706,5 +721,29 @@ mod tests {
             let from_table = table_set(spec.name).is_some();
             assert_ne!(from_table, spec.own.is_some(), "{}", spec.name);
         }
+    }
+}
+
+#[cfg(test)]
+mod length_tests {
+    use super::length;
+    use crate::Operand;
+    use crate::context::Context;
+
+    /// A 16-bit 40000 was read as -25536 by the selector, and a fill of it
+    /// stored nothing. Every reader asks `length`, which is unsigned at the
+    /// operand's own width.
+    #[test]
+    fn test_a_length_is_unsigned_at_the_width_of_its_type() {
+        let mut context = Context::new();
+        let (i16_, i32_) = (context.types.int(16), context.types.int(32));
+        for (ty, value) in
+            [(i16_, 32767), (i16_, 32768), (i16_, 40000), (i16_, 65535), (i32_, 65535), (i32_, 2_147_483_648)]
+        {
+            let constant = context.int(ty, value);
+            assert_eq!(length(&context, Operand::Constant(constant)), Some(value as u64), "{value}");
+        }
+        let negative = context.int(i16_, -1);
+        assert_eq!(length(&context, Operand::Constant(negative)), Some(65535), "-1 at i16 is 65535");
     }
 }

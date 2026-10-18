@@ -86,7 +86,7 @@ fn a_call_repeats_its_callees_convention() {
     let emitted = emit(&program(function.clone())).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("define cc1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
+    assert!(text.contains("define cc 1000 i16 @\"DIFF%\"(i16 %0, i16 %1) addrspace(1) {"), "{text}");
     assert!(text.contains("call i16 @llrm.qb.B$NEAR(i16 %2, i16 %0)"), "{text}");
     assert!(text.contains("declare i16 @llrm.qb.B$NEAR(i16, i16)\n"), "{text}");
 
@@ -725,7 +725,7 @@ fn a_string_comparison_compares_its_callees_sign() {
     let emitted = emit(&program(function)).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    assert!(text.contains("%2 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
+    assert!(text.contains("%2 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(i16 %0, i16 %1)\n  %3 = icmp sgt i16 %2, 0\n  %4 = sext i1 %3 to i16"), "{text}");
 }
 
 /// A string comparison's callee is stated a three-way compare: its sign
@@ -1450,7 +1450,7 @@ fn a_range_of_a_routines_parameter_and_result_is_its_attribute() {
         (Subject::Callable(1), Fact::NoAlias),
     ]);
     assert!(text.contains("(i16 range(i16 0, 2) %0,"), "{text}");
-    assert!(text.contains("declare cc1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
+    assert!(text.contains("declare cc 1000 range(i16 -1, 2) noalias i16 @B$NEAR"), "{text}");
 }
 
 /// A range stated of a load's result is `!range` on that load; a byte
@@ -1710,6 +1710,27 @@ fn an_assume_of_a_comparison_is_made_on_its_own_truth() {
         text.contains("%2 = icmp slt i16 %0, %1\n  %3 = sext i1 %2 to i16\n  call void @llvm.assume(i1 %2)"),
         "{text}"
     );
+}
+
+/// A branch on a comparison is a branch on the comparison's `i1`, as clang
+/// emits `br i1 %cmp`: it tested the widened result against zero, so every
+/// condition of d_faces cost an `icmp`, a `zext` and an `icmp ne` where one
+/// `icmp` did (118 chains in its first dump, 236 instructions).
+#[test]
+fn a_branch_on_a_comparison_is_a_branch_on_its_own_truth() {
+    let mut function = difference();
+    function.values.push(Value { id: 4, r#type: 1 });
+    let compare = Instruction::new(2, Op::Lt, vec![4], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    function.blocks = vec![
+        Block::new(1, vec![compare], Terminator::new(TerminatorKind::Branch, vec![Operand::value_ref(4)], vec![2, 3])),
+        Block::new(2, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(1)], Vec::new())),
+        Block::new(3, Vec::new(), Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(2)], Vec::new())),
+    ];
+    let emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("br i1 %2, label %b2, label %b3"), "{text}");
+    assert!(!text.contains("icmp ne") && !text.contains("sext"), "{text}");
 }
 
 /// A callable that returns twice is a declaration with the attribute, which
