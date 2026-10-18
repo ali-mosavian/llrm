@@ -119,7 +119,7 @@ impl From<RegId> for Register {
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 17] = [
+pub const CLASSES: [&str; 18] = [
     "base",
     "byte",
     "code_segment",
@@ -137,6 +137,7 @@ pub const CLASSES: [&str; 17] = [
     "stack_segment",
     "string_segment",
     "x87",
+    "rfp",
 ];
 
 /// The class bits.
@@ -161,6 +162,10 @@ pub mod class {
     pub const STACK: u32 = 1 << 13;
     pub const STACK_SEGMENT: u32 = 1 << 14;
     pub const STRING_SEGMENT: u32 = 1 << 15;
+    /// LLVM's RFP classes: FP0..FP6, the x87 registers greedy allocates and
+    /// the stackifier maps to stack positions. Named by iced's MM0..MM6,
+    /// the physical x87 registers, and never encoded.
+    pub const RFP: u32 = 1 << 17;
     pub const X87: u32 = 1 << 16;
 }
 
