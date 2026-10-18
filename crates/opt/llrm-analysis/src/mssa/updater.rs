@@ -150,7 +150,7 @@ impl MemorySsaUpdater {
                     }
                     // If this method is called from an unreachable block,
                     // return LoE.
-                    if !mssa.dominance.reachable(cfg::id(current)) {
+                    if !mssa.dominance.reachable(function, cfg::id(current)) {
                         returned = Some(LIVE_ON_ENTRY);
                         stack.pop();
                         continue;
@@ -200,7 +200,7 @@ impl MemorySsaUpdater {
                     let mut suspended = false;
                     while stack[top].pred_at < stack[top].predecessors.len() {
                         let pred = stack[top].predecessors[stack[top].pred_at];
-                        if mssa.dominance.reachable(cfg::id(pred)) {
+                        if mssa.dominance.reachable(function, cfg::id(pred)) {
                             // Local def resolves now, otherwise descend into
                             // pred.
                             if let Some(incoming) = local_def_from_end(mssa, cached, pred) {
@@ -504,7 +504,7 @@ impl MemorySsaUpdater {
     ) {
         let md_block = mssa.access(md).block;
         // Don't bother updating dead code.
-        if !mssa.dominance.reachable(cfg::id(md_block)) {
+        if !mssa.dominance.reachable(function, cfg::id(md_block)) {
             mssa.set_defining_access(md, Some(LIVE_ON_ENTRY));
             return;
         }
