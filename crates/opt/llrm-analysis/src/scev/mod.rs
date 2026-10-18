@@ -21,6 +21,7 @@ pub mod compare;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
+pub mod expander;
 pub mod expr;
 #[cfg(test)]
 mod golden_tests;
