@@ -644,7 +644,10 @@ pub(crate) fn llvm_order(
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
     let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
-        Box::new(Together { name, parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote)] })
+        Box::new(Together {
+            name,
+            parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+        })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
     let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
@@ -657,7 +660,10 @@ pub(crate) fn llvm_order(
             vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
         }
         Phase::Cleanup => vec![
-            promote("promote@1241"),
+            Box::new(Together {
+                name: "promote@1241",
+                parts: vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+            }),
             fold("fold@1242"),
             dead("dead@1242"),
             decide("decide@1244"),
