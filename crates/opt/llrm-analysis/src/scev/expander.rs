@@ -208,16 +208,27 @@ impl ExpanderCleaner {
         self.result_used = true;
     }
 
-    /// `cleanup`.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L2610
+    /// `cleanup`: unless the result is used, every instruction the expander
+    /// inserted (not those it reused) is erased. They are used only by each
+    /// other, which `erase_all` allows.
     pub fn cleanup(
         self,
-        _expander: &mut Expander,
-        _function: &mut Function,
+        expander: &mut Expander,
+        function: &mut Function,
     ) {
         if self.result_used {
             return;
         }
-        todo!("S6")
+        let reused = std::mem::take(&mut expander.reused);
+        let mut inserted = std::mem::take(&mut expander.inserted);
+        expander.expressions.clear();
+        expander.relevant_loops.clear();
+        expander.inserted_ivs.clear();
+        let mut seen = llrm_mir::dense::IdSet::<InstId>::new();
+        inserted.retain(|&inst| !reused.contains(&inst) && seen.insert(inst));
+        inserted.reverse();
+        function.erase_all(&inserted).expect("what the expander inserted is used only by itself");
     }
 }
 

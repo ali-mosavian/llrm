@@ -304,3 +304,22 @@ exit:
 fn test_a_loop_without_an_invariant_count_is_left_to_the_noncountable_half() {
     assert_eq!(run_on_loop(UNCOUNTED, "f"), None);
 }
+
+/// `text` through `LoopIdiom` under the pass manager, printed.
+fn pass_output(text: &str) -> String {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::LoopIdiom::new());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+    llrm_mir::print::module(&module)
+}
+
+/// The pass, joined at `loopidiom@737`, turns the byte fill into a memset;
+/// before the join nothing ran `LoopIdiomRecognize` on a function.
+#[test]
+fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
+    let after = pass_output(FILL);
+    println!("{after}");
+    panic!();
+}
