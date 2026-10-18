@@ -1456,9 +1456,9 @@ fn _chain_after(
 }
 
 /// Whether `stores`, all the stores some loop `loop_` would make were it split
-/// to give them a loop of their own, are what `fill` takes for the whole of a
-/// loop: each a fill of a value the loop does not change, or the one store of
-/// a copy. What loop distribution asks of a part before it parts it.
+/// to give them a loop of their own, are what `loopidioms` takes for the whole
+/// of a loop: each a fill of a value the loop does not change, or the one store
+/// of a copy. What loop distribution asks of a part before it parts it.
 pub fn takes(
     unit: &Unit,
     callees: &Callees,

@@ -127,10 +127,10 @@ fn a_load_reached_by_more_than_a_hundred_writes_is_not_served_by_them() {
     assert_eq!(chain(150).solved("loaded", &Calls::default()), None, "151 writes reach it: past the limit");
 }
 
-/// `fill`'s merge makes two byte stores of constants one word store before a
-/// later round's forwarding asks: a byte of that word is a known byte (the low
-/// one and the high one alike), so merging does not take a load's value from
-/// it.
+/// `loopidioms`'s merge makes two byte stores of constants one word store
+/// before a later round's forwarding asks: a byte of that word is a known byte
+/// (the low one and the high one alike), so merging does not take a load's
+/// value from it.
 #[test]
 fn a_byte_of_a_merged_constant_store_is_a_known_byte() {
     let parsed = Parsed::new(
