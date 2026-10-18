@@ -157,3 +157,16 @@ fn test_rotating_loops_in_sequence_scans_in_proportion_to_their_number() {
     let (a, b, c) = (scanned(64), scanned(128), scanned(256));
     assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "64: {a}, 128: {b}, 256: {c}");
 }
+
+/// A target with no cost model is priced by the generic profile, and the pass
+/// names no target crate: a release build of the bins failed on `llrm_x86`
+/// used outside the dev-dependencies (`cargo check --bins` is the test).
+#[test]
+fn test_the_slot_gets_its_cost_model_from_the_target() {
+    let module = parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let neutral = llrm_mir::passes::Outer::of(&module, None);
+    // The generic profile: a phi is free, a branch costs one.
+    let generic = super::target_tti(neutral.target());
+    assert_eq!(generic.cf_instr_cost(true, llrm_mir::tti::CostKind::CodeSize), llrm_mir::tti::Cost::FREE);
+    assert_eq!(generic.cf_instr_cost(false, llrm_mir::tti::CostKind::CodeSize), llrm_mir::tti::Cost::BASIC);
+}
