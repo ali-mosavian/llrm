@@ -1622,9 +1622,7 @@ fn first_insertion_point(
 ) -> InstId {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&inst| !matches!(
             function.instruction(inst).opcode,
             Opcode::Phi | Opcode::LandingPad { .. }
