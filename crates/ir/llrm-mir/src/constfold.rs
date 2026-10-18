@@ -43,6 +43,35 @@ fn number(
     }
 }
 
+/// `Constant::isNullValue`.
+pub(crate) fn is_null_value(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    match &context.get(id).kind {
+        ConstantKind::Int(bits) => *bits == 0,
+        ConstantKind::Float(bits) => *bits == 0,
+        ConstantKind::Null | ConstantKind::Zero => true,
+        ConstantKind::Aggregate(members) => members.iter().all(|&one| is_null_value(context, one)),
+        ConstantKind::Bytes(bytes) => bytes.iter().all(|&one| one == 0),
+        _ => false,
+    }
+}
+
+/// `Constant::getNullValue`.
+pub(crate) fn null_value(
+    context: &mut Context,
+    ty: TypeId,
+) -> ConstantId {
+    let kind = match context.types.get(ty) {
+        Type::Int(_) => ConstantKind::Int(0),
+        Type::Float(_) => ConstantKind::Float(0),
+        Type::Pointer(_) => ConstantKind::Null,
+        _ => ConstantKind::Zero,
+    };
+    context.constant(Constant { ty, kind })
+}
+
 fn is_poison(
     context: &Context,
     id: ConstantId,
@@ -94,22 +123,48 @@ pub fn binary(
     if is_poison(context, c1) || is_poison(context, c2) {
         return Some(poison(context, ty));
     }
-    let (x, y) = (x?, y?);
-    // The absorber on the right: `X * 0`, `X & 0`, `X | -1` are the constant
-    // itself.
+    // A number on the right is an absorber (`X * 0`, `X & 0`, `X | -1`) or
+    // makes `X / 0`, `X % 0` poison and `X % 1` zero whatever `X` is. A number
+    // on the left of a commutative operation is swapped over to the right; on
+    // the left of the others it is an absorber for `0 << X`, `0 / X`...
     let absorber = match op {
         BinaryOp::Mul | BinaryOp::And => Some(0),
         BinaryOp::Or => Some(ones(width)),
         _ => None,
     };
-    if absorber == Some(y) {
-        return Some(c2);
-    }
-    let folded = match op {
-        BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem if y == 0 => {
-            return Some(poison(context, ty));
+    let left_absorber = matches!(
+        op,
+        BinaryOp::Shl
+            | BinaryOp::LShr
+            | BinaryOp::AShr
+            | BinaryOp::SDiv
+            | BinaryOp::UDiv
+            | BinaryOp::URem
+            | BinaryOp::SRem
+    );
+    let commutative = matches!(
+        op,
+        BinaryOp::Add | BinaryOp::Mul | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor
+    );
+    if let Some(y) = y {
+        if absorber == Some(y) {
+            return Some(c2);
         }
-        BinaryOp::URem | BinaryOp::SRem if y == 1 => 0,
+        match op {
+            BinaryOp::UDiv | BinaryOp::SDiv if y == 0 => return Some(poison(context, ty)),
+            BinaryOp::URem | BinaryOp::SRem if y == 1 => {
+                return Some(context.constant(Constant { ty, kind: ConstantKind::Int(0) }));
+            }
+            BinaryOp::URem | BinaryOp::SRem if y == 0 => return Some(poison(context, ty)),
+            _ => {}
+        }
+    } else if let Some(x) = x {
+        if (commutative && absorber == Some(x)) || (left_absorber && x == 0) {
+            return Some(c1);
+        }
+    }
+    let (x, y) = (x?, y?);
+    let folded = match op {
         BinaryOp::UDiv => x / y,
         BinaryOp::URem => x % y,
         BinaryOp::SDiv | BinaryOp::SRem => {
@@ -186,8 +241,28 @@ pub fn cast(
     if is_poison(context, c) {
         return Some(poison(context, to));
     }
+    if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
+        return Some(null_value(context, to));
+    }
     let dest = context.types.get(to).clone();
     match (op, dest) {
+        // The bits of a number are those of the float of the same width.
+        (CastOp::BitCast, Type::Float(kind @ (FloatKind::Float | FloatKind::Double))) => {
+            let (x, from) = number(context, c)?;
+            if from != if kind == FloatKind::Float { 32 } else { 64 } {
+                return None;
+            }
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float(x as u64) }))
+        }
+        (CastOp::BitCast, Type::Int(width @ (32 | 64))) => {
+            let ConstantKind::Float(bits) = context.get(c).kind else { return None };
+            let float = match context.types.get(context.get(c).ty) {
+                Type::Float(FloatKind::Float) => 32,
+                Type::Float(FloatKind::Double) => 64,
+                _ => return None,
+            };
+            (float == width).then(|| context.constant(Constant { ty: to, kind: ConstantKind::Int(u128::from(bits)) }))
+        }
         (CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound, Type::Float(kind)) => {
             let (from, value) = float_number(context, c)?;
             // An x87 constant is held as a double, and a NaN's payload and
@@ -286,4 +361,75 @@ pub fn select(
     }
     let (bits, _) = number(context, condition)?;
     Some(if bits & 1 == 1 { if_true } else { if_false })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::context::{ConstantExpr, GlobalId};
+
+    fn unknown(
+        context: &mut Context,
+        width: u32,
+    ) -> ConstantId {
+        let ptr = context.types.ptr(0);
+        let global = context.constant(Constant { ty: ptr, kind: ConstantKind::Global(GlobalId(0)) });
+        let ty = context.types.int(width);
+        context.constant(Constant {
+            ty,
+            kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: global }),
+        })
+    }
+
+    fn number(
+        context: &mut Context,
+        width: u32,
+        value: u128,
+    ) -> ConstantId {
+        let ty = context.types.int(width);
+        context.constant(Constant { ty, kind: ConstantKind::Int(value) })
+    }
+
+    /// `X * 0`, `X | -1`, `0 << X`, `0 / X`, `X % 1` and `X / 0` fold with `X`
+    /// not a number; they stayed unfolded (the builder made the
+    /// instruction) because the number test came first.
+    #[test]
+    fn a_number_absorbs_or_poisons_an_operand_that_is_not_one() {
+        let mut context = Context::new();
+        let (x, zero, one, ones) = (
+            unknown(&mut context, 32),
+            number(&mut context, 32, 0),
+            number(&mut context, 32, 1),
+            number(&mut context, 32, u32::MAX.into()),
+        );
+        assert_eq!(binary(&mut context, BinaryOp::Mul, x, zero), Some(zero));
+        assert_eq!(binary(&mut context, BinaryOp::Mul, zero, x), Some(zero));
+        assert_eq!(binary(&mut context, BinaryOp::Or, x, ones), Some(ones));
+        assert_eq!(binary(&mut context, BinaryOp::Shl, zero, x), Some(zero));
+        assert_eq!(binary(&mut context, BinaryOp::LShr, zero, x), Some(zero));
+        assert_eq!(binary(&mut context, BinaryOp::UDiv, zero, x), Some(zero));
+        assert_eq!(binary(&mut context, BinaryOp::URem, x, one), Some(zero));
+        let poisoned = binary(&mut context, BinaryOp::UDiv, x, zero).expect("x / 0");
+        assert!(is_poison(&context, poisoned));
+        assert_eq!(binary(&mut context, BinaryOp::Shl, x, zero), Some(x), "X << 0 is X");
+        assert_eq!(binary(&mut context, BinaryOp::Sub, zero, x), None, "0 - X is not a number");
+    }
+
+    /// A null value of any type casts to the null value of the destination, a
+    /// pointer null to an integer included; and the bits of a number are
+    /// those of the float of its width.
+    #[test]
+    fn a_null_casts_to_a_null_and_the_bits_of_an_integer_are_those_of_the_float() {
+        let mut context = Context::new();
+        let (ptr, i32t, f32t) =
+            (context.types.ptr(0), context.types.int(32), context.types.intern(Type::Float(FloatKind::Float)));
+        let null = context.constant(Constant { ty: ptr, kind: ConstantKind::Null });
+        let made = cast(&mut context, CastOp::PtrToInt, null, i32t).expect("ptrtoint null");
+        assert_eq!(context.get(made).kind, ConstantKind::Int(0));
+        let one = number(&mut context, 32, 0x3f80_0000);
+        let float = cast(&mut context, CastOp::BitCast, one, f32t).expect("bitcast to float");
+        assert_eq!(context.get(float).kind, ConstantKind::Float(0x3f80_0000));
+        let back = cast(&mut context, CastOp::BitCast, float, i32t).expect("bitcast to int");
+        assert_eq!(back, one);
+    }
 }
