@@ -290,3 +290,28 @@ fn test_deviate_7_values_the_join_does_not_read_are_popped_on_the_edge_that_brin
     let (_, stack, _) = _x87_traced(&skip, &[(&cells[0], 1.0), (&cells[1], 2.0)]);
     assert!(stack.is_empty());
 }
+
+/// Liveness for the stack was solved over every value of the body and then
+/// cut to the floating ones: a body of integer work with one float paid for
+/// all of it (11 M of d_faces -O2's 26.6 M in `fpstack::converted`).
+#[test]
+fn test_liveness_for_the_stack_numbers_only_the_floating_values() {
+    let body = {
+        let mut insns: Vec<std::sync::Arc<crate::model::lir::Insn>> = Vec::new();
+        for n in 0..40u32 {
+            insns.push(std::sync::Arc::new(crate::model::lir::Insn::new(n as i64, None, None, vec![100 + n], vec![])));
+        }
+        crate::model::lir::LirBody::new(
+            "t",
+            0,
+            vec![crate::model::lir::LirBlock::new(0, insns).into()],
+            Default::default(),
+            Default::default(),
+        )
+    };
+    let (live_in, live_out) = crate::backend::allocate::live_among(&body, |value| value == 100);
+    let kept: usize = live_in.values().chain(live_out.values()).map(|set| set.iter().count()).sum();
+    assert!(kept <= 2, "{kept} values in the sets");
+    let rows = crate::backend::allocate::live_rows_by(&body, |value| value == 100);
+    assert_eq!(rows.numbered(), 1, "the values numbered");
+}
