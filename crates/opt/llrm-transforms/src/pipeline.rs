@@ -700,6 +700,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
+                slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
@@ -755,6 +756,7 @@ pub(crate) fn llvm_order(
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
+                slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
