@@ -1,3 +1,7 @@
+---
+architecture-index: HIR model
+architecture-order: 40
+---
 # HIR model
 
 For frontend authors. The schema of `crates/ir/llrm-hir/src/model.rs`

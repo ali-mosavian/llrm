@@ -1,3 +1,7 @@
+---
+architecture-index: pass lists against clang
+architecture-order: 200
+---
 # Pass-list parity with clang
 
 For contributors choosing which passes run at which level. Clang 20's pipelines are the reference (the pass lists; the costs below are the distro clang 20.1.8's and are void as a cost reference to the pinned 24.0.0git, whose `d_faces` -O2 is 415.5 M. It compiles d_faces in 520/670/672/567 M instructions at -O1/-O2/-O3/-Os, gcc 13.4 in 636/1137/1413/944, llrm in 3,040/5,521/5,930/5,671); gcc's passes are listed beside them and taken only where a measured row says gcc does better.
