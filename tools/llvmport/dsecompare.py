@@ -65,12 +65,12 @@ def normalise(out):
         names[m.group(1)] = (m.group(2), int(m.group(3)))
     found = []
     for m in re.finditer(r"store (?!volatile)i(\d+) (-?\w+), ptr (?:align \d+ )?(?:%(\w+)|(@g)|(%a))", out):
-        base = names.get(m.group(3), (m.group(4) or m.group(5), 0))
+        base = names.get(m.group(3), (m.group(4) or m.group(5) or "?", 0))
         found.append(("store", base, int(m.group(1)), m.group(2)))
     for m in re.finditer(r"call void @llvm\.memset\.p0\.i\d+\(ptr (?:align \d+ )?(?:%(\w+)|(@g)|(%a)), i8 (\w+), i\d+ (\d+), i1 false\)", out):
         base = names.get(m.group(1), (m.group(2) or m.group(3), 0))
         found.append(("memset", base, int(m.group(5)), m.group(4)))
-    return sorted(found)
+    return sorted(found, key=repr)
 
 
 def main():
@@ -98,4 +98,5 @@ def main():
     sys.exit(1 if bad else 0)
 
 
-main()
+if __name__ == "__main__":
+    main()

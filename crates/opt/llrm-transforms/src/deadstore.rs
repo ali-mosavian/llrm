@@ -147,6 +147,45 @@ impl FunctionPass for DeadStoreElimination {
         let mut state = Dse::new(&frozen, &before, &view, &accesses, outer.callees(), mssa, &tree, &post, &shape.loops);
         let changed = state.run();
         let gone = std::mem::take(&mut state.to_remove);
+        let shortened = std::mem::take(&mut state.shortened);
+        let merged = std::mem::take(&mut state.merged);
+        for (memset, (length, skip)) in shortened {
+            if unit.function.is_erased(memset) || gone.contains(&memset) {
+                continue;
+            }
+            let operands = unit.function.instruction(memset).operands.clone();
+            let length_ty = unit.function.operand_type(unit.context, operands[2]).expect("a typed length");
+            let new_length = Operand::Constant(unit.context.int(length_ty, i128::from(length)));
+            let mut now = operands.clone();
+            now[2] = new_length;
+            if skip != 0 {
+                let i8 = unit.context.types.int(8);
+                let offset = Operand::Constant(unit.context.int(length_ty, i128::from(skip)));
+                let ptr_ty = unit.function.operand_type(unit.context, operands[0]).expect("a typed pointer");
+                let gep = unit.function.create_instruction(
+                    Opcode::GetElementPtr { source: i8 },
+                    ptr_ty,
+                    vec![operands[0], offset],
+                    llrm_mir::opcode::Flags::default(),
+                    None,
+                );
+                unit.function.insert(gep, llrm_mir::edit::Position::Before(memset)).expect("a placed instruction");
+                now[0] = Operand::Value(unit.function.instruction(gep).result.expect("an address"));
+            }
+            unit.function.set_operands(memset, now);
+        }
+        for (store, value) in merged {
+            if unit.function.is_erased(store) || gone.contains(&store) {
+                continue;
+            }
+            let ty = unit
+                .function
+                .operand_type(unit.context, unit.function.instruction(store).operands[0])
+                .expect("a typed operand");
+            let constant = unit.context.int(ty, value as i128);
+            let pointer = unit.function.instruction(store).operands[1];
+            unit.function.set_operands(store, vec![Operand::Constant(constant), pointer]);
+        }
         for inst in gone {
             if !unit.function.is_erased(inst) {
                 unit.function.erase(inst).unwrap_or_else(|error| panic!("dse: {error}"));
@@ -163,6 +202,9 @@ enum Overwrite {
     MaybePartial,
     None,
     Unknown,
+    /// `OW_PartialEarlierWithFullLater`: a dead store overwritten by a smaller
+    /// killing store inside it.
+    PartialEarlierWithFullLater,
 }
 
 /// What `getDomMemoryDef` found: nothing, or an access (a def, or a phi the
@@ -189,6 +231,17 @@ struct Dse<'a> {
     any_unreachable_exit: bool,
     /// Dead instructions to be removed at the end.
     to_remove: Vec<InstId>,
+    /// `IOLs`: per partly overwritten instruction, the bytes the killing writes
+    /// found so far cover, as end -> start of disjoint intervals.
+    overlaps: HashMap<InstId, std::collections::BTreeMap<i64, i64>>,
+    /// Stores whose constant became a merge with a killing store's: the
+    /// store, and its new value.
+    merged: HashMap<InstId, u128>,
+    /// The order the partly overwritten instructions were first seen in.
+    overlap_order: Vec<InstId>,
+    /// The memsets to shorten: the new length, and the bytes taken off the
+    /// front.
+    shortened: HashMap<InstId, (i64, i64)>,
 }
 
 impl<'a> Dse<'a> {
@@ -220,6 +273,10 @@ impl<'a> Dse<'a> {
             skip_stores: HashSet::default(),
             any_unreachable_exit: false,
             to_remove: Vec::new(),
+            overlaps: HashMap::default(),
+            merged: HashMap::default(),
+            overlap_order: Vec::new(),
+            shortened: HashMap::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -296,7 +353,19 @@ impl<'a> Dse<'a> {
         }
         self.memset(inst)?;
         let filled = llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?;
-        Some(self.aa.location_for(&filled, false))
+        // The provenance the accesses annotated, with the bytes the memset fills.
+        let provenance = match self.accesses.writes(inst) {
+            Some([written]) => written.provenance.clone(),
+            _ => filled.provenance.clone(),
+        };
+        let mut reference = llrm_analysis::memory::MemRef { provenance, ..filled };
+        // A memset already shortened writes fewer bytes (LLVM changes the call
+        // at once; the edit here is made at the end).
+        if let Some(&(length, skip)) = self.shortened.get(&inst) {
+            reference.disp += skip;
+            reference.width = length as u32;
+        }
+        Some(self.aa.location_for(&reference, false))
     }
 
     /// `isRemovable`: not a volatile store or memset.
@@ -428,6 +497,38 @@ impl<'a> Dse<'a> {
     /// `isOverwrite`: whether the store of `killing` completely overwrites the
     /// write of `dead`.
     fn is_overwrite(
+        &self,
+        killing_inst: InstId,
+        dead_inst: InstId,
+        killing: &Location,
+        dead: &Location,
+    ) -> Overwrite {
+        self.is_overwrite_at(killing_inst, dead_inst, killing, dead).0
+    }
+
+    /// `isOverwrite` with the offsets of the two writes it found from their
+    /// common base (`KillingOff`, `DeadOff`; 0 where it found none).
+    fn is_overwrite_at(
+        &self,
+        killing_inst: InstId,
+        dead_inst: InstId,
+        killing: &Location,
+        dead: &Location,
+    ) -> (Overwrite, i64, i64) {
+        let result = self.is_overwrite_inner(killing_inst, dead_inst, killing, dead);
+        let (d, k) = (&dead.reference, &killing.reference);
+        if matches!(result, Overwrite::Complete | Overwrite::MaybePartial)
+            && d.root == k.root
+            && d.base.is_none()
+            && k.base.is_none()
+        {
+            (result, k.disp, d.disp)
+        } else {
+            (result, 0, 0)
+        }
+    }
+
+    fn is_overwrite_inner(
         &self,
         killing_inst: InstId,
         dead_inst: InstId,
@@ -866,6 +967,7 @@ impl<'a> Dse<'a> {
                 }
                 self.updater.remove_memory_access(&mut self.mssa, self.function, access, true);
             }
+            self.overlaps.remove(&dead);
             // Its operands that were only its own.
             let operands: Vec<Operand> = self.function.instruction(dead).operands.clone();
             self.to_remove.push(dead);
@@ -899,6 +1001,225 @@ impl<'a> Dse<'a> {
     }
 
     // ---- driver -------------------------------------------------------------
+
+    /// `tryToMergePartialOverlappingStores`: the constant the earlier, larger
+    /// store holds once the killing store's bytes are in it.
+    fn try_to_merge_partial_overlapping_stores(
+        &self,
+        killing: InstId,
+        dead: InstId,
+        killing_off: i64,
+        dead_off: i64,
+    ) -> Option<u128> {
+        let unit = self.aa.unit();
+        let (dead_value, killing_value) =
+            (self.function.instruction(dead).operands[0], self.function.instruction(killing).operands[0]);
+        let dead_bits = unit.int_bits(dead_value)?;
+        let killing_bits = unit.int_bits(killing_value)?;
+        // Both stores hold constants of whole bytes, and neither is volatile.
+        if dead_bits % 8 != 0 || killing_bits % 8 != 0 || dead_bits > 128 {
+            return None;
+        }
+        let dead_constant = self.merged.get(&dead).copied().or_else(|| unit.int_constant(dead_value))?;
+        let killing_constant = self.merged.get(&killing).copied().or_else(|| unit.int_constant(killing_value))?;
+        if !self.is_removable(killing) || !self.is_removable(dead) {
+            return None;
+        }
+        if !self.memory_is_not_modified_between(dead, killing) {
+            return None;
+        }
+        let shift = ((killing_off - dead_off) * 8) as u32;
+        let mask_of = |bits: u32| if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+        let mask = mask_of(killing_bits) << shift;
+        Some(((dead_constant & !mask) | ((killing_constant & mask_of(killing_bits)) << shift)) & mask_of(dead_bits))
+    }
+
+    /// `isModSet(AA.getModRefInfo(inst, loc))`: a memset writes the bytes it
+    /// fills (`MemoryLocation::getForDest`), not its destination object.
+    fn writes_location(
+        &self,
+        inst: InstId,
+        loc: &Location,
+    ) -> bool {
+        if self.memset(inst).is_some() {
+            if let Some(written) = self.loc_for_write(inst) {
+                return self.aa.alias(&written, loc) != llrm_analysis::mssa::alias::AliasResult::No;
+            }
+        }
+        self.aa.get_mod_ref_info(inst, loc).is_mod()
+    }
+
+    /// `memoryIsNotModifiedBetween`: nothing between `first` and `second`
+    /// (`second` dominated by `first`) writes the bytes `second` writes. The
+    /// address is not translated through phis: a pointer made by a phi ends the
+    /// walk (DEVIATE).
+    fn memory_is_not_modified_between(
+        &self,
+        first: InstId,
+        second: InstId,
+    ) -> bool {
+        let Some(loc) = self.loc_for_write(second) else { return false };
+        let (first_block, second_block) = (
+            self.function.parent(first).expect("a placed instruction"),
+            self.function.parent(second).expect("a placed instruction"),
+        );
+        let mut visited: Vec<BlockId> = Vec::new();
+        let mut work: Vec<(BlockId, bool)> = vec![(second_block, true)];
+        while let Some((block, is_first)) = work.pop() {
+            let instructions = self.function.block(block).instructions();
+            let start = if block == first_block {
+                instructions.iter().position(|one| *one == first).map_or(0, |at| at + 1)
+            } else {
+                0
+            };
+            let end = if is_first {
+                instructions.iter().position(|one| *one == second).unwrap_or(instructions.len())
+            } else {
+                instructions.len()
+            };
+            for &inst in &instructions[start.min(end)..end] {
+                if inst != second
+                    && !self.to_remove.contains(&inst)
+                    && self.may_write(inst)
+                    && self.writes_location(inst, &loc)
+                {
+                    return false;
+                }
+            }
+            if block != first_block {
+                for predecessor in self.function.predecessors(block) {
+                    if !visited.contains(&predecessor) {
+                        visited.push(predecessor);
+                        work.push((predecessor, false));
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// `isPartialOverwrite` with `EnablePartialOverwriteTracking`: the part of
+    /// the dead write the killing write covers joins the intervals found for
+    /// it, and together they may cover all of it. (`OW_PartialEarlierWithFullLater`
+    /// and the shortening of a store are stage 2.)
+    fn is_partial_overwrite(
+        &mut self,
+        killing: &Location,
+        dead: &Location,
+        killing_off: i64,
+        dead_off: i64,
+        dead_inst: InstId,
+    ) -> Overwrite {
+        let (killing_size, dead_size) = (i64::from(killing.reference.width), i64::from(dead.reference.width));
+        if killing_off < dead_off + dead_size && killing_off + killing_size >= dead_off {
+            if !self.overlaps.contains_key(&dead_inst) {
+                self.overlap_order.push(dead_inst);
+            }
+            let map = self.overlaps.entry(dead_inst).or_default();
+            let (mut start, mut end) = (killing_off, killing_off + killing_size);
+            // Intervals ending at or after the start that begin before the end.
+            let mut merging: Vec<i64> = Vec::new();
+            for (&interval_end, &interval_start) in map.range(start..) {
+                if interval_start <= end {
+                    start = start.min(interval_start);
+                    end = end.max(interval_end);
+                    merging.push(interval_end);
+                } else {
+                    break;
+                }
+            }
+            for key in merging {
+                map.remove(&key);
+            }
+            map.insert(end, start);
+            let (&first_end, &first_start) = map.iter().next().expect("one interval");
+            if first_start <= dead_off && first_end >= dead_off + dead_size {
+                return Overwrite::Complete;
+            }
+        }
+        // The dead store writes every byte the killing store writes.
+        if killing_off >= dead_off
+            && dead_off + dead_size > killing_off
+            && ((killing_off - dead_off) + killing_size) <= dead_size
+        {
+            return Overwrite::PartialEarlierWithFullLater;
+        }
+        Overwrite::Unknown
+    }
+
+    /// `tryToShorten`: `dead` (a memset) loses the bytes the killing intervals
+    /// cover at its end or its start. (A memset has no destination alignment
+    /// in MIR: the alignment of the remaining part is 1.)
+    fn try_to_shorten(
+        &mut self,
+        dead: InstId,
+        dead_start: &mut i64,
+        dead_size: &mut u64,
+        killing_start: i64,
+        killing_size: u64,
+        overwrite_end: bool,
+    ) -> bool {
+        let (remove_size, begin) = if overwrite_end {
+            let remove_start = killing_start;
+            if *dead_size <= (remove_start - *dead_start) as u64 {
+                return false;
+            }
+            (*dead_size - (remove_start - *dead_start) as u64, false)
+        } else {
+            (killing_size - (*dead_start - killing_start) as u64, true)
+        };
+        let new_size = *dead_size - remove_size;
+        let entry = self.shortened.entry(dead).or_insert((*dead_size as i64, 0));
+        entry.0 = new_size as i64;
+        if begin {
+            entry.1 += remove_size as i64;
+            *dead_start += remove_size as i64;
+        }
+        *dead_size = new_size;
+        true
+    }
+
+    /// `removePartiallyOverlappedStores`: for each partly overwritten memset, the
+    /// part its killing intervals cover at the end, then at the start.
+    fn remove_partially_overlapped_stores(&mut self) -> bool {
+        let mut changed = false;
+        for dead in self.overlap_order.clone() {
+            let Some(map) = self.overlaps.get(&dead).cloned() else { continue };
+            let Some(loc) = self.loc_for_write(dead) else { continue };
+            if self.is_store(dead) || self.memset(dead).is_none() {
+                continue;
+            }
+            let (mut dead_start, mut dead_size) = (loc.reference.disp, u64::from(loc.reference.width));
+            let mut map = map;
+            // The end.
+            if let Some((&end, &start)) = map.iter().next_back() {
+                let killing_size = (end - start) as u64;
+                if start > dead_start
+                    && ((start - dead_start) as u64) < dead_size
+                    && killing_size >= dead_size - (start - dead_start) as u64
+                    && self.try_to_shorten(dead, &mut dead_start, &mut dead_size, start, killing_size, true)
+                {
+                    map.remove(&end);
+                    changed = true;
+                }
+            }
+            if map.is_empty() {
+                continue;
+            }
+            // The start.
+            if let Some((&end, &start)) = map.iter().next() {
+                let killing_size = (end - start) as u64;
+                if start <= dead_start
+                    && killing_size > (dead_start - start) as u64
+                    && self.try_to_shorten(dead, &mut dead_start, &mut dead_size, start, killing_size, false)
+                {
+                    map.remove(&end);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
 
     /// `eliminateDeadDefs` for one killing def: whether anything changed.
     fn eliminate_dead_defs_of(
@@ -950,7 +1271,28 @@ impl<'a> Dse<'a> {
             if !to_check.contains(&defining) {
                 to_check.push(defining);
             }
-            let result = self.is_overwrite(killing_inst, dead_inst, &killing_loc, &dead_loc);
+            let (mut result, killing_off, dead_off) =
+                self.is_overwrite_at(killing_inst, dead_inst, &killing_loc, &dead_loc);
+            if result == Overwrite::MaybePartial {
+                result = self.is_partial_overwrite(&killing_loc, &dead_loc, killing_off, dead_off, dead_inst);
+            }
+            if result == Overwrite::PartialEarlierWithFullLater
+                && self.is_store(dead_inst)
+                && self.is_store(killing_inst)
+                && self.instruction_dominates(dead_inst, killing_inst)
+            {
+                if let Some(value) =
+                    self.try_to_merge_partial_overlapping_stores(killing_inst, dead_inst, killing_off, dead_off)
+                {
+                    // The earlier store takes the merged constant; the killing
+                    // store goes.
+                    self.merged.insert(dead_inst, value);
+                    changed = true;
+                    self.delete_dead_instruction(killing_inst, Some(&mut deleted));
+                    self.overlaps.remove(&dead_inst);
+                    return (changed, true);
+                }
+            }
             if result == Overwrite::Complete {
                 self.delete_dead_instruction(dead_inst, Some(&mut deleted));
                 changed = true;
@@ -1008,6 +1350,76 @@ impl<'a> Dse<'a> {
         true
     }
 
+    /// `eliminateRedundantStoresOfExistingValues`: a store of what the clobbering
+    /// def before it wrote already (an identical instruction, or a memset of
+    /// the byte) is removed.
+    fn eliminate_redundant_stores_of_existing_values(&mut self) -> bool {
+        let mut changed = false;
+        let defs = self.mem_defs.clone();
+        for def in defs {
+            if self.skip_stores.contains(&def) || self.mssa.is_live_on_entry_def(def) {
+                continue;
+            }
+            let def_inst = self.inst_of(def);
+            let Some(def_loc) = self.loc_for_write(def_inst) else { continue };
+            if !self.is_removable(def_inst) {
+                continue;
+            }
+            // To conserve compile time the walk to the next clobbering def is
+            // not made: the optimized access, if there is one.
+            let upper = if self.mssa.is_optimized(def) {
+                self.mssa.get_optimized(def)
+            } else {
+                self.mssa.access(def).defining
+            };
+            let Some(upper) = upper else { continue };
+            if self.mssa.is_live_on_entry_def(upper) || self.mssa.access(upper).kind != Kind::Def {
+                continue;
+            }
+            let upper_inst = self.inst_of(upper);
+            let identical = {
+                let (a, b) = (self.function.instruction(def_inst), self.function.instruction(upper_inst));
+                a.opcode == b.opcode && a.operands == b.operands
+            };
+            let redundant = identical || self.memset_covers_store(upper_inst, def_inst, &def_loc);
+            if !redundant || self.is_read_clobber(&def_loc, def_inst) {
+                continue;
+            }
+            self.delete_dead_instruction(def_inst, None);
+            changed = true;
+        }
+        changed
+    }
+
+    /// `upper` is a memset of the byte `store` stores, covering it.
+    fn memset_covers_store(
+        &self,
+        upper: InstId,
+        store: InstId,
+        store_loc: &Location,
+    ) -> bool {
+        let Some((_, byte, _)) = self.memset(upper) else { return false };
+        if !self.is_store(store) {
+            return false;
+        }
+        let Some(upper_loc) = self.loc_for_write(upper) else { return false };
+        let unit = self.aa.unit();
+        let value = self.function.instruction(store).operands[0];
+        let Some(bits) = unit.int_bits(value) else { return false };
+        let Some(constant) = self.merged.get(&store).copied().or_else(|| unit.int_constant(value)) else {
+            return false;
+        };
+        let stored_byte = if bits % 8 == 0 && bits > 0 {
+            let first = constant & 0xFF;
+            (0..bits / 8).all(|at| (constant >> (8 * at)) & 0xFF == first).then_some(first)
+        } else {
+            None
+        };
+        let Some(stored_byte) = stored_byte else { return false };
+        unit.int_constant(byte) == Some(stored_byte)
+            && self.is_overwrite(upper, store, &upper_loc, store_loc) == Overwrite::Complete
+    }
+
     /// `eliminateDeadWritesAtEndOfFunction`.
     fn eliminate_dead_writes_at_end_of_function(&mut self) -> bool {
         let mut changed = false;
@@ -1044,13 +1456,15 @@ impl<'a> Dse<'a> {
             }
             let killing_inst = self.inst_of(killing_def);
             let Some(killing_loc) = self.loc_for_write(killing_inst) else { continue };
-            let (did, _) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc));
+            let (did, deleted_killing) = self.eliminate_dead_defs_of(killing_def, Rc::clone(&killing_loc));
             changed |= did;
-            if self.store_is_noop(killing_def) {
+            if !deleted_killing && self.store_is_noop(killing_def) {
                 self.delete_dead_instruction(killing_inst, None);
                 changed = true;
             }
         }
+        changed |= self.remove_partially_overlapped_stores();
+        changed |= self.eliminate_redundant_stores_of_existing_values();
         changed |= self.eliminate_dead_writes_at_end_of_function();
         changed
     }
