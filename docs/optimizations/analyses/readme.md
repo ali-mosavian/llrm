@@ -6,6 +6,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 42 documented, 0 undoc
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
+| aa | The interface of alias analysis, as LLVM's `AAResults` and `BatchAAResults` (llvm/Analysis/AliasAnalysis.h at d1106deb71cc): the queries a client asks (MemorySSA, MemDep, LICM, GVN, DSE), not an implementation. | `LocationSize`, `AAInfo`, `MemoryLocation`, `AliasResult`, `ModRefInfo`, | [aa](aa.md) |
 | access | Each memory access of a loop as an affine function of its counters, in the form [`crate::dependence`] tests. | `references`, `Reference`, `Roots`, `Apart`. Consumers: `unroll_jam` and | [access](access.md) |
 | alias | Strong alias analysis: what each pointer may point to, what escapes and when, and what each call reads and writes. | `pointers`, `point_values`, `points_to` and `PointsTo` (`values`, `escaped`, | [alias](alias.md) |
 | assumptions | What each block assumes, as LLVM's AssumptionCache: the conditions of the `llvm.assume` calls in it. | The assumed conditions per block. Consumers: [`crate::guards`](guards.md) turns them | [assumptions](assumptions.md) |
