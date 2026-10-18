@@ -190,6 +190,15 @@ fn expanded_in_loop(
     canonical: bool,
     build: impl FnOnce(&mut ScalarEvolution, &Cx, llrm_mir::module::BlockId, &[Operand]) -> Scev,
 ) -> String {
+    expanded_in_loop_with(canonical, false, build)
+}
+
+/// [`expanded_in_loop`], in post-increment mode for the loop if `post_inc`.
+fn expanded_in_loop_with(
+    canonical: bool,
+    post_inc: bool,
+    build: impl FnOnce(&mut ScalarEvolution, &Cx, llrm_mir::module::BlockId, &[Operand]) -> Scev,
+) -> String {
     let module = llrm_mir::parse::module(LOOP).expect("a module");
     let (_, _, original) = module.functions().next().expect("a function");
     let mut function = original.clone();
@@ -219,6 +228,9 @@ fn expanded_in_loop(
         .expect("the compare");
     let mut expander = Expander::new("t");
     expander.set_canonical_mode(canonical);
+    if post_inc {
+        expander.set_post_inc(header);
+    }
     expander.set_insert_point(at);
     let mut declared = Declared::of(&module);
     expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s, None);
@@ -285,4 +297,42 @@ fn test_a_recurrence_written_literally_has_its_own_phi() {
             "%1 = add i32 %0, %b"
         ]
     );
+}
+
+/// In post-inc mode `{%a,+,%b}` is the value after the increment: the phi
+/// starts at the normalized `%a - %b` and the increment does not dominate the
+/// compare, so one is added there.
+#[test]
+fn test_a_post_increment_recurrence_starts_one_step_back() {
+    let text = expanded_in_loop_with(false, true, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let b = unknown(se, cx, args[1]).scev;
+        add_rec(se, cx, h, vec![a, b])
+    });
+    assert_eq!(
+        lines(&text),
+        [
+            "%0 = sub i32 %a, %b",
+            "%1 = phi i32 [ %0, %entry ], [ %3, %h ]",
+            "%i = phi i32 [ 0, %entry ], [ %i2, %h ]",
+            "%2 = add i32 %1, %b",
+            "%i2 = add i32 %i, 1",
+            "%c = icmp slt i32 %i2, %n",
+            "%3 = add i32 %1, %b"
+        ]
+    );
+}
+
+/// `normalizeForPostIncUse` then `denormalizeForPostIncUse` is the identity.
+#[test]
+fn test_normalizing_for_post_inc_is_inverted_by_denormalizing() {
+    expanded_in_loop(false, |se, cx, h, args| {
+        let a = unknown(se, cx, args[0]).scev;
+        let b = unknown(se, cx, args[1]).scev;
+        let chain = add_rec(se, cx, h, vec![a, b, a]);
+        let normalized = se.normalize_for_post_inc_use(cx, chain, &[h], true).expect("invertible");
+        assert_ne!(normalized, chain);
+        assert_eq!(se.denormalize_for_post_inc_use(cx, normalized, &[h]), chain);
+        chain
+    });
 }

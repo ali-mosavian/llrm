@@ -830,12 +830,18 @@ impl Run<'_> {
         s: Scev,
     ) -> Operand {
         let Kind::AddRec(_, header) = self.se.node(s).kind.clone() else { unreachable!("an add recurrence") };
-        if self.x.post_inc_loops.contains(&header) {
-            todo!("S6: normalizeForPostIncUse (ScalarEvolutionNormalization.cpp)");
-        }
-        let normalized = s;
+        // The expression before any post-increment adjustment.
+        let post_inc = self.x.post_inc_loops.contains(&header);
+        let normalized = if post_inc {
+            let cx = cx!(self);
+            self.se
+                .normalize_for_post_inc_use(&cx, s, &[header], false)
+                .expect("a normalization that is not checked for invertibility")
+        } else {
+            s
+        };
         let (pn, trunc_ty, invert) = self.get_add_rec_expr_phi_literally(normalized, header);
-        let mut result = self.result_of(pn);
+        let mut result = if !post_inc { self.result_of(pn) } else { self.post_inc_result(s, normalized, pn, header) };
         if let Some(trunc_ty) = trunc_ty {
             let to = self.ir_ty(trunc_ty);
             if to != self.ty_of_operand(result) || invert {
@@ -849,6 +855,56 @@ impl Run<'_> {
                 let start_v = self.expand(start);
                 result = self.create_binop(BinaryOp::Sub, start_v, result);
             }
+        }
+        result
+    }
+
+    /// The post-incremented value of the phi `pn`: its increment from the
+    /// latch, or a new one at the insert point where that does not dominate it.
+    fn post_inc_result(
+        &mut self,
+        s: Scev,
+        normalized: Scev,
+        pn: InstId,
+        header: BlockId,
+    ) -> Operand {
+        let l = self.env.loops.get_loop_for(header).expect("a loop");
+        let latch = l.get_loop_latch(self.function).expect("PostInc mode requires a unique loop latch!");
+        let mut result = self.incoming_for(pn, latch).expect("an increment from the latch");
+        // A new use of the post-inc IV that is not poison safe keeps only the
+        // flags SCEV has proved always hold.
+        if let Some(inc) = self.instruction_of(result) {
+            if matches!(self.function.instruction(inc).opcode, Opcode::Binary(_)) {
+                let mut f = self.function.instruction(inc).flags;
+                if self.se.get_no_wrap_flags(s, flags::NUW) == 0 {
+                    f.remove(IrFlags::NUW);
+                }
+                if self.se.get_no_wrap_flags(s, flags::NSW) == 0 {
+                    f.remove(IrFlags::NSW);
+                }
+                self.function.set_flags(inc, f);
+            }
+        }
+        let here = self.x.insert_point.expect("an insert point");
+        let dominates = match self.instruction_of(result) {
+            Some(inc) => self.env.tree.instruction_dominates(self.function, inc, here),
+            None => true,
+        };
+        if !dominates {
+            // The post-inc expansion does not dominate this use: add another
+            // increment at the insert point.
+            let mut step = {
+                let cx = cx!(self);
+                self.se.get_step_recurrence(&cx, normalized)
+            };
+            let use_subtract = !self.se.type_of(s).is_pointer() && self.se.is_non_constant_negative(step);
+            if use_subtract {
+                let cx = cx!(self);
+                step = self.se.get_negative_scev(&cx, step, 0);
+            }
+            let first = self.first_insertion_pt(header);
+            let step_v = self.expand_at(step, first);
+            result = self.expand_iv_inc(self.result_of(pn), step_v, use_subtract);
         }
         result
     }
