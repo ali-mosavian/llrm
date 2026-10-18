@@ -11,6 +11,7 @@ pub mod alias;
 pub mod build;
 pub mod shadow;
 pub mod verify;
+pub mod view;
 pub mod walker;
 
 #[cfg(test)]

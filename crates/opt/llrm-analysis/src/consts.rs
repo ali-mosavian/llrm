@@ -1085,7 +1085,8 @@ fn incoming(
 }
 
 /// Dominating, exact stores supplying loads outside the cell lattice: a
-/// load through a pointer whose one clobber, as MemorySSA walks it, is a
+/// load through a pointer whose one clobber, as MemorySSA's walker answers it
+/// ([`crate::mssa`], LLVM's `getClobberingMemoryAccess`), is a
 /// store of its bytes and its type.
 fn _pointer_stores(
     unit: &Unit,
@@ -1103,9 +1104,12 @@ fn _pointer_stores(
     if candidates.is_empty() {
         return Default::default();
     }
-    let graph = memoryssa::built(unit, &accesses);
     let shape = unit.shape();
     let dominance = &shape.dominance;
+    let graph = {
+        let mssa = crate::mssa::Mssa::build(function, &dominance, &crate::mssa::shadow::effect_of(&accesses, function));
+        crate::mssa::view::Translated::new(unit, &accesses, mssa)
+    };
     let before = |source: InstId, block: BlockId, inst: InstId| {
         let order = function.block(block).instructions();
         match function.parent(source) {
@@ -1118,10 +1122,7 @@ fn _pointer_stores(
     };
     let mut providers = llrm_mir::dense::IdMap::default();
     for (block, inst, (reference, result)) in candidates {
-        let clobbers = graph.clobbers(inst, &reference);
-        let single = if clobbers.len() == 1 { clobbers.first().map(|id| graph.access(*id)) } else { None };
-        let Some(source) = single.filter(|access| access.kind == memoryssa::Kind::Def).and_then(|access| access.site)
-        else {
+        let Some(source) = graph.clobbering_access(inst).and_then(|access| graph.def_instruction(access)) else {
             continue;
         };
         if let Some((stored, value)) = avail::stored_from(unit, &accesses, source)
