@@ -22,6 +22,10 @@
 //! printing, `fusedMultiplyAdd`, `mod`, `remainder`, `scalbn`, `frexp`,
 //! integer conversion.
 //!
+//! A value here is the IR value's own format. Whether an operation is
+//! evaluated wider (x87 excess precision) is the target description's fact, not
+//! decided in this module.
+//!
 //! # Example
 //! `ApFloat::from_bits(IEEE_SINGLE, 0x3f80_0000)` is 1.0; its `next(false)` is
 //! `0x3f80_0001`; `convert`ing it to [`FLOAT8_E5M2`] gives 1.0 exactly.
