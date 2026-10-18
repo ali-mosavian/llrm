@@ -109,3 +109,61 @@ define void @f(ptr %p, i32 %x) {
     // float or pointer; i1 is not a whole byte.
     assert_eq!(found, [true, false, false, true, true, true, false, true, false, false, false]);
 }
+
+/// `isSameByteValueStore` of each store of `%h` against the byte of the first.
+fn same_byte(text: &str) -> Vec<bool> {
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, function) = module.functions().find(|(_, _, function)| !function.is_declaration()).expect("a function");
+    let layout = DataLayout::default();
+    let tree = DominatorTree::new(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx { module: &module, function, layout: &layout, loops: &loops, tree: &tree, assumptions: &assumptions };
+    let header: BlockId =
+        *function.layout().iter().find(|&&one| function.block(one).name.as_deref() == Some("h")).expect("%h");
+    let cur_loop = loops.get_loop_for(header).expect("a loop");
+    let stores: Vec<InstId> = function
+        .block(header)
+        .instructions()
+        .iter()
+        .copied()
+        .filter(|&inst| matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+        .collect();
+    let splat = llrm_mir::valuetracking::bytewise::is_bytewise_value(
+        &cx.query(Some(stores[0])),
+        function.instruction(stores[0]).operands[0],
+    )
+    .expect("a byte");
+    stores.iter().map(|&inst| super::is_same_byte_value_store(&cx, cur_loop, inst, splat)).collect()
+}
+
+#[test]
+fn test_a_store_is_the_same_byte_only_if_simple_invariant_and_equal() {
+    let text = "define void @f(ptr %p, i8 %v, i32 %n) {
+entry:
+  br label %h
+
+h:
+  %i = phi i32 [ 0, %entry ], [ %i2, %h ]
+  %a = getelementptr i8, ptr %p, i32 %i
+  %t = trunc i32 %i to i8
+  store i32 -1, ptr %a
+  store i8 -1, ptr %a
+  store i16 -1, ptr %a
+  store i32 1, ptr %a
+  store volatile i8 -1, ptr %a
+  store i8 %v, ptr %a
+  store i8 %t, ptr %a
+  %i2 = add i32 %i, 1
+  %c = icmp slt i32 %i2, %n
+  br i1 %c, label %h, label %exit
+
+exit:
+  ret void
+}
+";
+    // -1 as i32, i8 and i16 is the byte 0xff; i32 1 has none; a volatile store
+    // is not simple; an i8 argument is its own byte, not 0xff; an i8 made in
+    // the loop is not invariant.
+    assert_eq!(same_byte(text), [true, true, true, false, false, false, false]);
+}

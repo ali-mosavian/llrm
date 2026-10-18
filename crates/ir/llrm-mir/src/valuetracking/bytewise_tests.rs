@@ -2,13 +2,12 @@
 //! `tests/vt/bytewise/*.ll` (`expected` is `tools/llvmport/vtdump.sh bw,uo` on
 //! the file).
 
-use crate::hash::HashMap;
-
 use super::bytewise::{Byte, is_bytewise_value};
 use super::query::Query;
 use super::underlying::{MAX_LOOKUP_SEARCH_DEPTH, get_underlying_object};
 use crate::context::ConstantKind;
 use crate::datalayout::DataLayout;
+use crate::hash::HashMap;
 use crate::module::{GlobalKind, Operand};
 use crate::parse;
 use crate::types::Type;

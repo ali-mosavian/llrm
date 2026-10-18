@@ -22,9 +22,10 @@
 //! [`LoopIdiomRecognize.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp),
 //! `docs/architecture/loopidiom-port.md`.
 
+use llrm_analysis::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation, ModRefInfo};
 use llrm_analysis::scev::ap::Ap;
-use llrm_analysis::scev::expr::Scev;
-use llrm_analysis::scev::{Cx, ScalarEvolution};
+use llrm_analysis::scev::expr::{Scev, Ty, Use, flags};
+use llrm_analysis::scev::{Cx, Flags as ScevFlags, ScalarEvolution};
 use llrm_mir::context::{ConstantId, ConstantKind};
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{InstId, Operand};
@@ -321,6 +322,123 @@ impl LoopIdiomRecognize {
     pub fn store_refs_for_memcpy(&self) -> &[InstId] {
         &self.store_refs_for_memcpy
     }
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1001
+/// `isSameByteValueStore`: whether `inst` is a simple store of a loop-invariant
+/// value whose bytewise value is `splat_byte`.
+pub fn is_same_byte_value_store(
+    cx: &Cx,
+    cur_loop: Loop,
+    inst: InstId,
+    splat_byte: Byte,
+) -> bool {
+    let instruction = cx.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = instruction.opcode else { return false };
+    let value = instruction.operands[0];
+    if !cur_loop.is_loop_invariant(cx.function, value) {
+        return false;
+    }
+    is_bytewise_value(&cx.query(Some(inst)), value) == Some(splat_byte)
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1017
+/// `mayLoopAccessLocation`: whether the loop might access the location `ptr`
+/// strides through. `access` says what the verboten forms of access are (read
+/// or write). When the access size cannot be bounded, fall back to allow
+/// stores writing the same byte value `splat_byte`.
+pub fn may_loop_access_location(
+    cx: &Cx,
+    se: &ScalarEvolution,
+    aa: &mut dyn AAResults,
+    ptr: Operand,
+    access: ModRefInfo,
+    cur_loop: Loop,
+    be_count: Scev,
+    store_size_scev: Scev,
+    ignored_insts: &[InstId],
+    splat_byte: Option<Byte>,
+) -> bool {
+    // Get the location that may be stored across the loop. Since the access
+    // is strided positively through memory, we say that the modified location
+    // starts at the pointer and has infinite size.
+    let mut access_size = LocationSize::AfterPointer;
+
+    // If the loop iterates a fixed number of times, we can refine the access
+    // size to be exactly the size of the memset, which is
+    // (BECount+1)*StoreSize.
+    if let (Some(be_cst), Some(const_size)) = (se.match_apint(be_count), se.match_apint(store_size_scev)) {
+        let try_zext = |value: Ap| (value.active_bits() <= 64).then(|| value.zext_value() as u64);
+        // FIXME (LLVM): Should this check for overflow?
+        if let (Some(be_int), Some(size_int)) = (try_zext(be_cst), try_zext(const_size)) {
+            access_size = LocationSize::Precise(be_int.wrapping_add(1).wrapping_mul(size_int));
+        }
+    }
+
+    // TODO (LLVM): For this to be really effective, we have to dive into the
+    // pointer operand in the store.
+    let store_loc = MemoryLocation::new(ptr, access_size);
+
+    // Only consult the same-byte-value fallback when the access size stayed
+    // infinite (non-constant trip count); with a precise size AA is accurate.
+    let try_same_byte_value = !matches!(access_size, LocationSize::Precise(_)) && splat_byte.is_some();
+
+    for &block in cur_loop.get_blocks() {
+        for &inst in cx.function.block(block).instructions() {
+            if ignored_insts.contains(&inst) {
+                continue;
+            }
+            let mod_ref = aa.get_mod_ref_info(inst, Some(&store_loc), &mut AAQueryInfo::default());
+            if !mod_ref.intersect(access).is_no_mod_ref() {
+                if try_same_byte_value
+                    && let Some(splat) = splat_byte
+                    && is_same_byte_value_store(cx, cur_loop, inst, splat)
+                {
+                    continue;
+                }
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1064
+/// `getStartForNegStride`: if we have a negative stride, `start` refers to
+/// the end of the memory location we're trying to memset. Therefore, we need
+/// to recompute the base pointer, which is just `start - be_count * size`.
+pub fn get_start_for_neg_stride(
+    cx: &Cx,
+    se: &mut ScalarEvolution,
+    start: Scev,
+    be_count: Scev,
+    int_ptr: Ty,
+    store_size_scev: Scev,
+) -> Scev {
+    let mut index = se.get_truncate_or_zero_extend(cx, be_count, int_ptr, 0);
+    if !se.match_one(store_size_scev) {
+        // index = back edge count * store size
+        let size = se.get_truncate_or_zero_extend(cx, store_size_scev, int_ptr, 0);
+        index = se.get_mul_expr(cx, vec![Use::of(index), Use::of(size)], ScevFlags::expr(flags::NUW), 0).scev;
+    }
+    // base pointer = start - index * store size
+    se.get_minus_scev(cx, Use::of(start), Use::of(index), 0, 0)
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1082
+/// `getNumBytes`: the number of bytes as a SCEV from the backedge taken
+/// count, mapped into `int_ptr` and handled in a way that will fold cleanly.
+pub fn get_num_bytes(
+    cx: &Cx,
+    se: &mut ScalarEvolution,
+    be_count: Scev,
+    int_ptr: Ty,
+    store_size_scev: Scev,
+    cur_loop: Loop,
+) -> Scev {
+    let trip_count_scev = se.get_trip_count_from_exit_count(cx, be_count, int_ptr, cur_loop.get_header());
+    let size = se.get_truncate_or_zero_extend(cx, store_size_scev, int_ptr, 0);
+    se.get_mul_expr(cx, vec![Use::of(trip_count_scev), Use::of(size)], ScevFlags::expr(flags::NUW), 0).scev
 }
 
 /// `match(StoreEv, m_scev_AffineAddRec(m_SCEV(), m_SCEVConstant(Stride),
