@@ -1140,3 +1140,71 @@ fn the_attributes_are_hashed_once_per_invalidation_not_once_per_result() {
     analyses.invalidate(function, &PreservedAnalyses::none());
     assert!(crate::module::attribute_stamps() - before <= 2, "{}", crate::module::attribute_stamps() - before);
 }
+
+thread_local! {
+    static BASE_RUNS: Cell<usize> = const { Cell::new(0) };
+    static ABOVE_RUNS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The number of instructions of the body.
+struct Base;
+
+impl Analysis for Base {
+    type Result = usize;
+    const NAME: &'static str = "base";
+    fn run(
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> usize {
+        BASE_RUNS.set(BASE_RUNS.get() + 1);
+        function.walk().count()
+    }
+}
+
+/// Twice `Base`.
+struct Above;
+
+impl Analysis for Above {
+    type Result = usize;
+    const NAME: &'static str = "above";
+    fn run(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> usize {
+        ABOVE_RUNS.set(ABOVE_RUNS.get() + 1);
+        2 * *analyses.get::<Base>(context, layout, function)
+    }
+}
+
+/// A pass edited and then asked, without invalidating: `above` was derived from
+/// the `base` the body had before the edit, and took the mark of the edit. An
+/// invalidation does not keep a result derived from the body as it stands when
+/// what it was derived from was not: `sroa` did this after a split and the
+/// manager held `points-to` stale (`LLRM_CHECK_ORDER` found it).
+#[test]
+fn a_result_derived_from_one_held_from_before_the_edit_is_not_kept_as_current() {
+    let mut module = module();
+    let layout = DataLayout::default();
+    let id = module.named("f").unwrap();
+    let outer = Rc::new(crate::passes::Outer::of(&module, None));
+    let mut analyses = Analyses::new(outer);
+    let function = module.global(id).function().unwrap();
+    let context = &module.context;
+    let before = *analyses.get::<Base>(context, &layout, function);
+    let (context, function) = module.function_mut("f").unwrap();
+    let entry = function.entry().unwrap();
+    let branch = function.terminator(entry).unwrap();
+    let at = function.instruction(branch).operands.len() - 2;
+    let target = function.instruction(branch).operands[at + 1];
+    function.set_operand(branch, at, target);
+    // The edit moved the mark; the pass asks `above` without invalidating.
+    ABOVE_RUNS.set(0);
+    assert_eq!(*analyses.get::<Above>(context, &layout, function), 2 * before, "derived from the base it held");
+    analyses.invalidate(function, &PreservedAnalyses::none());
+    analyses.get::<Above>(context, &layout, function);
+    assert_eq!(ABOVE_RUNS.get(), 2, "kept as derived from the body as it stands");
+}
