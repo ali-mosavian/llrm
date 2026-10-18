@@ -639,6 +639,39 @@ pub fn overlap_frame_buckets(
     reached
 }
 
+/// How many buckets `overlap_buckets` picks, at most (one in two of the sets it
+/// takes counts twice), without making the list: the sum of the sizes of the
+/// sets it would union. None where it names none.
+pub fn overlap_bucket_count(
+    reference: &MemRef,
+    parts: &OverlapParts,
+) -> Option<usize> {
+    let provenance = reference.provenance.as_ref()?;
+    let mut count = parts.objectless.len();
+    if let Some(frame) = _frame(reference) {
+        count += parts.frames.get(&Some(frame)).map_or(0, HashSet::len);
+    }
+    let mut kinds: Vec<AliasClass> = Vec::new();
+    let mut last = None;
+    for one in &provenance.slices {
+        if last == Some(one.object) {
+            continue;
+        }
+        last = Some(one.object);
+        count += parts.objects.get(&one.object).map_or(0, HashSet::len);
+        let kind = alias_class(&one.object);
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    for (kind, buckets) in &parts.classes {
+        if kind.is_some_and(|kind| kinds.iter().any(|one| classes_may_alias(*one, kind))) {
+            count += buckets.len();
+        }
+    }
+    Some(count)
+}
+
 /// Python `mir.overlap_buckets`: the buckets held (`parts`, of a map keyed
 /// by `object_bucket`) a write through `reference` may reach; None for all
 /// of them.

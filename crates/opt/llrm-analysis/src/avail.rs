@@ -137,7 +137,8 @@ use crate::memory::{AliasClass, MemRef, ObjectRef, Unit, alias_class, classes_ma
 use crate::memoryssa::{self, Accesses, covered, covers, may_clobber, placed, same_bytes};
 use crate::ranges;
 use crate::regions::{
-    Frame, OverlapBucket, OverlapBuckets, displaced_span, overlap_bucket, overlap_buckets, overlap_frame, overlap_span,
+    Frame, OverlapBucket, OverlapBuckets, displaced_span, overlap_bucket, overlap_bucket_count, overlap_buckets,
+    overlap_frame, overlap_span,
 };
 
 /// The cell `inst` purely loads, and the value it lands in.
@@ -232,16 +233,9 @@ struct Stored {
     /// A cell's groups and its bytes in each.
     group_of: Vec<GroupKeys>,
     private: Bits,
-    /// The cells that lie in one object, by object, with the bytes each names
-    /// of it: a write reaches those of its object whose bytes meet its own.
-    by_object: HashMap<ObjectRef, ObjectCells>,
-    /// The objects of `by_object` by alias class.
-    classes: HashMap<AliasClass, Vec<ObjectRef>>,
-    /// Whether the index below is built (`SPARSE_REACH`).
-    sparse: bool,
-    /// The cells of each frame (`overlap_frame`): those at fixed displacements
-    /// by the bytes they name of it, and the rest.
-    by_frame: HashMap<Frame, FrameCells>,
+    /// The index of bytes, built by the first query whose pick of buckets
+    /// would visit more than `DENSE_VISITS` cells.
+    sparse: std::cell::OnceCell<Sparse>,
     /// The cells that do not certainly name their own bytes.
     selfless: Bits,
     /// Per cell, lazily: the cells whose store writes all its bytes, the
@@ -257,15 +251,25 @@ struct Stored {
     twins: RefCell<HashMap<(usize, GroupKeys), Rc<Bits>>>,
 }
 
-/// A dead-store solve finds what an access reaches by the bytes it names where
-/// some object or frame holds more than this many cells: the buckets pick
-/// visits each cell of an object's buckets for each access to it. Below it the
-/// pick is cheaper than the index, whatever the number of cells (`cases` at
-/// N=128: 259 cells, one bucket each, +7% of `dse` with the index; the
-/// ladder's 400 cells in one object, 3.7x less with it; `fjoins` at N=128: 128
-/// float cells in one object, +6.5% of `dse` with the index at 64, the dense
-/// pick at 256 is 4 words a set).
-const SPARSE_REACH: usize = 256;
+/// An access finds the cells it reaches by the buckets pick where that visits
+/// at most this many cells, and by the index of the bytes each cell names
+/// otherwise: the pick costs a visit for each cell of the buckets it takes (an
+/// array of N cells and an access to it: N), the index a search and the cells
+/// it finds. The index is built by the first query that needs it, so a body
+/// whose accesses each reach a few cells never builds it (`fjoins`, `cases`).
+const DENSE_VISITS: usize = 64;
+
+/// What the index of bytes holds.
+struct Sparse {
+    /// The cells that lie in one object, by object, with the bytes each names
+    /// of it: a write reaches those of its object whose bytes meet its own.
+    by_object: HashMap<ObjectRef, ObjectCells>,
+    /// The objects of `by_object` by alias class.
+    classes: HashMap<AliasClass, Vec<ObjectRef>>,
+    /// The cells of each frame (`overlap_frame`): those at fixed displacements
+    /// by the bytes they name of it, and the rest.
+    by_frame: HashMap<Frame, FrameCells>,
+}
 
 /// The cells in one object: all of them, and by the first byte each names, as
 /// `CellMap`'s spans keep them.
@@ -471,43 +475,6 @@ impl Stored {
         for members in groups.values_mut() {
             members.by_first.sort_unstable();
         }
-        let mut by_object: HashMap<ObjectRef, ObjectCells> = HashMap::default();
-        let mut classes: HashMap<AliasClass, Vec<ObjectRef>> = HashMap::default();
-        let widest = index
-            .parts
-            .objects
-            .values()
-            .chain(index.parts.frames.values())
-            .map(|buckets| {
-                buckets.iter().filter_map(|bucket| index.buckets.get(bucket)).map(IndexMap::len).sum::<usize>()
-            })
-            .max()
-            .unwrap_or(0);
-        let sparse = widest > SPARSE_REACH;
-        if sparse {
-            INDEXED.with(|count| count.set(count.get() + 1));
-        }
-        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
-            // The cells `overlap_bucket` puts in an object's bucket: those of
-            // one slice.
-            let Some(provenance) = cell.provenance.as_ref().filter(|provenance| provenance.slices.len() == 1) else {
-                continue;
-            };
-            let slice = provenance.slices.first().expect("one slice");
-            if !by_object.contains_key(&slice.object) {
-                classes.entry(alias_class(&slice.object)).or_default().push(slice.object);
-            }
-            by_object.entry(slice.object).or_default().add(at, slice_bytes(slice));
-        }
-        let mut by_frame: HashMap<Frame, FrameCells> = HashMap::default();
-        for (at, cell) in cells.iter().enumerate().filter(|_| sparse) {
-            let Some(frame) = overlap_frame(cell) else { continue };
-            let held = by_frame.entry(frame).or_default();
-            match displaced_span(cell) {
-                Some((_, low, high)) => held.spanned.add(at, (low, high)),
-                None => held.unspanned.push(at),
-            }
-        }
         let mut selfless = Bits::new(size);
         (0..size).filter(|&at| !same_bytes(unit, &cells[at], &cells[at])).for_each(|at| selfless.insert(at));
         Self {
@@ -518,10 +485,7 @@ impl Stored {
             groups,
             group_of,
             private: marked,
-            sparse,
-            by_object,
-            classes,
-            by_frame,
+            sparse: std::cell::OnceCell::new(),
             covering: RefCell::new(vec![None; size]),
             alike: RefCell::new(vec![None; size]),
             alike_cells: RefCell::new(vec![None; size]),
@@ -532,6 +496,38 @@ impl Stored {
 
     fn none(&self) -> Bits {
         Bits::new(self.cells.len())
+    }
+
+    /// The index of bytes, built from the cells by the first query that asks.
+    fn sparse(&self) -> &Sparse {
+        self.sparse.get_or_init(|| {
+            INDEXED.with(|count| count.set(count.get() + 1));
+            let mut by_object: HashMap<ObjectRef, ObjectCells> = HashMap::default();
+            let mut classes: HashMap<AliasClass, Vec<ObjectRef>> = HashMap::default();
+            for (at, cell) in self.cells.iter().enumerate() {
+                // The cells `overlap_bucket` puts in an object's bucket: those
+                // of one slice.
+                let Some(provenance) = cell.provenance.as_ref().filter(|provenance| provenance.slices.len() == 1)
+                else {
+                    continue;
+                };
+                let slice = provenance.slices.first().expect("one slice");
+                if !by_object.contains_key(&slice.object) {
+                    classes.entry(alias_class(&slice.object)).or_default().push(slice.object);
+                }
+                by_object.entry(slice.object).or_default().add(at, slice_bytes(slice));
+            }
+            let mut by_frame: HashMap<Frame, FrameCells> = HashMap::default();
+            for (at, cell) in self.cells.iter().enumerate() {
+                let Some(frame) = overlap_frame(cell) else { continue };
+                let held = by_frame.entry(frame).or_default();
+                match displaced_span(cell) {
+                    Some((_, low, high)) => held.spanned.add(at, (low, high)),
+                    None => held.unspanned.push(at),
+                }
+            }
+            Sparse { by_object, classes, by_frame }
+        })
     }
 
     fn related(
@@ -835,23 +831,37 @@ impl Solve<'_, '_> {
     ) -> CellSet {
         let stored = &self.stored;
         let Some(provenance) = reference.provenance.as_ref() else { return CellSet::All };
-        if !stored.sparse {
-            let mut cells = stored.none();
-            match overlap_buckets(reference, &stored.index.parts) {
-                None => stored.index.buckets.values().flat_map(IndexMap::keys).for_each(|at| cells.insert(*at)),
+        // Counting the buckets takes no list: the pick is made only where there
+        // are few.
+        let few = overlap_bucket_count(reference, &stored.index.parts).is_none_or(|buckets| buckets <= DENSE_VISITS);
+        let picked = few.then(|| overlap_buckets(reference, &stored.index.parts)).flatten();
+        let visits = match &picked {
+            _ if !few => usize::MAX,
+            None => stored.cells.len(),
+            Some(buckets) => {
+                buckets.iter().filter_map(|bucket| stored.index.buckets.get(bucket)).map(IndexMap::len).sum()
+            }
+        };
+        if visits <= DENSE_VISITS {
+            let mut cells: Vec<usize> = match picked {
+                None => stored.index.buckets.values().flat_map(IndexMap::keys).copied().collect(),
                 Some(buckets) => buckets
                     .iter()
                     .filter_map(|bucket| stored.index.buckets.get(bucket))
                     .flat_map(IndexMap::keys)
-                    .for_each(|at| cells.insert(*at)),
-            }
-            return CellSet::Bits(cells);
+                    .copied()
+                    .collect(),
+            };
+            cells.sort_unstable();
+            cells.dedup();
+            return CellSet::Some(cells);
         }
+        let sparse = stored.sparse();
         let mut cells: Vec<usize> = Vec::new();
         for bucket in &stored.index.parts.objectless {
             cells.extend(stored.index.buckets.get(bucket).into_iter().flat_map(IndexMap::keys).copied());
         }
-        if let Some(held) = overlap_frame(reference).and_then(|frame| stored.by_frame.get(&frame)) {
+        if let Some(held) = overlap_frame(reference).and_then(|frame| sparse.by_frame.get(&frame)) {
             cells.extend(held.unspanned.iter().copied());
             match displaced_span(reference) {
                 Some((_, low, high)) => cells.extend(held.spanned.meeting((low, high))),
@@ -863,7 +873,7 @@ impl Solve<'_, '_> {
             if !objects.contains(&slice.object) {
                 objects.push(slice.object);
             }
-            if let Some(held) = stored.by_object.get(&slice.object) {
+            if let Some(held) = sparse.by_object.get(&slice.object) {
                 cells.extend(held.meeting(slice_bytes(slice)));
             }
         }
@@ -874,10 +884,10 @@ impl Solve<'_, '_> {
                 continue;
             }
             seen.push(class);
-            for (kind, others) in &stored.classes {
+            for (kind, others) in &sparse.classes {
                 if classes_may_alias(class, *kind) {
                     for other in others.iter().filter(|other| !objects.contains(other)) {
-                        cells.extend(stored.by_object[other].all.iter().copied());
+                        cells.extend(sparse.by_object[other].all.iter().copied());
                     }
                 }
             }
