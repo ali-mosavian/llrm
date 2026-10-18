@@ -29,10 +29,6 @@ Segmentation fault
 no pass reaches this path today. It is reachable by any caller that passes a flagged
 `SCEVUse` (for example one built with `SCEVUse(S, Flags)`).
 
-A related symptom without a crash: `getURemExpr(C, SCEVUse(AR, FlagNUW))` returns
-`C + (C /u AR) * AR`<nuw> instead of `C + (C /u AR) * {-b,+,-a}`; the `-1` of the remainder is
-lost.
-
 ## Expected
 
 The `AddRec` is found whatever its use bits. Comparing `Ops[i].getPointer() == AddRec`
