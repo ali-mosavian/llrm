@@ -306,8 +306,13 @@ pub struct Interprocedural {
     pub rate: Option<i64>,
     /// Runs the pipeline over a copy of a callee that is in no module, for the
     /// constants a site passes: what its copy there would come to.
-    pub specialise:
-        Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, llrm_mir::module::Function) -> llrm_mir::module::Function>,
+    pub specialise: Box<
+        dyn FnMut(
+            &mut Module,
+            &mut ModuleAnalyses,
+            llrm_mir::module::Function,
+        ) -> (llrm_mir::module::Function, Declared),
+    >,
     /// Whether what a body's callers pass is stated as a range on its
     /// parameters (gcc's `-fipa-vrp`, -O2 and up).
     pub ranges: bool,
@@ -712,12 +717,13 @@ pub(crate) struct Specialisations {
 }
 
 /// Runs the pipeline over a function that is in no module, in `module`'s
-/// context: what a copy specialised for its constants comes to.
+/// context: what a copy specialised for its constants comes to, and the
+/// functions it declared, which the module does not have.
 pub(crate) type Specialiser<'a, E> = &'a mut dyn FnMut(
     &mut Module,
     &mut ModuleAnalyses,
     llrm_mir::module::Function,
-) -> Result<llrm_mir::module::Function, E>;
+) -> Result<(llrm_mir::module::Function, Declared), E>;
 
 impl Specialisations {
     /// `callee`'s bytes (priced by `costs`) with `constants` for its
@@ -742,8 +748,8 @@ impl Specialisations {
                 copy.replace_value(parameter, llrm_mir::module::Operand::Constant(*constant));
             }
         }
-        let copy = specialised(module, modules, copy)?;
-        let size = inline::size_of(module, &callees(modules, module), &copy, costs);
+        let (copy, declared) = specialised(module, modules, copy)?;
+        let size = inline::size_of(module, &callees(modules, module), &copy, Some(&declared), costs);
         self.sizes.insert(key, size);
         Ok(size)
     }

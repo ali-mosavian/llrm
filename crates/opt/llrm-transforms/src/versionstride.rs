@@ -91,7 +91,7 @@ impl Stride {
 }
 
 fn one(
-    context: &mut Context,
+    context: &Context,
     width: u32,
 ) -> Operand {
     crate::counting::constant(context, &BigInt::from(1), width)
@@ -141,7 +141,7 @@ impl Assumption for Stride {
 
     fn assumed(
         &self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         copy: &LoopCopy,
     ) -> Result<(), String> {
