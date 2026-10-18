@@ -230,7 +230,7 @@ impl<'a> LoopSafety<'a> {
                 return false;
             }
             // BB dominates Pred, so if Pred runs, BB must run.
-            if self.shape.dominance.dominates(cfg::id(block), cfg::id(pred)) {
+            if self.shape.dominance.dominates(self.function, cfg::id(block), cfg::id(pred)) {
                 continue;
             }
             for succ in self.function.successors(pred) {

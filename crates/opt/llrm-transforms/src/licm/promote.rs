@@ -141,7 +141,7 @@ fn stores_with_invariant_aa_tags(
                 .any(
                     |&store| {
                         let block = ctx.function.parent(store).expect("a store in a block");
-                        ctx.shape.dominance.dominates(cfg::id(block), cfg::id(exiting))
+                        ctx.shape.dominance.dominates(ctx.function, cfg::id(block), cfg::id(exiting))
                     },
                 )
         }) {
@@ -407,7 +407,7 @@ pub fn promote_loop_accesses_to_scalars(
                         if store_safety == StoreSafety::Unknown
                             && exit_blocks.iter().all(|&exit| {
                                 let block = function.parent(inst).expect("a store in a block");
-                                ctx.shape.dominance.dominates(cfg::id(block), cfg::id(exit))
+                                ctx.shape.dominance.dominates(ctx.function, cfg::id(block), cfg::id(exit))
                             })
                         {
                             store_safety = StoreSafety::Safe;

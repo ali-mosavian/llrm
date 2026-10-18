@@ -28,7 +28,7 @@ fn collect_children_in_loop(ctx: &LoopCtx) -> Vec<BlockId> {
     while at < worklist.len() {
         let parent = cfg::id(worklist[at]);
         for &block in ctx.function.layout() {
-            if ctx.contains_block(block) && ctx.shape.dominance.immediate(cfg::id(block)) == Some(parent) {
+            if ctx.contains_block(block) && ctx.shape.dominance.immediate(ctx.function, cfg::id(block)) == Some(parent) {
                 worklist.push(block);
             }
         }
