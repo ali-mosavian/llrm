@@ -33,9 +33,9 @@
 //! # Used by
 //! `matrix`.
 
-use std::collections::HashMap;
-
 use llrm_lir::registers::{RegId, Regs};
+
+use crate::support::hash::HashMap;
 
 /// A register unit: `root number * 4 + {0: low byte, 1: high byte, 2: upper
 /// half}` (`MCRegUnit`).
