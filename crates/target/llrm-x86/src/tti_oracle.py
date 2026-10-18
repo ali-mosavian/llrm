@@ -55,7 +55,7 @@ for ty in FLTS:
 for ty in INTS + FLTS:
     add(f"select.{ty}", f"select i1 %c, {ty} %a.{ty}, {ty} %b.{ty}")
 for ty in INTS + FLTS:
-    add(f"load.{ty}", f"load {ty}, ptr %p"); 
+    add(f"load.{ty}", f"load {ty}, ptr %p")
 args = ", ".join([f"{t} %a.{t}, {t} %b.{t}" for t in INTS + FLTS] + ["i1 %c", "ptr %p"])
 body = "\n".join(lines)
 stores = "\n".join(f"  store {t} %a.{t}, ptr %p" for t in INTS + FLTS)
