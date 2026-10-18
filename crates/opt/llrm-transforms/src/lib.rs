@@ -96,6 +96,7 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod decide;
 pub mod dse;
+pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
@@ -145,6 +146,9 @@ pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
 pub mod phiopt;
 pub mod pipeline;
