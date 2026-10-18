@@ -480,3 +480,30 @@ fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_
         crate::spill::folded_runs() - before
     );
 }
+
+/// @f as `depth` loops nested, each counting with a phi of its own.
+fn nest(depth: usize) -> String {
+    let mut text = "define void @f(i16 %n) {\nb0:\n  br label %h0\n\n".to_string();
+    for k in 0..depth {
+        let from = if k == 0 { "b0".to_string() } else { format!("h{}", k - 1) };
+        let next = if k + 1 == depth { format!("l{k}") } else { format!("h{}", k + 1) };
+        text += &format!("h{k}:\n  %i{k} = phi i16 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  br label %{next}\n\n");
+    }
+    for k in (0..depth).rev() {
+        let out = if k == 0 { "out".to_string() } else { format!("l{}", k - 1) };
+        text += &format!(
+            "l{k}:\n  %n{k} = add i16 %i{k}, 1\n  %c{k} = icmp ult i16 %n{k}, %n\n  br i1 %c{k}, label %h{k}, label %{out}\n\n"
+        );
+    }
+    text + "out:\n  ret void\n}\n"
+}
+
+/// 40 nested loops weighed 32^40 a block: `weighted` and the spill forecast
+/// overflowed i64, a panic in a debug build and a wrapped price in a release
+/// one, which hoist then judged motions by.
+#[test]
+fn a_deep_nest_saturates_its_price_instead_of_overflowing() {
+    let deep = work(&nest(40), &[]).expect("a price");
+    assert!(deep >= work(&nest(8), &[]).expect("a price"), "{deep}");
+    assert!(risk(&nest(40), 1).expect("a forecast") >= 0);
+}

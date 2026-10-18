@@ -470,3 +470,9 @@ row = "callers O2"
 step_excess = 0.0051
 pass_slack = 1.277
 why = "User decision 2026-10-12 (docs/reference/levels.md, `tree-ch`): the header copy on by default for this compile cost; the slope follow-up is #1559."
+
+
+[[measure.accepted]]
+row = "nest Os mir gvn"
+pass_slack = 1.15
+why = "#2374: block weights cap at 2^48 instead of wrapping past i64, so loops past ~8 deep weigh alike and hoist moves less out of them; gvn sees what stays (x1.129 at 2N=32, 26.5 -> 29.9 Minstr) while the axis falls (nest Os 2N 576.7 -> 541.3 Minstr, x0.939; O1 x0.869, O2 x0.883). Remove when profit's weights are BlockFrequencyInfo's (relative, entry 1)."
