@@ -1971,6 +1971,10 @@ b:
     let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
     crate::testing::stamped(&mut module).unwrap();
     crate::argpromotion::promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), false);
+    // Until the next stamp the passes that run on the callers read this.
+    let promoted = printed(&module);
+    let line = promoted.lines().find(|line| line.starts_with("define internal void @set")).expect("set");
+    assert!(!line.contains("argmem: read"), "{line}");
     crate::testing::stamped(&mut module).unwrap();
     let text = printed(&module);
     let line = text.lines().find(|line| line.starts_with("define internal void @set")).expect("set");

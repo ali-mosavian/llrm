@@ -177,6 +177,7 @@ pub fn promoted(
             let Some(plan) = planned(module, layout, &callees, id, parameter, calls, costs, size) else { continue };
             changed.extend(applied(module, id, &plan, calls));
             changed.insert(id);
+            memory::unsplit(&mut crate::interprocedural::function_mut(module, id).1.attrs);
         }
     }
     changed.into_iter().collect()

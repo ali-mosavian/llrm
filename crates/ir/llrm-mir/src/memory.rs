@@ -314,6 +314,35 @@ pub fn located(attrs: &[Attribute]) -> (Effects, Effects) {
     (at(attrs, Some("argmem")), at(attrs, None))
 }
 
+/// `attrs`' `memory(...)` with argument memory and every other location
+/// allowed what either was. A rewrite that changes which memory the
+/// parameters reach (a loaded pointer taken as a parameter, a parameter
+/// replaced by a constant address) moves accesses from one location to the
+/// other, so the split it stated no longer holds.
+pub fn unsplit(attrs: &mut Vec<Attribute>) {
+    let (arguments, other) = located(attrs);
+    if arguments == other || !attrs.iter().any(|one| matches!(one, Attribute::Memory(_))) {
+        return;
+    }
+    let both = Effects { reads: arguments.reads || other.reads, writes: arguments.writes || other.writes };
+    let access = |one: Effects| {
+        match (one.reads, one.writes) {
+            (true, true) => "readwrite",
+            (true, false) => "read",
+            (false, true) => "write",
+            (false, false) => "none",
+        }
+        .to_owned()
+    };
+    let mut locations = vec![(None, access(both))];
+    let hidden = inaccessible(attrs);
+    if hidden != both {
+        locations.push((Some("inaccessiblemem".to_owned()), access(hidden)));
+    }
+    attrs.retain(|one| !matches!(one, Attribute::Memory(_)));
+    attrs.push(Attribute::Memory(locations));
+}
+
 /// What `attrs` allow on memory no pointer of the module reaches:
 /// `inaccessiblemem`.
 pub fn inaccessible(attrs: &[Attribute]) -> Effects {
