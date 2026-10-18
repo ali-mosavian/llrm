@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:e86372dc6c8b795b5fa2bddff68476e9496646a715ab62ef4fc88ef1526254b2 -->
+<!-- src: crates/opt/llrm-transforms/src/profit.rs sha256:a4d4562646f10a311027bdff888da4e39d5debcbcc0e5bf56b980ee9405e8289 -->
 
 # profit
 
@@ -40,8 +40,9 @@ flowchart TB
 Frequencies come in two models, both per entry:
 - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
   (never below one, so a cold arm is near free but ordered), with each
-  loop's proven trips (`proven_trips`, from `induction::trip_count`) in
-  place of its estimate;
+  loop's proven trips (`proven_trips`, from ScalarEvolution's
+  `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
+  `induction::trip_count`) in place of its estimate;
 - `_loop_products`: the trips of each loop around a block multiplied, with
   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
