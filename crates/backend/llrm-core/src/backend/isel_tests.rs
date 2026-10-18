@@ -599,9 +599,8 @@ define i32 @f(i16 %a) addrspace(1) {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "mov bl, al",
             "push ax",
-            "movzx ax, bl",
+            "movzx ax, al",
             "push ax",
             "call far ptr basic",
             "pushw 5",
@@ -4139,8 +4138,7 @@ define i16 @f() addrspace(1) {
             "db 0fah",
             "xor ax, ax",
             "db 0cdh,01ah",
-            "mov ax, cx",
-            "add ax, dx",
+            "lea ax, [ecx+edx]",
             "pop bp",
             "retf"
         ]
@@ -5468,4 +5466,20 @@ fn test_a_poison_float_or_address_is_zero() {
 fn test_a_poison_i64_is_two_zero_dwords() {
     let text = "define i64 @f(i64 %a) {\n  %v = add i64 poison, %a\n  ret i64 %v\n}\n";
     assert!(!listing(text, "f").is_empty());
+}
+
+/// The translated coalescer is the default: a function compiled here never
+/// reaches the old pass, whose counter says when it can be deleted.
+#[test]
+fn test_the_old_coalescer_is_not_reached_by_default() {
+    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
+  %c = add i16 %a, %b
+  %d = mul i16 %c, %a
+  ret i16 %d
+}
+";
+    let before = crate::backend::coalesce::old_runs();
+    let got = listing(text, "f");
+    assert!(got.len() > 3, "premise: the function compiled: {got:?}");
+    assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
 }
