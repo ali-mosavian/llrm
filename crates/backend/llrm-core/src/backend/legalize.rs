@@ -250,6 +250,7 @@ fn retyped(
     let kind = match constant.kind {
         ConstantKind::Int(bits) => ConstantKind::Int(bits),
         ConstantKind::Poison => ConstantKind::Poison,
+        ConstantKind::Undef => ConstantKind::Undef,
         _ => ConstantKind::Int(0),
     };
     Operand::Constant(context.constant(Constant { ty, kind }))

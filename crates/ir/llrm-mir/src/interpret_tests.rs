@@ -401,3 +401,10 @@ fn a_value_outside_its_stated_range_is_reported() {
     let module = parse::module(&format!("target datalayout = \"{LAYOUT}\"\n{parameter}")).unwrap();
     assert_eq!(crate::interpret::run(&module, "g", vec![small(5)], 100), Ok(small(5)));
 }
+
+/// An `undef` operand reads as some value: the interpreter picks zero, so
+/// `undef + 5` is 5 and not poison.
+#[test]
+fn undef_reads_as_a_value_not_poison() {
+    assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
+}

@@ -257,10 +257,10 @@ done:
 
 /// Old: a load of memory nothing wrote was `poison`, and a read-modify-write of
 /// a fresh bitfield poisoned its container (`and poison, -8` is poison), so
-/// `v.x = 5; return v.x` folded wrong. The pin gives `undef`; MIR has none, and
-/// the zero of the type refines it.
+/// `v.x = 5; return v.x` folded wrong. Then it was the zero of the type; the
+/// pin gives `undef` (PromoteMemoryToRegister.cpp#L914).
 #[test]
-fn test_a_read_of_unwritten_memory_is_the_zero_of_its_type_not_poison() {
+fn test_a_read_of_unwritten_memory_is_undef_not_poison() {
     let after = promoted(
         "define i8 @f() {
 b0:
@@ -275,13 +275,13 @@ b0:
 ",
     );
     assert!(!after.contains("poison") && !after.contains("alloca"), "{after}");
-    assert!(after.contains("and i8 0, -8"), "{after}");
+    assert!(after.contains("and i8 undef, -8"), "{after}");
 }
 
-/// The value on entry to a phi is the zero as well: one arm stores, the other
+/// The value on entry to a phi is undef as well: one arm stores, the other
 /// reaches the join with the slot unwritten.
 #[test]
-fn test_the_entry_value_of_a_slot_at_a_join_is_zero_and_a_pointer_slot_is_null() {
+fn test_the_entry_value_of_a_slot_at_a_join_is_undef() {
     let after = promoted(
         "define i32 @f(i32 %a, i1 %c) {
 b0:
@@ -297,7 +297,7 @@ b2:
 ",
     );
     assert!(!after.contains("poison"), "{after}");
-    assert!(after.contains("phi i32") && after.contains("0, %b0"), "{after}");
+    assert!(after.contains("phi i32") && after.contains("undef, %b0"), "{after}");
     let after = promoted(
         "define ptr @g() {
 b0:
@@ -307,5 +307,47 @@ b0:
 }
 ",
     );
-    assert!(after.contains("ret ptr null"), "{after}");
+    assert!(after.contains("ret ptr undef"), "{after}");
+}
+
+/// Old: `struct { int x:3, y:5; } v; v.x = 5; v.y = 3; return v.x * 8 + v.y`
+/// read the fresh container as poison and the optimized program returned
+/// poison instead of -21 (clang -O2). Undef reads as any value, and the
+/// masks keep only the written bits, so the full pipeline returns -21.
+#[test]
+fn test_a_bitfield_read_modify_write_on_a_fresh_container_returns_what_clang_does() {
+    let text = "define i16 @f() {
+b0:
+  %s = alloca i8
+  %c0 = load i8, ptr %s
+  %m0 = and i8 %c0, -8
+  %w0 = or i8 %m0, 5
+  store i8 %w0, ptr %s
+  %c1 = load i8, ptr %s
+  %m1 = and i8 %c1, 7
+  %w1 = or i8 %m1, 24
+  store i8 %w1, ptr %s
+  %c2 = load i8, ptr %s
+  %l = shl i8 %c2, 5
+  %x8 = ashr i8 %l, 5
+  %x = sext i8 %x8 to i16
+  %c3 = load i8, ptr %s
+  %y8 = ashr i8 %c3, 3
+  %y = sext i8 %y8 to i16
+  %xs = mul i16 %x, 8
+  %r = add i16 %xs, %y
+  ret i16 %r
+}
+";
+    use crate::pipeline::{self, Applied};
+    use llrm_mir::program::Program;
+    let mut module = module(text);
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program: &mut Program| {
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = crate::testing::printed(&module);
+    assert!(!printed.contains("poison") && !printed.contains("alloca"), "{printed}");
+    assert_eq!(crate::testing::results(&module, &[&[]]), vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]);
 }

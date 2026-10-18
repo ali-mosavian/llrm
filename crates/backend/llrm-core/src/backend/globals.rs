@@ -252,7 +252,7 @@ impl Initializer<'_> {
                 }
             },
             ConstantKind::Global(_) | ConstantKind::Expr(_) => self.address(id)?,
-            ConstantKind::Poison => return Err("a poison initializer".to_owned()),
+            ConstantKind::Poison | ConstantKind::Undef => return Err("a poison initializer".to_owned()),
         }
         Ok(())
     }
@@ -326,7 +326,7 @@ pub fn absolute(
     let context = &module.context;
     match &context.get(id).kind {
         // Poison is any address: null.
-        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison => Some(0),
+        ConstantKind::Null | ConstantKind::Zero | ConstantKind::Poison | ConstantKind::Undef => Some(0),
         ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }) => match context.get(*value).kind {
             ConstantKind::Int(bits) => {
                 Some(llrm_mir::context::signed(bits, context.types.int_bits(context.get(*value).ty)?) as i64)
