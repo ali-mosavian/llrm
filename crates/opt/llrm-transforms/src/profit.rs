@@ -77,12 +77,12 @@
 //!
 //! # Used by
 //! Each of [`crate::lsr`], [`crate::hoist`], [`crate::gvn`],
-//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`], [`crate::fill`],
-//! [`crate::window`], [`crate::gepoffset`], [`crate::indvars`],
-//! [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`] and
-//! [`crate::interprocedural`] asks it, before a rewrite that trades code size
-//! or registers for speed, whether the rewrite pays. Not a pass: it runs only
-//! inside those.
+//! [`crate::unswitch`], [`crate::unroll`], [`crate::peel`],
+//! [`crate::loopidioms`], [`crate::window`], [`crate::gepoffset`],
+//! [`crate::indvars`], [`crate::tailrec`], [`crate::ipacp`], [`crate::inline`]
+//! and [`crate::interprocedural`] asks it, before a rewrite that trades code
+//! size or registers for speed, whether the rewrite pays. Not a pass: it runs
+//! only inside those.
 //!
 //! # Needs
 //! The target's `OperationCosts` and registers, [`crate::spill`] for the
@@ -95,7 +95,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::consts::Known;
 use llrm_analysis::effects::Declarations;
 use llrm_analysis::{induction, memory};
-use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::memory::{Callees, callee};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -227,13 +227,9 @@ pub fn operation(
         Opcode::Call(_) | Opcode::Invoke(_)
             if callee(context, function, one).and_then(|id| callees.get(&id)).is_some_and(|summary| summary.memset) =>
         {
-            let cells = match instruction.operands[2] {
-                Operand::Constant(id) => match context.get(id).kind {
-                    ConstantKind::Int(count) => i64::try_from(count).expect("a cell count"),
-                    _ => UNKNOWN_TRIPS,
-                },
-                _ => UNKNOWN_TRIPS,
-            };
+            let cells = llrm_mir::intrinsics::length(context, instruction.operands[2])
+                .and_then(|count| i64::try_from(count).ok())
+                .unwrap_or(UNKNOWN_TRIPS);
             return Some(costs.fill + cells * costs.fill_cell);
         }
         Opcode::Call(_) | Opcode::Invoke(_) => costs.call,

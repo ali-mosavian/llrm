@@ -1408,3 +1408,24 @@ def test_the_gate_builds_as_ci_does_not_incrementally():
     compile, under the share) where CI's build reads 11.3 -> 37.6 (2.03%): a debt read 'paid' on the one machine and not the other."""
     assert gate.STEP_ENV["CARGO_INCREMENTAL"] == "0"
     assert all(k in gate.STEP_ENV for k in ("RUSTFLAGS", "RUSTC_BOOTSTRAP"))
+
+
+def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, capsys):
+    """fold-poc's #2171 was red for hours: `git add -A` committed a `target` symlink and the gate said only 'tree differs from HEAD in tracked files'."""
+    git = _repo(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("x")
+    (tmp_path / "docs/inside").symlink_to("a.md")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 0, "a relative link inside the tree is fine"
+    (tmp_path / "target").symlink_to("/home/someone/cargo-target")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 1
+    assert "tracked symlink target -> /home/someone/cargo-target" in capsys.readouterr().out
+    git("rm", "-q", "--cached", "target")
+    (tmp_path / "target").unlink()
+    (tmp_path / "target").mkdir()
+    (tmp_path / "target/x").write_text("y")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 1
+    assert "tracked build dir target/x" in capsys.readouterr().out
