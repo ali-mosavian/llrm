@@ -820,13 +820,38 @@ impl AAResults for BasicAA<'_> {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        let is_call = matches!(
-            self.unit.function.instruction(inst).opcode,
-            Opcode::Call(_) | Opcode::Invoke(_)
-        );
-        match loc {
-            Some(loc) if is_call => self.call_mod_ref(inst, loc, aaqi),
-            _ => ModRefInfo::ModRef,
+        // `AAResults::getModRefInfo(Instruction *, Loc)`: by opcode, and
+        // nothing for the rest.
+        match self.unit.function.instruction(inst).opcode {
+            Opcode::Call(_) | Opcode::Invoke(_) => match loc {
+                Some(loc) => self.call_mod_ref(inst, loc, aaqi),
+                None => ModRefInfo::ModRef,
+            },
+            // A load that cannot alias the location neither reads nor writes
+            // it; otherwise it reads. MIR has no atomics to be stronger than
+            // unordered.
+            Opcode::Load { .. } => {
+                if let (Some(loc), Some(own)) = (loc, MemoryLocation::get(self.unit, inst))
+                    && self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias
+                {
+                    return ModRefInfo::NoModRef;
+                }
+                ModRefInfo::Ref
+            }
+            // A store that cannot alias the location, or writes to constant
+            // memory, does not modify it; otherwise it writes.
+            Opcode::Store { .. } => {
+                if let (Some(loc), Some(own)) = (loc, MemoryLocation::get(self.unit, inst)) {
+                    if self.alias(&own, loc, aaqi, Some(inst)) == AliasResult::NoAlias {
+                        return ModRefInfo::NoModRef;
+                    }
+                    if self.points_to_constant_memory(loc, aaqi, false) {
+                        return ModRefInfo::NoModRef;
+                    }
+                }
+                ModRefInfo::Mod
+            }
+            _ => ModRefInfo::NoModRef,
         }
     }
 
