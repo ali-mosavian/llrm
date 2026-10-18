@@ -238,6 +238,8 @@ impl<'m> Machine<'m> {
             },
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
+            // Any value is a legal undef; the interpreter picks zero.
+            ConstantKind::Undef => self.zero(constant.ty),
             ConstantKind::Zero => self.zero(constant.ty),
             ConstantKind::Aggregate(members) => {
                 Val::Aggregate(members.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?)

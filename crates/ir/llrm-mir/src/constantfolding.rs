@@ -92,6 +92,14 @@ fn as_int(
     }
 }
 
+/// `isa<UndefValue>`: poison is one.
+fn is_undef(
+    context: &Context,
+    c: ConstantId,
+) -> bool {
+    matches!(context.get(c).kind, ConstantKind::Undef) || is_poison(context, c)
+}
+
 /// `isa<PoisonValue>`: LLVM makes an aggregate of poison one poison, and the
 /// parser reads the array `[]` as a poison.
 pub(crate) fn is_poison(
@@ -131,6 +139,13 @@ fn int(
     context.constant(Constant { ty, kind: ConstantKind::Int(value & mask(width)) })
 }
 
+fn undef(
+    context: &mut Context,
+    ty: TypeId,
+) -> ConstantId {
+    context.constant(Constant { ty, kind: ConstantKind::Undef })
+}
+
 fn poison(
     context: &mut Context,
     ty: TypeId,
@@ -153,7 +168,7 @@ fn all_ones_value(
 }
 
 /// `ConstantStruct::get`/`ConstantArray::get`: all-zero and all-poison
-/// members make a `zeroinitializer` and a poison.
+/// members make a `zeroinitializer` and a poison; all-undef, an undef.
 fn aggregate(
     context: &mut Context,
     ty: TypeId,
@@ -163,6 +178,8 @@ fn aggregate(
         ConstantKind::Zero
     } else if !members.is_empty() && members.iter().all(|&one| is_poison(context, one)) {
         ConstantKind::Poison
+    } else if !members.is_empty() && members.iter().all(|&one| is_undef(context, one)) {
+        ConstantKind::Undef
     } else {
         ConstantKind::Aggregate(members)
     };
@@ -189,6 +206,10 @@ fn aggregate_element(
         ConstantKind::Poison => {
             let member = context.types.member(ty, index)?;
             Some(poison(context, member))
+        }
+        ConstantKind::Undef => {
+            let member = context.types.member(ty, index)?;
+            Some(undef(context, member))
         }
         _ => None,
     }
