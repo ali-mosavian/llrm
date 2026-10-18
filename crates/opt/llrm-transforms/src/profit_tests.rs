@@ -480,3 +480,28 @@ fn test_a_forecast_asks_whether_a_value_is_folded_once_however_many_sites_it_is_
         crate::spill::folded_runs() - before
     );
 }
+
+/// `getSmallConstantTripCount` counts the header's runs, one more than the
+/// latch's where the header leaves: the first cut of the ScalarEvolution
+/// `proven_trips` weighed a pretested loop (`i < 12` step 3: 4 trips) as 5.
+#[test]
+fn a_loop_the_header_leaves_is_weighted_by_its_latch_runs_by_both_engines() {
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let trips = |text: &str, scev: bool| {
+        let module = module(text);
+        let unit = llrm_analysis::testing::with_registers(llrm_analysis::memory::Unit::of(
+            &module,
+            &layout,
+            function(&module),
+        ));
+        proven_trips_using(&unit, &llrm_analysis::consts::known(&unit), scev)
+    };
+    let pretested = "define void @f(i16 %n) {\nb0:\n  br label %head\nhead:\n  %i = phi i16 [ 0, %b0 ], [ %next, %body ]\n  \
+                     %more = icmp slt i16 %i, 12\n  br i1 %more, label %body, label %out\nbody:\n  %next = add nsw i16 %i, 3\n  \
+                     br label %head\nout:\n  ret void\n}\n";
+    let posttested = COUNTED.replace("icmp ult i16 %next, %n", "icmp ult i16 %next, 3");
+    for text in [pretested, posttested.as_str()] {
+        assert_eq!(trips(text, true), trips(text, false), "{text}");
+    }
+    assert_eq!(trips(pretested, true).values().copied().collect::<Vec<_>>(), [4]);
+}
