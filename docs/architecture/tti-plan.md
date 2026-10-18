@@ -37,19 +37,55 @@ Readers take `&dyn Tti`; the target decides the profile once per module.
 
 ## Plan
 
-1. `Generic` (`BasicTTIImpl` scalar rules) and the trait; move `free_instruction`, `gep_free`, `case_clusters` out of
-   `inlinecost.rs` onto it; no output change (#2140's tests).
-2. `X86` per `-march`: `getArithmeticInstrCost`, `getCastInstrCost`, `getCmpSelInstrCost`, `getIntImmCost*`,
-   `getMemoryOpCost`, `isLegalAddressingMode`, `getScalingFactorCost`, `isLSRCostLess` for i486 (scalar tables
-   with their feature gates).
-3. InlineCost switches to `X86` behind its switch; the SCEV expander and lsr read the same trait.
+1. Done (feat/tti): the trait (`llrm_mir::tti`) and the X86 scalar profile (`llrm_x86::tti`): arithmetic, casts,
+   compare and select, loads and stores, `phi`, constants, `isTruncateFree`, `isLegalAddressingMode`.
+2. InlineCost reads it behind its switch (`free_instruction`, `gep_free`, `case_clusters` move onto it).
+3. Loop strength reduction's two queries (`getScalingFactorCost`, `isLSRCostLess`); the `Machine` hook that hands a
+   reader the profile of the compile's `-march`; the generic (no-triple) profile.
 
 Each step: permalink per function, numbered DEVIATE, a test per cost against the pinned `opt` (`print<cost-model>`, at least `-mtriple=i486 -mcpu=i486` and
 `-mcpu=pentiumpro`), pinned version in every output header.
 
 ## DEVIATE
 
-- T1 No vector, masked, gather, interleave or reduction costs.
-- T2 `getInlineCallPenalty` and `areInlineCompatible` read no per-function target-feature attributes (llrm sets features
-  per module with `-march`).
-- T3 llrm's `OperationCosts` stay what the allocator and `profit` read; they are not TTI.
+Each rests on a fact of llrm; the LLVM code it leaves out is linked at d1106deb71cc.
+
+- T1 No vector, masked, gather, interleave or reduction costs. Fact: `Type::Vector` exists in `llrm-mir/src/types.rs`,
+  but no frontend and no pass creates one, so no reader asks the price of one. LLVM:
+  [`getArithmeticInstrCost` vector tables](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255) (L255-L1950).
+- T2 No per-function target features. Fact: llrm states the CPU once per compile with `-march`; the m32 targets accept
+  `i486` and `pentium`, the m16 target `i386 i486 pentium pentiumpro k5 k6 athlon core2` (`timings.times`, `march`
+  row of each). LLVM: [`X86TTIImpl(TM, F)` takes the subtarget of each function](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.h#L40).
+- T3 The SSE tables are read for `core2` only. Fact: `core2` is the one CPU of those lists with SSE, and neither back
+  end has an `xmm` register (`registers.regs` of m16 and m32), so scalar floats are x87 whatever the CPU says. LLVM:
+  [`SSE2CostTable`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1776), [`SSE1CostTable`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1846),
+  [`SSE2ConversionTbl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526).
+- T4 No instruction context in a query. Fact: a reader asks the price of an operation before the instruction exists
+  (the SCEV expander) or for a callee's instruction outside its function (InlineCost). LLVM:
+  [the `zext` folded into a GEP index and the extending load](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L2780), and the store
+  with an indexed address of `getMemoryOpCost`.
+- T5 The constant costs and the addressing modes are read off the source, not checked by `opt`. Fact: the cost model
+  prints no price for them. LLVM: [`getIntImmCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6892),
+  [`getIntImmCostInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6927),
+  [`isLegalAddressingMode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621). Their tests quote the source lines and are marked
+  unverified by oracle.
+
+## What the oracle found
+
+`opt -passes='print<cost-model>'` gives the same price for every scalar instruction on `i386`, `i486`, `pentium`,
+`pentiumpro`, `k6` and `athlon`; only `core2` differs (its SSE tables). So the per-`-march` features of `X86Subtarget`
+change a scalar price in LLVM only for SSE: CMOV (from `pentiumpro`) and the multiply and shift latencies are not in
+the cost model's scalar rows. Nothing here needs a table per CPU but `core2`'s, and no m32 target reaches it.
+
+## One owner per fact: `OperationCosts` and `Tti`
+
+`Machine::costs()` / `size_costs()` (`OperationCosts`, from `opcosts.txt` and `timings.times`: the 486/P5 clock
+model, in clocks or bytes of executed work) is read by the native passes, gcc-shaped or llrm's own (`addresssink`, `argpromotion`, `calleepop`, `fill`, `gvn`,
+`hoist`, `indvars`, `inline`, `ipacp`, `loopdistribute`, `loopfuse`, `loopinterchange`, `loopversion`, `lsr`, `memcpyopt`,
+`peelsize`, `phiopt`, `profit`, `switchlower`, `unswitch`, `window` and the allocator's spill code). `Tti` (LLVM's per-instruction throughput, latency and size units) is read by
+the passes that are translations of LLVM's: InlineCost, the SCEV expander, and loop strength reduction once its
+translation lands (`lsr` reads `OperationCosts` until then). A pass reads one:
+a translated pass keeps LLVM's thresholds, which are tuned to LLVM's units, so it cannot be fed clocks; a native pass
+decides in executed clocks or bytes, which `Tti` does not state. Nothing derives one from the other: `Tti` rows are
+copies of LLVM's tables checked against `opt`; `OperationCosts` rows come from the target's data sheets. They stay two
+because they price two things.

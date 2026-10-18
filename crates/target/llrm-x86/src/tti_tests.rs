@@ -188,8 +188,22 @@ fn the_compare_select_and_memory_costs_equal_the_pinned_opt_on_every_cpu() {
     assert!(wrong.is_empty(), "{} of {checked} differ:\n{}", wrong.len(), wrong[..wrong.len().min(40)].join("\n"));
 }
 
-/// Constants, from `X86TTIImpl::getIntImmCost` (:6882-7060); the cost model has
-/// no printer for them, so these are read off the source.
+/// Constants, from `X86TTIImpl::getIntImmCost` (X86TargetTransformInfo.cpp
+/// L6882-L7035); the cost model has no printer for them, so these are
+/// UNVERIFIED BY ORACLE and read off the source:
+/// - L6883 `if (Val == 0) return TTI::TCC_Free;`, L6886 `if (isInt<32>(Val))
+///   return TTI::TCC_Basic;`, then `return 2 * TTI::TCC_Basic;` (the 0, 5 and
+///   0x1_0000_0000 rows);
+/// - L6921 `Cost += getIntImmCost(Val);` per 64-bit chunk, L6924 `return
+///   std::max<InstructionCost>(1, Cost);` (the 128-bit row);
+/// - L6949 `if (Idx == 0)` of a GEP: `return 2 * TTI::TCC_Basic`, else free;
+/// - L6962 `ImmVal == 0x100000000ULL || ImmVal == 0xffffffff` free (the 64-bit
+///   compare), L6979 `Imm.isIntN(32)` free (and), L6990 `Imm.getZExtValue() ==
+///   0x80000000` free (add and sub);
+/// - L6998 division `return TTI::TCC_Free;`, L7007 shift `if (Idx == 1) return
+///   TTI::TCC_Free;`;
+/// - L7031 `return (Cost <= NumConstants * TTI::TCC_Basic) ? TCC_Free : Cost`
+///   for the operand an instruction takes as an immediate.
 #[test]
 fn an_integer_constant_costs_one_instruction_a_64_bit_chunk() {
     let x86 = X86::of_cpu("i486").unwrap();
@@ -212,8 +226,13 @@ fn an_integer_constant_costs_one_instruction_a_64_bit_chunk() {
     assert_eq!(x86.int_imm_cost_inst(ImmUser::Unknown, 0, 0x1000, 32), Cost::FREE);
 }
 
-/// `isLegalAddressingMode` (:36621): scales 1, 2, 4, 8 beside a base register,
-/// 3, 5, 9 without one; a displacement of 32 bits, below 16 MB beside a symbol.
+/// `isLegalAddressingMode` (X86ISelLowering.cpp L36621), UNVERIFIED BY ORACLE
+/// and read off the source: L36651-36668 `case 0: case 1: case 2: case 4: case
+/// 8: // These scales always work.` / `case 3: case 5: case 9: if
+/// (AM.HasBaseReg) return false;` / `default: return false;`; and
+/// `X86::isOffsetSuitableForCodeModel` (L3191-3217) `if (!isInt<32>(Offset))
+/// return false;` ... L3217 `return Offset < 16 * 1024 * 1024;` beside a
+/// symbol.
 #[test]
 fn the_x86_addressing_modes_are_those_of_the_lowering() {
     let x86 = X86::of_cpu("i486").unwrap();

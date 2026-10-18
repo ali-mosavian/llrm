@@ -55,7 +55,8 @@ impl X86 {
 }
 
 /// `getTypeLegalizationCost` for the scalar types on a 32-bit target: how many
-/// operations of what type a value takes.
+/// operations of what type a value takes:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1039
 fn legalized(ty: Ty) -> Option<(i64, Ty)> {
     match ty {
         Ty::Int(bits) if bits <= 8 => Some((1, Ty::Int(8))),
@@ -84,7 +85,8 @@ const fn throughput(value: i64) -> Row {
     [Some(value), None, None, None]
 }
 
-/// `ScalarVarDivCostTable` (X86TargetTransformInfo.cpp:757).
+/// `ScalarVarDivCostTable`:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L757
 fn scalar_variable_divide(
     op: ArithOp,
     ty: Ty,
@@ -104,7 +106,8 @@ fn scalar_variable_divide(
     }
 }
 
-/// `X86CostTbl` (:1625), the 32-bit rows.
+/// `X86CostTbl`, the 32-bit rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1879
 fn x86_table(
     op: ArithOp,
     ty: Ty,
@@ -123,7 +126,8 @@ fn x86_table(
     }
 }
 
-/// `SSE2CostTable` (:1522), the scalar rows.
+/// `SSE2CostTable`, the scalar rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1776
 fn sse2_table(
     op: ArithOp,
     ty: Ty,
@@ -139,7 +143,8 @@ fn sse2_table(
     }
 }
 
-/// `SSE1CostTable` (:1592), the scalar rows.
+/// `SSE1CostTable`, the scalar rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1846
 fn sse1_table(
     op: ArithOp,
     ty: Ty,
@@ -155,7 +160,8 @@ fn sse1_table(
 }
 
 /// `TargetTransformInfoImplBase::getArithmeticInstrCost`, which the generic
-/// rules fall to for every kind but throughput.
+/// rules fall to for every kind but throughput:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L733
 fn base_arithmetic(
     op: ArithOp,
     ty: Ty,
@@ -171,7 +177,8 @@ fn base_arithmetic(
     Cost::BASIC
 }
 
-/// `BasicTTIImplBase::getArithmeticInstrCost`.
+/// `BasicTTIImplBase::getArithmeticInstrCost`:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1092
 fn generic_arithmetic(
     op: ArithOp,
     ty: Ty,
@@ -202,7 +209,8 @@ fn generic_arithmetic(
     }
 }
 
-/// `SSE2ConversionTbl` (:3527), the scalar rows.
+/// `SSE2ConversionTbl`, the scalar rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
 fn sse2_conversion(
     op: CastKind,
     dst: Ty,
@@ -236,7 +244,10 @@ fn bitcast_expands(
     !profile.sse2 && !matches!(ty, Ty::Double)
 }
 
-/// `BasicTTIImplBase::getCastInstrCost` for scalars.
+/// `BasicTTIImplBase::getCastInstrCost` for scalars:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1257
+/// (the free ones, first, are `TargetTransformInfoImplBase`'s:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/TargetTransformInfoImpl.h#L789).
 fn generic_cast(
     profile: &X86,
     op: CastKind,
@@ -299,8 +310,10 @@ fn generic_cast(
     })
 }
 
-/// `SSE2CostTbl` and `SSE1CostTbl` of `getCmpSelInstrCost` (:4042, :4057), the
-/// scalar rows.
+/// `SSE2CostTbl` and `SSE1CostTbl` of `getCmpSelInstrCost`, the scalar rows:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L4058
+/// and
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L4075
 fn sse_cmp_sel(
     profile: &X86,
     op: CmpSel,
@@ -336,7 +349,8 @@ impl Tti for X86 {
         if let Some(each) = sse_cmp_sel(self, op, ty).and_then(|row| row[kind.index()]) {
             return Cost::of(count * each);
         }
-        // Assume a 3 cycle latency for a floating point select (:4136).
+        // Assume a 3 cycle latency for a floating point select:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L4133
         if kind == CostKind::Latency && op == CmpSel::Select && ty.is_float() {
             return Cost::of(3);
         }
@@ -344,7 +358,8 @@ impl Tti for X86 {
         Cost::of(count)
     }
 
-    /// `X86TTIImpl::getMemoryOpCost` (:5806), scalars.
+    /// `X86TTIImpl::getMemoryOpCost`, scalars:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L5806
     fn memory_op_cost(
         &self,
         op: MemoryOp,
@@ -365,7 +380,8 @@ impl Tti for X86 {
         Cost::of(extra + count)
     }
 
-    /// `X86TTIImpl::getCFInstrCost` (:7076).
+    /// `X86TTIImpl::getCFInstrCost`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7076
     fn cf_instr_cost(
         &self,
         phi: bool,
@@ -378,7 +394,8 @@ impl Tti for X86 {
         Cost::FREE
     }
 
-    /// `X86TTIImpl::getIntImmCost(const APInt &, Type *)` (:6892).
+    /// `X86TTIImpl::getIntImmCost(const APInt &, Type *)`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6892
     fn int_imm_cost(
         &self,
         imm: i128,
@@ -401,7 +418,8 @@ impl Tti for X86 {
         Cost::of(total.max(1))
     }
 
-    /// `X86TTIImpl::getIntImmCostInst` (:6927).
+    /// `X86TTIImpl::getIntImmCostInst`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L6927
     fn int_imm_cost_inst(
         &self,
         op: ImmUser,
@@ -453,7 +471,8 @@ impl Tti for X86 {
         cost
     }
 
-    /// `X86TargetLowering::isTruncateFree` (:36743).
+    /// `X86TargetLowering::isTruncateFree`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36743
     fn is_truncate_free(
         &self,
         from: Ty,
@@ -465,8 +484,9 @@ impl Tti for X86 {
         }
     }
 
-    /// `X86TargetLowering::isLegalAddressingMode` (:36621), 32-bit, small code
-    /// model, not position independent.
+    /// `X86TargetLowering::isLegalAddressingMode`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621,
+    /// 32-bit, small code model, not position independent.
     fn is_legal_addressing_mode(
         &self,
         base_gv: bool,
@@ -487,9 +507,10 @@ impl Tti for X86 {
         }
     }
 
-    /// `X86TTIImpl::getCastInstrCost` (:2772), scalars (T4: no instruction
-    /// context, so the `zext` folded into a GEP index and the extending load
-    /// are not seen).
+    /// `X86TTIImpl::getCastInstrCost`, scalars:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L2772
+    /// (T4: no instruction context, so the `zext` folded into a GEP index and
+    /// the extending load are not seen).
     fn cast_cost(
         &self,
         op: CastKind,
@@ -514,7 +535,8 @@ impl Tti for X86 {
                 return Cost::of(source_count.max(dest_count) * each);
             }
         }
-        // i8 and i16 integers convert through i32 (:3807).
+        // i8 and i16 integers convert through i32:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3805
         if matches!(op, SIToFP | UIToFP) && matches!(src, Ty::Int(bits) if (2..32).contains(&bits)) {
             let extend = if op == SIToFP { SExt } else { ZExt };
             return self.cast_cost(extend, Ty::Int(32), src, kind) + self.cast_cost(SIToFP, dst, Ty::Int(32), kind);
@@ -525,7 +547,8 @@ impl Tti for X86 {
         generic_cast(self, op, dst, src, kind)
     }
 
-    /// `X86TTIImpl::getArithmeticInstrCost` (:255), scalars.
+    /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -537,7 +560,8 @@ impl Tti for X86 {
         use ArithOp::*;
         let Some((count, legal)) = legalized(ty) else { return Cost::INVALID };
         let none = OperandInfo::ANY;
-        // Multiply by a power of two (or its negation) is a shift (:335).
+        // Multiply by a power of two (or its negation) is a shift:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L334
         if op == Mul && second.constant && (second.power_of_two || second.negated_power_of_two) {
             let mut cost = self.arithmetic_cost(Shl, ty, kind, none, none);
             if second.negated_power_of_two {
@@ -545,7 +569,8 @@ impl Tti for X86 {
             }
             return cost;
         }
-        // Signed divide by a power of two (:350).
+        // Signed divide by a power of two:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L346
         if matches!(op, SDiv | SRem) && second.constant && second.power_of_two {
             let mut cost = self.arithmetic_cost(AShr, ty, kind, none, none) * 2
                 + self.arithmetic_cost(LShr, ty, kind, none, none)
@@ -557,7 +582,8 @@ impl Tti for X86 {
             }
             return cost;
         }
-        // Unsigned divide by a power of two (:372).
+        // Unsigned divide by a power of two:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L371
         if matches!(op, UDiv | URem) && second.constant && second.power_of_two {
             return if op == UDiv {
                 self.arithmetic_cost(LShr, ty, kind, none, none)
@@ -565,7 +591,8 @@ impl Tti for X86 {
                 self.arithmetic_cost(And, ty, kind, none, none)
             };
         }
-        // A scalar divide by a constant is a multiply-high sequence (:388).
+        // A scalar divide by a constant is a multiply-high sequence:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L382
         if second.constant && !second.negated_power_of_two && matches!(op, UDiv | SDiv | URem | SRem) {
             let mut cost = if matches!(op, URem | SRem) { 6 } else { 5 };
             if matches!(kind, CostKind::CodeSize | CostKind::SizeAndLatency) {
@@ -589,7 +616,8 @@ impl Tti for X86 {
                 }
             }
         }
-        // Single-instruction code size cases (:1930).
+        // Single-instruction code size cases:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L1918
         if kind == CostKind::CodeSize && matches!(op, FAdd | FSub | FMul | FDiv | FNeg | And | Or | Xor) {
             return Cost::of(count);
         }
