@@ -1316,7 +1316,8 @@ fn renamed_into_a_chain(
     let alike = |was: ValueId, now: ValueId| match (function.value(was).def, function.value(now).def) {
         (ValueDef::Instruction(a), ValueDef::Instruction(b)) => {
             let (a, b) = (function.instruction(a), function.instruction(b));
-            (ends(was) && ends(now)) || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands)
+            (ends(was) && ends(now))
+                || (!ends(was) && !ends(now) && a.opcode == b.opcode && a.operands == b.operands && a.flags == b.flags)
         }
         _ => ends(was) && ends(now),
     };
