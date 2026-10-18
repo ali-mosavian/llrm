@@ -137,7 +137,13 @@
 //!   the removed jump is any `llvm.loop` (the MIR has no debug-loc-only ones);
 //!   `undef` is `poison`, the MIR's one. `decide`'s `_threaded` is not removed
 //!   yet: it also bypasses jumps in the loop-simplify shapes this keeps; its
-//!   removal needs the corpus run.
+//!   removal needs the corpus run. Exit: the CI-gate phase PR removes it.
+//! - D7. Rounds repeat until nothing changes and `loopsimplify` runs in them;
+//!   LLVM's passes run once. A jump alone in a block that holds a loop's simple
+//!   form up (its preheader, its one latch, a dedicated exit:
+//!   `decide::loop_form_blocks`) is kept, or the two undid each other each
+//!   round ("cycle after 3 rounds" on the `deedlines` demo). Exit: the
+//!   LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
