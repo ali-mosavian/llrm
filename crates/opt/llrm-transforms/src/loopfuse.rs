@@ -682,7 +682,7 @@ fn work(
 /// `fusion` made in `function`: the second loop's phis and body run in the
 /// first loop's trips.
 fn fused(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     fusion: &Fusion,
 ) -> Result<(), String> {

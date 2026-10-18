@@ -586,7 +586,7 @@ pub fn get_mem_inst_value_for_load(
 /// ([VNCoercion.cpp:463](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L463)):
 /// a `memset` of a constant byte, into an integer type (owed by fold-poc).
 pub fn get_constant_mem_inst_value_for_load(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     src_inst: MemIntrinsic,
     load_ty: TypeId,
