@@ -5,7 +5,7 @@ use std::rc::Rc;
 use crate::arena::Arena;
 
 /// A `Vec`-backed table moved its entries when it grew, so a `&Constant` held
-/// across an intern pointed at freed memory. 10,000 pushes cross eight chunk
+/// across an intern pointed at freed memory. 10,000 pushes cross nine chunk
 /// boundaries; every earlier reference must still read its own value.
 #[test]
 fn an_entry_stays_where_it_was_put_while_the_arena_grows() {

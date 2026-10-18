@@ -56,7 +56,7 @@ pub struct Constant {
 pub struct Context {
     pub types: Types,
     constants: Arena<Constant>,
-    interned: RefCell<HashMap<Constant, ConstantId>>,
+    interned: Box<RefCell<HashMap<Constant, ConstantId>>>,
     extensions: Extensions,
 }
 
@@ -91,6 +91,7 @@ impl Context {
     /// LLVM's `ConstantInt::get` and kin: `constant`, made on the first ask.
     /// The table is borrowed for the lookup and again for the insert, never
     /// across a call.
+    #[inline]
     pub fn constant(
         &self,
         constant: Constant,
@@ -110,6 +111,7 @@ impl Context {
         self.constants.len()
     }
 
+    #[inline]
     pub fn get(
         &self,
         id: ConstantId,
@@ -150,10 +152,11 @@ impl Context {
         }
         let interned =
             self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
-        self.interned = RefCell::new(interned);
+        self.interned = Box::new(RefCell::new(interned));
     }
 
     /// `value` modulo the width of the integer type `ty`.
+    #[inline]
     pub fn int(
         &self,
         ty: TypeId,

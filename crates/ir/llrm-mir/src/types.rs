@@ -91,7 +91,7 @@ pub struct StructBody {
 #[derive(Clone, Debug, Default)]
 pub struct Types {
     types: Arena<Type>,
-    interned: RefCell<HashMap<Type, TypeId>>,
+    interned: Box<RefCell<HashMap<Type, TypeId>>>,
     /// Identified structs in definition order.
     pub named: Vec<(String, Option<StructBody>)>,
 }
@@ -100,6 +100,7 @@ impl Types {
     /// LLVM's `IntegerType::get` and kin: `ty`, made on the first ask. The
     /// table is borrowed for the lookup and again for the insert, never across
     /// a call.
+    #[inline]
     pub fn intern(
         &self,
         ty: Type,
@@ -113,6 +114,7 @@ impl Types {
         id
     }
 
+    #[inline]
     pub fn get(
         &self,
         id: TypeId,
@@ -163,6 +165,7 @@ impl Types {
         self.intern(Type::Pointer(space))
     }
 
+    #[inline]
     pub fn int_bits(
         &self,
         id: TypeId,
@@ -173,6 +176,7 @@ impl Types {
         }
     }
 
+    #[inline]
     pub fn is_void(
         &self,
         id: TypeId,
