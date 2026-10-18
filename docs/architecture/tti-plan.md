@@ -82,18 +82,26 @@ the cost model's scalar rows. Nothing here needs a table per CPU but `core2`'s, 
 The direction (oversight): LLVM has two cost systems, the TTI for IR passes and the scheduling model for machine
 passes; llrm's `OperationCosts` is the second. MIR passes read `Tti`; the LIR and the back end keep `OperationCosts`.
 Nothing is migrated yet except InlineCost, behind `LLRM_EXP_INLINEDECIDE`. The readers today (24 MIR files and 6 of the back
-end and front ends; classification proposed, oversight to confirm):
+end and front ends; classification confirmed by oversight, with three corrections below):
 
 Reads `Tti` after migration (their decisions are IR-level and have an LLVM counterpart that asks the TTI):
 `gvn`, `hoist`, `indvars`, `inline` (the native inliner, until INLINEDECIDE replaces it), `interprocedural`, `ipacp`
 (`getInlineCallPenalty`-like call pricing), `argpromotion`, `candidate`, `loopdistribute`, `loopfuse`, `loopinterchange`,
-`loopversion`, `lsr` (once translated), `memcpyopt`, `peelsize`, `phiopt`, `profit`, `switchlower`, `unswitch`.
+`loopversion`, `lsr` (once translated), `memcpyopt`, `peelsize`, `phiopt`, `profit`, `switchlower`, `unswitch`, and `addresssink`: LLVM decides addressing forms in CodeGenPrepare through
+`isLegalAddressingMode` and `getScalingFactorCost`, so it moves with its TLI hook.
 
 Stays on `OperationCosts` (the price is a machine form or a convention, which LLVM keeps in the target's lowering and
-scheduling model, not in the TTI): `addresssink` (the indexed address forms), `calleepop` (the bytes of `ret N` against
-`add sp`), `fill` (gcc's by-pieces limits of a constant memset), `spill` (spill code), `window` (a huge pointer's
-carry), and the back end and front ends: `cpu`, `loopslots`, `ssaspill`, the model passes (`model/passes.rs`), `abi/qb`,
+scheduling model, not in the TTI): `calleepop` (the bytes of `ret N` against `add sp`), `window` (a huge pointer's
+carry), and the back end and front ends: `cpu`, `loopslots`, `ssaspill`, the model passes (`model/passes.rs`), `abi/qb`
 and the `cli` of the front ends that name the CPU.
+
+`fill` mirrors the expansion limits of X86's `TargetLowering`, not gcc's by-pieces: `MaxStoresPerMemset` 16 (8 at
+optsize), `MaxStoresPerMemcpy` 8 (4), `MaxStoresPerMemmove` 8 (4), `MaxLoadsPerMemcmp` 2
+([X86ISelLowering.cpp:2936-2947](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L2936-L2947)). Keeping gcc's limits is a DEVIATE with a number; otherwise `fill`
+translates these values.
+
+`spill` is the register-pressure forecast, which the LICM translation removes: it is deleted with its last reader, not a
+permanent stay.
 
 Each migration is its own PR with the same discipline as InlineCost: the named reader, the queries it reads, the rows
 with the premise count (queries that reached the TTI) beside the rows line, and the compile-time numbers.
