@@ -36,29 +36,8 @@
 //! widening where its cells are narrower. Tuned for size the costs are bytes
 //! and the whole tree is set against the code and the data of the table.
 //!
-<<<<<<< HEAD
 //! The deviations (probabilities, cases to the default) are in
 //! [`switchcg`](crate::switchcg).
-=======
-//! Bit tests (`bit_test_cluster`). A run of clusters narrower than a word with
-//! at most 3 targets, and 3 cases for one target, 5 for two or 6 for three, is
-//! `1 << (x - min)` tested against one mask per target.
-//!
-//! The tree (`switch_decision_tree`). What is left is balanced by count and
-//! tested as `emit_case_nodes` does: a single value by equality, a range by
-//! `x - low <= span` when it is a leaf, a node with children by the compares
-//! `x > high`, `x >= low`.
-//!
-//! Jump tables (`jump_table_cluster`), over the plain clusters left: the fewest
-//! runs whose span is at most 8 times (3 tuned for size) the comparisons they
-//! replace, and at least the target's `jump_table` cases (gcc's
-//! `case_values_threshold`, 5 on x86; 0: no table jump). Such a run is `x -
-//! low` behind its range test and a `switch table` over the indices `0..n`,
-//! every index a block that only jumps on; the backend makes it a jump through
-//! a table of code addresses. `-fno-jump-tables` leaves them in the tree. A run
-//! dense as a whole is one table without the search for the fewest runs
-//! (LLVM's `findJumpTables` "cheap case").
->>>>>>> origin/feat/parity
 //!
 //! # Runs
 //! As two passes: `switchconv` (gcc's `pass_convert_switch`, -O2 and up),
@@ -842,105 +821,13 @@ impl Lowering<'_, '_> {
             let outside = self.compare(block, IntPredicate::Ugt, offset, span);
             self.branch(block, outside, next, jump);
         }
-<<<<<<< HEAD
         let wide = self.unit.context.types.int(self.pointer);
-        let mut landings: Vec<(BlockId, BlockId)> = Vec::new();
-        let mut operands = vec![index, Operand::Block(default)];
-        for (at, &target) in table.iter().enumerate() {
-            let land = match landings.iter().find(|&&(to, _)| to == target) {
-                Some(&(_, land)) => land,
-=======
-        let wide = self.unit.context.types.int(word);
-        let amount = match bits.cmp(&word) {
-            std::cmp::Ordering::Less => self.put(block, Opcode::Cast(CastOp::ZExt), wide, vec![index]),
-            std::cmp::Ordering::Greater => self.put(block, Opcode::Cast(CastOp::Trunc), wide, vec![index]),
-            std::cmp::Ordering::Equal => index,
-        };
-        let one = Operand::Constant(self.unit.context.int(wide, 1));
-        let bit = self.put(block, Opcode::Binary(BinaryOp::Shl), wide, vec![one, amount]);
-        for (at, &(tested, target)) in cluster.tests.iter().enumerate() {
-            let tested = Operand::Constant(self.unit.context.int(wide, (tested << shift) as i128));
-            let both = self.put(block, Opcode::Binary(BinaryOp::And), wide, vec![bit, tested]);
-            let zero = Operand::Constant(self.unit.context.int(wide, 0));
-            let set = self.compare(block, IntPredicate::Ne, both, zero);
-            let next = if at + 1 == cluster.tests.len() { default } else { self.fresh(block) };
-            self.branch(block, set, target, next);
-            block = next;
-        }
-    }
-
-    /// `find_jump_tables`: over each run of clusters left plain, the fewest
-    /// that a table can take (values at most 8 times the comparisons they
-    /// replace, 3 times tuned for size); the runs of at least the target's
-    /// threshold become one cluster.
-    fn with_jump_tables(
-        &self,
-        clusters: Vec<Cluster>,
-    ) -> Vec<Cluster> {
-        let threshold = self.threshold as usize;
-        if threshold == 0 {
-            return clusters;
-        }
-        let ratio: u128 = if self.size { 300 } else { 800 };
-        let plain = |one: &Cluster| one.tests.is_empty() && one.parts.is_empty();
-        let mut out = Vec::new();
-        let mut run: Vec<Cluster> = Vec::new();
-        for one in clusters {
-            if plain(&one) {
-                run.push(one);
-            } else {
-                out.extend(tabled_runs(std::mem::take(&mut run), threshold, ratio));
-                out.push(one);
-            }
-        }
-        out.extend(tabled_runs(run, threshold, ratio));
-        out
-    }
-
-    /// `jump_table_cluster::emit`: the index in the pointer's width, and a
-    /// `switch` the backend makes a table jump of; each index goes to a block
-    /// that only jumps on, so the edges are not critical.
-    fn table(
-        &mut self,
-        mut block: BlockId,
-        cluster: &Cluster,
-        entry: bool,
-    ) {
-        let default = self.switch.default;
-        let index = self.offset(block, cluster.low);
-        let span = cluster.high - cluster.low;
-        if entry {
-            let limit = Operand::Constant(self.unit.context.int(self.switch.ty, span as i128));
-            let outside = self.compare(block, IntPredicate::Ugt, index, limit);
-            let next = self.fresh(block);
-            self.branch(block, outside, default, next);
-            block = next;
-        }
-        let (pointer, bits) = (self.pointer, self.switch.bits);
-        let wide = self.unit.context.types.int(pointer);
-        let index = match bits.cmp(&pointer) {
-            std::cmp::Ordering::Less => self.put(block, Opcode::Cast(CastOp::ZExt), wide, vec![index]),
-            std::cmp::Ordering::Greater => self.put(block, Opcode::Cast(CastOp::Trunc), wide, vec![index]),
-            std::cmp::Ordering::Equal => index,
-        };
         let mut landings: IdMap<BlockId, BlockId> = IdMap::new();
         let mut lands: Vec<BlockId> = Vec::new();
         let mut operands = vec![index, Operand::Block(default)];
-        // The parts are in order and apart: the one that holds an index is at
-        // or after the one that held the index before.
-        let mut part = 0;
-        for at in 0..=span {
-            while cluster.parts.get(part).is_some_and(|&(_, high, _)| high - cluster.low < at) {
-                part += 1;
-            }
-            let target = cluster
-                .parts
-                .get(part)
-                .filter(|&&(low, _, _)| low - cluster.low <= at)
-                .map_or(default, |&(_, _, target)| target);
+        for (at, &target) in table.iter().enumerate() {
             let land = match landings.get(&target) {
                 Some(&land) => land,
->>>>>>> origin/feat/parity
                 None => {
                     let land = self.fresh(*placed);
                     *placed = land;
@@ -956,13 +843,8 @@ impl Lowering<'_, '_> {
         operands[1] = operands[3];
         let void = self.unit.context.types.void();
         let inst = self.unit.function.create_instruction(Opcode::Switch, void, operands, Flags::TABLE, None);
-<<<<<<< HEAD
         self.unit.function.insert(inst, Position::End(jump)).expect("a placed instruction");
-        self.edges.extend(landings.iter().map(|&(_, land)| (jump, land)));
-=======
-        self.unit.function.insert(inst, Position::End(block)).expect("a placed instruction");
-        self.edges.extend(lands.iter().map(|&land| (block, land)));
->>>>>>> origin/feat/parity
+        self.edges.extend(lands.iter().map(|&land| (jump, land)));
     }
 
     /// `visitBitTestHeader` and `visitBitTestCase`: a range test of
@@ -1092,82 +974,6 @@ fn cell_width(
     (bits, CastOp::ZExt)
 }
 
-<<<<<<< HEAD
-=======
-thread_local! {
-    /// Partitions `tabled_runs` has tried, for a test of its slope.
-    static TRIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// `jump_table_cluster::find_jump_tables` over `run`, clusters in order.
-fn tabled_runs(
-    run: Vec<Cluster>,
-    threshold: usize,
-    ratio: u128,
-) -> Vec<Cluster> {
-    let count = run.len();
-    let comparisons = |one: &Cluster| 1 + u128::from(one.high != one.low);
-    // The fewest clusters up to each, where the last starts, and the cases
-    // left out of tables on the way.
-    let mut best = vec![(usize::MAX, 0usize, usize::MAX); count + 1];
-    best[0] = (0, 0, 0);
-    // `compared[i]` is the comparisons of the clusters before `i`.
-    let compared: Vec<u128> = std::iter::once(0)
-        .chain(run.iter().scan(0, |sum, one| {
-            *sum += comparisons(one);
-            Some(*sum)
-        }))
-        .collect();
-    let dense = |start: usize, end: usize| {
-        start + 1 == end || 100 * (run[end - 1].high - run[start].low + 1) <= ratio * (compared[end] - compared[start])
-    };
-    // MIRROR `findJumpTables`, "Cheap case"
-    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SwitchLoweringUtils.cpp#L83-L96):
-    // a run dense as a whole is one table, the fewest partitions there are,
-    // and the quadratic search below is skipped.
-    // DEVIATE 1: density is gcc's span against comparisons, not the pin's
-    // `isSuitableForJumpTable` percentage, as this pass lowers as gcc 13.4.
-    if count > 0 && dense(0, count) {
-        best[count] = (1, 0, if count < threshold { count } else { 0 });
-    } else {
-        for end in 1..=count {
-            for start in 0..end {
-                TRIED.with(|tried| tried.set(tried.get() + 1));
-                let left = best[start].2 + if end - start < threshold { end - start } else { 0 };
-                let (fewer, tied) = (best[start].0 + 1 < best[end].0, best[start].0 + 1 == best[end].0);
-                if (fewer || (tied && left < best[end].2)) && dense(start, end) {
-                    best[end] = (best[start].0 + 1, start, left);
-                }
-            }
-        }
-    }
-    if best[count].0 == count {
-        return run;
-    }
-    let mut out = Vec::new();
-    let mut end = count;
-    while end > 0 {
-        let start = best[end].1;
-        let one = &run[start..end];
-        if one.len() > 1 && one.len() >= threshold {
-            let parts = one.iter().map(|case| (case.low, case.high, case.target)).collect();
-            out.push(Cluster {
-                low: one[0].low,
-                high: one[one.len() - 1].high,
-                target: one[0].target,
-                tests: Vec::new(),
-                parts,
-            });
-        } else {
-            out.extend(one.iter().rev().cloned());
-        }
-        end = start;
-    }
-    out.reverse();
-    out
-}
-
->>>>>>> origin/feat/parity
 /// `bit_test_cluster::is_beneficial`.
 fn beneficial(
     count: usize,

@@ -411,7 +411,6 @@ fn test_the_least_density_is_a_tenth_and_two_fifths_tuned_for_size() {
     assert!(!size.contains("load"), "{size}");
 }
 
-<<<<<<< HEAD
 /// `lowerWorkItem`: two values to one target one bit apart are one compare,
 /// `(x | 2) == 6`, not two.
 #[test]
@@ -429,23 +428,4 @@ fn test_a_dominant_range_is_tested_first() {
     let after = lowered(&returns("i32", &cases), (-2..12).chain([100, 150, 200, 300, 301]), false);
     let first = after.lines().find(|line| line.contains("icmp")).unwrap();
     assert!(first.contains("icmp ule i32 %x, 9"), "{after}");
-=======
-/// The `cases` scaling row (512 dense labels, each its own block): every block
-/// the lowering merged or dropped was taken out of the layout by a search of
-/// it, 28% of `mir switchlower` at x4.0 per doubling (#2260); and the
-/// jump-table partition search was tried over all 131K pairs of its clusters.
-#[test]
-fn test_lowering_a_dense_switch_searches_the_layout_once_not_per_block() {
-    let cases: Vec<(i128, u32)> = (0..512).map(|at| (at, at as u32 * 3 + 1)).collect();
-    let text = returns("i32", &cases);
-    let (before, tried) = (llrm_mir::edit::layout_scanned(), super::TRIED.with(std::cell::Cell::get));
-    let after = lowered_by(&text, [-1, 0, 255, 511, 512], false, 5);
-    let scanned = llrm_mir::edit::layout_scanned() - before;
-    assert!(after.contains("switch table"), "{after}");
-    assert!(scanned < 64 * 1024, "{scanned} layout entries searched for 512 cases");
-    // The partition search of 512 clusters is 131K tries; a run dense as a
-    // whole is one table without it.
-    let tried = super::TRIED.with(std::cell::Cell::get) - tried;
-    assert!(tried < 512, "{tried} partitions tried for a run dense as a whole");
->>>>>>> origin/feat/parity
 }
