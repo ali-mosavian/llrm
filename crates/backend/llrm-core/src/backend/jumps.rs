@@ -190,6 +190,13 @@ pub fn optimized(
     let size = cpu.size;
     let price = Branches::of(cpu);
     let mut placed = threaded(&_placed(&_hoisted(body), size)?);
+    // Tail duplication before the merge, as LLVM places with it: after, the
+    // merge would give back what the copy gained.
+    if !size {
+        placed = threaded(&duplicated_tails(&placed));
+    }
+    // Tail duplication before the merge, as LLVM places with it: after, the
+    // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
@@ -200,7 +207,7 @@ pub fn optimized(
         };
         placed = machinedce::eliminated(threaded(&merged));
     }
-    Ok(inverted(&if size { placed } else { rotated(&duplicated(&duplicated_tails(&placed), true), &price)? }))
+    Ok(inverted(&if size { placed } else { rotated(&duplicated(&placed, true), &price)? }))
 }
 
 /// A conditional branch taken to the block laid out next, followed by a jump:
@@ -1856,6 +1863,26 @@ pub fn _step(
                 None => _stranded_whole(body, at),
             }
             return Some(at.get(&here).unwrap_or(0));
+        }
+        // A branch before the final jump goes through a block that only jumps
+        // as well (BranchFolding's `OptimizeBlock`, the true branch of a
+        // `Bcc T; B F` pair).
+        if let Some(branch) = before.as_ref().filter(|one| {
+            one.what
+                .as_ref()
+                .is_some_and(|what| what.op == Operation::Branch && !what.indirect && what.target.is_some())
+        }) {
+            let old = branch.what.as_ref().and_then(|what| what.target).expect("checked");
+            let onward = _through(&blocks, at, Some(old), protected).expect("a passage names its target");
+            if onward != old {
+                body.odds.rerouted(block.at, &block.succ, old, &[(onward, 1.0)]);
+                let retargeted = _retargeted(&block, branch, onward);
+                at.moved(&block.succ, &retargeted.succ);
+                blocks[index] = retargeted.into();
+                body.blocks = blocks;
+                _stranded(body, at, &[old]);
+                return Some(at.get(&here).unwrap_or(0));
+            }
         }
         if last_what.op == Operation::Jump && target == after {
             // A fall-through needs no machine jump.  A decoded jump may still

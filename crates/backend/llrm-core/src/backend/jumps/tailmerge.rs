@@ -140,7 +140,8 @@ fn seq_of(
     for (index, insn) in block.insns.iter().enumerate() {
         let nop =
             insn.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"));
-        if insn.is_meta() || nop {
+        // An anchor emits nothing: LLVM has none after allocation to count.
+        if insn.is_meta() || nop || super::_inert(insn) {
             if !insn.owned().is_empty() {
                 items.push(Item { insn: Arc::clone(insn), index, fixed: true });
             }
@@ -637,7 +638,12 @@ impl Folder {
             }
             let seq = &pots[one.pot].seq;
             let block = self.block(one.at).clone();
-            let cut = seq.items[one.start].index;
+            let mut cut = seq.items[one.start].index;
+            // Anchors just before the tail go with it: left, they would keep
+            // the block that is now only a jump from being threaded around.
+            while cut > 0 && super::_inert(&block.insns[cut - 1]) && block.insns[cut - 1].owned().is_empty() {
+                cut -= 1;
+            }
             let mut pairs: Vec<(u32, u32)> = Vec::new();
             for dropped in block.insns[cut..].iter().filter(|dropped| super::_inert(dropped)) {
                 pairs.extend(dropped.defines.iter().zip(&dropped.uses).map(|(from, to)| (*from, *to)));

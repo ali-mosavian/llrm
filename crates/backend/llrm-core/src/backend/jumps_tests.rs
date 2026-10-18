@@ -568,6 +568,136 @@ fn test_a_tail_of_one_is_not_shared() {
     assert!(tailmerge::merged(&source, false).unwrap().is_none());
 }
 
+/// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3
+/// split each diamond's join into an empty block, every other arm paid a jump
+/// to it, +5.0% clocks. LLVM has no anchors after allocation, so they count for
+/// nothing.
+#[test]
+fn test_anchors_that_emit_no_code_do_not_count_toward_a_shared_tail() {
+    let anchor = |at: i64| {
+        let one = _inserted(nothing(at, None));
+        Arc::new(Insn { defines: vec![at as u32 + 500], uses: vec![at as u32 + 600], ..(*one).clone() })
+    };
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![
+            _inserted(_move(at, first)),
+            _inserted(_move(at + 1, bx())),
+            anchor(at + 2),
+            anchor(at + 3),
+            _inserted(_jump(at + 9, 40)),
+        ];
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+}
+
+/// An anchor just before the shared tail stayed in the arm that now only jumps,
+/// and `threaded` would not go around that block: `recpow` -O2 ran a `jmp`
+/// after every taken `jne` to it, +0.53% clocks.
+#[test]
+fn test_an_anchor_before_the_shared_tail_leaves_the_arm_with_it() {
+    let anchored = |at: i64| {
+        let one = _inserted(nothing(at, None));
+        Arc::new(Insn { defines: vec![at as u32 + 500], uses: vec![at as u32 + 600], ..(*one).clone() })
+    };
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first)), anchored(at + 1)];
+        insns.extend([_move(at + 2, bx()), _compare(at + 3), _move(at + 4, imm(7))].into_iter().map(_inserted));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    let anchors = result.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| super::_inert(one)).count();
+    assert_eq!(anchors, 1, "the arm that now jumps still holds its anchor");
+}
+
+/// `jne T; jmp F` left T, a block that only jumps, in place: `recpow` -O2 ran
+/// an extra `jmp` after every taken `jne`, +0.14% clocks and 15 bytes.
+#[test]
+fn test_a_branch_before_the_final_jump_goes_through_a_block_that_only_jumps() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "jne", 20), _jump(3, 30)], vec![20, 30]).into(),
+            block(70, vec![_inserted(_move(70, cx())), _inserted(_return(71))], vec![]).into(),
+            block(30, vec![_compare(30), _branch(31, "je", 70), _jump(32, 60)], vec![70, 60]).into(),
+            block(20, vec![_inserted(_jump(20, 60))], vec![60]).into(),
+            block(60, vec![_inserted(_move(60, bx())), _inserted(_return(61))], vec![]).into(),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    let first = result.blocks.iter().find(|block| block.at == 1).expect("the entry stays");
+    assert!(first.succ.contains(&60) && !first.succ.contains(&20), "{:?}", first.succ);
+}
+
+/// The merge ran before tail duplication: two arms that end in the same move
+/// and jump to a small join were merged into an empty tail block, so the join
+/// could no longer be copied into an arm and every trip paid a jump (`x_cordic`
+/// -O3, +5.0% clocks). LLVM duplicates while it places, then merges.
+#[test]
+fn test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged() {
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![_inserted(_move(at, first)), _inserted(_move(at + 1, bx())), _inserted(_jump(at + 9, 30))];
+        block(at, insns, vec![30]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_compare(30), _branch(31, "jge", 40), _jump(32, 50)], vec![40, 50]).into(),
+            block(40, vec![_inserted(_move(40, cx())), _inserted(_return(41))], vec![]).into(),
+            block(50, vec![_inserted(_move(50, bx())), _inserted(_return(51))], vec![]).into(),
+        ],
+    );
+
+    let result = optimized(&source, cpu::profile("486").unwrap()).unwrap();
+
+    let jumps_only = result
+        .blocks
+        .iter()
+        .filter(|block| {
+            _real(block).len() == 1 && _real(block)[0].what.as_ref().is_some_and(|what| what.op == Operation::Jump)
+        })
+        .count();
+    assert_eq!(
+        jumps_only,
+        0,
+        "{:?}",
+        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+    );
+}
+
 /// Blocks that end the function share the tail they end in, the return
 /// included.
 #[test]
