@@ -708,7 +708,7 @@ mod tests {
             name: name.into(),
             binding,
             definition: Definition::Defined { section, offset },
-            group: None,
+            size: 0, group: None,
         };
         let procedure = types.len();
         let mut types = types;
