@@ -181,13 +181,17 @@ slow_pytest = [
 [bench]
 shards = 3
 
+[oracle]
+shards = 3
+
 [groups]
 unit = ["lib", "doc", "crate-tests", "scans", "rfmt-post", "facts", "identity"]
 static = ["fmt", "docs", "products"]  # read the tree, build nothing: CI runs them first and alone, so a format error fails in minutes
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs", "pytest-quick", "changed-tests"]
-perf = ["pytest-perf"]  # the test files that read hardware counters: tinytim has them, a hosted VM has none
+perf = ["pytest-perf", "oracle-premise"]  # steps that read hardware counters: tinytim has them, a hosted VM has none
+oracle = ["oracle-sweep"]  # CI runs it as `oracle-1` .. `oracle-N` ([oracle] shards): every LLRM_CHECK_* oracle over a slice of the BASIC and Nib programs
 tools = ["torture"]
 bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
 reference = ["turbo", "cv4", "qcport"]
@@ -246,6 +250,7 @@ cv4 = ["codeview"]
 qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
 pytest-perf = ["perf"]
+oracle-premise = ["perf"]
 measure = ["perf", "qcport"]  # callgrind counts (capability `counter`) but takes over an hour a run on a hosted runner: measure waits for its shards and a cached base (#1844). qcport: its rows are QCport's modules; without them measure would judge the programs alone
 bench = ["qb45"]
 "lang:qb" = ["qb45"]
