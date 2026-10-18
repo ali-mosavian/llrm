@@ -2180,7 +2180,7 @@ fn test_the_llvm_order_hoists_invariants_the_spill_forecast_would_keep() {
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.require::<llrm_analysis::manager::Summaries>();
     let slots = pipeline::llvm_order(&applied, crate::parity::Phase::Simplify);
-    let slot = slots.into_iter().find(|one| one.name() == "hoist@730").expect("the speculating LICM slot");
+    let slot = slots.into_iter().find(|one| one.name() == "licm@730").expect("the speculating LICM slot");
     manager.add_boxed(slot);
     manager
         .run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned { registers: 6, ..Default::default() }))
