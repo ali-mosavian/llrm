@@ -271,6 +271,12 @@ fn planned_with(
     Ok(Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow })
 }
 
+// `spilled_from` asked, for a test that greedy's spills write no plan of it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PLANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `spilled`, numbering the values it makes from `floor` at least: an
 /// allocation in progress still knows values the body no longer names.
 pub fn spilled_from(
@@ -280,6 +286,8 @@ pub fn spilled_from(
     floor: u32,
     classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    #[cfg(test)]
+    PLANS.with(|one| one.set(one.get() + 1));
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
     }
@@ -4886,7 +4894,7 @@ pub fn _renamed(
 
 /// One move of a parallel copy, with its spilled end read or written where it
 /// lives.
-fn _in_place(
+pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
@@ -5043,7 +5051,7 @@ fn _tied(
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(
+pub(crate) fn _encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,
