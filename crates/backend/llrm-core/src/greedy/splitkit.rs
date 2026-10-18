@@ -55,6 +55,24 @@ pub trait SplitEnv {
         block: usize,
     ) -> bool;
 
+    /// `Loops.getLoopFor(MBB)`: a number naming the innermost loop of `block`.
+    fn loop_of(
+        &self,
+        block: usize,
+    ) -> Option<usize>;
+
+    /// `L->getLoopDepth()`.
+    fn loop_depth(
+        &self,
+        l: usize,
+    ) -> u32;
+
+    /// `L->getHeader()`.
+    fn loop_header(
+        &self,
+        l: usize,
+    ) -> usize;
+
     /// `TII.isCopyInstr(MI) || MI.isSubregToReg()`.
     fn is_copy_like(
         &self,
@@ -556,6 +574,27 @@ mod tests {
             block: usize,
         ) -> bool {
             self.latches.contains(&block)
+        }
+
+        fn loop_of(
+            &self,
+            _block: usize,
+        ) -> Option<usize> {
+            None
+        }
+
+        fn loop_depth(
+            &self,
+            _l: usize,
+        ) -> u32 {
+            0
+        }
+
+        fn loop_header(
+            &self,
+            _l: usize,
+        ) -> usize {
+            0
         }
 
         fn is_copy_like(
