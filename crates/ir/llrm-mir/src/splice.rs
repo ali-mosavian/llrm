@@ -27,7 +27,11 @@ fn phis(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
+    function
+        .block(block)
+        .iter()
+        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
+        .collect()
 }
 
 /// `call`, a call to `callee`, replaced by a copy of its body, which
@@ -79,9 +83,7 @@ pub fn splice_before(
         blocks.insert(one, copy);
         last = copy;
     }
-    let first = anchor.unwrap_or_else(|| {
-        function.block(function.entry().expect("a defined caller")).first().expect("a block with an instruction")
-    });
+    let first = anchor.unwrap_or_else(|| function.block(function.entry().expect("a defined caller")).first().expect("a block with an instruction"));
     let entry = callee.entry().expect("a defined callee");
     let mut made = Vec::new();
     let mut returns = Vec::new();

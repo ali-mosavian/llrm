@@ -105,8 +105,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 _ => None,
             };
             let dominates_block = |op: Operand, at: BlockId| parent_of(op).is_none_or(|def| dt.dominates(def, at));
-            let entry_first =
-                function.block(function.entry().expect("an entry")).first().expect("a block with an instruction");
+            let entry_first = function.block(function.entry().expect("an entry")).first().expect("a block with an instruction");
 
             let mut env = Env::new(context, globals, metadata, function, &layout, &assumptions);
             let mut dump_value = |env: &mut Env, op: Operand, cxt: InstId| -> Option<String> {
@@ -288,14 +287,14 @@ pub fn dump(text: &str) -> Result<String, String> {
             }
 
             // printLVI, where every block, argument and result has a name.
-            let named = function.parameters().iter().all(|&p| function.value(p).name.is_some())
-                && function.layout().iter().all(|&bb| {
-                    function.block(bb).name.is_some()
-                        && function
-                            .block(bb)
-                            .iter()
-                            .all(|i| function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some()))
-                });
+            let named =
+                function.parameters().iter().all(|&p| function.value(p).name.is_some())
+                    && function.layout().iter().all(|&bb| {
+                        function.block(bb).name.is_some()
+                            && function.block(bb).iter().all(|i| {
+                                function.instruction(i).result.is_none_or(|r| function.value(r).name.is_some())
+                            })
+                    });
             if named {
                 let annotations = match lvi.get_impl() {
                     Some(imp) => imp.annotations(&mut env, &dt),
