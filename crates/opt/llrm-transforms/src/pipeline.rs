@@ -230,9 +230,9 @@ pub struct Options {
     /// turns it off.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
-    /// `LLRM_EXP_ROTATE` sets it, off by default until `indvars` and
-    /// `loopidioms` take a rotated loop.
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on by
+    /// default, `LLRM_NO_ROTATE` turns it off. Not run where `unroll_jam` is
+    /// (see [`Options::rotating`]).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); on by default, `LLRM_NO_MEM2REG` turns it off.
@@ -383,6 +383,13 @@ impl Options {
             version: false,
             ..Self::default()
         }
+    }
+
+    /// Whether the rotate slot runs: it does not where `unroll_jam` does,
+    /// whose nests are the header-tested form (RJ1: `loopnest.rs` and
+    /// `loopclone::chained` take a loop that leaves only from its header).
+    pub fn rotating(&self) -> bool {
+        self.rotate_slot && !self.unroll_jam
     }
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
@@ -667,10 +674,10 @@ impl FunctionPass for Together {
     }
 }
 
-/// `LLRM_EXP_ROTATE`, read once: set, the rotate slot of [`llvm_order`] runs
-/// (it stays off until the loop passes accept a rotated loop).
+/// `LLRM_NO_ROTATE`, read once: set, the rotate slot of [`llvm_order`] does
+/// not run.
 fn rotate_default() -> bool {
-    llrm_support::env_flag!("LLRM_EXP_ROTATE")
+    !llrm_support::env_flag!("LLRM_NO_ROTATE")
 }
 
 /// `LLRM_NO_LLVM_ORDER`, read once: set, [`Options::llvm_order`] is off by
@@ -772,7 +779,7 @@ pub(crate) fn llvm_order(
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
             // Without the rotate slot the first LICM keeps speculating, as the
             // single hoist did.
-            let rotating = applied.options.rotate_slot;
+            let rotating = applied.options.rotating();
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
@@ -1314,7 +1321,7 @@ impl Fixed {
             level,
             applied.options.sroa,
             applied.options.mem2reg,
-            applied.options.rotate_slot,
+            applied.options.rotating(),
         );
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
