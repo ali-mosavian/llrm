@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:95c48e47eeb9ba18edd4fb3ca48777b61dc0153a6a3ad5c43a12d5f12f95e9a2 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:70483c4f20014b3920eddc4e6063d1d9f1714ddbefe31f3ecc78bfc3cec715ff -->
 
 # simplifycfg
 
@@ -142,7 +142,13 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   the removed jump is any `llvm.loop` (the MIR has no debug-loc-only ones);
   `undef` is `poison`, the MIR's one. `decide`'s `_threaded` is not removed
   yet: it also bypasses jumps in the loop-simplify shapes this keeps; its
-  removal needs the corpus run.
+  removal needs the corpus run. Exit: the CI-gate phase PR removes it.
+- D7. Rounds repeat until nothing changes and `loopsimplify` runs in them;
+  LLVM's passes run once. A jump alone in a block that holds a loop's simple
+  form up (its preheader, its one latch, a dedicated exit:
+  `decide::loop_form_blocks`) is kept, or the two undid each other each
+  round ("cycle after 3 rounds" on the `deedlines` demo). Exit: the
+  LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches

@@ -222,6 +222,11 @@ impl ScalarEvolution {
 
         values.push((l, None));
 
+        #[cfg(test)]
+        if let Some(hook) = self.compute_hook.take() {
+            hook(self, cx, v);
+        }
+
         // Otherwise compute it.
         let c = self.compute_scev_at_scope(cx, v, l);
         // Computing can forget `v` (its exit count asks for the expressions

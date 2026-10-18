@@ -49,6 +49,8 @@ pub mod print;
 pub mod range;
 pub mod rewrite;
 pub mod scope;
+#[cfg(test)]
+mod scope_tests;
 pub mod seams;
 pub mod sequential;
 pub mod trip;
@@ -179,6 +181,9 @@ pub struct ScalarEvolution {
     /// `ValuesAtScopesUsers`: for each value at scope, the (loop, expression)
     /// pairs it is the value of.
     pub(super) values_at_scopes_users: HashMap<Scev, Vec<(Option<BlockId>, Scev)>>,
+    /// A test's hook, run once as a value at scope starts to be computed.
+    #[cfg(test)]
+    pub(super) compute_hook: Option<fn(&mut ScalarEvolution, &Cx, Scev)>,
     /// `FoldCacheUser`: the `fold_cache` keys each SCEV is the answer of.
     pub(super) fold_cache_user: HashMap<Scev, Vec<(Type, Use, Ty)>>,
     /// `CouldNotCompute`.
@@ -215,6 +220,8 @@ impl ScalarEvolution {
             signed_wrap_via_induction_tried: HashSet::default(),
             values_at_scopes: HashMap::default(),
             values_at_scopes_users: HashMap::default(),
+            #[cfg(test)]
+            compute_hook: None,
             fold_cache_user: HashMap::default(),
             could_not_compute: Scev(0),
             trips: trip::TripState::default(),

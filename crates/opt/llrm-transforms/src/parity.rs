@@ -365,9 +365,24 @@ pub fn check_phase_at(
     built: &[&str],
     level: Level,
 ) -> Result<(), String> {
+    check_phase_with(phase, built, level, false)
+}
+
+/// [`check_phase_at`] with `sroa` (`LLRM_EXP_SROA`): the SROA slots are
+/// Translated, the translated unit is what runs there.
+pub(crate) fn check_phase_with(
+    phase: Phase,
+    built: &[&str],
+    level: Level,
+    sroa: bool,
+) -> Result<(), String> {
     let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
-    check_without(REGISTRY, phase, built, absent)?;
-    llrm_mir::counts::joined(joined_slots(REGISTRY, built));
+    let registry: Vec<Entry> = REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if sroa && one.replaced_by == "sroa.rs" { Translated } else { one.kind }, ..*one })
+        .collect();
+    check_without(&registry, phase, built, absent)?;
+    llrm_mir::counts::joined(joined_slots(&registry, built));
     Ok(())
 }
 
