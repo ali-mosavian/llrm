@@ -80,7 +80,7 @@ How the column was found right: two earlier readings of the same inputs gave 22,
 | S1 | `MemoryLocation`/`LocationSize`; BasicAA over identified objects; `CaptureTracking`; `isNonEscapingLocalObject` | oracle 1 equal; oracle 2 table filled |
 | S2 | `aliasGEP`, `aliasPHI`, `aliasSelect`, TBAA, scoped noalias | oracle 2 differences classified; no new NoAlias that LLVM says May |
 | S3 | call ModRef and `MemoryEffects` | needs function-attrs; `capturecheck` agrees with each derived `nocapture` |
-| S4 | `GlobalsModRef` | the 19 `d_faces` -O2 hoists LLVM does and ours does not all hoist, no hoist LLVM does not do; rows per metric and level, worse counts first |
+| S4 | `GlobalsModRef` | the 19 `d_faces` -O2 hoists LLVM does and ours does not all hoist, no hoist LLVM does not do; rows per metric and level, worse counts first. Cost: GlobalsAA is 42 M on `d_faces` (glue partition) against LLVM's 1.1 M; target at most ~1.5x LLVM per instruction, one linear pass over the module's globals and call graph, no per-function rebuild, slope test at 2N |
 | S5 | clients, one PR each: the MemorySSA walker, MemDep (gvn-port), LICM, DSE | each PR states "LLVM structure: X; ours: Y; mirror or deviate because Z"; objects identical or classified; the per-IR-instruction cost of the memory path against the 3.9 K instructions of `Accesses::plain` plus `Shape` today |
 | S6 | delete the tower and its tests | no caller left; dense-key ratchet lowered |
 
