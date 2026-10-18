@@ -733,6 +733,23 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// Replaces the call `inst`'s attributes, as `CallBase::setAttributes`.
+    pub fn set_call_attributes(
+        &mut self,
+        inst: InstId,
+        attrs: Vec<crate::opcode::Attribute>,
+        return_attrs: Vec<crate::opcode::Attribute>,
+        argument_attrs: Vec<Vec<crate::opcode::Attribute>>,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        info.attrs = attrs;
+        info.return_attrs = return_attrs;
+        info.argument_attrs = argument_attrs;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Gives the call `inst` calling convention `convention`.
     pub fn set_call_convention(
         &mut self,

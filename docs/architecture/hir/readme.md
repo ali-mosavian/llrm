@@ -1,3 +1,7 @@
+---
+architecture-index: HIR
+architecture-order: 30
+---
 # HIR
 
 For frontend authors and anyone reading how source becomes MIR. HIR is the
