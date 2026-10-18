@@ -1388,7 +1388,7 @@ impl FunctionPass for Fixed {
             steps: 0,
             skipped: 0,
             fixed: 0,
-            billing: llrm_support::debug::enabled("runs"),
+            billing: runs_billed(),
             idle: 0,
             useful: 0,
             idle_with_analyses: 0,
@@ -1405,9 +1405,8 @@ impl FunctionPass for Fixed {
         run.rerun = run.records.knows(unit.function);
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         run.remember(unit, analyses);
-        llrm_support::debug!(
-            "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
+        runs_line(format_args!(
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
@@ -1420,10 +1419,41 @@ impl FunctionPass for Fixed {
             run.idle,
             run.useful,
             run.idle_with_analyses,
-            run.useful_with_analyses
-        );
+            run.useful_with_analyses,
+            llrm_mir::passes::running_function()
+        ));
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
+}
+
+/// The instructions in the function's layout: erased ones stay in the arena
+/// and are not counted.
+fn placed_instructions(function: &llrm_mir::module::Function) -> usize {
+    function.layout().iter().map(|&block| function.block(block).instructions().len()).sum()
+}
+
+thread_local! {
+    /// Tests: the `runs` lines go here, and are billed without `LLRM_DEBUG`.
+    static RUNS_CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn runs_billed() -> bool {
+    llrm_support::debug::enabled("runs") || RUNS_CAPTURE.with(|capture| capture.borrow().is_some())
+}
+
+fn runs_line(line: std::fmt::Arguments) {
+    let captured = RUNS_CAPTURE.with(|capture| capture.borrow_mut().as_mut().map(|lines| lines.push(line.to_string())));
+    if captured.is_none() {
+        llrm_support::debug!("runs", "{}", line);
+    }
+}
+
+/// `run` with the `runs` lines kept, not printed.
+#[cfg(test)]
+pub(crate) fn capturing_runs<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    RUNS_CAPTURE.with(|capture| *capture.borrow_mut() = Some(Vec::new()));
+    let done = run();
+    (done, RUNS_CAPTURE.with(|capture| capture.borrow_mut().take()).unwrap_or_default())
 }
 
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
@@ -1595,24 +1625,26 @@ impl Run {
             llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
         }
         let outside = llrm_mir::passes::read::swap(0);
-        let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
+        let billed = self.billing.then(|| {
+            (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
+        });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
         let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);
-        if let Some((billed, analysed)) = billed {
+        if let Some((billed, analysed, entering)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
             let idle = preserved.are_all_preserved();
             *(if idle { &mut self.idle } else { &mut self.useful }) += own;
             *(if idle { &mut self.idle_with_analyses } else { &mut self.useful_with_analyses }) += with_analyses;
-            llrm_support::debug!(
-                "runs",
-                "step {stage} {} {own} with-analyses {with_analyses}",
-                if idle { "idle" } else { "changed" }
-            );
+            runs_line(format_args!(
+                "step {stage} {} {own} with-analyses {with_analyses} in={entering} out={}",
+                if idle { "idle" } else { "changed" },
+                placed_instructions(unit.function)
+            ));
         }
         assert!(
             !checking || preserved.are_all_preserved(),
