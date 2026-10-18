@@ -73,8 +73,6 @@
 //! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
 //! behind `Options::llvm_order` (`LLRM_EXP_LLVM`), off by default.
 
-use std::collections::HashMap;
-
 use llrm_analysis::memory::Unit as View;
 use llrm_analysis::memoryssa::{self, Accesses, MemorySSA};
 use llrm_mir::context::Context;
@@ -84,6 +82,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::types::TypeId;
+use llrm_support::hash::HashMap;
 
 /// `EarlyCSEMssaOptCap`, `-earlycse-mssa-optimization-cap`.
 const MSSA_OPT_CAP: usize = 500;
@@ -98,7 +97,7 @@ struct Scoped<K, V> {
 
 impl<K: std::hash::Hash + Eq + Clone, V: Clone> Scoped<K, V> {
     fn new() -> Self {
-        Self { map: HashMap::new(), inserted: Vec::new(), marks: Vec::new() }
+        Self { map: HashMap::default(), inserted: Vec::new(), marks: Vec::new() }
     }
 
     fn enter(&mut self) {
