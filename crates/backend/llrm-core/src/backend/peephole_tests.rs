@@ -3412,6 +3412,52 @@ fn test_dword_fixed_register_argument_keeps_all_value_lanes_live() {
     assert_eq!(narrowed_moves(rules(), &input), input);
 }
 
+#[test]
+fn test_dword_copy_read_after_a_call_that_may_clobber_its_upper_half_stays_wide() {
+    // regparm3_matrix_4 at -O2: `mov edi,eax` became `mov di,ax` because the
+    // call between it and `mov eax,edi; shrd eax,ebx,20` may clobber EDI's
+    // upper half, and the shift then read a stale one.
+    let (eax, ebx, edi) = (rl(RegId::EAX, 4), rl(RegId::EBX, 4), rl(RegId::EDI, 4));
+    let copy =
+        insn(1, Some((1, 1)), Some(sem(Operation::Move, "mov", vec![edi.clone()], vec![eax.clone()])), vec![1], vec![]);
+    let call = Insn {
+        clobbers: [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX].into(),
+        clobbers_high: [RegId::ESI, RegId::EDI].into(),
+        ..insn(5, Some((5, 5)), Some(sem(Operation::Call, "call", vec![], vec![])), vec![], vec![])
+    };
+    let read = insn(2, Some((2, 2)), Some(sem(Operation::Move, "mov", vec![eax.clone()], vec![edi])), vec![2], vec![1]);
+    let shift = insn(
+        3,
+        Some((3, 3)),
+        Some(sem(Operation::Funnel, "shrd", vec![eax.clone()], vec![eax.clone(), ebx, im(20, 1)])),
+        vec![3],
+        vec![2, 4],
+    );
+    let finish = Insn {
+        requires: vec![(Held { value: 3, width: 4 }, RegId::EAX)],
+        reads_complete: true,
+        ..insn(4, Some((4, 4)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![3])
+    };
+    let input = body(
+        "wide-copy-shrd",
+        1,
+        vec![
+            block(1, vec![Arc::new(copy), Arc::new(call), Arc::new(read), Arc::new(shift), Arc::new(finish)], vec![])
+                .into(),
+        ],
+    );
+
+    assert_eq!(narrowed_moves(rules(), &input), input);
+
+    // Premise: with nothing reading EDI after it, the same copy is narrowed.
+    let ret = Insn {
+        reads_complete: true,
+        ..insn(6, Some((6, 6)), Some(sem(Operation::Return, "ret", vec![], vec![])), vec![], vec![])
+    };
+    let unread = body("narrow-copy", 1, vec![block(1, vec![input.insns()[0].clone(), Arc::new(ret)], vec![]).into()]);
+    assert_ne!(narrowed_moves(rules(), &unread), unread);
+}
+
 fn extract_parts(
     source: Loc,
     high: Loc,

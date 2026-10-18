@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 53 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 54 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -22,6 +22,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 53 documented, 0 undoc
 | constant_cycles | Sparse value propagation over phis, with distinct pending and overdefined states, to find constants that only a cycle proves. | `State`, `Successors` and `propagated`. Consumers: [`crate::consts`](consts.md) | [constant_cycles](constant_cycles.md) |
 | consts | Which values are known, and what they are: integer constant propagation and folding, with memory read through MemorySSA. | `Known`, `known` (registers, cached as [`crate::manager::Registers`](manager.md)), | [consts](consts.md) |
 | demanded | Which bits of each integer value anything reads: LLVM's `DemandedBits`. | `demanded(context, function)`: a `ValueId -> u128` map. Cached as | [demanded](demanded.md) |
+| demandedbits | Which bits of each integer value anything reads: a translation of LLVM's `DemandedBits` (`DemandedBits.cpp` at d1106deb71cc). | `DemandedBits::of`, then `demanded_bits`, `demanded_bits_of_use`, | [demandedbits](demandedbits.md) |
 | dependence | Data dependence distances over a two-deep loop nest, the outer unroll factor that unroll-and-jam may use for them, and whether two loops may be fused. | `distances`, `factor`, `fusable`, `meetings`, `interchangeable`, | [dependence](dependence.md) |
 | difference | What a set of compares proves of the unknowns they test, by difference bounds: LLVM's ConstraintElimination. | `proves(width, facts, ranges, predicate, left, right)`. Its one consumer is | [difference](difference.md) |
 | effects | What a call may do to memory its operands do not name, from LLVM's call attributes. | `call`, `touches_memory`, `writes_memory`, `unmodeled_read`, | [effects](effects.md) |

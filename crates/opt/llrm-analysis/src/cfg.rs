@@ -667,7 +667,7 @@ impl Analysis for Shape {
 /// Copied from llrm-core's `optimize/transform.rs` `_unreachable`. The old
 /// MIR kept a dead block as an inert byte owner; the rich MIR owns no bytes.
 pub fn _unreachable(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     let blocks = graph(function);

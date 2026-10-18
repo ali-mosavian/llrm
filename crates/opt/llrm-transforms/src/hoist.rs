@@ -585,7 +585,7 @@ fn _float_working_set(
         if !loop_.body.contains(&cfg::id(block)) {
             continue;
         }
-        let list = function.block(block).instructions();
+        let list = function.block(block).iter().collect::<Vec<_>>();
         let mut ends: Vec<usize> = Vec::new();
         for (at, &inst) in list.iter().enumerate() {
             let one = function.instruction(inst);
@@ -726,7 +726,7 @@ pub fn _invariant_run(
         .layout()
         .iter()
         .filter(|&&block| inside(block))
-        .flat_map(|&block| function.block(block).instructions().to_vec())
+        .flat_map(|&block| function.block(block).iter().collect::<Vec<_>>())
         .collect();
     let outside = |value: ValueId| match function.value(value).def {
         ValueDef::Argument(_) => true,
@@ -923,9 +923,9 @@ pub fn _guaranteed(
     if function.successors(cfg::block(into)) != [cfg::block(loop_.header)] {
         return BTreeSet::new();
     }
-    let ends = |at: i64| function.block(cfg::block(at)).instructions().iter().any(|inst| terminal.contains(inst));
+    let ends = |at: i64| function.block(cfg::block(at)).iter().any(|inst| terminal.contains(&inst));
     let before_terminal = |at: i64| {
-        let instructions = function.block(cfg::block(at)).instructions();
+        let instructions = function.block(cfg::block(at)).iter().collect::<Vec<_>>();
         let stop = instructions.iter().position(|inst| terminal.contains(inst)).map_or(instructions.len(), |at| at + 1);
         instructions[..stop].to_vec()
     };
@@ -1004,10 +1004,9 @@ fn _seeded(
         .any(
             |&block| function
                 .block(block)
-                .instructions()
                 .iter()
                 .any(
-                    |&inst| {
+                    |inst| {
                         let op = function.instruction(inst);
                         matches!(
                             op.opcode,

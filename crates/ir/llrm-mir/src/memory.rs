@@ -223,6 +223,24 @@ pub fn callee(
     }
 }
 
+/// `isNoAliasCall`: whether the call `inst` returns `noalias`, as the call
+/// site or its callee states it (`CallBase::hasRetAttr` reads both).
+pub fn returns_noalias(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &Function,
+    inst: InstId,
+) -> bool {
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
+    Facts::of(&info.return_attrs).no_alias()
+        || callee(context, function, inst).and_then(|global| globals.get(global.0 as usize)).is_some_and(|global| {
+            match &global.kind {
+                GlobalKind::Function(callee) => Facts::of(&callee.return_attrs).no_alias(),
+                GlobalKind::Variable(_) => false,
+            }
+        })
+}
+
 /// Whether `inst`'s only effect is its value, so that if nothing needs the
 /// value it may go: a pure operation, a plain load, or a call touching no
 /// memory to a function that always comes back.
