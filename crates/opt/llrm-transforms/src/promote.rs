@@ -133,7 +133,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::TypeId;
-use llrm_mir::{Constant, ConstantKind, Context};
+use llrm_mir::Context;
 use llrm_support::bits::Bits;
 use llrm_support::hash::{HashMap, HashSet, IndexMap};
 
@@ -987,10 +987,12 @@ fn rewrite(
         .filter(|one| one.opcode == Opcode::Phi)
         .filter_map(|one| one.result)
         .collect::<llrm_mir::dense::IdSet<ValueId>>();
+    // The entry value of a cell is the zero of its type: MIR has no `undef`
+    // (mem2reg.rs DEVIATE 1).
     let poison = plan
         .types
         .iter()
-        .map(|&ty| Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })))
+        .map(|&ty| Operand::Constant(llrm_mir::constfold::null_value(context, ty)))
         .collect::<Vec<_>>();
 
     // Where each cell is live on entering a block: LLVM's PromoteMemToReg
