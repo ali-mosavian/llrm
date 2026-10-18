@@ -166,7 +166,7 @@ impl LoopGuards {
 
         let mut terms: Vec<(Operand, bool)> = Vec::new();
         // First, collect information from assumptions dominating the loop.
-        let first = cx.function.block(block).instructions().first().copied();
+        let first = cx.function.block(block).first();
         for &assume in &cx.assumptions.assumes {
             let dominates = first.is_some_and(|first| cx.tree.instruction_dominates(cx.function, assume, first));
             if !dominates {

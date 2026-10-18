@@ -145,7 +145,7 @@ impl SsaUpdater {
         let mut singular: Option<Operand> = None;
         // The predecessor list of a block that holds a phi is read from the
         // phi.
-        let first = function.block(block).instructions().first().copied();
+        let first = function.block(block).first();
         let preds: Vec<BlockId> = match first {
             Some(some_phi) if function.instruction(some_phi).opcode == Opcode::Phi => function
                 .instruction(some_phi)
@@ -199,7 +199,7 @@ impl SsaUpdater {
         let ty = self.proto_type;
         let inserted =
             function.create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), self.proto_name.as_deref());
-        let first = function.block(block).instructions().first().copied();
+        let first = function.block(block).first();
         function.insert(inserted, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
         let mut operands = Vec::new();
         for &(pred, value) in &pred_values {
@@ -341,7 +341,7 @@ impl Impl<'_> {
         &self,
         block: BlockId,
     ) -> Vec<BlockId> {
-        let first = self.function.block(block).instructions().first().copied();
+        let first = self.function.block(block).first();
         match first {
             Some(some_phi) if self.function.instruction(some_phi).opcode == Opcode::Phi => self
                 .function
@@ -623,7 +623,7 @@ impl Impl<'_> {
             let phi = self
                 .function
                 .create_instruction(Opcode::Phi, ty, Vec::new(), Flags::default(), self.updater.proto_name.as_deref());
-            let first = self.function.block(block).instructions().first().copied();
+            let first = self.function.block(block).first();
             self.function.insert(phi, first.map_or(Position::End(block), Position::Before)).expect("a placed block");
             let value = Operand::Value(self.function.instruction(phi).result.expect("a phi's value"));
             self.infos[info].available_val = Some(value);

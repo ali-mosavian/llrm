@@ -1058,7 +1058,7 @@ fn a_range_a_frontend_states_of_an_instruction_bounds_its_result() {
     let function = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("F%")).expect("F%").2;
     let unit = crate::testing::with_registers(Unit::of(&module, &layout, function));
     let below = &super::scoped(&unit).unwrap()[&cfg::id(function.layout()[1])];
-    let result = function.instruction(function.block(function.layout()[0]).instructions()[0]).result.expect("a sum");
+    let result = function.instruction(function.block(function.layout()[0]).first().expect("a block with an instruction")).result.expect("a sum");
     assert_eq!(below.get(&result), Some(&interval(0, 7, 16)), "{below:?}");
 }
 

@@ -232,7 +232,7 @@ join:
     let mut module = parsed(text);
     assert!(cut(&mut module, "f", "exit"));
     let f = function(&module, "f");
-    let phi = f.block(block(f, "join")).instructions()[0];
+    let phi = f.block(block(f, "join")).first().expect("a block with an instruction");
     assert_eq!(f.instruction(phi).operands.len(), 2, "one input, from %b");
     assert_eq!(run(&module, "f", vec![bit(false)]), Ok(Val::Int { bits: 2, width: 16 }));
     assert_eq!(run(&module, "f", vec![bit(true)]), run(&parsed(text), "f", vec![bit(true)]));

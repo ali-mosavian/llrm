@@ -134,7 +134,7 @@ impl ScalarEvolution {
             let query = cx.query(None);
             let mut found = Vec::new();
             for &block in cx.function.layout() {
-                for &inst in cx.function.block(block).instructions() {
+                for inst in cx.function.block(block).iter() {
                     if call_intrinsic(&query, inst) == Some(IntrinsicId::ExperimentalGuard) {
                         found.push(inst);
                     }
@@ -376,7 +376,7 @@ impl ScalarEvolution {
             }
         }
 
-        let ctx_i = cx.function.block(bb).instructions().first().copied();
+        let ctx_i = cx.function.block(bb).first();
 
         // Try to prove (Pred, LHS, RHS) using isImpliedCond.
         let mut prove_via_cond = |se: &mut ScalarEvolution, condition: Operand, inverse: bool| -> bool {
@@ -418,7 +418,7 @@ impl ScalarEvolution {
 
         // Check conditions due to any @llvm.assume intrinsics.
         for &assume in &cx.assumptions.assumes {
-            let Some(first) = cx.function.block(bb).instructions().first().copied() else { continue };
+            let Some(first) = cx.function.block(bb).first() else { continue };
             if !cx.tree.instruction_dominates(cx.function, assume, first) {
                 continue;
             }
