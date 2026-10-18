@@ -43,7 +43,7 @@ DEFAULT = BUDGETS["default"]
 # against 2.3 read paid on one build and over on the next (lir twoaddr, lir coalesce).
 PAID_MARGIN = 0.97
 ONE_FUNCTION = ("straight", "mulconst", "branches", "live", "nest", "cells", "cases", "joins", "fjoins", "unrolled")
-PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations")
+PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations", "cold_scans")
 # The gate's N per axis, but `branches` larger: its steps are small at the gate's 32 (analysis bounded is 1 Minstr there), and #1771 made
 # `analysis bounded` quadratic in it (108 -> 982 Minstr from N=256 to 512) unseen by a size where the step is under the floor.
 SIZES = {**scaling_gate.SIZES, "branches": 256}
