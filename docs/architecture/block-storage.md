@@ -98,6 +98,40 @@ first run, with the erased-block check going through `block()`, was 77% in
 `attach`), so stage A's reader migration is part of the cost, not optional;
 and `Block::instructions()` cannot stay a slice once the list is the truth.
 
+## The remaining diamond term: use lists
+With the block list free, diamond's rest was still x3.0 per doubling. Callgrind
+(own cost, 400 to 800 instructions, POC build): `Function::erase` x3.82
+(3.2 M to 12.1 M); the rest of the profile is x1.5 to x2.1. Cause:
+`remove_use` is `uses.retain(..)`, O(uses of the operand): a value or block
+with n users costs O(n) per erase, where LLVM's `Use` is an intrusive list node
+removed in O(1). Bound: replacing the `retain` by a swap-remove took diamond to
+x2.05, mem x2.3, loop x2.3 (instructions, whole run). This is stage C: use
+lists with O(1) removal (an arena list per value, same shape as the block
+list; `users()` can stay a slice only if its order is kept, so a swap-remove
+changes the order passes see and needs the identical.py corpus). It lies in
+llrm-mir, not in SROA.
+
+## Scoreboard and migration
+Uses of `Block::instructions()` (main): `git grep -n -E '\.instructions\(\)|(block\([^)]*\)|blocks\[[^]]*\])\.instructions([^(]|$)' -- crates | wc -l`
+is 380 (337 calls + 43 direct field reads); the goal is 0 with the method and
+the field private. Calls by crate: llrm-transforms 195, llrm-analysis 63,
+llrm-mir 42, llrm-core 30, llrm-x86-bc 3, llrm-hir 2, llrm-qb 2 (the last two
+are other types' methods named alike). I land the API and SROA; each crate's
+migration is its owners' PR (llrm-transforms by pass owner, per the slot table;
+llrm-analysis by the analysis owners; llrm-core by the backend owners; llrm-mir
+mine), mechanical and output-identical.
+
+Recipe, one line per reader: `for &i in b.instructions()` becomes
+`for i in b.iter()` (collect first where the body edits the block), `[0]` and
+`.first()` become `first()`, `.last()` becomes `last()` or `terminator()`,
+`.len()` becomes `len()`, "the one before/after" becomes
+`prev_in_block`/`next_in_block`, "which comes first" becomes `comes_before`;
+run identical.py on the full corpus and the pass's slope test.
+
+Before stage B merges: the ladder is re-taken with `perf stat -e instructions:u`
+(method M, base = parent) and a quiet-host cycles line (min of 11, load under
+4, pinned, A/A), not CPU samples.
+
 ## DEVIATE
 None planned: the list is LLVM's. A deviation is recorded here only if the
 POC leads to a storage that is not an ilist.
