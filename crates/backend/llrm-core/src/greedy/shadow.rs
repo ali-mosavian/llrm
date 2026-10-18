@@ -29,7 +29,7 @@ use std::rc::Rc;
 
 use llrm_lir::registers::{RegId, Regs};
 
-use super::greedy::{GreedyEnv, LiveRangeStage, RAGreedy, Stats};
+use super::greedy::{GreedyEnv, RAGreedy, Stats};
 use super::matrix::{LiveRegMatrix, PhysInterference};
 use super::inlinespiller::{InlineSpiller, Tables};
 use super::spill::SimpleSpiller;
@@ -392,9 +392,12 @@ pub fn decide_with(
     });
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         if let Some(edited) = &edited {
+            let held = greedy.lis.interval_count();
             let compared = greedy.lis.assert_intervals_equal_afresh(edited);
-            assert!(compared > 0, "LLRM_CHECK_LIVEINTERVALS compared no interval of {}", body.name);
-            eprintln!("check-liveintervals {}: {compared} intervals equal afresh", body.name);
+            assert!(compared == held, "LLRM_CHECK_LIVEINTERVALS compared {compared} of {held} intervals of {}", body.name);
+            if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+                eprintln!("check-liveintervals {}: {compared} intervals equal afresh", body.name);
+            }
         }
     }
     Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed() })

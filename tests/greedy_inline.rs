@@ -34,3 +34,23 @@ fn a_rotation_of_constants_is_allocated_inline_at_every_level() {
         assert!(!said.contains("greedy-check"), "{level}: {said}");
     }
 }
+
+/// tests/run/c/es_across_copy.c at -O2: spilling a far pointer's offset put an index add before its use, which
+/// redefined the base register; the base kept its old interval and `LLRM_CHECK_LIVEINTERVALS` found it stale.
+#[test]
+fn a_register_an_inline_spill_redefines_gets_its_interval_again() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/c/es_across_copy.c");
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .env("LLRM_GREEDY", "1")
+        .env("LLRM_CHECK_LIVEINTERVALS", "1")
+        .env("LLRM_GREEDY_CHECK", "1")
+        .args(["-O2", "-march=i486", "-S", "-o", "a.s"])
+        .arg(source)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+    assert!(!said.contains("greedy-check"), "{said}");
+}

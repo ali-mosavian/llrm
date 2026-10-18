@@ -260,6 +260,11 @@ impl LiveIntervals {
         Rc::clone(&self.intervals[&reg])
     }
 
+    /// How many intervals are held.
+    pub fn interval_count(&self) -> usize {
+        self.intervals.len()
+    }
+
     /// `hasInterval`.
     pub fn has_interval(
         &self,

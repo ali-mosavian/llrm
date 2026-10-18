@@ -79,6 +79,9 @@ pub struct InlineSpiller<'a> {
     folded: usize,
     failed: bool,
     spilled: Vec<u32>,
+    /// Registers other than the spilled one that the units named: an edit may
+    /// have given them a definition or a use.
+    named: Vec<u32>,
 }
 
 impl<'a> InlineSpiller<'a> {
@@ -89,7 +92,7 @@ impl<'a> InlineSpiller<'a> {
         order_of: &'a dyn Fn(u32) -> Vec<RegId>,
         tables: Rc<Tables>,
     ) -> Self {
-        Self { template, frame, classes, order_of, tables, reloads: 0, stores: 0, folded: 0, failed: false, spilled: Vec::new() }
+        Self { template, frame, classes, order_of, tables, reloads: 0, stores: 0, folded: 0, failed: false, spilled: Vec::new(), named: Vec::new() }
     }
 
     /// The units of `reg`'s instructions: a parallel copy is one, listed by its
@@ -302,6 +305,42 @@ impl<'a> InlineSpiller<'a> {
         Some(Vec::new())
     }
 
+    /// The intervals of the registers the edit named other than the spilled one,
+    /// made again: an instruction put before a use may define one (an index added
+    /// into its base) and so number its values anew. It stays right for the matrix
+    /// only if it covers the same points, which is checked; false when it does not.
+    fn refresh_named(
+        &mut self,
+        lis: &mut LiveIntervals,
+    ) -> bool {
+        let mut names = std::mem::take(&mut self.named);
+        names.sort_unstable();
+        names.dedup();
+        for value in names {
+            if !lis.has_interval(value) {
+                continue;
+            }
+            let held = lis.interval_rc(value);
+            let mut again = lis.compute_virt_reg_interval(value);
+            let merged = |li: &crate::liveness::liverange::LiveInterval| -> Vec<_> {
+                let mut spans: Vec<(crate::liveness::slotindex::SlotIndex, crate::liveness::slotindex::SlotIndex)> = Vec::new();
+                for seg in &li.segments {
+                    match spans.last_mut() {
+                        Some(last) if last.1 == seg.start => last.1 = seg.end,
+                        _ => spans.push((seg.start, seg.end)),
+                    }
+                }
+                spans
+            };
+            if merged(&held) != merged(&again) {
+                return false;
+            }
+            again.set_weight(held.weight());
+            lis.insert_interval(again);
+        }
+        true
+    }
+
     /// `spillAroundUses` for one unit. Returns the registers it made.
     fn spill_unit(
         &mut self,
@@ -311,6 +350,7 @@ impl<'a> InlineSpiller<'a> {
         members: &[InstrKey],
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
+        self.named.extend(old.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().filter(|value| *value != reg));
         if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
             return Some(folded);
         }
@@ -484,6 +524,9 @@ impl Spiller for InlineSpiller<'_> {
             }
         }
         edit.erase_virt_reg(lis, reg);
+        if !self.refresh_named(lis) {
+            self.failed = true;
+        }
     }
 
     fn counts(&self) -> (usize, usize, usize) {
