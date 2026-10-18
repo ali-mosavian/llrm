@@ -424,6 +424,17 @@ fn defined(program: &Program) -> impl Iterator<Item = Defined> + '_ {
     })
 }
 
+/// `procedures` callees first, as LLVM's CGSCC post-order visits them
+/// (`LLRM_EXP_INLINEWALK`); the members of a cycle in the order the call graph
+/// gives.
+pub(crate) fn walk_order(
+    module: &Module,
+    procedures: &[GlobalId],
+) -> Vec<GlobalId> {
+    let wanted: BTreeSet<GlobalId> = procedures.iter().copied().collect();
+    CallGraph::new(module).bottom_up().into_iter().filter(|id| wanted.contains(id)).collect()
+}
+
 /// Defined procedures of module `at`, in module order.
 fn procedures(
     program: &Program,
@@ -1145,6 +1156,7 @@ pub fn optimized_with<E: From<String>>(
     // https://github.com/gcc-mirror/gcc/blob/releases/gcc-13.4.0/gcc/ipa-inline-transform.cc#L727
     // (`inline_transform`)
     let mut ahead = true;
+    let walk = llrm_support::env_flag!("LLRM_EXP_INLINEDECIDE") && llrm_support::env_flag!("LLRM_EXP_INLINEWALK");
     loop {
         let mut changed = false;
         let mut deferred = false;
@@ -1213,7 +1225,17 @@ pub fn optimized_with<E: From<String>>(
             // private function whose last call was inlined is never built.
             let mut live = reference_counts(module);
             let reachable_by_pointer: BTreeSet<GlobalId> = addressed.union(&listed(module)).copied().collect();
-            let order = if ahead { procedures[at].clone() } else { callers_first(module, &procedures[at]) };
+            // `LLRM_EXP_INLINEWALK`: LLVM's order (`InlinerPass::run` over the
+            // CGSCC post-order): callees before callers, each function
+            // visited once, the sites priced on the callees as they now are,
+            // simplified; no rounds.
+            let order = if walk {
+                walk_order(module, &procedures[at])
+            } else if ahead {
+                procedures[at].clone()
+            } else {
+                callers_first(module, &procedures[at])
+            };
             for id in order {
                 let unreached = private[at].contains(&id)
                     && !reachable_by_pointer.contains(&id)
@@ -1252,7 +1274,8 @@ pub fn optimized_with<E: From<String>>(
                             module,
                             &program.layout,
                             id,
-                            &counts,
+                            // The calls left of each callee as the walk stands.
+                            &if walk { inline::call_counts(module) } else { counts.clone() },
                             &addressed,
                             &recursive,
                             params,
@@ -1354,6 +1377,15 @@ pub fn optimized_with<E: From<String>>(
                     }
                 }
             }
+        }
+        if walk {
+            // One visit of each function; what no call reaches now goes.
+            for at in 0..count {
+                let module = &mut program.modules[at];
+                let addressed = llrm_mir::callgraph::addressed(module);
+                bare_the_unreached(module, &mut modules[at], &private[at], &addressed, &roots_here(roots, at));
+            }
+            break;
         }
         if !changed {
             if ahead && deferred {

@@ -1933,3 +1933,18 @@ fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
     assert_eq!(loads(""), 0, "premise: the stamped read-only callee leaves the cell alone");
     assert_eq!(loads("noipa"), 1);
 }
+
+/// The walk visits a callee before its callers: `@c` is simplified and inlined
+/// into `@b` before `@a` prices the call of `@b`, as LLVM's CGSCC post-order
+/// does. Program order (`@a` first) priced `@b` as it stood unsimplified.
+#[test]
+fn the_walk_visits_each_callee_before_its_callers() {
+    let module = parsed(
+        "define internal i16 @c(i16 %x) {\nb:\n  ret i16 %x\n}\n\ndefine internal i16 @b(i16 %x) {\nb:\n  %r = call i16 @c(i16 %x)\n  ret i16 %r\n}\n\ndefine i16 @a(i16 %x) {\nb:\n  %r = call i16 @b(i16 %x)\n  ret i16 %r\n}\n",
+    );
+    let program_order: Vec<GlobalId> = ["a", "b", "c"].iter().map(|name| module.named(name).unwrap()).collect();
+    let walked = walk_order(&module, &program_order);
+    let names: Vec<_> = walked.iter().map(|&id| module.global(id).name.clone().unwrap()).collect();
+    assert_eq!(names, ["c", "b", "a"]);
+    assert_ne!(walked, program_order, "premise: program order puts the caller first");
+}
