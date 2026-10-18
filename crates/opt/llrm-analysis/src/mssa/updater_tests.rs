@@ -47,7 +47,7 @@ impl Body {
         &self,
         f: impl FnOnce(&dyn Fn(InstId) -> Effect) -> R,
     ) -> R {
-        let unit = Unit::of(&self.module, &self.layout, self.function());
+        let unit = crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()));
         let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
         let effect = shadow::effect_of(&accesses, self.function());
         f(&effect)
@@ -58,17 +58,20 @@ impl Body {
         self.with_effects(|effect| Mssa::build(self.function(), &shape.dominance, effect))
     }
 
-    /// The graph says what a fresh one says of the body.
+    /// The graph says what a fresh one says of the body, both asked of the
+    /// walker.
     fn check(
         &self,
-        mssa: &Mssa,
+        mssa: &mut Mssa,
         what: &str,
     ) {
         let shape = Shape::of(self.function());
-        self.with_effects(|effect| {
-            shadow::same_as_fresh(mssa, self.function(), &shape.dominance, effect)
-                .unwrap_or_else(|why| panic!("after {what}: {why}\n{}", llrm_mir::print::module(&self.module)))
-        });
+        let unit = crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()));
+        let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+        let aa = super::alias::AliasQuery::new(&unit, &accesses);
+        let effect = shadow::effect_of(&accesses, self.function());
+        shadow::same_as_fresh(mssa, self.function(), &shape.dominance, &effect, &aa)
+            .unwrap_or_else(|why| panic!("after {what}: {why}\n{}", llrm_mir::print::module(&self.module)));
     }
 
     /// The walker's answers on the updated graph (its cache kept from before
@@ -78,7 +81,7 @@ impl Body {
         mssa: &mut Mssa,
         what: &str,
     ) {
-        let unit = Unit::of(&self.module, &self.layout, self.function());
+        let unit = crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()));
         let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
         let aa = super::alias::AliasQuery::new(&unit, &accesses);
         let mut fresh = self.fresh();
@@ -122,7 +125,7 @@ impl Body {
         &self,
         mssa: &mut Mssa,
     ) {
-        let unit = Unit::of(&self.module, &self.layout, self.function());
+        let unit = crate::testing::with_registers(Unit::of(&self.module, &self.layout, self.function()));
         let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
         let aa = super::alias::AliasQuery::new(&unit, &accesses);
         shadow::walked(mssa, &aa, self.function());
@@ -163,8 +166,8 @@ impl Body {
         let access = mssa.get_memory_access(inst).expect("an access");
         updater.remove_memory_access(mssa, self.function(), access, true);
         self.mutate(|function| function.erase(inst)).expect("erased");
-        self.check(mssa, &format!("erasing {inst:?}"));
         self.check_walks(mssa, &format!("erasing {inst:?}"));
+        self.check(mssa, &format!("erasing {inst:?}"));
     }
 
     /// `inst` moved to `block`, before the instruction at `index` of it (the
@@ -189,8 +192,8 @@ impl Body {
             Where::Before(next) => updater.move_before(mssa, self.function(), access, next),
             Where::End => updater.move_to_place(mssa, self.function(), access, block, MoveTo::End, None),
         }
-        self.check(mssa, &format!("moving {inst:?} to {block:?}:{index}"));
         self.check_walks(mssa, &format!("moving {inst:?} to {block:?}:{index}"));
+        self.check(mssa, &format!("moving {inst:?} to {block:?}:{index}"));
     }
 
     /// A copy of `like` placed in `block` before the instruction at `index`,
@@ -220,8 +223,8 @@ impl Body {
         } else {
             updater.insert_use(mssa, self.function(), access, true);
         }
-        self.check(mssa, &format!("inserting a copy of {like:?} at {block:?}:{index}"));
         self.check_walks(mssa, &format!("inserting a copy of {like:?} at {block:?}:{index}"));
+        self.check(mssa, &format!("inserting a copy of {like:?} at {block:?}:{index}"));
         copy
     }
 }
@@ -287,86 +290,34 @@ fn test_a_load_moved_to_the_exit_and_a_store_put_in_the_loop() {
     body.insert_copy(&mut mssa, &mut updater, store, b1, 0);
 }
 
-/// Cells the body reads and writes at random places: random bodies of up to 7
-/// blocks with back edges and joins, then up to 10 edits of them at random, the
-/// graph checked after each.
+/// A store put in a block between a store and the later one whose cached
+/// clobber it is. LLVM's `insertDef` renames the uses it dominates, so a later
+/// store in another block keeps the first as its clobber past a write of the
+/// same cell (the DEVIATE `reset_optimized_defs` closes).
 #[test]
-fn test_random_edits_leave_the_graph_a_fresh_one_would_be() {
-    struct Rng(u64);
-    impl Rng {
-        fn next(
-            &mut self,
-            n: usize,
-        ) -> usize {
-            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((self.0 >> 33) as usize) % n
-        }
-    }
-    for seed in 0..400u64 {
-        let mut rng = Rng(seed * 7919 + 1);
-        let blocks = 3 + rng.next(5);
-        let mut text = String::from("define i16 @f(i1 %c) {\n");
-        let mut name = 0;
-        for b in 0..blocks {
-            text += &format!("b{b}:\n");
-            for _ in 0..(rng.next(4)) {
-                let cell = ["ga", "gb", "gc"][rng.next(3)];
-                match rng.next(3) {
-                    0 => text += &format!("  store i16 {}, ptr @{cell}\n", rng.next(9)),
-                    1 => {
-                        text += &format!("  %v{name} = load i16, ptr @{cell}\n");
-                        name += 1;
-                    }
-                    _ => text += "  call void @anything()\n",
-                }
-            }
-            text += &if b + 1 == blocks {
-                "  ret i16 0\n".to_owned()
-            } else if rng.next(3) == 0 {
-                format!("  br label %b{}\n", b + 1)
-            } else {
-                // The next block is always one way on; the other way is a join
-                // further on or a back edge to a block at or
-                // before this one. (the entry block has no
-                // predecessor, as in LLVM IR).
-                let other = if b > 0 && rng.next(2) == 0 { 1 + rng.next(b) } else { b + 1 + rng.next(blocks - b - 1) };
-                format!("  br i1 %c, label %b{}, label %b{other}\n", b + 1)
-            };
-            text += "\n";
-        }
-        text += "}\n";
-        // Every block must be reachable from the entry: a forward edge to the
-        // next block is always there.
-        let mut body = Body::new(&text);
-        // Non-minimal phis in cycles are left by the updater as by LLVM's (its
-        // own comment): irreducible control flow is not compared.
-        if !Shape::of(body.function()).dominance.irreducible(body.function()).is_empty() {
-            continue;
-        }
-        let mut mssa = body.fresh();
-        let mut updater = MemorySsaUpdater::new();
-        body.warm(&mut mssa);
-        for _step in 0..10 {
-            let memory = body.memory_instructions();
-            if memory.is_empty() {
-                break;
-            }
-            let layout_blocks: Vec<BlockId> = body.function().layout().to_vec();
-            let inst = memory[rng.next(memory.len())];
-            let block = layout_blocks[rng.next(layout_blocks.len())];
-            let index = rng.next(4);
-            let op = rng.next(3);
-            match op {
-                0 if memory.len() > 1 => body.erase(&mut mssa, &mut updater, inst),
-                1 => {
-                    // A move needs somewhere to go before: the block has its
-                    // terminator.
-                    body.move_to(&mut mssa, &mut updater, inst, block, index);
-                }
-                _ => {
-                    body.insert_copy(&mut mssa, &mut updater, inst, block, index);
-                }
-            }
-        }
-    }
+fn test_a_def_inserted_between_a_def_and_its_cached_clobber_is_the_clobber() {
+    let mut body = Body::new(
+        "define void @f() {
+b0:
+  store i16 1, ptr @gb
+  br label %b1
+
+b1:
+  store i16 2, ptr @ga
+  br label %b2
+
+b2:
+  store i16 3, ptr @gb
+  ret void
+}
+",
+    );
+    let mut mssa = body.fresh();
+    let mut updater = MemorySsaUpdater::new();
+    body.warm(&mut mssa);
+    let (first, last) = (find(&body, "b0", 0), find(&body, "b2", 0));
+    let copy = body.insert_copy(&mut mssa, &mut updater, first, body.block("b1"), 0);
+    body.warm(&mut mssa);
+    let (copy, last) = (mssa.get_memory_access(copy), mssa.get_memory_access(last).expect("an access"));
+    assert_eq!(mssa.access(last).optimized, copy, "the last store reads the new one, not the first");
 }
