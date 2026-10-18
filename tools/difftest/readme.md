@@ -16,6 +16,12 @@ as a large hunk with equal histograms.
 
 `inlinediff.py BEFORE.ll AFTER.ll` (or `dumps DIR...`) compares the call sites llrm's inline stage inlined with those of `opt -passes=inline` at the same module, with LLVM's cost, threshold and reason (see its docstring); `test_inlinediff.py` has a module where a call over the threshold must show as llrm-only and one where both agree.
 
+## A slot of LLVM's order
+
+`llrm-pass [-On] --order PASS@SLOT FILE` runs one slot of the order alone (stderr names what stands in it); `difftest.py inputs PASS@SLOT DIR...`
+compares it with `opt` on the inputs of `LLRM_DUMP_INPUTS=1 llrm-c --dump DIR`: every run, changed or not. `dumps PASS@SLOT` takes only the
+steps that changed a body. A report over no function reads PREMISE FAILED.
+
 ## Joining a slot to parity
 
 A translation joins the parity pipeline when this oracle reads clean on its pass. Run it for your pass, with the order branch's dumps (`llrm-c --dump DIR`) or the replay inputs, and the `llrm-pass` of your tree:

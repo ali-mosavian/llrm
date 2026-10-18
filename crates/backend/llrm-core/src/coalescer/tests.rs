@@ -266,12 +266,11 @@ fn test_two_parameters_live_on_entry_are_not_joined() {
 
 /// Two arms each copy their own value into `v2`, read after the join: the
 /// copies join (or not) so that every value read is one something defines.
-/// (Ported from the old coalescer's `two_copies_into_one_value_leave_every_read_defined`.)
+/// (Ported from the old coalescer's
+/// `two_copies_into_one_value_leave_every_read_defined`.)
 #[test]
 fn test_two_copies_into_one_value_leave_every_read_defined() {
-    let arm = |value: u32, at: i64| {
-        block_at(at, vec![def(value), copy(2, value), jump(0x20)], &[0x20])
-    };
+    let arm = |value: u32, at: i64| block_at(at, vec![def(value), copy(2, value), jump(0x20)], &[0x20]);
     let was = body_of(vec![arm(61, 0), arm(63, 0x10), block_at(0x20, vec![read(2)], &[])]);
     let mut lis = LiveIntervals::new(&was);
     let stats = super::driver::run(&mut lis, &AnyClass, &[0, 0, 0]);
@@ -338,6 +337,59 @@ fn test_values_pinned_to_different_registers_are_not_joined() {
     let mut lis = LiveIntervals::new(&was);
     assert_eq!(join_copy(&mut lis, &Pinned, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Rejected);
     assert_eq!(names(&lis).len(), 3);
+}
+
+/// `a, b = b, t` at the end of a loop, as one parallel copy (`gcd`'s
+/// `a = b; b = a % b`): after the group `a` is the old `b`, and `b` the new
+/// value, both live round the loop. Joining `a` with `b` (the first copy then
+/// "an identity") made `a` the new `b`: gcd(1071, 462) printed 0.
+fn swap_loop() -> LirBody {
+    let (a, b, t, saved) = (4, 3, 5, 12);
+    let grouped = |one: Arc<Insn>| {
+        let mut made = (*one).clone();
+        made.group = Some(2);
+        Arc::new(made)
+    };
+    let step = {
+        let what = Semantics {
+            name: Some("idiv".to_owned()),
+            dests: vec![held(t)],
+            sources: vec![held(a), held(b)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![t], vec![a, b]))
+    };
+    let branch = {
+        let what = Semantics { name: Some("jne".to_owned()), target: Some(1), ..Semantics::new(Operation::Branch) };
+        Arc::new(Insn::new(0, None, Some(what), vec![], vec![]))
+    };
+    body_of(vec![
+        block_at(0, vec![def(a), def(b), jump(1)], &[1]),
+        block_at(1, vec![step, copy(saved, b), grouped(copy(a, b)), grouped(copy(b, t)), branch], &[1, 2]),
+        block_at(2, vec![read(saved)], &[]),
+    ])
+}
+
+#[test]
+fn test_a_parallel_swap_round_a_loop_is_not_joined_away() {
+    let was = swap_loop();
+    let mut lis = LiveIntervals::new(&was);
+    super::driver::run(&mut lis, &AnyClass, &[0, 1, 0]);
+    let after = lis.body_like(&was);
+    let loop_copies: Vec<(u32, u32)> = after.blocks[1]
+        .insns
+        .iter()
+        .filter_map(|one| crate::coalescer::pair::full_copy(one).map(|(d, s)| (d.value, s.value)))
+        .collect();
+    // `a` takes the old `b` while `b` takes `t`: a copy of `b` into something
+    // other than `b` itself must remain in the loop, and the exit's saved
+    // value must not have become `b`.
+    assert!(loop_copies.iter().any(|(dst, src)| src == &3 && dst != &3), "a's copy of b went away: {loop_copies:?}");
+    let exit_read = after.blocks[2].insns[0].uses[0];
+    assert!(
+        loop_copies.iter().any(|(dst, src)| *dst == exit_read && *src == 3) || exit_read != 3,
+        "the exit reads b after the loop rewrote it: v{exit_read}, {loop_copies:?}"
+    );
 }
 
 fn block_at(

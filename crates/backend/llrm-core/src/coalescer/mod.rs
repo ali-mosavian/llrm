@@ -56,7 +56,6 @@ pub mod joinvals;
 pub mod pair;
 pub mod register_coalescer;
 
-
 #[cfg(test)]
 mod tests;
 

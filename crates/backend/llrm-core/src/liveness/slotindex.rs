@@ -507,6 +507,20 @@ impl SlotIndexes {
         self.idx2mbb_map.sort_by(|a, b| a.0.cmp(&b.0));
     }
 
+    /// Every instruction at `index`: the first, then the rest of its bundle
+    /// (the instructions of a parallel copy share one index).
+    pub fn get_instructions_at(
+        &self,
+        index: &SlotIndex,
+    ) -> Vec<InstrKey> {
+        let Some(first) = self.get_instruction_from_index(index) else { return Vec::new() };
+        let mut all = vec![first];
+        if let Some(others) = self.bundled.get(&index.list_entry()) {
+            all.extend(others.iter().copied());
+        }
+        all
+    }
+
     /// `getZeroIndex`.
     pub fn get_zero_index(&self) -> SlotIndex {
         let first = SlotIndex::at(self.first, Slot::Block);
