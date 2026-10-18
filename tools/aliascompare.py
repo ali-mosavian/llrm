@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -49,6 +50,10 @@ def entry(name: str, kind: str) -> tuple[str, int | None]:
     """A pointer and the bytes aa-eval accesses through it, from the type it prints (none where it prints one llrm sizes by its datalayout)."""
     return name.replace('"', ""), SIZES.get(kind)
 
+
+# The data layout of the machine the replay inputs were made for (`-m32`, crates/target/llrm-x86-m32/src/machines/datalayout.toml): the dumps carry none, and
+# both readings then use LLVM's default of 64-bit pointers, whose 8-byte `load ptr` is larger than a 4-byte object that the real 4-byte pointer fits.
+M32_DATALAYOUT = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 
 AA_PIPELINES = {"default": "tbaa,scoped-noalias-aa,basic-aa", "basic": "basic-aa"}
 
@@ -183,6 +188,7 @@ def main() -> int:
     parser.add_argument("files", nargs="+", type=Path)
     parser.add_argument("--llrm-mir", default=str(ROOT / "target/release/llrm-mir"))
     parser.add_argument("--calls", action="store_true", help="the call-against-pointer and call-against-call mod/ref pairs instead of the pointer pairs")
+    parser.add_argument("--datalayout", default=M32_DATALAYOUT, help="the data layout both sides read the dumps with ('' = LLVM's default, as the dumps carry none)")
     parser.add_argument("--memops", action="store_true", help="the load and store pairs of `-evaluate-aa-metadata` (type tags included unless --basic) instead of the pointer pairs")
     parser.add_argument(
         "--basic",
@@ -201,15 +207,21 @@ def main() -> int:
     ambiguous = 0
     for path in args.files:
         text = path.read_text()
+        if args.datalayout and "target datalayout" not in text:
+            text = f'target datalayout = "{args.datalayout}"\n' + text
+        with tempfile.NamedTemporaryFile("w", suffix=".ll", delete=False) as handle:
+            handle.write(text)
+        real = Path(handle.name)
         if args.calls:
-            ours, theirs, skipped = call_answers(dt, args.llrm_mir, path, text, "basic" if args.basic else "default")
+            ours, theirs, skipped = call_answers(dt, args.llrm_mir, real, text, "basic" if args.basic else "default")
             ambiguous += skipped
         elif args.memops:
-            ours, theirs, skipped = memop_answers(dt, args.llrm_mir, path, text, "basic" if args.basic else "default")
+            ours, theirs, skipped = memop_answers(dt, args.llrm_mir, real, text, "basic" if args.basic else "default")
             ambiguous += skipped
             llrm_side = {k: v for k, v in ours.items()}
         else:
-            ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text, "basic" if args.basic else "default")
+            ours, theirs = llrm_answers(args.llrm_mir, real), llvm_answers(dt, text, "basic" if args.basic else "default")
+        real.unlink(missing_ok=True)
         if not ours and not theirs:
             continue  # no two pointers to compare
         if not ours or not theirs:
