@@ -1,3 +1,7 @@
+---
+architecture-index: strong alias analysis
+architecture-order: 60
+---
 # Strong alias analysis
 
 For contributors writing or reading an analysis or pass that asks about

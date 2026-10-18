@@ -164,6 +164,7 @@ slow_pytest = [
     "tools/dosbatch/test_qbrt.py",
     "tools/dosbatch/test_qb32.py",
     "tools/gate/test_gate.py",
+    "tools/gate/test_prepush.py",
     "tools/dosbatch/test_qbgfxfill.py",
     "tools/bench/test_bench.py",
     "tools/dosbatch/test_qbgfxspeed.py",
@@ -177,8 +178,21 @@ slow_pytest = [
     "tools/dosbatch/test_dosbatch.py",
 ]
 
+# What tools/prepush.sh runs before a push: these gate steps (the smoke tier's commands, cut to the cheap ones that read the tree: the format check,
+# the generated docs, the tracked build products, the source scans, target_facts) and these root test binaries beside them. A scan added to
+# [[scan]] or a step added here is picked up; the script has no list of its own.
+[prepush]
+steps = ["fmt", "docs", "products", "scans", "facts"]
+tests = ["docs_links"]
+# Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
+[prepush.checks]
+"diff check" = "git diff --check origin/main && ! git diff -U0 origin/main | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
+
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
+shards = 3
+
+[oracle]
 shards = 3
 
 [groups]
@@ -187,7 +201,8 @@ static = ["fmt", "docs", "products"]  # read the tree, build nothing: CI runs th
 integration = ["integration", "build-script-reruns"]
 run = ["run"]
 python = ["pytest", "pytest-programs", "pytest-quick", "changed-tests"]
-perf = ["pytest-perf"]  # the test files that read hardware counters: tinytim has them, a hosted VM has none
+perf = ["pytest-perf", "oracle-premise"]  # steps that read hardware counters: tinytim has them, a hosted VM has none
+oracle = ["oracle-sweep"]  # CI runs it as `oracle-1` .. `oracle-N` ([oracle] shards): every LLRM_CHECK_* oracle over a slice of the BASIC and Nib programs
 tools = ["torture"]
 bench = ["bench"]  # CI runs it as `bench-1` .. `bench-N` ([bench] shards): one slice of the benchmarks each, judged together by bench.py --merge
 reference = ["turbo", "cv4", "qcport"]
@@ -246,6 +261,7 @@ cv4 = ["codeview"]
 qcport = ["qcport"]
 dos-slow = ["qb45", "qb45demos"]
 pytest-perf = ["perf"]
+oracle-premise = ["perf"]
 measure = ["perf", "qcport"]  # callgrind counts (capability `counter`) but takes over an hour a run on a hosted runner: measure waits for its shards and a cached base (#1844). qcport: its rows are QCport's modules; without them measure would judge the programs alone
 bench = ["qb45"]
 "lang:qb" = ["qb45"]

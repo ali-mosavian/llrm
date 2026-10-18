@@ -94,9 +94,9 @@
 //! Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
 //! maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 //! `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
-//! `min_size` (`-Og`: `basic` without `fill`). `-f` flags set single fields
-//! (`PASSES` in the same file). The per-level table, with the gcc and LLVM
-//! counterpart of each limit, is
+//! `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
+//! fields (`PASSES` in the same file). The per-level table, with the gcc and
+//! LLVM counterpart of each limit, is
 //! [docs/reference/levels.md](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/docs/reference/levels.md).
 //!
 //! `Options::wanted` gates passes by name, so every pass can be bisected off:
@@ -112,7 +112,7 @@
 //! | `promote` | `sroa`, `promote` |
 //! | `strength` | `indvars`, `lsr`, `window`, `gepoffset`, `addresssink` |
 //! | `unroll`, `peel` | the pass of that name |
-//! | `fill` | `fill`, `merge`, `memcpyopt` |
+//! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `ipa_ranges` | argument ranges in the interprocedural step |
 //! | `unswitch`, `split`, `interchange`, `unroll_jam` | the passes of that name (off by default; on at -O3 and -Omax) |
@@ -123,9 +123,9 @@
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `expensive`
 //! enables `jumpthread`'s state machines and `copy_headers` its correlated
-//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `fill`, `lsr`,
-//! `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals` lets
-//! alias and branch decisions use the intervals of counted loops. `limits`
+//! branches; `for_size` prices `phiopt`, `hoist`, `algebraic`, `loopidioms`,
+//! `lsr`, `window`, `jumpthread` and `calleepop` in bytes; `loop_intervals`
+//! lets alias and branch decisions use the intervals of counted loops. `limits`
 //! are the copy budgets of `unroll` and `peel`.
 //!
 //! # Needs
@@ -153,10 +153,10 @@ use llrm_mir::program::Program;
 use crate::interprocedural::Interprocedural;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fill, fixednarrow, floatloop, fold,
-    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute,
-    loopfuse, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt,
-    ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
+    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
+    loopidioms, loopinterchange, loopmotion, loopsimplify, loopsplit, loopversion, lsr, mem2reg, memcpyopt, peel,
+    phiopt, ports, promote, rotate, sink, switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -198,7 +198,7 @@ pub struct Options {
     pub strength: bool,
     pub unroll: bool,
     pub peel: bool,
-    pub fill: bool,
+    pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
     /// A loop with a test of its counter against an invariant becomes two,
@@ -227,8 +227,9 @@ pub struct Options {
     /// default.
     pub llvm_order: bool,
     /// With `llvm_order`, LPM1's `loop-rotate` between the two LICM runs
-    /// (PassBuilderPipelines.cpp L728). A knob for the test that holds the
-    /// order without it to the failing form of #2194.
+    /// (PassBuilderPipelines.cpp L728), the first LICM not speculating;
+    /// `LLRM_EXP_ROTATE` sets it, off by default (the loop passes refuse a
+    /// rotated loop: docs/architecture/rotate-refusals.md).
     pub rotate_slot: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
@@ -268,7 +269,7 @@ impl Default for Options {
         Self {
             optimize: true,
             llvm_order: experiment_llvm(),
-            rotate_slot: true,
+            rotate_slot: experiment_rotate(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -289,7 +290,7 @@ impl Default for Options {
             strength: true,
             unroll: true,
             peel: true,
-            fill: true,
+            loopidioms: true,
             sibcalls: true,
             unswitch: false,
             split: false,
@@ -471,7 +472,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "fill" | "merge" | "memcpyopt" => self.fill,
+            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -545,8 +546,8 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         Box::new(dead::Dead),
         Box::new(unroll::Unroll { limits: limits() }),
         Box::new(peel::Peel { limits: limits() }),
-        Box::new(fill::Fill { size: applied.options.prefers_size() }),
-        Box::new(fill::Merge { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::LoopIdioms { size: applied.options.prefers_size() }),
+        Box::new(loopidioms::Merge { size: applied.options.prefers_size() }),
         Box::new(memcpyopt::MemCpyOpt { size: applied.options.prefers_size() }),
     ];
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
@@ -626,6 +627,10 @@ impl FunctionPass for Together {
 
 /// `LLRM_EXP_LLVM`, read once: [`Options::llvm_order`] by default
 /// (PassBuilderPipelines.cpp at d1106deb71cc).
+fn experiment_rotate() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_ROTATE")
+}
+
 fn experiment_llvm() -> bool {
     llrm_support::env_flag!("LLRM_EXP_LLVM")
 }
@@ -696,6 +701,9 @@ pub(crate) fn llvm_order(
                 slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
             ]);
             list.extend(canonical("loopsimplify@764", "lcssa@764"));
+            // Without the rotate slot the first LICM keeps speculating, as the
+            // single hoist did.
+            let rotating = applied.options.copy_headers && !size && applied.options.rotate_slot;
             list.extend([
                 slot("floatloop@724", Box::new(floatloop::FloatLoop)),
                 // LPM1
@@ -706,10 +714,10 @@ pub(crate) fn llvm_order(
                 // not proven to run, so that the second hoists into a preheader
                 // behind it (#2194). llrm skips the header copy at -Os, as
                 // gcc's -ftree-ch.
-                hoist("hoist@724", false),
+                hoist("hoist@724", !rotating),
                 loopmotion("loopmotion@724"),
             ]);
-            if applied.options.copy_headers && !size && applied.options.rotate_slot {
+            if rotating {
                 list.push(slot("rotate@728", Box::new(rotate::Rotate { proven: false, copy: true })));
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
@@ -723,7 +731,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
-                slot("fill@737", Box::new(fill::Fill { size })),
+                slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",
                     Box::new(indvars::IndVars {
@@ -739,7 +747,7 @@ pub(crate) fn llvm_order(
                 dead("dead@801"),
                 decide("decide@809"),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
-                slot("merge@818", Box::new(fill::Merge { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
@@ -1372,8 +1380,7 @@ impl Fixed {
             declared: &mut declared,
         };
         for pass in &mut self.passes {
-            let before = copy.function.mark();
-            let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+            let preserved = pass.run(&mut copy, &mut analyses.fresh());
             if !preserved.are_all_preserved() {
                 eprintln!("LLRM_CHECK_ROUNDS: round {} would change the body with {}", rounds + 1, pass.name());
                 return;
@@ -1408,7 +1415,7 @@ impl FunctionPass for Fixed {
             steps: 0,
             skipped: 0,
             fixed: 0,
-            billing: llrm_support::debug::enabled("runs"),
+            billing: runs_billed(),
             idle: 0,
             useful: 0,
             idle_with_analyses: 0,
@@ -1425,9 +1432,8 @@ impl FunctionPass for Fixed {
         run.rerun = run.records.knows(unit.function);
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         run.remember(unit, analyses);
-        llrm_support::debug!(
-            "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
+        runs_line(format_args!(
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
@@ -1440,10 +1446,41 @@ impl FunctionPass for Fixed {
             run.idle,
             run.useful,
             run.idle_with_analyses,
-            run.useful_with_analyses
-        );
+            run.useful_with_analyses,
+            llrm_mir::passes::running_function()
+        ));
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
+}
+
+/// The instructions in the function's layout: erased ones stay in the arena
+/// and are not counted.
+fn placed_instructions(function: &llrm_mir::module::Function) -> usize {
+    function.layout().iter().map(|&block| function.block(block).instructions().len()).sum()
+}
+
+thread_local! {
+    /// Tests: the `runs` lines go here, and are billed without `LLRM_DEBUG`.
+    static RUNS_CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn runs_billed() -> bool {
+    llrm_support::debug::enabled("runs") || RUNS_CAPTURE.with(|capture| capture.borrow().is_some())
+}
+
+fn runs_line(line: std::fmt::Arguments) {
+    let captured = RUNS_CAPTURE.with(|capture| capture.borrow_mut().as_mut().map(|lines| lines.push(line.to_string())));
+    if captured.is_none() {
+        llrm_support::debug!("runs", "{}", line);
+    }
+}
+
+/// `run` with the `runs` lines kept, not printed.
+#[cfg(test)]
+pub(crate) fn capturing_runs<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    RUNS_CAPTURE.with(|capture| *capture.borrow_mut() = Some(Vec::new()));
+    let done = run();
+    (done, RUNS_CAPTURE.with(|capture| capture.borrow_mut().take()).unwrap_or_default())
 }
 
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
@@ -1614,27 +1651,27 @@ impl Run {
                 ^ (unit.function.mark().position() as u64);
             llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
         }
-        let before = unit.function.mark();
         let outside = llrm_mir::passes::read::swap(0);
-        let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
+        let billed = self.billing.then(|| {
+            (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
+        });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
-        let preserved =
-            llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses)).unless_unchanged(unit.function, before);
+        let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);
-        if let Some((billed, analysed)) = billed {
+        if let Some((billed, analysed, entering)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
             let idle = preserved.are_all_preserved();
             *(if idle { &mut self.idle } else { &mut self.useful }) += own;
             *(if idle { &mut self.idle_with_analyses } else { &mut self.useful_with_analyses }) += with_analyses;
-            llrm_support::debug!(
-                "runs",
-                "step {stage} {} {own} with-analyses {with_analyses}",
-                if idle { "idle" } else { "changed" }
-            );
+            runs_line(format_args!(
+                "step {stage} {} {own} with-analyses {with_analyses} in={entering} out={}",
+                if idle { "idle" } else { "changed" },
+                placed_instructions(unit.function)
+            ));
         }
         assert!(
             !checking || preserved.are_all_preserved(),
@@ -1674,7 +1711,6 @@ impl Run {
         let mut context = unit.context.clone();
         let mut function = unit.function.clone();
         let mut declared = unit.declared.clone();
-        let before = function.mark();
         let mut copy = Unit {
             context: &mut context,
             layout: unit.layout,
@@ -1683,7 +1719,7 @@ impl Run {
             metadata: unit.metadata,
             declared: &mut declared,
         };
-        let preserved = pass.run(&mut copy, &mut analyses.fresh()).unless_unchanged(copy.function, before);
+        let preserved = pass.run(&mut copy, &mut analyses.fresh());
         assert!(preserved.are_all_preserved(), "{} was skipped and would have changed the body", pass.name());
     }
 

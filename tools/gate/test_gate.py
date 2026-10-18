@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure", "pytest-perf"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -508,7 +508,7 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
     `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
     is historical, has none."""
-    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENTAL": "0"}
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
@@ -1320,9 +1320,10 @@ def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
 def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
     cfg = gate.load()
-    assert cfg["groups"]["perf"] == ["pytest-perf"] and "pytest-perf" not in cfg["groups"]["python"]
+    assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-premise"] and cfg["groups"]["oracle"] == ["oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
     assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
+    assert cfg["requires"]["oracle-premise"] == ["perf"], "which oracle ran at all is measured with perf; the sharded compiles need none"
 
 
 def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():
@@ -1383,3 +1384,48 @@ def test_a_push_to_main_makes_no_perf_or_cost_job():
     """Every merge queued a perf and a cost job on the six tinytim runners: 16 of the 20 jobs waiting, and the pull requests' behind them."""
     workflow = (gate.ROOT / ".github/workflows/ci.yml").read_text()
     assert "COMPILER: ${{ github.event_name == 'pull_request' && steps.plan.outputs.compiler || 'false' }}" in workflow
+
+
+def test_the_oracle_sweep_is_cut_into_slices_that_run_on_their_own_runners_and_the_premise_stays_on_perf():
+    """No counters needed to compile 1,350 times: hosted, sharded; only 'did each oracle run' reads perf, once, on tinytim."""
+    p = gate.plan(["crates/backend/llrm-core/src/backend/peephole.rs"], "full")
+    groups = gate.groups_of(p, {})
+    n = gate.load()["oracle"]["shards"]
+    assert [g for g in groups if g.startswith("oracle")] == [f"oracle-{i}" for i in range(1, n + 1)] and groups["perf"][-1] == "oracle-premise"
+    assert gate.shard_of("oracle-2") == ("oracle", f"2/{n}") and gate.shard_of("bench-1") == ("bench", f"1/{gate.load()['bench']['shards']}")
+    assert "--shard" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"] and "--no-premise" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"]
+
+
+def test_a_change_to_the_oracle_sweep_runs_the_sweep_and_its_premise():
+    """A tools-only PR to oracle_sweep.py planned neither step: its own sharded groups never ran in its CI."""
+    p = gate.plan(["tools/oracle_sweep.py"])
+    assert "oracle-sweep" in p.steps and "oracle-premise" in p.steps
+    assert "oracle-sweep" not in gate.plan(["tools/bench/mkci.py"]).steps
+
+
+def test_the_gate_builds_as_ci_does_not_incrementally():
+    """A local gate run built release incrementally (the profile's default) and test_budgets counted lir pressuresink 10.3 -> 33.3 Minstr (1.72% of the
+    compile, under the share) where CI's build reads 11.3 -> 37.6 (2.03%): a debt read 'paid' on the one machine and not the other."""
+    assert gate.STEP_ENV["CARGO_INCREMENTAL"] == "0"
+    assert all(k in gate.STEP_ENV for k in ("RUSTFLAGS", "RUSTC_BOOTSTRAP"))
+
+
+def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, capsys):
+    """fold-poc's #2171 was red for hours: `git add -A` committed a `target` symlink and the gate said only 'tree differs from HEAD in tracked files'."""
+    git = _repo(tmp_path)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("x")
+    (tmp_path / "docs/inside").symlink_to("a.md")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 0, "a relative link inside the tree is fine"
+    (tmp_path / "target").symlink_to("/home/someone/cargo-target")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 1
+    assert "tracked symlink target -> /home/someone/cargo-target" in capsys.readouterr().out
+    git("rm", "-q", "--cached", "target")
+    (tmp_path / "target").unlink()
+    (tmp_path / "target").mkdir()
+    (tmp_path / "target/x").write_text("y")
+    git("add", "-A")
+    assert gate.products_main(tmp_path) == 1
+    assert "tracked build dir target/x" in capsys.readouterr().out

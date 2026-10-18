@@ -3,6 +3,7 @@
 //! held in arenas addressed by id.
 
 pub mod alias;
+pub mod apint;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
@@ -15,6 +16,7 @@ pub mod debuginfo;
 pub mod dense;
 pub mod depends;
 pub mod dominators;
+pub mod domtree;
 pub mod dumpdir;
 pub mod edit;
 pub mod facts;
@@ -30,7 +32,7 @@ pub mod intrinsics;
 pub mod knownbits;
 pub mod lexer;
 pub mod lint;
-pub mod loops;
+pub mod loopinfo;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -63,11 +65,17 @@ pub use types::{FloatKind, Type, TypeId, Types};
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod constantrange_tests;
+#[cfg(test)]
 mod edit_tests;
 #[cfg(test)]
 mod interpret_tests;
 #[cfg(test)]
+mod knownbits_tests;
+#[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod loopinfo_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]
