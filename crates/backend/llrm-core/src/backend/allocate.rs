@@ -1622,9 +1622,22 @@ pub fn greedy_rewritten(
         };
         let mode = crate::greedy::shadow::Mode::Inline { frame: &mut *frame, classes };
         let decided = crate::greedy::shadow::decide_with(&inputs, mode);
+        if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+            if let Some(d) = &decided {
+                eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
+            }
+        }
         if let Some(decided) = decided {
             if decided.report.stats.failed == 0 && !decided.spill_failed {
                 if let Some(edited) = decided.edited {
+                    if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+                        let r = &decided.report;
+                        eprintln!(
+                            "greedy-inline {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} reloads {} stores {} folded {}",
+                            body.name, r.values, r.stats.dequeued, r.stats.assigned, r.stats.evicted, r.stats.waited,
+                            r.stats.spilled_ranges, r.stats.new_queued, r.stats.last_chance, r.reloads, r.stores, r.folded
+                        );
+                    }
                     GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
                     let r#where: IndexMap<u32, RegId> = decided.placed.into_iter().collect();
                     if llrm_support::env_flag!("LLRM_GREEDY_CHECK") {
@@ -1654,6 +1667,9 @@ pub fn greedy_rewritten(
                     ));
                 }
             }
+        }
+        if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
+            eprintln!("greedy-inline {}: left for the rounds", body.name);
         }
         frame.restore(&kept);
     }

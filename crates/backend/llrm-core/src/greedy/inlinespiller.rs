@@ -48,6 +48,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
+use crate::model::ir::{Held, Loc, Operation, Semantics};
 
 use super::greedy::{SpillContext, Spiller};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
@@ -127,6 +128,88 @@ impl<'a> InlineSpiller<'a> {
             units.push((block, members));
         }
         units
+    }
+
+    /// `reMaterializeAll` for a register defined once by `mov %reg, imm`: the
+    /// move is made again, in a new register, before each instruction that
+    /// reads it, and the original goes (`eliminateDeadDef`). A constant needs
+    /// nothing to be available where it is read. Returns the registers made,
+    /// or None when the register is not one of these.
+    ///
+    /// DEVIATE D-E2: only a constant is rematerialized here. The fact: the
+    /// other forms the spiller makes again (a frame address, a load of a frame
+    /// cell, an extension of a value kept) need `allUsesAvailableAt`, which
+    /// needs the live intervals of what they read; they are spilled through
+    /// the cell instead. Exit: `LiveRangeEdit::allUsesAvailable` over
+    /// `LiveIntervals` (step 2).
+    fn rematerialize_all(
+        &mut self,
+        lis: &mut LiveIntervals,
+        reg: u32,
+    ) -> Option<Vec<u32>> {
+        let mut def: Option<InstrKey> = None;
+        for operand in lis.operands(reg) {
+            if operand.is_def {
+                if def.is_some_and(|seen| seen != operand.instr) {
+                    return None;
+                }
+                def = Some(operand.instr);
+            }
+        }
+        let def = Arc::clone(lis.instr(def?));
+        let what = def.what.as_ref()?;
+        let constant = what.op == Operation::Move
+            && what.name.as_deref() == Some("mov")
+            && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.address.is_none())
+            && matches!(what.dests.as_slice(), [Loc::Held(held)] if held.value == reg)
+            && def.defines == [reg]
+            && def.uses.is_empty()
+            && def.group.is_none()
+            && def.requires.is_empty()
+            && def.delivers.is_empty()
+            && def.clobbers.is_empty()
+            && def.symbol != Some(true);
+        if !constant {
+            return None;
+        }
+        let def_block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(def.id()));
+        let mut made = Vec::new();
+        for (block, members) in Self::units(lis, reg) {
+            if members == [def.id()] {
+                continue;
+            }
+            let value = lis.next_virtual_register();
+            lis.reserve_virtual_register(value);
+            let again = Arc::new(Insn {
+                defines: vec![value],
+                what: Some(Semantics {
+                    dests: vec![Loc::Held(Held {
+                        value,
+                        width: match &what.dests[0] {
+                            Loc::Held(held) => held.width,
+                            _ => unreachable!("checked above"),
+                        },
+                    })],
+                    ..what.clone()
+                }),
+                spill_reload: true,
+                rematerialized: true,
+                ..(*def).clone()
+            });
+            // A parallel copy reads before it writes: the constant goes before
+            // its first member, whichever member reads it.
+            let mut first = None;
+            for key in &members {
+                let renamed = lis.instr(*key).renamed(&|name| if name == reg { value } else { name });
+                first.get_or_insert(renamed.id());
+                lis.rewrite_instr(block, *key, renamed);
+            }
+            lis.insert_instr_before(block, first, again);
+            self.reloads += 1;
+            made.push(value);
+        }
+        lis.remove_instr(def_block, def.id());
+        Some(made)
     }
 
     /// `spillAroundUses` for one unit. Returns the registers it made.
@@ -215,6 +298,17 @@ impl Spiller for InlineSpiller<'_> {
         self.spilled.push(reg);
         let mut delegate = NoDelegate;
         let mut edit = LiveRangeEdit::new(reg, &mut delegate);
+        if let Some(made) = self.rematerialize_all(lis, reg) {
+            for value in made {
+                edit.create_from(lis, vrm, value, reg);
+                let mut li = lis.compute_virt_reg_interval(value);
+                vrai.calculate_spill_weight_and_hint(&mut li, lis);
+                lis.insert_interval(li);
+                new_vregs.push(value);
+            }
+            edit.erase_virt_reg(lis, reg);
+            return;
+        }
         for (block, members) in Self::units(lis, reg) {
             let Some(fresh) = self.spill_unit(lis, reg, block, &members) else {
                 self.failed = true;

@@ -435,9 +435,20 @@ impl LiveIntervals {
         let mut compared = 0;
         for (reg, was) in held {
             let again = fresh.compute_virt_reg_interval(reg);
+            let now = shape(&fresh, &again);
+            if was != now {
+                // The instructions that name the register, for the report.
+                for operand in fresh.operands(reg) {
+                    let one = fresh.instr(operand.instr);
+                    eprintln!(
+                        "  v{reg} named by #{} d{:?} u{:?} reload {} store {} remat {}: {:?}",
+                        operand.instr, one.defines, one.uses, one.spill_reload, one.spill_store, one.rematerialized,
+                        one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                    );
+                }
+            }
             assert_eq!(
-                was,
-                shape(&fresh, &again),
+                was, now,
                 "LLRM_CHECK_LIVEINTERVALS: the edited interval of v{reg} differs from the one made afresh"
             );
             compared += 1;
