@@ -1320,9 +1320,10 @@ def test_the_measure_step_is_a_private_group_so_it_gets_qcports_modules():
 def test_the_scaling_tests_run_in_their_own_step_in_their_own_group():
     """Only they need hardware counters, so only their job needs tinytim: the python group, with them in it, ran on tinytim for 12 minutes."""
     cfg = gate.load()
-    assert cfg["groups"]["perf"] == ["pytest-perf"] and "pytest-perf" not in cfg["groups"]["python"]
+    assert cfg["groups"]["perf"] == ["pytest-perf", "oracle-sweep"] and "pytest-perf" not in cfg["groups"]["python"]
     assert gate.perf_files() == sorted(f for f, needs in gate.declared_requirements().items() if "perf" in needs) and len(gate.perf_files()) == 2
     assert cfg["requires"]["pytest-perf"] == ["perf"], "skipped whole, and allowed to be, where there are no counters"
+    assert cfg["requires"]["oracle-sweep"] == ["perf"], "the sweep first checks that each oracle ran, which it measures with perf"
 
 
 def test_the_plan_keeps_the_perf_steps_the_planners_host_cannot_run_when_told_the_jobs_can():

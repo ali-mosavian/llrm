@@ -32,3 +32,15 @@ def test_a_compiler_that_ignores_the_oracles_is_refused_and_each_oracle_named(tm
     said = capsys.readouterr().out
     for name in oracle_sweep.CHECKS:
         assert name in said.split("never exercised:")[1], name
+
+
+def test_a_finding_nothing_expects_fails_and_an_expected_one_that_stopped_failing_fails_too():
+    """The sweep is red on main until #2193: the expected-failures list says so aloud; a new kind is news, a paid entry must be deleted."""
+    expected = [{"match": "call-effects: the result kept past N sound edits", "fix": "#2193", "owner": "basicaa-port"}]
+    old = {"call-effects: the result kept past N sound edits contradicts x": {"greeting.nib -O1 -m16"}}
+    new, seen, unseen = oracle_sweep.judge(old, expected)
+    assert (new, len(seen), unseen) == ([], 1, [])
+    new, _, _ = oracle_sweep.judge({**old, "dataflow: something else": {"a.nib -O2 -m32"}}, expected)
+    assert new == ["dataflow: something else"]
+    _, _, unseen = oracle_sweep.judge({}, expected)
+    assert unseen and "#2193" in unseen[0]
