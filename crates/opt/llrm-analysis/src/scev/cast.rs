@@ -5,6 +5,7 @@
 use llrm_mir::constantrange::ConstantRange;
 
 use super::ap::Ap;
+use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Cx, Flags, Key, ScalarEvolution};
 
@@ -269,7 +270,7 @@ impl ScalarEvolution {
 
         // "{S,+,X} is <nsw>/<nuw>" and "the backedge is taken at least once"
         // implies "S+X does not sign/unsign-overflow".
-        let be_count = self.get_backedge_taken_count(cx, l);
+        let be_count = self.get_backedge_taken_count(cx, l, ExitCountKind::Exact);
         if let Some(pre_ar) = pre_ar
             && self.get_no_wrap_flags(pre_ar, wrap_type) != 0
             && !matches!(self.node(be_count).kind, Kind::CouldNotCompute)
@@ -539,7 +540,7 @@ impl ScalarEvolution {
             // likely result in infinite recursion. In the later case, the
             // analysis code will cope with a conservative value, and it will
             // take care to purge that value once it has finished.
-            let max_be_count = self.get_constant_max_backedge_taken_count(cx, l);
+            let max_be_count = self.get_backedge_taken_count(cx, l, ExitCountKind::ConstantMaximum);
             if !matches!(self.node(max_be_count).kind, Kind::CouldNotCompute) {
                 // Manually compute the final value for AR, checking for
                 // overflow.
@@ -1010,7 +1011,7 @@ impl ScalarEvolution {
 
             // Check whether the backedge-taken count is SCEVCouldNotCompute.
             // (See the comment in getZeroExtendExprImpl.)
-            let max_be_count = self.get_constant_max_backedge_taken_count(cx, l);
+            let max_be_count = self.get_backedge_taken_count(cx, l, ExitCountKind::ConstantMaximum);
             if !matches!(self.node(max_be_count).kind, Kind::CouldNotCompute) {
                 // Manually compute the final value for AR, checking for
                 // overflow.

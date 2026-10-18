@@ -15,6 +15,7 @@
 
 pub mod ap;
 pub mod arith;
+pub mod backedge;
 pub mod cast;
 pub mod compare;
 pub mod disposition;

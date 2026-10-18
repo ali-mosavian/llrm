@@ -7,6 +7,7 @@ use llrm_mir::valuetracking::known::compute_known_bits;
 use llrm_mir::valuetracking::signbits::compute_num_sign_bits;
 
 use super::ap::Ap;
+use super::backedge::ExitCountKind;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Cx, ScalarEvolution};
 
@@ -523,7 +524,7 @@ impl ScalarEvolution {
 
                 // TODO: non-affine addrec
                 if ops.len() == 2 {
-                    let max_be_scev = self.get_constant_max_backedge_taken_count(cx, header);
+                    let max_be_scev = self.get_backedge_taken_count(cx, header, ExitCountKind::ConstantMaximum);
                     if let Some(mut max_be_count) = self.as_constant(max_be_scev) {
                         // Adjust MaxBECount to the same bitwidth as AddRec. We
                         // can truncate if MaxBECount's active bits are all <=
@@ -860,7 +861,7 @@ impl ScalarEvolution {
         }
 
         if self.get_no_wrap_flags(ar, flags::NW) == 0 {
-            let be_count = self.get_constant_max_backedge_taken_count(cx, header);
+            let be_count = self.get_backedge_taken_count(cx, header, ExitCountKind::ConstantMaximum);
             if let Some(be_count_ap) = self.as_constant(be_count) {
                 let step = self.get_step_recurrence(cx, ar);
                 let step_cr = self.get_signed_range(cx, step);

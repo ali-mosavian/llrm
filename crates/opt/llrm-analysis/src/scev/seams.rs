@@ -4,8 +4,6 @@
 //! answer until its stage lands; the stack that lands S1 lands them with it.
 //! A seam never makes a fold unsound, only less eager than LLVM's.
 
-use llrm_mir::module::BlockId;
-
 use super::expr::{Scev, flags};
 use super::{Cx, ScalarEvolution};
 
@@ -38,25 +36,6 @@ impl ScalarEvolution {
         s: Scev,
     ) -> bool {
         self.get_signed_range_min(cx, s).is_strictly_positive()
-    }
-
-    /// `getConstantMaxBackedgeTakenCount` (indvars-decide-poc's
-    /// `BackedgeTakenInfo`).
-    pub fn get_constant_max_backedge_taken_count(
-        &mut self,
-        _cx: &Cx,
-        _header: BlockId,
-    ) -> Scev {
-        self.get_could_not_compute()
-    }
-
-    /// `getBackedgeTakenCount`.
-    pub fn get_backedge_taken_count(
-        &mut self,
-        _cx: &Cx,
-        _header: BlockId,
-    ) -> Scev {
-        self.get_could_not_compute()
     }
 
     /// `HasGuards`: the function calls `llvm.experimental.guard`.
