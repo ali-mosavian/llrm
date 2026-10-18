@@ -878,7 +878,7 @@ name = "split carving"
 ratio = 7.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
-why = "measured 1.3 -> 8.6 Minstr (x6.37)"
+why = "overstated: N sits under a regime change; settled k=1.3; measured 1.3 -> 8.6 Minstr (x6.37)"
 
 [[debt]]
 kind = "steps"
@@ -1382,7 +1382,7 @@ name = "regalloc frequency"
 ratio = 9.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
-why = "measured 0.9 -> 8.2 Minstr (x8.68)"
+why = "overstated: N sits under a regime change; settled k=1.1; measured 0.9 -> 8.2 Minstr (x8.68)"
 
 [[debt]]
 kind = "steps"
