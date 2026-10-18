@@ -247,14 +247,21 @@ pub fn said(mssa: &Mssa) -> Said {
 
 /// `updated` says what a graph made afresh of `function` says: the check of the
 /// updater, edit by edit.
+/// The walker has answered for every load and store of both first: a use's
+/// defining access is what the walker found, so a graph the walker has been
+/// asked of is compared with one it has been asked of.
 pub fn same_as_fresh(
-    updated: &Mssa,
+    updated: &mut Mssa,
     function: &llrm_mir::module::Function,
     dominance: &crate::cfg::Dominance,
     effect: &dyn Fn(InstId) -> Effect,
+    aa: &super::alias::AliasQuery,
 ) -> Result<(), String> {
     updated.verify_memory_ssa(function, Level::Full)?;
-    let fresh = Mssa::build(function, dominance, effect);
+    let mut fresh = Mssa::build(function, dominance, effect);
+    walked(updated, aa, function);
+    walked(&mut fresh, aa, function);
+    let updated = &*updated;
     let (left, right) = (said(updated), said(&fresh));
     if left == right {
         return Ok(());
