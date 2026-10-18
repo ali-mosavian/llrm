@@ -1132,7 +1132,7 @@ pub fn instructions_scanned() -> usize {
 }
 
 thread_local! {
-    static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static USES_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many use-list entries this thread has looked over to remove uses, for a
