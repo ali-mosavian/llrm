@@ -11,6 +11,7 @@
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Analysis/PostDominators.h"
+#include "llvm/Support/VCSRevision.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -145,7 +146,7 @@ template <typename DT> static void run(const char *name, const Graph &before, co
 
 int main() {
   static_assert(LLVM_VERSION_MAJOR == 24, "the pin is clang 24.0.0git");
-  printf("# LLVM %s\n", LLVM_VERSION_STRING);
+  printf("# LLVM %s %s\n", LLVM_VERSION_STRING, LLVM_REVISION);
   Graph g = base();
   std::vector<Edge> edges;
   for (unsigned f = 0; f < N; ++f)

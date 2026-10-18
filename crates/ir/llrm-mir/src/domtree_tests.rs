@@ -257,7 +257,10 @@ fn golden() -> (String, HashMap<(String, String), [String; 3]>) {
 #[test]
 fn the_golden_file_is_the_pinned_llvms_and_lists_every_case() {
     let (version, rows) = golden();
-    assert_eq!(version, "# LLVM 24.0.0git");
+    assert_eq!(
+        version, "# LLVM 24.0.0git d1106deb71cc81016406a1917d0508d2df296266",
+        "golden file not from the pinned binary"
+    );
     assert_eq!(rows.len(), 2 * cases().len());
     let diverges = |kind: &str| rows.iter().filter(|((k, _), r)| k == kind && r[1] != r[2]).count();
     assert_eq!((diverges("dom"), diverges("post") > 0), (0, true));
