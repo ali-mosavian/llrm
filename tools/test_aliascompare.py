@@ -40,6 +40,6 @@ def test_a_set_the_reference_only_ever_calls_may_alias_is_refused():
     import collections
 
     only_may = collections.Counter({("MayAlias", "MayAlias"): 10, ("NoAlias", "MayAlias"): 3})
-    assert "NoAlias, MustAlias" in aliascompare.premise(only_may)
+    assert "MustAlias, NoAlias" in aliascompare.premise(only_may)
     varied = collections.Counter({("MayAlias", "MayAlias"): 10, ("NoAlias", "NoAlias"): 3, ("MayAlias", "MustAlias"): 1})
     assert aliascompare.premise(varied) is None
