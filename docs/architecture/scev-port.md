@@ -1,3 +1,7 @@
+---
+architecture-index: ScalarEvolution as a translation of LLVM's
+architecture-order: 260
+---
 # ScalarEvolution as a translation of LLVM's: the plan
 
 TL;DR: LoopInfo first, then `ScalarEvolution.cpp` (16,469 lines), the Expander (2,625) and `ScalarEvolutionNormalization`/`Division` (413), at `d1106deb71cc`, translated function for function. The SCEV tree replaces `Scev`/`Monomial`/`Recurrence` and the IV discovery in `induction.rs` and `expand.rs`; `lsr` is the first consumer (89.5 M against LLVM's 10.0 M on `d_faces` -O2, [lsr-vs-llvm](lsr-vs-llvm.md)). Trip counts (`BackedgeTakenInfo`) and the guards that feed them after LVI/CVP belong to indvars-decide-poc and are not translated here.

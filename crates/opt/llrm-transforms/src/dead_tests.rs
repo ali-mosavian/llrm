@@ -310,3 +310,20 @@ b0:
     assert!(!text.contains("llvm.assume(i1 %") && !text.contains("slt i16 %x, 10"), "{text}");
     assert!(text.contains("icmp sgt i16 %x, 3"), "what else reads a compare stays:\n{text}");
 }
+
+/// `dead` erased what it found one instruction at a time, each a scan of its
+/// block and a shift of the rest: on a block of n adds where all but the last
+/// are dead, O(n²). On `arith` at N=1600 the step's own work grew 2.6x a
+/// doubling (exponent 1.4) and `Function::detach` was 4% of the compile.
+#[test]
+fn dead_scans_a_block_once_whatever_goes_from_it() {
+    let scanned = |n: usize| {
+        let body: String = (0..n).map(|i| format!("  %x{i} = add i16 %a, {i}\n")).collect();
+        let mut module = parsed(&format!("define i16 @f(i16 %a) {{\nentry:\n{body}  ret i16 %a\n}}\n"));
+        let before = llrm_mir::edit::instructions_scanned();
+        assert!(deadened(&mut module));
+        llrm_mir::edit::instructions_scanned() - before
+    };
+    let (small, large) = (scanned(200), scanned(400));
+    assert!(large <= 2 * small + 8, "{small} instructions scanned erasing 200 dead adds, {large} erasing 400");
+}
