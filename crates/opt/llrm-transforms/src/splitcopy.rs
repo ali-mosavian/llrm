@@ -134,7 +134,8 @@ fn splittable(unit: &Unit) -> Option<(InstId, Vec<Leaf>)> {
                     return None;
                 }
                 let [to, from, length, volatile, _] = unit.function.instruction(inst).operands[..] else { return None };
-                let (bytes, volatile) = (constant(unit.context, length)?, constant(unit.context, volatile)?);
+                let (bytes, volatile) =
+                    (llrm_mir::intrinsics::length(unit.context, length)? as i64, constant(unit.context, volatile)?);
                 if volatile != 0 || bytes <= 0 {
                     return None;
                 }
