@@ -48,3 +48,8 @@ def test_the_verdict_line_says_which_tier_ran_and_a_cheap_pass_is_not_a_candidat
     assert 'CANDIDATE PASS at ${head:0:12}$on"' in CI and '(cheap: no perf)"' in CI
     assert candidate_ok.CANDIDATE.search("GATE full CANDIDATE PASS at 0123456789ab on ba9876543210")
     assert not candidate_ok.CANDIDATE.search("GATE full PASS at 0123456789ab on ba9876543210 (cheap: no perf)")
+
+
+def test_only_a_pull_request_into_main_starts_the_gate():
+    """A parity pull request into feat/parity merges on a build and a smoke set (tools/parity_smoke.py); its CI runs were cancelled by hand."""
+    assert "branches: [main]" in CI.split("pull_request:")[1].split("push:")[0]

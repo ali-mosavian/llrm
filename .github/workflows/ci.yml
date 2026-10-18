@@ -28,6 +28,8 @@ name: ci
 on:
   pull_request:
     # A draft runs plan and static only (minutes); marking it ready starts the full gate.
+    # Parity work targets the integration branch feat/parity and a stack targets its parent's branch: only a pull request into main runs the gate.
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, labeled]
   push:
     branches: [main]
