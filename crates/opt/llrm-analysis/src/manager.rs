@@ -1365,7 +1365,7 @@ fn renamed_into_a_chain(
         })
     };
     // The lists calls share are looked at once.
-    let mut seen: std::collections::HashSet<*const [crate::memory::MemRef]> = std::collections::HashSet::new();
+    let mut seen: llrm_support::hash::HashSet<*const [crate::memory::MemRef]> = Default::default();
     effects.values().any(|effect| {
         let mut lists = [&effect.loads, &effect.stores].into_iter().filter(|list| seen.insert(Rc::as_ptr(list)));
         lists.any(|list| list.iter().any(&differs)) || effect.fills.iter().any(&differs)
