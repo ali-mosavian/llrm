@@ -930,10 +930,10 @@ why = "measured 7.4 -> 18.8 Minstr (x2.54)"
 kind = "steps"
 axis = "nest"
 name = "intervals liveness"
-ratio = 3.8
+ratio = 7.0
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
-why = "measured 6.7 -> 23.0 Minstr (x3.43)"
+why = "measured 6.7 -> 23.0 -> 145.4 Minstr at N, 2N, 4N (x6.33 at the 4N doubling)"
 
 [[debt]]
 kind = "steps"
@@ -1461,10 +1461,10 @@ why = "measured 9.2 -> 27.7 Minstr (x3.01)"
 kind = "steps"
 axis = "unrolled"
 name = "siblings depths"
-ratio = 2.9
+ratio = 4.5
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
-why = "measured 2.6 -> 6.7 Minstr (x2.62)"
+why = "measured 2.6 -> 6.7 -> 27.0 Minstr at N, 2N, 4N (x4.03 at the 4N doubling)"
 
 [[debt]]
 kind = "steps"
@@ -1555,3 +1555,57 @@ ratio = 3.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 5.4 -> 18.1 Minstr (x3.33)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "spill rewrite"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 4.3 -> 7.4 -> 17.5 Minstr at N, 2N, 4N (x2.36 at the 4N doubling)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "spill cleanup"
+ratio = 3.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 4.3 -> 8.8 -> 24.1 Minstr at N, 2N, 4N (x2.75 at the 4N doubling)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "intervals walk"
+ratio = 4.0
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 13.9 -> 24.1 -> 86.9 Minstr at N, 2N, 4N (x3.61 at the 4N doubling)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "spill slots shared"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 4.5 -> 9.9 -> 23.5 Minstr at N, 2N, 4N (x2.37 at the 4N doubling)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "facts masks"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 2.8 -> 5.1 -> 13.4 Minstr at N, 2N, 4N (x2.61 at the 4N doubling)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "regalloc frequency"
+ratio = 4.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 8.2 -> 17.5 -> 77.3 Minstr at N, 2N, 4N (x4.41 at the 4N doubling)"

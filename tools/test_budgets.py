@@ -49,6 +49,35 @@ SIZES = {**scaling_gate.SIZES, "branches": 256, "nest": 32, "unrolled": 16}
 AXES = tuple(SIZES)
 
 
+DIP = 0.3  # the exponent N -> 2N is this much under N/2 -> N: the step may have settled, or be about to grow again
+
+
+def dips(work_half: float, work_small: float, work_big: float) -> bool:
+    """A step whose growth slowed after N/2 -> N: from three readings a settled step (a switch behind it) and a hump (it grows again) look alike."""
+    return work_half >= 0.3 and work_small > 0 and exponent(work_small, work_big) < exponent(work_half, work_small) - DIP
+
+
+def judged_ratio(work_small: float, work_big: float, work_quad: float | None) -> float:
+    """The growth per doubling a step is judged on: the larger of N -> 2N and, where the step dips and a 4N reading exists, 2N -> 4N."""
+    ratio = work_big / max(work_small, 1e-9)
+    return ratio if work_quad is None else max(ratio, work_quad / max(work_big, 1e-9))
+
+
+def test_a_dip_is_judged_by_the_exponent_it_grows_again_at():
+    """nest intervals walk: 3.2 (N/2), 13.9 (N), 24.1 (2N), 86.9 (4N): x1.7 at N -> 2N, x3.6 at 2N -> 4N. Judged by the larger; a step with no 4N reading
+    (no dip) by N -> 2N."""
+    assert dips(3.2, 13.9, 24.1) and dips(0.9, 8.2, 17.5)
+    assert judged_ratio(13.9, 24.1, 86.9) > 3.5
+    assert judged_ratio(13.9, 24.1, None) < 1.8
+    assert not dips(1.0, 2.0, 4.1)
+
+
+@cache
+def quad_steps(axis: str) -> dict[str, float]:
+    """The steps of the compile at 4N: a third doubling, compiled only for the axes that hold a step whose growth dipped."""
+    return parsed_steps(run(source_of(axis, 4 * SIZES[axis]), axis, "time"))
+
+
 def still_rising(work_small: float, work_big: float) -> bool:
     """Whether a debt's step still grows: not under the limit by the margin. x2.30 against 2.3 is still rising."""
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
@@ -242,8 +271,13 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     small, big = parsed_steps(small_text), parsed_steps(big_text)
     total = sum(max(value - empty.get(name, 0.0), 0.0) for name, value in big.items())
     grown, rising = [], set()
+    half = half_steps(axis)
+    work = lambda table, name: max(table.get(name, 0.0) - empty.get(name, 0.0), 0.0)  # noqa: E731
+    dipping = {name for name in big if work(big, name) >= DEFAULT["floor_minstr"] and dips(work(half, name), work(small, name), work(big, name))}
+    quad = quad_steps(axis) if dipping else {}
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
+        work_quad = work(quad, name) if name in dipping else None
         if onset(work_small):
             continue  # the step starts between N and 2N: no slope to judge from a base of nothing
         if not read(work_big, total):
@@ -251,10 +285,12 @@ def test_no_step_grows_faster_than_the_program_does(axis):
                 rising.add(name)  # a debt's step that dips under the floor is not paid by dipping
             continue
         ratio, debt = allowed("steps", axis, name, DEFAULT["steps"])
-        if still_rising(work_small, work_big):
+        widest = judged_ratio(work_small, work_big, work_quad)
+        if widest > PAID_MARGIN * DEFAULT["steps"]:
             rising.add(name)
-        if work_big > ratio * max(work_small, 1e-9):
-            grown.append(f"{name} {work_small:.1f} -> {work_big:.1f} Minstr (limit {ratio} per doubling{debt})")
+        if widest > ratio:
+            readings = f"{work_small:.1f} -> {work_big:.1f}" + (f" -> {work_quad:.1f} (4N)" if work_quad is not None else "")
+            grown.append(f"{name} {readings} Minstr (x{widest:.2f}, limit {ratio} per doubling{debt})")
     paid = [one["name"] for one in debts("steps", axis) if one["name"] not in rising]
     assert not grown, f"{axis} at N={SIZES[axis]} -> 2N: " + "; ".join(grown)
     assert not paid, f"{axis}: paid, so out of budgets.toml: {paid}"
