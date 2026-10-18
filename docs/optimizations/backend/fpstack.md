@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fpstack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fpstack.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fpstack.rs sha256:a4ec6b85d059c824eb5ca25aaff1a8a9443ad2fb102c564a14ef9b279e2f6b1f -->
+<!-- src: crates/backend/llrm-core/src/backend/fpstack.rs sha256:bb0e5430ea625af485623aa8adadfc0bf6c1c55e811977d7a60d7b9d1327f6e9 -->
 
 # fpstack
 
@@ -61,8 +61,8 @@ to fix its entry; its live values are taken in ascending order (LLVM
 asserts).
 
 ## Runs
-In place of `floatalloc`'s conversion when `LLRM_EXP_FPS` is set, after
-`floatassign`, once per function with floating values. Off by default.
+As the body of `floatalloc` (slot `floatalloc@8`), after `floatassign`, once
+per function with floating values.
 
 ## Example
 `a * b` where `a` is read again afterwards. Before:
