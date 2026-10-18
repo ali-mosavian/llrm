@@ -603,3 +603,15 @@ fn erase_blocks_removes_each_empty_block_in_one_pass() {
     assert_eq!(f.layout().len(), 2);
     assert!(!f.is_placed(a) && !f.is_placed(b));
 }
+/// `set_icmp_predicate` is `CmpInst::setPredicate`: the compare reads the same
+/// operands under another predicate, and the log tells of the rewrite.
+#[test]
+fn an_icmp_takes_another_predicate() {
+    let mut module = module("define i1 @f(i16 %a) {\nentry:\n  %c = icmp slt i16 %a, 5\n  ret i1 %c\n}\n");
+    let f = function(&mut module);
+    let (c, _) = named(f, "c");
+    f.take_changes();
+    f.set_icmp_predicate(c, crate::opcode::IntPredicate::Ult);
+    assert_eq!(f.instruction(c).opcode, Opcode::ICmp(crate::opcode::IntPredicate::Ult));
+    assert_eq!(f.take_changes(), vec![Change::Rewritten(c)]);
+}

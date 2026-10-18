@@ -462,6 +462,18 @@ impl Function {
         }
     }
 
+    /// Gives the `icmp` `inst` the predicate `predicate`, as LLVM's
+    /// `CmpInst::setPredicate`.
+    pub fn set_icmp_predicate(
+        &mut self,
+        inst: InstId,
+        predicate: crate::opcode::IntPredicate,
+    ) {
+        let Opcode::ICmp(held) = &mut self.instructions[inst.0 as usize].opcode else { panic!("an icmp") };
+        *held = predicate;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Replaces an instruction's flags.
     pub fn set_flags(
         &mut self,
