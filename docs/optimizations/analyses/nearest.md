@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/nearest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/nearest.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:b87335bd694a30ccf0594a83766ee778780254d14fe968c133cb39e3e306e110 -->
+<!-- src: crates/opt/llrm-analysis/src/nearest.rs sha256:d6fc2d1173933c43d35276c317b47feaeabd7f73fa4fc500cb6e640f3512e6d1 -->
 
 # nearest
 
@@ -53,5 +53,5 @@ The `Nearest` index and its `Walk` iterator. Consumers: [`crate::avail`](avail.m
 `loadjoins` in llrm-transforms.
 
 ## Needs
-`llrm_mir::dominators::DominatorTree` (`span`, the preorder interval of a
+`llrm_mir::domtree::DomTree` (`span`, the preorder interval of a
 block).

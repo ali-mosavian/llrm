@@ -14,11 +14,12 @@ const GLOBAL: &str = "@g = global i32 0\n\n";
 /// The cost and threshold of the `at`th call of @callee in @f, `sole`: the
 /// callee's only call (the `LastCallToStatic` bonus is in the cost, as in
 /// `opt`'s remark).
-fn priced(
+fn priced_with(
     text: &str,
     at: usize,
     sole: bool,
     size: CallerSize,
+    tti: Option<&dyn llrm_mir::tti::Tti>,
 ) -> (i64, i64) {
     let module: Module = parsed(text);
     let layout = DataLayout::default();
@@ -43,12 +44,22 @@ fn priced(
         caller_recursive: false,
         caller_size: size,
         relative_frequency: None,
+        tti,
     };
     let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
     match inline_cost(&site, params) {
         InlineCost::Cost { cost, threshold, .. } => (cost, threshold),
         other => panic!("{other:?}"),
     }
+}
+
+fn priced(
+    text: &str,
+    at: usize,
+    sole: bool,
+    size: CallerSize,
+) -> (i64, i64) {
+    priced_with(text, at, sole, size, None)
 }
 
 /// A callee of straight code: the single-block bonus raises the threshold to
@@ -194,8 +205,31 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
             caller_recursive: false,
             caller_size: CallerSize::Speed,
             relative_frequency: None,
+            tti: None,
         };
         let verdict = inline_cost(&site, InlineParams::from_level(2));
         assert!(matches!(verdict, InlineCost::Never(_)) && !verdict.is_ok(), "{attribute}: {verdict:?}");
     }
+}
+
+/// The target's price decides what is free: an address `p + 4 * i` folds into
+/// an x86 load (scale 4), the generic rule takes scale 1 only; a `trunc` to
+/// `i1` is free for X86's `isTruncateFree` and not for the generic legal
+/// integer rule. Each callee costs 5 less per such instruction under the X86
+/// model, and the generic number is unchanged.
+#[test]
+fn the_x86_model_makes_a_scaled_address_and_a_narrow_trunc_free() {
+    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let gep = format!(
+        "{GLOBAL}define internal i32 @callee(ptr %p, i32 %i) {{\nb0:\n  %q = getelementptr i32, ptr %p, i32 %i\n  %v = load i32, ptr %q\n  ret i32 %v\n}}\n\ndefine i32 @f(ptr %a, i32 %j) {{\nb0:\n  %r = call i32 @callee(ptr %a, i32 %j)\n  %s = call i32 @callee(ptr %a, i32 %r)\n  ret i32 %s\n}}\n"
+    );
+    let generic = priced_with(&gep, 0, false, CallerSize::Speed, None).0;
+    let target = priced_with(&gep, 0, false, CallerSize::Speed, Some(&x86)).0;
+    assert_eq!(generic - target, 5, "generic {generic}, x86 {target}");
+    let trunc = format!(
+        "{GLOBAL}define internal i1 @callee(i32 %x) {{\nb0:\n  %t = trunc i32 %x to i1\n  ret i1 %t\n}}\n\ndefine i1 @f(i32 %y) {{\nb0:\n  %r = call i1 @callee(i32 %y)\n  %s = call i1 @callee(i32 %y)\n  ret i1 %r\n}}\n"
+    );
+    let generic = priced_with(&trunc, 0, false, CallerSize::Speed, None).0;
+    let target = priced_with(&trunc, 0, false, CallerSize::Speed, Some(&x86)).0;
+    assert_eq!(generic - target, 5, "generic {generic}, x86 {target}");
 }
