@@ -959,7 +959,8 @@ impl<'a> RAGreedy<'a> {
                     )
                     && !partially_overlaps;
                 let tied_exception = self.env.has_tied_def(virt.reg()) && !self.env.has_tied_def(intf_reg);
-                if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) || self.pinned.contains(&intf_reg) {
+                if (done_same_class && !tied_exception) || fixed.contains(&intf_reg) || self.pinned.contains(&intf_reg)
+                {
                     return false;
                 }
                 let intf = self.lis.interval_rc(intf_reg);

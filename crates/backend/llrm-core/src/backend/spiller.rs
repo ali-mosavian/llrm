@@ -326,8 +326,12 @@ pub fn recording_cores<R>(work: impl FnOnce() -> R) -> (R, Vec<u64>) {
 /// isTriviallyReMaterializable` answers for the translated allocator.
 pub fn remade_values(body: &LirBody) -> BTreeSet<u32> {
     postings::following(body, |postings| {
-        let values: BTreeSet<u32> =
-            body.blocks.iter().flat_map(|block| block.insns.iter()).flat_map(|one| one.defines.iter().copied()).collect();
+        let values: BTreeSet<u32> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .flat_map(|one| one.defines.iter().copied())
+            .collect();
         let mut out: BTreeSet<u32> = _literals_by(body, &values, false, postings).keys().copied().collect();
         out.extend(_addresses_by(body, &values, postings).keys().copied());
         out.extend(_stable_loads_by(body, &values, &IndexMap::default(), postings).keys().copied());

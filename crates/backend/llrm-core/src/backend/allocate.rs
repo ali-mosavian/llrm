@@ -1624,14 +1624,24 @@ pub fn greedy_rewritten(
         let decided = crate::greedy::shadow::decide_with(&inputs, mode);
         if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
             if let Some(d) = &decided {
-                eprintln!("greedy-inline {}: failed {} spill_failed {}", body.name, d.report.stats.failed, d.spill_failed);
+                eprintln!(
+                    "greedy-inline {}: failed {} spill_failed {}",
+                    body.name, d.report.stats.failed, d.spill_failed
+                );
             }
         }
         if let (Some(d), true) = (&decided, std::env::var("LLRM_EDITED_DUMP").is_ok_and(|n| n == body.name)) {
             if let Some(edited) = &d.edited {
                 for (b, block) in edited.blocks.iter().enumerate() {
                     for (at, one) in block.insns.iter().enumerate() {
-                        eprintln!("ED b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}", one.id(), one.defines, one.uses, one.group, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                        eprintln!(
+                            "ED b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}",
+                            one.id(),
+                            one.defines,
+                            one.uses,
+                            one.group,
+                            one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                        );
                     }
                 }
             }
@@ -1643,8 +1653,18 @@ pub fn greedy_rewritten(
                         let r = &decided.report;
                         eprintln!(
                             "greedy-inline {}: values {} dequeued {} assigned {} evicted {} waited {} spilled {} new {} last-chance {} reloads {} stores {} folded {}",
-                            body.name, r.values, r.stats.dequeued, r.stats.assigned, r.stats.evicted, r.stats.waited,
-                            r.stats.spilled_ranges, r.stats.new_queued, r.stats.last_chance, r.reloads, r.stores, r.folded
+                            body.name,
+                            r.values,
+                            r.stats.dequeued,
+                            r.stats.assigned,
+                            r.stats.evicted,
+                            r.stats.waited,
+                            r.stats.spilled_ranges,
+                            r.stats.new_queued,
+                            r.stats.last_chance,
+                            r.reloads,
+                            r.stores,
+                            r.folded
                         );
                     }
                     GREEDY_RUNS.with(|runs| runs.set((runs.get().0 + 1, runs.get().1, runs.get().2)));
@@ -1732,8 +1752,9 @@ pub fn greedy_rewritten(
     rewritten(body, pinned, unspillable, protected, cpu, segments, classes, frame, splitting)
 }
 
-/// Reports on stderr every pair of values placed in registers that overlap while
-/// both are live, and every value live across a point that destroys its register.
+/// Reports on stderr every pair of values placed in registers that overlap
+/// while both are live, and every value live across a point that destroys its
+/// register.
 fn greedy_check(
     body: &LirBody,
     facts: &Facts,
@@ -1746,14 +1767,25 @@ fn greedy_check(
     for one in body.insns() {
         for (held, register) in one.requires.iter().chain(&one.delivers) {
             if placed.get(&held.value).is_some_and(|got| _whole(*got) != _whole(*register)) {
-                eprintln!("greedy-check {}: v{} must be in {} but is in {}", body.name, held.value, register.repr(), placed[&held.value].repr());
+                eprintln!(
+                    "greedy-check {}: v{} must be in {} but is in {}",
+                    body.name,
+                    held.value,
+                    register.repr(),
+                    placed[&held.value].repr()
+                );
             }
         }
     }
     for one in body.insns() {
         for value in one.defines.iter().chain(&one.uses) {
             if !placed.contains_key(value) && !body.inputs.contains(value) {
-                eprintln!("greedy-check {}: v{value} is named by #{} and has no register: {:?}", body.name, one.id(), one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                eprintln!(
+                    "greedy-check {}: v{value} is named by #{} and has no register: {:?}",
+                    body.name,
+                    one.id(),
+                    one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                );
             }
         }
     }
@@ -1766,7 +1798,12 @@ fn greedy_check(
         }
         for (b, rb) in &values[at + 1..] {
             if info.overlaps(**ra, **rb) && live(**b).is_some_and(|ib| ia.overlaps(ib)) {
-                eprintln!("greedy-check {}: v{a} in {} and v{b} in {} are live together", body.name, ra.repr(), rb.repr());
+                eprintln!(
+                    "greedy-check {}: v{a} in {} and v{b} in {} are live together",
+                    body.name,
+                    ra.repr(),
+                    rb.repr()
+                );
             }
         }
     }
