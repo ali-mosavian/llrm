@@ -246,7 +246,7 @@ pub fn specialized(
             if closed.instruction(compare).operands.iter().any(|operand| match operand {
                 Operand::Value(value) => owners
                     .get(value)
-                    .is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(owner, entry)),
+                    .is_some_and(|&owner| loop_.body.contains(&owner) || !dominance.dominates(function, owner, entry)),
                 _ => false,
             }) {
                 continue;

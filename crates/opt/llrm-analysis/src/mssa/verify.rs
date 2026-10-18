@@ -40,7 +40,7 @@ impl Mssa {
                 // If the predecessor has no unreachable predecessors, get the
                 // last def looking at the immediate dominators;
                 // an unreachable one may hold any access.
-                if !self.dominance.reachable(cfg::id(pred)) {
+                if !self.dominance.reachable(function, cfg::id(pred)) {
                     continue;
                 }
                 let mut node = Some(cfg::id(pred));
@@ -52,7 +52,7 @@ impl Mssa {
                         }
                         break;
                     }
-                    node = self.dominance.immediate(at);
+                    node = self.dominance.immediate(function, at);
                 }
             }
         }

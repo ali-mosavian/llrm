@@ -270,12 +270,13 @@ fn _moved(
         ValueDef::Argument(_) => None,
     };
     let address_values = |value: ValueId| {
-        defined_in(value).is_none_or(|at| !loop_.body.contains(&at) && dominators.dominates(at, loop_.header))
+        defined_in(value)
+            .is_none_or(|at| !loop_.body.contains(&at) && dominators.dominates(unit.function, at, loop_.header))
     };
     // What a moved store reads must reach the exit, whose one way in is
     // `source`.
     let reaches = |operand: Operand| match operand {
-        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(at, source)),
+        Operand::Value(value) => defined_in(value).is_none_or(|at| dominators.dominates(unit.function, at, source)),
         _ => true,
     };
     // What the loop's accesses reach, found by object: asked of each store.

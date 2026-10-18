@@ -184,13 +184,9 @@ impl FunctionPass for Gvn {
         // the rest reads is read of the body it leaves.
         let blocks = unit.function.layout().len();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let (scalar, cfg_changed) = pass::run_impl_cfg(
-            unit.context,
-            unit.layout,
-            unit.function,
-            analyses.outer(),
-            Some(shape.dominance.tree()),
-        );
+        let tree = shape.dominance.tree(unit.function);
+        let (scalar, cfg_changed) =
+            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), Some(tree));
         drop(shape);
         // Edits to operands leave what the manager holds of the body whole but
         // for its registers; a changed CFG leaves none of it.
@@ -385,8 +381,8 @@ fn _numbered(
             if !(forwarded || subexpressed) {
                 break;
             }
-            let (changed, split) =
-                pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(shape.dominance.tree()));
+            let tree = shape.dominance.tree(&function);
+            let (changed, split) = pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(tree));
             scalar |= changed;
             cfg |= split;
             if !changed || split {
@@ -508,7 +504,7 @@ fn _insertion(
 ) -> Option<InstId> {
     let (parent_at, join_at) = (cfg::id(parent), cfg::id(join));
     if function.successors(parent) != [join]
-        || dominance.dominates(join_at, parent_at)
+        || dominance.dominates(function, join_at, parent_at)
         || natural_loops.iter().any(|loop_| loop_.body.contains(&parent_at) != loop_.body.contains(&join_at))
         || op.operands.iter().any(|operand| !matches!(operand, Operand::Value(_) | Operand::Constant(_)))
     {
@@ -524,7 +520,7 @@ fn _insertion(
             continue;
         };
         let (at, index) = *definitions.get(value)?;
-        if !dominance.dominates(at, parent_at) || (at == parent_at && index >= cut_index) {
+        if !dominance.dominates(function, at, parent_at) || (at == parent_at && index >= cut_index) {
             return None;
         }
     }
@@ -616,8 +612,8 @@ pub fn joined(
                         .flatten()
                         .filter(|(provider, _, _)| {
                             *provider != at
-                                && dominance.dominates(*provider, cfg::id(parent))
-                                && !dominance.dominates(at, *provider)
+                                && dominance.dominates(function, *provider, cfg::id(parent))
+                                && !dominance.dominates(function, at, *provider)
                                 && natural_loops
                                     .iter()
                                     .all(|loop_| !loop_.body.contains(provider) || loop_.body.contains(&at))
