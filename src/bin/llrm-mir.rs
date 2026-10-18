@@ -29,6 +29,10 @@ fn main() -> ExitCode {
     if aliases_wanted {
         arguments.remove(0);
     }
+    let memops_wanted = arguments.first().is_some_and(|one| one == "--memops");
+    if memops_wanted {
+        arguments.remove(0);
+    }
     let mut option = |flag: &str| {
         let at = arguments.iter().position(|one| one == flag)?;
         let value = arguments.get(at + 1).cloned();
@@ -57,6 +61,10 @@ fn main() -> ExitCode {
             // names, which the verifier does not take for a whole module.
             if aliases_wanted {
                 print!("{}", aliases(&module));
+                return ExitCode::SUCCESS;
+            }
+            if memops_wanted {
+                print!("{}", memops(&module));
                 return ExitCode::SUCCESS;
             }
             let problems = llrm_mir::verify::verify(&module);
@@ -190,6 +198,73 @@ fn aliases(module: &llrm_mir::module::Module) -> String {
                     other.0,
                     other.1
                 );
+            }
+        }
+    }
+    out
+}
+
+/// `function<TAB>answer` per pair `aa-eval -evaluate-aa-metadata` lists of the loads
+/// and stores of a function, in its order: the answer `regions::overlapping` gives the two
+/// accesses, with the type tags unless `LLRM_ALIASES_NO_TBAA` is set.
+fn memops(module: &llrm_mir::module::Module) -> String {
+    use llrm_analysis::memory::{MemRef, Unit};
+    use llrm_mir::opcode::Opcode;
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
+            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
+        });
+    let mut out = String::new();
+    for (_, global, function) in module.functions() {
+        if function.layout().is_empty() {
+            continue;
+        }
+        let plain = Unit::of(module, &layout, function);
+        let known = llrm_analysis::consts::known(&Unit { registers: None, ..plain });
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = plain.with_registers(&known).with_shape(&shape);
+        let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
+        let mut accesses: Vec<(bool, Option<MemRef>)> = Vec::new();
+        for (_, inst) in function.walk() {
+            let store = match function.instruction(inst).opcode {
+                Opcode::Load { .. } => false,
+                Opcode::Store { .. } => true,
+                _ => continue,
+            };
+            let Some(mut reference) = MemRef::of(&unit, inst) else {
+                // Numbered all the same: a pair with it is not asked.
+                accesses.push((store, None));
+                continue;
+            };
+            reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());
+            if std::env::var_os("LLRM_ALIASES_NO_TBAA").is_some() {
+                reference.typed = None;
+            }
+            accesses.push((store, Some(reference)));
+        }
+        // aa-eval's order: each load against each store, then each store against
+        // the stores before it; one line a pair, `?` where an access has no
+        // reference, so that the n-th line is the n-th pair it lists.
+        let answer = |one: &Option<MemRef>, other: &Option<MemRef>| match (one, other) {
+            (Some(one), Some(other)) => match llrm_analysis::regions::overlapping(one, other, None, None, None) {
+                Ok(false) => "NoAlias",
+                _ => "MayAlias",
+            },
+            _ => "?",
+        };
+        let loads: Vec<_> = accesses.iter().filter(|one| !one.0).collect();
+        let stores: Vec<_> = accesses.iter().filter(|one| one.0).collect();
+        let name = global.name.as_deref().unwrap_or("?");
+        for load in &loads {
+            for store in &stores {
+                out += &format!("{name}\t{}\n", answer(&load.1, &store.1));
+            }
+        }
+        for (at, store) in stores.iter().enumerate() {
+            for earlier in &stores[..at] {
+                out += &format!("{name}\t{}\n", answer(&store.1, &earlier.1));
             }
         }
     }

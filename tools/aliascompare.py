@@ -92,6 +92,44 @@ def theirs_for(theirs: dict[Key, str], key: Key) -> str | None:
     return None
 
 
+MEMOP_PAIR = re.compile(r"^\s+(NoAlias|MayAlias|PartialAlias|MustAlias):\s+.* <-> .*$")
+
+
+def memop_answers(dt, binary: str, path: Path, text: str, aa: str) -> tuple[dict, dict, int]:
+    """(ours, LLVM's) answers by (function, n) for the n-th load/store pair aa-eval lists in a function. Both sides list the pairs in aa-eval's
+    order (each load against each store, then each store against the stores before it), so the n-th line of each is the same pair; a function
+    where the counts differ is not compared (the third value)."""
+    done = subprocess.run(
+        [str(dt.LLVM_BIN / "opt"), f"-aa-pipeline={AA_PIPELINES[aa]}", "-evaluate-aa-metadata", "-passes=aa-eval", "-print-all-alias-modref-info", "-disable-output", "-"],
+        input=dt.normalise(text), capture_output=True, text=True,
+    )
+    theirs_lists: dict[str, list[str]] = collections.defaultdict(list)
+    current = ""
+    for line in done.stderr.splitlines():
+        if (head := FUNCTION.match(line)) is not None:
+            current = head[1].strip('"')
+            theirs_lists[current] = []
+        elif (pair := MEMOP_PAIR.match(line)) is not None:
+            theirs_lists[current].append(pair[1])
+    done = subprocess.run([binary, "--memops", str(path)], capture_output=True, text=True)
+    ours_lists: dict[str, list[str]] = collections.defaultdict(list)
+    for line in done.stdout.splitlines():
+        function, answer = line.split("\t")
+        ours_lists[function].append(answer)
+    ours: dict = {}
+    theirs: dict = {}
+    skipped = 0
+    for function, answers in ours_lists.items():
+        if len(answers) != len(theirs_lists.get(function, [])):
+            skipped += len(answers)
+            continue
+        for n, (mine, other) in enumerate(zip(answers, theirs_lists[function])):
+            if mine != "?":
+                ours[(function, n)] = mine
+                theirs[(function, n)] = other
+    return ours, theirs, skipped
+
+
 def premise(table: collections.Counter) -> str | None:
     """Why the reference cannot be trusted on this set: a comparison against an analysis that answered MayAlias alone, or never MustAlias or NoAlias,
     says nothing of the pairs it was asked (an instrument that cannot answer in more than one way agrees with anything)."""
@@ -106,6 +144,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="+", type=Path)
     parser.add_argument("--llrm-mir", default=str(ROOT / "target/release/llrm-mir"))
+    parser.add_argument("--memops", action="store_true", help="the load and store pairs of `-evaluate-aa-metadata` (type tags included unless --basic) instead of the pointer pairs")
     parser.add_argument(
         "--basic",
         action="store_true",
@@ -120,9 +159,15 @@ def main() -> int:
     table: collections.Counter[tuple[str, str]] = collections.Counter()
     unmatched = 0
     theirs_only = 0
+    ambiguous = 0
     for path in args.files:
         text = path.read_text()
-        ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text, "basic" if args.basic else "default")
+        if args.memops:
+            ours, theirs, skipped = memop_answers(dt, args.llrm_mir, path, text, "basic" if args.basic else "default")
+            ambiguous += skipped
+            llrm_side = {k: v for k, v in ours.items()}
+        else:
+            ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text, "basic" if args.basic else "default")
         if not ours and not theirs:
             continue  # no two pointers to compare
         if not ours or not theirs:
@@ -130,7 +175,7 @@ def main() -> int:
             continue
         matched = 0
         for key, answer in ours.items():
-            if (found := theirs_for(theirs, key)) is not None:
+            if (found := (theirs.get(key) if args.memops else theirs_for(theirs, key))) is not None:
                 table[(answer, found)] += 1
                 matched += 1
             else:
@@ -142,6 +187,8 @@ def main() -> int:
         print(f"  {ours:9} {theirs:12} {count:8}{flag}")
     print(f"pairs llrm printed that aa-eval did not: {unmatched}")
     print(f"pairs aa-eval printed that llrm did not: {theirs_only}")
+    if args.memops:
+        print(f"pairs of functions whose pair counts differ (not compared): {ambiguous}")
     if (why := premise(table)) is not None:
         print(f"FAILED PREMISE: {why}")
         return 1
