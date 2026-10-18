@@ -76,6 +76,16 @@ fn same(
     }
 }
 
+thread_local! {
+    static RESET_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The entries `reset_live_out_map` has cleared on this thread, for a test that
+/// a reset costs what was written since the last.
+pub fn reset_work() -> usize {
+    RESET_WORK.with(std::cell::Cell::get)
+}
+
 /// `LiveRangeCalc` (LiveRangeCalc.h#L36).
 pub struct LiveRangeCalc {
     /// Active entries in `map`, also the visited set of `findReachingDefs`.
@@ -84,6 +94,9 @@ pub struct LiveRangeCalc {
     map: Vec<LiveOutPair>,
     /// Work list of blocks where the live-in value has yet to be determined.
     live_in: Vec<LiveInBlock>,
+    /// The blocks of `map` written since the last reset: the only ones a reset
+    /// has to clear.
+    touched: Vec<usize>,
     /// Reserved: a value that is known to be "undef" (`UndefVNI`).
     undef_vni: Vn,
 }
@@ -100,6 +113,7 @@ impl LiveRangeCalc {
             seen: Vec::new(),
             map: Vec::new(),
             live_in: Vec::new(),
+            touched: Vec::new(),
             undef_vni: VNInfo::new(0xbad, SlotIndex::default()),
         }
     }
@@ -109,10 +123,32 @@ impl LiveRangeCalc {
         &mut self,
         num_blocks: usize,
     ) {
-        self.seen.clear();
-        self.seen.resize(num_blocks, false);
-        self.map.clear();
-        self.map.resize(num_blocks, (None, None));
+        // Only what was written is cleared: a reset per live range of a
+        // function of N blocks was N work each (LLVM's `Seen.clear()` is a
+        // bit vector and its `Map.resize` leaves the entries).
+        if self.map.len() == num_blocks {
+            RESET_WORK.with(|work| work.set(work.get() + self.touched.len()));
+            for at in self.touched.drain(..) {
+                self.seen[at] = false;
+                self.map[at] = (None, None);
+            }
+        } else {
+            RESET_WORK.with(|work| work.set(work.get() + num_blocks));
+            self.touched.clear();
+            self.seen.clear();
+            self.seen.resize(num_blocks, false);
+            self.map.clear();
+            self.map.resize(num_blocks, (None, None));
+        }
+    }
+
+    /// `map[mbb]`, to be written: it is cleared at the next reset.
+    fn slot(
+        &mut self,
+        mbb: usize,
+    ) -> &mut LiveOutPair {
+        self.touched.push(mbb);
+        &mut self.map[mbb]
     }
 
     /// `reset` (LiveRangeCalc.cpp#L46): prepares caches for a new set of
@@ -139,7 +175,7 @@ impl LiveRangeCalc {
         vni: Option<Vn>,
     ) {
         self.seen[mbb] = true;
-        self.map[mbb] = (vni, None);
+        *self.slot(mbb) = (vni, None);
     }
 
     /// `addLiveInBlock` (LiveRangeCalc.h#L238): a block with an unknown live-in
@@ -178,7 +214,7 @@ impl LiveRangeCalc {
                 } else {
                     // The value is live-through, update LiveOut as well.
                     assert!(self.seen[mbb]);
-                    self.map[mbb] = (Some(value.clone()), None);
+                    *self.slot(mbb) = (Some(value.clone()), None);
                 }
                 updater.add(Segment::new(start, end, Some(value)));
             }
@@ -298,7 +334,7 @@ impl LiveRangeCalc {
                 if bn == use_mbb && use_.is_valid() {
                     end = use_;
                 } else {
-                    self.map[bn] = (Some(the_vni.clone()), None);
+                    *self.slot(bn) = (Some(the_vni.clone()), None);
                 }
                 updater.add(Segment::new(start, end, Some(the_vni.clone())));
             }
@@ -351,7 +387,7 @@ impl LiveRangeCalc {
                     if idom_value.0.is_some() && !self.is_undef(&idom_value.0) && idom_value.1.is_none() {
                         let block = ctx.indexes.get_mbb_from_index(&idom_value.0.as_ref().expect("a value").def());
                         idom_value.1 = Some(block);
-                        self.map[d].1 = Some(block);
+                        self.slot(d).1 = Some(block);
                     }
                     for &pred in &ctx.cfg.preds[mbb] {
                         let mut value = self.map[pred].clone();
@@ -366,7 +402,7 @@ impl LiveRangeCalc {
                         if value.1.is_none() {
                             let block = ctx.indexes.get_mbb_from_index(&value.0.as_ref().expect("a value").def());
                             value.1 = Some(block);
-                            self.map[pred].1 = Some(block);
+                            self.slot(pred).1 = Some(block);
                         }
                         // This predecessor is carrying something other than
                         // IDomValue. It could be
@@ -394,7 +430,7 @@ impl LiveRangeCalc {
                         lr.add_segment(Segment::new(start, kill, Some(vni)));
                     } else {
                         lr.add_segment(Segment::new(start, end, Some(vni.clone())));
-                        self.map[mbb] = (Some(vni), Some(node));
+                        *self.slot(mbb) = (Some(vni), Some(node));
                     }
                 } else if idom_value.0.is_some() && !self.is_undef(&idom_value.0) {
                     // No phi-def here. Remember incoming value.
@@ -410,7 +446,7 @@ impl LiveRangeCalc {
                         continue;
                     }
                     changed = true;
-                    self.map[mbb] = idom_value;
+                    *self.slot(mbb) = idom_value;
                 }
             }
             if !changed {
@@ -544,5 +580,27 @@ impl LiveIntervalCalc {
             // is idempotent.
             self.calc.extend(lr, use_idx, ctx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reset cleared every block's entry, N of them for each live range of
+    /// a function of N blocks (5.6 M of d_faces' register allocation). It
+    /// clears what was written since the last one.
+    #[test]
+    fn test_a_reset_costs_what_was_written_not_the_blocks() {
+        let mut calc = LiveRangeCalc::new();
+        calc.reset_live_out_map(3000);
+        let vni = VNInfo::new(1, SlotIndex::default());
+        for block in [5, 700, 2999] {
+            calc.set_live_out_value(block, Some(vni.clone()));
+        }
+        let before = reset_work();
+        calc.reset_live_out_map(3000);
+        assert_eq!(reset_work() - before, 3);
+        assert!(!calc.seen[700] && calc.map[700].0.is_none() && calc.map[700].1.is_none(), "what was written is clear");
     }
 }
