@@ -202,6 +202,15 @@ why = "measured 26.8 -> 61.8 Minstr (x2.31)"
 
 [[debt]]
 kind = "steps"
+axis = "branches"
+name = "lir twoaddr"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/1947"
+owner = "coordinator (to assign)"
+why = "measured 60.3 -> 138.7 Minstr (x2.30)"
+
+[[debt]]
+kind = "steps"
 axis = "cells"
 name = "lir coalesce"
 ratio = 3.4
