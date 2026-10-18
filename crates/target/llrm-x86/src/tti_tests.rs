@@ -276,3 +276,39 @@ fn an_mir_type_is_the_cost_models_scalar_or_none() {
         [Some(Ty::Int(32)), Some(Ty::Float), Some(Ty::X87), Some(Ty::Pointer), None]
     );
 }
+
+/// Loop strength reduction's queries (`LoopStrengthReduce.cpp`), UNVERIFIED BY
+/// ORACLE and read off the source: `getScalingFactorCost`
+/// (X86TargetTransformInfo.cpp L8045) `return AM.Scale != 0;` when
+/// `isLegalAddressingMode`, else invalid; `isLSRCostLess` (L7202)
+/// `std::tie(C1.Insns, C1.NumRegs, C1.AddRecCost, C1.NumIVMuls, C1.NumBaseAdds,
+/// C1.ScaleCost, C1.ImmCost, C1.SetupCost) < ...` (the base's,
+/// TargetTransformInfoImpl.h L330, has no `Insns`); `canMacroFuseCmp` (L7211)
+/// `ST->hasMacroFusion() || ST->hasBranchFusion()` (core2's X86.td L2008
+/// `TuningMacroFusion`); `isLegalAddImmediate` and `isLegalICmpImmediate`
+/// (X86ISelLowering.cpp L36730-36736) `return isInt<32>(Imm);`;
+/// `getNumberOfRegisters` (L173) `if (!ST->is64Bit()) return 8;`.
+#[test]
+fn the_loop_strength_reduction_queries_are_the_lowerings() {
+    let x87 = X86::of_cpu("i486").unwrap();
+    let core2 = X86::of_cpu("core2").unwrap();
+    // A scale of 4 beside a base register is legal and costs one register; no
+    // scale costs none; 6 is no mode.
+    assert_eq!(x87.scaling_factor_cost(false, 0, true, 4), Cost::of(1));
+    assert_eq!(x87.scaling_factor_cost(false, 0, true, 0), Cost::of(0));
+    assert_eq!(x87.scaling_factor_cost(false, 0, true, 6), Cost::INVALID);
+    assert_eq!(x87.scaling_factor_cost(false, 0, true, 3), Cost::INVALID, "3 needs no base register");
+    // Instructions first: fewer instructions win whatever the registers.
+    let low = LsrCost { insns: 3, num_regs: 9, ..LsrCost::default() };
+    let high = LsrCost { insns: 4, num_regs: 1, ..LsrCost::default() };
+    assert!(
+        x87.is_lsr_cost_less(&low, &high) && !x87.is_lsr_cost_less(&high, &low) && !x87.is_lsr_cost_less(&low, &low)
+    );
+    let by_setup = (LsrCost { setup_cost: 1, ..low }, LsrCost { setup_cost: 2, ..low });
+    assert!(x87.is_lsr_cost_less(&by_setup.0, &by_setup.1));
+    assert!(!x87.can_macro_fuse_cmp() && core2.can_macro_fuse_cmp());
+    assert!(x87.is_legal_add_immediate(i64::from(i32::MIN)) && !x87.is_legal_add_immediate(i64::from(i32::MAX) + 1));
+    assert!(x87.is_legal_icmp_immediate(-5) && !x87.is_legal_icmp_immediate(1 << 32));
+    assert_eq!(x87.general_registers(), 8);
+    assert!(x87.is_num_regs_major_cost_of_lsr());
+}

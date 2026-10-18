@@ -89,3 +89,18 @@ a translated pass keeps LLVM's thresholds, which are tuned to LLVM's units, so i
 decides in executed clocks or bytes, which `Tti` does not state. Nothing derives one from the other: `Tti` rows are
 copies of LLVM's tables checked against `opt`; `OperationCosts` rows come from the target's data sheets. They stay two
 because they price two things.
+
+## What loop strength reduction reads
+
+`LoopStrengthReduce.cpp` asks the target about twenty things (the reader is the translated `lsr`, stage S6 of the SCEV
+port; `lsr` today is native and reads `OperationCosts`). Done in `Tti`, read off the source and unit-tested (no oracle:
+the cost model has no printer for them): `getIntImmCost` ([L1412](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1412)), `isLegalAddressingMode` ([L1862](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1862)),
+`getScalingFactorCost` ([L2027](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L2027)), `isLSRCostLess` ([L1663](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1663)), `canMacroFuseCmp` ([L1635](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1635)),
+`isLegalICmpImmediate` ([L1897](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1897)), `isLegalAddImmediate` ([L1984](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1984)), `isTruncateFree`
+([L4502](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4502)), `getNumberOfRegisters` ([L1613](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613)), `isNumRegsMajorCostOfLSR` ([L6385](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L6385), the
+base's `true`). X86 answers the base's `false` / none for the rest, so they need no row until a target says otherwise:
+`isIndexedLoadLegal` / `isIndexedStoreLegal` ([L1461](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1461), [L3970](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3970), [L5210](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L5210)),
+`isLegalAddScalableImmediate` (L1498), `LSRWithInstrQueries` (L1990), `isProfitableLSRChainElement` (L3161),
+`canSaveCmp` (L3586), `shouldDropLSRSolutionIfLessProfitable` (L5694), `getPreferredAddressingMode` (L6315),
+`isHardwareLoopProfitable` (L6356), `getTgtMemIntrinsic` (L1053). `isTypeLegal` (L2402) is the legalization of
+`tti::Ty`. Not done: the `Machine`-side answer of the 16-bit target (none).

@@ -206,6 +206,19 @@ pub enum ImmUser {
     Unknown,
 }
 
+/// `TTI::LSRCost`: what loop strength reduction counts of a candidate solution.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LsrCost {
+    pub insns: u32,
+    pub num_regs: u32,
+    pub add_rec_cost: u32,
+    pub num_iv_muls: u32,
+    pub num_base_adds: u32,
+    pub scale_cost: u32,
+    pub imm_cost: u32,
+    pub setup_cost: u32,
+}
+
 /// The target a cost is for.
 pub trait Tti {
     /// `getCmpSelInstrCost`.
@@ -264,6 +277,46 @@ pub trait Tti {
         has_base_reg: bool,
         scale: i64,
     ) -> bool;
+
+    /// `getScalingFactorCost`: what the scale of an addressing mode costs;
+    /// invalid where the mode is not legal.
+    fn scaling_factor_cost(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> Cost;
+
+    /// `isLSRCostLess`.
+    fn is_lsr_cost_less(
+        &self,
+        first: &LsrCost,
+        second: &LsrCost,
+    ) -> bool;
+
+    /// `canMacroFuseCmp`: a compare and its branch issue as one.
+    fn can_macro_fuse_cmp(&self) -> bool;
+
+    /// `isLegalAddImmediate`.
+    fn is_legal_add_immediate(
+        &self,
+        imm: i64,
+    ) -> bool;
+
+    /// `isLegalICmpImmediate`.
+    fn is_legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool;
+
+    /// `getNumberOfRegisters` of the general register class.
+    fn general_registers(&self) -> u32;
+
+    /// `isNumRegsMajorCostOfLSR`: the base's `true` (X86 does not override).
+    fn is_num_regs_major_cost_of_lsr(&self) -> bool {
+        true
+    }
 
     /// `getCastInstrCost`.
     fn cast_cost(
