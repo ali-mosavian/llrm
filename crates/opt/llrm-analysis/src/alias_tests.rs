@@ -1672,6 +1672,47 @@ fn an_effect_with_a_global_beside_the_unknown_covers_the_unknown_alone() {
     assert!(!effect(vec![placed]).covers(&effect(vec![unknown])), "a kept global does not cover a fresh unknown");
 }
 
+/// A fresh run of a call states a slice of an escaped object (a parameter the
+/// body stored away) where the kept effect has the unknown object's whole range
+/// alone: the unknown reaches what escaped, so nothing is new (greeting.nib and
+/// pipeline.nib at -O1: 'the result kept past 56 sound edits contradicts what
+/// deriving it afresh gives'). The other way is still flagged: a kept effect
+/// that lists the parameter alone does not cover a fresh unknown, and the
+/// unknown does not cover an object that never escaped.
+#[test]
+fn an_effect_of_the_unknown_covers_a_fresh_slice_of_an_escaped_object_and_not_the_reverse() {
+    let escaped = MemoryObject {
+        identity: Some(Identity::Int(3)),
+        captured: true,
+        addressed: true,
+        ..MemoryObject::new(MemoryKind::Parameter)
+    };
+    let private = MemoryObject {
+        identity: Some(Identity::Value(9)),
+        extent: Some(4),
+        addressed: false,
+        captured: false,
+        ..MemoryObject::new(MemoryKind::Frame)
+    };
+    let reference =
+        |provenance: Provenance| MemRef { provenance: Some(provenance.clone()), ..MemRef::reach(1, provenance) };
+    let effect = |loads: Vec<MemRef>| Effect { loads: loads.into(), ..Effect::default() };
+    let unknown = reference(UNKNOWN.clone());
+    let parameter = reference(one(&escaped, 0, 1));
+    assert!(
+        effect(vec![unknown.clone()]).covers(&effect(vec![unknown.clone(), parameter.clone()])),
+        "the unknown reaches what escaped"
+    );
+    assert!(
+        !effect(vec![parameter.clone()]).covers(&effect(vec![parameter.clone(), unknown.clone()])),
+        "a kept parameter does not cover a fresh unknown"
+    );
+    assert!(
+        !effect(vec![unknown]).covers(&effect(vec![reference(one(&private, 0, 2))])),
+        "the unknown does not reach an object that never escaped"
+    );
+}
+
 /// A summary stands for the bytes its slices name. A fresh read of two bytes
 /// at offset 2 of a 7-byte global lies in a kept read of its bytes [0, 7), and
 /// a two-byte read starting anywhere in [0, 7) names the object's last byte

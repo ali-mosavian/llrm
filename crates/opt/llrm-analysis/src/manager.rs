@@ -573,7 +573,10 @@ struct Slots {
 
 /// `module`'s defined functions, each with its id.
 fn bodies(module: &Module) -> impl Iterator<Item = (GlobalId, &Function)> {
-    module.functions().filter(|(_, _, function)| !function.is_declaration()).map(|(id, _, function)| (id, function))
+    module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration() && !llrm_mir::facts::opaque(function))
+        .map(|(id, _, function)| (id, function))
 }
 
 /// What a body gives `Summaries` that is of the body, the declarations and (for
