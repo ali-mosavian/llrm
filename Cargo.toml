@@ -120,6 +120,10 @@ name = "llrm-mir"
 path = "src/bin/llrm-mir.rs"
 
 [[bin]]
+name = "llrm-pass"
+path = "src/bin/llrm-pass.rs"
+
+[[bin]]
 name = "llrm-run"
 path = "src/bin/llrm-run.rs"
 

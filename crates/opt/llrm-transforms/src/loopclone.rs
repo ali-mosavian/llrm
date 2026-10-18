@@ -249,7 +249,7 @@ pub fn peeled(
         let mut values = BTreeMap::new();
         for &at in &originals {
             function.insert_block(map[&at], None)?;
-            for inst in function.block(cfg::block(at)).instructions().to_vec() {
+            for inst in function.block(cfg::block(at)).iter().collect::<Vec<_>>() {
                 let copy = function.clone_instruction(inst);
                 function.insert(copy, Position::End(map[&at]))?;
                 if let (Some(original), Some(result)) =
@@ -357,7 +357,7 @@ fn cloned(
     let mut renamed = IdMap::new();
     for &at in originals {
         function.insert_block(blocks[&at], None)?;
-        for inst in function.block(cfg::block(at)).instructions().to_vec() {
+        for inst in function.block(cfg::block(at)).iter().collect::<Vec<_>>() {
             let copy = function.clone_instruction(inst);
             function.insert(copy, Position::End(blocks[&at]))?;
             if let (Some(original), Some(result)) =
@@ -626,7 +626,7 @@ pub fn chained(
         let mut values = IdMap::new();
         for &at in &originals {
             function.insert_block(map[&at], None)?;
-            for inst in function.block(cfg::block(at)).instructions().to_vec() {
+            for inst in function.block(cfg::block(at)).iter().collect::<Vec<_>>() {
                 // A later header's phis take the value the copy before flows
                 // in; its branch is the way into the body.
                 if at == loop_.header && function.instruction(inst).opcode == Opcode::Phi {

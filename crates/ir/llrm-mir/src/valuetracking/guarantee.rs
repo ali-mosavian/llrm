@@ -657,6 +657,7 @@ fn is_guaranteed_not_to_be_undef_or_poison_kind(
         let constant = q.context().get(id);
         match &constant.kind {
             ConstantKind::Poison => return !includes_poison(kind),
+            ConstantKind::Undef => return !includes_undef(kind),
             ConstantKind::Int(_) | ConstantKind::Float(_) | ConstantKind::Null | ConstantKind::Global(_) => {
                 return true;
             }
@@ -673,6 +674,9 @@ fn is_guaranteed_not_to_be_undef_or_poison_kind(
         if is_vector_constant(q, v) && !matches!(constant.kind, ConstantKind::Expr(_)) {
             if let ConstantKind::Aggregate(members) = &constant.kind {
                 let members: Vec<_> = members.iter().map(|one| q.context().get(*one)).collect();
+                if includes_undef(kind) && members.iter().any(|one| matches!(one.kind, ConstantKind::Undef)) {
+                    return false;
+                }
                 if includes_poison(kind) && members.iter().any(|one| matches!(one.kind, ConstantKind::Poison)) {
                     return false;
                 }

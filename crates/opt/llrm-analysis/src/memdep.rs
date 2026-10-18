@@ -65,7 +65,6 @@
 use llrm_mir::context::Context;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
-use llrm_mir::facts::Facts;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Opcode, Tail};
@@ -305,17 +304,6 @@ fn identical_calls(
         && tail(x.tail) == tail(y.tail)
 }
 
-/// `isNoAliasCall`: a call whose result is `noalias`.
-fn is_no_alias_call(
-    function: &Function,
-    inst: InstId,
-) -> bool {
-    matches!(
-        &function.instruction(inst).opcode,
-        Opcode::Call(info) if Facts::of(&info.return_attrs).no_alias()
-    )
-}
-
 /// [`isStorePreservingMemoryLocation`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/Loads.cpp#L843)
 /// (Loads.cpp): `store` writes back, unchanged, what `mem_loc` holds: it stores
 /// a load of the same bytes, same block, and nothing between modifies them.
@@ -449,7 +437,7 @@ impl MemoryDependenceResults {
     ) -> Option<InstId> {
         match scan {
             Some(inst) => function.prev_in_block(inst),
-            None => function.block(bb).instructions().last().copied(),
+            None => function.block(bb).last(),
         }
     }
 
@@ -698,7 +686,9 @@ impl MemoryDependenceResults {
             }
             // An allocation the accessed pointer is to: a Def, so a load of it
             // can become undef. BasicAA bypasses the allocation itself.
-            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }) || is_no_alias_call(function, inst) {
+            if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
+                || llrm_mir::memory::returns_noalias(unit.context, unit.globals, function, inst)
+            {
                 let (access_ptr, _) = valuetracking::underlying(unit.context, unit.layout, function, mem_loc.ptr);
                 let this = function.instruction(inst).result.map(Operand::Value);
                 if this == Some(access_ptr)

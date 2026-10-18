@@ -327,9 +327,7 @@ fn apply(
         let first_k = inner_first(function, hi_k, &|to| body_k.contains(&to));
         let at = function
             .block(first_k)
-            .instructions()
             .iter()
-            .copied()
             .find(|&inst| function.instruction(inst).opcode != Opcode::Phi);
         for inst in work(function, hi_k) {
             match at {

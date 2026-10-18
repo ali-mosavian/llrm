@@ -530,7 +530,7 @@ pub fn _executable_successors(
 /// it: false where `from` is the branch's false side, true where it is the true
 /// side (LLVM JumpThreading's `getKnownConstant` of an edge).
 fn known_on_edge(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     value: ValueId,
     from: BlockId,
@@ -559,13 +559,13 @@ fn known_on_edge(
 /// constant leads: LLVM JumpThreading's `ProcessBranchOnPHI`. A loop's
 /// header keeps its edges. Whether anything changed.
 pub fn _phi_threaded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> Result<bool, String> {
     let headers = cfg::Shape::of(function).loops.iter().map(|one| one.header).collect::<BTreeSet<_>>();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
+        let instructions = function.block(block).iter().collect::<Vec<_>>();
         let [phi, last] = instructions[..] else { continue };
         let branch = function.instruction(last);
         let [Operand::Value(condition), Operand::Block(taken), Operand::Block(other)] = branch.operands[..] else {
@@ -670,7 +670,7 @@ pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
 /// Loop-simplify form keeps a loop's one entry edge, its one back edge and
 /// its dedicated exits as blocks of their own.
 pub fn _threaded(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
 ) -> bool {
     if function.entry().is_none() {
@@ -680,7 +680,7 @@ pub fn _threaded(
     let mut redirects = BTreeMap::new();
     for &block in function.layout() {
         let at = cfg::id(block);
-        let [only] = function.block(block).instructions()[..] else {
+        let [only] = function.block(block).iter().collect::<Vec<_>>()[..] else {
             continue;
         };
         let instruction = function.instruction(only);

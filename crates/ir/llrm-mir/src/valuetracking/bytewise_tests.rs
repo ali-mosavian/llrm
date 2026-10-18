@@ -117,3 +117,9 @@ fn underlying_objects_are_as_llvm_says() {
         include_str!("../../tests/vt/bytewise/underlying.expected"),
     );
 }
+
+/// `isBytewiseValue` of `undef`: undef at every width, a pointer included.
+#[test]
+fn bytewise_undef_is_undef_as_llvm_says() {
+    check(include_str!("../../tests/vt/bytewise/undef.ll"), include_str!("../../tests/vt/bytewise/undef.expected"));
+}

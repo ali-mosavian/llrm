@@ -339,7 +339,7 @@ fn block_simplified(
 /// The one-armed `if` ending `block` run before its branch: the speculation
 /// of LLVM's `simplifyCondBranch`.
 fn branch_speculated(
-    context: &mut Context,
+    context: &Context,
     spec: &Speculation,
     function: &mut Function,
     block: BlockId,
@@ -396,7 +396,7 @@ fn loop_headers(function: &Function) -> IdSet<BlockId> {
 /// loop's header or entry in the way (`NeedCanonicalLoop`): the first part of
 /// LLVM's `simplifyUncondBranch`.
 fn jump_simplified(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     block: BlockId,
     loop_headers: &IdSet<BlockId>,
@@ -408,7 +408,7 @@ fn jump_simplified(
         return false;
     };
     if function.entry() == Some(block)
-        || function.block(block).instructions().len() != edges::phis(function, block).len() + 1
+        || function.block(block).len() != edges::phis(function, block).len() + 1
     {
         return false;
     }
@@ -440,13 +440,14 @@ fn value_from(
     arms(function, phi).into_iter().find(|&(_, at)| at == from).map(|(value, _)| value)
 }
 
-fn is_poison(
+/// `isa<UndefValue>`: poison is one.
+fn is_undef(
     context: &Context,
     value: Operand,
 ) -> bool {
     matches!(
         value,
-        Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison
+        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Poison | ConstantKind::Undef)
     )
 }
 
@@ -466,7 +467,7 @@ fn phi_of(
 /// MIRROR, except that a block keeps its name, and a loop's metadata check
 /// is on any `llvm.loop`.
 fn empty_block_removed(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     block: BlockId,
     successor: BlockId,
@@ -517,9 +518,7 @@ fn empty_block_removed(
         function.erase(last).expect("a jump defines nothing");
         let anchor = function
             .block(successor)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| function.instruction(one).opcode != Opcode::Phi);
         for inst in function.block(block).instructions().to_vec() {
             function.move_to(inst, anchor.map_or(Position::End(successor), Position::Before)).expect("a placed phi");
@@ -570,7 +569,7 @@ fn predecessors_propagate(
         return true;
     }
     let merge =
-        |first: Operand, second: Operand| first == second || is_poison(context, first) || is_poison(context, second);
+        |first: Operand, second: Operand| first == second || is_undef(context, first) || is_undef(context, second);
     for phi in edges::phis(function, successor) {
         let from_block = value_from(function, phi, block).expect("a phi entry for each edge");
         let inner = phi_of(function, from_block, block);
@@ -654,14 +653,14 @@ fn values_redirected(
     let mut known: IdMap<BlockId, Option<Operand>> = sources.iter().map(|&one| (one, None)).collect();
     for pair in operands.chunks(2) {
         if let (value, Operand::Block(from)) = (pair[0], pair[1])
-            && !is_poison(context, value)
+            && !is_undef(context, value)
             && let Some(slot) = known.get_mut(&from)
         {
             *slot = Some(value);
         }
     }
     let mut select = |value: Operand, from: BlockId| -> Operand {
-        if !is_poison(context, value) {
+        if !is_undef(context, value) {
             known.insert(from, Some(value));
             return value;
         }
@@ -690,13 +689,30 @@ fn values_redirected(
     for (value, from) in added {
         operands.extend([value, Operand::Block(from)]);
     }
-    // A poison input takes the value another input gives that predecessor.
-    for pair in operands.chunks_mut(2) {
+    // An undef input takes the value another input gives that predecessor
+    // (`replaceUndefValuesInPhi`); those left with none must match.
+    let mut true_undef = Vec::new();
+    for (at, pair) in operands.chunks_mut(2).enumerate() {
         if let (value, Operand::Block(from)) = (pair[0], pair[1])
-            && is_poison(context, value)
-            && let Some(Some(one)) = known.get(&from)
+            && is_undef(context, value)
+            && known.contains_key(&from)
         {
-            pair[0] = *one;
+            match known.get(&from) {
+                Some(Some(one)) => pair[0] = *one,
+                _ => true_undef.push(at),
+            }
+        }
+    }
+    // Both undef and poison incoming for one block is invalid: all become undef.
+    let poisons = true_undef
+        .iter()
+        .filter(|&&at| matches!(operands[2 * at], Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison))
+        .count();
+    if poisons != 0 && poisons != true_undef.len() {
+        let ty = function.instruction(phi).ty;
+        let undef = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }));
+        for at in true_undef {
+            operands[2 * at] = undef;
         }
     }
     function.set_operands(phi, operands);
@@ -706,7 +722,7 @@ fn values_redirected(
 /// has had its terminator folded (so a successor that no longer runs is not
 /// followed): `removeUnreachableBlocks` over `markAliveBlocks`.
 pub fn unreachable_removed(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     folded: &mut bool,
@@ -738,7 +754,7 @@ pub fn unreachable_removed(
 /// defined replaced by poison, its instructions and then the blocks erased.
 /// LLVM's `DeleteDeadBlocks`.
 fn dead_blocks_deleted(
-    context: &mut Context,
+    context: &Context,
     function: &mut Function,
     blocks: &[BlockId],
 ) {
@@ -809,7 +825,7 @@ fn terminator_replaced(
 /// same way: LLVM's `ConstantFoldTerminator`. `delete_dead_conditions`: the
 /// condition nothing reads afterwards goes, with what only it read.
 pub fn terminator_folded(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     block: BlockId,
@@ -859,7 +875,7 @@ fn condition_deleted(
 /// case.
 #[allow(clippy::too_many_arguments)]
 fn switch_folded(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     block: BlockId,
