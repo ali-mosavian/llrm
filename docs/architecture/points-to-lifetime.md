@@ -1,3 +1,7 @@
+---
+architecture-index: points-to across edits
+architecture-order: 80
+---
 # Points-to kept across edits
 
 For contributors who want to reuse a points-to answer after a pass edits the
