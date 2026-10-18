@@ -271,6 +271,12 @@ fn planned_with(
     Ok(Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow })
 }
 
+// `spilled_from` asked, for a test that greedy's spills write no plan of it.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PLANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `spilled`, numbering the values it makes from `floor` at least: an
 /// allocation in progress still knows values the body no longer names.
 pub fn spilled_from(
@@ -280,6 +286,8 @@ pub fn spilled_from(
     floor: u32,
     classes: &RegisterClasses,
 ) -> Result<(LirBody, BTreeSet<u32>), Error> {
+    #[cfg(test)]
+    PLANS.with(|one| one.set(one.get() + 1));
     if values.is_empty() {
         return Ok((body.clone(), BTreeSet::new()));
     }

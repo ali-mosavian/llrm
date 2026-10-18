@@ -5,27 +5,18 @@
 //!
 //! # How it works
 //! `spill(reg)` takes every instruction that names `reg` (a parallel copy is
-//! one unit) and has the per-instruction decisions of `backend::spiller` make
-//! its replacement: a reload before, the instruction rewritten, a store after,
-//! or the stack cell folded into the instruction itself. The replacement is put
-//! into the edited function with `LiveIntervals::rewrite_instr` (the
-//! instruction keeps its slot, so a call keeps its register mask) and
-//! `insert_instr_before/after` (new slots between the neighbours: no other
-//! interval moves). Each register the replacement names for the first time is
-//! made with `LiveRangeEdit::create_from`, gets its interval and weight, and is
-//! returned for the queue. The interval of `reg` is erased. Nothing is rebuilt:
-//! this is why a spill no longer restarts the allocation.
+//! one unit). `foldMemoryOperand` (`tii`) puts the stack cell in place of
+//! `reg` where the form exists; otherwise a register made from `reg` with
+//! `LiveRangeEdit::create_from` replaces it in the unit, with a reload before
+//! where the unit reads and a store after where it writes. The unit is
+//! rewritten in place (`LiveIntervals::rewrite_instr`: it keeps its slot, so a
+//! call keeps its register mask) and the reload and store take new slots
+//! between its neighbours (`insert_instr_before/after`): no other register's
+//! interval changes. Each register made gets its interval and weight and is
+//! returned for the queue; the interval of `reg` is erased.
 //!
-//! DEVIATE D-A: the choice of reload, store or fold is `backend::spiller`'s
-//! (`_source`, `_in_place`, `_tied`, the parallel-copy folds), asked for one
-//! instruction at a time through `spilled_from` on a body of that instruction.
-//! The fact: the m16 forms (segment-offset pairs, 8/16/32-bit lanes, the folds
-//! into a parallel copy) are not forms `TargetInstrInfo::foldMemoryOperand`
-//! knows. Exit: those forms expressed as `foldMemoryOperand` rules, with the
-//! spiller's whole-body plan (copies, merged updates) gone; issue to be
-//! opened with step 2. Boundary: a replacement that does not hold the same
-//! number of instructions as the unit it replaces, or that still names `reg`,
-//! sets `failed` and the caller falls back to the rounds.
+//! DEVIATE D-A2: no `coalesceStackAccess` (a copy between `reg` and its own
+//! slot is not dropped). Exit: translated with the sibling hoist.
 //!
 //! DEVIATE D-B: no `analyzeSiblingValues`, `hoistAllSpills` or
 //! `reMaterializeAll` ahead of the spill: they need SplitKit's sibling
@@ -463,6 +454,12 @@ fn written_narrower(
     })
 }
 
+// Registers a spill worked out the interval of without making them.
+#[cfg(test)]
+thread_local! {
+    static STRAY: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 thread_local! {
     static NATIVE_UNITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -482,6 +479,9 @@ impl Spiller for InlineSpiller<'_> {
     ) {
         let SpillContext { lis, vrm, vrai } = ctx;
         self.spilled.push(reg);
+        #[cfg(test)]
+        crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow_mut().clear());
+        let first_new = new_vregs.len();
         // Bisection aid: only the first N spills are written inline.
         if std::env::var("LLRM_GREEDY_SPILLS")
             .ok()
@@ -527,6 +527,13 @@ impl Spiller for InlineSpiller<'_> {
             }
         }
         edit.erase_virt_reg(lis, reg);
+        #[cfg(test)]
+        {
+            let made = &new_vregs[first_new..];
+            let computed = crate::liveness::liveintervals::COMPUTED.with(|one| std::mem::take(&mut *one.borrow_mut()));
+            STRAY.with(|stray| stray.borrow_mut().extend(computed.into_iter().filter(|value| !made.contains(value))));
+        }
+        let _ = first_new;
     }
 
     fn counts(&self) -> (usize, usize, usize) {
@@ -539,5 +546,24 @@ impl Spiller for InlineSpiller<'_> {
 
     fn recorded(&self) -> Vec<u32> {
         self.spilled.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A spill wrote each unit through the old spiller's plan on a body of
+    /// that unit (D-A), then worked out again the interval of every other
+    /// register the unit named (`refresh_named`: 27 M of d_faces -O2 m16's
+    /// 73 M in `spill`). `spillAroundUses` touches only the spilled register:
+    /// no plan, and only the registers it makes get intervals.
+    #[test]
+    fn test_a_spill_writes_no_plan_and_works_out_only_the_registers_it_makes() {
+        let plans = crate::backend::spiller::PLANS.with(std::cell::Cell::get);
+        let units = super::native_units();
+        crate::backend::regalloc_fuzz_tests::allocate_generated_bodies(40);
+        assert!(super::native_units() > units, "premise: some unit was spilled");
+        assert_eq!(crate::backend::spiller::PLANS.with(std::cell::Cell::get) - plans, 0, "plans of the old spiller");
+        let stray = super::STRAY.with(|one| std::mem::take(&mut *one.borrow_mut()));
+        assert!(stray.is_empty(), "intervals worked out of registers the spills did not make: {stray:?}");
     }
 }

@@ -2353,3 +2353,21 @@ fn test_live_intervals_are_live_where_the_dataflow_says() {
         "premise: bodies with values defined more than once ({checked}, {multi_def})"
     );
 }
+
+/// The generated bodies of seeds `0..count` through the allocator on the 386,
+/// for tests that count what the allocation did.
+pub(crate) fn allocate_generated_bodies(count: u64) {
+    for seed in 0..count {
+        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
+        let (body, _) = body(seed, &shape);
+        let mut phase = RegAlloc::new(
+            None,
+            None,
+            ProfileOrName::Name("386"),
+            &*target::BUILT_IN,
+            &crate::backend::classes::RegisterClasses::m16(),
+        )
+        .expect("a phase");
+        phase.transform(body).expect("allocated");
+    }
+}
