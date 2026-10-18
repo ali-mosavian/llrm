@@ -19,7 +19,7 @@ fn dump(text: &str) -> String {
         }
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let entry_first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<_> = function.parameters().iter().map(|p| (Operand::Value(*p), entry_first)).collect();
         for (_, inst) in function.walk() {
             if let Some(result) = function.instruction(inst).result {

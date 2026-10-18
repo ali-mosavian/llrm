@@ -52,7 +52,7 @@ fn steps(text: &str) -> Steps {
     let x = Operand::Value(function.parameters()[0]);
     for &bb in function.layout() {
         let terminator = function.terminator(bb).expect("a terminator");
-        for &inst in function.block(bb).instructions() {
+        for inst in function.block(bb).iter() {
             if let Some(result) = function.instruction(inst).result {
                 lvi.get_constant_range(&mut env, Operand::Value(result), inst, false);
             }

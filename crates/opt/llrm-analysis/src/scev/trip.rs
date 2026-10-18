@@ -530,7 +530,7 @@ impl ScalarEvolution {
 
         let mut properties = LoopProperties { has_no_abnormal_exits: true, has_no_side_effects: true };
         'blocks: for &block in loop_.get_blocks() {
-            for &inst in cx.function.block(block).instructions() {
+            for inst in cx.function.block(block).iter() {
                 if !is_guaranteed_to_transfer_execution_to_successor(&query, inst) {
                     properties.has_no_abnormal_exits = false;
                 }

@@ -121,7 +121,7 @@ impl Mssa {
                     }
                 }
             }
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let Some(access) = self.get_memory_access(inst) else { continue };
                 if !(list.is_some() && (self.access(access).kind == Kind::Use || defs.is_some())) {
                     return Err(

@@ -355,7 +355,7 @@ pub fn references(
     let addresses = Addresses::new(unit, counters, variant);
     let mut out = Vec::new();
     for &at in scanned {
-        for &inst in function.block(cfg::block(at)).instructions() {
+        for inst in function.block(cfg::block(at)).iter() {
             let op = function.instruction(inst);
             let (pointer, ty, write) = match op.opcode {
                 Opcode::Load { volatile: false, .. } => (op.operands[0], op.ty, false),
