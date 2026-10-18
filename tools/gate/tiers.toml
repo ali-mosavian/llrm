@@ -164,6 +164,7 @@ slow_pytest = [
     "tools/dosbatch/test_qbrt.py",
     "tools/dosbatch/test_qb32.py",
     "tools/gate/test_gate.py",
+    "tools/gate/test_prepush.py",
     "tools/dosbatch/test_qbgfxfill.py",
     "tools/bench/test_bench.py",
     "tools/dosbatch/test_qbgfxspeed.py",
@@ -176,6 +177,16 @@ slow_pytest = [
     "crates/target/llrm-x86-m32/vsgcc/dfaces/test_dfaces.py",
     "tools/dosbatch/test_dosbatch.py",
 ]
+
+# What tools/prepush.sh runs before a push: these gate steps (the smoke tier's commands, cut to the cheap ones that read the tree: the format check,
+# the generated docs, the tracked build products, the source scans, target_facts) and these root test binaries beside them. A scan added to
+# [[scan]] or a step added here is picked up; the script has no list of its own.
+[prepush]
+steps = ["fmt", "docs", "products", "scans", "facts"]
+tests = ["docs_links"]
+# Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
+[prepush.checks]
+"diff check" = "git diff --check origin/main && ! git diff -U0 origin/main | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]
