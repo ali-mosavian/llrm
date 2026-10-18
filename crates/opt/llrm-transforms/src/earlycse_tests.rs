@@ -167,3 +167,36 @@ b0:
     assert_eq!(after.matches("call i32 @b").count(), 2, "{after}");
     assert_eq!(after.matches("call i32 @c").count(), 1, "{after}");
 }
+
+/// `simplifyInstruction` was a stub of a few identities, so a compare that only
+/// known bits decide (`(x & 7) u< 8`) stayed in the function.
+#[test]
+fn test_a_compare_the_known_bits_decide_is_folded() {
+    let after = run("define i1 @f(i32 %x) {
+b0:
+  %m = and i32 %x, 7
+  %c = icmp ult i32 %m, 8
+  ret i1 %c
+}
+");
+    assert!(!after.contains("icmp"), "{after}");
+}
+
+/// A compare implied by the branch that dominates it is the branch's answer
+/// (`isImpliedByDomCondition`, which needs the dominator tree in the query).
+#[test]
+fn test_a_compare_the_dominating_branch_implies_is_folded() {
+    let after = run("define i32 @f(i32 %x) {
+b0:
+  %a = icmp ult i32 %x, 10
+  br i1 %a, label %b1, label %b2
+b1:
+  %c = icmp ult i32 %x, 20
+  %r = zext i1 %c to i32
+  ret i32 %r
+b2:
+  ret i32 0
+}
+");
+    assert_eq!(after.matches("icmp").count(), 1, "{after}");
+}
