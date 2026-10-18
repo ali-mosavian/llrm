@@ -514,7 +514,7 @@ fn _control(
     // A latch that only jumps on, split from a critical edge, is the end of
     // the block that branches to it: that block is tested after its trip.
     let forwarded = (latch.succ.as_slice() == [header.at]).then(|| {
-        let only = function.block(cfg::block(latch.at)).instructions();
+        let only = function.block(cfg::block(latch.at));
         let preds =
             function.predecessors(cfg::block(latch.at)).into_iter().map(|at| block_of(cfg::id(at))).collect::<Vec<_>>();
         match (only.len(), &preds[..]) {
@@ -1969,7 +1969,7 @@ fn accesses<'a>(
         .body
         .iter()
         .filter(move |at| latch.is_some_and(|latch| shape.dominance.dominates(unit.function, **at, latch)))
-        .flat_map(|&at| unit.function.block(cfg::block(at)).instructions().iter().map(move |&inst| (at, inst)))
+        .flat_map(|&at| unit.function.block(cfg::block(at)).iter().map(move |inst| (at, inst)))
         .filter_map(|(at, inst)| Some((at, MemRef::of(unit, inst)?)))
         .filter(|(_, reference)| reference.inbounds)
 }
@@ -2519,7 +2519,7 @@ pub fn control_replacement<'a>(
         return None;
     }
     let (header, latch) = (cfg::block(loop_.header), cfg::block(proof.latch));
-    let first = function.block(latch).instructions().first().map(|&one| &function.instruction(one).opcode);
+    let first = function.block(latch).first().map(|one| &function.instruction(one).opcode);
     if loop_.body.len() != 2
         || proof.entered != proof.latch
         || first == Some(&Opcode::Phi)
@@ -2529,10 +2529,9 @@ pub fn control_replacement<'a>(
     }
     let tests_only = function
         .block(header)
-        .instructions()
         .iter()
         .all(
-            |&inst| inst == proof.compare
+            |inst| inst == proof.compare
                 || inst == proof.branch
                 || matches!(
                     function.instruction(inst).opcode,

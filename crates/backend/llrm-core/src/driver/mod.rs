@@ -238,7 +238,7 @@ fn spill_model(program: &Program) {
                 .with_spaces(program.target.spaces())
                 .with_registers(&registers)
                 .with_shape(&shape);
-            let trips = profit::proven_trips(&unit, &registers);
+            let trips = profit::proven_trips(&unit);
             let Some(frequency) =
                 profit::_frequencies(&module.context, &module.metadata, &module.globals, function, Some(&trips))
             else {
@@ -304,7 +304,7 @@ pub fn emitted(
             })
         };
         let instructions: usize = bodies()
-            .map(|one| one.layout().iter().map(|&block| one.block(block).instructions().len()).sum::<usize>())
+            .map(|one| one.layout().iter().map(|&block| one.block(block).len()).sum::<usize>())
             .sum();
         llrm_support::debug!("mir", "functions {} instructions {}", bodies().count(), instructions);
     }

@@ -509,13 +509,8 @@ pub fn ranges_of(
             let exposed = match at {
                 Some((home, false)) if home == block => {
                     let places = positions.get_or_insert_with(block, || {
-                        let mut table: Vec<(llrm_mir::module::InstId, usize)> = function
-                            .block(block)
-                            .instructions()
-                            .iter()
-                            .enumerate()
-                            .map(|(at, &one)| (one, at))
-                            .collect();
+                        let mut table: Vec<(llrm_mir::module::InstId, usize)> =
+                            function.block(block).iter().enumerate().map(|(at, one)| (one, at)).collect();
                         table.sort_unstable();
                         #[cfg(test)]
                         POSITION_SLOTS.with(|slots| slots.set(slots.get() + table.len()));
@@ -583,8 +578,8 @@ pub fn ranges_of(
                     if !seen_phis.insert((id(block), value)) {
                         continue;
                     }
-                    for one in function.block(block).instructions() {
-                        let phi = function.instruction(*one);
+                    for one in function.block(block).iter() {
+                        let phi = function.instruction(one);
                         if phi.opcode != Opcode::Phi {
                             break;
                         }

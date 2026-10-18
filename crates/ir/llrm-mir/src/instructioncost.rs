@@ -272,7 +272,7 @@ pub fn instruction_cost(
             // for code size.
             if kind == CostKind::CodeSize
                 && let Some(value) = operation.result
-                && let [only] = function.users(value)
+                && let Some(only) = function.users(value).only()
                 && let Opcode::Cast(CastOp::Trunc) = function.instruction(only.user).opcode
             {
                 loaded = function.instruction(only.user).ty;

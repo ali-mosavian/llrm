@@ -208,7 +208,7 @@ fn _load(
     let Opcode::Load { volatile: false, .. } = op.opcode else { return None };
     let bits = unit.context.types.int_bits(op.ty)?;
     let value = op.result?;
-    let [only] = unit.function.users(value) else { return None };
+    let only = unit.function.users(value).only()?;
     let user = unit.function.instruction(only.user);
     let stored = matches!(user.opcode, Opcode::Store { volatile: false, .. })
         && only.index == 0
@@ -301,9 +301,7 @@ fn _replaced(
     };
     let last = function
         .block(function.parent(first.store).expect("a placed store"))
-        .instructions()
         .iter()
-        .copied()
         .rfind(|inst| run.iter().any(|one| one.store == *inst))
         .expect("a run has stores");
     let call = function.create_instruction(
