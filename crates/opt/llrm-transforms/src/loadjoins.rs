@@ -296,12 +296,7 @@ fn planned(
         .layout()
         .iter()
         .flat_map(|&block| {
-            function
-                .block(block)
-                .instructions()
-                .iter()
-                .enumerate()
-                .map(move |(index, &inst)| (inst, (cfg::id(block), index)))
+            function.block(block).iter().enumerate().map(move |(index, inst)| (inst, (cfg::id(block), index)))
         })
         .collect();
     let providers: Vec<(InstId, MemRef, Operand)> = memory
@@ -333,7 +328,7 @@ fn planned(
             continue;
         }
         let join = cfg::block(block.at);
-        for (index, &load) in function.block(join).instructions().iter().enumerate() {
+        for (index, load) in function.block(join).iter().enumerate() {
             let Some((reference, result)) = loaded_into(unit, accesses, load) else {
                 continue;
             };

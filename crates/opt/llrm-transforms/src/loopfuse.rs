@@ -693,7 +693,7 @@ fn fused(
     }
     // The first loop's phis come back round from the second's latch, and the
     // second's are the fused loop's too.
-    let top = *function.block(first.header).instructions().first().ok_or("a header")?;
+    let top = function.block(first.header).first().ok_or("a header")?;
     for phi in phis_of(function, first.header) {
         let moved = arms(function, phi)
             .into_iter()

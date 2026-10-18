@@ -1300,8 +1300,8 @@ fn _stepped_before_test(
         // The step is made before the compare, on every path to it.
         let (stepped_in, compared_in) = (function.parent(made)?, block);
         let before = if stepped_in == compared_in {
-            let all = function.block(block).instructions();
-            all.iter().position(|one| *one == made)? < all.iter().position(|one| *one == compare)?
+            let all = function.block(block);
+            all.iter().position(|one| one == made)? < all.iter().position(|one| one == compare)?
         } else {
             view.shape().dominance.dominates(function, cfg::id(stepped_in), at)
         };
@@ -3076,8 +3076,8 @@ fn _applied(
         let value = if fit.next {
             // The step goes before its first reader in the latch.
             if let (Some(step), Place::Before(reader)) = (stepping[*index], site.at) {
-                let order = function.block(plan.latch).instructions();
-                if order.iter().position(|&one| one == reader) < order.iter().position(|&one| one == step) {
+                let order = function.block(plan.latch);
+                if order.iter().position(|one| one == reader) < order.iter().position(|one| one == step) {
                     function.move_to(step, Position::Before(reader)).expect("a placed reader");
                 }
             }
@@ -3120,9 +3120,9 @@ fn _applied(
     // already ahead of the branch stays, where its readers need it.
     if let (true, Some(next)) = (proof.posttested, stepping[*index]) {
         let block = function.parent(branch).expect("a placed branch");
-        let order = function.block(block).instructions();
+        let order = function.block(block);
         let ahead = function.parent(next) == Some(block)
-            && order.iter().position(|&one| one == next) < order.iter().position(|&one| one == branch);
+            && order.iter().position(|one| one == next) < order.iter().position(|one| one == branch);
         if !ahead {
             function.move_to(next, Position::Before(branch)).expect("a placed branch");
         }
@@ -3169,9 +3169,8 @@ fn _after_step(
     let Place::Before(reader) = site.at else { return None };
     let Operand::Value(stepped) = stepped else { return None };
     let ValueDef::Instruction(step) = function.value(stepped).def else { return None };
-    let order = function.block(latch).instructions();
-    let (step_at, reader_at) =
-        (order.iter().position(|&one| one == step)?, order.iter().position(|&one| one == reader)?);
+    let order = function.block(latch);
+    let (step_at, reader_at) = (order.iter().position(|one| one == step)?, order.iter().position(|one| one == reader)?);
     if site.one.kind != UseKind::Address || fit.trip.is_some() || fit.k == BigInt::from(0) || step_at > reader_at {
         return None;
     }
