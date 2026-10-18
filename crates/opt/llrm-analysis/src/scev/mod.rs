@@ -25,6 +25,7 @@ pub mod create_phi;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
+pub mod evaluate;
 pub mod exit_limit;
 pub mod exit_value;
 pub mod expand;
