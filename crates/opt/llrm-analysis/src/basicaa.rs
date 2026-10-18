@@ -11,8 +11,9 @@
 //! `aliasGEP` as far as it needs no value ranges: the inbounds and
 //! constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
-//! ranges, `aliasPHI`, `aliasSelect`, the mod/ref queries (they answer the top
-//! of the lattice).
+//! ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
+//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
+//! read the attributes.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
@@ -520,20 +521,63 @@ impl AAResults for BasicAA<'_> {
         ModRefInfo::ModRef
     }
 
+    /// `BasicAAResult::getArgModRefInfo` (BasicAliasAnalysis.cpp:897,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L897>):
+    /// the call site's attributes on the argument, else the callee's on the
+    /// parameter (`CallBase::paramHasAttr`).
     fn get_arg_mod_ref_info(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: u32,
+        call: llrm_mir::module::InstId,
+        arg: u32,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        let function = self.unit.function;
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+            return ModRefInfo::ModRef;
+        };
+        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function());
+        let stated = |fact: fn(&llrm_mir::facts::Facts) -> bool| {
+            let site =
+                info.argument_attrs.get(arg as usize).is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)));
+            site || callee
+                .and_then(|one| one.parameter_attrs.get(arg as usize))
+                .is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)))
+        };
+        if stated(llrm_mir::facts::Facts::read_none) {
+            ModRefInfo::NoModRef
+        } else if stated(llrm_mir::facts::Facts::write_only) {
+            ModRefInfo::Mod
+        } else if stated(llrm_mir::facts::Facts::read_only) {
+            ModRefInfo::Ref
+        } else {
+            ModRefInfo::ModRef
+        }
     }
 
+    /// `BasicAAResult::getMemoryEffects(Call)` (BasicAliasAnalysis.cpp:860,
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/BasicAliasAnalysis.cpp#L860>):
+    /// the call site's `memory(...)` met with the direct callee's.
+    ///
+    /// DEVIATE B1: no `hasReadingOperandBundles`/`hasClobberingOperandBundles`/
+    /// `isVolatile` terms. MIR has no operand bundles (#2203) and no volatile
+    /// call; `CallInfo` carries neither, so there is nothing to read.
+    /// DEVIATE B2: no `experimental_guard`/`experimental_deoptimize` case; MIR
+    /// has neither intrinsic.
     fn get_memory_effects(
         &mut self,
-        _: llrm_mir::module::InstId,
+        call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        MemoryEffects::unknown()
+        let function = self.unit.function;
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+            return MemoryEffects::unknown();
+        };
+        let site = MemoryEffects::of_attrs(&info.attrs);
+        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
+            .and_then(|one| self.unit.globals.get(one.0 as usize))
+            .and_then(|one| one.function());
+        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
     }
 
     fn get_mod_ref_info(
@@ -567,6 +611,7 @@ impl AAResults for BasicAA<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aa::IRMemLocation;
     use crate::testing::{layout, parsed, value};
 
     const M32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
@@ -635,6 +680,60 @@ mod tests {
         };
         assert_eq!(answer(&body(148), "a", "slot", 4), AliasResult::NoAlias);
         assert_eq!(answer(&body(149), "a", "slot", 4), AliasResult::MayAlias);
+    }
+
+    /// The call `%c` of `@f` in `body`: its effects and its argument 0's.
+    fn call_effects(body: &str) -> (MemoryEffects, ModRefInfo) {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let call = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Call(_)))
+            .expect("a call");
+        let mut aa = BasicAA::new(&unit);
+        (aa.get_memory_effects(call, &mut AAQueryInfo::default()), aa.get_arg_mod_ref_info(call, 0))
+    }
+
+    /// `getMemoryEffects(Call)` met the site's `memory(...)` with the callee's.
+    /// The stub answered `unknown` for every call: `memory(argmem: read)` was
+    /// `ModRef` everywhere, and `FunctionAttrs` could infer nothing.
+    #[test]
+    fn a_calls_effects_are_the_meet_of_its_site_and_its_callee() {
+        use IRMemLocation::{ArgMem, Other};
+        let (declared, _) = call_effects(
+            "declare void @g(ptr) memory(argmem: read)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n",
+        );
+        assert_eq!(declared.mod_ref(ArgMem), ModRefInfo::Ref);
+        assert_eq!(declared.mod_ref(Other), ModRefInfo::NoModRef);
+        let (met, _) = call_effects(
+            "declare void @g(ptr) memory(argmem: readwrite)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p) memory(argmem: write)\n  ret void\n}\n",
+        );
+        assert_eq!(met.mod_ref(ArgMem), ModRefInfo::Mod);
+        let (none, _) =
+            call_effects("declare void @g()\ndefine void @f() {\nentry:\n  call void @g()\n  ret void\n}\n");
+        assert_eq!(none, MemoryEffects::unknown());
+        let (readnone, _) =
+            call_effects("declare void @g() readnone\ndefine void @f() {\nentry:\n  call void @g()\n  ret void\n}\n");
+        assert!(readnone.does_not_access_memory());
+    }
+
+    /// `getArgModRefInfo`: `readnone`, `writeonly`, `readonly` on the site's
+    /// argument or the callee's parameter, in that order.
+    #[test]
+    fn an_argument_is_what_its_attributes_leave_open() {
+        let arg = |callee: &str, site: &str| {
+            call_effects(&format!(
+                "declare void @g(ptr {callee})\ndefine void @f(ptr %p) {{\nentry:\n  call void @g(ptr {site} %p)\n  ret void\n}}\n"
+            ))
+            .1
+        };
+        assert_eq!(arg("", ""), ModRefInfo::ModRef);
+        assert_eq!(arg("readonly", ""), ModRefInfo::Ref);
+        assert_eq!(arg("", "writeonly"), ModRefInfo::Mod);
+        assert_eq!(arg("readonly", "readnone"), ModRefInfo::NoModRef);
     }
 
     /// Distinct allocas are distinct objects.

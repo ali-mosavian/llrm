@@ -260,6 +260,63 @@ impl MemoryEffects {
         Self { effects: [ModRefInfo::NoModRef; 4] }
     }
 
+    /// `Attrs.getMemoryEffects()`: what `memory(...)` and the legacy
+    /// `readnone`/`readonly`/`writeonly` allow at each location, the
+    /// attributes' meet. A location `memory(...)` does not name takes its
+    /// default, `none` when the default is not stated.
+    pub fn of_attrs(attrs: &[llrm_mir::opcode::Attribute]) -> Self {
+        use llrm_mir::opcode::Attribute;
+        let access = |word: &str| match word {
+            "readwrite" => ModRefInfo::ModRef,
+            "read" => ModRefInfo::Ref,
+            "write" => ModRefInfo::Mod,
+            _ => ModRefInfo::NoModRef,
+        };
+        let mut result = Self::unknown();
+        for attr in attrs {
+            let stated = match attr {
+                Attribute::Memory(locations) => {
+                    let default = locations
+                        .iter()
+                        .find(|(name, _)| name.is_none())
+                        .map_or(ModRefInfo::NoModRef, |(_, word)| access(word));
+                    let named = |name: &str| {
+                        locations
+                            .iter()
+                            .find(|(one, _)| one.as_deref() == Some(name))
+                            .map_or(default, |(_, word)| access(word))
+                    };
+                    Self::none()
+                        .with(IRMemLocation::ArgMem, named("argmem"))
+                        .with(IRMemLocation::InaccessibleMem, named("inaccessiblemem"))
+                        .with(IRMemLocation::ErrnoMem, named("errnomem"))
+                        .with(IRMemLocation::Other, default)
+                }
+                Attribute::Flag(_) => {
+                    let through = llrm_mir::memory::through(std::slice::from_ref(attr));
+                    let info = match (through.reads, through.writes) {
+                        (true, true) => ModRefInfo::ModRef,
+                        (true, false) => ModRefInfo::Ref,
+                        (false, true) => ModRefInfo::Mod,
+                        (false, false) => ModRefInfo::NoModRef,
+                    };
+                    Self { effects: [info; 4] }
+                }
+                _ => continue,
+            };
+            result = result.intersect(stated);
+        }
+        result
+    }
+
+    /// `MemoryEffects::operator&`.
+    pub fn intersect(
+        self,
+        other: Self,
+    ) -> Self {
+        Self { effects: std::array::from_fn(|at| self.effects[at].intersect(other.effects[at])) }
+    }
+
     pub fn mod_ref(
         self,
         at: IRMemLocation,
