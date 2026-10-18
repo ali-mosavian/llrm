@@ -23,8 +23,10 @@ pub mod divrec;
 pub mod eval;
 pub mod expander;
 pub mod expr;
+pub mod forget;
 #[cfg(test)]
 mod golden_tests;
+pub mod guards;
 pub mod minmax;
 pub mod pattern;
 pub mod poison;
@@ -36,13 +38,14 @@ pub mod scope;
 pub mod seams;
 pub mod sequential;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef, ValueId};
 use llrm_mir::types::Type as MirType;
 use llrm_mir::valuetracking::{AssumptionCache, Query};
 
@@ -137,6 +140,18 @@ pub struct ScalarEvolution {
     pub(super) loop_dispositions: HashMap<(Scev, Option<BlockId>), disposition::LoopDisposition>,
     /// `BlockDispositions`.
     pub(super) block_dispositions: HashMap<(Scev, BlockId), disposition::BlockDisposition>,
+    /// `ValueExprMap`: the SCEV of each value that has one. Constants are not
+    /// held: their SCEV is a constant node, made again for the price of a
+    /// lookup.
+    pub(super) value_expr_map: IdMap<ValueId, Scev>,
+    /// `ExprValueMap`: the values a SCEV was made for, in insertion order.
+    pub(super) expr_value_map: HashMap<Scev, Vec<ValueId>>,
+    /// `SCEVUsers`: the expressions that have a SCEV as an operand.
+    pub(super) scev_users: HashMap<Scev, HashSet<Scev>>,
+    /// `LoopUsers`: the add recurrences of each loop.
+    pub(super) loop_users: IdMap<BlockId, Vec<Scev>>,
+    /// `FoldCacheUser`: the `fold_cache` keys each SCEV is the answer of.
+    pub(super) fold_cache_user: HashMap<Scev, Vec<(Type, Use, Ty)>>,
     /// `CouldNotCompute`.
     could_not_compute: Scev,
 }
@@ -159,6 +174,11 @@ impl ScalarEvolution {
             constant_multiple_cache: HashMap::new(),
             loop_dispositions: HashMap::new(),
             block_dispositions: HashMap::new(),
+            value_expr_map: IdMap::new(),
+            expr_value_map: HashMap::new(),
+            scev_users: HashMap::new(),
+            loop_users: IdMap::new(),
+            fold_cache_user: HashMap::new(),
             could_not_compute: Scev(0),
         };
         se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
@@ -380,6 +400,12 @@ impl ScalarEvolution {
         let at = Scev(self.nodes.len() as u32);
         self.nodes.push(Node { kind, ty, size, flags: 0, canonical: at });
         self.unique.insert(key, at);
+        // `LoopUsers[L].push_back(S)` and `registerUser(S, Ops)`, made where
+        // each constructor makes a node.
+        if let Kind::AddRec(_, header) = self.nodes[at.0 as usize].kind {
+            self.loop_users.get_or_insert_with(header, Vec::new).push(at);
+        }
+        self.register_user(at);
         at
     }
 
