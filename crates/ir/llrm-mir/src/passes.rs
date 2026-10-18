@@ -637,7 +637,7 @@ impl Analysis for Dominators {
 pub struct Loops;
 
 impl Analysis for Loops {
-    type Result = crate::loops::LoopInfo;
+    type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
     fn run(
@@ -645,8 +645,8 @@ impl Analysis for Loops {
         layout: &DataLayout,
         function: &Function,
         analyses: &mut Analyses,
-    ) -> crate::loops::LoopInfo {
-        crate::loops::LoopInfo::new(function, &analyses.get::<Dominators>(context, layout, function))
+    ) -> crate::loopinfo::LoopInfo {
+        crate::loopinfo::LoopInfo::analyze(function, || analyses.get::<Dominators>(context, layout, function))
     }
 }
 

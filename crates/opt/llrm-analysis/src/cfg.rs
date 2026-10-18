@@ -89,12 +89,12 @@ use std::rc::Rc;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::dominators::DominatorTree;
-use llrm_mir::loops::LoopInfo;
+use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Analyses, Analysis, Dominators, Loops, PreservedAnalyses};
 use llrm_mir::{Constant, ConstantKind, Context};
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashSet;
 
 use crate::graph::loops::{self, Dominates, Loop, Node};
 
@@ -431,17 +431,18 @@ pub fn natural(
     function: &Function,
     info: &LoopInfo,
 ) -> Vec<Loop> {
-    let headers = info.loops.iter().map(|one| (one.header, one)).collect::<HashMap<_, _>>();
+    let forest = std::rc::Rc::new(llrm_mir::forest::Forest::of_loop_info(function, info));
     let mut seen = HashSet::default();
-    let mut found = Vec::with_capacity(info.loops.len());
+    let mut found = Vec::with_capacity(forest.loops.len());
     for &at in function.layout() {
         for successor in function.successors(at) {
-            let Some(one) = headers.get(&successor) else { continue };
-            if one.latches.contains(&at) && seen.insert(successor) {
+            let Some(one) = info.get_loop_for(successor).filter(|one| one.get_header() == successor) else { continue };
+            let index = one.id().0 as usize;
+            if one.contains(at) && seen.insert(successor) {
                 found.push(Loop {
                     header: id(successor),
-                    latches: one.latches.iter().map(|&latch| id(latch)).collect(),
-                    body: one.blocks.ids().clone(),
+                    latches: forest.loops[index].latches.iter().copied().collect(),
+                    body: llrm_mir::forest::Body::new(&forest, index),
                 });
             }
         }
@@ -534,7 +535,7 @@ impl Shape {
         DERIVED.with(|count| count.set(count.get() + 1));
         llrm_mir::counts::bump(llrm_mir::counts::Event::Shapes);
         let dominance = Dominance::of(function);
-        let loops = natural(function, &LoopInfo::new(function, dominance.tree()));
+        let loops = natural(function, &LoopInfo::analyze(function, || dominance.tree()));
         Self { dominance, loops, reaching: Reaching::default() }
     }
 }
