@@ -292,6 +292,11 @@ pub fn specialize_parameters(
             changed = true;
         }
     }
+    if changed {
+        // A pointer parameter now a constant address: its accesses are no
+        // longer argument memory.
+        llrm_mir::memory::unsplit(&mut function.attrs);
+    }
     changed
 }
 

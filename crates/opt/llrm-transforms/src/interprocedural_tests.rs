@@ -2,7 +2,9 @@
 
 use std::collections::BTreeSet;
 
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::passes::PassManager;
+use llrm_mir::target::Machine;
 
 use super::*;
 use crate::inline::Threshold;
@@ -1934,4 +1936,61 @@ fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
     };
     assert_eq!(loads(""), 0, "premise: the stamped read-only callee leaves the cell alone");
     assert_eq!(loads("noipa"), 1);
+}
+
+/// `sc_face_set_head` (QCport's surface cache) writes through `sc->faces`, a
+/// pointer it loads from its argument. Stamped `memory(readwrite, argmem:
+/// read)`, correct; argument promotion then takes `sc->faces` as the
+/// parameter, so the write is now through an argument, and the next stamp
+/// narrowed each location by what the old split stated: the write was in
+/// neither (`memory(argmem: read)`), the call in `sc_init`'s loop was erased as
+/// reading only, and the faces kept their old heads.
+#[test]
+fn a_write_that_moves_to_an_argument_when_it_is_promoted_stays_a_write() {
+    let mut module = parsed(&format!(
+        "{}define internal void @set(ptr addrspace(1) nocapture %0, i16 %1, i16 %2) {{
+b1:
+  %3 = getelementptr inbounds i8, ptr addrspace(1) %0, i16 14
+  %4 = load ptr addrspace(1), ptr addrspace(1) %3
+  %5 = mul i16 %1, 8
+  %6 = getelementptr inbounds i8, ptr addrspace(1) %4, i16 %5
+  %7 = load i16, ptr addrspace(1) %6
+  %8 = and i16 %7, 8191
+  %9 = shl i16 %2, 13
+  %10 = or i16 %8, %9
+  store i16 %10, ptr addrspace(1) %6
+  ret void
+}}
+
+define void @init(ptr addrspace(1) %0, i16 %n) {{
+b:
+  call void @set(ptr addrspace(1) %0, i16 %n, i16 0)
+  ret void
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a layout")).expect("parses");
+    crate::testing::stamped(&mut module).unwrap();
+    crate::argpromotion::promoted(&mut module, &layout, &llrm_x86_m16::Dos::default().costs(), false);
+    // Until the next stamp the passes that run on the callers read this.
+    let promoted = printed(&module);
+    let line = promoted.lines().find(|line| line.starts_with("define internal void @set")).expect("set");
+    assert!(!line.contains("argmem: read"), "{line}");
+    crate::testing::stamped(&mut module).unwrap();
+    let text = printed(&module);
+    let line = text.lines().find(|line| line.starts_with("define internal void @set")).expect("set");
+    assert!(!line.contains("memory(argmem: read)") && !line.contains("memory(read"), "{line}");
+    // What the passes ask: the call writes memory, so it is neither erased nor
+    // a load after it forwarded from one before.
+    let callees = llrm_mir::memory::callees(&module);
+    let init = llrm_analysis::testing::function(&module, "init");
+    let call = init
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(
+            init.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Call(_)
+        ));
+    assert!(llrm_mir::memory::of(&module.context, &callees, init, call.expect("a call")).writes, "{text}");
 }

@@ -510,3 +510,26 @@ fn test_noreturn_follows_a_long_chain_to_where_it_ends() {
     let returns = parsed(&chain("ret void"));
     assert_eq!(noreturn_procedures(&returns, &returns.declarations(), &all(&returns)), BTreeSet::new());
 }
+
+/// A pointer parameter replaced by the address of a global: what the body
+/// wrote through it as `argmem` it now writes to a global, so `memory(argmem:
+/// write)` no longer says where.
+#[test]
+fn a_pointer_parameter_made_a_constant_address_unsplits_the_memory_attribute() {
+    let mut module = parsed(
+        "@g = global i16 0
+
+define internal void @set(ptr %p) memory(argmem: write) {
+b:
+  store i16 1, ptr %p
+  ret void
+}
+",
+    );
+    let global = module.named("g").unwrap();
+    let constant = module.reference(global);
+    let (context, function) = module.function_mut("set").unwrap();
+    assert!(specialize_parameters(context, function, &[Some(constant)]));
+    let attrs = &function.attrs;
+    assert!(llrm_mir::memory::located(attrs).1.writes, "{attrs:?}");
+}
