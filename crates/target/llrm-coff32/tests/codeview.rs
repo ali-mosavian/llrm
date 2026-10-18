@@ -31,7 +31,8 @@ fn public(
         name: name.into(),
         binding: Binding::Public,
         definition: Definition::Defined { section, offset },
-        size: 0, group: None,
+        size: 0,
+        group: None,
     }
 }
 
