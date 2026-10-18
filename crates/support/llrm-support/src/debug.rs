@@ -582,7 +582,9 @@ mod tests {
     fn test_the_instr_total_row_names_how_many_spans_it_timed() {
         let row = work_total_line(2_602_704_000, 2_573_426_000, "Minstr", 12075);
         assert!(
-            row.starts_with("[instr] total 2602.704 Minstr, outermost steps 2573.426 Minstr, outside every step 29.278 Minstr"),
+            row.starts_with(
+                "[instr] total 2602.704 Minstr, outermost steps 2573.426 Minstr, outside every step 29.278 Minstr"
+            ),
             "{row}"
         );
         assert!(row.contains("12075 timed spans"), "{row}");
