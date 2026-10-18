@@ -1125,8 +1125,11 @@ impl Selector<'_, '_, '_> {
         let regs = self.regs();
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
-        let ConstantKind::Float(bits) = self.module.context.get(id).kind else {
-            return refuse("a float constant of no bits");
+        // Poison is any value: +0.0.
+        let bits = match self.module.context.get(id).kind {
+            ConstantKind::Float(bits) => bits,
+            ConstantKind::Poison => 0,
+            _ => return refuse("a float constant of no bits"),
         };
         // An extended float is its 10 bytes: a dword, a dword and a word, as a
         // global's initializer lays them down.

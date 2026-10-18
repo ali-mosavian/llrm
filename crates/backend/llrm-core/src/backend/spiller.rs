@@ -361,7 +361,8 @@ pub fn materialized(
     let Plan { constants, addresses, extensions, frame_loads, rebuilt, stored, narrow } = plan;
     let merging: BTreeSet<u32> = stored.difference(plain).copied().collect();
     let first = fresh;
-    // A value made again where it is read cannot take the place of a stored one.
+    // A value made again where it is read cannot take the place of a stored
+    // one.
     let again: BTreeSet<u32> = constants
         .keys()
         .chain(addresses.keys())
@@ -370,9 +371,8 @@ pub fn materialized(
         .chain(rebuilt.keys())
         .copied()
         .collect();
-    let (body, next) = llrm_support::debug::timed("spill short updates", || {
-        _short_update_runs(body, &merging, &again, frame, fresh)
-    })?;
+    let (body, next) =
+        llrm_support::debug::timed("spill short updates", || _short_update_runs(body, &merging, &again, frame, fresh))?;
     fresh = next;
     let (body, next) =
         llrm_support::debug::timed("spill local updates", || _local_updates(&body, &merging, frame, fresh))?;
@@ -1775,41 +1775,63 @@ fn _existing_colors(
     let found = _existing_colors_by(body, frame, false);
     if llrm_support::env_flag!("LLRM_CHECK_COLORS") {
         let whole = _existing_colors_by(body, frame, true);
-        assert!(_same_colors(&found.0, &whole.0), "{}: the slot colors differ from working them out whole", body.name);
         // What is asked of a value is where it is live (`slots::fits` overlaps
-        // segments). Its weight is not read, and counts a value an
+        // segments of values with those of homes), so the homes and the values
+        // are compared together, the weight not read: it counts a value an
         // instruction names twice once more than the body made of the homes
         // does.
         assert!(
-            found
-                .1
-                .iter()
-                .all(|(value, interval)| whole.1.get(value).is_some_and(|other| other.segments == interval.segments)),
-            "{}: where a value is live differs from working it out whole",
-            body.name
-        );
-        assert!(
-            found.1.len() == whole.1.len(),
-            "{}: a value has no interval where working it out whole gives one",
+            found.1.len() == whole.1.len()
+                && found.1.iter().all(|(value, _)| whole.1.get(value).is_some())
+                && _same_liveness(&found, &whole),
+            "{}: the slot colors or where a value is live differ from working them out whole",
             body.name
         );
     }
     found
 }
 
-/// Whether two sets of slot colors are the same where each home is live: the
-/// weights of the occupants are not read.
-fn _same_colors(
-    one: &[(i64, u32, Vec<Interval>)],
-    other: &[(i64, u32, Vec<Interval>)],
+/// Whether two sets of slot colors, with the values' intervals beside them, say
+/// the same of where each is live, whatever numbers their positions carry. A
+/// body found by parts numbers its instructions as it remembers them and one
+/// worked out whole as it lays them out, so the same liveness comes in other
+/// numbers (27 of the 71 vsgcc programs at -O2, the first four segments of a
+/// home six instructions apart). What the colors read of a position is where it
+/// lies among the others, so the order of all the ends, the homes' and the
+/// values' in one order, is compared.
+fn _same_liveness(
+    one: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
+    other: &(Vec<(i64, u32, Vec<Interval>)>, Lives),
 ) -> bool {
-    one.len() == other.len()
-        && one.iter().zip(other).all(|(left, right)| {
-            left.0 == right.0
-                && left.1 == right.1
-                && left.2.len() == right.2.len()
-                && left.2.iter().zip(&right.2).all(|(a, b)| a.value == b.value && a.segments == b.segments)
-        })
+    let shape = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| {
+        let homes: Vec<(i64, u32, Vec<(u32, usize)>)> = colors
+            .iter()
+            .map(|(home, color, intervals)| {
+                (*home, *color, intervals.iter().map(|one| (one.value, one.segments.len())).collect())
+            })
+            .collect();
+        let values: std::collections::BTreeMap<u32, usize> =
+            lives.iter().map(|(value, interval)| (*value, interval.segments.len())).collect();
+        (homes, values)
+    };
+    // Every end of every segment, the homes' then the values' by value number,
+    // as its rank among the distinct positions.
+    let ranks = |colors: &[(i64, u32, Vec<Interval>)], lives: &Lives| -> Vec<usize> {
+        let by_value: std::collections::BTreeMap<u32, &Interval> =
+            lives.iter().map(|(value, interval)| (*value, interval)).collect();
+        let ends: Vec<i64> = colors
+            .iter()
+            .flat_map(|c| &c.2)
+            .chain(by_value.values().copied())
+            .flat_map(|i| &i.segments)
+            .flat_map(|s| [s.start, s.end])
+            .collect();
+        let mut distinct = ends.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        ends.iter().map(|end| distinct.binary_search(end).expect("an end is among them")).collect()
+    };
+    shape(&one.0, &one.1) == shape(&other.0, &other.1) && ranks(&one.0, &one.1) == ranks(&other.0, &other.1)
 }
 
 // `_existing_colors`, with the intervals of the homes' pseudo-values found
@@ -5657,7 +5679,13 @@ mod tests {
             &[1],
             &[],
         );
-        let copy = insn(0x102, (0x102, 0x102), semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]), &[2], &[1]);
+        let copy = insn(
+            0x102,
+            (0x102, 0x102),
+            semantics(Operation::Move, "mov", vec![held(2, 2)], vec![held(1, 2)]),
+            &[2],
+            &[1],
+        );
         let add = insn(
             0x104,
             (0x104, 0x104),
@@ -5665,7 +5693,13 @@ mod tests {
             &[2],
             &[2],
         );
-        let user = insn(0x106, (0x106, 0x106), semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]), &[3], &[2]);
+        let user = insn(
+            0x106,
+            (0x106, 0x106),
+            semantics(Operation::Move, "mov", vec![held(3, 2)], vec![held(2, 2)]),
+            &[3],
+            &[2],
+        );
         let mut frame = Frame::new(0);
         let (result, _made) = spilled(
             &_body(vec![load, copy, add, user]),
@@ -6025,6 +6059,28 @@ mod tests {
         );
     }
 
+    /// The colors found by parts and worked out whole are the same liveness in
+    /// other numbers (27 of the 71 vsgcc programs at -O2: x_fib's home -52 had
+    /// its segments six instruction slots apart), and `LLRM_CHECK_COLORS`
+    /// called them different. What the colors read is the order of the ends
+    /// of the homes and the values together: a shift is the same, a value
+    /// that now reaches a home is not.
+    #[test]
+    fn test_slot_colors_that_differ_only_in_position_numbers_are_the_same() {
+        use crate::analysis::intervals::{Interval, Segment};
+        let segments =
+            |runs: &[(i64, i64)]| runs.iter().map(|&(start, end)| Segment { start, end }).collect::<Vec<_>>();
+        let found = |home: (i64, i64), value: (i64, i64)| {
+            let colors = vec![(-52, 4, vec![Interval::new(7, segments(&[home]))])];
+            let lives =
+                super::Lives { shared: None, own: [(9, Interval::new(9, segments(&[value])))].into_iter().collect() };
+            (colors, lives)
+        };
+        let before = found((36, 72), (80, 90));
+        assert!(super::_same_liveness(&before, &found((42, 78), (86, 96))), "the same order of ends in other numbers");
+        assert!(!super::_same_liveness(&before, &found((42, 88), (86, 96))), "a home that now reaches the value");
+    }
+
     /// Every spill made a body of every instruction with the slots in it as
     /// values, and numbered it and found every interval again to colour the
     /// slots: 16 s of compiling `d_faces` (#559). The slots are found among
@@ -6048,7 +6104,7 @@ mod tests {
             super::_existing_colors_by(&spilt, &mut frame, false),
             super::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
+        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
         assert!(
             among.1.len() == whole.1.len()
                 && among
@@ -6082,7 +6138,7 @@ mod tests {
             super::_existing_colors_by(&spilt, &mut frame, false),
             super::_existing_colors_by(&spilt, &mut frame, true),
         );
-        assert!(super::_same_colors(&among.0, &whole.0), "{:?} {:?}", among.0, whole.0);
+        assert!(super::_same_liveness(&among, &whole), "{:?} {:?}", among.0, whole.0);
     }
 
     #[test]

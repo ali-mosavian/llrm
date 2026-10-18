@@ -2,6 +2,8 @@
 
 TL;DR: `regalloc` is 415.5 M of `d_faces` -O2 (2,612 M), against greedy's 39.5 M. The decisions are comparable (837 assignments against LLVM's 815, 67 evictions against 78); the rounds cost 2.0 M each against LLVM's 150 K, and a fit over bodies of 191 to 4,664 instructions says a round costs 431 K plus 309 instructions per body instruction. The sites I and greedy-port have measured add to about 55 M of new work beside the 57 M of #1958; the fit says 57% of a round on the large function scales with the body and a fixed 431 K does not (section 1.1). This page is the joint design; each half is a section, and the steps are in the plan's block format. Status: draft after review, nothing built.
 
+> **Reference note.** The LLVM allocator figures on this page (greedy 39.5 M, 815 assignments, 78 evictions, 122, 13/22/33 K per decision) were taken from the distro `llc` 20.1.8, are not reproduced on the pinned or the distro `llc`, and are being re-taken on the pinned 24.0.0git `d1106deb71cc` by regalloc-core-poc. Do not quote them until its old-versus-new lands.
+
 ## 1. Where the 415.5 M goes
 
 `d_faces` -O2, 11 functions, callgrind on main plus [#2010], [#2021], [#2027], [#2032] (instructions, inclusive). A round is one spill, split or rewrite followed by a rebuild of the facts: 206 facts builds, 11 of them from scratch.
@@ -198,3 +200,11 @@ The experiment the review proposed (the same function at 1x, 2x and 4x and beyon
 [#1958]: https://github.com/ali-mosavian/llrm/pull/1958
 [#1954]: https://github.com/ali-mosavian/llrm/pull/1954
 [spec 8]: compile-time-spec.md
+
+## 7. The greedy port (current)
+
+The design above is superseded: the allocator is now the translation of LLVM's greedy at `d1106deb71cc`, behind `LLRM_GREEDY` on `alim/poc/liveness-types`, and becomes the default only when rows hold at m16 and m32.
+
+Acceptance item from [#2260]: the `lir loopslots` row (x5.82 per doubling) is replaced by this port, with SplitKit's region splitting as its counterpart. With greedy the default, the loopslots step is gone and no step on the cases or nest axes exceeds its limit at 2N (`tools/test_budgets.py`).
+
+[#2260]: https://github.com/ali-mosavian/llrm/issues/2260
