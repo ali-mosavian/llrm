@@ -381,7 +381,7 @@ b5:
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let (_, after) = applied(text, &inputs);
     assert_eq!(block_of(&after, "b0"), ["%k = mul i16 %a, 3", "br label %b1"], "{after}");
-    assert_eq!(DECIDED.with(|all| all.borrow().rebuilds), 3, "one graph, one more after each loop that changed");
+    assert_eq!(DECIDED.with(|all| all.borrow().rebuilds), 1, "one graph, kept right by the updater through the nest");
 }
 
 /// A loop over a slot (a global) with the accesses `body` makes; the exit
