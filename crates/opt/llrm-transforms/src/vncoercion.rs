@@ -223,11 +223,21 @@ impl MemIntrinsic {
         function: &Function,
         inst: InstId,
     ) -> Option<Self> {
+        Self::of_in(&module.context, &module.globals, function, inst)
+    }
+
+    /// `inst` of `function` as one, where `globals` name the callees.
+    pub fn of_in(
+        context: &Context,
+        globals: &[llrm_mir::module::GlobalValue],
+        function: &Function,
+        inst: InstId,
+    ) -> Option<Self> {
         let instruction = function.instruction(inst);
         let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
-        let ConstantKind::Global(callee) = module.context.get(callee).kind else { return None };
+        let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
         let [dest, second, length, ..] = instruction.operands[..] else { return None };
-        match module.global(callee).name.as_deref().and_then(Intrinsic::named)? {
+        match globals.get(callee.0 as usize)?.name.as_deref().and_then(Intrinsic::named)? {
             Intrinsic::MemSet => Some(Self::Set { dest, value: second, length }),
             Intrinsic::MemCpy | Intrinsic::MemMove => Some(Self::Transfer { dest, source: second, length }),
             _ => None,
