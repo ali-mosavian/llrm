@@ -34,6 +34,7 @@ pub mod fpclass;
 pub mod hash;
 pub mod idf;
 pub mod inline;
+pub mod instructioncost;
 pub mod interpret;
 mod intrinsic_attrs;
 pub mod intrinsics;

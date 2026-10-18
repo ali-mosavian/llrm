@@ -700,6 +700,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
+                slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
@@ -755,6 +756,7 @@ pub(crate) fn llvm_order(
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
+                slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
@@ -998,7 +1000,13 @@ pub fn recorded(
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
-    manager.run(program)
+    let done = manager.run(program);
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    done
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
