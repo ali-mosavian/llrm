@@ -191,8 +191,8 @@ fn a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spil
     assert!(!body.contains("sub sp,"), "a stack slot for a spill: {body}");
 }
 
-/// The parity pipeline (`LLRM_EXP_LLVM`) allocates with greedy, the allocate slot's translation; before the
-/// join it ran the old allocator there.
+/// The parity pipeline (`LLRM_EXP_LLVM`) allocates with greedy, the allocate
+/// slot's translation; before the join it ran the old allocator there.
 #[test]
 fn the_parity_pipeline_allocates_with_greedy() {
     let scratch = tempfile::tempdir().unwrap();
