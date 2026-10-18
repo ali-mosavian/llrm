@@ -77,6 +77,27 @@ Each rests on a fact of llrm; the LLVM code it leaves out is linked at d1106deb7
 change a scalar price in LLVM only for SSE: CMOV (from `pentiumpro`) and the multiply and shift latencies are not in
 the cost model's scalar rows. Nothing here needs a table per CPU but `core2`'s, and no m32 target reaches it.
 
+## Migration owed: MIR passes read `Tti`, LIR keeps `OperationCosts`
+
+The direction (oversight): LLVM has two cost systems, the TTI for IR passes and the scheduling model for machine
+passes; llrm's `OperationCosts` is the second. MIR passes read `Tti`; the LIR and the back end keep `OperationCosts`.
+Nothing is migrated yet except InlineCost, behind `LLRM_EXP_INLINEDECIDE`. The readers today (24 MIR files and 6 of the back
+end and front ends; classification proposed, oversight to confirm):
+
+Reads `Tti` after migration (their decisions are IR-level and have an LLVM counterpart that asks the TTI):
+`gvn`, `hoist`, `indvars`, `inline` (the native inliner, until INLINEDECIDE replaces it), `interprocedural`, `ipacp`
+(`getInlineCallPenalty`-like call pricing), `argpromotion`, `candidate`, `loopdistribute`, `loopfuse`, `loopinterchange`,
+`loopversion`, `lsr` (once translated), `memcpyopt`, `peelsize`, `phiopt`, `profit`, `switchlower`, `unswitch`.
+
+Stays on `OperationCosts` (the price is a machine form or a convention, which LLVM keeps in the target's lowering and
+scheduling model, not in the TTI): `addresssink` (the indexed address forms), `calleepop` (the bytes of `ret N` against
+`add sp`), `fill` (gcc's by-pieces limits of a constant memset), `spill` (spill code), `window` (a huge pointer's
+carry), and the back end and front ends: `cpu`, `loopslots`, `ssaspill`, the model passes (`model/passes.rs`), `abi/qb`,
+and the `cli` of the front ends that name the CPU.
+
+Each migration is its own PR with the same discipline as InlineCost: the named reader, the queries it reads, the rows
+with the premise count (queries that reached the TTI) beside the rows line, and the compile-time numbers.
+
 ## One owner per fact: `OperationCosts` and `Tti`
 
 `Machine::costs()` / `size_costs()` (`OperationCosts`, from `opcosts.txt` and `timings.times`: the 486/P5 clock
@@ -88,4 +109,4 @@ translation lands (`lsr` reads `OperationCosts` until then). A pass reads one:
 a translated pass keeps LLVM's thresholds, which are tuned to LLVM's units, so it cannot be fed clocks; a native pass
 decides in executed clocks or bytes, which `Tti` does not state. Nothing derives one from the other: `Tti` rows are
 copies of LLVM's tables checked against `opt`; `OperationCosts` rows come from the target's data sheets. They stay two
-because they price two things.
+because they price two things; the migration owed above moves the MIR readers to `Tti`.
