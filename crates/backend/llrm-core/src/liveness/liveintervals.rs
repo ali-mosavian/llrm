@@ -391,4 +391,111 @@ impl LiveIntervals {
         self.insns.remove(&key);
         self.indexes.remove_machine_instr_from_maps(key);
     }
+
+    /// A point of an interval as the function's own shape names it, so two
+    /// numberings of one function compare: the instruction and the slot of it,
+    /// or the block and the slot of its boundary.
+    fn named_point(
+        &self,
+        index: &SlotIndex,
+    ) -> (u8, u64, u32) {
+        let slot = index.get_slot() as u32;
+        if let Some(instr) = self.indexes.get_instruction_from_index(index) {
+            return (0, instr, slot);
+        }
+        for block in 0..self.blocks.len() {
+            if self.indexes.get_mbb_start_idx(block) == *index {
+                return (1, block as u64, slot);
+            }
+            if self.indexes.get_mbb_end_idx(block) == *index {
+                return (2, block as u64, slot);
+            }
+        }
+        panic!("an interval ends at an index that is neither an instruction nor a block boundary");
+    }
+
+    /// `LLRM_CHECK_LIVEINTERVALS`: every interval this holds is what
+    /// `computeVirtRegInterval` makes over `body` afresh (the function as
+    /// edited), compared by instruction and slot, not by number. Returns how
+    /// many intervals it compared; the caller asserts it is not zero, so the
+    /// check cannot pass by comparing nothing.
+    pub fn assert_intervals_equal_afresh(
+        &self,
+        body: &LirBody,
+    ) -> usize {
+        let shape = |lis: &Self, li: &LiveInterval| -> Vec<_> {
+            li.segments.iter().map(|seg| (lis.named_point(&seg.start), lis.named_point(&seg.end))).collect()
+        };
+        // The slot indexes of every `SlotIndexes` of a thread live in one
+        // arena, which a new one empties: what this holds is named first.
+        let mut regs: Vec<u32> = self.intervals.keys().copied().collect();
+        regs.sort_unstable();
+        let held: Vec<(u32, Vec<_>)> = regs.iter().map(|reg| (*reg, shape(self, &self.intervals[reg]))).collect();
+        let mut fresh = Self::new(body);
+        let mut compared = 0;
+        for (reg, was) in held {
+            let again = fresh.compute_virt_reg_interval(reg);
+            assert_eq!(
+                was,
+                shape(&fresh, &again),
+                "LLRM_CHECK_LIVEINTERVALS: the edited interval of v{reg} differs from the one made afresh"
+            );
+            compared += 1;
+        }
+        compared
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::lir::{Block, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    fn body(insns: &[Arc<Insn>]) -> LirBody {
+        LirBody::new(
+            "edited",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.to_vec()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        )
+    }
+
+    fn insn(
+        defines: &[u32],
+        uses: &[u32],
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(0, None, None, defines.to_vec(), uses.to_vec()))
+    }
+
+    /// An instruction put after the last use of `%1` that reads it, without
+    /// `%1`'s interval made again: `LLRM_CHECK_LIVEINTERVALS` must say the held
+    /// interval differs from the one made afresh (a check that passes whatever
+    /// the edit is would be no check).
+    #[test]
+    #[should_panic(expected = "differs from the one made afresh")]
+    fn test_the_afresh_check_fails_for_an_interval_an_edit_left_stale() {
+        let insns = [insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        lis.interval(1);
+        let late = insn(&[], &[1]);
+        lis.insert_instr_after(0, insns[2].id(), Arc::clone(&late));
+        let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[2]), late]);
+        lis.assert_intervals_equal_afresh(&edited);
+    }
+
+    /// The same edit with the interval made again: equal, and one compared.
+    #[test]
+    fn test_the_afresh_check_passes_for_an_interval_made_again_after_the_edit() {
+        let insns = [insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        lis.interval(1);
+        let late = insn(&[], &[1]);
+        lis.insert_instr_after(0, insns[2].id(), Arc::clone(&late));
+        lis.remove_interval(1);
+        lis.interval(1);
+        let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[2]), late]);
+        assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
+    }
 }

@@ -376,6 +376,13 @@ pub fn decide_with(
             .collect();
         body.with_blocks(blocks)
     });
+    if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
+        if let Some(edited) = &edited {
+            let compared = greedy.lis.assert_intervals_equal_afresh(edited);
+            assert!(compared > 0, "LLRM_CHECK_LIVEINTERVALS compared no interval of {}", body.name);
+            eprintln!("check-liveintervals {}: {compared} intervals equal afresh", body.name);
+        }
+    }
     Some(Decided { report, placed, spilled, edited, spill_failed: greedy.spill_failed() })
 }
 
@@ -387,6 +394,12 @@ mod tests {
     use crate::liveness::liverange::Segment;
     use crate::liveness::slotindex::SlotIndexes;
     use crate::model::lir::{Block, LirBlock};
+
+    fn widths(pairs: &[(u32, u32)]) -> Rc<Tables> {
+        let tables = Tables::default();
+        tables.widths.borrow_mut().extend(pairs.iter().copied());
+        Rc::new(tables)
+    }
 
     /// A 16-bit callee that pushes and pops `si` keeps its low half and
     /// destroys the high half (`clobbers_high`): a 32-bit value held in `esi`
@@ -405,7 +418,7 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
-        let masks = CallMasks { calls: vec![(at(5), vec![], vec![esi], vec![])], widths: IndexMap::from_iter([(1, 4), (2, 2)]) };
+        let masks = CallMasks { calls: vec![(at(5), vec![], vec![esi], vec![])], widths: widths(&[(1, 4), (2, 2)]) };
         let across = |reg: u32| {
             let mut li = LiveInterval::new(reg, 1.0);
             let v = li.get_next_value(at(2));
@@ -433,7 +446,7 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let ds = crate::model::ir::root(RegId::DS);
-        let masks = CallMasks { calls: vec![(at(5), vec![], vec![], vec![ds])], widths: IndexMap::default() };
+        let masks = CallMasks { calls: vec![(at(5), vec![], vec![], vec![ds])], widths: widths(&[]) };
         let live = |to: usize| {
             let mut li = LiveInterval::new(1, 1.0);
             let v = li.get_next_value(at(2));
