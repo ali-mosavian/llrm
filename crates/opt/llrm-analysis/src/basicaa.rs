@@ -524,15 +524,23 @@ impl BasicAA<'_> {
         let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return ModRefInfo::ModRef };
         let object = self.underlying(loc.ptr);
         let local_slot = self.defining(object).is_some_and(|one| matches!(one.opcode, Opcode::Alloca { .. }));
-        // A tail call cannot reach this frame's slots, but may take one by value.
+        // A tail call cannot reach this frame's slots, but may take one by
+        // value.
         let by_value = |attrs: &[llrm_mir::opcode::Attribute]| {
-            attrs.iter().any(|one| {
-                matches!(one, llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval")
-            })
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
         };
         if local_slot
             && info.tail == llrm_mir::opcode::Tail::Tail
-            && !(by_value(&info.attrs) || by_value(&info.return_attrs) || info.argument_attrs.iter().any(|one| by_value(one)))
+            && !(by_value(&info.attrs)
+                || by_value(&info.return_attrs)
+                || info.argument_attrs.iter().any(|one| by_value(one)))
         {
             return ModRefInfo::NoModRef;
         }
@@ -544,10 +552,12 @@ impl BasicAA<'_> {
         let errno = effects.mod_ref(ErrnoMem);
         let mut other = effects.mod_ref(Other);
         // What does not escape is reached through arguments only.
-        let callee = llrm_mir::memory::callee(self.unit.context, self.unit.function, call)
-            .and_then(|one| match &self.unit.globals.get(one.0 as usize)?.kind {
-                GlobalKind::Function(function) => Some(function),
-                GlobalKind::Variable(_) => None,
+        let callee =
+            llrm_mir::memory::callee(self.unit.context, self.unit.function, call).and_then(|one| {
+                match &self.unit.globals.get(one.0 as usize)?.kind {
+                    GlobalKind::Function(function) => Some(function),
+                    GlobalKind::Variable(_) => None,
+                }
             });
         let returns_twice = llrm_mir::memory::has(&info.attrs, "returns_twice")
             || callee.is_some_and(|one| llrm_mir::memory::has(&one.attrs, "returns_twice"));
@@ -744,7 +754,10 @@ impl AAResults for BasicAA<'_> {
         loc: Option<&MemoryLocation>,
         aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        let is_call = matches!(self.unit.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_));
+        let is_call = matches!(
+            self.unit.function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        );
         match loc {
             Some(loc) if is_call => self.call_mod_ref(inst, loc, aaqi),
             _ => ModRefInfo::ModRef,
@@ -925,7 +938,9 @@ mod tests {
     #[test]
     fn the_mask_of_a_constant_global_is_none_and_of_a_mutable_one_is_everything() {
         let body = |kind: &str| {
-            format!("@g = internal {kind} [8 x i8] zeroinitializer\ndefine void @f() {{\nentry:\n  %a = getelementptr i8, ptr @g, i32 4\n  ret void\n}}\n")
+            format!(
+                "@g = internal {kind} [8 x i8] zeroinitializer\ndefine void @f() {{\nentry:\n  %a = getelementptr i8, ptr @g, i32 4\n  ret void\n}}\n"
+            )
         };
         assert_eq!(mask(&body("constant"), false), ModRefInfo::NoModRef);
         assert_eq!(mask(&body("global"), false), ModRefInfo::ModRef);
@@ -964,7 +979,9 @@ mod tests {
     #[test]
     fn a_call_cannot_touch_a_slot_that_never_escapes_unless_it_is_passed() {
         let body = |pass: &str| {
-            format!("declare void @h(ptr)\ndeclare void @g()\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  call void {pass}\n  ret void\n}}\n")
+            format!(
+                "declare void @h(ptr)\ndeclare void @g()\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  call void {pass}\n  ret void\n}}\n"
+            )
         };
         assert_eq!(call_on(&body("@g()")), ModRefInfo::NoModRef);
         assert_eq!(call_on(&body("@h(ptr %a)")), ModRefInfo::ModRef);
@@ -975,7 +992,9 @@ mod tests {
     #[test]
     fn a_tail_call_cannot_touch_a_slot_of_the_frame_unless_it_takes_one_by_value() {
         let body = |arg: &str| {
-            format!("declare void @h(ptr)\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  tail call void @h(ptr {arg} %a)\n  ret void\n}}\n")
+            format!(
+                "declare void @h(ptr)\ndefine void @f() {{\nentry:\n  %a = alloca i32\n  tail call void @h(ptr {arg} %a)\n  ret void\n}}\n"
+            )
         };
         assert_eq!(call_on(&body("")), ModRefInfo::NoModRef);
         assert_eq!(call_on(&body("byval(i32)")), ModRefInfo::ModRef);
@@ -987,7 +1006,9 @@ mod tests {
     #[test]
     fn a_call_that_reads_through_its_argument_only_reads_what_it_is_given() {
         let body = |pass: &str| {
-            format!("declare void @r(ptr) memory(argmem: read) nounwind\n@g = external global i32\ndefine void @f(ptr %q) {{\nentry:\n  %a = alloca i32\n  store ptr %a, ptr @g\n  call void @r(ptr {pass})\n  ret void\n}}\n")
+            format!(
+                "declare void @r(ptr) memory(argmem: read) nounwind\n@g = external global i32\ndefine void @f(ptr %q) {{\nentry:\n  %a = alloca i32\n  store ptr %a, ptr @g\n  call void @r(ptr {pass})\n  ret void\n}}\n"
+            )
         };
         assert_eq!(call_on(&body("%a")), ModRefInfo::Ref);
         assert_eq!(call_on(&body("%q")), ModRefInfo::NoModRef);
