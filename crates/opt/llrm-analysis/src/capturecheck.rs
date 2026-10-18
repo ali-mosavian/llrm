@@ -101,13 +101,14 @@ impl<'a> Verify<'a> {
             self.stack.borrow_mut().push((callee, index));
             let unit = Unit::of(self.module, self.layout, function);
             let mut kept = Vec::new();
-            let captured = captured_by(&unit, root, &mut kept, Some(self), false);
+            let captured = captured_by(&unit, root, &mut kept, Some(self), false, false);
             self.stack.borrow_mut().pop();
             // Kept in a local slot of the callee: read back it is the pointer
             // again (followed), and it is captured if the slot
             // itself is.
-            let slot_captured =
-                kept.iter().any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self), false).is_some());
+            let slot_captured = kept
+                .iter()
+                .any(|holder| captured_by(&unit, *holder, &mut Vec::new(), Some(self), false, false).is_some());
             if captured.is_some() || slot_captured { Err(Unproven::Captured) } else { Ok(()) }
         })();
         if top {
@@ -208,6 +209,7 @@ fn captured_by(
     held_in: &mut Vec<ValueId>,
     verify: Option<&Verify>,
     joins: bool,
+    attr_calls: bool,
 ) -> Option<InstId> {
     let function = unit.function;
     let mut seen: IdSet<ValueId> = IdSet::new();
@@ -297,7 +299,7 @@ fn captured_by(
                         // facts follow the summaries of those the module
                         // defines, so a direct call is read only in the mode
                         // that reports them.
-                        (Some(_), None) if !llrm_support::env_flag!("LLRM_CHECK_CAPTURES_CALLS") => {}
+                        (Some(_), None) if !attr_calls && !llrm_support::env_flag!("LLRM_CHECK_CAPTURES_CALLS") => {}
                         _ => {
                             if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_BLIND")
                                 || !crate::alias::borrowed(unit, used.user, at)
@@ -312,6 +314,18 @@ fn captured_by(
         }
     }
     None
+}
+
+/// Whether the address `root` may be captured, as LLVM's `PointerMayBeCaptured`
+/// with stores counting (`isNonEscapingLocalObject`): a gep, cast, phi or
+/// select of it is followed; stored anywhere, returned, turned into an integer,
+/// or passed to a call whose parameter is not `nocapture` it is captured.
+pub(crate) fn may_be_captured(
+    unit: &Unit,
+    root: ValueId,
+) -> bool {
+    let mut held = Vec::new();
+    captured_by(unit, root, &mut held, None, false, true).is_some() || !held.is_empty()
 }
 
 /// Panics on a frame object some use captures that `facts.escaped` lacks.
@@ -335,7 +349,7 @@ pub fn check_with(
         let op = function.instruction(inst);
         let (Opcode::Alloca { .. }, Some(value)) = (&op.opcode, op.result) else { continue };
         let mut held_in = Vec::new();
-        let by = captured_by(unit, value, &mut held_in, verify, true);
+        let by = captured_by(unit, value, &mut held_in, verify, true, false);
         direct.push((value, by, held_in));
     }
     // Held in a captured object is captured, to a fixed point.

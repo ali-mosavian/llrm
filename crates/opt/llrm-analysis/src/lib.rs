@@ -94,6 +94,7 @@ pub mod access;
 pub mod alias;
 pub mod assumptions;
 pub mod avail;
+pub mod basicaa;
 pub mod branchprob;
 pub mod capturecheck;
 pub mod cellmap;
