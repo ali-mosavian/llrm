@@ -1,3 +1,7 @@
+---
+architecture-index: object model
+architecture-order: 500
+---
 # Object model
 
 For contributors changing a writer or the backend's object layout. The backend lays code and data out

@@ -1,3 +1,7 @@
+---
+architecture-index: MIR
+architecture-order: 50
+---
 # MIR
 
 For contributors writing a frontend, a pass or lowering. MIR is the one IR

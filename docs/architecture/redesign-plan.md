@@ -1,3 +1,7 @@
+---
+architecture-index: the plan to reach clang's compile time
+architecture-order: 430
+---
 # Compile time at clang's level: the plan
 
 **Scoreboard.** `d_faces` -O2 is 2,104 M instructions at main `9d50a350e` in a clean dist build, 5.1x clang 24's 413 M (section 2.0; the 2,253 M at `5e2e995ef` was not taken in the clean-build mode and is superseded; it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
@@ -355,13 +359,14 @@ Code generation (`llc -O2`, i486; the same passes at -O1 less a few):
 | 57 | machine-scheduler | none | missing | lir-cleanup-poc (map) |
 | 58 | greedy, spill-code-placement, virtregrewriter, stack-slot-coloring | `greedy` (parked OFF), old `regalloc` | translated, off | regalloc-core-poc |
 | 59 | machine-cp, machinelicm, postra-machine-sink | LIR clean-up | old | lir-cleanup-poc |
-| 60 | x86-fp-stackifier | `floatassign`, `floatalloc` | old | lir-cleanup-poc |
+| 60 | x86-fp-stackifier (`X86FloatingPoint.cpp`) and the RFP register classes | (a) `floatalloc` (27.0 M; clang 1.4 M, 19x); (b) `floatassign` (40.4 M) with `analysis float-facts` (35.7 M, 18 runs); (c) `floatfold` (d_faces -O2, m16, own, main `d1460fd39`, backend-slopes) | old | (a) translation of `X86FloatingPoint.cpp` (flat registers to stack form, fxch, pop), owner backend-slopes (coordinator, 2026-10-18; it coordinates register-class facts with regalloc-core-poc); DEVIATE to number: `_split_for_the_stack` critical-edge blocks against FPS's EdgeBundles. (b) no separate LLVM pass: the x87 registers are ordinary classes RFP32, RFP64 and RFP80 (FP0 to FP6; FP7 is reserved) allocated by RAGreedy, so `floatassign` and `float-facts` are replaced by the greedy allocation of the RFP class and deleted with it; owner regalloc-core-poc (confirmed; greedy allocates x87 values as RFP32, RFP64 and RFP80 virtual registers onto FP0 to FP6, as LLVM does before `X86FloatingPoint`); our `_crowded` depth check is the stack-depth part of FPS's `setupBlockStack`. (c) `X86InstrInfo::foldMemoryOperand`, lir-cleanup-poc's peephole row |
 | 61 | shrink-wrap, prolog-epilog, machine-latecleanup | `shrink-wrap`, frame code | old | lir-cleanup-poc |
 | 62 | branch-folder, tailduplication, block-placement, post-RA scheduler | `jumps` | old | lir-cleanup-poc (jumps-tailmerge) |
 | 63 | execution-domain, break-false-deps, fixup-bw, fixup-leas | none | missing | lir-cleanup-poc (map) |
 | 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-slopes (emission, ranked last) |
+| 65 | `X86FrameLowering::hasFP` (frame-pointer decision) | `without_frame_register`; interim [#2274] (framefree block lookup slope fix) | old | backend-slopes (the translation replaces `without_frame_register`) |
 
-Count: of 64 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; the other 54 are old or missing, every one with an owner (24 of them assigned by kind from the former gap list). The default pipeline runs none of the translated slots.
+Count: of 65 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; the other 55 are old or missing, every one with an owner (24 of them assigned by kind from the former gap list). The default pipeline runs none of the translated slots.
 
 ## 3. The plan
 
@@ -1295,6 +1300,15 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 5. Pipeline row, owner llvm-order-poc: LLVM's new pass manager runs LoopSimplify and LCSSA only where a loop-pass adaptor needs them (a handful of times at -O2); ours runs them 9 times. The run count must match the pinned pipeline's.
 6. `LazyValueInfo.cpp` and `CorrelatedValuePropagation.cpp` are translated at the pin `d1106deb71cc`. LLVM -O2 runs CVP, and JumpThreading reads LVI, so it is the real counterpart of `ranger.rs`'s uses there. Owner vt-constantfolding (valuetracking-port, which translated `ConstantRange` and `ValueTracking`), ordered after the DomTree stack lands (domtree-port). llrm's `ranger.rs` uses are deleted when it becomes default.
 7. `JumpThreading.cpp` is translated after it. JumpThreading is our worst ratio (26.33x in the per-pass table; 28.8x by oversight's reading). Owner decided when the LVI row lands.
+8. Glue (projection, 108 M on `d_faces`): `Stamp`, `Summaries` and the interprocedural stage. Owner cgscc-poc (the plan page is theirs). Each is replaced by LLVM's mechanism or deleted.
+9. Emission and `masm` (21 M; slot 64): owner backend-slopes, ranked last until the split below. Not one pass (backend-slopes; files checked to exist at the pin):
+   - Frame sequences and return cleanup (`masm` listing, shrinkwrap, cleaned returns, duplicated returns): LLVM does them before the AsmPrinter, in `PrologEpilogInserter.cpp`, `ShrinkWrap.cpp`, `X86FrameLowering.cpp` (`hasFPImpl`, `emitPrologue`, `emitEpilogue`) and X86ExpandPseudo. Translation, one row with the `hasFP` row (slot 65); part of its cost is counted under the LIR clean-up, not emission.
+   - Encode, branch relaxation, relocations: `X86MCInstLower.cpp`, `X86MCCodeEmitter.cpp`, `MCObjectStreamer.cpp`, `MCAssembler.cpp`. Translation, DEVIATE: llrm relaxes a flat item list at one fixed point, LLVM uses MCFragments; the `_trampolined` size step has no LLVM counterpart and stays a numbered DEVIATE.
+   - Object writers: ELF, COFF and MachO have counterparts; OMF: LLVM has no such pass (`llvm/lib/MC` has no OMF writer), llrm keeps it.
+   - `masm::text` (-S and the BASIC driver): AsmPrinter and `X86IntelInstPrinter`; LLVM's object path never prints, so the C and Nib object path has no printing step to translate.
+   - Split measured (backend-slopes; `d_faces` -O2, default m16, `CARGO_INCREMENTAL=0` release of main, `LLRM_DEBUG=time` own instructions; the m32 i486 compile fails in wccq there, so it is not used): total about 22.5 M. Object write 15.25 (inclusive of `masm::listing`; callgrind 14.67 inside `built_inner`), `assemble` own 3.41, shrink-wrap tails 1.75, `masm` return overhead 0.74, duplicated returns 0.49, data layout 0.24, stack checks 0.18, cleaned returns 0.17, `mir` near code 0.14, `lir` frame 0.12, debug info 0.06. Inside object write: `masm::listing` 6.89 (frame sequences; `shrinkwrap::wrapped` 3.02 and `saved_of` 1.76, recomputed per call), `_items` / `_encoded` 5.09 (`select::emit_in` 3.88), relax, `object_of` and OMF write about 2.7. By counterpart: frame sequences and return glue about 10 M (PEI, ShrinkWrap, `X86FrameLowering`; one row with `hasFP`), MC encode about 5 M (`X86MCCodeEmitter`), relax and write about 2.7 M, assemble glue about 3.4 M. Order: frame sequences first, MC encode second; OMF write stays.
+10. The C translate stage (`frontend translate`): owner hir-branch-icmp-2211 (frontend-aggregates); GO for step 1 (coordinator). Instrument: callgrind, inclusive, `d_faces` -O1, main plus [#2211]: 40.7 M of 1,945 M, the sum of `stream::parse` 17.9 (self 9.8; the rest allocation: a `String` per token, an `IndexMap` per line, `tokens.remove(0)`), `translate::program` 15.4, `hir::unit` 5.3 and drops 1.7; 6,231 records; in line with the 42.0 M of `fold-hoist-decide.md`. The projection's ~29 M was not a stage figure: it is one recursive row (`Body::eval`, 28.7 M inclusive, `d_faces` -O2), overlapping `translate::program`, without parse; withdrawn (llvm-difftest). Counterparts at the pin: `program` and `unit` follow `CodeGenFunction::EmitStmt`, `EmitScalarExpr` and `EmitLValue` (fed by Open Watcom's call tree, not an AST); `stream::parse` corresponds to clang's Lexer, Preprocessor and Parser (`clang/lib/Lex`, `clang/lib/Parse`): no middle-end pass, but a front-end counterpart, and it exists as a separate step because wccq and llrm are two processes joined by a text stream. Order: (1) `stream::parse` first, no dependency (borrowed tokens, one arena, no per-line map; 17.9 to 4 M or less, linear already; test: slope on `straight`); (2) `program` and `unit` after it (clang's whole cc1 front end is 33 M against our 81 M); (3) dropping the text stream is the structural fix, nobody's yet.
+11. The scoreboard is the projection (llvm-difftest's table), refreshed half-hourly.
 
 **Method M (every exit measurement).**
 
@@ -1555,6 +1569,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
 [#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2274]: https://github.com/ali-mosavian/llrm/pull/2274
 [#2272]: https://github.com/ali-mosavian/llrm/pull/2272
 [#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179

@@ -96,6 +96,7 @@ pub mod deadargs;
 mod deadargs_tests;
 pub mod decide;
 pub mod dse;
+pub mod earlycse;
 pub mod edges;
 pub mod exitfold;
 pub mod exitsink;
@@ -110,6 +111,8 @@ pub mod globaldce;
 mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
+#[cfg(test)]
+mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
 pub mod indvars;
@@ -126,6 +129,9 @@ pub mod jumpthread;
 pub mod lcssa;
 pub mod lcssamerges;
 pub mod loadjoins;
+pub mod local;
+#[cfg(test)]
+mod local_tests;
 pub mod loopclone;
 pub mod loopdistribute;
 pub mod loopexit;
@@ -145,6 +151,9 @@ pub mod mirror;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;
+pub mod parity;
+#[cfg(test)]
+mod parity_tests;
 pub mod peel;
 pub mod phiopt;
 pub mod pipeline;
@@ -155,6 +164,7 @@ pub mod profit;
 pub mod promote;
 pub mod rotate;
 pub mod settled;
+pub mod simplifycfg;
 pub mod sink;
 pub mod spares;
 pub mod spill;
