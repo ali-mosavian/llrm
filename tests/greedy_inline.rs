@@ -191,15 +191,16 @@ fn a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spil
     assert!(!body.contains("sub sp,"), "a stack slot for a spill: {body}");
 }
 
-/// The parity pipeline (`LLRM_EXP_LLVM`) allocates with greedy, the allocate
-/// slot's translation; before the join it ran the old allocator there.
+/// LLVM's order, on by default, allocates with greedy, the allocate slot's
+/// translation; before the join it ran the old allocator there.
 #[test]
 fn the_parity_pipeline_allocates_with_greedy() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), "int f(int a, int b) { return a * b + a; }\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
         .current_dir(scratch.path())
-        .env("LLRM_EXP_LLVM", "1")
+        .env_remove("LLRM_GREEDY")
+        .env_remove("LLRM_NO_LLVM_ORDER")
         .env("LLRM_GREEDY_TRACE", "1")
         .args(["-m32", "-march=i486", "-O2", "-o", "a.o", "a.c"])
         .output()

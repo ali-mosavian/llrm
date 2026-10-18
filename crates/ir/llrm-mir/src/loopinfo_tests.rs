@@ -1,4 +1,4 @@
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::loopinfo::{LoopInfo, print_loops};
 use crate::module::{BlockId, Function, Module};
 use crate::parse;
@@ -48,7 +48,7 @@ fn test_exit_blocks_keep_repeats_and_unique_exit_does_not() {
     let module = load("shapes.ll");
     let (_, _, function) =
         module.functions().find(|(_, global, _)| global.name.as_deref() == Some("switch_exits")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     let exit = block(function, "exit");
     assert_eq!(one.get_exit_blocks(function), vec![exit, exit]);
@@ -64,7 +64,7 @@ fn test_latch_predecessor_and_preheader() {
     let module = load("shapes.ll");
     let find = |name: &str| module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).unwrap().2;
     let function = find("two_latches");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "h")).expect("loop");
     assert_eq!(one.get_loop_latch(function), None, "two latches");
     assert_eq!(names(function, one.get_loop_latches(function)), ["a", "b"]);
@@ -73,7 +73,7 @@ fn test_latch_predecessor_and_preheader() {
     assert_eq!(one.get_loop_preheader(function), Some(block(function, "entry")));
 
     let function = find("self");
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.get_loop_for(block(function, "l")).expect("loop");
     assert_eq!(one.get_loop_latch(function), Some(block(function, "l")));
     assert_eq!(info.get_unique_latch_exit_block(function, one), Some(block(function, "exit")));
@@ -83,7 +83,7 @@ fn test_latch_predecessor_and_preheader() {
 fn test_nesting_preorder_depth_and_common_loop() {
     let module = load("shapes.ll");
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("nest")).unwrap();
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let headers: Vec<_> =
         info.get_loops_in_preorder().iter().map(|one| function.block(one.get_header()).name.clone().unwrap()).collect();
     assert_eq!(headers, ["o", "i", "j", "k"], "program order, outer first");

@@ -1809,10 +1809,11 @@ fn greedy_check(
     }
 }
 
-/// Whether the translated greedy allocator allocates: `LLRM_GREEDY`, or the
-/// parity pipeline (`LLRM_EXP_LLVM`), where the allocate slot is greedy's.
+/// Whether the translated greedy allocator allocates: by default, the allocate
+/// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
+/// unless `LLRM_GREEDY` is set.
 pub fn greedy_on() -> bool {
-    llrm_support::env_flag!("LLRM_GREEDY") || llrm_support::env_flag!("LLRM_EXP_LLVM")
+    llrm_support::env_flag!("LLRM_GREEDY") || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
 }
 
 /// (allocations the greedy allocator made, allocations it left to this one).
