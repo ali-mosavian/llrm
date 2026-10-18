@@ -14,8 +14,8 @@
 //! plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
 //! ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 //! other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
-//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo` read the
-//! attributes.
+//! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
+//! read the attributes.
 //!
 //! # Example
 //! Two allocas never alias, and a call cannot touch an alloca nobody holds a
