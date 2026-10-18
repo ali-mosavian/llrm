@@ -1,6 +1,6 @@
 # Loop passes as translations of LLVM's: the plan
 
-TL;DR: LoopPeel, LoopUnroll (full), SimpleLoopUnswitch (trivial), LoopRotate and LoopDeletion are translated from `d1106deb71cc` (clang 24.0.0git), one small PR each, and the translations accept a rotated loop. That turns each row of the rotate refusals table (llvm-order-poc, branch `alim/docs/rotate-refusals`; link when it lands) into an acceptance row; the rotate slot of `llvm_order` stays off until all are green. Owner: loop-passes-port. No rotated-form shim and no reordering of `hoist` around rotate.
+TL;DR: LoopPeel, LoopUnroll (full), SimpleLoopUnswitch (trivial), LoopRotate and LoopDeletion are translated from `d1106deb71cc` (clang 24.0.0git), one small PR each, and the translations accept a rotated loop. That turns each row of the rotate refusals table (PR #2235; linked once merged) into an acceptance row; the rotate slot of `llvm_order` stays off until all are green. Owner: loop-passes-port. No rotated-form shim and no reordering of `hoist` around rotate.
 
 Rule for the code: each Rust function is a translation of the C++ function named in its first comment (permalink), `cl::opt` defaults stand, and anything not translated is a numbered DEVIATE resting on a fact MIR or the target lacks, with an assert or test at the boundary. The llrm code a translation replaces is deleted in the PR that lands it, or the PR says which later PR does.
 
@@ -38,8 +38,14 @@ Order: S1, S2 (the two guards that matter for rows), S3, S4, S5, S6. S4 comes af
 
 ## 4. DEVIATE
 
-- D1 Trip counts come from `induction`, not `ScalarEvolution`, until scev-port lands. Not a deviation to keep: each call site names the `SE.getSmallConstantTripCount` / `getBackedgeTakenCount` it stands for, and the swap is one PR per stage after S0.
-- D2 No partial, runtime or epilog unrolling (`UnrollRuntimeLoopRemainder`, `shouldPartialUnroll`, `UP.Partial`/`UP.Runtime`). Fact to establish at S2 with the pinned `opt`: for `-mtriple=i486 -mcpu=i486` `gatherUnrollingPreferences` leaves both false (no scheduling model); the test asserts it, and `computeUnrollCount` asserts `!up.partial && !up.runtime`.
+- D1 Trip counts come from `induction`, not `ScalarEvolution`. Temporary: [#2236](https://github.com/ali-mosavian/llrm/issues/2236). Each call site names the `SE.getSmallConstantTripCount` / `getBackedgeTakenCount` it stands for. Exit: scev-port's S6/S7 consumers land, then one PR per stage swaps the call and deletes the `induction` use.
+- D2 No partial, runtime or epilog unrolling (`UnrollRuntimeLoopRemainder`, `shouldPartialUnroll`, `UP.Partial`/`UP.Runtime`). Fact, established with the pinned `opt` (`LLVM version 24.0.0git`, d1106deb71cc): `opt -passes='default<O2>'` and `default<O3>` on a runtime-trip-count loop and a 1000-trip loop (`"target-cpu"="i486"` and `"pentiumpro"`, triple `i486-unknown-linux-gnu`) leave one copy of the body (1 `mul` each); the same loop at `x86_64`/`skylake` gets 6 (control: the instrument does unroll where the target allows it; a 4-trip loop at i486 is fully unrolled). `loop-unroll<runtime>` forces it (9 `mul`s), so the default is the target's: `computeUnrollCount` asserts `!up.partial && !up.runtime`, and a test pins the table below. If a `-march` is added whose scheduling model turns them on, D2 ends and the stage includes them.
+
+  | pass, input at i486 | `mul`s in `@rt` |
+  |---|---|
+  | `default<O2>`, `default<O3>`, `loop-unroll`, `loop-unroll<partial>` | 1 |
+  | `loop-unroll<runtime>` (explicit override) | 9 |
+  | `default<O3>`, same loop at x86_64 skylake (control) | 6 |
 - D3 No `OptimizationRemarkEmitter` and no remarks. llrm has `LLRM_DEBUG` run lines; the reason strings are kept as the debug text.
 - D4 Unroll and peel hints come from the `peelsize` hint a language states, not from `llvm.loop.*` metadata. Fact: MIR carries no loop metadata on branches.
 - D5 SimpleLoopUnswitch is the trivial form only (S3); `unswitchNontrivialInvariants` and the cost multiplier are the `unswitch` pass's, replaced separately.
@@ -50,8 +56,8 @@ Any further deviation is added here with its fact before the code lands, and non
 
 ## 5. Verification
 
-- Oracle on extracted loops: the pinned `opt` (`tools/llvmpin.py` names it and refuses a mismatched version; the version is printed in every output) with `-passes='loop-mssa(loop-rotate<header-duplication>)'`, `loop-unroll-full`, `loop-mssa(simple-loop-unswitch<no-nontrivial>)`, `loop(loop-deletion)`, `loop-unroll<peeling>` for peel (option spelling checked against the pinned `opt` at S1), at `-mtriple=i486 -mcpu=i486` and `-mcpu=pentiumpro`. Each stage compares decisions (loop changed, count chosen) first and the output text second, every difference classified. A rotated and an unrotated input of each loop are both run: the acceptance premise.
+- Oracle on extracted loops: the pinned `opt` (`tools/llvmpin.py` once it is on main names it and refuses a mismatched version; the version is printed in every output) with `-passes='loop-mssa(loop-rotate<header-duplication>)'`, `loop-unroll-full`, `loop-mssa(simple-loop-unswitch<no-nontrivial>)`, `loop(loop-deletion)`, `loop-unroll<peeling>` for peel (option spelling checked against the pinned `opt` at S1), at `-mtriple=i486 -mcpu=i486` and `-mcpu=pentiumpro`. Each stage compares decisions (loop changed, count chosen) first and the output text second, every difference classified. A rotated and an unrotated input of each loop are both run: the acceptance premise.
 - `tools/identical.py` old against new `llrm-c`, every `LLRM_CHECK_*` on, at -O1/-O2/-O3/-Os/-Omax: identical where the old pass accepted, and a listed, explained difference where the translation accepts more.
-- Refusal-table row of the stage: counts with `LLRM_DEBUG=runs` on the 145 compiles of the rotate refusals table (llvm-order-poc, branch `alim/docs/rotate-refusals`; link when it lands), slot on against off. The premise (non-zero before) is shown in the PR first; the row is zero after.
+- Refusal-table row of the stage: counts with `LLRM_DEBUG=runs` on the 145 compiles of the rotate refusals table (PR #2235; linked once merged), slot on against off. The premise (non-zero before) is shown in the PR first; the row is zero after.
 - Rows of record: `rows/main24d` (pinned clang 24, gcc 13.4.0); summary leads with rows total / with counters / failed / missing (`tools/rows/rowcheck.py`). Per-row worse counts per metric (clocks, executed instructions, memory operands, code bytes at -Os) and level first, then geomean, then rows above min(gcc, clang) moved.
 - Regression test per fix, seen to fail first, in the same commit. Cost figures: plain `perf stat -e instructions:u`; per-pass cost from callgrind inclusive.
