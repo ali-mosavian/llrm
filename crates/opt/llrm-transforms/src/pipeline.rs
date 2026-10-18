@@ -241,6 +241,10 @@ pub struct Options {
     /// [`crate::sroa`], with [`crate::mem2reg`]); on by default,
     /// `LLRM_NO_SROA` turns it off.
     pub sroa: bool,
+    /// The loop-invariant passes are the translated LICM ([`crate::licm`]):
+    /// `licm` in the LICM slots and where `hoist` ran; on by default,
+    /// `LLRM_NO_LICM` brings back `hoist` and `loopmotion`.
+    pub licm: bool,
     /// Loops not proven to run are entered behind a copy of their test, before
     /// the loop passes (gcc's `-ftree-ch`; not at -Os).
     pub copy_headers: bool,
@@ -309,6 +313,7 @@ impl Default for Options {
             interchange: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
+            licm: !llrm_support::env_flag!("LLRM_NO_LICM"),
             copy_headers: true,
             for_size: false,
             expensive: true,
@@ -474,7 +479,7 @@ impl Options {
             "simplifycfg" => self.simplifycfg,
             "decide" => self.decide,
             "dead" => self.dead,
-            "hoist" | "loopmotion" => self.hoist,
+            "hoist" | "loopmotion" | "licm" => self.hoist,
             "gvn" | "equalcalls" | "earlycse" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
@@ -568,12 +573,12 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
-/// The pass that moves loop invariants: `hoist`, or with `LLRM_EXP_LICM=1` the
-/// translation of LLVM's LICM (`licm`), which also sinks and promotes. An
-/// experiment: not part of the pipeline.
+/// The pass that moves loop invariants outside the LLVM-order slots: LLVM's
+/// LICM translated (`licm`), which also sinks and promotes, or `hoist` under
+/// `LLRM_NO_LICM`.
 fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
-    if llrm_support::env_flag!("LLRM_EXP_LICM") {
-        Box::new(crate::licm::Licm { apply: true })
+    if applied.options.licm {
+        Box::new(crate::licm::Licm { apply: true, speculate: true })
     } else {
         Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true })
     }
@@ -708,8 +713,20 @@ pub(crate) fn llvm_order(
         Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate, priced: false }));
-    let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
+    // `licm<allowspeculation>` or `licm<no-allowspeculation>`; under
+    // `LLRM_NO_LICM` the slot holds what ran there before, `hoist` and, in the
+    // places that had it, `loopmotion`.
+    let licm = |name, speculate, motion| {
+        if applied.options.licm {
+            slot(name, Box::new(crate::licm::Licm { apply: true, speculate }))
+        } else {
+            let mut parts: Vec<Box<dyn FunctionPass>> = vec![Box::new(hoist::Hoist { size, speculate, priced: false })];
+            if motion {
+                parts.push(Box::new(loopmotion::LoopMotion));
+            }
+            Box::new(Together { name, parts })
+        }
+    };
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
     };
@@ -766,8 +783,7 @@ pub(crate) fn llvm_order(
                 // not proven to run, so that the second hoists into a preheader
                 // behind it (#2194). llrm skips the header copy at -Os, as
                 // gcc's -ftree-ch.
-                hoist("hoist@724", !rotating),
-                loopmotion("loopmotion@724"),
+                licm("licm@724", !rotating, true),
             ]);
             if rotating {
                 list.push(slot(
@@ -777,7 +793,7 @@ pub(crate) fn llvm_order(
                 list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
             list.extend([
-                hoist("hoist@730", true),
+                licm("licm@730", true, false),
                 slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
                 decide("decide@766"),
                 phiopt("phiopt@766"),
@@ -819,8 +835,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@823", "lcssa@823"));
             list.extend([
-                hoist("hoist@823", true),
-                loopmotion("loopmotion@823"),
+                licm("licm@823", true, true),
                 decide("decide@832"),
                 phiopt("phiopt@832"),
                 fold("fold@837"),
