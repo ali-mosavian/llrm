@@ -1,3 +1,7 @@
+---
+architecture-index: loop passes as translations of LLVM's
+architecture-order: 480
+---
 # Loop passes as translations of LLVM's: the plan
 
 TL;DR: LoopUnroll (full unroll, which replaces both `peel` and `unroll`), LoopPeel, SimpleLoopUnswitch (trivial), LoopRotate and LoopDeletion are translated from `d1106deb71cc` (clang 24.0.0git), one small PR each, and the translations accept a rotated loop. That turns each row of the rotate refusals table (PR #2235; linked once merged) into an acceptance row; the rotate slot of `llvm_order` stays off until all are green. Owner: loop-passes-port. No rotated-form shim and no reordering of `hoist` around rotate.
@@ -53,6 +57,7 @@ Order: S1 (the two guards that matter for rows: both `peel.rs` and `unroll.rs` a
 - D7 LoopDeletion `EnableSymbolicExecution` stays at its default (on) once SCEV exists; before, `canProveExitOnFirstIteration` reads `induction` (D1).
 
 Any further deviation is added here with its fact before the code lands, and none is taken without oversight's approval. BFI/PSI uses in LoopUnrollPass (`PGSO`, `isColdBlock`) are checked at S2 against the `pgo` input llrm has.
+- D10 S4 (`looprotate.rs`, [LoopRotationUtils.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopRotationUtils.cpp)): R1 no kept `DominatorTree`/`LoopInfo`/`ScalarEvolution`/`MemorySSA`/`AssumptionCache` (D8); one `LoopInfo` per function, made again only before an outer loop of a rotated one. R2 no `check-exit-count` (no pipeline sets it). R3 new blocks at the end of the layout and emptied ones erased together. R4 no debug records, noalias scope decls or coroutines. R5 `simplifyInstruction` without the dominator tree. Checked by `tools/rotate_oracle.py`: 332 files, 1,048 functions, 370 rotated by `opt`, 0 differ; its control (no header duplication) differs in 150.
 
 ## 5. Verification
 

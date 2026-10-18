@@ -8,13 +8,18 @@
 //! One run is these steps, each followed by a refresh of what is known where it
 //! changed the body.
 //!
+//! 0. `exitvalues::rewritten`: a value read after a loop becomes an expression
+//!    of the loop's count where the loop is left (`rewriteLoopExitValues`,
+//!    ScalarEvolution's exit values); `LLRM_NO_SCEV_EXITVALUES` leaves it to
+//!    steps 1 and 3.
 //! 1. `loopexit::evaluated`: values after a counted loop computed from its
 //!    trips.
 //! 2. `exitfold::folded`: exits their counts decide are folded.
-//! 3. `exit_values` (only with `exit_values: true`): a counted exit's phi
-//!    values that are affine in the counters, with constant starts and steps,
-//!    become numbers. A counter stepped and then tested (`i + 1 < 32`) leaves
-//!    as 32, so the exit no longer keeps the old counter alive past its step.
+//! 3. `exit_values` (only with `exit_values: true`, and without step 0): a
+//!    counted exit's phi values that are affine in the counters, with constant
+//!    starts and steps, become numbers. A counter stepped and then tested (`i +
+//!    1 < 32`) leaves as 32, so the exit no longer keeps the old counter alive
+//!    past its step.
 //! 4. `exitsink::sunk`: final updates only exit phis read move to the exits.
 //! 5. `widened`: a counter read through `zext` (or, where it is signed and
 //!    tested by `slt`, `sext`) to the address's index width, where `induction`
@@ -214,6 +219,16 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
+        let compared = crate::simplifyindvar::enabled()
+            && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer);
+        if compared {
+            standing.changed();
+        }
+        let rewrote = crate::exitvalues::enabled()
+            && crate::exitvalues::rewritten(unit.context, unit.layout, unit.function, unit.declared, &outer);
+        if rewrote {
+            standing.changed();
+        }
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -224,7 +239,9 @@ impl FunctionPass for IndVars {
         if folded {
             standing.reshaped();
         }
-        let valued = self.exit_values && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
+        let valued = self.exit_values
+            && !crate::exitvalues::enabled()
+            && exit_values(unit.context, unit.layout, unit.function, &outer, &mut standing);
         if valued {
             standing.reshaped();
         }
@@ -251,11 +268,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued || merged)
+        let dead = (compared || rewrote || sunk || rewound || widened || valued || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded || valued {
             PreservedAnalyses::none()
-        } else if sunk || rewound || widened || merged || dead {
+        } else if compared || rewrote || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {
@@ -699,7 +716,10 @@ fn _rewinding(
         };
         let sources = exiting.iter().map(|(source, _)| *source).collect::<BTreeSet<_>>();
         let exit_preds = function.predecessors(cfg::block(exit)).into_iter().map(cfg::id).collect::<BTreeSet<_>>();
-        if !parent.body.contains(&exit) || exit_preds != sources || !dominance.dominates(exit, *parent_latch) {
+        if !parent.body.contains(&exit)
+            || exit_preds != sources
+            || !dominance.dominates(unit.function, exit, *parent_latch)
+        {
             continue;
         }
         let Some(count) = induction::trip_count(unit, inner, facts) else { continue };
@@ -729,7 +749,7 @@ fn _rewinding(
             // already `start + count * step`; a post-tested one from its
             // latch, where the update is.
             let updated = _block_of(function, stepping);
-            let exit_value = if sources.iter().all(|&source| dominance.dominates(updated, source)) {
+            let exit_value = if sources.iter().all(|&source| dominance.dominates(unit.function, updated, source)) {
                 Operand::Value(update)
             } else if sources == BTreeSet::from([inner.header]) {
                 Operand::Value(counter.value)

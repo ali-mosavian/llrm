@@ -428,6 +428,12 @@ fn test_a_block_that_jumps_to_itself_stays() {
     assert_eq!(_printed(vec![block(1, vec![_jump(1, 1)], vec![1]).into()]), ["L0_1:", "jmp L0_1"]);
 }
 
+/// `optimized`'s round: the tails merged, then the branches settled.
+fn merged(body: &LirBody) -> Result<LirBody, masm::Unprintable> {
+    let merged = tailmerge::merged(body, false)?.unwrap_or_else(|| body.clone());
+    Ok(machinedce::eliminated(_converged(&threaded(&merged))))
+}
+
 fn two_zero_tails(inserted: bool) -> LirBody {
     let fresh = |one: Arc<Insn>| if inserted { _inserted(one) } else { one };
     body(
@@ -480,6 +486,448 @@ fn test_merged_tails_share_their_values() {
     assert_eq!(undefined, Vec::<String>::new());
 }
 
+/// Both ways of a branch led to bare jumps to one block: threading sent each
+/// to it, which left `jae L; jmp L` with the successor listed twice. A second
+/// threading then took the jump to `L` and stranded `L` under the branch's
+/// other reference (qcport mdl_ai -Os: "a jump to L66_287, which is nowhere").
+#[test]
+fn test_a_branch_whose_two_ways_were_threaded_to_one_block_is_not_left_a_branch() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "jae", 10), _jump(3, 20)], vec![10, 20]).into(),
+            block(10, vec![_jump(10, 30)], vec![30]).into(),
+            block(20, vec![_jump(20, 30)], vec![30]).into(),
+            block(30, vec![_move(30, cx()), _return(31)], vec![]).into(),
+        ],
+    );
+
+    let once = threaded(&source);
+    let twice = threaded(&once);
+
+    assert_eq!(count(&once, Operation::Branch), 0);
+    let known: std::collections::BTreeSet<i64> = twice.blocks.iter().map(|block| block.at).collect();
+    for one in twice.blocks.iter().flat_map(|block| block.insns.iter()) {
+        if let Some(target) = one.what.as_ref().and_then(|what| what.target) {
+            assert!(known.contains(&target), "a jump to {target}, which is nowhere");
+        }
+    }
+}
+
+/// Two arms that differ in their first instruction and share the last three:
+/// `BranchFolder::TailMergeBlocks` splits the shared three off one arm and
+/// sends the other to it. The merge of whole blocks left both copies: 7 moves
+/// and 3 compares where 5 and 2 do.
+fn arms_sharing_a_tail(shared: usize) -> LirBody {
+    let tail = |at: i64| -> Vec<Arc<Insn>> {
+        [_move(at, bx()), _compare(at + 1), _move(at + 2, imm(7))].into_iter().take(shared).map(_inserted).collect()
+    };
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first))];
+        insns.extend(tail(at + 1));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![40]).into()
+    };
+    body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    )
+}
+
+fn count(
+    result: &LirBody,
+    op: Operation,
+) -> usize {
+    physical(result).iter().filter(|what| what.op == op).count()
+}
+
+#[test]
+fn test_a_tail_of_three_shared_by_two_arms_is_split_off_and_shared() {
+    let source = arms_sharing_a_tail(3);
+    assert_eq!((count(&source, Operation::Move), count(&source, Operation::Compare)), (7, 3));
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    assert_eq!((count(&result, Operation::Move), count(&result, Operation::Compare)), (5, 2));
+}
+
+/// One shared instruction plus the jump taken off is two, under the three a
+/// merge must save (`MinCommonTailLength`): the arms stay as they are.
+#[test]
+fn test_a_tail_of_one_is_not_shared() {
+    let source = arms_sharing_a_tail(1);
+
+    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+}
+
+/// A tail of one move and two zero-code anchors was shared: `x_cordic` -O3
+/// split each diamond's join into an empty block, every other arm paid a jump
+/// to it, +5.0% clocks. LLVM has no anchors after allocation, so they count for
+/// nothing.
+#[test]
+fn test_anchors_that_emit_no_code_do_not_count_toward_a_shared_tail() {
+    let anchor = |at: i64| {
+        let one = _inserted(nothing(at, None));
+        Arc::new(Insn { defines: vec![at as u32 + 500], uses: vec![at as u32 + 600], ..(*one).clone() })
+    };
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![
+            _inserted(_move(at, first)),
+            _inserted(_move(at + 1, bx())),
+            anchor(at + 2),
+            anchor(at + 3),
+            _inserted(_jump(at + 9, 40)),
+        ];
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    assert!(tailmerge::merged(&source, false).unwrap().is_none());
+}
+
+/// An anchor just before the shared tail stayed in the arm that now only jumps,
+/// and `threaded` would not go around that block: `recpow` -O2 ran a `jmp`
+/// after every taken `jne` to it, +0.53% clocks.
+#[test]
+fn test_an_anchor_before_the_shared_tail_leaves_the_arm_with_it() {
+    let anchored = |at: i64| {
+        let one = _inserted(nothing(at, None));
+        Arc::new(Insn { defines: vec![at as u32 + 500], uses: vec![at as u32 + 600], ..(*one).clone() })
+    };
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first)), anchored(at + 1)];
+        insns.extend([_move(at + 2, bx()), _compare(at + 3), _move(at + 4, imm(7))].into_iter().map(_inserted));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    let anchors = result.blocks.iter().flat_map(|block| block.insns.iter()).filter(|one| super::_inert(one)).count();
+    assert_eq!(anchors, 1, "the arm that now jumps still holds its anchor");
+}
+
+/// The stackifier's `sahf` is an inserted `Nothing` that emits a byte, and was
+/// taken for an anchor: the shared tail began after it, one arm lost its
+/// `sahf`, and `d_faces` -Os computed other results (feat/parity bisect).
+#[test]
+fn test_a_sahf_is_not_an_anchor_and_stays_on_every_path() {
+    let sahf = |at: i64| {
+        let what = Semantics { name: Some("sahf".into()), ..Semantics::new(Operation::Nothing) };
+        _inserted(Arc::new(Insn::new(at, None, Some(what), Vec::new(), Vec::new())))
+    };
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![
+            _inserted(_move(at, first)),
+            sahf(at + 1),
+            _inserted(_move(at + 2, bx())),
+            _inserted(_jump(at + 9, 40)),
+        ];
+        block(at, insns, vec![40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(40, vec![_return(40)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, true).unwrap().expect("nothing was merged");
+
+    let sahfs = |at: i64| {
+        let mut path = 0;
+        let mut at = at;
+        loop {
+            let block = result.blocks.iter().find(|one| one.at == at).expect("a block");
+            path += block
+                .insns
+                .iter()
+                .filter(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("sahf")))
+                .count();
+            match block.succ.as_slice() {
+                [next] => at = *next,
+                _ => return path,
+            }
+        }
+    };
+    assert_eq!((sahfs(10), sahfs(20)), (1, 1), "an arm lost its sahf");
+}
+
+/// A block with a branch before its last two (`jne A; ...; jne B; jmp C`, B
+/// laid out next) had its final jump taken for a fall-through and the branch
+/// reversed: three ways out and no instruction choosing among them, and
+/// QCport's `menu.c`, `triggers.c` and `sb_build.c` failed the verifier at
+/// -O1/-O2/-O3.
+#[test]
+fn test_a_block_with_an_inner_branch_keeps_a_way_out_the_verifier_can_read() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(
+                1,
+                vec![_compare(1), _branch(2, "jne", 20), _compare(3), _branch(4, "jne", 77), _jump(5, 75)],
+                vec![20, 77, 75],
+            )
+            .into(),
+            block(77, vec![_move(77, imm(1)), _return(78)], vec![]).into(),
+            block(75, vec![_move(75, imm(2)), _return(76)], vec![]).into(),
+            block(20, vec![_move(20, imm(3)), _return(21)], vec![]).into(),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    for block in &result.blocks {
+        masm::_falls_to(block, "f").unwrap_or_else(|why| panic!("{why:?}"));
+    }
+}
+
+/// A branch before the shared tail named a block its arm's successors no longer
+/// listed after the merge: the block was dropped as unreachable and the branch
+/// jumped nowhere (QCport `sb_build.c` -O2, "a jump to L1_149, which is
+/// nowhere").
+#[test]
+fn test_a_branch_before_the_shared_tail_keeps_its_target_a_successor() {
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first)), _compare(at + 1), _branch(at + 2, "jne", 50)];
+        insns.extend([_move(at + 3, bx()), _compare(at + 4), _move(at + 5, imm(7))].into_iter().map(_inserted));
+        insns.push(_inserted(_jump(at + 9, 40)));
+        block(at, insns, vec![50, 40]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(40, vec![_return(40)], vec![]).into(),
+            block(50, vec![_move(50, imm(9)), _return(51)], vec![]).into(),
+        ],
+    );
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    for block in &result.blocks {
+        for one in &block.insns {
+            let Some(target) = one
+                .what
+                .as_ref()
+                .filter(|w| matches!(w.op, Operation::Branch | Operation::Jump))
+                .and_then(|w| w.target)
+            else {
+                continue;
+            };
+            assert!(block.succ.contains(&target), "block {} names {target} but leaves for {:?}", block.at, block.succ);
+        }
+    }
+}
+
+/// An unnamed pseudo that clobbers a register emits no bytes but is not an
+/// anchor: `_inert` asked the name alone and would have dropped it.
+#[test]
+fn test_an_unnamed_flag_clobbering_pseudo_is_not_inert() {
+    let pseudo = Insn { clobbers: [RegId::AX].into(), ..(*_inserted(nothing(5, None))).clone() };
+    assert!(!super::_inert(&pseudo));
+    assert!(super::_inert(&_inserted(nothing(5, None))));
+}
+
+/// `jne T; jmp F` left T, a block that only jumps, in place: `recpow` -O2 ran
+/// an extra `jmp` after every taken `jne`, +0.14% clocks and 15 bytes.
+#[test]
+fn test_a_branch_before_the_final_jump_goes_through_a_block_that_only_jumps() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "jne", 20), _jump(3, 30)], vec![20, 30]).into(),
+            block(70, vec![_inserted(_move(70, cx())), _inserted(_return(71))], vec![]).into(),
+            block(30, vec![_compare(30), _branch(31, "je", 70), _jump(32, 60)], vec![70, 60]).into(),
+            block(20, vec![_inserted(_jump(20, 60))], vec![60]).into(),
+            block(60, vec![_inserted(_move(60, bx())), _inserted(_return(61))], vec![]).into(),
+        ],
+    );
+
+    let result = threaded(&source);
+
+    let first = result.blocks.iter().find(|block| block.at == 1).expect("the entry stays");
+    assert!(first.succ.contains(&60) && !first.succ.contains(&20), "{:?}", first.succ);
+}
+
+/// The merge ran before tail duplication: two arms that end in the same move
+/// and jump to a small join were merged into an empty tail block, so the join
+/// could no longer be copied into an arm and every trip paid a jump (`x_cordic`
+/// -O3, +5.0% clocks). LLVM duplicates while it places, then merges.
+#[test]
+fn test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged() {
+    let arm = |at: i64, first: Loc| {
+        let insns = vec![_inserted(_move(at, first)), _inserted(_move(at + 1, bx())), _inserted(_jump(at + 9, 30))];
+        block(at, insns, vec![30]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10, imm(1)),
+            arm(20, imm(2)),
+            block(30, vec![_compare(30), _branch(31, "jge", 40), _jump(32, 50)], vec![40, 50]).into(),
+            block(40, vec![_inserted(_move(40, cx())), _inserted(_return(41))], vec![]).into(),
+            block(50, vec![_inserted(_move(50, bx())), _inserted(_return(51))], vec![]).into(),
+        ],
+    );
+
+    let result = optimized(&source, cpu::profile("486").unwrap()).unwrap();
+
+    let jumps_only = result
+        .blocks
+        .iter()
+        .filter(|block| {
+            _real(block).len() == 1 && _real(block)[0].what.as_ref().is_some_and(|what| what.op == Operation::Jump)
+        })
+        .count();
+    assert_eq!(
+        jumps_only,
+        0,
+        "{:?}",
+        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+    );
+}
+
+/// D1: the faithful merge turned three arms of a loop that each carry the same
+/// 5-instruction latch into one shared latch and a jump to it, one more jump a
+/// trip (`x_switch` -O2/-O3, +0.96% clocks). The blocks of a loop are kept
+/// whole for speed.
+#[test]
+fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first))];
+        insns.extend(
+            [_move(at + 1, bx()), _compare(at + 2), _move(at + 3, imm(7)), _compare(at + 4)].into_iter().map(_inserted),
+        );
+        insns.push(_inserted(_branch(at + 5, "jne", 40)));
+        insns.push(_inserted(_jump(at + 9, 50)));
+        block(at, insns, vec![40, 50]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 5)], vec![20, 5]).into(),
+            block(5, vec![_compare(5), _branch(6, "je", 25), _jump(7, 10)], vec![25, 10]).into(),
+            block(96, vec![_return(96)], vec![]).into(),
+            arm(10, imm(1)),
+            block(98, vec![_return(98)], vec![]).into(),
+            arm(20, imm(2)),
+            block(94, vec![_return(94)], vec![]).into(),
+            arm(25, imm(3)),
+            block(97, vec![_return(97)], vec![]).into(),
+            block(
+                40,
+                vec![
+                    _inserted(_move(40, cx())),
+                    _inserted(_move(42, bx())),
+                    _inserted(_move(43, cx())),
+                    _inserted(_jump(41, 1)),
+                ],
+                vec![1],
+            )
+            .into(),
+            block(95, vec![_return(95)], vec![]).into(),
+            block(
+                50,
+                vec![
+                    _inserted(_move(50, bx())),
+                    _inserted(_move(52, cx())),
+                    _inserted(_move(53, bx())),
+                    _inserted(_jump(51, 1)),
+                ],
+                vec![1],
+            )
+            .into(),
+            block(99, vec![_return(99)], vec![]).into(),
+        ],
+    );
+    assert!(tailmerge::merged(&source, true).unwrap().is_some(), "the premise: for size the merge applies here");
+
+    let result = optimized(&source, cpu::profile("486").unwrap()).unwrap();
+
+    assert_eq!(
+        count(&result, Operation::Compare),
+        count(&source, Operation::Compare),
+        "{:?}",
+        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+    );
+}
+
+/// Blocks that end the function share the tail they end in, the return
+/// included.
+#[test]
+fn test_two_blocks_that_return_share_their_last_three_instructions() {
+    let ends = |at: i64, first: Loc| {
+        block(
+            at,
+            vec![
+                _inserted(_move(at, first)),
+                _inserted(_move(at + 1, bx())),
+                _inserted(_compare(at + 2)),
+                _inserted(_return(at + 3)),
+            ],
+            vec![],
+        )
+        .into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            ends(10, imm(1)),
+            ends(20, imm(2)),
+            block(30, vec![_inserted(_move(30, cx())), _inserted(_return(31))], vec![]).into(),
+        ],
+    );
+    assert_eq!(count(&source, Operation::Return), 3);
+
+    let result = tailmerge::merged(&source, false).unwrap().expect("nothing was merged");
+
+    assert_eq!(count(&result, Operation::Return), 2);
+}
+
 /// Decoded tails cannot share one copy without reconciling source maps.
 #[test]
 fn test_identical_source_owned_tails_keep_their_distinct_anchors() {
@@ -518,39 +966,6 @@ fn test_shared_machine_pipeline_merges_fresh_identical_tails() {
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
 }
 
-/// Unpriced tail sharing grew C sieve from 54 to 55 instructions.
-#[test]
-fn test_tail_sharing_rejects_a_static_saving_that_adds_hot_work() {
-    // The loop's exit test stays in 31 times in 32, as isel's heuristic odds
-    // say.
-    let shaped = |entry: Vec<Arc<Insn>>, looped: Vec<Arc<Insn>>| {
-        let mut shaped = body(
-            "f",
-            1,
-            vec![
-                block(1, entry, vec![10]).into(),
-                block(10, looped, vec![30, 20]).into(),
-                block(20, vec![_jump(20, 10)], vec![10]).into(),
-                block(30, vec![_return(30)], vec![]).into(),
-            ],
-        );
-        for (to, probability) in [(20, 124.0 / 128.0), (30, 4.0 / 128.0)] {
-            shaped.odds.taken.insert((10, to), (probability * crate::model::lir::BlockOdds::CERTAIN).round() as u32);
-        }
-        shaped
-    };
-
-    let before = shaped(
-        vec![_move(1, bx()), _move(2, cx()), _move(3, imm(0)), _jump(4, 10)],
-        vec![_compare(10), _branch(11, "je", 30)],
-    );
-    let after = shaped(vec![_jump(1, 10)], vec![_move(9, cx()), _compare(10), _branch(11, "je", 30)]);
-
-    assert!(_work(&after).0 < _work(&before).0);
-    assert!(_work(&after).1 > _work(&before).1);
-    assert!(std::ptr::eq(preferred(&before, &after), &before));
-}
-
 /// choose's folded arms joined through a two-byte `jmp` to `pop bp; retf`.
 #[test]
 fn test_byte_neutral_return_duplication_removes_a_join_jump() {
@@ -565,13 +980,49 @@ fn test_byte_neutral_return_duplication_removes_a_join_jump() {
         ],
     );
 
-    let result = duplicated_returns(source, 1);
+    let result = duplicated_returns(source, &|| 1);
     let physical: Vec<Semantics> =
         result.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.clone()).collect();
 
     assert!(result.blocks.iter().all(|block| block.at != 30));
     assert_eq!(physical.iter().filter(|one| one.op == Operation::Return).count(), 2);
     assert!(physical.iter().all(|one| one.op != Operation::Jump));
+}
+
+/// The leave sequence was encoded for every procedure (17.5 M on `d_faces` -O2,
+/// 11 procedures), also those whose one return has nothing to duplicate into.
+#[test]
+fn test_return_duplication_asks_for_the_overhead_only_for_a_tail_with_two_jumping_parents() {
+    let asked = std::cell::Cell::new(0);
+    let counted = || {
+        asked.set(asked.get() + 1);
+        1
+    };
+    let single = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, ax())], vec![30]).into(),
+            block(20, vec![_move(20, bx())], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+        ],
+    );
+    duplicated_returns(single, &counted);
+    assert_eq!(asked.get(), 0);
+
+    let joined = body(
+        "g",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, imm(8))], vec![30]).into(),
+            block(30, vec![_inserted(_return(30))], vec![]).into(),
+            block(20, vec![_move(20, imm(10)), _inserted(_jump(21, 30))], vec![30]).into(),
+        ],
+    );
+    duplicated_returns(joined, &counted);
+    assert_eq!(asked.get(), 1);
 }
 
 /// A larger return tail, or one owning source bytes, stays shared.
@@ -594,8 +1045,8 @@ fn test_return_duplication_rejects_growth_and_source_owned_tails() {
     let owned = candidate(vec![_return(30)]);
 
     // Python `is`: nothing changed, so the result equals the input.
-    assert_eq!(duplicated_returns(large.clone(), 1), large);
-    assert_eq!(duplicated_returns(owned.clone(), 1), owned);
+    assert_eq!(duplicated_returns(large.clone(), &|| 1), large);
+    assert_eq!(duplicated_returns(owned.clone(), &|| 1), owned);
 }
 
 /// The raise lays a C loop out test first, so entered at its body the

@@ -1,11 +1,19 @@
 //! What every x86 target shares. Each target's `x86.instr` holds only the forms
 //! it adds to `instructions::FAMILY`.
 
+#[cfg(test)]
+mod codemetrics_tests;
 pub mod effects;
+#[cfg(test)]
+mod instructioncost_tests;
 /// `x86.instr`'s reader. Dependency-free but `llrm-lir`, so a build script can
 /// include it with `#[path]`.
+pub mod lowering;
 pub mod parse;
 pub mod select;
+pub mod tti;
+#[cfg(test)]
+mod tti_tests;
 
 /// A calling convention's registers as the x86 family names them: the
 /// architecture's, the same in every x86 target.

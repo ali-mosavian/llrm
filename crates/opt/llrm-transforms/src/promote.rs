@@ -387,6 +387,83 @@ fn run(
     }
 }
 
+/// The alloca nothing loads, deleted with its stores, as a pass of its own:
+/// LLVM's PromoteMemToReg and SROA leave none (`removeIntrinsicUsers`, and
+/// `deleteDeadInstructions` for a slot whose loads were all forwarded). It runs
+/// with the slots of `llvm_order` (`Options::llvm_order`).
+pub struct DeadSlots;
+
+impl FunctionPass for DeadSlots {
+    fn name(&self) -> &'static str {
+        "deadslots"
+    }
+
+    fn reads(&self) -> Footprint {
+        Footprint::MEMORY
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        if emptied_slots(unit.function) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// Every alloca that nothing loads and whose address goes nowhere (only stores
+/// through it, and addresses derived by `gep` or a bitcast that are the same),
+/// erased with those stores and addresses; whether any was.
+pub fn emptied_slots(function: &mut Function) -> bool {
+    let allocas: Vec<(InstId, ValueId)> = function
+        .walk()
+        .filter_map(|(_, inst)| {
+            let op = function.instruction(inst);
+            matches!(op.opcode, Opcode::Alloca { .. }).then(|| op.result.map(|result| (inst, result))).flatten()
+        })
+        .collect();
+    let mut changed = false;
+    for (alloca, root) in allocas {
+        let mut erase: Vec<InstId> = Vec::new();
+        let mut pending = vec![root];
+        let mut dead = true;
+        'walk: while let Some(value) = pending.pop() {
+            for one in function.users(value) {
+                let user = function.instruction(one.user);
+                match &user.opcode {
+                    Opcode::Store { volatile: false, .. }
+                        if one.index == 1 && user.operands[0] != Operand::Value(value) =>
+                    {
+                        erase.push(one.user);
+                    }
+                    Opcode::GetElementPtr { .. } | Opcode::Cast(llrm_mir::opcode::CastOp::BitCast) | Opcode::Freeze
+                        if one.index == 0 =>
+                    {
+                        erase.push(one.user);
+                        pending.extend(user.result);
+                    }
+                    _ => {
+                        dead = false;
+                        break 'walk;
+                    }
+                }
+            }
+        }
+        if !dead {
+            continue;
+        }
+        // Stores first, then the addresses (a user before what it uses), then
+        // the alloca.
+        for inst in erase.into_iter().rev().chain([alloca]) {
+            if !function.is_erased(inst) {
+                function.erase(inst).expect("nothing reads it");
+            }
+        }
+        changed = true;
+    }
+    changed
+}
+
 /// `function` promoted, or with `aggregate_only` only its aggregates'
 /// leaves; `outer` is its module and target. Whether it changed.
 pub fn promoted(
@@ -614,7 +691,11 @@ fn _available(
     let Some(entry) = function.entry().map(cfg::id) else { return HashSet::default() };
     let graph = cfg::graph(function);
     let dominance = cfg::Dominance::of(function);
-    let reachable = graph.iter().map(|block| block.at).filter(|&at| dominance.reachable(at)).collect::<BTreeSet<_>>();
+    let reachable = graph
+        .iter()
+        .map(|block| block.at)
+        .filter(|&at| dominance.reachable(unit.function, at))
+        .collect::<BTreeSet<_>>();
     let predecessors = loops::predecessors(&graph);
     let refs = cells
         .iter()

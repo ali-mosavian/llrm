@@ -1,3 +1,7 @@
+---
+architecture-index: BasicAA as a translation of LLVM's
+architecture-order: 290
+---
 # BasicAA as a translation of LLVM's: the plan
 
 **TL;DR.** Today alias answers come from a whole-function tower (`alias.rs` 3,852 lines, `frameescape.rs` 703, `llrm-mir/alias.rs` 216, tests 1,640): points-to sets, a flow-sensitive escape phase and a join rule per case. Two soundness bugs in one day (#2132: a join lost an arm; #2125: edges not re-derived) are a class LLVM's per-query design does not have. The plan is to translate `AliasAnalysis.cpp`, `BasicAliasAnalysis.cpp`, `CaptureTracking.cpp` and `MemoryLocation.cpp` (pinned `d1106deb71cc`, about 4,100 C++ lines) behind the interface of [#2163](https://github.com/ali-mosavian/llrm/pull/2163), move the clients over one PR each, and delete the tower. Nothing below is measured yet unless a number is given.
@@ -110,7 +114,8 @@ The 4,472 / 16,914 / 9,418 cells of the tables (tags on, BasicAA alone memops, B
 3. No `invariant.group`, fences or atomics (MIR has none).
 4. The capture oracle trusts a callee another module defines when one module is compiled alone; the module report counts them.
 5. The first implementation answers from the existing provenance and `MemRef` where LLVM walks `GEP` chains; each place is replaced by the translated walk at S2 and listed in that PR.
-6. `CaptureTracking` stops at 100 uses of an object (`getDefaultMaxUsesToExploreForCaptureTracking`) and answers captured. Seen: a slot with about 200 loads in `loop400` (replay input 01/0011-in-hoist) is NoAlias against a loaded pointer for llrm and MayAlias for LLVM; the mirror takes the cap (precision lost, rows to be counted), a deviation takes none. Verified in LLVM: a slot with up to 101 loads is NoAlias against a gep of a pointer loaded from it, with 150 it is MayAlias. Default: mirror the cap (LLVM's limits at its defaults); an uncapped answer stays only as a numbered deviation if a row needs it, with its compile cost; the d_faces and mem-ladder compile numbers with and without the cap come with S1.
+6. `CaptureTracking` stops at 150 uses of an object (`getDefaultMaxUsesToExploreForCaptureTracking`) and answers captured. Seen: a slot with about 200 loads in `loop400` (replay input 01/0011-in-hoist) is NoAlias against a loaded pointer for llrm and MayAlias for LLVM; the mirror takes the cap (precision lost, rows to be counted), a deviation takes none. Verified with the pinned opt (24.0.0git d1106deb71cc): a slot with 148 loads is NoAlias against a gep of a pointer loaded from it, with 149 it is MayAlias (the slot has two more uses). Default: mirror the cap (LLVM's limits at its defaults); an uncapped answer stays only as a numbered deviation if a row needs it, with its compile cost; the d_faces and mem-ladder compile numbers with and without the cap come with S1.
+7. `getModRefInfo(Call1, Call2)` is BasicAA's guard-intrinsic case only; MIR has no `experimental.guard`, so it answers ModRef (B2). The effects-based call-vs-call form is `AAResults`'.
 
 ## 6. Open
 

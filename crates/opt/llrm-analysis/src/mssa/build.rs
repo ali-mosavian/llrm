@@ -36,6 +36,9 @@ impl Mssa {
         dominance: &Dominance,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Self {
+        // The memory SSA answers `dominates` for the rest of its life without
+        // the function.
+        dominance.tree(function);
         let entry = *function.layout().first().expect("a function with a block");
         // We create an access to represent "live on entry", for things like
         // arguments or users of globals, where the memory they use is
@@ -75,7 +78,7 @@ impl Mssa {
         let mut defining_blocks: BTreeSet<i64> = BTreeSet::new();
         for &block in function.layout() {
             let mut insert_into_def = false;
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let Some(access) = mssa.create_new_access(block, inst, modref) else { continue };
                 let lists = mssa.per_block.get_or_insert_with(block, BlockAccesses::default);
                 lists.accesses.push(access);
@@ -296,7 +299,7 @@ impl Mssa {
     ) {
         let mut children: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
         for &block in function.layout() {
-            if let Some(idom) = self.dominance.immediate(cfg::id(block)) {
+            if let Some(idom) = self.dominance.immediate(function, cfg::id(block)) {
                 children.get_or_insert_with(cfg::block(idom), Vec::new).push(block);
             }
         }
@@ -334,12 +337,15 @@ impl Mssa {
         function: &Function,
         block: BlockId,
     ) {
-        assert!(!self.dominance.reachable(cfg::id(block)), "reachable block found while handling unreachable blocks");
+        assert!(
+            !self.dominance.reachable(function, cfg::id(block)),
+            "reachable block found while handling unreachable blocks"
+        );
         // Make sure phi nodes in our reachable successors end up with a
         // LiveOnEntryDef for our incoming edge, even though our block
         // is forward unreachable.
         for successor in function.successors(block) {
-            if !self.dominance.reachable(cfg::id(successor)) {
+            if !self.dominance.reachable(function, cfg::id(successor)) {
                 continue;
             }
             let Some(phi) = self.get_memory_phi(successor) else { continue };

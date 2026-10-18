@@ -1,3 +1,7 @@
+---
+architecture-index: the plan to reach clang's compile time
+architecture-order: 430
+---
 # Compile time at clang's level: the plan
 
 **Scoreboard.** `d_faces` -O2 is 2,104 M instructions at main `9d50a350e` in a clean dist build, 5.1x clang 24's 413 M (section 2.0; the 2,253 M at `5e2e995ef` was not taken in the clean-build mode and is superseded; it was 2,903 M and 6.8x at `21f5c9fc8`); about 900 allocations per IR instruction against 19; 3.4 computes per pass run. Updated after each landing ([compile-gap-series]).
@@ -359,7 +363,7 @@ Code generation (`llc -O2`, i486; the same passes at -O1 less a few):
 | 61 | shrink-wrap, prolog-epilog, machine-latecleanup | `shrink-wrap`, frame code | old | lir-cleanup-poc |
 | 62 | branch-folder, tailduplication, block-placement, post-RA scheduler | `jumps` | old | lir-cleanup-poc (jumps-tailmerge) |
 | 63 | execution-domain, break-false-deps, fixup-bw, fixup-leas | none | missing | lir-cleanup-poc (map) |
-| 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-slopes (emission, ranked last) |
+| 64 | asm printer, MC object streamer | `assemble`, object write, omf | old | backend-two (emission, rows E1 to E8 in [emission-survey.md](emission-survey.md)); E1 global alignment first |
 | 65 | `X86FrameLowering::hasFP` (frame-pointer decision) | `without_frame_register`; interim [#2274] (framefree block lookup slope fix) | old | backend-slopes (the translation replaces `without_frame_register`) |
 
 Count: of 65 slots, 4 are translated (2, 3, 6, 58), all off by default; 2 are partly translated (11: `InlineCost`; 49: LoopInfo); 4 are n/a; the other 55 are old or missing, every one with an owner (24 of them assigned by kind from the former gap list). The default pipeline runs none of the translated slots.

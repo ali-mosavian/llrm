@@ -1116,7 +1116,7 @@ fn _pointer_stores(
             Some(at) if at == block => {
                 order.iter().position(|&one| one == source) < order.iter().position(|&one| one == inst)
             }
-            Some(at) => dominance.dominates(cfg::id(at), cfg::id(block)),
+            Some(at) => dominance.dominates(unit.function, cfg::id(at), cfg::id(block)),
             None => false,
         }
     };
@@ -1191,7 +1191,7 @@ fn exit_loads(
         for (_, inst) in function.walk() {
             let Some((reference, result)) = avail::loaded_into(unit, accesses, inst) else { continue };
             let block = cfg::id(function.parent(inst).expect("a placed load"));
-            if !shape.dominance.dominates(after, block) {
+            if !shape.dominance.dominates(unit.function, after, block) {
                 continue;
             }
             let reference = _addressed(unit, &reference, registers);

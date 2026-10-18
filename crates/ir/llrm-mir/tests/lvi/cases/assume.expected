@@ -1,0 +1,146 @@
+val range 0 cr=i32:full-set cst=- pn=-
+val range 1 cr=i1:full-set cst=- pn=-
+val range 2 cr=i32:[1,101) cst=- pn=-
+rval range 2 cr=i32:[1,101)
+rval range 1 cr=i1:full-set
+pred range 0 a=- b=-
+use range 0 0 cr=i32:full-set
+use range 1 0 cr=i1:full-set
+use range 2 0 cr=i32:[0,100)
+use range 3 0 cr=i32:[1,101)
+lat range arg0 bb0 overdefined
+lat range i0 bb0 overdefined
+lat range i1 bb0 overdefined
+lat range i2 bb0 constantrange<1, 101>
+lat range i3 bb0 overdefined
+val after 0 cr=i32:[0,100) cst=- pn=-
+val after 1 cr=i32:[1,101) cst=- pn=-
+val after 2 cr=i1:full-set cst=- pn=-
+val after 3 cr=i32:[2,102) cst=- pn=-
+rval after 3 cr=i32:[2,102)
+rval after 2 cr=i1:full-set
+rval after 1 cr=i32:[1,101)
+pred after 1 a=- b=-
+use after 0 0 cr=i32:[0,100)
+use after 1 0 cr=i32:full-set
+use after 2 0 cr=i1:full-set
+use after 3 0 cr=i32:[0,100)
+use after 4 0 cr=i32:[2,102)
+lat after arg0 bb0 overdefined
+lat after i0 bb0 constantrange<1, 101>
+lat after i1 bb0 overdefined
+lat after i2 bb0 overdefined
+lat after i3 bb0 constantrange<2, 102>
+lat after i4 bb0 overdefined
+val other_block 0 cr=i32:full-set cst=- pn=-
+val other_block 1 cr=i1:full-set cst=- pn=-
+val other_block 2 cr=i1:full-set cst=- pn=-
+val other_block 3 cr=i32:[9,1) cst=- pn=-
+val other_block 4 cr=i32:[1,-7) cst=- pn=-
+rval other_block 4 cr=i32:[1,-7)
+rval other_block 3 cr=i32:[9,1)
+rval other_block 2 cr=i1:full-set
+edge other_block 0 1 0 cr=i32:[8,0)
+edge other_block 0 2 0 cr=i32:[8,0)
+pred other_block 0 a=- b=-
+use other_block 0 0 cr=i32:full-set
+use other_block 1 0 cr=i1:full-set
+use other_block 2 0 cr=i1:full-set
+use other_block 3 0 cr=i32:[8,0)
+use other_block 4 0 cr=i32:[9,1)
+use other_block 5 0 cr=i32:[8,0)
+use other_block 6 0 cr=i32:[1,-7)
+lat other_block arg0 bb0 overdefined
+lat other_block arg0 bb1 constantrange<8, 0>
+lat other_block arg0 bb2 constantrange<8, 0>
+lat other_block arg1 bb0 overdefined
+lat other_block arg1 bb1 constantrange<-1, 0>
+lat other_block arg1 bb2 constantrange<0, -1>
+lat other_block i0 bb0 overdefined
+lat other_block i0 bb1 overdefined
+lat other_block i0 bb2 overdefined
+lat other_block i1 bb0 overdefined
+lat other_block i1 bb1 overdefined
+lat other_block i1 bb2 overdefined
+lat other_block i2 bb0 overdefined
+lat other_block i2 bb1 overdefined
+lat other_block i2 bb2 overdefined
+lat other_block i3 bb1 constantrange<9, 1>
+lat other_block i4 bb1 overdefined
+lat other_block i5 bb2 constantrange<1, -7>
+lat other_block i6 bb2 overdefined
+val conj 0 cr=i32:full-set cst=- pn=-
+val conj 1 cr=i1:full-set cst=- pn=-
+val conj 2 cr=i1:full-set cst=- pn=-
+val conj 3 cr=i1:full-set cst=- pn=-
+val conj 4 cr=i32:full-set cst=- pn=-
+rval conj 4 cr=i32:full-set
+rval conj 3 cr=i1:full-set
+rval conj 2 cr=i1:full-set
+rval conj 1 cr=i1:full-set
+pred conj 0 a=- b=-
+pred conj 1 a=- b=-
+use conj 0 0 cr=i32:full-set
+use conj 1 0 cr=i32:full-set
+use conj 2 0 cr=i1:full-set
+use conj 2 1 cr=i1:full-set
+use conj 3 0 cr=i1:full-set
+use conj 4 0 cr=i32:full-set
+use conj 5 0 cr=i32:full-set
+lat conj arg0 bb0 overdefined
+lat conj i0 bb0 overdefined
+lat conj i1 bb0 overdefined
+lat conj i2 bb0 overdefined
+lat conj i3 bb0 overdefined
+lat conj i4 bb0 overdefined
+lat conj i5 bb0 overdefined
+val eq 0 cr=i32:full-set cst=- pn=-
+val eq 1 cr=i1:full-set cst=- pn=-
+val eq 2 cr=i32:[18,19) cst=i32:18 pn=-
+rval eq 2 cr=i32:[18,19)
+rval eq 1 cr=i1:full-set
+pred eq 0 a=- b=-
+use eq 0 0 cr=i32:full-set
+use eq 1 0 cr=i1:full-set
+use eq 2 0 cr=i32:[17,18)
+use eq 3 0 cr=i32:[18,19)
+lat eq arg0 bb0 overdefined
+lat eq i0 bb0 overdefined
+lat eq i1 bb0 overdefined
+lat eq i2 bb0 constantrange<18, 19>
+lat eq i3 bb0 overdefined
+val nonnull 0 cr=- cst=- pn=-
+val nonnull 1 cr=i1:full-set cst=- pn=-
+rval nonnull 1 cr=i1:full-set
+pred nonnull 0 a=- b=-
+use nonnull 1 0 cr=i1:full-set
+lat nonnull arg0 bb0 overdefined
+lat nonnull i0 bb0 overdefined
+lat nonnull i1 bb0 overdefined
+lat nonnull i2 bb0 overdefined
+val two 0 cr=i32:full-set cst=- pn=-
+val two 1 cr=i32:[0,10) cst=- pn=-
+val two 2 cr=i1:full-set cst=- pn=-
+val two 3 cr=i1:full-set cst=- pn=-
+val two 4 cr=i32:full-set cst=- pn=-
+rval two 4 cr=i32:full-set
+rval two 3 cr=i1:full-set
+rval two 2 cr=i1:full-set
+pred two 0 a=- b=-
+pred two 2 a=- b=-
+use two 0 0 cr=i32:full-set
+use two 0 1 cr=i32:[0,10)
+use two 1 0 cr=i1:full-set
+use two 2 0 cr=i32:[1,0)
+use two 3 0 cr=i1:full-set
+use two 4 0 cr=i32:[0,-1)
+use two 4 1 cr=i32:[1,10)
+use two 5 0 cr=i32:full-set
+lat two arg0 bb0 overdefined
+lat two arg1 bb0 overdefined
+lat two i0 bb0 overdefined
+lat two i1 bb0 overdefined
+lat two i2 bb0 overdefined
+lat two i3 bb0 overdefined
+lat two i4 bb0 overdefined
+lat two i5 bb0 overdefined
