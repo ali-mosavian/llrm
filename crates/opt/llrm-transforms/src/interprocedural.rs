@@ -1841,7 +1841,7 @@ pub fn stamped(
     // as they stand when its first member is reached: LLVM stamps an SCC at
     // once.
     let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
-    let shadow_memory = std::env::var_os("LLRM_SHADOW_MEMORY").is_some();
+    let shadow_memory = llrm_support::env_set("LLRM_SHADOW_MEMORY");
     // Shadow of `functionattrs::stamp_memory`: the same bodies stamped
     // callees first from no memory attribute at all, against what `_narrowed`
     // states; one line per body that differs.
