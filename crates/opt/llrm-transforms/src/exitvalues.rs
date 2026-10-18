@@ -441,7 +441,7 @@ fn first_insertion_point(
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L1036
 /// `LoopInfo::replacementPreservesLCSSAForm(From, To)`.
-fn replacement_preserves_lcssa_form(
+pub(crate) fn replacement_preserves_lcssa_form(
     cx: &llrm_analysis::scev::Cx,
     from: InstId,
     to: Operand,
