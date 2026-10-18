@@ -8,6 +8,7 @@
 pub mod edgebundles;
 pub mod greedy;
 pub mod inlinespiller;
+pub mod interferencecache;
 pub mod liverangeedit;
 pub mod matrix;
 pub mod shadow;

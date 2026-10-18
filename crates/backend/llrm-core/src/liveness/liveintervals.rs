@@ -3,8 +3,8 @@
 //! indexes the allocator edits as it spills. Translated from
 //! llvm/lib/CodeGen/LiveIntervals.cpp (`computeVirtRegInterval`,
 //! `createAndComputeVirtRegInterval`, `getInterval`, `intervalIsInOneMBB`,
-//! `removeInterval`) and the parts of `MachineFunction`/`MachineRegisterInfo`
-//! it reads, at d1106deb71cc.
+//! `removeInterval`, `pruneValue`, `extendToIndices`, `shrinkToUses`) and the
+//! parts of `MachineFunction`/`MachineRegisterInfo` it reads, at d1106deb71cc.
 //!
 //! # How it works
 //! `new` numbers the instructions (`SlotIndexes`), builds the CFG and dominator
@@ -22,6 +22,10 @@
 //! an interval is an `Rc` so the allocator can hold one while the map changes
 //! (the `LiveInterval*` of C++).
 //!
+//! DEVIATE (no number): `shrinkToUses` has no sub-ranges and sets no dead flags
+//! on operands (an instruction here has none); it lists the instructions whose
+//! value is dead and `all_defs_are_dead` tells which can go.
+//!
 //! # Example
 //! `%1 = 5; %2 = %1 + 1; use %2`: `%1` is `[16r,32r)`, `%2` is `[32r,48r)`.
 //!
@@ -32,11 +36,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use super::cfg::{Cfg, DomTree};
-use super::liverange::LiveInterval;
+use super::liverange::{LiveInterval, LiveRange, Segment, VNInfo, Vn};
 use super::liverangecalc::{Ctx, LiveIntervalCalc, Operand};
 use super::slotindex::{InstrKey, SlotIndex, SlotIndexes};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::HashMap;
+use crate::support::hash::{HashMap, HashSet};
 
 /// `LiveIntervals` (LiveIntervals.h).
 pub struct LiveIntervals {
@@ -397,6 +401,250 @@ impl LiveIntervals {
         self.indexes.remove_machine_instr_from_maps(key);
     }
 
+    /// `extendToIndices` (LiveIntervals.cpp#L695): extends `lr` to reach each
+    /// of `indices`, as `LiveRangeCalc::extend` does for a use.
+    pub fn extend_to_indices(
+        &mut self,
+        lr: &mut LiveRange,
+        indices: &[SlotIndex],
+    ) {
+        self.calc.calc.reset(self.cfg.len());
+        let ctx = Ctx { cfg: &self.cfg, indexes: &self.indexes, dom: &self.dom };
+        for idx in indices {
+            self.calc.calc.extend(lr, *idx, &ctx);
+        }
+    }
+
+    /// `pruneValue` (LiveIntervals.cpp#L704): removes the part of `lr` that
+    /// the value live at `kill` reaches from `kill` on, and puts the places
+    /// where it ended in `end_points`.
+    pub fn prune_value(
+        &self,
+        lr: &mut LiveRange,
+        kill: &SlotIndex,
+        mut end_points: Option<&mut Vec<SlotIndex>>,
+    ) {
+        let lrq = lr.query(kill);
+        // LR may have liveness reachable from early clobber slot, which may be
+        // only live-in instead of live-out of the instruction.
+        let Some(vni) = lrq.value_out_or_dead().or_else(|| lrq.value_in()) else { return };
+        let kill_mbb = self.indexes.get_mbb_from_index(kill);
+        let mbb_end = self.indexes.get_mbb_end_idx(kill_mbb);
+        // If VNI isn't live out from KillMBB, the value is trivially pruned.
+        if lrq.end_point() < mbb_end {
+            lr.remove_segment(kill, &lrq.end_point(), false);
+            if let Some(points) = end_points.as_deref_mut() {
+                points.push(lrq.end_point());
+            }
+            return;
+        }
+        // VNI is live out of KillMBB.
+        lr.remove_segment(kill, &mbb_end, false);
+        if let Some(points) = end_points.as_deref_mut() {
+            points.push(mbb_end);
+        }
+        // Every block reachable from KillMBB without leaving VNI's live range.
+        // KillMBB itself may be reachable, so a search starts at each
+        // successor (`df_ext_begin` with one `Visited` set).
+        let mut visited = vec![false; self.cfg.len()];
+        for &succ in &self.cfg.succs[kill_mbb] {
+            if std::mem::replace(&mut visited[succ], true) {
+                continue;
+            }
+            let mut stack: Vec<(usize, usize)> = Vec::new();
+            if self.prune_block(lr, &vni, succ, end_points.as_deref_mut()) {
+                stack.push((succ, 0));
+            }
+            while let Some((block, next)) = stack.last_mut() {
+                let Some(&child) = self.cfg.succs[*block].get(*next) else {
+                    stack.pop();
+                    continue;
+                };
+                *next += 1;
+                if !std::mem::replace(&mut visited[child], true)
+                    && self.prune_block(lr, &vni, child, end_points.as_deref_mut())
+                {
+                    stack.push((child, 0));
+                }
+            }
+        }
+    }
+
+    /// One block of `pruneValue`'s search: whether the search goes on into its
+    /// successors.
+    fn prune_block(
+        &self,
+        lr: &mut LiveRange,
+        vni: &Vn,
+        block: usize,
+        end_points: Option<&mut Vec<SlotIndex>>,
+    ) -> bool {
+        let (start, end) = *self.indexes.get_mbb_range(block);
+        // Check if VNI is live in to MBB.
+        let lrq = lr.query(&start);
+        if !lrq.value_in().is_some_and(|found| Rc::ptr_eq(&found, vni)) {
+            // This block isn't part of the VNI segment. Prune the search.
+            return false;
+        }
+        // Prune the search if VNI is killed in MBB.
+        if lrq.end_point() < end {
+            lr.remove_segment(&start, &lrq.end_point(), false);
+            if let Some(points) = end_points {
+                points.push(lrq.end_point());
+            }
+            return false;
+        }
+        // VNI is live through MBB.
+        lr.remove_segment(&start, &end, false);
+        if let Some(points) = end_points {
+            points.push(end);
+        }
+        true
+    }
+
+    /// `extendSegmentsToUses` (LiveIntervals.cpp#L443) for the main range:
+    /// `segments` gets every block from the value's def to the places in
+    /// `work`, going by the values `old` has at the ends of predecessors.
+    fn extend_segments_to_uses(
+        &self,
+        segments: &mut LiveRange,
+        work: &mut Vec<(SlotIndex, Vn)>,
+        old: &LiveRange,
+    ) {
+        // Keep track of the PHIs that are in use.
+        let mut used_phis: HashSet<*const VNInfo> = HashSet::default();
+        // Blocks that have already been added to the work list as live-out.
+        let mut live_out: HashSet<usize> = HashSet::default();
+        while let Some((idx, vni)) = work.pop() {
+            let block = self.indexes.get_mbb_from_index(&idx.get_prev_slot());
+            let block_start = self.indexes.get_mbb_start_idx(block);
+            // Extend the live range for VNI to be live at Idx.
+            if let Some(ext) = segments.extend_in_block(&block_start, &idx) {
+                assert!(Rc::ptr_eq(&ext, &vni), "Unexpected existing value number");
+                // Is this a PHIDef we haven't seen before?
+                if !vni.is_phi_def() || vni.def() != block_start || !used_phis.insert(Rc::as_ptr(&vni)) {
+                    continue;
+                }
+                // The PHI is live, make sure the predecessors are live-out.
+                for &pred in &self.cfg.preds[block] {
+                    if !live_out.insert(pred) {
+                        continue;
+                    }
+                    let stop = self.indexes.get_mbb_end_idx(pred);
+                    // A predecessor is not required to have a live-out value
+                    // for a PHI.
+                    if let Some(pred_vni) = old.get_vn_info_before(&stop) {
+                        work.push((stop, pred_vni));
+                    }
+                }
+                continue;
+            }
+            // VNI is live-in to MBB.
+            segments.add_segment(Segment::new(block_start, idx, Some(Rc::clone(&vni))));
+            // Make sure VNI is live-out from the predecessors.
+            for &pred in &self.cfg.preds[block] {
+                if !live_out.insert(pred) {
+                    continue;
+                }
+                let stop = self.indexes.get_mbb_end_idx(pred);
+                let old_vni = old.get_vn_info_before(&stop).expect("Missing value out of predecessor for main range");
+                assert!(Rc::ptr_eq(&old_vni, &vni), "Wrong value out of predecessor");
+                work.push((stop, Rc::clone(&vni)));
+            }
+        }
+    }
+
+    /// `shrinkToUses` (LiveIntervals.cpp#L524): the interval of `reg` cut back
+    /// to what its reads reach. Returns whether a value died (the interval may
+    /// now fall into components) and the instructions that define a value
+    /// nothing reads (`computeDeadValues`); `all_defs_are_dead` says which of
+    /// them can go.
+    pub fn shrink_to_uses(
+        &mut self,
+        reg: u32,
+    ) -> (bool, Vec<InstrKey>) {
+        let mut li = (*self.interval_rc(reg)).clone();
+        // Find all the values used, including PHI kills.
+        let mut work: Vec<(SlotIndex, Vn)> = Vec::new();
+        // Visit all instructions reading the register.
+        for operand in self.operands(reg) {
+            if !operand.reads_reg {
+                continue;
+            }
+            let mut idx = self.indexes.get_instruction_index(operand.instr).get_reg_slot(false);
+            let lrq = li.query(&idx);
+            // A read of no live value is an operand that claims a read it does
+            // not make.
+            let Some(vni) = lrq.value_in() else { continue };
+            // Special case: An early-clobber tied operand reads and writes the
+            // register one slot early.
+            if let Some(def) = lrq.value_defined() {
+                idx = def.def();
+            }
+            work.push((idx, vni));
+        }
+        // Create new live ranges with only minimal live segments per def.
+        let mut fresh = LiveRange::new();
+        for vni in &li.valnos {
+            if vni.is_unused() {
+                continue;
+            }
+            let def = vni.def();
+            fresh.add_segment(Segment::new(def, def.get_dead_slot(), Some(Rc::clone(vni))));
+        }
+        self.extend_segments_to_uses(&mut fresh, &mut work, &li);
+        // Move the trimmed segments back.
+        li.segments = fresh.segments;
+        // Handle dead values.
+        let (may_split, dead) = self.compute_dead_values(&mut li);
+        self.intervals.insert(reg, Rc::new(li));
+        (may_split, dead)
+    }
+
+    /// `computeDeadValues` (LiveIntervals.cpp#L582) without the dead flags
+    /// (DEVIATE: an instruction here has no per-operand flags; the dead
+    /// definitions are returned): a dead phi is removed, a dead def is listed.
+    fn compute_dead_values(
+        &self,
+        li: &mut LiveInterval,
+    ) -> (bool, Vec<InstrKey>) {
+        let mut may_have_split_components = false;
+        let mut dead = Vec::new();
+        for vni in li.valnos.clone() {
+            if vni.is_unused() {
+                continue;
+            }
+            let def = vni.def();
+            let at = li.find_segment_containing(&def);
+            assert!(at != li.segments.len(), "Missing segment for VNI");
+            if li.segments[at].end != def.get_dead_slot() {
+                continue;
+            }
+            if vni.is_phi_def() {
+                // This is a dead PHI. Remove it.
+                vni.mark_unused();
+                li.remove_segment_at(at, false);
+            } else {
+                // This is a dead def.
+                let instr = self.indexes.get_instruction_from_index(&def).expect("No instruction defining live value");
+                dead.push(instr);
+            }
+            may_have_split_components = true;
+        }
+        (may_have_split_components, dead)
+    }
+
+    /// `MachineInstr::allDefsAreDead` for the instruction `key`: every value it
+    /// defines is dead at it, by the intervals held.
+    pub fn all_defs_are_dead(
+        &mut self,
+        key: InstrKey,
+    ) -> bool {
+        let defines = self.insns[&key].defines.clone();
+        let idx = self.indexes.get_instruction_index(key).get_reg_slot(false);
+        !defines.is_empty() && defines.into_iter().all(|reg| self.interval_rc(reg).query(&idx).is_dead_def())
+    }
+
     /// A point of an interval as the function's own shape names it, so two
     /// numberings of one function compare: the instruction and the slot of it,
     /// or the block and the slot of its boundary.
@@ -544,6 +792,96 @@ mod tests {
         lis.remove_interval(1);
         lis.interval(1);
         let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[2]), late]);
+        assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
+    }
+
+    fn blocks(shape: &[(&[Arc<Insn>], &[i64])]) -> LirBody {
+        let made = shape
+            .iter()
+            .enumerate()
+            .map(|(at, (insns, succ))| {
+                Block::from(LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at as i64, insns.to_vec()) })
+            })
+            .collect();
+        LirBody::new("edited", 0, made, IndexMap::default(), IndexMap::default())
+    }
+
+    fn reg_slot(
+        lis: &LiveIntervals,
+        insn: &Arc<Insn>,
+    ) -> SlotIndex {
+        lis.indexes.get_instruction_index(insn.id()).get_reg_slot(false)
+    }
+
+    /// `pruneValue` from the middle of a block that falls into a join: the
+    /// value goes from the kill to the end of its block and from the join's
+    /// start to its last read, and stays on the path that skips the block.
+    #[test]
+    fn test_prune_value_removes_what_the_value_reaches_after_the_kill() {
+        let (def, nop, other, read) = (insn(&[1], &[]), insn(&[], &[]), insn(&[], &[]), insn(&[], &[1]));
+        let body = blocks(&[
+            (&[Arc::clone(&def)], &[1, 2]),
+            (&[Arc::clone(&nop), Arc::clone(&other)], &[2]),
+            (&[Arc::clone(&read)], &[]),
+        ]);
+        let mut lis = LiveIntervals::new(&body);
+        let mut range = lis.interval(1).range.clone();
+        let kill = reg_slot(&lis, &nop);
+        let mut ends = Vec::new();
+        lis.prune_value(&mut range, &kill, Some(&mut ends));
+        assert_eq!(ends, vec![lis.indexes.get_mbb_end_idx(1), reg_slot(&lis, &read)]);
+        assert!(
+            range.live_at(&lis.indexes.get_mbb_end_idx(0).get_prev_slot()),
+            "the path that skips the block keeps the value"
+        );
+        assert!(!range.live_at(&kill), "the kill is pruned");
+        assert!(!range.live_at(&lis.indexes.get_mbb_start_idx(2)), "the join no longer holds the value");
+    }
+
+    /// `shrinkToUses` after the last read of a value in a loop exit is gone:
+    /// the interval is what a fresh computation makes.
+    #[test]
+    fn test_shrink_to_uses_cuts_the_interval_back_to_the_reads_left() {
+        let (def, inside, outside) = (insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[1]));
+        let was =
+            blocks(&[(&[Arc::clone(&def)], &[1]), (&[Arc::clone(&inside)], &[1, 2]), (&[Arc::clone(&outside)], &[])]);
+        let mut lis = LiveIntervals::new(&was);
+        lis.interval(1);
+        lis.remove_instr(2, outside.id());
+        let now = blocks(&[(&[Arc::clone(&def)], &[1]), (&[Arc::clone(&inside)], &[1, 2]), (&[], &[])]);
+        let (_, dead) = lis.shrink_to_uses(1);
+        assert!(dead.is_empty());
+        assert_eq!(lis.assert_intervals_equal_afresh(&now), 1);
+    }
+
+    /// A value whose reads are all gone is a dead def: `shrinkToUses` lists
+    /// the instruction that defines it.
+    #[test]
+    fn test_shrink_to_uses_lists_the_definition_of_a_value_nothing_reads() {
+        let (def, read) = (insn(&[1], &[]), insn(&[], &[1]));
+        let mut lis = LiveIntervals::new(&body(&[Arc::clone(&def), Arc::clone(&read)]));
+        lis.interval(1);
+        lis.remove_instr(0, read.id());
+        let (split, dead) = lis.shrink_to_uses(1);
+        assert!(split);
+        assert_eq!(dead, vec![def.id()]);
+        assert!(lis.all_defs_are_dead(def.id()));
+    }
+
+    /// `extendToIndices` reaches a read added after the interval was made.
+    #[test]
+    fn test_extend_to_indices_reaches_a_read_added_later() {
+        let (def, read, last) = (insn(&[1], &[]), insn(&[], &[1]), insn(&[], &[]));
+        let mut lis = LiveIntervals::new(&body(&[Arc::clone(&def), Arc::clone(&read), Arc::clone(&last)]));
+        let mut range = lis.interval(1).range.clone();
+        let late = insn(&[], &[1]);
+        lis.insert_instr_after(0, last.id(), Arc::clone(&late));
+        let at = reg_slot(&lis, &late);
+        lis.extend_to_indices(&mut range, &[at]);
+        let mut held = (*lis.interval_rc(1)).clone();
+        held.range = range;
+        lis.insert_interval(held);
+        let edited = body(&[def, read, last, late]);
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
     }
 }

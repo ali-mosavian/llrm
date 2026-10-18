@@ -35,7 +35,7 @@ import llrmbin  # noqa: E402
 SELECTION = HERE / "parity_smoke.toml"
 BUDGET = 10.0
 CARGO_OVERHEAD = 0.3  # cargo's own CPU to find the test binary up to date, per crate
-MAX_CRATES = 6  # a merge touching more is tested in the 6 crates with most changed files: each crate costs its cargo start before any test
+MAX_CRATES = 5  # a merge touching more is tested in the 5 crates with most changed files: each crate costs its cargo start before any test
 UNIT_FLOOR = 3.0  # the seconds the fixed steps always leave for unit tests
 ORACLES = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
 PROGRAM = ROOT / "bench" / "bintree"
@@ -182,6 +182,21 @@ def d_faces(bins: Path) -> tuple[str, str]:
     return ("ok", "reports equal gcc -O0's") if got == DFACES_REPORTS else ("fail", f"d_faces reports {got}, gcc -O0 printed {DFACES_REPORTS}")
 
 
+def qc_d_faces(bins: Path) -> tuple[str, str]:
+    """QCport's own render/d_faces.c with the flags the QCport build uses (the m16 default, QCport's -I dirs), at all four levels: the flat d_faces of the `d_faces` step is another
+    file at one level, and passed on 3858c5195 while this one failed the verifier at -O2/-O3 ('block 964 leaves for ... with no instruction choosing')."""
+    qcport = Path(os.environ.get("QCPORT", Path.home() / "scratch/qcport/src")).expanduser()
+    include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
+    source = qcport / "render" / "d_faces.c"
+    if not source.is_file() or not include.is_dir():
+        return "skipped", f"no QCport sources ({qcport})"
+    flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
+    for level in ("-O1", "-O2", "-O3", "-Os"):
+        if why := compile_ok([str(bins / "llrm-c"), level, *flags, str(source), "-o", os.devnull], os.environ):
+            return "fail", f"QCport d_faces.c {level}: {why}"
+    return "ok", "QCport d_faces.c at 4 levels"
+
+
 def run_cases(bins: Path) -> tuple[str, str]:
     names = selection().get("run", {}).get("cases", [])
     if not names:
@@ -209,7 +224,7 @@ def unit_step(package: str, allowance: float):
     return step
 
 
-FIXED = [("programs", programs, 1.0), ("sc", sc, 1.0), ("d_faces", d_faces, 2.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
+FIXED = [("programs", programs, 0.5), ("sc", sc, 0.8), ("d_faces", d_faces, 2.0), ("qc_d_faces", qc_d_faces, 1.0), ("run", run_cases, 2.5)]  # (name, step, declared seconds)
 
 
 def fixed_cost() -> float:
