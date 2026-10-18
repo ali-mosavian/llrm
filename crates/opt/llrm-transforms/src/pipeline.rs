@@ -538,7 +538,7 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         // Strict floating recurrences must retain their original iteration
         // order; LICM may move invariant preparation out afterwards.
         Box::new(floatloop::FloatLoop),
-        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }),
+        Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }),
         Box::new(loopmotion::LoopMotion),
         // The loop's exit tests that nothing in it changes are made once, with
         // the loop's entry.
@@ -687,7 +687,7 @@ pub(crate) fn llvm_order(
         Box::new(Together { name, parts })
     };
     let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
-    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate }));
+    let hoist = |name, speculate| slot(name, Box::new(hoist::Hoist { size, speculate, priced: false }));
     let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
     let canonical = |a: &'static str, b: &'static str| {
         [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
@@ -993,7 +993,7 @@ pub fn recorded(
     // A loop entered at its body runs it at least once: what it loads
     // unchanged may now leave it, as MachineLICM follows LLVM's LSR.
     if !guarded && applied.options.wanted("hoist") {
-        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true });
+        manager.add(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true });
     }
     // After hoist, which would move a constant `gep` out of its loop.
     if applied.options.wanted("gepoffset") {
@@ -1061,7 +1061,7 @@ pub fn header_copied(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     passes.push(Box::new(indvars::IndVars { exit_values: true, unrolls: None }));
     passes.push(Box::new(dead::Dead));
     if applied.options.wanted("hoist") {
-        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true }));
+        passes.push(Box::new(hoist::Hoist { size: applied.options.prefers_size(), speculate: true, priced: true }));
     }
     passes
 }
