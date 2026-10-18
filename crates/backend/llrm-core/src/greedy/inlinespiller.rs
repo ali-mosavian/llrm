@@ -52,7 +52,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
-use crate::model::ir::{Held, Loc, Operation, Semantics};
 
 use super::greedy::{SpillContext, Spiller};
 use super::liverangeedit::{LiveRangeEdit, NoDelegate};
@@ -61,6 +60,7 @@ use crate::backend::frame::Frame;
 use crate::backend::spiller::{recording_cores, spilled_from};
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::slotindex::InstrKey;
+use crate::model::ir::{Held, Loc, Operation, Semantics};
 use crate::model::lir::{Block, Insn, LirBlock, LirBody};
 
 /// What the allocator keeps per register and the spiller must extend for the
@@ -79,8 +79,8 @@ pub struct Tables {
 // load of a cell nothing writes while the value lives. The fact: LLVM takes a
 // load only when its memory operand is a dereferenceable invariant load; llrm
 // proves the same per live range (`_stable_loads_by`), which covers the m16
-// descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated with
-// an invariant-load flag set from those facts.
+// descriptor loads (`mov es, [d+2]`). Exit: X86InstrInfo's rules translated
+// with an invariant-load flag set from those facts.
 /// Whether `one` is a definition `isTriviallyReMaterializable` takes: one
 /// register written by a plain move or address, nothing pinned or destroyed.
 pub fn remat_shape(one: &Insn) -> bool {
@@ -93,7 +93,10 @@ pub fn remat_shape(one: &Insn) -> bool {
         && one.symbol != Some(true)
         && one.what.as_ref().is_some_and(|w| {
             matches!(w.op, Operation::Move | Operation::Address)
-                && matches!(w.dests.as_slice(), [Loc::Held(held)] if held.value == one.defines[0])
+                && matches!(
+                    w.dests.as_slice(),
+                    [Loc::Held(held)] if held.value == one.defines[0]
+                )
                 && w.sources.len() == 1
         })
 }
@@ -123,7 +126,19 @@ impl<'a> InlineSpiller<'a> {
         order_of: &'a dyn Fn(u32) -> Vec<RegId>,
         tables: Rc<Tables>,
     ) -> Self {
-        Self { template, frame, classes, order_of, tables, reloads: 0, stores: 0, folded: 0, failed: false, spilled: Vec::new(), named: Vec::new() }
+        Self {
+            template,
+            frame,
+            classes,
+            order_of,
+            tables,
+            reloads: 0,
+            stores: 0,
+            folded: 0,
+            failed: false,
+            spilled: Vec::new(),
+            named: Vec::new(),
+        }
     }
 
     /// The units of `reg`'s instructions: a parallel copy is one, listed by its
@@ -165,15 +180,16 @@ impl<'a> InlineSpiller<'a> {
     }
 
     /// `reMaterializeAll` and `reMaterializeFor` (InlineSpiller.cpp#L586,
-    /// #L640): a register defined once by an instruction `isTriviallyReMaterializable`
-    /// takes (a literal, an address, a load of a cell nothing writes while it
-    /// lives) is made again before each instruction that reads it, in a new
-    /// register, when what the definition reads is still the same there
-    /// (`allUsesAvailableAt`); the definition goes (`eliminateDeadDefs`). A
-    /// plain copy of it takes the definition in place, the copy's destination
-    /// written by the literal, address or load (`foldMemoryOperand` of a COPY
-    /// with the remat as its LoadMI). Returns the registers made, or None when
-    /// the register is not one of these.
+    /// #L640): a register defined once by an
+    /// instruction `isTriviallyReMaterializable` takes (a literal, an address,
+    /// a load of a cell nothing writes while it lives) is made again before
+    /// each instruction that reads it, in a new register, when what the
+    /// definition reads is still the same there (`allUsesAvailableAt`); the
+    /// definition goes (`eliminateDeadDefs`). A plain copy of it takes the
+    /// definition in place, the copy's destination written by the literal,
+    /// address or load (`foldMemoryOperand` of a COPY with the remat as its
+    /// LoadMI). Returns the registers made, or None when the register is not
+    /// one of these.
     fn rematerialize_all(
         &mut self,
         lis: &mut LiveIntervals,
@@ -210,7 +226,8 @@ impl<'a> InlineSpiller<'a> {
         let mut made = Vec::new();
         for (block, members) in units {
             // The registers a copy's members write: a definition that reads one
-            // cannot stand in for a member, which reads before any member writes.
+            // cannot stand in for a member, which reads before any member
+            // writes.
             let written: Vec<u32> = members.iter().flat_map(|key| lis.instr(*key).defines.clone()).collect();
             let in_place: Option<Vec<Arc<Insn>>> = members
                 .iter()
@@ -229,7 +246,10 @@ impl<'a> InlineSpiller<'a> {
                         && one.delivers.is_empty()
                         && one.clobbers.is_empty()
                         && dest.width == defined.width
-                        && matches!(w.sources.as_slice(), [Loc::Held(h)] if h.value == reg && h.width == defined.width)
+                        && matches!(
+                            w.sources.as_slice(),
+                            [Loc::Held(h)] if h.value == reg && h.width == defined.width
+                        )
                         && (one.group.is_none() || !def.uses.iter().any(|read| written.contains(read)));
                     ok.then(|| {
                         let mut folded = (**one).clone();
@@ -259,8 +279,8 @@ impl<'a> InlineSpiller<'a> {
                 rematerialized: true,
                 ..(*def).clone()
             });
-            // A parallel copy reads before it writes: the definition goes before
-            // its first member, whichever member reads it.
+            // A parallel copy reads before it writes: the definition goes
+            // before its first member, whichever member reads it.
             let mut first = None;
             for key in &members {
                 let renamed = lis.instr(*key).renamed(&|name| if name == reg { value } else { name });
@@ -332,10 +352,11 @@ impl<'a> InlineSpiller<'a> {
         Some(Vec::new())
     }
 
-    /// The intervals of the registers the edit named other than the spilled one,
-    /// made again: an instruction put before a use may define one (an index added
-    /// into its base) and so number its values anew. It stays right for the matrix
-    /// only if it covers the same points, which is checked; false when it does not.
+    /// The intervals of the registers the edit named other than the spilled
+    /// one, made again: an instruction put before a use may define one (an
+    /// index added into its base) and so number its values anew. It stays
+    /// right for the matrix only if it covers the same points, which is
+    /// checked; false when it does not.
     fn refresh_named(
         &mut self,
         lis: &mut LiveIntervals,
@@ -350,7 +371,8 @@ impl<'a> InlineSpiller<'a> {
             let held = lis.interval_rc(value);
             let mut again = lis.compute_virt_reg_interval(value);
             let merged = |li: &crate::liveness::liverange::LiveInterval| -> Vec<_> {
-                let mut spans: Vec<(crate::liveness::slotindex::SlotIndex, crate::liveness::slotindex::SlotIndex)> = Vec::new();
+                let mut spans: Vec<(crate::liveness::slotindex::SlotIndex, crate::liveness::slotindex::SlotIndex)> =
+                    Vec::new();
                 for seg in &li.segments {
                     match spans.last_mut() {
                         Some(last) if last.1 == seg.start => last.1 = seg.end,
@@ -377,15 +399,18 @@ impl<'a> InlineSpiller<'a> {
         members: &[InstrKey],
     ) -> Option<Vec<u32>> {
         let old: Vec<Arc<Insn>> = members.iter().map(|key| Arc::clone(lis.instr(*key))).collect();
-        self.named.extend(old.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().filter(|value| *value != reg));
+        self.named.extend(
+            old.iter().flat_map(|one| one.defines.iter().chain(&one.uses)).copied().filter(|value| *value != reg),
+        );
         if let Some(folded) = self.fold_into_copy(lis, reg, block, members, &old) {
             return Some(folded);
         }
-        // The plan of the spiller reads the definitions of a register it can see:
-        // a constant defined once is made again at its uses and its definition
-        // dropped. Here the definition may be one of several (or the uses are
-        // other units), so a second, empty definition says the register is
-        // stored, and its slot written at this one.
+        // The plan of the spiller reads the definitions of a register it can
+        // see: a constant defined once is made again at its uses and
+        // its definition dropped. Here the definition may be one of
+        // several (or the uses are other units), so a second, empty
+        // definition says the register is stored, and its slot written
+        // at this one.
         let marker = Arc::new(Insn::new(0, None, None, vec![reg], Vec::new()));
         let marked = old.iter().any(|one| one.defines.contains(&reg));
         let mut seen = Vec::new();
@@ -394,11 +419,13 @@ impl<'a> InlineSpiller<'a> {
         }
         seen.extend(old.iter().cloned());
         // What the spiller decides by the last use of a value (an index added
-        // into its base register when the base is not read again) is decided over
-        // the body it is given. A last empty instruction that reads what the unit
-        // reads and lives on after it says those uses are not the last.
+        // into its base register when the base is not read again) is decided
+        // over the body it is given. A last empty instruction that
+        // reads what the unit reads and lives on after it says those
+        // uses are not the last.
         let end = lis.indexes.get_instruction_index(*members.last().expect("a unit has members")).get_reg_slot(false);
-        let mut later: Vec<u32> = old.iter().flat_map(|one| one.uses.iter().copied()).filter(|value| *value != reg).collect();
+        let mut later: Vec<u32> =
+            old.iter().flat_map(|one| one.uses.iter().copied()).filter(|value| *value != reg).collect();
         later.sort_unstable();
         later.dedup();
         later.retain(|value| lis.interval_rc(*value).end_index() > end);
@@ -434,19 +461,32 @@ impl<'a> InlineSpiller<'a> {
             }
             out.drain(..2);
         }
-        // The instructions of the unit that went through unchanged, and those the
-        // spiller wrote in their place.
+        // The instructions of the unit that went through unchanged, and those
+        // the spiller wrote in their place.
         let given: Vec<u64> = old.iter().map(|one| one.id()).collect();
         let is_core = |one: &Arc<Insn>| given.contains(&one.id()) || made_cores.contains(&one.id());
         let cores: Vec<&Arc<Insn>> = out.iter().filter(|one| is_core(one)).collect();
-        if cores.len() != members.len() || cores.iter().any(|one| one.defines.contains(&reg) || one.uses.contains(&reg)) {
+        if cores.len() != members.len() || cores.iter().any(|one| one.defines.contains(&reg) || one.uses.contains(&reg))
+        {
             if std::env::var("LLRM_ISP_DEBUG").is_ok() {
                 eprintln!("inline spill of v{reg}: {} members, {} cores", members.len(), cores.len());
                 for one in &old {
-                    eprintln!("  in d{:?} u{:?} {:?}", one.defines, one.uses, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                    eprintln!(
+                        "  in d{:?} u{:?} {:?}",
+                        one.defines,
+                        one.uses,
+                        one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                    );
                 }
                 for one in &out {
-                    eprintln!("  out d{:?} u{:?} reload {} store {} {:?}", one.defines, one.uses, one.spill_reload, one.spill_store, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                    eprintln!(
+                        "  out d{:?} u{:?} reload {} store {} {:?}",
+                        one.defines,
+                        one.uses,
+                        one.spill_reload,
+                        one.spill_store,
+                        one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                    );
                 }
             }
             return None;
@@ -485,8 +525,9 @@ impl<'a> InlineSpiller<'a> {
             .map(|(held, register)| (held.value, crate::model::ir::root(*register)))
             .collect();
         let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
-        // Every register the replacement names that did not exist: the spiller's own
-        // list of what it made leaves out a load put before an instruction.
+        // Every register the replacement names that did not exist: the
+        // spiller's own list of what it made leaves out a load put
+        // before an instruction.
         let mut fresh: Vec<u32> = out
             .iter()
             .flat_map(|one| one.defines.iter().chain(&one.uses))
@@ -497,8 +538,7 @@ impl<'a> InlineSpiller<'a> {
         fresh.dedup();
         for &value in &fresh {
             lis.reserve_virtual_register(value);
-            let mut order: Vec<RegId> =
-                (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
+            let mut order: Vec<RegId> = (self.order_of)(reg).into_iter().map(crate::model::ir::root).collect();
             order.dedup();
             if let Some(only) = pinned.get(&value) {
                 order = vec![*only];
@@ -520,7 +560,11 @@ impl Spiller for InlineSpiller<'_> {
         let SpillContext { lis, vrm, vrai } = ctx;
         self.spilled.push(reg);
         // Bisection aid: only the first N spills are written inline.
-        if std::env::var("LLRM_GREEDY_SPILLS").ok().and_then(|n| n.parse::<usize>().ok()).is_some_and(|n| self.spilled.len() > n) {
+        if std::env::var("LLRM_GREEDY_SPILLS")
+            .ok()
+            .and_then(|n| n.parse::<usize>().ok())
+            .is_some_and(|n| self.spilled.len() > n)
+        {
             self.failed = true;
             return;
         }

@@ -30,17 +30,17 @@ use std::rc::Rc;
 use llrm_lir::registers::{RegId, Regs};
 
 use super::greedy::{GreedyEnv, RAGreedy, Stats};
-use super::matrix::{LiveRegMatrix, PhysInterference};
 use super::inlinespiller::{InlineSpiller, Tables};
+use super::matrix::{LiveRegMatrix, PhysInterference};
 use super::spill::SimpleSpiller;
 use super::virtregmap::RegisterInfo;
 use crate::analysis::frequency::Frequency;
+use crate::backend::classes::RegisterClasses;
+use crate::backend::frame::Frame;
 use crate::liveness::calcspillweights::SpillWeightEnv;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
-use crate::backend::classes::RegisterClasses;
-use crate::backend::frame::Frame;
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::IndexMap;
 
@@ -279,7 +279,14 @@ pub fn decide_with(
     if std::env::var("LLRM_INPUT_DUMP").is_ok_and(|n| n == body.name) {
         for (b, block) in body.blocks.iter().enumerate() {
             for (at, one) in block.insns.iter().enumerate() {
-                eprintln!("IN b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}", one.id(), one.defines, one.uses, one.group, one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources)));
+                eprintln!(
+                    "IN b{b}[{at}] #{} d{:?} u{:?} g{:?} {:?}",
+                    one.id(),
+                    one.defines,
+                    one.uses,
+                    one.group,
+                    one.what.as_ref().map(|w| (&w.name, &w.dests, &w.sources))
+                );
             }
         }
     }
@@ -289,7 +296,8 @@ pub fn decide_with(
     // `MachineBlockFrequencyInfo` keeps a frequency in 64 bits and saturates:
     // a deep loop nest reaches the top, never infinity, which the spill weights
     // read as a range that cannot be spilled.
-    let freq: Vec<f32> = body.blocks.iter().map(|block| (busy.block(block.at) as f64).min(u64::MAX as f64) as f32).collect();
+    let freq: Vec<f32> =
+        body.blocks.iter().map(|block| (busy.block(block.at) as f64).min(u64::MAX as f64) as f32).collect();
     let loops = crate::analysis::loops::loops(&body.blocks, Some(body.entry));
     let exiting: Vec<bool> = body
         .blocks
@@ -333,7 +341,10 @@ pub fn decide_with(
             }
         }
     }
-    let matrix = LiveRegMatrix::new(RegisterInfo::new(inputs.registers), Box::new(CallMasks { calls, widths: Rc::clone(&tables) }));
+    let matrix = LiveRegMatrix::new(
+        RegisterInfo::new(inputs.registers),
+        Box::new(CallMasks { calls, widths: Rc::clone(&tables) }),
+    );
     let inline = matches!(mode, Mode::Inline { .. });
     let spiller: Box<dyn super::greedy::Spiller + '_> = match mode {
         Mode::Record => Box::new(super::spill::RecordingSpiller::default()),
@@ -354,9 +365,10 @@ pub fn decide_with(
             greedy.lis.insert_interval(li);
         }
     }
-    // A value an instruction requires in one register may be given that one only:
-    // its allocation order is the register (`getRegClass` of a one-register
-    // class), and it competes like any other range: it can be evicted or spilled.
+    // A value an instruction requires in one register may be given that one
+    // only: its allocation order is the register (`getRegClass` of a
+    // one-register class), and it competes like any other range: it can be
+    // evicted or spilled.
     for (&reg, &phys) in inputs.pins {
         if !greedy.lis.reg_nodbg_empty(reg) {
             tables.orders.borrow_mut().insert(reg, vec![crate::model::ir::root(phys)]);
@@ -379,26 +391,31 @@ pub fn decide_with(
     if std::env::var("LLRM_PLACED_DEBUG").is_ok() {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
-                eprintln!("v{reg} named, no phys; interval {} stage {:?} original {}", greedy.lis.has_interval(reg), greedy.extra.get_stage(reg), greedy.matrix.vrm.get_original(reg));
+                eprintln!(
+                    "v{reg} named, no phys; interval {} stage {:?} original {}",
+                    greedy.lis.has_interval(reg),
+                    greedy.extra.get_stage(reg),
+                    greedy.matrix.vrm.get_original(reg)
+                );
             }
         }
     }
     let spilled = greedy.recorded_spills();
     let report = ShadowReport { values, stats: greedy.stats.clone(), reloads, stores, folded, signature };
     let edited = inline.then(|| {
-        let blocks = body
-            .blocks
-            .iter()
-            .zip(greedy.lis.blocks())
-            .map(|(block, insns)| block.with_insns(insns.clone()))
-            .collect();
+        let blocks =
+            body.blocks.iter().zip(greedy.lis.blocks()).map(|(block, insns)| block.with_insns(insns.clone())).collect();
         body.with_blocks(blocks)
     });
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         if let Some(edited) = &edited {
             let held = greedy.lis.interval_count();
             let compared = greedy.lis.assert_intervals_equal_afresh(edited);
-            assert!(compared == held, "LLRM_CHECK_LIVEINTERVALS compared {compared} of {held} intervals of {}", body.name);
+            assert!(
+                compared == held,
+                "LLRM_CHECK_LIVEINTERVALS compared {compared} of {held} intervals of {}",
+                body.name
+            );
             if llrm_support::env_flag!("LLRM_GREEDY_TRACE") {
                 eprintln!("check-liveintervals {}: {compared} intervals equal afresh", body.name);
             }

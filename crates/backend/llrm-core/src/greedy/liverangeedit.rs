@@ -1,7 +1,8 @@
 //! `LiveRangeEdit`: the edit a spill or a split makes of a live range, and the
-//! registers it creates. Translated from llvm/include/llvm/CodeGen/LiveRangeEdit.h
-//! and llvm/lib/CodeGen/LiveRangeEdit.cpp (`createFrom`, `eraseVirtReg`,
-//! the `Delegate` callbacks) at d1106deb71cc.
+//! registers it creates. Translated from
+//! llvm/include/llvm/CodeGen/LiveRangeEdit.h and llvm/lib/CodeGen/
+//! LiveRangeEdit.cpp (`createFrom`, `eraseVirtReg`, the `Delegate` callbacks)
+//! at d1106deb71cc.
 //!
 //! # How it works
 //! An edit is made for one parent register. `create_from` numbers a new
@@ -9,8 +10,8 @@
 //! (`MRI.createVirtualRegister` and `VRM.setIsSplitFromReg`), tells the
 //! delegate (`LRE_DidCloneVirtReg`), and remembers it; the spiller or the
 //! splitter then fills it with instructions. `erase_virt_reg` is the opposite:
-//! the register has no operand left, so its interval goes (`LRE_CanEraseVirtReg`
-//! asks the delegate first).
+//! the register has no operand left, so its interval goes
+//! (`LRE_CanEraseVirtReg` asks the delegate first).
 //!
 //! DEVIATE D-E1: `eliminateDeadDefs` and `anyRematerializable` are not here.
 //! The fact: a spill's products here are a reload, the instruction itself and a
@@ -20,7 +21,8 @@
 //! isTriviallyReMaterializable` rules (issue to be opened with step 2).
 //!
 //! # Example
-//! `create_from(7)` gives `%12`, whose original is `%7`; `new_regs()` is `[12]`.
+//! `create_from(7)` gives `%12`, whose original is `%7`; `new_regs()` is
+//! `[12]`.
 //!
 //! # Used by
 //! `inlinespiller`.

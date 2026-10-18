@@ -37,7 +37,8 @@ use std::collections::HashMap;
 
 use llrm_lir::registers::{RegId, Regs};
 
-/// A register unit: `root number * 4 + {0: low byte, 1: high byte, 2: upper half}` (`MCRegUnit`).
+/// A register unit: `root number * 4 + {0: low byte, 1: high byte, 2: upper
+/// half}` (`MCRegUnit`).
 pub type RegUnit = u32;
 
 /// The units of a register (`MCRegUnitIterator`), without a heap allocation.
@@ -87,7 +88,8 @@ impl RegisterInfo {
         reg: RegId,
     ) -> Units {
         let root = self.regs.root(reg).index() as u32;
-        // A segment register has no sub-registers: one unit (`DS` of the table).
+        // A segment register has no sub-registers: one unit (`DS` of the
+        // table).
         let lanes = if self.regs.is_segment(reg) { 1 } else { self.regs.lanes(reg) as u32 & 0xf };
         // Bytes 2 and 3 are never named apart (no `eax` sub-register covers
         // one), so they are one unit, `HAX` of X86RegisterInfo.td.

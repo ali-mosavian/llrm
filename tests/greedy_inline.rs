@@ -1,18 +1,21 @@
-//! The translated greedy allocator writes its spills as it goes (`InlineSpiller`).
+//! The translated greedy allocator writes its spills as it goes
+//! (`InlineSpiller`).
 
 use std::process::Command;
 
-/// Eight values rotated in a loop, each started from a constant: the copy at the back edge reads eight
-/// spilled sources at once, a constant read by a copy is a literal in place, and the instructions the
-/// spiller rewrites keep the live intervals of every other value (`LLRM_CHECK_LIVEINTERVALS`).
+/// Eight values rotated in a loop, each started from a constant: the copy at
+/// the back edge reads eight spilled sources at once, a constant read by a copy
+/// is a literal in place, and the instructions the spiller rewrites keep the
+/// live intervals of every other value (`LLRM_CHECK_LIVEINTERVALS`).
 const ROTATE: &str = "void rot(int *p, int n)\n{\n    int a = 1, b = 2, c = 3, d = 4, e = 5, f = 6, g = 7, h = 8;\n    int i;\n\
     for (i = 0; i < n; ++i) {\n        int t = a;\n        a = b + p[0];\n        b = c + p[1];\n        c = d + p[2];\n\
         d = e + p[3];\n        e = f + p[4];\n        f = g + p[5];\n        g = h + p[6];\n        h = t + p[7];\n    }\n\
     p[0] = a; p[1] = b; p[2] = c; p[3] = d; p[4] = e; p[5] = f; p[6] = g; p[7] = h;\n}\n";
 
-/// The inline allocation of `rot` fell back to the rounds at -Os (two spill products of the copy needed a
-/// register no one could give), and at -O1 and -O2 left an interval that the instructions rewritten no
-/// longer matched. Each level must finish inline, with the intervals equal to ones made afresh.
+/// The inline allocation of `rot` fell back to the rounds at -Os (two spill
+/// products of the copy needed a register no one could give), and at -O1 and
+/// -O2 left an interval that the instructions rewritten no longer matched. Each
+/// level must finish inline, with the intervals equal to ones made afresh.
 #[test]
 fn a_rotation_of_constants_is_allocated_inline_at_every_level() {
     for level in ["-O1", "-O2", "-Os"] {
@@ -35,8 +38,9 @@ fn a_rotation_of_constants_is_allocated_inline_at_every_level() {
     }
 }
 
-/// tests/run/c/es_across_copy.c at -O2: spilling a far pointer's offset put an index add before its use, which
-/// redefined the base register; the base kept its old interval and `LLRM_CHECK_LIVEINTERVALS` found it stale.
+/// tests/run/c/es_across_copy.c at -O2: spilling a far pointer's offset put an
+/// index add before its use, which redefined the base register; the base kept
+/// its old interval and `LLRM_CHECK_LIVEINTERVALS` found it stale.
 #[test]
 fn a_register_an_inline_spill_redefines_gets_its_interval_again() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/c/es_across_copy.c");
@@ -55,9 +59,11 @@ fn a_register_an_inline_spill_redefines_gets_its_interval_again() {
     assert!(!said.contains("greedy-check"), "{said}");
 }
 
-/// nbody_fixed at -O3 printed 191828 (want 38421): a spilled `pos_x[i] += vel_x[i]` kept in its slot was written
-/// back to `pos_x[i]` as `pos_x[i]`'s old value, because the one-instruction body the inline spiller hands the
-/// spiller showed no definition of the value, so its home cell `pos_x[i]` looked current.
+/// nbody_fixed at -O3 printed 191828 (want 38421): a spilled `pos_x[i] +=
+/// vel_x[i]` kept in its slot was written back to `pos_x[i]` as `pos_x[i]`'s
+/// old value, because the one-instruction body the inline spiller hands the
+/// spiller showed no definition of the value, so its home cell `pos_x[i]`
+/// looked current.
 const HOME_UPDATE: &str = "/* Six-body Q9 fixed-point integrator, 1000 steps; long is 32-bit, / truncates toward zero. */\n\
 \n\
 #define BODIES 6\n\
@@ -116,10 +122,13 @@ fn a_spilled_update_is_stored_back_from_its_slot_not_its_stale_home() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     for pair in lines.windows(2) {
-        let (Some(load), Some(store)) = (pair[0].strip_prefix("mov eax, dword ptr "), pair[1].strip_prefix("mov dword ptr ")) else {
+        let (Some(load), Some(store)) =
+            (pair[0].strip_prefix("mov eax, dword ptr "), pair[1].strip_prefix("mov dword ptr "))
+        else {
             continue;
         };
-        // `pos_x[i]` is updated before its store; `pos_y[i] += 0` may store what it loads.
+        // `pos_x[i]` is updated before its store; `pos_y[i] += 0` may store
+        // what it loads.
         assert!(
             !(load.starts_with("_pos_x") && store == format!("{load}, eax")),
             "pos_x stored with its own old value: {} / {}",
@@ -129,9 +138,11 @@ fn a_spilled_update_is_stored_back_from_its_slot_not_its_stale_home() {
     }
 }
 
-/// tools/test_budgets.py's `nest` axis at 2N (32 loops deep) cost 21 G instructions under `LLRM_GREEDY=1`: the
-/// innermost block's frequency overflowed f32 to infinity, every range there weighed infinity (not spillable), 54
-/// ranges found no register, and the function went to the rounds and then to the old allocator.
+/// tools/test_budgets.py's `nest` axis at 2N (32 loops deep) cost 21 G
+/// instructions under `LLRM_GREEDY=1`: the innermost block's frequency
+/// overflowed f32 to infinity, every range there weighed infinity (not
+/// spillable), 54 ranges found no register, and the function went to the rounds
+/// and then to the old allocator.
 #[test]
 fn a_deep_loop_nest_is_allocated_inline() {
     let depth = 40;
@@ -156,10 +167,12 @@ fn a_deep_loop_nest_is_allocated_inline() {
     assert!(!said.contains("left for the rounds"), "{said}");
 }
 
-/// sum_three.bas's SUMTHREE under `LLRM_GREEDY=1` spilled a pointer to the stack (`sub sp, 2`, then `[bp-2]`
-/// reloads) to keep three descriptor loads `mov r, [d+2]` in registers before their copies into ES, FS and GS:
-/// a load of a cell nothing writes is rematerialized and folded into the copy (`mov es, [d+2]`), so it weighs
-/// half and is the one evicted (every BASIC bench row was worse than the old allocator).
+/// sum_three.bas's SUMTHREE under `LLRM_GREEDY=1` spilled a pointer to the
+/// stack (`sub sp, 2`, then `[bp-2]` reloads) to keep three descriptor loads
+/// `mov r, [d+2]` in registers before their copies into ES, FS and GS:
+/// a load of a cell nothing writes is rematerialized and folded into the copy
+/// (`mov es, [d+2]`), so it weighs half and is the one evicted (every BASIC
+/// bench row was worse than the old allocator).
 #[test]
 fn a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spill() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/parity/sum_three/sum_three.bas");
@@ -173,7 +186,8 @@ fn a_load_that_can_be_made_again_is_not_kept_in_a_register_at_the_cost_of_a_spil
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    let body = text.split("SUMTHREE proc").nth(1).and_then(|rest| rest.split("SUMTHREE endp").next()).expect("SUMTHREE");
+    let body =
+        text.split("SUMTHREE proc").nth(1).and_then(|rest| rest.split("SUMTHREE endp").next()).expect("SUMTHREE");
     assert!(!body.contains("sub sp,"), "a stack slot for a spill: {body}");
 }
 
