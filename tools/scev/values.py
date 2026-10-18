@@ -50,7 +50,7 @@ def parse_llrm(text):
             out[function] = []
         else:
             name, body = line.split("\t", 1)
-            out[function].append((name, body))
+            out[function].append((name, body.replace("\t\t", "\t")))
     return out
 
 
