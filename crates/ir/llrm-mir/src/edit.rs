@@ -31,9 +31,12 @@ impl Function {
         self.block_uses = vec![Vec::new(); self.blocks.len()];
         self.parent = vec![None; self.instructions.len()];
         self.erased = vec![false; self.instructions.len()];
+        self.link = vec![(0, 0); self.instructions.len()];
         for &block in &self.layout.clone() {
-            for &inst in &self.blocks[block.0 as usize].instructions.clone() {
+            let list = self.blocks[block.0 as usize].instructions.clone();
+            for &inst in &list {
                 self.parent[inst.0 as usize] = Some(block);
+                self.link_last(block, inst);
             }
         }
         for inst in 0..self.instructions.len() {
@@ -193,6 +196,7 @@ impl Function {
             self.add_use(operand, Use { user: id, index: index as u32 });
         }
         self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new() });
+        self.link.push((0, 0));
         self.parent.push(None);
         self.erased.push(false);
         id
@@ -267,12 +271,12 @@ impl Function {
         moving: bool,
     ) -> Option<(BlockId, Option<InstId>)> {
         let block = self.parent(inst)?;
-        let list = &self.blocks[block.0 as usize].instructions;
-        SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
-        let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-        let next = list.get(at + 1).copied();
+        let next = match self.link[inst.0 as usize].1 {
+            0 => None,
+            n => Some(InstId(n - 1)),
+        };
         self.settle_records(inst, next, moving);
-        self.blocks[block.0 as usize].instructions.remove(at);
+        self.unlink(block, inst);
         self.parent[inst.0 as usize] = None;
         Some((block, next))
     }
@@ -312,16 +316,74 @@ impl Function {
         }
     }
 
+    /// POC: links `inst` last in `block`.
+    fn link_last(&mut self, block: BlockId, inst: InstId) {
+        let b = &mut self.blocks[block.0 as usize];
+        let id = inst.0 + 1;
+        self.link[inst.0 as usize] = (b.tail, 0);
+        if b.tail != 0 {
+            self.link[(b.tail - 1) as usize].1 = id;
+        } else {
+            b.head = id;
+        }
+        b.tail = id;
+        b.len += 1;
+        b.dirty.set(true);
+    }
+
+    /// POC: links `inst` before `next` in `block`.
+    fn link_before(&mut self, block: BlockId, inst: InstId, next: InstId) {
+        let id = inst.0 + 1;
+        let prev = self.link[next.0 as usize].0;
+        self.link[inst.0 as usize] = (prev, next.0 + 1);
+        self.link[next.0 as usize].0 = id;
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.link[(prev - 1) as usize].1 = id;
+        } else {
+            b.head = id;
+        }
+        b.len += 1;
+        b.dirty.set(true);
+    }
+
+    /// POC: takes `inst` out of the list of `block`.
+    fn unlink(&mut self, block: BlockId, inst: InstId) {
+        let (prev, next) = self.link[inst.0 as usize];
+        let b = &mut self.blocks[block.0 as usize];
+        if prev != 0 {
+            self.link[(prev - 1) as usize].1 = next;
+        } else {
+            b.head = next;
+        }
+        if next != 0 {
+            self.link[(next - 1) as usize].0 = prev;
+        } else {
+            b.tail = prev;
+        }
+        self.link[inst.0 as usize] = (0, 0);
+        b.len -= 1;
+        b.dirty.set(true);
+    }
+
     fn attach(
         &mut self,
         inst: InstId,
         position: Position,
     ) -> Result<(BlockId, Option<InstId>), String> {
-        let (block, at) = self.slot(position)?;
-        if self.block(block).erased {
+        let block = match position {
+            Position::End(block) => block,
+            Position::Before(next) => {
+                self.parent(next).ok_or_else(|| format!("instruction {} is not placed", next.0))?
+            }
+        };
+        if self.blocks[block.0 as usize].erased {
             return Err(format!("block {} is erased", block.0));
         }
-        self.blocks[block.0 as usize].instructions.insert(at, inst);
+        match position {
+            Position::End(_) => self.link_last(block, inst),
+            Position::Before(next) => self.link_before(block, inst, next),
+        }
         self.parent[inst.0 as usize] = Some(block);
         // What follows is what the position named: scanning the block for it
         // made each append linear (#992).
@@ -373,9 +435,7 @@ impl Function {
     ) -> Result<(), String> {
         for &inst in run {
             let block_from = self.parent(inst).ok_or_else(|| format!("instruction {} is not placed", inst.0))?;
-            let list = &mut self.blocks[block_from.0 as usize].instructions;
-            let at = list.iter().position(|one| *one == inst).expect("an instruction is in its parent");
-            list.remove(at);
+            self.unlink(block_from, inst);
             self.parent[inst.0 as usize] = None;
             let (to, next) = self.attach(inst, Position::End(block))?;
             self.log(Change::Moved { inst, block: to, next, from: block_from });
@@ -684,18 +744,20 @@ impl Function {
         blocks.sort_unstable();
         blocks.dedup();
         for block in blocks {
-            let list = self.blocks[block.0 as usize].instructions.clone();
-            SCANNED.with(|scanned| scanned.set(scanned.get() + list.len()));
+            let mut at = self.blocks[block.0 as usize].tail;
             let mut next = None;
-            for &inst in list.iter().rev() {
+            while at != 0 {
+                let inst = InstId(at - 1);
+                let before = self.link[inst.0 as usize].0;
                 if gone.contains(&inst) {
                     self.settle_records(inst, next, false);
                     self.log(Change::Erased { inst, block, next });
+                    self.unlink(block, inst);
                 } else {
                     next = Some(inst);
                 }
+                at = before;
             }
-            self.blocks[block.0 as usize].instructions.retain(|one| !gone.contains(one));
         }
         for inst in insts {
             self.parent[inst.0 as usize] = None;
@@ -938,7 +1000,7 @@ impl Function {
     ) -> BlockId {
         let id = BlockId(self.blocks.len() as u32);
         let name = name.map(|one| self.unique_name(one));
-        self.blocks.push(Block { name, instructions: Vec::new(), erased: false, placed: false });
+        self.blocks.push(Block { name, instructions: Vec::new(), head: 0, tail: 0, len: 0, dirty: Default::default(), erased: false, placed: false });
         self.block_uses.push(Vec::new());
         self.log(Change::BlockCreated(id));
         id
@@ -993,7 +1055,7 @@ impl Function {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
+        if self.blocks[block.0 as usize].len != 0 {
             return Err(format!("block {} still holds instructions", block.0));
         }
         if !self.block_users(block).is_empty() {

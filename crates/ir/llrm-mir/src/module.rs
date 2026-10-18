@@ -81,7 +81,13 @@ pub struct Instruction {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Block {
     pub name: Option<String>,
+    /// POC: a view of the list, rebuilt on read when `dirty`.
     pub(crate) instructions: Vec<InstId>,
+    /// The first, last and count of the linked list (an id + 1; 0 for none).
+    pub(crate) head: u32,
+    pub(crate) tail: u32,
+    pub(crate) len: u32,
+    pub(crate) dirty: std::cell::Cell<bool>,
     pub(crate) erased: bool,
     /// In the function's layout.
     pub(crate) placed: bool,
@@ -319,6 +325,8 @@ pub struct Function {
     pub(crate) layout: Vec<BlockId>,
     pub(crate) value_uses: Vec<Vec<Use>>,
     pub(crate) block_uses: Vec<Vec<Use>>,
+    /// Each instruction's (previous, next) in its block, as id + 1.
+    pub(crate) link: Vec<(u32, u32)>,
     pub(crate) changes: ChangeLog,
     /// How many edits of each kind the function has had: no part of what it is.
     pub(crate) epochs: crate::touched::Epochs,
@@ -383,6 +391,7 @@ impl Function {
             layout: Vec::new(),
             value_uses: Vec::new(),
             block_uses: Vec::new(),
+            link: Vec::new(),
             changes: ChangeLog::default(),
             epochs: crate::touched::Epochs::default(),
             taken: 0,
@@ -500,7 +509,22 @@ impl Function {
         &self,
         id: BlockId,
     ) -> &Block {
-        &self.blocks[id.0 as usize]
+        let block = &self.blocks[id.0 as usize];
+        if block.dirty.get() {
+            // POC: the view is rebuilt behind a shared reference; no slice of it
+            // is alive, as the edit that dirtied it needed `&mut self`.
+            unsafe {
+                let view = &mut (*(block as *const Block as *mut Block)).instructions;
+                view.clear();
+                let mut at = block.head;
+                while at != 0 {
+                    view.push(InstId(at - 1));
+                    at = self.link[(at - 1) as usize].1;
+                }
+            }
+            block.dirty.set(false);
+        }
+        block
     }
 
     pub fn layout(&self) -> &[BlockId] {
@@ -553,7 +577,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> Option<InstId> {
-        self.block(block).instructions.last().copied().filter(|&last| self.instruction(last).opcode.is_terminator())
+        (self.blocks[block.0 as usize].tail != 0).then(|| InstId(self.blocks[block.0 as usize].tail - 1)).filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
     /// The blocks `block`'s terminator names, in operand order, once each.
