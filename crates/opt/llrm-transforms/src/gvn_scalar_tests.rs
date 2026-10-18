@@ -648,3 +648,20 @@ b2:
 ",
     );
 }
+
+/// A GEP of offset zero stays (DEVIATE 18): simplified to its pointer, the
+/// BASIC runtime compiled at -Os grew in two objects (nhstutil +10 bytes, play
+/// +9) and crc, jpeg and stft on `bq32` ran +0.1..0.55% instructions.
+#[test]
+fn test_a_gep_of_offset_zero_is_kept() {
+    kept(
+        "define i16 @f(i16 %n) {
+b0:
+  %p = inttoptr i16 %n to ptr
+  %q = getelementptr i8, ptr %p, i16 0
+  %v = load i16, ptr %q
+  ret i16 %v
+}
+",
+    );
+}

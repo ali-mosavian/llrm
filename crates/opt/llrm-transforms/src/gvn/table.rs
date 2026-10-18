@@ -73,7 +73,8 @@ pub struct Expression {
     pub ty: Option<TypeId>,
     pub var_args: Vec<u32>,
     pub attrs: CallAttrs,
-    /// DEVIATE 16: LLVM's key has no IR flags.
+    /// DEVIATE 16: LLVM's key has no IR flags. Exit and owner:
+    /// https://github.com/ali-mosavian/llrm/issues/2187
     pub flags: Flags,
 }
 

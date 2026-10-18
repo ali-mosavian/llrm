@@ -13,7 +13,10 @@
 //! `ImplicitControlFlowTracking` are not kept: nothing in this part reads
 //! them (the last is read by PRE, stage 5).
 //!
-//! DEVIATE 17, see `PROPAGATE_COMPARE_FACTS`.
+//! DEVIATE 17, see `PROPAGATE_COMPARE_FACTS`. DEVIATE 18, no GEP is simplified
+//! to its pointer: with it the BASIC runtime at -Os grew in nhstutil (+10
+//! bytes) and play (+9), and crc, jpeg and stft on `bq32` ran +0.1..0.55%
+//! instructions. Exit: the consumer named and fixed.
 //!
 //! DEVIATE 14, what "changed" says: LLVM's `processFoldableCondBr` answers true
 //! for a branch on a constant it found a dead arm of, whether or not it edited
@@ -25,7 +28,7 @@
 //! `lcssa` and this pass run to one fixed point, which they would never reach;
 //! and a loop's invariant phi simplified to its input lets the loop's
 //! expressions merge with copies outside it, a live range the allocator
-//! spills (x_hanoi2 -O2 +22.8% clocks, quicksort +1.5%).
+//! spills (x_hanoi2 -O2 +22.8% clocks, quicksort +1.5%; issue 2186).
 //!
 //! DEVIATE 3, `salvageAndRemoveInstruction` removes the instruction: MIR has no
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
@@ -47,7 +50,8 @@ use crate::local;
 /// DEVIATE 17 (temporary): what a taken compare says of its operands (`A == B`
 /// replaces `A` by `B`; `A >= B` makes `A < B` false) is not propagated. A
 /// measured loss: matmul -O2 +5.7% code bytes on Nib, +2.5% on BASIC, jpeg
-/// +0.9%. The compare itself still becomes its edge's constant.
+/// +0.9%. The compare itself still becomes its edge's constant. Exit and
+/// owner: https://github.com/ali-mosavian/llrm/issues/2188
 const PROPAGATE_COMPARE_FACTS: bool = false;
 
 /// What `propagateEquality` is rooted at: the edge from a block to a
@@ -702,8 +706,14 @@ impl GvnPass<'_> {
         // redundancies, for example if it determines that %y is equal to %x
         // then the instruction "%z = and i32 %x, %y" becomes "%z = and i32 %x,
         // %x" which we now simplify.
-        // DEVIATE 15: no phi is simplified.
-        let simplified = if self.function.instruction(inst).opcode == Opcode::Phi {
+        // DEVIATE 15: no phi is simplified (issue 2186); DEVIATE 18: no GEP
+        // either, whose offset-zero form the BASIC runtime and the `bq32` bench
+        // cells ran worse without.
+        let simplified = if matches!(
+            self.function.instruction(inst).opcode,
+            Opcode::Phi | Opcode::GetElementPtr { .. }
+        )
+        {
             None
         } else {
             llrm_mir::simplify::simplify_instruction(self.context, self.function, inst)
