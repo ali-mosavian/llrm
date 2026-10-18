@@ -2351,3 +2351,4 @@ fn test_live_intervals_are_live_where_the_dataflow_says() {
         "premise: bodies with values defined more than once ({checked}, {multi_def})"
     );
 }
+

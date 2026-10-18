@@ -380,7 +380,9 @@ pub fn decide_with(
         }
     }
     greedy.allocate_phys_regs();
-    greedy.try_hints_recoloring();
+    if !NO_RECOLORING.with(std::cell::Cell::get) {
+        greedy.try_hints_recoloring();
+    }
     let mut signature = 0u64;
     for reg in greedy.lis.virt_regs() {
         if let Some(phys) = greedy.matrix.vrm.get_phys(reg) {
@@ -501,4 +503,17 @@ mod tests {
         assert_eq!(masks.reg_mask_clobbered(&live(8)), Some(vec![ds]), "goes on past it");
         assert!(masks.reg_mask_clobbered(&live(4)).is_none_or(|roots| roots.is_empty()), "ends before it");
     }
+}
+
+thread_local! {
+    static NO_RECOLORING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `f` with `tryHintsRecoloring` left out, for a test of what it changes.
+#[cfg(test)]
+pub(crate) fn without_hint_recoloring<R>(f: impl FnOnce() -> R) -> R {
+    NO_RECOLORING.with(|one| one.set(true));
+    let out = f();
+    NO_RECOLORING.with(|one| one.set(false));
+    out
 }
