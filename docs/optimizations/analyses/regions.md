@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/regions.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/regions.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:d2bc56092324072f8430e4483eaa24b4f6365b7b5fdd7604c00e41ae29a9d59c -->
+<!-- src: crates/opt/llrm-analysis/src/regions.rs sha256:becf2a63f4066f07fb101a89b8f77ee6b899d8f02ce31105cc144bb15b77dbaf -->
 
 # regions
 
@@ -87,7 +87,7 @@ From unit test `overlapping_same_base_statics_use_half_open_byte_ranges` in
 `fixed_provenance`, the bucket functions, `displaced_span`, `Index`.
 Consumers: [`crate::alias`](alias.md), [`crate::memoryssa`](memoryssa.md), [`crate::avail`](avail.md),
 [`crate::consts`](consts.md), [`crate::floatfacts`](floatfacts.md), [`crate::cellmap`](cellmap.md), and in
-llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `fill`,
+llrm-transforms `promote`, `transform`, `homes`, `loopmotion`, `loopidioms`,
 `floatloop`.
 
 ## Needs
