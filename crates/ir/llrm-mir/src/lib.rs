@@ -5,6 +5,7 @@
 pub mod alias;
 pub mod apfloat;
 pub mod apint;
+pub mod blockfrequency;
 pub mod blocklist;
 pub mod build;
 pub mod callgraph;
@@ -16,6 +17,7 @@ pub mod constfold;
 pub mod constraintsystem;
 pub mod context;
 pub mod counts;
+pub mod cycleinfo;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dense;
