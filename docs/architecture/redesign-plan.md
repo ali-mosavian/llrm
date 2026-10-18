@@ -1295,6 +1295,10 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 5. Pipeline row, owner llvm-order-poc: LLVM's new pass manager runs LoopSimplify and LCSSA only where a loop-pass adaptor needs them (a handful of times at -O2); ours runs them 9 times. The run count must match the pinned pipeline's.
 6. `LazyValueInfo.cpp` and `CorrelatedValuePropagation.cpp` are translated at the pin `d1106deb71cc`. LLVM -O2 runs CVP, and JumpThreading reads LVI, so it is the real counterpart of `ranger.rs`'s uses there. Owner vt-constantfolding (valuetracking-port, which translated `ConstantRange` and `ValueTracking`), ordered after the DomTree stack lands (domtree-port). llrm's `ranger.rs` uses are deleted when it becomes default.
 7. `JumpThreading.cpp` is translated after it. JumpThreading is our worst ratio (26.33x in the per-pass table; 28.8x by oversight's reading). Owner decided when the LVI row lands.
+8. Glue (projection, 108 M on `d_faces`): `Stamp`, `Summaries` and the interprocedural stage. Owner cgscc-poc (the plan page is theirs). Each is replaced by LLVM's mechanism or deleted.
+9. Emission and `masm` (21 M): owner backend-slopes.
+10. The C translate stage (about 29 M): unowned. Nobody in the plan is named for the C front end; hir-branch-icmp-2211 works nearest to it (HIR). Owner owed.
+11. The scoreboard is the projection (llvm-difftest's table), refreshed half-hourly.
 
 **Method M (every exit measurement).**
 
