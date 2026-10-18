@@ -22,8 +22,8 @@
 //! phi reads `shl n, 1` written in the exit block, and the loop's `s` is dead.
 //!
 //! # Used by
-//! [`crate::indvars`], first of its steps, in place of
-//! [`crate::indvars::exit_values`] when `LLRM_NO_SCEV_EXITVALUES` is not set.
+//! [`crate::indvars`], first of its steps. It replaced indvars' own
+//! `exit_values`, which asked only the header for its exit.
 //!
 //! # See also
 //! `rewriteLoopExitValues`, `canLoopBeDeleted`, `hasHardUserWithinLoop`,
@@ -50,7 +50,7 @@ use crate::local;
 const CHEAP_EXPANSION_BUDGET: u32 = 4;
 
 /// `LLRM_NO_SCEV_EXITVALUES`, read once: the exit values come from
-/// ScalarEvolution, not `loopexit` and `indvars::exit_values`.
+/// ScalarEvolution; set, the step is skipped.
 pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_EXITVALUES")
 }
