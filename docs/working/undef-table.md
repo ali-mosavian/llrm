@@ -21,5 +21,8 @@ N/A.
 | SimplifyCFG (rest) | `markAliveBlocks` store to undef ptr (Local L2758), `assume(undef)` L2703, lookup tables L7198, `passingUndefUB` L9174 | OWED |
 | JumpThreading | `getKnownConstant` L543, branch on undef L1009, xor L1838 | OWED |
 | SCEV | the pin has no `UndefValue` arm; an undef is an unknown | N/A |
-| LICM, LSR, indvars | none known | N/A until found |
+| LoopIdiom | `isa<UndefValue>` of the splat and pattern value L736/L741, the memset byte | DONE |
+| backend globals | an undef initializer is zero bytes | DONE |
+| InstCombine, IndVars `hasConcreteDef`, FunctionAttrs return-null, MemCpyOpt `isZeroSize`, GlobalOpt undef initializers, SCCP | the passes or functions are not ported | N/A until ported |
+| LICM, LSR | no undef arm that MIR has | N/A |
 | isel, legalize | undef lowers as any value: zero | DONE (#2532) |

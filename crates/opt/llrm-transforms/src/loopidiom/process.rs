@@ -146,7 +146,8 @@ fn byte_operand(
     match byte {
         Byte::Value(value) => value,
         Byte::Constant(value) => Operand::Constant(context.int(ty, i128::from(value))),
-        Byte::Undef | Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
+        Byte::Undef => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef })),
+        Byte::Poison => Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison })),
     }
 }
 
