@@ -28,7 +28,9 @@ name: ci
 on:
   pull_request:
     # A draft runs plan and static only (minutes); marking it ready starts the full gate.
-    types: [opened, synchronize, reopened, ready_for_review]
+    # Parity work targets the integration branch feat/parity and a stack targets its parent's branch: only a pull request into main runs the gate.
+    branches: [main]
+    types: [labeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -44,7 +46,11 @@ env:
   GATE_ALLOW_MISSING: perf
 
 jobs:
+  # The gate runs in CI and only to merge into main: a push runs nothing, a pull request runs nothing until the merge loop labels ONE of them
+  # `merge-candidate` (any other label starts nothing; a push after the label needs the label put on again), and that run is the FULL gate. Its verdict line,
+  # `GATE <tier> CANDIDATE PASS at <head12> on <main12>`, names the head that merges (tools/ci/candidate_ok.py judges it). docs/working/ci.md.
   plan:
+    if: ${{ github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -329,7 +335,7 @@ jobs:
 
   ci:
     needs: [plan, static, build, gate, bench-merge, setup-check]
-    if: always()
+    if: ${{ always() && (github.event_name != 'pull_request' || github.event.label.name == 'merge-candidate') }}
     runs-on: ${{ fromJSON(needs.plan.outputs.runner_small || '"ubuntu-24.04"') }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -365,6 +371,10 @@ jobs:
           fi
           if [ "${{ needs.plan.result }}" = success ] && [ "${{ needs.setup-check.result }}" != failure ] && [ "${{ needs.static.result }}" != failure ] && [ "${{ needs.build.result }}" != failure ] && [ "${{ needs.gate.result }}" != failure ] && [ "${{ needs.gate.result }}" != cancelled ] && [ "${{ needs.bench-merge.result }}" != failure ] && [ "${{ needs.bench-merge.result }}" != cancelled ]; then
             line="GATE ${{ needs.plan.outputs.tier }} PASS at ${head:0:12}$on"
+            # A pull request's run is the merge candidate's, the full gate: its line says so.
+            if [ "${{ github.event_name }}" = pull_request ]; then
+              line="GATE ${{ needs.plan.outputs.tier }} CANDIDATE PASS at ${head:0:12}$on"
+            fi
           else
             line="GATE ${{ needs.plan.outputs.tier }} FAIL at ${head:0:12}: plan=${{ needs.plan.result }} static=${{ needs.static.result }} build=${{ needs.build.result }} gate=${{ needs.gate.result }} bench-merge=${{ needs.bench-merge.result }}"
           fi

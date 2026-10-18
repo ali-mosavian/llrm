@@ -14,11 +14,11 @@
 //!
 //! An `and` that only compares of it with zero read (`x & mask == 0`), some in
 //! other blocks than its own, is made again before each of those compares,
-//! where the target makes one instruction of the pair
-//! (`OperationCosts::mask_test`) and the copy would not stretch two values read
-//! nowhere else (`sinkAndCmp0Expression`). Numbering made one value of the
-//! repeated tests of a bit; the compares sunk into the blocks that branch on it
-//! left the `and` held across all of them.
+//! where the target's lowering says the pair folds
+//! (`Lowering::is_mask_and_cmp0_folding_beneficial`) and the copy would not
+//! stretch two values read nowhere else (`sinkAndCmp0Expression`). Numbering
+//! made one value of the repeated tests of a bit; the compares sunk into the
+//! blocks that branch on it left the `and` held across all of them.
 //!
 //! A phi read only as an address (`spill::address_only`: loads, stores through
 //! it, and GEPs of up to three levels that are themselves only addresses) whose
@@ -126,7 +126,8 @@ impl FunctionPass for AddressSink {
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
         let sunk_compares = one_flag && compares_sunk(unit.function);
-        let masks = one_flag && masks_sunk(unit.context, unit.function, &analyses.outer().target().costs());
+        let masks =
+            one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         if sunk(unit.function) || sunk_compares || masks {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
@@ -323,16 +324,16 @@ fn compares_sunk(function: &mut Function) -> bool {
 /// diamonds held 31 such values across up to 30 diamonds: 419 stack operands
 /// where a test at each branch has none).
 ///
-/// Only where the target makes one instruction of the pair
-/// (`OperationCosts::mask_test` under the price of the two), and not where
-/// both operands of the `and` are values read nowhere else, whose live ranges
-/// the copy would stretch to the compare (CodeGenPrepare.cpp:2224).
+/// Only where the target's lowering says the pair folds
+/// (`isMaskAndCmp0FoldingBeneficial`; none: the base class's `false`), and not
+/// where both operands of the `and` are values read nowhere else, whose live
+/// ranges the copy would stretch to the compare (CodeGenPrepare.cpp:2224).
 fn masks_sunk(
     context: &Context,
     function: &mut Function,
-    costs: &llrm_mir::target::OperationCosts,
+    lowering: Option<&dyn llrm_mir::lowering::Lowering>,
 ) -> bool {
-    if costs.mask_test <= 0 || costs.mask_test >= 2 * costs.add {
+    if !lowering.is_some_and(|one| one.is_mask_and_cmp0_folding_beneficial()) {
         return false;
     }
     let masks: Vec<(BlockId, InstId)> = function
@@ -413,9 +414,9 @@ fn merged(
 ) -> Option<Merged> {
     let reaches = |operand: Operand| match operand {
         Operand::Value(value) => match function.value(value).def {
-            ValueDef::Instruction(def) => {
-                function.parent(def).is_some_and(|block| shape.dominance.dominates(cfg::id(block), cfg::id(join)))
-            }
+            ValueDef::Instruction(def) => function
+                .parent(def)
+                .is_some_and(|block| shape.dominance.dominates(function, cfg::id(block), cfg::id(join))),
             ValueDef::Argument(_) => true,
         },
         _ => true,

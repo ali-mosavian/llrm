@@ -169,7 +169,9 @@ pub fn closed(
         let available = exits
             .iter()
             .copied()
-            .filter(|at| predecessors[at].iter().all(|&parent| dominance.dominates(definitions[&value], parent)))
+            .filter(|at| {
+                predecessors[at].iter().all(|&parent| dominance.dominates(function, definitions[&value], parent))
+            })
             .collect::<BTreeSet<_>>();
         let mut needed = BTreeSet::new();
         let mut pending = value_sites.iter().copied().collect::<Vec<_>>();

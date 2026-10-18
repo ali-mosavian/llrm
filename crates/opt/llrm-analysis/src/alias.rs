@@ -2939,7 +2939,7 @@ pub fn point_values(unit: &Unit) -> Result<PointValues, String> {
     let back_edges = graph
         .iter()
         .flat_map(|block| block.succ.iter().map(move |successor| (block.at, *successor)))
-        .filter(|(at, successor)| dominance.dominates(*successor, *at))
+        .filter(|(at, successor)| dominance.dominates(unit.function, *successor, *at))
         .collect::<BTreeSet<_>>();
     // The instructions that can give a pointer a fact, in program order, and
     // the ones that read each value they read.

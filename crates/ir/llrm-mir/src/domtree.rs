@@ -34,19 +34,28 @@
 //!    differ. The test graph lists predecessors newest first, so the golden
 //!    file of the pinned LLVM compares byte for byte.
 //!
+//! 8. A `Function` may have no block, where LLVM's has an entry: its tree is
+//!    empty (`DomTree::of`).
+//! 10. `NodeInfos` is kept between constructions with every record clear, and
+//!     `clear` resets the records the walk wrote, not every block's.
+//! 9. The readers' `Dominators` analysis is brought up to date from MIR's
+//!    change log, not from calls a pass makes: [`DomTree::updated`] turns the
+//!    log into the edge `Update`s `applyUpdates` takes. A pass that leaves a
+//!    terminator's block or operands as they were makes no update.
+//!
 //! # Example
 //! A diamond `a -> {b, c} -> d`: `d`'s immediate dominator is `a`.
 //!
 //! # Used by
-//! Nothing yet: the readers of [`crate::dominators::DominatorTree`] move here
-//! one at a time.
+//! The `Dominators` analysis (`passes`) and every reader of dominance in
+//! `llrm-mir`, `llrm-analysis` and `llrm-transforms`.
 
 use std::cell::{Cell, RefCell};
 
 use crate::blocklist::BlockList;
 use crate::dense::{IdMap, IdSet};
 use crate::hash::{HashMap, HashSet};
-use crate::module::{BlockId, Function};
+use crate::module::{BlockId, Change, Function, InstId, Operand};
 
 /// The graph a tree is over: LLVM's `GraphTraits<ParentPtr>` and
 /// `GraphTraits<NodePtr>` (`getEntryNode`, `getMaxNumber`, `nodes`, `children`
@@ -296,7 +305,7 @@ type Batch<'a> = Option<&'a BatchUpdateInfo>;
 /// `DomTreeNodeBase`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericDomTree.h#L57>
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct TreeNode {
     block: Bb,
     idom: Node,
@@ -310,7 +319,7 @@ struct TreeNode {
 /// `DominatorTreeBase<NodeT, IsPostDom>`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Support/GenericDomTree.h#L263>
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct DomTreeBase<const POST: bool> {
     /// Dominators always have a single root, postdominators can have more.
     roots: Vec<BlockId>,
@@ -729,6 +738,50 @@ impl<const POST: bool> DomTreeBase<POST> {
             return true;
         }
         self.dominates_nodes(self.node(Some(a)), self.node(Some(b)))
+    }
+
+    /// `dominates(const BasicBlockEdge &, const BasicBlock *)`: whether every
+    /// path to `use_block` takes the edge `start` -> `end`.
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Dominators.cpp#L162>
+    pub fn dominates_edge(
+        &self,
+        function: &Function,
+        start: BlockId,
+        end: BlockId,
+        use_block: BlockId,
+    ) -> bool {
+        assert!(!POST, "an edge dominates in a dominator tree");
+        // If the end of the edge does not dominate the use block, nothing on
+        // the edge does.
+        if !self.dominates(end, use_block) {
+            return false;
+        }
+        // The edge dominates the block if it is the only way in, or if every
+        // other way in comes from a block `end` dominates.
+        let predecessors: Vec<BlockId> = function
+            .block_users(end)
+            .iter()
+            .filter(|one| function.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| function.parent(one.user))
+            .collect();
+        if predecessors.len() == 1 {
+            return true;
+        }
+        let mut duplicates = 0;
+        for from in predecessors {
+            if from == start {
+                duplicates += 1;
+                if duplicates > 1 {
+                    return false;
+                }
+                continue;
+            }
+            if !self.dominates(end, from) {
+                return false;
+            }
+        }
+        true
     }
 
     /// `properlyDominates`.
@@ -1367,6 +1420,26 @@ struct SemiNca<'a, G: DomGraph, const POST: bool> {
 
 type NodeOrderMap = IdMap<BlockId, u32>;
 
+thread_local! {
+    /// The records of the last `SemiNca` to go, all clear: LLVM's `NodeInfos`
+    /// is allocated and zeroed for every block of the function by each
+    /// construction, and an update of one edge makes several. DEVIATE 10.
+    static INFOS: RefCell<Vec<InfoRec>> = const { RefCell::new(Vec::new()) };
+}
+
+impl<G: DomGraph, const POST: bool> Drop for SemiNca<'_, G, POST> {
+    fn drop(&mut self) {
+        self.clear();
+        let infos = std::mem::take(&mut self.node_infos);
+        INFOS.with(|pool| {
+            let mut pool = pool.borrow_mut();
+            if pool.len() < infos.len() {
+                *pool = infos;
+            }
+        });
+    }
+}
+
 /// A copy of the heap `std::priority_queue` keeps in libstdc++, ordered by
 /// level: nodes of one level pop in the order LLVM's pop them.
 struct LevelQueue {
@@ -1460,20 +1533,21 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
         graph: &'a G,
         batch: Batch<'a>,
     ) -> Self {
-        let max_node_number = graph.max_number();
-        Self {
-            graph,
-            batch,
-            num_to_node: Vec::new(),
-            node_infos: vec![InfoRec::default(); max_node_number + usize::from(POST)],
-            reverse_children: Vec::new(),
-        }
+        let mut node_infos = INFOS.with(|pool| std::mem::take(&mut *pool.borrow_mut()));
+        // Every record in the pool is clear (`Drop`), so the vector grows with
+        // defaults.
+        node_infos.resize(node_infos.len().max(graph.max_number() + usize::from(POST)), InfoRec::default());
+        Self { graph, batch, num_to_node: Vec::new(), node_infos, reverse_children: Vec::new() }
     }
 
-    /// `clear`: the batch stays, an update in progress needs it.
+    /// `clear`: the batch stays, an update in progress needs it. Only the
+    /// records of the nodes the walk reached are written, so only those are
+    /// reset: `NodeInfos.assign` over every block was the cost of a walk of
+    /// one.
     fn clear(&mut self) {
-        self.num_to_node.clear();
-        self.node_infos.fill(InfoRec::default());
+        for node in std::mem::take(&mut self.num_to_node) {
+            self.node_infos[Self::info_index(node)] = InfoRec::default();
+        }
         self.reverse_children.clear();
     }
 
@@ -1861,6 +1935,11 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
         let calculated = dt.calculated;
         dt.reset();
         dt.calculated = calculated;
+        // DEVIATE 8: a MIR function may have no block; LLVM's definition has an
+        // entry.
+        if graph.entry().is_none() {
+            return;
+        }
         // If the update is using the actual CFG, BUI is null. If it's using a
         // view, BUI is non-null and the PreCFGView is used. When calculating
         // from scratch, make the PreViewCFG equal to the PostCFGView, so Post
@@ -2659,6 +2738,215 @@ impl<'a, G: DomGraph, const POST: bool> SemiNca<'a, G, POST> {
         }
         Ok(())
     }
+}
+
+impl PartialEq for DomTreeBase<false> {
+    /// Two trees are the same where `compare` finds no difference.
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        !self.compare(other)
+    }
+}
+
+impl DomTree {
+    /// The tree of `function`.
+    pub fn of(function: &Function) -> Self {
+        crate::counts::bump(crate::counts::Event::Dominators);
+        let mut tree = Self::new();
+        tree.recalculate(function);
+        tree
+    }
+
+    /// Whether `block` is reachable from the entry.
+    pub fn is_reachable(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.is_reachable_from_entry(block)
+    }
+
+    /// Whether `def` comes before `user` on every path to `user`.
+    pub fn instruction_dominates(
+        &self,
+        function: &Function,
+        def: InstId,
+        user: InstId,
+    ) -> bool {
+        let (Some(a), Some(b)) = (function.parent(def), function.parent(user)) else { return false };
+        if a != b {
+            return self.dominates(a, b);
+        }
+        if !self.is_reachable(b) {
+            return true;
+        }
+        SCANS.with(|scans| scans.set(scans.get() + 1));
+        let list = function.block(a).instructions();
+        list.iter().position(|one| *one == def) < list.iter().position(|one| *one == user)
+    }
+
+    /// `instruction_dominates`, where `position` is each instruction's index in
+    /// its block (`Function::positions`): no scan of the block for two in
+    /// the same one.
+    pub fn instruction_dominates_at(
+        &self,
+        function: &Function,
+        def: InstId,
+        user: InstId,
+        position: &[u32],
+    ) -> bool {
+        let (Some(a), Some(b)) = (function.parent(def), function.parent(user)) else { return false };
+        if a != b {
+            return self.dominates(a, b);
+        }
+        !self.is_reachable(b) || position[def.0 as usize] < position[user.0 as usize]
+    }
+
+    /// The tree of `function` after `changes`, from this one of the function
+    /// before them: the edges the log says terminators lost and gained go to
+    /// `applyUpdates`. None where the changes did something else to the graph
+    /// (a block gone, a terminator moved, another entry): the caller builds
+    /// afresh.
+    pub fn updated(
+        &self,
+        function: &Function,
+        changes: &[Change],
+    ) -> Option<Self> {
+        let mut tree = self.clone();
+        tree.update_in_place(function, changes).then_some(tree)
+    }
+
+    /// `updated`, of this tree itself. Where it says false the tree is
+    /// untouched.
+    pub fn update_in_place(
+        &mut self,
+        function: &Function,
+        changes: &[Change],
+    ) -> bool {
+        let Some(updates) = self.updates_for(function, changes) else { return false };
+        self.apply_updates(function, &updates);
+        true
+    }
+
+    /// The edge updates `changes` make to the CFG this tree is of, for
+    /// `applyUpdates` or a `DomTreeUpdater`. None where the changes did
+    /// something else to the graph (another entry, an operand out of range).
+    pub fn updates_for(
+        &self,
+        function: &Function,
+        changes: &[Change],
+    ) -> Option<Vec<Update>> {
+        let entry = function.entry()?;
+        if self.roots.first() != Some(&entry) {
+            return None;
+        }
+        edge_updates(function, changes)
+    }
+}
+
+thread_local! {
+    static SCANS: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How many times this thread has scanned a block's instructions to order two
+/// of them, for a test that the verifier does not.
+pub fn scans() -> usize {
+    SCANS.with(Cell::get)
+}
+
+/// The edges the terminators the log touched lost and gained, as `Update`s.
+/// A terminator's old block and operands are what it has now with the log
+/// undone from the last change; its edges then and now are compared as pairs.
+/// None where an edge change cannot be told (an operand index out of range).
+fn edge_updates(
+    function: &Function,
+    changes: &[Change],
+) -> Option<Vec<Update>> {
+    struct Touched {
+        /// Where it sat before the log, None if it was inserted by it.
+        block: Option<BlockId>,
+        operands: Vec<Operand>,
+    }
+    // Sorted by instruction, looked up by search: a vector indexed by id is
+    // as long as the function has instructions, for each update.
+    let terminator = |inst: InstId| function.instruction(inst).opcode.is_terminator();
+    let mut insts: Vec<InstId> = Vec::new();
+    for change in changes {
+        match change {
+            Change::Operand { inst, .. }
+            | Change::Operands { inst, .. }
+            | Change::Inserted { inst, .. }
+            | Change::Erased { inst, .. }
+            | Change::Moved { inst, .. } => {
+                if terminator(*inst) {
+                    insts.push(*inst);
+                }
+            }
+            _ => {}
+        }
+    }
+    insts.sort_unstable();
+    insts.dedup();
+    let mut touched: Vec<Touched> = insts
+        .iter()
+        .map(|&inst| Touched { block: function.parent(inst), operands: function.instruction(inst).operands.clone() })
+        .collect();
+    let slot = |inst: &InstId| insts.binary_search(inst).ok();
+    for change in changes.iter().rev() {
+        match change {
+            Change::Operand { inst, index, was } => {
+                if let Some(at) = slot(inst) {
+                    *touched[at].operands.get_mut(*index as usize)? = *was;
+                }
+            }
+            Change::Operands { inst, was } => {
+                if let Some(at) = slot(inst) {
+                    touched[at].operands = was.to_vec();
+                }
+            }
+            Change::Inserted { inst, .. } => {
+                if let Some(at) = slot(inst) {
+                    touched[at].block = None;
+                }
+            }
+            Change::Erased { inst, block, .. } => {
+                if let Some(at) = slot(inst) {
+                    touched[at].block = Some(*block);
+                }
+            }
+            Change::Moved { inst, from, .. } => {
+                if let Some(at) = slot(inst) {
+                    touched[at].block = Some(*from);
+                }
+            }
+            _ => {}
+        }
+    }
+    let edges = |block: Option<BlockId>, operands: &[Operand]| -> Vec<(BlockId, BlockId)> {
+        let mut out: Vec<(BlockId, BlockId)> = Vec::new();
+        for one in operands {
+            if let (Some(block), Operand::Block(target)) = (block, one)
+                && !out.contains(&(block, *target))
+            {
+                out.push((block, *target));
+            }
+        }
+        out
+    };
+    let mut updates = Vec::new();
+    for (&inst, one) in insts.iter().zip(&touched) {
+        let old = edges(one.block, &one.operands);
+        let now_block = if function.is_erased(inst) { None } else { function.parent(inst) };
+        let now = edges(now_block, &function.instruction(inst).operands);
+        for &(from, to) in old.iter().filter(|edge| !now.contains(edge)) {
+            updates.push(Update::delete(from, to));
+        }
+        for &(from, to) in now.iter().filter(|edge| !old.contains(edge)) {
+            updates.push(Update::insert(from, to));
+        }
+    }
+    Some(updates)
 }
 
 #[cfg(test)]

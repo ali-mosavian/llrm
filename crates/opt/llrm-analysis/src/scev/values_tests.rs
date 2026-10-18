@@ -82,7 +82,7 @@ fn test_forgetting_a_recurrence_forgets_the_values_that_use_it() {
     let module = llrm_mir::parse::module(text).expect("parses");
     let (_, _, function) = module.functions().find(|(_, _, function)| !function.layout().is_empty()).expect("a body");
     let layout = llrm_mir::datalayout::DataLayout::default();
-    let tree = llrm_mir::dominators::DominatorTree::new(function);
+    let tree = llrm_mir::domtree::DomTree::of(function);
     let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || &tree);
     let assumptions = llrm_mir::valuetracking::AssumptionCache::new(&module, function);
     let cx = Cx {

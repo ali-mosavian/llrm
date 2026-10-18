@@ -14,6 +14,8 @@ pub struct PointerSpec {
     /// Preferred alignment, in bytes: the ABI one unless stated.
     pub pref: u64,
     pub index_bits: u32,
+    /// `HasUnstableRepresentation`: set by `ni:` ([`DataLayout::parse`]).
+    pub unstable: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -39,7 +41,10 @@ impl Default for DataLayout {
     fn default() -> Self {
         Self {
             big_endian: false,
-            pointers: BTreeMap::from([(0, PointerSpec { bits: 64, align: 8, pref: 8, index_bits: 64 })]),
+            pointers: BTreeMap::from([(
+                0,
+                PointerSpec { bits: 64, align: 8, pref: 8, index_bits: 64, unstable: false },
+            )]),
             ints: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 4)]),
             floats: BTreeMap::from([(16, 2), (32, 4), (64, 8), (80, 2), (128, 16)]),
             int_prefs: BTreeMap::from([(1, 1), (8, 1), (16, 2), (32, 4), (64, 8)]),
@@ -71,7 +76,17 @@ impl DataLayout {
                 "e" => layout.big_endian = false,
                 "E" => layout.big_endian = true,
                 "n" => layout.legal = numbers(rest)?.into_iter().map(|bits| bits as u32).collect(),
-                "m" | "S" | "F" | "G" | "P" | "ni" | "Fi" | "Fn" => {}
+                "ni" => {
+                    for space in numbers(rest)? {
+                        if space == 0 {
+                            return Err(format!("`{spec}`: address space 0 cannot be non-integral"));
+                        }
+                        let mut one = layout.pointer(space as u32);
+                        one.unstable = true;
+                        layout.pointers.insert(space as u32, one);
+                    }
+                }
+                "m" | "S" | "F" | "G" | "P" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
@@ -91,6 +106,7 @@ impl DataLayout {
                                 align: bytes(*abi),
                                 pref: bytes(rest.first().copied().unwrap_or(*abi)),
                                 index_bits: index as u32,
+                                unstable: false,
                             },
                         );
                 }
@@ -157,6 +173,26 @@ impl DataLayout {
         space: u32,
     ) -> PointerSpec {
         self.pointers.get(&space).or_else(|| self.pointers.get(&0)).copied().expect("space 0 always has a pointer")
+    }
+
+    /// `DataLayout::isNonIntegralAddressSpace`
+    /// ([DataLayout.h:412](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h#L412)).
+    /// DEVIATE: no `HasExternalState` (the `pe` flag is not parsed).
+    pub fn is_non_integral_address_space(
+        &self,
+        space: u32,
+    ) -> bool {
+        let spec = self.pointer(space);
+        spec.bits != spec.index_bits || spec.unstable
+    }
+
+    /// `DataLayout::mustNotIntroduceIntToPtr`
+    /// ([DataLayout.h:461](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/DataLayout.h#L461)).
+    pub fn must_not_introduce_int_to_ptr(
+        &self,
+        space: u32,
+    ) -> bool {
+        self.pointer(space).unstable
     }
 
     /// Whether a pointer in `space` is a selector and an offset: wider than

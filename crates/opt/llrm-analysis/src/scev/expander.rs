@@ -10,7 +10,7 @@
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand};
 use llrm_mir::passes::Declared;
@@ -27,7 +27,7 @@ pub struct Env<'a> {
     pub metadata: &'a [MetadataNode],
     pub layout: &'a DataLayout,
     pub loops: &'a LoopInfo,
-    pub tree: &'a DominatorTree,
+    pub tree: &'a DomTree,
     pub assumptions: &'a AssumptionCache,
 }
 
