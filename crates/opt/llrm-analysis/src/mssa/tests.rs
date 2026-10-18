@@ -609,3 +609,48 @@ b0:
     );
     assert_eq!(joined, [(2, false, true, true)]);
 }
+
+
+/// EarlyCSE's x_hash: one arm of a diamond stores into the table, the other
+/// does not, and two loads of the same slot follow the join. The walker answers
+/// ONE access for both, the join's phi (a set of the nearest stores made the
+/// second load a different question from the first, and its CSE was missed:
+/// 524 B instead of 515).
+#[test]
+fn test_loads_after_a_diamond_with_a_store_in_one_arm_are_clobbered_by_the_one_phi() {
+    let parsed = Parsed::new(
+        "define i16 @f(i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 1, ptr @g
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %x = load i16, ptr @g
+  %y = load i16, ptr @g
+  ret i16 %y
+}
+",
+    );
+    let unit = parsed.unit();
+    let (mssa, accesses) = translated(&unit);
+    let view = super::view::Translated::new(&unit, &accesses, mssa);
+    let loads: Vec<_> = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| matches!(
+            unit.function.instruction(inst).opcode,
+            llrm_mir::opcode::Opcode::Load { .. }
+        ))
+        .collect();
+    let first = view.clobbering_access(loads[0]).expect("an answer");
+    let second = view.clobbering_access(loads[1]).expect("an answer");
+    assert_eq!(first, second, "both loads have the same one clobber");
+    assert!(view.is_phi(first), "the clobbers diverge, so it is the join's phi");
+}
