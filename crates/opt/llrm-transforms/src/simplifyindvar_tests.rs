@@ -5,6 +5,19 @@ use llrm_mir::passes::Outer;
 
 use crate::testing::{parsed, printed, results};
 
+thread_local! {
+    /// Forces `widening_enabled` in this test's thread.
+    pub static FORCED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// `simplifyAndExtend` is opt-in (`LLRM_SCEV_WIDEN`) until #2531 is fixed: a
+/// run without the variable takes the old path. Its panic at `widen.rs:142`
+/// (a user with no value) stopped every smoke program at -O2 -m32.
+#[test]
+fn test_widening_by_scalar_evolution_is_off_unless_asked_for() {
+    assert!(!super::widening_enabled());
+}
+
 fn simplified(text: &str) -> (bool, String) {
     let mut module = parsed(&format!("{DOS}{text}"));
     let (layout, outer) = (layout(&module), Outer::of(&module, None));
