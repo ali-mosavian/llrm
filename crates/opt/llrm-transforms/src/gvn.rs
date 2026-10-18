@@ -199,7 +199,7 @@ impl FunctionPass for Gvn {
         } else if scalar {
             analyses.invalidate(
                 unit.function,
-                &PreservedAnalyses::all().except::<Registers>().except::<llrm_analysis::manager::Counted>(),
+                &PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>(),
             );
         }
         let accesses = Accesses::managed(unit.context, unit.layout, unit.function, analyses);
