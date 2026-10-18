@@ -4853,7 +4853,8 @@ fn _memory_source_read_first(
     fresh: u32,
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
-    if one.group.is_some() {
+    // A lea's cell is an address: nothing is read from it.
+    if one.group.is_some() || what.op == Operation::Address {
         return None;
     }
     let tied: Vec<u32> =
@@ -5575,6 +5576,30 @@ mod tests {
 
     fn _recreated(insns: &[Arc<Insn>]) -> Vec<&Arc<Insn>> {
         insns.iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Address)).collect()
+    }
+
+    /// `x = x * 5` as `lea x, [x + x*4]` with `x` spilled: the spill wrote
+    /// `mov r, [r]` then `lea r2, r`, which the assembler refuses (N$PQ4 of the
+    /// Nib runtime at -m32 -O2 under the translated greedy allocator).
+    #[test]
+    fn test_a_lea_that_redefines_its_own_spilled_base_and_index_still_leas_a_cell() {
+        let cell = Mem {
+            base: Some(Held { value: 1, width: 4 }),
+            index: Some(Held { value: 1, width: 4 }),
+            scale: 4,
+            ..Mem::new(None, 4)
+        };
+        let first = insn(0, (0, 3), semantics(Operation::Move, "mov", vec![held(1, 4)], vec![imm(8, 4)]), &[1], &[]);
+        let times_five =
+            insn(4, (4, 6), semantics(Operation::Address, "lea", vec![held(1, 4)], vec![Loc::Mem(cell)]), &[1], &[1]);
+        let store = insn(8, (8, 10), semantics(Operation::Move, "mov", vec![held(3, 4)], vec![held(1, 4)]), &[3], &[1]);
+        let result = _out(&_body(vec![first, times_five, store]), &[1]);
+        for one in &result {
+            let w = what(one);
+            if w.op == Operation::Address {
+                assert!(matches!(w.sources.as_slice(), [Loc::Mem(_) | Loc::Address(_)]), "a lea of a register: {w:?}");
+            }
+        }
     }
 
     /// `p = *p` with `p` spilled: the load read its own base from a register
