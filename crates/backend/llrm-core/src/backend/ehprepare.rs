@@ -344,10 +344,7 @@ fn landing_pad(
     function: &Function,
     block: BlockId,
 ) -> Option<InstId> {
-    function
-        .block(block)
-        .iter()
-        .find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+    function.block(block).iter().find(|&one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
 }
 
 /// What a registration becomes: the runtime's ON ERROR GOTO, B$OEGA with
@@ -631,11 +628,8 @@ fn demote_phis(
     function: &mut Function,
     pad: BlockId,
 ) -> Result<(), String> {
-    let phis: Vec<InstId> = function
-        .block(pad)
-        .iter()
-        .filter(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect();
+    let phis: Vec<InstId> =
+        function.block(pad).iter().filter(|&one| function.instruction(one).opcode == Opcode::Phi).collect();
     for phi in phis {
         let instruction = function.instruction(phi).clone();
         let slot = slot(context, function, instruction.ty)?;
@@ -745,9 +739,7 @@ fn demote_live(
                         }
                         body_start(function, normal)
                     }
-                    _ => {
-                        Position::Before(function.next_in_block(def).expect("a successor in its block"))
-                    }
+                    _ => Position::Before(function.next_in_block(def).expect("a successor in its block")),
                 }
             }
         };

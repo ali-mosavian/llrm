@@ -154,11 +154,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
-    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion, loopdistribute,
-    loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopunrollpass,
-    loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower,
-    tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
+    addresssink, algebraic, availableexternally, bdce, calleepop, dead, decide, dse, fixednarrow, floatloop, fold,
+    gepoffset, globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion,
+    loopdistribute, loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit,
+    loopunrollpass, loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink,
+    switchlower, tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -583,7 +583,7 @@ fn hoisting(applied: &Applied) -> Box<dyn FunctionPass> {
 /// `Applied::only` run them alone, which is what `tools/difftest` compares
 /// with LLVM's counterpart. A pass leaves this list when it joins `pipeline`.
 fn translated() -> Vec<Box<dyn FunctionPass>> {
-    vec![Box::new(crate::cvp::Cvp)]
+    vec![Box::new(bdce::Bdce), Box::new(crate::cvp::Cvp)]
 }
 
 /// `name` without the slot it stands in (`gvn@787` is `gvn`).

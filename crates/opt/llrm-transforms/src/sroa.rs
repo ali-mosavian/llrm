@@ -41,8 +41,8 @@
 //! - `AssumptionCache`, `DomTreeUpdater`, statistics, names that follow
 //!   `.sroa.` suffix rules.
 //! - Offsets are `i128` kept in `0..2^index width` after each GEP, as the
-//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it,
-//!   and so is a negative one, which wraps to a large number.
+//!   `APInt` of `PtrUseVisitor` wraps; one past the alloca is outside it, and
+//!   so is a negative one, which wraps to a large number.
 //! - `IRBuilder` here makes what it is told and does not fold constants
 //!   (`ConstantFolder`) except the splat of a constant byte; `fold` does that
 //!   after.
