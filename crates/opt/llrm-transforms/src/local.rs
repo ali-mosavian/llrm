@@ -62,14 +62,27 @@
 //!     a `phi` or a call that returns an argument: two pointers that differ
 //!     only below one are not replaceable here, where LLVM may say they are.
 //!
+//! # Example
+//! Two phis with the same arms in one block. Before:
+//!
+//! ```mir
+//! %p = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+//! %q = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+//! ```
+//!
+//! `eliminate_duplicate_phi_nodes` puts `%q` in the set to remove and makes it
+//! read `%p`; after the caller erases it only `%p` is left.
+//!
+//! From unit test `a_duplicate_phi_is_replaced_by_the_first` in
+//! `local_tests.rs`.
+//!
 //! # Used by
 //! Nothing yet; `gvn` is the caller this is for.
-
-use std::collections::BTreeSet;
 
 use llrm_analysis::effects::{self, Declarations};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::edit::Position;
 use llrm_mir::facts::Fact;
@@ -600,7 +613,7 @@ fn phi_value(
 fn eliminate_duplicate_phi_nodes_naive_impl(
     function: &mut Function,
     bb: BlockId,
-    to_remove: &mut BTreeSet<InstId>,
+    to_remove: &mut IdSet<InstId>,
 ) -> bool {
     // This implementation doesn't currently consider undef operands
     // specially.
@@ -637,7 +650,7 @@ fn eliminate_duplicate_phi_nodes_naive_impl(
 fn eliminate_duplicate_phi_nodes_set_based_impl(
     function: &mut Function,
     bb: BlockId,
-    to_remove: &mut BTreeSet<InstId>,
+    to_remove: &mut IdSet<InstId>,
 ) -> bool {
     let phis = edges::phis(function, bb);
     let mut phi_set: HashMap<(TypeId, Vec<Operand>, Flags), InstId> = HashMap::default();
@@ -682,7 +695,7 @@ const PHICSE_NUM_PHIS_SMALL_SIZE: usize = 32;
 pub fn eliminate_duplicate_phi_nodes(
     function: &mut Function,
     bb: BlockId,
-    to_remove: &mut BTreeSet<InstId>,
+    to_remove: &mut IdSet<InstId>,
 ) -> bool {
     if edges::phis(function, bb).len() <= PHICSE_NUM_PHIS_SMALL_SIZE {
         return eliminate_duplicate_phi_nodes_naive_impl(function, bb, to_remove);
@@ -697,9 +710,9 @@ pub fn eliminate_duplicate_phi_nodes_and_erase(
     function: &mut Function,
     bb: BlockId,
 ) -> bool {
-    let mut to_remove = BTreeSet::new();
+    let mut to_remove = IdSet::new();
     let changed = eliminate_duplicate_phi_nodes(function, bb, &mut to_remove);
-    for pn in to_remove {
+    for pn in to_remove.iter() {
         function.erase(pn).expect("a replaced phi");
     }
     changed
@@ -1408,7 +1421,7 @@ pub fn is_pointer_use_replaceable(
 ) -> bool {
     let mut limit = 40;
     let mut worklist = vec![at.user];
-    let mut visited = BTreeSet::new();
+    let mut visited = IdSet::new();
 
     while !worklist.is_empty() {
         limit -= 1;

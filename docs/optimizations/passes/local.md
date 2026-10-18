@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:827849d5750a4b5276a8a0822863828bedb36103b2691e282f75777bd911942a -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:98d2aeb08961e10c295f63a27acb86ba92ad7b00d1b08b73eff46d3bc4e372fd -->
 
 # local
 
@@ -66,6 +66,19 @@ DEVIATE, each with the fact MIR lacks:
     is `valuetracking::underlying`, which does not look through a `select`,
     a `phi` or a call that returns an argument: two pointers that differ
     only below one are not replaceable here, where LLVM may say they are.
+
+## Example
+Two phis with the same arms in one block. Before:
+
+```mir
+%p = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+%q = phi i16 [ %x, %b1 ], [ %y, %b2 ]
+```
+
+`eliminate_duplicate_phi_nodes` puts `%q` in the set to remove and makes it
+read `%p`; after the caller erases it only `%p` is left.
+
+From unit test `a_duplicate_phi_is_replaced_by_the_first` in `local_tests.rs`.
 
 ## Used by
 Nothing yet; `gvn` is the caller this is for.

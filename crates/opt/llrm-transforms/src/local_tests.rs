@@ -1,8 +1,6 @@
 //! `Local.cpp`'s utilities for GVN, each run on MIR text; a change is also run
 //! by the interpreter before and after.
 
-use std::collections::BTreeSet;
-
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
@@ -754,13 +752,13 @@ fn deduplicated(text: &str) -> (Vec<String>, Module) {
     let mut module = parsed(text);
     let b3 = block(&module, "b3");
     let (_, function) = module.function_mut("f").expect("@f");
-    let mut to_remove = BTreeSet::new();
+    let mut to_remove = llrm_mir::dense::IdSet::new();
     assert_eq!(eliminate_duplicate_phi_nodes(function, b3, &mut to_remove), !to_remove.is_empty());
     let names: Vec<String> = to_remove
         .iter()
-        .map(|&phi| function.value(function.instruction(phi).result.expect("a value")).name.clone().expect("named"))
+        .map(|phi| function.value(function.instruction(phi).result.expect("a value")).name.clone().expect("named"))
         .collect();
-    for phi in to_remove {
+    for phi in to_remove.iter() {
         function.erase(phi).expect("nothing reads it");
     }
     (names, module)
