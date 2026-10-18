@@ -1609,7 +1609,7 @@ struct Agree(&'static str);
 
 impl llrm_mir::passes::FunctionPass for Agree {
     fn name(&self) -> &'static str {
-        "agree"
+        self.0
     }
 
     fn run(
