@@ -71,7 +71,7 @@ impl ScalarEvolution {
         // overflow. Use this fact to avoid doing extra work that may not pay
         // off.
         if matches!(self.node(max_be_count).kind, Kind::CouldNotCompute)
-            && !self.has_guards()
+            && !self.has_guards(cx)
             && !self.has_assumptions(cx)
         {
             return result;
@@ -120,7 +120,7 @@ impl ScalarEvolution {
         let max_be_count = self.get_backedge_taken_count(cx, l, super::backedge::ExitCountKind::ConstantMaximum);
 
         if matches!(self.node(max_be_count).kind, Kind::CouldNotCompute)
-            && !self.has_guards()
+            && !self.has_guards(cx)
             && !self.has_assumptions(cx)
         {
             return result;

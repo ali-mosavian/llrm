@@ -12,8 +12,10 @@ use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;
 use llrm_mir::loopinfo::LoopInfo;
-use llrm_mir::module::{Function, GlobalValue, InstId, MetadataNode, Operand};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand};
+use llrm_mir::passes::Declared;
 use llrm_mir::valuetracking::AssumptionCache;
+use llrm_support::hash::HashMap;
 
 use super::expr::{Scev, Ty};
 use super::{Cx, ScalarEvolution};
@@ -55,14 +57,26 @@ impl<'a> Env<'a> {
 /// `SCEVExpander`.
 pub struct Expander {
     name: &'static str,
-    insert_point: Option<InstId>,
+    pub(super) insert_point: Option<InstId>,
+    /// `InsertedValues`: what this expander made, in order.
+    pub(super) inserted: Vec<InstId>,
+    /// `InsertedExpressions`: a SCEV expanded at an insert point.
+    pub(super) expressions: HashMap<(Scev, InstId), Operand>,
+    /// `RelevantLoops`.
+    pub(super) relevant_loops: HashMap<Scev, Option<BlockId>>,
 }
 
 impl Expander {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L192
     /// `SCEVExpander(SE, Name)`. `PreserveLCSSA` is always true.
     pub fn new(name: &'static str) -> Self {
-        Self { name, insert_point: None }
+        Self {
+            name,
+            insert_point: None,
+            inserted: Vec::new(),
+            expressions: HashMap::default(),
+            relevant_loops: HashMap::default(),
+        }
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/ScalarEvolutionExpander.h#L407
@@ -96,14 +110,16 @@ impl Expander {
     /// point; `ty` is the type of the result, or none for the SCEV's own.
     pub fn expand_code_for(
         &mut self,
-        _env: &Env,
-        _context: &mut Context,
-        _function: &mut Function,
-        _se: &mut ScalarEvolution,
-        _s: Scev,
-        _ty: Option<Ty>,
+        env: &Env,
+        context: &mut Context,
+        declared: &mut Declared,
+        function: &mut Function,
+        se: &mut ScalarEvolution,
+        s: Scev,
+        ty: Option<Ty>,
     ) -> Operand {
-        todo!("S6")
+        let mut run = super::expand::Run { x: self, env: *env, context, declared, function, se };
+        run.expand_code_for(s, ty)
     }
 
     /// The name given at `new`, the prefix of the instructions it makes.
@@ -150,11 +166,12 @@ impl ScalarEvolution {
     /// `applyLoopGuards(Expr, L)`. S5 (guards).
     pub fn apply_loop_guards(
         &mut self,
-        _cx: &Cx,
-        _expr: Scev,
-        _l: llrm_mir::module::BlockId,
+        cx: &Cx,
+        expr: Scev,
+        l: llrm_mir::module::BlockId,
     ) -> Scev {
-        todo!("S5")
+        let guards = super::guards::LoopGuards::collect(self, cx, l);
+        self.apply_loop_guards_with(cx, expr, &guards)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.h#L1158
@@ -162,8 +179,10 @@ impl ScalarEvolution {
     pub fn forget_loop(
         &mut self,
         _cx: &Cx,
-        _l: llrm_mir::module::BlockId,
+        l: llrm_mir::module::BlockId,
     ) {
-        todo!("S3")
+        // Drop any stored trip count value (and the loop's properties); the
+        // other half, the expressions of the loop's phis, is S3.
+        self.trips.forget(l);
     }
 }

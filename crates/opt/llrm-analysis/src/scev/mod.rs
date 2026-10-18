@@ -25,12 +25,21 @@ pub mod create_phi;
 pub mod disposition;
 pub mod divrec;
 pub mod eval;
+pub mod exit_limit;
+pub mod exit_value;
+pub mod expand;
+#[cfg(test)]
+mod expand_tests;
 pub mod expander;
 pub mod expr;
 pub mod forget;
 #[cfg(test)]
 mod golden_tests;
 pub mod guards;
+#[cfg(test)]
+mod guards_tests;
+pub mod how_many;
+pub mod implied;
 pub mod minmax;
 pub mod pattern;
 pub mod poison;
@@ -41,6 +50,9 @@ pub mod rewrite;
 pub mod scope;
 pub mod seams;
 pub mod sequential;
+pub mod trip;
+#[cfg(test)]
+mod trip_tests;
 pub mod values;
 #[cfg(test)]
 mod values_tests;
@@ -171,6 +183,10 @@ pub struct ScalarEvolution {
     pub(super) fold_cache_user: HashMap<Scev, Vec<(Type, Use, Ty)>>,
     /// `CouldNotCompute`.
     could_not_compute: Scev,
+    /// `BackedgeTakenCounts` and `LoopPropertiesCache`.
+    pub(super) trips: trip::TripState,
+    /// What the guard queries keep between calls.
+    pub(super) guards: implied::GuardState,
 }
 
 impl Default for ScalarEvolution {
@@ -201,6 +217,8 @@ impl ScalarEvolution {
             values_at_scopes_users: HashMap::new(),
             fold_cache_user: HashMap::new(),
             could_not_compute: Scev(0),
+            trips: trip::TripState::default(),
+            guards: implied::GuardState::default(),
         };
         se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
         se
