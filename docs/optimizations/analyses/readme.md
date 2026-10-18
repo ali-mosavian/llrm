@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 48 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -53,3 +53,4 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 47 documented, 0 undoc
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |
+| ssaupdater | `SSAUpdater`: a value defined in several blocks, rewritten so each use reads the definition that reaches it, with a phi placed where definitions meet. |  | [ssaupdater](ssaupdater.md) |

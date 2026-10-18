@@ -147,6 +147,7 @@ pub mod loopidioms;
 pub mod loopinterchange;
 pub mod loopmotion;
 pub mod loopnest;
+pub mod looprotate;
 pub mod loopshape;
 pub mod loopsimplify;
 pub mod loopsplit;
