@@ -6,6 +6,7 @@
 //! value with an [`Inserter`], which is `IRBuilder` at an insertion point and
 //! folds an operation of constants as it does.
 //!
+//! # How it works
 //! A byte offset or `-1` in LLVM is `Option<u64>` here: none is `-1`.
 //!
 //! DEVIATE 6, the types MIR does not have: no scalable vector, no target
@@ -41,6 +42,9 @@
 //!
 //! From unit test `test_a_half_of_a_word_is_shifted_and_truncated` in
 //! `vncoercion_tests.rs`.
+//!
+//! # Used by
+//! Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the caller this is for.
 
 use llrm_mir::constfold;
 use llrm_mir::context::{Constant, ConstantKind, Context};

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/vncoercion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vncoercion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:41e41c4e33bc4cf08ec807659d0fd791c9d782801f6058275fc727936c0ec1b2 -->
+<!-- src: crates/opt/llrm-transforms/src/vncoercion.rs sha256:ba4c01060b1451fb8704bf5b81bcc59e4bb3436e38e8a8a1a8207af31e3057b7 -->
 
 # vncoercion
 
@@ -11,6 +11,7 @@ of the write, a load is contained in it; `get_*` and `coerce_*` build the
 value with an `Inserter`, which is `IRBuilder` at an insertion point and
 folds an operation of constants as it does.
 
+## How it works
 A byte offset or `-1` in LLVM is `Option<u64>` here: none is `-1`.
 
 DEVIATE 6, the types MIR does not have: no scalable vector, no target
@@ -46,3 +47,6 @@ store, and `get_value_for_load` builds what it reads:
 
 From unit test `test_a_half_of_a_word_is_shifted_and_truncated` in
 `vncoercion_tests.rs`.
+
+## Used by
+Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the caller this is for.
