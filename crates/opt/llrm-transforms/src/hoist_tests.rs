@@ -848,3 +848,17 @@ b2:
         "premise: an invariant moves\n{text}"
     );
 }
+
+/// The proofs `Hoist` held of its loops were those of the body before it moved
+/// anything out of one, and the next loop's bounds were worked from them: a
+/// bound moved out of a loop makes it counted, and `LLRM_CHECK_COUNTED` found
+/// the held proofs stale (qcport/triggers -O1 and five more modules under the
+/// LLVM order: kept none, fresh the loop counted). The body is `pipeline.body`
+/// of triggers.c as that order hands it to `hoist`.
+#[test]
+fn test_counted_proofs_are_made_again_after_a_loop_is_hoisted_out_of() {
+    llrm_analysis::induction::check_counted(true);
+    let (before, after) = hoisted(include_str!("../tests/fixtures/pipeline_body_before_hoist.ll"));
+    llrm_analysis::induction::check_counted(false);
+    assert_ne!(printed(&before), printed(&after), "the body had nothing to hoist");
+}
