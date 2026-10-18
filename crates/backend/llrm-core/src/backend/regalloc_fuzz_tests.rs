@@ -1395,6 +1395,8 @@ fn test_a_body_the_base_allocation_split_nothing_in_is_not_allocated_again_witho
 #[test]
 fn test_the_allocators_rewrites_ask_the_postings_for_the_next_value() {
     use crate::backend::splitkit::next_value_asks;
+    // The old allocator's rewrites, which greedy has none of: deleted with it.
+    let _old = crate::backend::allocate::OldAllocator::pinned();
     let before = next_value_asks();
     for seed in 0..120_u64 {
         let shape = Shape { pool: 7 + (seed % 8) as usize, ops: 4 + (seed % 9) as usize };

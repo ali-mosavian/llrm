@@ -4886,7 +4886,7 @@ pub fn _renamed(
 
 /// One move of a parallel copy, with its spilled end read or written where it
 /// lives.
-fn _in_place(
+pub(crate) fn _in_place(
     one: &Insn,
     values: &BTreeSet<u32>,
     frame: &mut Frame,
@@ -5043,7 +5043,7 @@ fn _tied(
 }
 
 /// Whether this form exists, asked of the one place that knows.
-fn _encodable(
+pub(crate) fn _encodable(
     bits: u32,
     what: &Semantics,
     classes: &RegisterClasses,
