@@ -625,6 +625,10 @@ impl Analysis for Dominators {
     const NAME: &'static str = "dominators";
     const INCREMENTAL: bool = true;
 
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     /// The blocks the changed edges reach are worked out again; nothing else
     /// can move.
     fn update(
@@ -672,6 +676,11 @@ impl Analysis for Loops {
     type Result = crate::loopinfo::LoopInfo;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "loops";
+
+    fn preserved(preserved: &PreservedAnalyses) -> bool {
+        preserved.kept::<Self>() || preserved.cfg_preserved()
+    }
+
     fn run(
         context: &Context,
         layout: &DataLayout,
@@ -706,12 +715,14 @@ impl Analysis for ScalarEvolution {
 #[derive(Clone, Debug, Default)]
 pub struct PreservedAnalyses {
     all: bool,
+    /// LLVM's `preserveSet<CFGAnalyses>`: the pass left the CFG as it was.
+    cfg: bool,
     kept: HashSet<TypeId>,
 }
 
 impl PreservedAnalyses {
     pub fn all() -> Self {
-        Self { all: true, kept: HashSet::default() }
+        Self { all: true, cfg: false, kept: HashSet::default() }
     }
 
     pub fn none() -> Self {
@@ -726,6 +737,18 @@ impl PreservedAnalyses {
     pub fn preserve_module<M: ModuleAnalysis>(mut self) -> Self {
         self.kept.insert(TypeId::of::<M>());
         self
+    }
+
+    /// `preserveSet<CFGAnalyses>`: the pass changed no block or edge, so the
+    /// analyses that read only the CFG (dominators, loops) stand.
+    pub fn preserve_cfg(mut self) -> Self {
+        self.cfg = true;
+        self
+    }
+
+    /// `PreservedAnalyses::allAnalysesInSet<CFGAnalyses>`.
+    pub fn cfg_preserved(&self) -> bool {
+        self.all || self.cfg
     }
 
     /// Whether the pass changed nothing: LLVM's `areAllPreserved`.

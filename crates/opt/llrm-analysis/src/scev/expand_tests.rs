@@ -150,3 +150,20 @@ fn test_an_equal_binop_just_before_the_insert_point_is_reused() {
     });
     assert_eq!(lines(&text).len(), 2, "{text}");
 }
+
+/// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
+/// zero, so it is not safe; by a nonzero constant it is.
+#[test]
+fn test_a_udiv_is_safe_to_expand_only_by_a_divisor_known_nonzero() {
+    let mut safe = Vec::new();
+    for divisor_is_constant in [false, true] {
+        expanded(|se, cx, args| {
+            let a = unknown(se, cx, args[0]);
+            let d = if divisor_is_constant { constant(se, 32, 3) } else { unknown(se, cx, args[1]) };
+            let s = se.get_udiv_expr(cx, a, d);
+            safe.push(Expander::new("t").is_safe_to_expand(cx, se, s));
+            s
+        });
+    }
+    assert_eq!(safe, [false, true]);
+}
