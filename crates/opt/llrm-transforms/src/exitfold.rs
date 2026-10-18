@@ -946,7 +946,7 @@ fn _decided_by_scev(
         if scev.is_could_not_compute(max_be_count) {
             return decided;
         }
-        let mut dominating_exact_exit_counts = std::collections::HashSet::new();
+        let mut dominating_exact_exit_counts = llrm_support::hash::HashSet::default();
         for exit in exits {
             let condition = function.instruction(exit.branch).operands.first().copied();
             if !innermost(exit.block) || matches!(condition, Some(Operand::Constant(_))) {

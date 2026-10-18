@@ -237,6 +237,73 @@ pub const ANALYSES: &[AnalysisEntry] = &[
 pub const TODO: &[&str] =
     &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
 
+/// How many times LLVM runs a slot's pass over one body in one visit of the
+/// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
+/// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
+/// -O2 for its 11 functions). The slot name is as in `llvm_order`.
+pub const RUNS_PER_BODY: &[(&str, [usize; 4])] = &[("gvn@787", [0, 1, 1, 1])];
+
+/// The level a list is built for: the pin's `default<O1>`, `default<O2>`,
+/// `default<O3>`; -Os is the -O2 list on optsize IR (`opt` rejects `-Os`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Level {
+    O1,
+    O2,
+    O3,
+    Os,
+}
+
+impl Level {
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Registry slots the pin's `default<O1>` does not have (no GVN at -O1:
+/// `buildO1FunctionSimplificationPipeline`), so a Translated one is not
+/// required in a -O1 list.
+pub const ABSENT_AT_O1: &[&str] = &["gvn@787"];
+
+/// Run counts LLVM does not match yet, stated and not checked:
+/// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
+/// level (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's
+/// 4/10/10/10).
+pub const RUN_COUNTS_OPEN: &[&str] = &[
+    "loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor",
+    "-O3 reruns a body's whole list after `ipa-cp.` and `ipa-deadargs.` (d_faces: _d_draw_faces runs the 52 steps three times, 17 gvn runs over 12 bodies against -O2's 12): LLVM runs IPSCCP and deadargelim before the function pipelines, so a body is not run twice (cgscc-poc's single pass-list run per SCC visit)",
+];
+
+/// `name` without the slot it stands in (`gvn@787` is `gvn`); the rounds name
+/// their passes without a slot.
+fn base_of(name: &str) -> &str {
+    name.split_once('@').map_or(name, |split| split.0)
+}
+
+/// `lines`, the `LLRM_DEBUG=runs` lines of a compile of `bodies` functions,
+/// against [`RUNS_PER_BODY`]: a slot that ran over more bodies' worth of
+/// steps than its allowance is the error. Linear in the lines.
+pub fn check_run_counts(
+    lines: &[String],
+    bodies: usize,
+    level: Level,
+) -> Result<(), String> {
+    for (slot, per_level) in RUNS_PER_BODY {
+        let per_body = &per_level[level.index()];
+        let ran = lines
+            .iter()
+            .filter(|line| line.starts_with("step "))
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .filter(|name| base_of(name.split_once('-').map_or(*name, |split| split.1)) == base_of(slot))
+            .count();
+        if ran > *per_body * bodies {
+            return Err(format!(
+                "{slot} ran {ran} times over {bodies} bodies at {level:?}, LLVM runs it {per_body} per body"
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `built`, the slot names a list of `phase` runs, against the registry: the
 /// first Translated slot of the phase that it lacks, or slot it has that the
 /// registry does not know, is the error.
@@ -245,7 +312,20 @@ pub(crate) fn check(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {
-    for one in registry.iter().filter(|one| one.phase == phase && matches!(one.kind, Translated | Partial)) {
+    check_without(registry, phase, built, &[])
+}
+
+/// [`check`] where the slots in `absent` are not LLVM's at this level.
+fn check_without(
+    registry: &[Entry],
+    phase: Phase,
+    built: &[&str],
+    absent: &[&str],
+) -> Result<(), String> {
+    for one in registry
+        .iter()
+        .filter(|one| one.phase == phase && matches!(one.kind, Translated | Partial) && !absent.contains(&one.slot))
+    {
         if !built.contains(&one.slot) {
             return Err(format!("slot {} is Translated ({}) and not run in {phase:?}", one.slot, one.llvm));
         }
@@ -273,7 +353,18 @@ pub fn check_phase(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {
-    check(REGISTRY, phase, built)?;
+    check_phase_at(phase, built, Level::O2)
+}
+
+/// [`check_phase`] for the list of `level`: the slots the pin's list of that
+/// level lacks are not required.
+pub fn check_phase_at(
+    phase: Phase,
+    built: &[&str],
+    level: Level,
+) -> Result<(), String> {
+    let absent = if level == Level::O1 { ABSENT_AT_O1 } else { &[] };
+    check_without(REGISTRY, phase, built, absent)?;
     llrm_mir::counts::joined(joined_slots(REGISTRY, built));
     Ok(())
 }

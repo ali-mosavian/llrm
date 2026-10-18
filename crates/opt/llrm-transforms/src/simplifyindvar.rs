@@ -53,8 +53,6 @@
 //! [`crate::exitfold`], [`crate::decide`]; LLVM SimplifyIndVar
 //! (`simplifyUsers`, `eliminateIVComparison`).
 
-use std::collections::HashSet;
-
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::expr::Kind;
@@ -63,6 +61,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::Outer;
+use llrm_support::hash::HashSet;
 
 use crate::counting;
 
@@ -83,7 +82,7 @@ pub fn simplified(
         let mut session = ScevSession::of(context, function, outer);
         session.ask(context, layout, function, outer, |scev, cx| {
             let mut decided: Vec<(InstId, bool)> = Vec::new();
-            let mut done: HashSet<InstId> = HashSet::new();
+            let mut done: HashSet<InstId> = HashSet::default();
             let loops = cx.loops.get_loops_in_preorder();
             for loop_ in loops.into_iter().rev() {
                 let header = loop_.get_header();
@@ -127,7 +126,7 @@ fn simplify_users(
     done: &mut HashSet<InstId>,
 ) {
     // Instructions processed for CurrIV.
-    let mut simplified: HashSet<InstId> = HashSet::new();
+    let mut simplified: HashSet<InstId> = HashSet::default();
     // Use-def pairs of IV users waiting to be processed for CurrIV.
     let mut simple_iv_users: Vec<(InstId, InstId)> = Vec::new();
 
