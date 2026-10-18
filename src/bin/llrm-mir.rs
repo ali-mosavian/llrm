@@ -84,6 +84,13 @@ fn main() -> ExitCode {
         })
         .is_some()
     };
+    let loop_deletion = {
+        let at = arguments.iter().position(|one| one == "--loop-deletion");
+        at.inspect(|&at| {
+            arguments.remove(at);
+        })
+        .is_some()
+    };
     let unroll_full = {
         let at = arguments.iter().position(|one| one == "--unroll-full");
         at.inspect(|&at| {
@@ -180,6 +187,16 @@ fn main() -> ExitCode {
                         eprintln!("{path}: @{name}: {error}");
                         return ExitCode::FAILURE;
                     }
+                }
+                print!("{}", llrm_mir::print::module(&module));
+                return ExitCode::SUCCESS;
+            }
+            if loop_deletion {
+                let mut manager = llrm_mir::passes::PassManager::default();
+                manager.add(llrm_transforms::loopdeletion::LoopDeletion);
+                if let Err(error) = manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)) {
+                    eprintln!("{path}: {error}");
+                    return ExitCode::FAILURE;
                 }
                 print!("{}", llrm_mir::print::module(&module));
                 return ExitCode::SUCCESS;

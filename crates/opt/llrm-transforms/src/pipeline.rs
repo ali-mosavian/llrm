@@ -155,10 +155,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     addresssink, algebraic, availableexternally, calleepop, dead, decide, dse, fixednarrow, floatloop, fold, gepoffset,
-    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdistribute, loopfuse,
-    loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopunrollpass, loopversion, lsr,
-    mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower, tailrec, trivialunswitch,
-    unroll, unroll_jam, unswitch, window,
+    globaldce, globalopt, gvn, hoist, indvars, inferspace, inline, jumpthread, lcssa, loopdeletion, loopdistribute,
+    loopfuse, loopidioms, loopinterchange, loopmotion, looprotate, loopsimplify, loopsplit, loopunrollpass,
+    loopversion, lsr, mem2reg, memcpyopt, peel, phiopt, ports, promote, rotate, simplifycfg, sink, switchlower,
+    tailrec, trivialunswitch, unroll, unroll_jam, unswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -681,7 +681,6 @@ pub(crate) fn llvm_order(
     phase: Phase,
 ) -> Vec<Box<dyn FunctionPass>> {
     let size = applied.options.prefers_size();
-    let limits = || applied.options.limits.clone();
     let slot =
         |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
     let decide = |name| slot(name, Box::new(decide::Decide));
@@ -796,6 +795,7 @@ pub(crate) fn llvm_order(
                         unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
                     }),
                 ),
+                slot("loopdeletion@749", Box::new(loopdeletion::LoopDeletion)),
                 slot(
                     "unroll@753",
                     Box::new(loopunrollpass::LoopFullUnroll {
