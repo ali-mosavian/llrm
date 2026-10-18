@@ -128,10 +128,19 @@ use-based selection. The gate: identical.py over the full corpus. Output
 changes where the order now matches LLVM's are expected and are reported as
 rows (the rows line first, the worse count per row); any row worse blocks.
 
+## Passes waiting on it
+SROA (#2316, #2317) and CVP (#2348, from #2349: 20,000 sext conversions in
+one block, x4 per doubling in `processSExt`/`processZExt`, because
+`Function::insert(Before)` and `erase` scan the block). Both close with the
+O(1) position of stage B and a slope test each; until then a pass that inserts
+or erases mid-block in a big block is quadratic.
+
 ## Scoreboard and migration
 Uses of `Block::instructions()` (main): `git grep -n -E '\.instructions\(\)|(block\([^)]*\)|blocks\[[^]]*\])\.instructions([^(]|$)' -- crates | wc -l`
 is 380 (337 calls + 43 direct field reads); the goal is 0 with the method and
-the field private. Calls by crate: llrm-transforms 195, llrm-analysis 63,
+the field private. #2348 (CVP) is a user of stage B's O(1) insert and erase, not
+a reader to migrate: it closes with B, and its slope test is added to the
+scoreboard when B lands. Calls by crate: llrm-transforms 195, llrm-analysis 63,
 llrm-mir 42, llrm-core 30, llrm-x86-bc 3, llrm-hir 2, llrm-qb 2 (the last two
 are other types' methods named alike). I land the API and SROA; each crate's
 migration is its owners' PR (llrm-transforms by pass owner, per the slot table;
