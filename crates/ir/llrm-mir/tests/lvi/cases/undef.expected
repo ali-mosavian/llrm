@@ -1,0 +1,116 @@
+val sel 0 cr=i32:full-set cst=- pn=-
+val sel 1 cr=i1:full-set cst=- pn=-
+val sel 2 cr=i32:full-set cst=- pn=-
+val sel 3 cr=i32:[7,8) cst=i32:7 pn=-
+val sel 4 cr=i32:full-set cst=- pn=-
+rval sel 4 cr=i32:full-set
+rval sel 3 cr=i32:[7,8)
+rval sel 2 cr=i32:full-set
+use sel 0 0 cr=i1:full-set
+use sel 0 2 cr=i32:full-set
+use sel 1 0 cr=i1:full-set
+use sel 2 0 cr=i32:full-set
+use sel 2 1 cr=i32:[7,8)
+use sel 3 0 cr=i32:full-set
+lat sel arg0 bb0 overdefined
+lat sel arg1 bb0 overdefined
+lat sel i0 bb0 overdefined
+lat sel i1 bb0 constantrange incl. undef <7, 8>
+lat sel i2 bb0 overdefined
+lat sel i3 bb0 overdefined
+val edge 0 cr=i32:full-set cst=- pn=-
+val edge 1 cr=i1:full-set cst=- pn=-
+val edge 2 cr=i32:full-set cst=- pn=-
+val edge 3 cr=i1:full-set cst=- pn=-
+val edge 4 cr=i32:full-set cst=- pn=-
+rval edge 4 cr=i32:full-set
+rval edge 3 cr=i1:full-set
+rval edge 2 cr=i32:full-set
+rval edge 1 cr=i1:full-set
+edge edge 0 1 0 cr=i32:full-set
+edge edge 0 2 0 cr=i32:full-set
+edge edge 2 3 0 cr=i32:full-set
+pred edge 0 a=- b=-
+pred edge 4 a=- b=-
+epred edge 0 0 0 -
+epred edge 0 1 0 -
+epred edge 2 0 4 -
+epred edge 2 1 4 -
+use edge 0 0 cr=i32:full-set
+use edge 1 0 cr=i1:full-set
+use edge 2 0 cr=i32:full-set
+use edge 3 0 cr=i32:full-set
+use edge 4 0 cr=i32:full-set
+use edge 5 0 cr=i1:full-set
+use edge 6 0 cr=i32:full-set
+use edge 7 0 cr=i32:full-set
+lat edge arg0 bb0 overdefined
+lat edge arg0 bb1 overdefined
+lat edge arg0 bb2 undef
+lat edge arg0 bb3 undef
+lat edge arg0 bb4 undef
+lat edge i0 bb0 overdefined
+lat edge i0 bb1 constantrange<-1, 0>
+lat edge i0 bb2 constantrange<0, -1>
+lat edge i1 bb0 overdefined
+lat edge i1 bb1 overdefined
+lat edge i1 bb2 overdefined
+lat edge i2 bb1 overdefined
+lat edge i3 bb1 overdefined
+lat edge i4 bb2 overdefined
+lat edge i4 bb3 constantrange<-1, 0>
+lat edge i4 bb4 constantrange<0, -1>
+lat edge i5 bb2 overdefined
+lat edge i5 bb3 overdefined
+lat edge i5 bb4 overdefined
+lat edge i6 bb3 overdefined
+lat edge i7 bb3 overdefined
+lat edge i8 bb4 overdefined
+val phi 0 cr=i32:full-set cst=- pn=-
+val phi 1 cr=i1:full-set cst=- pn=-
+val phi 2 cr=i32:[5,6) cst=i32:5 pn=-
+val phi 3 cr=i32:[6,7) cst=i32:6 pn=-
+rval phi 3 cr=i32:[6,7)
+rval phi 2 cr=i32:[5,6)
+use phi 0 0 cr=i1:full-set
+use phi 4 0 cr=i32:[5,6)
+use phi 5 0 cr=i32:[6,7)
+lat phi arg0 bb0 overdefined
+lat phi arg0 bb1 overdefined
+lat phi arg0 bb2 overdefined
+lat phi arg0 bb3 overdefined
+lat phi arg1 bb0 overdefined
+lat phi arg1 bb1 constantrange<-1, 0>
+lat phi arg1 bb2 constantrange<0, -1>
+lat phi arg1 bb3 overdefined
+lat phi i0 bb0 overdefined
+lat phi i0 bb1 overdefined
+lat phi i0 bb2 overdefined
+lat phi i1 bb1 overdefined
+lat phi i2 bb2 overdefined
+lat phi i3 bb3 constantrange incl. undef <5, 6>
+lat phi i4 bb3 constantrange<6, 7>
+lat phi i5 bb3 overdefined
+val ops 0 cr=i32:full-set cst=- pn=-
+val ops 1 cr=i32:full-set cst=- pn=-
+val ops 2 cr=i32:full-set cst=- pn=-
+val ops 3 cr=i16:full-set cst=- pn=-
+val ops 4 cr=i32:[0,65536) cst=- pn=-
+val ops 5 cr=i32:full-set cst=- pn=-
+rval ops 5 cr=i32:full-set
+rval ops 4 cr=i32:[0,65536)
+rval ops 3 cr=i16:full-set
+rval ops 2 cr=i32:full-set
+rval ops 1 cr=i32:full-set
+use ops 1 0 cr=i32:full-set
+use ops 3 0 cr=i16:full-set
+use ops 4 0 cr=i32:full-set
+use ops 4 1 cr=i32:[0,65536)
+use ops 5 0 cr=i32:full-set
+lat ops arg0 bb0 overdefined
+lat ops i0 bb0 overdefined
+lat ops i1 bb0 overdefined
+lat ops i2 bb0 overdefined
+lat ops i3 bb0 constantrange<0, 65536>
+lat ops i4 bb0 overdefined
+lat ops i5 bb0 overdefined

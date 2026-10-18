@@ -122,9 +122,7 @@ fn first_insertion_point(
 ) -> Position {
     function
         .block(block)
-        .instructions()
         .iter()
-        .copied()
         .find(|&one| function.instruction(one).opcode != Opcode::Phi)
         .map_or(Position::End(block), Position::Before)
 }
@@ -160,7 +158,7 @@ fn clone_in_exit_block(
                 let name = function.value(value).name.clone().map(|name| format!("{name}.lcssa"));
                 let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
                 let first =
-                    function.block(exit).instructions().first().copied().map_or(Position::End(exit), Position::Before);
+                    function.block(exit).first().map_or(Position::End(exit), Position::Before);
                 function.insert(phi, first)?;
                 lcssa.insert(value, phi);
                 phi
@@ -288,7 +286,7 @@ fn maybe_insert_lcssa_phi(
     let ty = function.value(source).ty;
     let name = function.value(source).name.clone().map(|name| format!("{name}.lcssa"));
     let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());
-    let first = function.block(block).instructions().first().copied().map_or(Position::End(block), Position::Before);
+    let first = function.block(block).first().map_or(Position::End(block), Position::Before);
     function.insert(phi, first)?;
     Ok(Operand::Value(function.instruction(phi).result.expect("a phi's result")))
 }
@@ -374,7 +372,7 @@ pub fn promote(
         // Mixed: a scan of the block tells the order. A load after a store
         // reads the stored value; the last store defines the value at the end.
         let mut stored: Option<Operand> = None;
-        for inst in function.block(block).instructions().to_vec() {
+        for inst in function.block(block).iter().collect::<Vec<_>>() {
             if !uses.contains(&inst) {
                 continue;
             }

@@ -249,7 +249,7 @@ impl SsaUpdater {
 
     fn poison(
         &self,
-        context: &mut Context,
+        context: &Context,
     ) -> Operand {
         Operand::Constant(context.constant(Constant { ty: self.proto_type, kind: ConstantKind::Poison }))
     }
@@ -260,13 +260,7 @@ fn phis_of(
     function: &Function,
     block: BlockId,
 ) -> Vec<InstId> {
-    function
-        .block(block)
-        .instructions()
-        .iter()
-        .copied()
-        .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
-        .collect()
+    function.block(block).iter().take_while(|&one| function.instruction(one).opcode == Opcode::Phi).collect()
 }
 
 /// `IsEquivalentPHI`.
