@@ -39,8 +39,6 @@
 //!    `fcmp`, FP intrinsics and libcalls (#2246); an `x86_fp80` load, held as a
 //!    double (#2251).
 //!
-//! Gap of [`constfold`](crate::constfold) the oracle shows: a pointer compare
-//! of globals or `null` (#2247).
 //! `tools/llvmport/cfcompare.py` lists them against LLVM's answers.
 //!
 //! # Example
@@ -1556,7 +1554,9 @@ fn constant_fold_inst_operands_impl(
             }
             constant_expr_get_gep_with_layout(context, env.layout, *source, ops[0], &ops[1..], nw)
         }
-        Opcode::ICmp(predicate) => constant_fold_compare_inst_operands(context, env.layout, *predicate, ops[0], ops[1]),
+        Opcode::ICmp(predicate) => {
+            constant_fold_compare_inst_operands(context, env.globals, env.layout, *predicate, ops[0], ops[1])
+        }
         Opcode::Freeze => {
             let guaranteed = with_query(context, env, |q| {
                 crate::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(
@@ -1748,6 +1748,7 @@ pub fn constant_fold_inst_operands_at(
 /// ([L1332](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L1332)).
 pub fn constant_fold_compare_inst_operands(
     context: &mut Context,
+    globals: &[GlobalValue],
     layout: &DataLayout,
     predicate: IntPredicate,
     ops0: ConstantId,
@@ -1761,7 +1762,7 @@ pub fn constant_fold_compare_inst_operands(
                     let int_ptr = context.types.int(pointer_bits(layout, space));
                     if let Some(c) = constant_fold_integer_cast(context, layout, value, int_ptr, false) {
                         let null = null_value(context, ty_of(context, c));
-                        return constant_fold_compare_inst_operands(context, layout, predicate, c, null);
+                        return constant_fold_compare_inst_operands(context, globals, layout, predicate, c, null);
                     }
                 }
                 ConstantExpr::Cast { op: CastOp::PtrToInt, value } => {
@@ -1769,7 +1770,7 @@ pub fn constant_fold_compare_inst_operands(
                     let addr = context.types.int(index_bits(layout, space));
                     if ty_of(context, ops0) == addr {
                         let null = null_value(context, ty_of(context, value));
-                        return constant_fold_compare_inst_operands(context, layout, predicate, value, null);
+                        return constant_fold_compare_inst_operands(context, globals, layout, predicate, value, null);
                     }
                 }
                 _ => {}
@@ -1786,7 +1787,7 @@ pub fn constant_fold_compare_inst_operands(
                     let c0 = constant_fold_integer_cast(context, layout, *v0, int_ptr, false);
                     let c1 = constant_fold_integer_cast(context, layout, *v1, int_ptr, false);
                     if let (Some(c0), Some(c1)) = (c0, c1) {
-                        return constant_fold_compare_inst_operands(context, layout, predicate, c0, c1);
+                        return constant_fold_compare_inst_operands(context, globals, layout, predicate, c0, c1);
                     }
                 }
                 (
@@ -1796,7 +1797,7 @@ pub fn constant_fold_compare_inst_operands(
                     let space = pointer_space(context, ty_of(context, *v0))?;
                     let addr = context.types.int(index_bits(layout, space));
                     if ty_of(context, ops0) == addr && ty_of(context, *v0) == ty_of(context, *v1) {
-                        return constant_fold_compare_inst_operands(context, layout, predicate, *v0, *v1);
+                        return constant_fold_compare_inst_operands(context, globals, layout, predicate, *v0, *v1);
                     }
                 }
                 _ => {}
@@ -1830,9 +1831,9 @@ pub fn constant_fold_compare_inst_operands(
             }
         }
     } else if expr(context, ops1).is_some() {
-        return constant_fold_compare_inst_operands(context, layout, predicate.swapped(), ops1, ops0);
+        return constant_fold_compare_inst_operands(context, globals, layout, predicate.swapped(), ops1, ops0);
     }
-    constfold::compare(context, predicate, ops0, ops1)
+    constfold::compare_in(context, globals, predicate, ops0, ops1)
 }
 
 /// `ConstantFoldUnaryOpOperand`

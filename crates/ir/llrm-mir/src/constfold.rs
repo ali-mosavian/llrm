@@ -631,7 +631,13 @@ mod relation_tests {
             linkage,
             unnamed_addr: UnnamedAddr::None,
             address_space: 0,
-            kind: GlobalKind::Variable(GlobalVariable { ty, constant: false, initializer: None, align: None }),
+            kind: GlobalKind::Variable(GlobalVariable {
+                externally_initialized: false,
+                ty,
+                constant: false,
+                initializer: None,
+                align: None,
+            }),
         }
     }
 
