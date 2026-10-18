@@ -237,6 +237,45 @@ pub const ANALYSES: &[AnalysisEntry] = &[
 pub const TODO: &[&str] =
     &["preserved, kept updated by the pass (MemorySSAUpdater): not a PreservedAnalyses variant yet"];
 
+/// How many times LLVM runs a slot's pass over one body in one visit of the
+/// function (`PassBuilderPipelines.cpp`: the function simplification pipeline
+/// runs once per function, so `gvn` once; llvm-difftest counted 11 on d_faces
+/// -O2 for its 11 functions). The slot name is as in `llvm_order`.
+pub const RUNS_PER_BODY: &[(&str, usize)] = &[("gvn@787", 1)];
+
+/// Run counts LLVM does not match yet, stated and not checked:
+/// `loopsimplify`/`lcssa` run at three unconditional slots per body at every
+/// level (x_hanoi2: ours 9/9/15/9 at -O1/-O2/-O3/-Os against LLVM's
+/// 4/10/10/10).
+pub const RUN_COUNTS_OPEN: &[&str] = &["loopsimplify@764,772,823 and lcssa: one pair per loop-pass adaptor"];
+
+/// `name` without the slot it stands in (`gvn@787` is `gvn`); the rounds name
+/// their passes without a slot.
+fn base_of(name: &str) -> &str {
+    name.split_once('@').map_or(name, |split| split.0)
+}
+
+/// `lines`, the `LLRM_DEBUG=runs` lines of a compile of `bodies` functions,
+/// against [`RUNS_PER_BODY`]: a slot that ran over more bodies' worth of
+/// steps than its allowance is the error. Linear in the lines.
+pub fn check_run_counts(
+    lines: &[String],
+    bodies: usize,
+) -> Result<(), String> {
+    for (slot, per_body) in RUNS_PER_BODY {
+        let ran = lines
+            .iter()
+            .filter(|line| line.starts_with("step "))
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .filter(|name| base_of(name.split_once('-').map_or(*name, |split| split.1)) == base_of(slot))
+            .count();
+        if ran > per_body * bodies {
+            return Err(format!("{slot} ran {ran} times over {bodies} bodies, LLVM runs it {per_body} per body"));
+        }
+    }
+    Ok(())
+}
+
 /// `built`, the slot names a list of `phase` runs, against the registry: the
 /// first Translated slot of the phase that it lacks, or slot it has that the
 /// registry does not know, is the error.

@@ -212,7 +212,7 @@ mod tests {
     /// documentation); a new one fails here until it is, and is listed.
     #[test]
     fn only_audited_readers_take_a_promise_off_an_instruction() {
-        const CHECKED: [&str; 26] = [
+        const CHECKED: [&str; 27] = [
             "algebraic.rs",
             "simplify.rs",
             "induction.rs",
@@ -259,6 +259,10 @@ mod tests {
             // ConstraintElimination.cpp reads nuw/inbounds/nsw where LLVM
             // does (`decompose`, `getFlagsFor...`).
             "constraintelim.rs",
+            // BasicAliasAnalysis.cpp's `DecomposeGEPExpression` reads a GEP's
+            // `inbounds` and `nuw` where LLVM does; `aliasGEP` takes NoAlias
+            // from them only as LLVM's rules do.
+            "basicaa.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =
