@@ -137,6 +137,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loopidiom@737", Simplify, "loop-idiom", Translated, ""),
     entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port (the pricing, noncountable half)"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
+    entry("loopdeletion@749", Simplify, "loop-deletion", Translated, ""),
     entry("unroll@753", Simplify, "loop-unroll-full", Translated, ""),
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
