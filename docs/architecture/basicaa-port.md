@@ -36,7 +36,21 @@
 | MayAlias | MustAlias | 41,105 | MayAlias | MustAlias | 41,105 |
 | NoAlias | MayAlias | 7,119 | NoAlias | MayAlias | 17,397 |
 
-All 7,119 and all 17,397 `NoAlias`-against-`MayAlias` pairs are accesses through pointers loaded from one slot (the class of the first table; the slots are stored once and used by nothing else), so they are not a miscompile column. The 41,105 are equal addresses that the harness prints as MayAlias. The type tags move LLVM from 3.51 M to 3.77 M NoAlias pairs and ours from 3.51 M to 3.77 M: the tags agree. Call-vs-pointer mod/ref pairs are not yet compared.
+All 7,119 and all 17,397 `NoAlias`-against-`MayAlias` pairs are accesses through pointers loaded from one slot (the class of the first table; the slots are stored once and used by nothing else), so they are not a miscompile column. The 41,105 are equal addresses that the harness prints as MayAlias. The type tags move LLVM from 3.51 M to 3.77 M NoAlias pairs and ours from 3.51 M to 3.77 M: the tags agree. The other direction (ours MayAlias, LLVM NoAlias: 4,472 with tags, 20,106 without) is ONE class: every pair has a global variable on one side and a parameter pointer (2,891 with tags, 11,187 without), a pointer loaded from memory (1,581; 8,558), a phi (304, without tags) or an inttoptr (57, without tags) on the other. LLVM's BasicAA says NoAlias because the global is private and its address is never captured before the access (`isNotCapturedBefore`); llrm marks every global object captured and addressed, and the harness's standalone unit has no GlobalsAA (the real pipeline's `globals_aa.tracked` is the same idea, whole-program). The general fix is capture tracking on a global's uses (stage S1/S4), not a per-pair rule; the same gap is the 19 `d_faces` hoists of S4.
+
+### Third table: call mod/ref pairs (`--calls`)
+
+Each call against each load/store pointer (one entry per pointer and size), then each call against every other call, matched by position; ours = what `CallEffects` says (Mod if its stores or fills overlap the access, Ref if its loads do). All 428 replay dumps (d_faces -O1/-O2/-Os and the other programs). Failed rows 0; functions whose counts differ: 0.
+
+| ours | LLVM (default pipeline, and BasicAA alone: identical) | pairs |
+|---|---|---|
+| ModRef | ModRef | 213,832 |
+| NoModRef | NoModRef | 121,566 |
+| Ref | Ref | 7,635 |
+| Mod | Mod | 1,445 |
+| NoModRef | ModRef | 18 |
+
+The 18 are call-against-call pairs in `floats-O2`: `bench_floats_` (declared `memory(inaccessiblemem: readwrite)`) against `report_` (no attributes). LLVM says ModRef: an unknown callee may touch inaccessible memory; llrm's `CallEffects` for an unknown callee lists the escaped objects and the tracked globals only, and says nothing of inaccessible memory, so the pair is NoModRef. Reachable on main today? Nothing asks a call about a call (GVN numbers only `memory(none)` calls, and a `TIMER` call stays in its loop beside a `PRINT`), so no; it is a hazard for any client that asks (EarlyCSE's read-only call CSE on MemorySSA, call-use clobbers). The fix is a token for inaccessible memory in the footprint of an unknown call, at S3.
 
 ### First table (oracle 2, `tools/aliascompare.py --basic` of #2176)
 
