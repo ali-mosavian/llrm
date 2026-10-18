@@ -587,6 +587,22 @@ fn a_block_is_placed_from_its_insertion_to_its_erasure() {
     assert!(!f.is_placed(made) && !f.is_placed(entry) && agrees(f), "a deleted body has none");
 }
 
+/// Erasing several empty blocks at once leaves the others in order, and a
+/// block that still holds an instruction refuses the whole call.
+#[test]
+fn erase_blocks_removes_each_empty_block_in_one_pass() {
+    let mut module = module("define void @f() {\nentry:\n  br label %c\n\nc:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let (a, b) = (f.create_block(Some("a")), f.create_block(Some("b")));
+    f.insert_block(a, None).expect("placed");
+    f.insert_block(b, None).expect("placed");
+    let entry = f.entry().unwrap();
+    assert!(f.erase_blocks(&[a, entry]).is_err());
+    assert!(f.is_placed(a));
+    f.erase_blocks(&[a, b]).expect("empty and unnamed");
+    assert_eq!(f.layout().len(), 2);
+    assert!(!f.is_placed(a) && !f.is_placed(b));
+}
 /// `set_icmp_predicate` is `CmpInst::setPredicate`: the compare reads the same
 /// operands under another predicate, and the log tells of the rewrite.
 #[test]

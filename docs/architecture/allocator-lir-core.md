@@ -204,3 +204,30 @@ The experiment the review proposed (the same function at 1x, 2x and 4x and beyon
 [#1958]: https://github.com/ali-mosavian/llrm/pull/1958
 [#1954]: https://github.com/ali-mosavian/llrm/pull/1954
 [spec 8]: compile-time-spec.md
+
+## 7. The greedy port (current)
+
+The design above is superseded: the allocator is now the translation of LLVM's greedy at `d1106deb71cc`, behind `LLRM_GREEDY` on `alim/poc/liveness-types`, and becomes the default only when rows hold at m16 and m32.
+
+Acceptance item from [#2260]: the `lir loopslots` row (x5.82 per doubling) is replaced by this port, with SplitKit's region splitting as its counterpart. With greedy the default, the loopslots step is gone and no step on the cases or nest axes exceeds its limit at 2N (`tools/test_budgets.py`).
+
+Acceptance at 4N ([#2265], debts in [#2260]): each step within its limit under greedy, own Minstr 2N to 4N, `LLRM_GREEDY=1` (e1db028db).
+
+| axis | step | old | greedy | counterpart |
+|---|---|--:|--:|---|
+| nest | intervals walk | x1.73 | x3.16 | not only allocator: coalesce and twoaddr (lir-cleanup-poc), `Facts::of` and `slots_colored` (greedy: LiveIntervals, LiveStacks) |
+| nest | intervals liveness | x3.31 | x4.43 | as above |
+| nest | spill cleanup | x2.03 | x2.90 | InlineSpiller without `spiller.rs` (step 2) |
+| nest | spill rewrite | x1.74 | x1.55 | within |
+| joins | spill slots shared | x2.36 | x2.22 | within; StackSlotColoring/LiveStacks |
+| unrolled | regalloc frequency | x2.11 | gone | MBFI |
+| unrolled | siblings depths | x2.59 | gone | none needed |
+| unrolled | facts masks | x1.81 | x2.00 | within; regmask slots |
+
+Owners of the callers of `intervals walk` and `intervals liveness` under greedy at 4N: `coalesce::joined` and `twoaddr` (lir-cleanup-poc: RegisterCoalescer, TwoAddressInstructionPass); `Facts::of` in the greedy driver and `slots_colored` (regalloc-core-poc: LiveIntervals, LiveStacks); spiller short updates (regalloc-core-poc: InlineSpiller without `spiller.rs`).
+
+x87 ([#2304], slot 60 split): `floatassign` and `float-facts` are replaced by greedy allocating x87 values as RFP32/RFP64/RFP80 virtual registers onto FP0-FP6, as LLVM does before `X86FloatingPoint`; acceptance: under greedy those steps are gone and the float rows hold. The stackifier is slot 60's (backend-slopes); greedy keeps its contract: calls end with the x87 stack empty (results as unnamed FloatLoad, returns as unnamed FloatStore), and no x87 value is live across a call (every FP register in the call's regmask).
+
+[#2260]: https://github.com/ali-mosavian/llrm/issues/2260
+[#2304]: https://github.com/ali-mosavian/llrm/pull/2304
+[#2265]: https://github.com/ali-mosavian/llrm/issues/2265

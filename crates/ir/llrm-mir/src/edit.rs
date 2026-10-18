@@ -3,6 +3,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::context::{Constant, ConstantKind, Context};
 use crate::module::{
     Block, BlockId, Change, DebugRecord, DebugWhat, Function, InstId, Instruction, MetadataId, NameIndex, Names,
     Operand, Use, ValueData, ValueDef, ValueId,
@@ -1017,24 +1018,119 @@ impl Function {
         self.block_uses.iter_mut().for_each(Vec::clear);
     }
 
+    /// One edge from `predecessor` into `block` gone: its phis lose one input
+    /// from it. Unless `keep_one_input_phis`, a phi left with one value (or
+    /// none) is replaced by it (or by poison). LLVM's
+    /// [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446),
+    /// with `PHINode::hasConstantValue` (L468). MIRROR, except a phi has one
+    /// input per edge, so one call drops one input.
+    pub fn predecessor_removed(
+        &mut self,
+        context: &mut Context,
+        block: BlockId,
+        predecessor: BlockId,
+        keep_one_input_phis: bool,
+    ) {
+        let phis: Vec<InstId> = self
+            .block(block)
+            .instructions()
+            .iter()
+            .copied()
+            .take_while(|&one| self.instruction(one).opcode == Opcode::Phi)
+            .collect();
+        for phi in phis {
+            let mut operands = self.instruction(phi).operands.clone();
+            let Some(at) = operands.chunks(2).position(|pair| pair[1] == Operand::Block(predecessor)) else {
+                continue;
+            };
+            operands.drain(2 * at..2 * at + 2);
+            let result = self.instruction(phi).result.expect("a phi's value");
+            let emptied = operands.is_empty();
+            self.set_operands(phi, operands);
+            if keep_one_input_phis {
+                continue;
+            }
+            let only = if emptied {
+                let poison = context.constant(Constant { ty: self.value(result).ty, kind: ConstantKind::Poison });
+                Some(Operand::Constant(poison))
+            } else {
+                self.phi_constant_value(phi)
+            };
+            if let Some(only) = only {
+                self.replace_value(result, only);
+                self.set_operands(phi, Vec::new());
+                self.erase(phi).expect("a phi nothing reads");
+            }
+        }
+    }
+
+    /// The one value all of `phi`'s inputs are, itself not counted: LLVM's
+    /// `PHINode::hasConstantValue`.
+    fn phi_constant_value(
+        &self,
+        phi: InstId,
+    ) -> Option<Operand> {
+        let result = Operand::Value(self.instruction(phi).result.expect("a phi's value"));
+        let mut only = None;
+        for pair in self.instruction(phi).operands.chunks(2) {
+            if pair[0] == result {
+                continue;
+            }
+            if only.is_some_and(|one| one != pair[0]) {
+                return None;
+            }
+            only = Some(pair[0]);
+        }
+        only
+    }
+
     /// Removes an empty block nothing names.
     pub fn erase_block(
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
-            return Err(format!("block {} still holds instructions", block.0));
+        self.erase_blocks(&[block])
+    }
+
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
+    pub fn erase_blocks(
+        &mut self,
+        blocks: &[BlockId],
+    ) -> Result<(), String> {
+        for &block in blocks {
+            if !self.block(block).instructions.is_empty() {
+                return Err(format!("block {} still holds instructions", block.0));
+            }
+            if !self.block_users(block).is_empty() {
+                return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+            }
         }
-        if !self.block_users(block).is_empty() {
-            return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
         }
-        self.layout.retain(|one| *one != block);
-        self.release_name(block);
-        self.blocks[block.0 as usize].erased = true;
-        self.blocks[block.0 as usize].placed = false;
-        self.log(Change::BlockErased(block));
+        LAYOUT_SCANNED.with(|scanned| scanned.set(scanned.get() + self.layout.len()));
+        self.layout.retain(|one| !gone.contains(one));
+        for &block in blocks {
+            self.release_name(block);
+            self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
+            self.log(Change::BlockErased(block));
+        }
         Ok(())
     }
+}
+
+thread_local! {
+    /// Layout entries looked over to take blocks out of it.
+    static LAYOUT_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many layout entries this thread has looked over to erase blocks, for a
+/// test that erasing k of n blocks does not scan k times n.
+pub fn layout_scanned() -> usize {
+    LAYOUT_SCANNED.with(std::cell::Cell::get)
 }
 
 thread_local! {

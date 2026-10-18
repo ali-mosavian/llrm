@@ -89,6 +89,7 @@
 //! The manager contract is `crates/ir/llrm-mir/src/passes.rs`. LLVM's
 //! `AnalysisManager` and `PreservedAnalyses` are its counterpart.
 
+pub mod aa;
 pub mod access;
 pub mod alias;
 pub mod assumptions;
@@ -107,6 +108,7 @@ pub mod effects;
 pub mod floatbounds;
 pub mod floatfacts;
 pub mod frameescape;
+pub mod functionattrs;
 #[cfg(any(test, feature = "testing"))]
 pub mod generated;
 pub mod globalsaa;
@@ -115,10 +117,12 @@ pub mod guards;
 pub mod induction;
 pub mod interprocedural;
 pub mod liveness;
+pub mod loopaccess;
 pub mod manager;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;
+pub mod mustexecute;
 pub mod nearest;
 pub mod noreturn;
 pub mod num;
@@ -131,6 +135,7 @@ pub mod ranger;
 pub mod ranges;
 pub mod references;
 pub mod regions;
+pub mod scev;
 pub mod sliceset;
 pub mod slotstores;
 pub mod ssa;

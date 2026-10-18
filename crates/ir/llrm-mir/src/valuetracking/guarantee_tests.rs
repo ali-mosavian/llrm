@@ -2,7 +2,7 @@
 //! `isGuaranteedNotToBeUndef` on `tests/vt/guarantee/guarantee.ll`.
 
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::module::{GlobalKind, Operand};
 use crate::parse;
 use crate::valuetracking::{AssumptionCache, Query, column};
@@ -18,7 +18,7 @@ fn dump(text: &str) -> String {
             continue;
         }
         let name = global.name.clone().unwrap_or_default();
-        let dt = DominatorTree::new(function);
+        let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
         let entry_first = function.block(function.entry().expect("an entry")).instructions().first().copied();
         let mut values: Vec<(Operand, _)> =
@@ -136,7 +136,7 @@ exit:
     else {
         panic!("a function");
     };
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let one = info.top_level_loops().next().expect("a loop");
     let query = Query::new(&module, function, &layout);
     let adds: Vec<_> = function
