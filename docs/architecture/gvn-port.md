@@ -87,7 +87,7 @@ Stages 1 and 3 can land before the two upstream dependencies.
 
 | LLVM | Rust | llrm today | DEVIATE |
 |---|---|---|---|
-| [`canCoerceMustAliasedValueToLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L17), [`coerceAvailableValueToLoadType`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L90) | `vncoercion::can_coerce_must_aliased_value_to_load`, `coerce_available_value_to_load_type` | forward only same type and bytes | arms for casts or types MIR lacks are numbered DEVIATEs written in stage 3 after reading `llrm-mir` types, each with an assert |
+| [`canCoerceMustAliasedValueToLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L17), [`coerceAvailableValueToLoadType`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L90) | `vncoercion::can_coerce_must_aliased_value_to_load`, `coerce_available_value_to_load_type` | forward only same type and bytes | D6 (types MIR lacks) and D9 (no constant load folder) |
 | [`analyzeLoadFromClobberingWrite`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L198), [`analyzeLoadFromClobberingStore`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L236), [`analyzeLoadFromClobberingLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L258), [`analyzeLoadFromClobberingMemInst`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L273) | `analyze_load_from_clobbering_*` | none | none |
 | [`getValueForLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L380), [`getConstantValueForLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L401), [`getMemInstValueForLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L414), [`getConstantMemInstValueForLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L463) | `get_value_for_load`, `get_constant_value_for_load`, `get_mem_inst_value_for_load`, `get_constant_mem_inst_value_for_load` | none | constant folds through fold-poc, not a private folder |
 
@@ -119,10 +119,12 @@ Stages 1 and 3 can land before the two upstream dependencies.
 | D1 | the `Function`/`FunctionAnalysisManager` plumbing (`run`, legacy pass) | llrm passes take a `Unit` and the `Analyses` | `FunctionPass::run` only |
 | D3 | no debug-value salvage | MIR has no debug-value use lists | test with debug info |
 | D5 | masked loads, `invariant.group` | not in MIR | assert at the front ends |
+| D6 | `VNCoercion` arms for scalable vectors, target-ext types, non-integral pointers | not in `Type` or the datalayout | none reachable |
+| D9 | `ConstantFoldLoadFromConst` | llrm has no folder of a load from a constant; memcpy-from-constant arms are none (owner wanted: fold-poc) | stage 3 test |
 | D7 | optimization remarks | no remark stream | |
 | D8 | llrm's motion pricing | not LLVM; removed unless rows keep it | stage 5 rows |
 
-D2 and D4 are withdrawn (MIR carries the flags; the shared `AssumptionCache` is used). D6 is reserved for the cast arms of `VNCoercion`, written in stage 3. D1 is the only one that does not need an assert.
+D2 and D4 are withdrawn (MIR carries the flags; the shared `AssumptionCache` is used). D1 is the only one that does not need an assert.
 
 ## 6. Verification
 
