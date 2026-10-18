@@ -1247,9 +1247,9 @@ impl Analysis for CallEffects {
         function: &Function,
     ) -> bool {
         match (old, fresh) {
-            (Ok(old), Ok(fresh)) => {
-                old.iter().all(|(inst, effect)| function.is_erased(*inst) || fresh.get(inst) == Some(effect))
-            }
+            (Ok(old), Ok(fresh)) => old.iter().all(|(inst, effect)| {
+                function.is_erased(*inst) || fresh.get(inst).is_some_and(|found| effect.covers(found))
+            }),
             (old, fresh) => old == fresh,
         }
     }
@@ -2091,6 +2091,24 @@ impl Held {
             counted: alias.then(|| analyses.get::<Counted>(context, layout, function)),
             followers: alias.then(|| analyses.get::<Followers>(context, layout, function)),
             bounded: None,
+        }
+    }
+
+    /// `of` without the memory annotations and points-to (`PointerValues`,
+    /// `Annotated`): the loop facts and what is known without memory, for a
+    /// pass that decides from the values.
+    pub fn of_without_memory(
+        context: &Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> Self {
+        Self {
+            values: None,
+            annotated: None,
+            counted: Some(analyses.get::<Counted>(context, layout, function)),
+            followers: Some(analyses.get::<Followers>(context, layout, function)),
+            ..Self::of(context, layout, function, analyses, false)
         }
     }
 

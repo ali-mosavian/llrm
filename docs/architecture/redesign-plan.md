@@ -8,7 +8,7 @@
 
 ## Status
 
-As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). Unchanged: keep-analyses (facts-per-query) and plan-upkeep-rows.
+As of main `caf406d9b` (states checked with `gh`); `d_faces` -O2 is unchanged at 2,253 M since `5e2e995ef`, as no code landed in between (#2022, #2032, #2021, #2038 and #1958 are inside that baseline). Refreshed once per batch of merges by plan-upkeep-rows (the former llvm-compare). Sessions renamed as of 2026-10-17: the owner names in the tables below are the old ones. pass-list-parity and inline-storage-combine are now fold-poc; attrs-budgets, trace-recorder and sroa-promote-poc are llvm-order-poc (early FPM order and LLVM run counts, one experiment); ssa-spill-m16 and regalloc-quadratics are regalloc-core-poc; hoist-bounded and walker-caps are dse-poc (the MemorySSA and alias layer after); greedy-port, lsr-gvn-split and body-size-table are indvars-decide-poc; edit-rollback and edit-contract-replay are lir-cleanup-poc; objectref-identity and identity-s0-done are now cgscc-poc (the CGSCC inliner translation: bottom-up walk with simplify-before-inline, then `InlineCost.cpp`); the simplifycfg-poc name is retired, and SimplifyCFG keeps an owner (indvars-decide-poc, for the known-condition part) and a slot (LLVM runs it about 8 times). dse-poc is now memoryssa-port (`MemorySSA.cpp` and `MemorySSAUpdater.cpp` translated, #2108 and #2116; the LICM and DSE translations plug into it). fold-poc owns the single `InstructionSimplify` translation, used by the worklist and by EarlyCSE, and writes the `ValueTracking` API stub first. align-pad is now valuetracking-port (the translation of `ValueTracking.cpp`, `KnownBits` and `ConstantRange` at `d1106deb71cc`). llvm-order-poc: the EarlyCSE translation is done in shadow (54 of 58 identical to `opt`), `SROA.cpp` and `PromoteMemoryToRegister.cpp` next. gate-dist-build is now llvm-difftest (builds `tools/difftest`, the per-pass differential against LLVM `opt`; llvm-order-poc classifies; the EarlyCSE and GVN tables first). keep-analyses and facts-per-query are now basicaa-port (the translation of `BasicAliasAnalysis`, `CaptureTracking`, `AliasAnalysis` and `MemoryLocation` at `d1106deb71cc` as memoryssa-port's `AliasQuery`; the `Pointers` tower and its join rules are deleted when the clients move; first [#2125] and the main-order soundness search); identical-corpus is now simplifycfg-port (the `SimplifyCFG.cpp` translation, `ConstantFoldTerminator` and the early-FPM options first); scev-port is a track named by the coordinator (its scope and owner line are not yet stated to this page); fill goes to LoopIdiom, owner loopidiom-port (renamed from loadpre-idioms); lcssa and stamp go to llvm-order-poc (stamp: it says what it is for first); emission is unowned and ranked last; the LIR clean-up (266 M gap) is lir-cleanup-poc, who writes a translation map. Unchanged: plan-upkeep-rows.
 
 Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when the queue is quiet). The rows at that SHA are the "never worse" baseline for every redesign PR: a per-row regression check, the worst row beside the geomean.
 
@@ -26,11 +26,12 @@ Known gaps: the m16 rows were not re-run at `5e2e995ef` (run them off-peak when 
 | lsr probe | indvars-decide-poc | KILLED | forecast kept; DEVIATE, 425 objects differ |
 | mover-discount delete | regalloc-core-poc | queued, gated on rows | `unmeasured` |
 | valuetracking-port | valuetracking-port | starting; fold-poc writes the API stub first | translation of `ValueTracking.cpp`, `KnownBits`, `ConstantRange`; consumers: InstSimplify gaps, EarlyCSE, InstCombine, SCCP, LVI, CVP, SCEV |
-| oracle triage | facts-per-query | running | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); [#2110] is held by the user (no row trade) |
+| basicaa-port | basicaa-port | starting | about 4,100 C++ lines at the core, about 6,400 llrm lines to delete when the clients have moved |
+| oracle triage | basicaa-port | COLORS 634 of 1,323 ([#2111]), FRAME 21 ([#2112]), SCOPES 102 ([#2113]), STALE ([#2094]); soundness finds: DSE dropped a store through a phi with an unknown arm (cgscc-poc, fix PR coming), a join with an unfollowed arm published only the other arms' objects ([#2132], merged), kept points-to facts were not re-derived after in-place retargets ([#2125], merged), a body kept its memory-SSA structure after an edit changed it ([#2151], open), a volatile load is a Use in main's graph (issue #2129, no miscompile); [#2110] is held by the user (no row trade; decision A: re-measure stacked on regalloc S1/S2 in shadow, the per-row table is part of S1's checkpoint) |
 | 0.1 one baseline | llvm-compare | done at `5e2e995ef` except rows | `d_faces` -O2 2,253 M (5.5x clang 24), -O1 1,789, -O3 2,497, -Os 2,322; 2.98 M allocations, 601.7 MB |
 | 0.2 counters as tests | attrs-budgets | draft [#1948] | counter cost 0.03% by callgrind own-function sum (bar 0.1% met by that number, not by perf stat, whose +0.13% total is inside the noise floor) |
 | 0.3 `ObjectRef` identity (spike S0) | objectref-identity | answered: not a cause on main | `LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ; the 131 came from a loose share key; the context-free ordering cost +0.7% and was reverted |
-| 1.0 inline storage | pass-list-parity | to do | [#1956]: 259 K allocations |
+| 1.0 inline storage | fold-poc | [#2051] (InlineVec) merged: instructions only (-0.55%), cycles not claimed (taken at load about 90); [#2069] and [#2077] wait for a quiet-host cycles run | [#1956]: 259 K allocations |
 | 1.1 slab | pass-list-parity | [#2022] merged | -4.2% instructions, -2.9% cycles (in the 5e2e995ef baseline) |
 | 1.2 dense ids | attrs-budgets, ssa-spill-m16 | [#1971], [#2032] merged | -1.17%; -0.38% |
 | 1.3 escape phase | keep-analyses | [#2035] open, [#2037] draft | -0.29%, -0.64% |
@@ -82,7 +83,7 @@ The pools overlap, so each product overstates what the steps save together. The 
 0. Answered (spike S0): `ObjectRef` interning order is not a cause on main (`LLRM_CHECK_INTERN` scrambled ids: 0 of 1,583 differ); the 131 differing objects of the `point_values` share prototype came from a loose share key (the fingerprint equated bodies whose constants name different globals; `LLRM_CHECK_PVSHARED` fails on cached `Global(1)` against fresh `Global(0)`), which keep-analyses fixes in 2.1b.
 1. Facts updated from the change log, taking analysis computations per pass run from 2.8 toward 0.5 for edit-rollback's family (step 3.1; edit-rollback with keep-analyses). The pointer families are small after the escape PRs; the family that carries the saving is edit-rollback's `Held`, `ThroughMemory` and decide facts (403 M own, 12.8%).
 2. One pipeline pass with a combine worklist instead of rounds (step 3.2; pass-list-parity with hoist-bounded).
-3. The allocator on the LIR core, 444 M against greedy's 39.5 M (step 3.3; greedy-port with ssa-spill-m16).
+3. The allocator on the LIR core, 444 M against greedy's 39.5 M (distro-llc figure, not reproduced and being re-taken by regalloc-core-poc: do not quote; step 3.3; greedy-port with ssa-spill-m16).
 4. Each pass held to a counted per-run budget (phase 4; each pass's owner).
 
 ## 2. Baseline snapshot
@@ -90,6 +91,55 @@ The pools overlap, so each product overstates what the steps save together. The 
 Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR states below were checked with `gh` on that day. `d_faces` flags are `-m32 -march=i486 -fno-inline-functions`, as in [synthesis]. Percentages are of `d_faces` -O2 instructions, measured on the PR's own parent unless stated.
 
 ### 2.0 Scoreboard re-taken (clean dist build)
+
+**Phase table** (llvm-difftest; llrm dist at `cb2a78038`, `-m32 -mabi=sysv -march=i486 -O2 -fno-inline-functions`, `LLRM_DEBUG=counts,time` own work; clang is the pinned `clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)`, `-cc1` of the same flags under callgrind, inclusive M; input `d_faces.c` of the tree with hash `53880fe70961` (`d_faces.c` `1ab72e38cab4`); 11 functions each side, final machine instructions 1,816 (llrm) against 2,132 (clang): 1,195 against 195 instructions per final machine instruction). Whole: llrm 2,170.1 M, clang 415.5 M, 5.2x.
+
+| phase | llrm M | clang M | ratio | clang counterpart | proposed owner |
+|---|--:|--:|--:|---|---|
+| front end (translate, hir to mir, data layout) | 49.4 | 44.8 | 1.1x | lex, parse, sema, IRGen | none (at parity) |
+| optimizer: ten passes (gvn, fold, algebraic, sroa, promote, hoist, loopmotion, jumpthread, dse, indvars, unroll, rotate) | 498.7 | 116.6, with the analyses they use | | InstCombine, GVN, SROA, LICM, JumpThreading, DSE, IndVars, LoopUnroll, LoopRotate | the translation tracks of the per-pass table |
+| optimizer: analyses | 535.5 | inside clang's pass rows | | nearest: through-memory ~ MemoryDependence 23.5 and MemorySSA ~6; pointer-values, points-to, globals-aa ~ BasicAA 19.5 and GlobalsAA 1.1; bounded, counted, demanded, float-facts ~ ValueTracking 12.5, LazyValueInfo 6.2, SCEV 5.6; call-effects ~ GlobalsModRef and FunctionAttrs (not separable); registers, pressure, exposed-frames, annotated, published, shape: none | memoryssa-port, basicaa-port, valuetracking-port; the "none" analyses below |
+| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | indvars-decide-poc |
+| optimizer: all other mir passes (interprocedural 62.7, decide 62.0, stamp 39.6, lcssa 21.1, fill 17.1) | 254.7 | 50.9 | 5.0x | SimplifyCFG 8.4, CVP 6.7, EarlyCSE 5.7, IPSCCP 4.1; stamp and fill: none | decide: simplifycfg-port; stamp: llvm-order-poc says what it is for first; fill: loopidiom-port; lcssa: llvm-order-poc |
+| optimizer total | 1,378.4 | 177.5 | 7.8x | | |
+| isel | 49.5 | 54.2 | 0.9x | SelectionDAGISel 51.3, CodeGenPrepare 2.9 | none (at parity) |
+| LIR clean-up (peephole 82.2, jumps 56.6, coalesce 42.8, floatassign 38.8, floatalloc 20.5, shrink-wrap 11.2) | 315.5 | 49.6 | 6.4x | MachineCSE 2.7, Sink 3.8, CopyProp 3.2, PeepholeOpt 1.0, FPStackifier 1.4, BranchFolder 2.2, BlockPlacement 3.2, MachineLICM 8.6, DeadMI 1.5, MachineScheduler 9.6, TwoAddr 1.1, PHIElim 1.9, FixupBW 1.1, LateCleanup 1.1, LiveRangeShrink 1.0, PEI 1.1, ExecDomain 0.7, ReachingDef 3.1, MBFI 1.3 | lir-cleanup-poc (writes a translation map) |
+| regalloc, split, spill, intervals, facts, classes, siblings | 354.3 | 58.9 | 6.0x | RAGreedy 39.5 (SplitKit inside; the distro-llc figure, being re-taken), RegisterCoalescer 6.5, LiveIntervals 6.6, LiveVariables 4.0, VirtRegRewriter 1.4, StackSlotColoring 0.9; facts, classes, siblings: none | regalloc-core-poc |
+| emission (assemble, object write, omf) | 23.0 | 4.9 | 4.7x | AsmPrinter and MCObjectStreamer | unowned, ranked last |
+| codegen pass manager and other, unattributed | 0.0 | 25.5 | | | |
+
+Sum check: llrm 2,170.0 grouped plus 0.1 ungrouped is 2,170.1 whole; clang 44.8 + 177.5 + 54.2 + 49.6 + 58.9 + 4.9 + 25.5 is 415.4 (whole 415.5: front end 44.8, optimizer 177.5, codegen 193.2). Caveats: clang inclusive costs overlap (analyses sit inside the pass rows, while llrm's analyses are a separate row); the counterpart names for llrm's analyses are the nearest, not verified row by row; LSR is not in clang's pass table (a loop pass) and its 10.0 lies inside the 177.5; one run per column, with deterministic counts; the unit of the per-instruction figures is a final machine instruction. The LIR clean-up phases were re-taken on one instrument at main `703d070b7` ([#2134], lir-cleanup-poc: dist, `CARGO_INCREMENTAL=0`, callgrind inclusive of each phase's `transform_raising`, `d_faces` -O2, total 2,178.9 M): peephole 86.9, jumps 51.6, coalesce 54.5, floatassign 39.6 and floatalloc 21.0, phielim 9.9, parcopy 8.7, pressuresink 7.9, twoaddr 7.3, loopslots 6.1, `RegAlloc` 296.3 separate; shrink-wrap 11.2 was not re-taken. The two tables are at different commits (`cb2a78038` and `703d070b7`) and are not one table. Scripts and raw outputs: llvm-difftest's phase-table tools (no PR yet).
+
+**Per-pass table** (the same run; llrm `tools/pass_budgets.py`, clang `tools/clang_pass_budgets.py` with the pinned `--clang`; cost per IR instruction per run, inclusive; the earlier table whose clang column was the distro clang 20.1.8 is void):
+
+| llrm pass | clang pass | runs | IR instructions | llrm per unit | clang per unit | ratio | llrm M | clang M | proposed owner |
+|---|---|---|---|--:|--:|--:|--:|--:|---|
+| gvn | GVN | 35 / 11 | 7,979 / 1,250 | 23,863 | 25,680 | 0.93x | 190.4 | 32.1 | open (GVN.cpp's translation needs an owner other than fold-poc, whose queue is InstSimplify consumers, the worklist and builder folds; the gap is volume, 35 runs against 11, which llvm-order-poc's order reduces; GVN's natural dependency is the MemorySSA walker, on memoryssa-port's client turn-on list: LICM, DSE, GVN) |
+| fold + algebraic | InstCombine | 92 / 88 | 18,212 / 9,719 | 13,612 | 4,064 | 3.35x | 247.9 | 39.5 | fold-poc |
+| sroa + promote | SROA | 47 / 44 | 10,561 / 6,839 | 9,450 | 1,433 | 6.59x | 99.8 | 9.8 | llvm-order-poc |
+| hoist + loopmotion | LICM | 81 / 70 | 18,145 / 9,472 | 8,129 | 771 | 10.55x | 147.5 | 7.3 | memoryssa-port (LICM translation plugs into it) |
+| jumpthread | JumpThreading | 11 / 22 | 1,587 / 2,408 | 49,212 | 1,869 | 26.33x | 78.1 | 4.5 | indvars-decide-poc |
+| dse | DSE | 34 / 11 | 7,120 / 1,181 | 7,008 | 1,948 | 3.60x | 49.9 | 2.3 | memoryssa-port |
+| indvars | IndVarSimplify | 46 / 19 | 8,245 / 2,343 | 4,912 | 4,951 | 0.99x | 40.5 | 11.6 | indvars-decide-poc |
+| unroll | LoopUnroll | 26 / 11 | 6,101 / 1,164 | 2,459 | 3,093 | 0.79x | 15.0 | 3.6 | indvars-decide-poc |
+| rotate | LoopRotate | 22 / 35 | 3,050 / 4,774 | 3,705 | 1,236 | 3.00x | 11.3 | 5.9 | indvars-decide-poc |
+| decide | SimplifyCFG | 35 / 88 | 8,333 / 11,706 | 9,180 | 718 | 12.79x | 76.5 | 8.4 | simplifycfg-port |
+
+Ratios derived by dividing by the pinned 415.5 M (the 5.2x above, and any later quotient) are labelled derived, not measured, unless llrm's numerator was itself re-taken on the pinned build.
+
+**The "none" analyses** (registers, pressure, exposed-frames, annotated, published, shape): under the mirror rule the default verdict is DELETE; keeping one is a DEVIATE with a number. Each goes to the owner of its largest consumer and is deleted in the PR that moves its last consumer. Own cost at `5e2e995ef` (dist, `LLRM_DEBUG=time`, `d_faces` -O2; the split by consumer is `unmeasured`, to come from the `LLRM_TRACE` recorder, [#2076]):
+
+| analysis | runs | own M (total M) | consumers (files that ask) | owner |
+|---|--:|--:|---|---|
+| annotated | 116 | 38.6 (171.6) | `consts`, `fill`, `floatfacts`, `memcpyopt`, `memoryssa`, `decide` | basicaa-port |
+| registers | 202 | 25.4 (46.9) | `alias`, `fill`, `induction`, `indvars`, `loopmotion`, `profit`, `ranges`, `spill`, `window`, `ports` | valuetracking-port |
+| pressure | 17 | 22.2 | `hoist`, `loopmotion`, `lsr` (the spill forecast) | memoryssa-port and indvars-decide-poc (LICM and lsr owners) |
+| exposed-frames | 282 | 20.0 | alias queries | basicaa-port |
+| shape | 160 | 4.2 (19.7) | `alias`, `avail`, `consts`, `exitfold`, `floatfacts`, `floatloop`, `guards`, `induction`, `indvars`, `jumpthread` | by consumer (open) |
+| published | 26 | 4.5 | alias | basicaa-port |
+
+**Rows above min(gcc, clang)** (reference of record `rows/main24d`, llvm-order-poc: clang `24.0.0git` `d1106deb71cc` and gcc 13.4.0, `-fno-builtin-strlen` only, for both, other builtins on, the i386 builtins built from the pinned source; 71 programs, m32; llrm is main). Rows above min per level, clocks / executed instructions / memory operands / code bytes: -O1 30 / 48 / 24 / 24; -O2 32 / 48 / 38 / 29; -O3 28 / 46 / 35 / 39; -Os 39 / 29 / 21 / 20. Geomean of llrm over min, clocks .8979 / .9277 / .9088 / .9250 and code bytes .9522 / 1.0443 / 1.3036 / .9596 at -O1 / -O2 / -O3 / -Os. The same count with the distro clang 20.1.8 (void as a reference): -O1 27 / 45 / 24 / 17; -O2 31 / 48 / 37 / 23; -O3 27 / 47 / 35 / 36; -Os 36 / 27 / 19 / 19. A table with `-fno-builtin` on both references is dropped: it weakens gcc and clang on 12 programs and is never used for a "newly above" statement. Code bytes against min are not a separate track: the translations are expected to close them. Each translation PR reports how many rows move against min, per metric and level. Per-row table: `flips-main-vs-main24d.txt` (llvm-order-poc; not in the repo).
+
 
 `d_faces.c` from the `qbq-llrm` source tree (sha256 over its `.c` and `.h` files `53880fe70961`, `d_faces.c` `1ab72e38cab4`; the same tree for every row), `-m32 -march=i486 -fno-inline-functions`, both compilers; llrm `dist` (fat LTO, one codegen unit) with `CARGO_INCREMENTAL=0`, a fresh target per SHA, one build at a time; `perf stat -e instructions:u,cycles:u`, min of 3, host load about 80 (cycles are soft, instructions are the claim); each run asserts exit 0, an object present and 1 to 3.5 G instructions, because a failed compile is about 8 M. Every row runs with the same environment, `LLRM_EC_COARSE=1` and only the switch under test added. Clang is the pinned build, `clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)` (not the distro clang 20.1.8): 348.0 / 413.4 / 407.0 M instructions (cycles 451.8 / 440.6 / 366.3 M) at -O1 / -O2 / -Os. Earlier figures from `tools/abmeasure.py` for `d_faces` are suspect: its row could compile nothing. Instructions in M, then x clang:
 
@@ -356,7 +406,7 @@ Checklist: the shared list. Its own metric boxes:
 - [x] phase table ([compile-gap-series], `5e2e995ef`)
 - [x] gap table (clang 24 and 20.1.8, four levels)
 - [x] ladder json (`tools/ladder/ladder-5e2e995ef.json`)
-- [x] rows (71 programs, m32, at `5e2e995ef`: clocks geomean 0.8875 / 0.9044 / 0.9021 / 0.9169 at -O1/-O2/-O3/-Os, worst 2.01 to 2.19; [compile-gap-series])
+- [x] rows (71 programs, m32, at `5e2e995ef`, distro clang 20.1.8 as the clang reference, void: superseded by section 2.0's reference of record: clocks geomean 0.8875 / 0.9044 / 0.9021 / 0.9169 at -O1/-O2/-O3/-Os, worst 2.01 to 2.19; [compile-gap-series])
 - [x] computations per run (3.4 at -O2 by the `LLRM_WHY` count)
 - [x] allocations by DHAT and RSS
 
@@ -1127,6 +1177,10 @@ Checklist: the shared list.
 
 The "re-test after 3.1/3.2" rows were measured as pieces inside today's pipeline, which is not LLVM-shaped; their numbers show they do not pay today and are kept, but the rows are open until the pipeline is one pass with lazy facts.
 
+Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide` runs, 3,002 decisions; indvars-decide-poc): a literal `br i1 true/false` 2,298 and a switch on a constant 160 (together 2,458, 82%, which is `ConstantFoldTerminator` in SimplifyCFG), constant only by the optimistic cycles (SCCP) 244, computed-from-registers constant 6, ranges (CVP, LVI) 186, guards (ConstraintElimination) 108. On the LLVM-order branch the same decisions are still made by `decide` (78,962 runs, 3,043 decisions): no earlier pass folds a literal branch there, so the SimplifyCFG slot owns them. `decide`'s 124.7 M on `d_faces` is the sources that decide nothing (facts asked first 72.8, guards 43.3, constants-cycles 16.0, threading 15.7); `br const` folding is not built in `decide` but translated as `ConstantFoldTerminator` at SimplifyCFG's LLVM slots (78 runs on `d_faces`), with CE, CVP and SCCP as their own passes at LLVM's 11, 22 and 11 slots. The order branch's 78,962 `decide` runs against main's 33,932 go away when SimplifyCFG, SCCP and CVP take the decisions at LLVM's slots.
+
+**Quiet-host cycles.** A container or allocation PR needs a quiet-host cycles line before it merges, as the gate line is needed: min of 11, pinned to one core, load under 4, base the parent. [#2051] merged on instructions only (-0.55%); [#2069] and [#2077] wait for that run.
+
 **Bundling.** Constant-factor PRs under 0.5% are bundled per area; slopes, soundness and architecture items are separate PRs.
 
 **Method M (every exit measurement).**
@@ -1136,7 +1190,7 @@ The "re-test after 3.1/3.2" rows were measured as pieces inside today's pipeline
 3. **Cycles.** `perf stat -e cycles:u`, min of 11, alternating base and head, pinned to one core, `uptime` recorded. A cycle figure is claimed only at a load average below 4. Otherwise it reads "not claimed", and the step's cycle box stays open until a quiet run.
 4. **Slopes.** `tools/ladder/ladder.py` and `fit.py` for both binaries, every shape, N=25 to 1600; `scaling_gate.py` 2N/N per axis.
 5. **Output.** Run `tools/identical.py BASE HEAD` with `QCPORT` and `QCPORT_INC` set; the corpus is 1,583 objects with every `LLRM_CHECK_*` on, and a smaller corpus is a failure. For output-changing steps, also run:
-   - `tools/rows/run.sh`, `analyse.py` and `qcport.py`;
+   - `tools/rows/run.sh`, `analyse.py` and `qcport.py`; a rows report leads with the number of rows worse than base for each metric (clocks, executed instructions, memory operands, code bytes) at each level, then the geomean (#2110 was reported "geomean flat or better, worst rows unchanged or better" while 16 clocks, 16 instructions, 22 memory-operand and 26 code-byte rows were worse); a summary refuses a failed or missing row and prints "N rows failed" first ([#2145]);
    - `tools/bench/bench.py --opt O1 O2 O3 Os --no-judge --json` on both sides, then `bench_table.py`.
 6. **Memory.** `/usr/bin/time -v` max RSS on `d_faces` -O2 and `mdl_ai` -O2; DHAT peak where the step claims memory.
 7. **Gate.** The CI line `GATE <tier> PASS at <head12>` must name the PR's head; premerge OK on main.
@@ -1362,7 +1416,14 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2041]: https://github.com/ali-mosavian/llrm/pull/2041
 [#2072]: https://github.com/ali-mosavian/llrm/pull/2072
 [#2067]: https://github.com/ali-mosavian/llrm/pull/2067
+[#2051]: https://github.com/ali-mosavian/llrm/pull/2051
+[#2069]: https://github.com/ali-mosavian/llrm/pull/2069
 [#2073]: https://github.com/ali-mosavian/llrm/pull/2073
+[#2125]: https://github.com/ali-mosavian/llrm/pull/2125
+[#2132]: https://github.com/ali-mosavian/llrm/pull/2132
+[#2145]: https://github.com/ali-mosavian/llrm/pull/2145
+[#2151]: https://github.com/ali-mosavian/llrm/pull/2151
+[#2134]: https://github.com/ali-mosavian/llrm/pull/2134
 [#2094]: https://github.com/ali-mosavian/llrm/pull/2094
 [#2110]: https://github.com/ali-mosavian/llrm/pull/2110
 [#2111]: https://github.com/ali-mosavian/llrm/pull/2111

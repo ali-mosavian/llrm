@@ -114,7 +114,7 @@ One table at one main SHA (`5e2e995ef`, `--profile dist` and the same tree with 
 | -O3 | 2,497 | 415 | 6.0x | 464 | 5.4x | 48.4 | 1,748 | 747 | 3008 / 1021 = 2.9 |
 | -Os | 2,322 | 407 | 5.7x | 459 | 5.1x | 48.4 | 1,560 | 729 | 2227 / 758 = 2.9 |
 
-The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
+The -O2 row against the plan's start (`21f5c9fc8`, 2,903 M, 6.8x): 2,253 M, 5.5x clang 24. Rows at this SHA (distro clang 20.1.8 as the clang reference, void as a clang-24 reference and replaced by `rows/main24d` in the plan's section 2.0; 71 vsgcc programs, m32, llrm / min(gcc, clang), `tools/rows/run.sh base-5e2e995ef`; 852 results): clocks per level, geomean, worst program, rows above 1.00:
 
 | level | clocks geomean | worst (program) | rows above 1.00 | code bytes geomean | worst (program) | rows above 1.00 |
 |---|---:|---|---:|---:|---|---:|
