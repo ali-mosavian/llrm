@@ -99,6 +99,7 @@ pub fn body(
 /// cycle, and a printed body (formatted a line at a time, then held and
 /// compared) was 1.4% of a d_faces compile.
 pub fn fingerprint(function: &Function) -> u128 {
+    crate::counts::bump(crate::counts::Event::Fingerprints);
     use std::hash::{Hash, Hasher};
 
     /// Two multiply-and-rotate hashes (rustc's Fx) with different salts and

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/needs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:dbb2538c19376a615ed49ed1d035a660e1a03fca206151cbc204f006bb517d81 -->
+<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:2fee09db16b15adf02c5283adc54b59e3c0ba149323d613574d8d745b961ebfe -->
 
 # needs
 
@@ -13,7 +13,7 @@ the body has all of them. The shape is that of the MIR passes' `Depends`,
 for the machine passes.
 
 ```text
-  COPY        register-to-register mov       regthrash, copyprop
+  COPY        register-to-register mov       regthrash, machinecp
   INSERTED    inserted instruction defining  secondary_bases
   UNHELD      cell read via an unheld reg32  upperzero
   EXACT_CELL  a cell lowering proved exact   exactaddress
