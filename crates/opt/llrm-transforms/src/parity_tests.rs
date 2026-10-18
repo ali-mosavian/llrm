@@ -64,18 +64,19 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     }
 }
 
-/// The MemorySSA entry carries its dependency on alias analysis, and the
-/// preserved-and-updated vocabulary is a named TODO until the manager has it.
+/// The MemorySSA entry carries its dependency on alias analysis, is asked by
+/// default (EarlyCSE, LICM), and what is open of keeping it updated is named.
 #[test]
 fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() {
     let mssa = parity::ANALYSES.iter().find(|one| one.key == "mssa").expect("mssa is registered");
     assert_eq!(
         (mssa.llvm, mssa.kind, mssa.off, mssa.deps),
-        ("MemorySSAAnalysis", SlotKind::Translated, true, &["aa"][..])
+        ("MemorySSAAnalysis", SlotKind::Translated, false, &["aa"][..])
     );
     let report = parity::report();
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
-    assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
+    assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
+    assert!(parity::TODO.iter().all(|one| !one.contains("not a PreservedAnalyses variant")), "the variant exists now");
     assert!(parity::TODO.iter().all(|one| !one.contains("CFGAnalyses")), "the CFG set exists now");
     let loops = parity::ANALYSES.iter().find(|one| one.key == "loops").expect("loops is registered");
     assert_eq!((loops.llvm, loops.kind, loops.off), ("LoopAnalysis", SlotKind::Translated, false));
