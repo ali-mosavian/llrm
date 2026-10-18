@@ -77,3 +77,8 @@ def test_the_image_replaces_the_perf_wrapper_in_place():
     tests (12 files) read "perf counted nothing"."""
     text = (Path(__file__).parent / "selfhosted/Containerfile").read_text()
     assert "dpkg-divert --local --rename --add /usr/bin/perf" in text
+
+
+def test_a_job_container_mounts_the_pinned_toolchain_read_only():
+    """The runner image has clang-20 and gcc 13.3; the pin lives at /opt/llrm-pin on the host (#2137): without the mount the pin tests fail there."""
+    assert "--volume=/opt/llrm-pin:/opt/llrm-pin:ro" in supervisor.container("tinytim-1-aa")

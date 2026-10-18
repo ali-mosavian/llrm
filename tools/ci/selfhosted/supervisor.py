@@ -73,6 +73,14 @@ def heartbeat() -> None:
         time.sleep(60)
 
 
+PIN = "/opt/llrm-pin"  # the pinned clang and gcc (tools/ci/stage_pin.sh), read-only in every job's container: LLRM_PIN_DIR and PATH name it
+
+
+def container(name: str) -> list[str]:
+    return ["podman", "--cgroup-manager=cgroupfs", "run", "--rm", "--name", name, f"--memory={MEMORY}", f"--volume={PIN}:{PIN}:ro",
+            "--security-opt=seccomp=/opt/ghrunner/seccomp.json", "--pids-limit=8192", "--env-file=/dev/stdin", IMAGE]
+
+
 def slot(n: int) -> None:
     while True:
         name = f"tinytim-{n}-{os.urandom(3).hex()}"
@@ -80,8 +88,7 @@ def slot(n: int) -> None:
         try:
             jit = api("POST", "actions/runners/generate-jitconfig", {"name": name, "runner_group_id": 1, "labels": LABELS, "work_folder": WORK})
             subprocess.run(
-                ["podman", "--cgroup-manager=cgroupfs", "run", "--rm", "--name", name, f"--memory={MEMORY}",
-                 "--security-opt=seccomp=/opt/ghrunner/seccomp.json", "--pids-limit=8192", "--env-file=/dev/stdin", IMAGE],
+                container(name),
                 input=f"ACTIONS_RUNNER_INPUT_JITCONFIG={jit['encoded_jit_config']}\n", text=True, check=False,
             )
         except Exception as e:
