@@ -313,7 +313,7 @@ impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L1383
     /// `getExtendAddRecStart`: the normalized zero or sign extended expression
     /// for this AddRec's Start.
-    fn get_extend_add_rec_start(
+    pub(super) fn get_extend_add_rec_start(
         &mut self,
         cx: &Cx,
         extend: Extend,
@@ -650,7 +650,7 @@ impl ScalarEvolution {
             // of overflow. Use this fact to avoid doing extra work that may not
             // pay off.
             if !matches!(self.node(max_be_count).kind, Kind::CouldNotCompute)
-                || self.has_guards()
+                || self.has_guards(cx)
                 || self.has_assumptions(cx)
             {
                 let new_flags = self.prove_no_unsigned_wrap_via_induction(cx, ar);

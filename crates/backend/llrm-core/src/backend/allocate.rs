@@ -1811,9 +1811,40 @@ fn greedy_check(
 
 /// Whether the translated greedy allocator allocates: by default, the allocate
 /// slot of LLVM's order being greedy's; `LLRM_NO_LLVM_ORDER` turns it off
-/// unless `LLRM_GREEDY` is set.
+/// unless `LLRM_GREEDY` is set, and `LLRM_NO_GREEDY` alone, under the order.
 pub fn greedy_on() -> bool {
-    llrm_support::env_flag!("LLRM_GREEDY") || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER")
+    #[cfg(test)]
+    if OLD_ALLOCATOR.with(std::cell::Cell::get) {
+        return false;
+    }
+    llrm_support::env_flag!("LLRM_GREEDY")
+        || !llrm_support::env_flag!("LLRM_NO_LLVM_ORDER") && !llrm_support::env_flag!("LLRM_NO_GREEDY")
+}
+
+#[cfg(test)]
+thread_local! {
+    static OLD_ALLOCATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The old allocator on this thread until dropped: for the tests of its
+/// mechanics (last resort, trial search, rebuilds), which greedy does not have
+/// and which are deleted with it.
+#[cfg(test)]
+pub struct OldAllocator;
+
+#[cfg(test)]
+impl OldAllocator {
+    pub fn pinned() -> Self {
+        OLD_ALLOCATOR.with(|old| old.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for OldAllocator {
+    fn drop(&mut self) {
+        OLD_ALLOCATOR.with(|old| old.set(false));
+    }
 }
 
 /// (allocations the greedy allocator made, allocations it left to this one).

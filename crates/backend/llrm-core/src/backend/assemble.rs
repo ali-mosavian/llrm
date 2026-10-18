@@ -278,10 +278,24 @@ pub fn assembled_by(
                 let procedure = if !cpu.optimized {
                     procedure
                 } else {
-                    let overhead = timed("masm return overhead", || masm::return_overhead_bytes(&procedure))
-                        .map_err(|error| error.to_string())? as i64;
+                    // Asked only by a tail a copy could save a jump for.
+                    let (overhead, unprintable) = (std::cell::OnceCell::new(), std::cell::RefCell::new(None));
+                    let overhead = || {
+                        *overhead.get_or_init(|| {
+                            timed("masm return overhead", || masm::return_overhead_bytes(&procedure)).map_or_else(
+                                |error| {
+                                    *unprintable.borrow_mut() = Some(error.to_string());
+                                    0
+                                },
+                                |bytes| bytes as i64,
+                            )
+                        })
+                    };
                     let body =
-                        timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), overhead));
+                        timed("lir duplicated returns", || jumps::duplicated_returns(procedure.body.clone(), &overhead));
+                    if let Some(error) = unprintable.take() {
+                        return Err(error);
+                    }
                     let procedure = masm::Procedure { body, ..procedure };
                     let enough = std::cell::OnceCell::new();
                     let body = timed("lir shrink-wrap tails", || {

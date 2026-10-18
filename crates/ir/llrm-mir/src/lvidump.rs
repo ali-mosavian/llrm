@@ -3,10 +3,9 @@
 //! (`examples/lvidump.rs`, `tools/llvmport/lvicompare.py`) and of the tests
 //! that hold LLVM's answers (`tests/lvi`).
 
-use std::collections::HashMap;
-
 use crate::datalayout::DataLayout;
 use crate::domtree::DomTree;
+use crate::hash::HashMap;
 use crate::lazyvalueinfo::{Env, LazyValueInfo, Subject};
 use crate::module::{BlockId, GlobalKind, InstId, Operand, Use, ValueDef};
 use crate::opcode::{IntPredicate, Opcode};
@@ -75,7 +74,7 @@ pub fn dump(text: &str) -> Result<String, String> {
                 matches!(context.types.get(ty), crate::Type::Int(bits) if *bits <= 128)
             };
             let positions = function.positions();
-            let mut number: HashMap<Operand, u32> = HashMap::new();
+            let mut number: HashMap<Operand, u32> = HashMap::default();
             let mut index = crate::dense::IdMap::<InstId, u32>::new();
             let mut block = crate::dense::IdMap::<BlockId, u32>::new();
             let (mut n, mut u) = (0, 0);
