@@ -1,3 +1,7 @@
+---
+architecture-index: compile-time architecture
+architecture-order: 130
+---
 # Compile-time architecture: llrm at gcc's cost per unit of work
 
 For contributors redesigning the compiler's core. It specifies the IR, the analysis manager, the pipeline and the backend that bring llrm's cost per unit of work to gcc's and LLVM's. It also gives the budgets that keep it there and the stages that get there. The measurements behind it are in [compile-time-review.md](compile-time-review.md); this document gives only the numbers its targets are derived from. It is measured at [a99bffc80](https://github.com/ali-mosavian/llrm/commit/a99bffc80c76da6fdffa295f6b77d5192d3ba275). "fn" means `D_DRAW_FACES` in qbq-llrm's `render/d_faces.c`, `-m32` unless stated.

@@ -1366,6 +1366,16 @@ impl MemorySSA<'_> {
         found
     }
 
+    /// Whether `ahead` is `access` or reached from it by `defining` links:
+    /// MemorySSA's `dominates(ahead, access)`.
+    pub fn dominates(
+        &self,
+        ahead: usize,
+        access: usize,
+    ) -> bool {
+        self.behind(access, ahead)
+    }
+
     /// Whether `ahead` is `access` or reached from it by `defining` links.
     fn behind(
         &self,
