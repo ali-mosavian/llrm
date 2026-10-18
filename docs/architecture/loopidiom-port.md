@@ -4,6 +4,23 @@ TL;DR: `LoopIdiomRecognize.cpp` (3,881 lines at `d1106deb71cc`) is translated as
 
 Rule for the code: each Rust function is a translation of the C++ function named in its first comment (permalink), the `cl::opt` defaults stand, and anything not translated is a numbered DEVIATE with a reason and a number. None is taken without oversight's approval.
 
+## 0. Premise: the rotate slot (#2194)
+
+Oversight's step 2: the `rotate@728` slot cannot land until llrm's loop passes accept a rotated loop, and `fill` refuses one. Measured on `alim/feat/llvm-order-rotate` (0ad2fcd83), `LLRM_EXP_LLVM=1`, `bench/sieve/sieve.c` `-m32 -march=i486 -O2`: `rep stos` in the output 2 with `-fno-tree-ch`, 0 with the slot. Refusal table (sroa-poc's `rotate-refusals.md`, measured on 71 programs at -O2/-O3): fill changes 16 steps with the slot, 18 without.
+
+The reason, read from `_fill` (`fill.rs`, `counters.len() != phis.len()`): the rotated zero-fill loop has two header phis,
+
+```text
+%4 = phi i32 [ %8, %b4 ], [ 0, %37 ]      ; the index, zext of the counter's next
+%5 = phi i16 [ %7, %b4 ], [ 0, %37 ]      ; the counter
+...
+%7 = add i16 %5, 1 ; %8 = zext i16 %7 to i32 ; br (%7 < limit)
+```
+
+and `induction::basics` finds one counter: it follows a header phi that is the counter's next plus a constant (the header-copy case), not a phi that is a cast of it. LLVM does not ask: `runOnCountableLoop` takes `getBackedgeTakenCount` and `processLoopStridedStore` the store address's `SCEVAddRecExpr`, and SCEV's `getZeroExtendExpr` of an add recurrence that cannot wrap is `{0,+,1}` in the wider type, whatever phis carry it. So the premise is a SCEV fact, not a guard to patch in `fill`.
+
+Acceptance test (S0, fail-first, in `fill_tests.rs`): the sieve fill loop as the slot leaves it (the IR above, a guard `limit != 0` ahead, the test on the stepped counter) becomes one `llvm.memset` of `limit` bytes; it fails on main's `fill`. Second test: the same loop unrotated still does.
+
 ## 1. What `fill` is today
 
 `Fill` (1,604 lines in `fill.rs` with `Merge`) rewrites one loop at a time, then looks again. The loop has one latch, a straight-line body and a trip count `induction::counted` proves. It takes:
@@ -75,16 +92,18 @@ DEVIATEs. A deviation is kept only where it rests on something MIR or the target
 - D5. The loop cut to one trip with `counting::Seeds` exit values, where LLVM zaps the stores and leaves the empty loop to `LoopDeletion` and `IndVarSimplify`. Approved until `LoopDeletion` is translated (fact: no loop deletion in the pipeline); then mirrored.
 - D6. No `ScalarEvolution`: strides, counts and exit values come from `induction`/`counting`. Not a deviation to live with: a project-level dependency, sized separately.
 - D7. `getPopcntSupport` and the FFS cost as target hooks. Approved: x86 has no fast popcount before Nehalem (fact: `PSK_FastHardware` never holds on 486/P5). `ctlz`/`cttz` need MIR intrinsics and `bsf`/`bsr` selection, which i386 and later have: a later representation item, not never.
+- D10. S0 only: `basics` follows a cast of a counter's next. LLVM has no such rule: `getZeroExtendExpr` of a non-wrapping add recurrence is an add recurrence. Pending oversight; deleted when scev-port's tree lands and `basics` is replaced (fact: no SCEV yet, scev-port, PR #2150).
 - D9. CRC loops (`HashRecognize`, `Clmul`, table): not translated. Pending: no carry-less multiply on any target here; the table strategy is open.
 
 (`isLibFuncEmittable` is LLVM's own rule, not a deviation: no `strlen` in the program's library, no call.)
 
 ## 5. Stages and gates
 
-Priority: low. No time is taken from LICM, InstCombine or LVI.
+Priority: S0 gates the rotate slot (#2194) and comes first; the rest is low, taking no time from LICM, InstCombine or LVI.
 
 | stage | content | gate |
 |---|---|---|
+| S0 | the acceptance test above and the smallest change that makes it pass on what exists: `induction::basics` follows a header phi that is a `zext`/`sext`/`trunc` of a counter's next when the counter's step cannot wrap over the proven trips (D10); then `fill` accepts the rotated loop with no change of its own | the test; sieve `rep stos` 2 with the slot; rows (section 7) with `rotate_slot` on; `identical.py` with every `LLRM_CHECK_*` without it |
 | S1 | the first PR: `Fill` moves to LLVM's slot (before `indvars` and full unroll, mirroring the pipeline) and its cost on the same inputs is brought to LoopIdiomRecognize's, per IR instruction. D4 gets its number or goes | rows (section 7); `d_faces` -O1/-O2/-Os cycles of the pass against LLVM's |
 | L0 | idiom-bearing inputs for the replay corpus, `difftest` gains `fill -> loop(loop-idiom)`; before any further port | the oracle reports a nonzero number; the 112 runs' zero is explained, not accepted |
 | L1 | decisions only, countable half, against `opt -passes='loop(loop-idiom)'` and against `Fill` | counts per function; every difference classified |
