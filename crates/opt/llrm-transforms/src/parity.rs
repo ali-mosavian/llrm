@@ -51,6 +51,8 @@ pub enum Phase {
     Cleanup,
     /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
     Simplify,
+    /// The end of `buildModuleOptimizationPipeline`'s function list (l.1662).
+    Late,
     /// The module pipeline: the inliner, the CGSCC members, the IPO passes.
     Module,
     /// llc's machine pipeline.
@@ -93,7 +95,7 @@ const fn partial(
     Entry { slot, phase, llvm, kind: Partial, replaced_by: "", note }
 }
 
-use Phase::{Backend, Cleanup, Early, Simplify};
+use Phase::{Backend, Cleanup, Early, Late, Simplify};
 use SlotKind::{Missing, Old, Partial, Translated};
 
 /// Every slot of the -O2 function pipeline in `llvm_order` (-O1 builds a
@@ -159,6 +161,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fold@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("dead@837", Simplify, "instcombine", Old, "instcombine-port"),
     entry("constraint-elimination", Simplify, "constraint-elimination", Missing, ""),
+    entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("loop-instsimplify", Simplify, "loop-instsimplify", Missing, ""),
     entry("loop-simplifycfg", Simplify, "loop-simplifycfg", Missing, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Old, "loop-passes-port"),
@@ -430,10 +433,11 @@ pub(crate) fn tally(registry: &[Entry]) -> Tally {
     count(registry.iter().map(|one| one.kind))
 }
 
-const PHASES: [(Phase, &str); 5] = [
+const PHASES: [(Phase, &str); 6] = [
     (Phase::Early, "early"),
     (Phase::Cleanup, "cleanup"),
     (Phase::Simplify, "simplify"),
+    (Phase::Late, "late"),
     (Phase::Module, "module"),
     (Phase::Backend, "backend"),
 ];

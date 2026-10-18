@@ -737,6 +737,9 @@ pub(crate) fn llvm_order(
             decide("decide@1244"),
             phiopt("phiopt@1244"),
         ],
+        // InstSimplifyPass, PassBuilderPipelines.cpp#L1662: the last function
+        // pass of `OptimizePM`, after LoopSink.
+        Phase::Late => vec![slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify))],
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
@@ -868,6 +871,9 @@ pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
             Fixed::linear(applied, Phase::Early),
             Fixed::linear(applied, Phase::Cleanup),
             Fixed::linear(applied, Phase::Simplify),
+            // DEVIATE: LLVM runs it after the interprocedural passes; here it
+            // closes the function stages, before `ipa-range`.
+            Fixed::linear(applied, Phase::Late),
         ]
     } else {
         vec![Fixed::new(applied)]
