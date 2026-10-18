@@ -16,6 +16,7 @@ pub mod debuginfo;
 pub mod dense;
 pub mod depends;
 pub mod domtree;
+pub mod domtree_updater;
 pub mod dumpdir;
 pub mod edit;
 pub mod facts;

@@ -14,10 +14,11 @@ Rule for the code: each Rust function is a translation of the C++ function named
 | `SemiNCAInfo` | `SemiNca` |
 | `GraphDiff`, `cfg::Update`, `LegalizeUpdates` | `GraphDiff`, `Update`, `legalize_updates` |
 | `std::priority_queue` of `InsertionInfo` | `LevelQueue` (libstdc++'s heap) |
+| `GenericDomTreeUpdater`, `DomTreeUpdater` (Eager, Lazy) | `domtree_updater::DomTreeUpdater` (D2b) |
 
 ## 2. The oracle
 
-`tools/llvmport/domtree_dump.sh` builds an 8-block graph (a loop, a diamond, a fan, an unreachable block, an infinite loop) in the pinned LLVM, applies every single edge flip, every pair and some triples as one `applyUpdates` batch, and prints a hash of each resulting `DominatorTree` and `PostDominatorTree` (immediate dominator, level and children in order, roots). `domtree_tests.rs` recomputes the 4,720 hashes from the port; all match. Premise assertions: the golden file names `LLVM 24.0.0git` and the commit `d1106deb71cc` (the test fails on any other binary), has one line per case and tree, and holds the cases where LLVM's updated post-dominator tree differs from a fresh one (267; none for dominators), so the port is checked against what LLVM does, not against a fresh build.
+`tools/llvmport/domtree_dump.sh` builds an 8-block graph (a loop, a diamond, a fan, an unreachable block, an infinite loop) in the pinned LLVM, applies every single edge flip, every pair and some triples as one `applyUpdates` batch, as a Lazy `DomTreeUpdater` queue (one update at a time, and `applyUpdatesPermissive` with a repeat), and 46 critical-edge splits (Eager, Lazy), and prints a hash of each resulting `DominatorTree` and `PostDominatorTree` (immediate dominator, level and children in order, roots). `domtree_tests.rs` recomputes the 4,720 hashes from the port; all match. Premise assertions: the golden file names `LLVM 24.0.0git` and the commit `d1106deb71cc` (the test fails on any other binary), has one line per case and tree, and holds the cases where LLVM's updated post-dominator tree differs from a fresh one (267; none for dominators), so the port is checked against what LLVM does, not against a fresh build.
 
 ## 3. D2 measured
 
