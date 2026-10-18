@@ -2539,6 +2539,15 @@ pub fn check_stale(on: bool) {
     CHECK_STALE.with(|check| check.set(on));
 }
 
+static STALE_CHECKS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// How many times `LLRM_CHECK_STALE` recomputed held analyses in this process:
+/// `LLRM_DEBUG=checks` reports it (llrm-mir cannot name llrm-support's
+/// counter), so a sweep sees whether the oracle ran at all.
+pub fn stale_checks_run() -> u32 {
+    STALE_CHECKS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// `LLRM_CHECK_STALE`: the module analyses held past `pass`, which said it adds
 /// no memory operation, still cover what working them out afresh gives.
 fn checked_stale(
@@ -2553,6 +2562,7 @@ fn checked_stale(
     if frozen.is_empty() || !on {
         return;
     }
+    STALE_CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     for kind in frozen {
         let Some((_, held)) = analyses.results.get(&kind.id) else { continue };
         let held = Rc::clone(held);

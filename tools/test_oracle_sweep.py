@@ -53,12 +53,12 @@ def test_a_slice_runs_only_its_programs_and_never_calls_an_expected_entry_paid(t
         path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: programs)
     seen = []
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: seen.append(job[1].name) or (job, None))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: seen.append(job[1].name) or (job, None, {}))
     expected = tmp_path / "e.toml"
     expected.write_text('[[expected]]\nmatch = "x"\nfix = "#1"\nowner = "o"\n')
     import sys
 
-    monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--shard", "2/3", "--levels=-O2", "--machines=-m32", "--expected", str(expected)])
+    monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--no-reach", "--shard", "2/3", "--levels=-O2", "--machines=-m32", "--expected", str(expected)])
     assert oracle_sweep.main() == 0
     assert sorted(seen) == ["p1.nib", "p4.nib"] and "wall " in capsys.readouterr().out
 
@@ -68,9 +68,32 @@ def test_a_new_finding_kind_turns_the_sweep_red_and_the_first_line_says_so(tmp_p
     path = tmp_path / "p.nib"
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, "dataflow: a new kind of panic"))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, "dataflow: a new kind of panic", {}))
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--no-reach", "--levels=-O2", "--machines=-m32"])
+    assert oracle_sweep.main() == 1
+    assert capsys.readouterr().out.splitlines()[0].startswith("1 compiles / 1 new finding kinds / 0 expected")
+
+
+def test_an_oracle_whose_hook_was_never_reached_stops_the_sweep_naming_it(tmp_path, monkeypatch, capsys):
+    """With the expected list empty, an oracle that did not run also reports no findings: the sweep must not read as clean. No perf is needed: the
+    compiler counts, per oracle, the call sites asked while it was on (LLRM_DEBUG=checks)."""
+    path = tmp_path / "p.nib"
+    path.write_text("x")
+    monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
+    everything = {name: 3 for name in oracle_sweep.CHECKS}
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, {k: v for k, v in everything.items() if k != "REPLAY"}))
     import sys
 
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--levels=-O2", "--machines=-m32"])
-    assert oracle_sweep.main() == 1
-    assert capsys.readouterr().out.splitlines()[0].startswith("1 compiles / 1 new finding kinds / 0 expected")
+    assert oracle_sweep.main() == 2
+    assert "never reached: REPLAY" in capsys.readouterr().out
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, everything))
+    assert oracle_sweep.main() == 0
+
+
+def test_the_checks_lines_are_not_the_findings_last_line():
+    """run_main prints `[checks] NAME N` after the compile's own message: a refusal in words must still read as one."""
+    stderr = "llrm-nib: entry function 'main' does not exist\n[checks] REPLAY 3\n"
+    assert oracle_sweep.classify(1, oracle_sweep.REACHED.sub("", stderr)) is None

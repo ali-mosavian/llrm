@@ -34,8 +34,38 @@ pub fn env_set(name: &str) -> bool {
 macro_rules! env_flag {
     ($name:literal) => {{
         static ON: ::std::sync::OnceLock<bool> = ::std::sync::OnceLock::new();
-        *ON.get_or_init(|| $crate::env_set($name))
+        *ON.get_or_init(|| {
+            let on = $crate::env_set($name);
+            if on {
+                $crate::note_reached($name);
+            }
+            on
+        })
     }};
+}
+
+static REACHED: std::sync::Mutex<Vec<(&'static str, u32)>> = std::sync::Mutex::new(Vec::new());
+
+/// A call site of `env_flag!` asked `name` and found it on: of the
+/// `LLRM_CHECK_*` switches, an oracle whose hook the compile reached.
+/// `LLRM_DEBUG=checks` prints, per oracle, how many call sites did (`[checks]
+/// REPLAY 4`): an oracle that reports none did not run, so a sweep that finds
+/// nothing proves nothing (tools/oracle_sweep.py, without perf counters).
+pub fn note_reached(name: &'static str) {
+    if let Some(oracle) = name.strip_prefix("LLRM_CHECK_") {
+        let mut reached = REACHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match reached.iter_mut().find(|row| row.0 == oracle) {
+            Some(row) => row.1 += 1,
+            None => reached.push((oracle, 1)),
+        }
+    }
+}
+
+/// The oracles reached so far and the call sites of each, by name.
+pub fn reached_checks() -> Vec<(&'static str, u32)> {
+    let mut rows = REACHED.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    rows.sort();
+    rows
 }
 
 /// `LLRM_CHECK_CACHES=1`: every identity-cache hit is recomputed and must equal
@@ -65,5 +95,22 @@ mod decoder_tests {
             let mut decoder = Decoder::with_ip(32, bytes, 0, DecoderOptions::NONE);
             assert_eq!(decoder.decode().code(), Code::INVALID, "{name} has a decoder table");
         }
+    }
+}
+
+#[cfg(test)]
+mod reached_tests {
+    use super::{note_reached, reached_checks};
+
+    /// An oracle whose hook the compile reached is counted by its name, once
+    /// per call site; a switch that is not a check is not.
+    #[test]
+    fn test_a_reached_check_is_counted_by_oracle_and_other_switches_are_not() {
+        note_reached("LLRM_CHECK_ZZ_TEST");
+        note_reached("LLRM_CHECK_ZZ_TEST");
+        note_reached("LLRM_NOT_A_CHECK");
+        let rows = reached_checks();
+        assert!(rows.contains(&("ZZ_TEST", 2)), "{rows:?}");
+        assert!(!rows.iter().any(|row| row.0.contains("NOT_A_CHECK")), "{rows:?}");
     }
 }

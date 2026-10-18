@@ -88,13 +88,27 @@ def exercised(binaries: Path, probes: list[tuple[str, Path, str, str]]) -> dict[
     return found
 
 
-def compile_one(job: tuple[str, Path, str, str], binaries: Path) -> tuple[tuple[str, Path, str, str], str | None]:
+REACHED = re.compile(r"^\[checks\] (\w+) (\d+)$", re.M)
+
+
+def compile_one(job: tuple[str, Path, str, str], binaries: Path) -> tuple[tuple[str, Path, str, str], str | None, dict[str, int]]:
+    """(the job, its finding or None, the oracles its compile reached and the call sites of each: `LLRM_DEBUG=checks`)."""
     tool, source, level, machine = job
     out = Path(os.environ.get("TMPDIR", "/tmp")) / f"sweep-{os.getpid()}-{abs(hash(job))}.o"
-    env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in CHECKS}}
+    debug = ",".join(filter(None, [os.environ.get("LLRM_DEBUG"), "checks"]))
+    env = {**os.environ, **{f"LLRM_CHECK_{name}": "1" for name in CHECKS}, "LLRM_DEBUG": debug}
     done = subprocess.run([str(binaries / tool), str(source), level, machine, "-o", str(out)], capture_output=True, text=True, env=env)
     out.unlink(missing_ok=True)
-    return job, classify(done.returncode, done.stderr)
+    reached = {name: int(sites) for name, sites in REACHED.findall(done.stderr)}
+    return job, classify(done.returncode, REACHED.sub("", done.stderr)), reached
+
+
+def unreached(results: list[tuple], allowed: list[str]) -> list[str]:
+    """The oracles no compile of the run reached (no call site asked them while on): a run that finds nothing proves nothing about them."""
+    reached = collections.Counter()
+    for _, _, sites in results:
+        reached.update(sites)
+    return [name for name in CHECKS if reached[name] == 0 and name not in allowed]
 
 
 def judge(findings: dict[str, set[str]], expected: list[dict]) -> tuple[list[str], list[str], list[str]]:
@@ -121,6 +135,7 @@ def main() -> int:
     parser.add_argument("--levels", default="-O1,-O2,-O3,-Os,-Omax")
     parser.add_argument("--machines", default="-m16,-m32")
     parser.add_argument("--shard", metavar="I/N", help="only slice I of N of the programs (the gate's oracle-I job): no entry is judged paid by a slice")
+    parser.add_argument("--no-reach", action="store_true", help="skip the check that every oracle's hook was reached (LLRM_DEBUG=checks), which needs no perf")
     parser.add_argument("--no-premise", action="store_true", help="skip the check that each oracle ran (it needs perf; the gate's oracle-premise step does it once)")
     parser.add_argument("--premise-only", action="store_true", help="only the check that each oracle ran")
     parser.add_argument("--allow-unexercised", action="append", default=[], metavar="NAME", help="an oracle the sweep may skip")
@@ -152,7 +167,8 @@ def main() -> int:
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda job: compile_one(job, args.bin), jobs))
     findings: dict[str, set[str]] = collections.defaultdict(set)
-    for (tool, source, level, machine), why in results:
+    silent = [] if args.no_reach else unreached(results, args.allow_unexercised)
+    for (tool, source, level, machine), why, _ in results:
         if why:
             findings[why].add(f"{source.name} {level} {machine}")
     new, seen, unseen = judge(findings, expected)
@@ -164,6 +180,9 @@ def main() -> int:
         print(f"{len(where):4}  {why}\n      e.g. {sorted(where)[:3]}")
     for one in unseen:
         print(f"paid: {one}: no longer happens; delete the entry from {args.expected}")
+    if silent:
+        print("never reached: " + ", ".join(silent) + " (no call site of the oracle was asked while it was on: a sweep that finds nothing proves nothing about it)")
+        return 2
     print(f"wall {time.perf_counter() - started:.0f} s" + (f" (slice {args.shard}: {len(found)} programs)" if args.shard else ""))
     return 1 if new or unseen else 0
 
