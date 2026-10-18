@@ -1531,3 +1531,19 @@ fn test_the_budget_of_a_recursive_call_doubles_at_o3_as_gccs_does() {
     // -O1 keeps the ordinary budget: it has no -finline-functions.
     assert_eq!(Threshold::new(225 * 6 / 15).recursive_budget(12), Threshold::new(225 * 6 / 15).budget(12));
 }
+
+/// A `noipa` routine is not inlined, whatever its size, and the same routine
+/// without the attribute is (the premise): a bench kernel stays the
+/// procedure its caller calls.
+#[test]
+fn a_noipa_routine_is_never_inlined() {
+    let text = |attribute: &str| {
+        format!(
+            "define internal i16 @k(i16 %a) {attribute} {{\nb0:\n  %r = add i16 %a, 1\n  ret i16 %r\n}}\n\ndefine i16 @main() {{\nb0:\n  %v = call i16 @k(i16 5)\n  ret i16 %v\n}}\n"
+        )
+    };
+    let mut plain = parsed(&text(""));
+    assert!(inline_into(&mut plain, "main", 1), "premise: the small private routine inlines");
+    let mut marked = parsed(&text("noipa"));
+    assert!(!inline_into(&mut marked, "main", 1), "{}", printed(&marked));
+}

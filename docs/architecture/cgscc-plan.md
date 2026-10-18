@@ -77,6 +77,29 @@ hint 325; locally hot 525; the cost-benefit analysis is off (`inline-enable-cost
 - D7 `shouldBeDeferred` needs the other callers of the callee with their costs: translated over the module call
   graph the interprocedural stage holds.
 
+- D9 `noipa` (GCC's attribute; LLVM has no IR equivalent: `optnone`/`noinline` keep a function from being changed
+  or inlined, not from being read by its callers' passes). A bench kernel is a real procedure its callers cannot
+  fold away. Scope: functions the source marks `noipa`, nothing else; no `-O` flag sets it.
+
+## noipa: the contract (D9)
+
+The fact: a `noipa` function is opaque to every interprocedural pass. Its body is still optimised by the per-body
+pipeline; what no pass does is use the body for anyone else, or change how it is called.
+
+- Inlining and cloning: never inlined (`inline`, the InlineCost decision), never cloned or specialised (`ipacp`),
+  never argument-promoted, dead-argument-pruned or given a new calling convention (`calleepop`, argument promotion).
+- Facts read off the body: none. `Stamp` (function-attrs) does not infer attributes for it and callers read only
+  the attributes the source declared; `Summaries`, `GlobalsAA`, `CalleeEffects` and `CallRegisters` treat a call of
+  it as a call of a declaration with its declared attributes.
+- Constants and values from callers (`current_call_constants`, IPSCCP-style propagation) are not pushed into it.
+- It is not deleted by `globaldce` while the module names it, and a call of it is never removed as dead unless the
+  declared attributes allow it.
+
+Test, fail first: `crc/nib` at -O3, where `bench_crc` is folded into `main` today ("not in the map"), keeps its
+procedure and its call; one unit test per honouring pass (a `noipa` callee stays out of the inline candidates, out of
+the stamp, out of the summaries, out of the constants pushed in). The bench sources that name the attribute and the
+re-blessed rows are llvm-difftest's, in the same PR.
+
 ## Measurements before code is long
 
 - Body size at the inline stage's input and at gvn's input, llrm against LLVM, on d_faces -O2 and an inlining
