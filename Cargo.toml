@@ -70,6 +70,7 @@ default-run = "llrm-qb"
 llrm-alloc = { workspace = true }
 llrm-core = { workspace = true }
 llrm-mir = { workspace = true }
+llrm-transforms = { workspace = true }
 llrm-bcdriver = { workspace = true }
 llrm-nib = { workspace = true }
 llrm-qb = { workspace = true }
@@ -116,6 +117,10 @@ path = "src/bin/llrm-nib.rs"
 [[bin]]
 name = "llrm-mir"
 path = "src/bin/llrm-mir.rs"
+
+[[bin]]
+name = "llrm-pass"
+path = "src/bin/llrm-pass.rs"
 
 [[bin]]
 name = "llrm-run"
