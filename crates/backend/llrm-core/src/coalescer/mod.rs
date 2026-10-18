@@ -35,6 +35,12 @@
 //! `removePartialRedundancy` are not translated yet; a copy whose intervals
 //! cannot join is left.
 //!
+//! DEVIATE C9 (no number): a parameter's value on entry is defined by no
+//! instruction, so LLVM's phi rule ("any real interference would show up in a
+//! predecessor") does not carry over: the entry block has none. Two parameters
+//! are two values and their definitions at the entry do not merge. LLVM's
+//! arguments are `COPY`s of the incoming registers, separate definitions.
+//!
 //! # Example
 //! `v2 := mov v1; ...; use v2` with `v1` dead after the copy: the intervals do
 //! not overlap past the copy, `v1` is merged into `v2` (or the reverse, the

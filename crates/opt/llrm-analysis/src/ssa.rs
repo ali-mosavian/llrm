@@ -696,7 +696,7 @@ b1:
 
     #[test]
     fn a_value_substituted_by_a_constant_reads_the_constant() {
-        let mut module = parsed(
+        let module = parsed(
             "define i16 @f(i16 %x) {
 b0:
   %y = add i16 %x, %x

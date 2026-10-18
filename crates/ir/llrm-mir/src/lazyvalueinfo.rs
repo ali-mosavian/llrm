@@ -3245,7 +3245,7 @@ fn constant_fold_compare_inst_operands(
     c1: &LatticeConstant,
     c2: &LatticeConstant,
 ) -> Option<bool> {
-    let mut make = |c: &LatticeConstant| match c {
+    let make = |c: &LatticeConstant| match c {
         LatticeConstant::Undef => None,
         LatticeConstant::Int { width, bits } => {
             let ty = env.context.types.int(*width);
