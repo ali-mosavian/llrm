@@ -5132,48 +5132,81 @@ fn test_spillforward_solvers_agree_on_a_cycle_of_reloads_and_stores() {
     }
 }
 
-/// What a block's transfer makes of the fact (DI, [BP-1284]): absent, a
-/// register a reload filled (false), or one a store wrote the slot from (true),
-/// in that order of what is known. A store of DI is redundant where the fact is
-/// already present and kept where it is absent, and the first left the fact as
-/// it was (false) while the second made it true: the fact present as false gave
-/// LESS than the fact absent, so the transfer was not monotone, and a loop
-/// through it had two fixed points (the worklist's and the rounds' of
-/// `LLRM_CHECK_DATAFLOW` on `_savegame_load@3`).
+/// `LLRM_CHECK_DATAFLOW` found the worklist and the rounds of `spillforward`'s
+/// solve disagree on the `stored` flag of (DI, [BP-1284]) in
+/// `qcport/savegame.c`'s `_savegame_load@3` under the order switch, and 10 of
+/// 300,000 random bodies of 3 to 7 blocks show the same: a store of DI is
+/// dropped where the pair is already present (the flag as it was) and kept
+/// where it is absent (the flag true), so a flag decided in the solve that
+/// finds the pairs had two fixed points in a loop, and which one it reached
+/// depended on the order the blocks were worked in. Presence is solved first
+/// now, the flags after with it fixed. The bodies are three of the random ones:
+/// a block is its first effect, then its second, as 0 nothing, 1 a reload of
+/// DI, 2 a store of DI, 3 a store of CX; block `b` is at `100 * (b + 1)`, entry
+/// the first.
 #[test]
-fn test_spillforward_transfer_gives_more_for_more_known() {
+fn test_spillforward_answers_the_same_in_the_worklist_and_in_rounds() {
+    crate::analysis::dataflow::check_always();
     let cell = || Loc::Mem(mem(frame(-1284), 2, RegId::BP, 0, 2));
-    let store = Arc::new(insn(
-        1,
-        Some((1, 1)),
-        Some(sem(Operation::Move, "mov", vec![cell()], vec![rl(RegId::DI, 2)])),
-        vec![],
-        vec![],
-    ));
-    let input = body("monotone", 1, vec![block(1, vec![store], vec![]).into()]);
-    let regs = input.regs();
-    let fact = (
-        r(RegId::DI, 2),
-        match cell() {
-            Loc::Mem(cell) => cell,
-            _ => unreachable!(),
-        },
-    );
-    let rank = |facts: &crate::backend::spillforward::Facts| match facts.get(&fact) {
-        None => 0,
-        Some(false) => 1,
-        Some(true) => 2,
+    let effect = |kind: usize, at: i64| -> Option<Arc<Insn>> {
+        let movement = |dests: Vec<Loc>, sources: Vec<Loc>| Some(sem(Operation::Move, "mov", dests, sources));
+        let what = match kind {
+            0 => return None,
+            1 => movement(vec![rl(RegId::DI, 2)], vec![cell()]),
+            2 => movement(vec![cell()], vec![rl(RegId::DI, 2)]),
+            _ => movement(vec![cell()], vec![rl(RegId::CX, 2)]),
+        };
+        Some(Arc::new(Insn { spill_reload: kind == 1, ..insn(at, Some((at, at)), what, vec![], vec![]) }))
     };
-    let out = |begin: Option<bool>| {
-        let mut facts = crate::backend::spillforward::Facts::default();
-        if let Some(stored) = begin {
-            facts.insert(fact.clone(), stored);
+    let witnesses: [(&[usize], &[&[usize]]); 3] = [
+        (&[7, 8, 11, 10, 0, 10, 7], &[&[2], &[5], &[5, 0], &[4, 2], &[5], &[6, 5], &[]]),
+        (&[4, 1, 8, 8, 13, 2, 7], &[&[4, 4], &[6, 3], &[5], &[5], &[6, 3], &[6, 2], &[]]),
+        (&[4, 8, 12, 2, 0, 9], &[&[1], &[4, 1], &[5, 1], &[4, 4], &[5, 3], &[]]),
+    ];
+    for (kinds, successors) in witnesses {
+        let mut list = Vec::new();
+        for (b, kind) in kinds.iter().enumerate() {
+            let at = 100 * (b as i64 + 1);
+            let mut insns: Vec<Arc<Insn>> = Vec::new();
+            insns.extend(effect(kind % 4, at + 5));
+            if kind / 4 > 0 {
+                insns.extend(effect(kind / 4, at + 15));
+            }
+            let targets: Vec<i64> = successors[b].iter().map(|to| 100 * (*to as i64 + 1)).collect();
+            match targets[..] {
+                [first, second] => {
+                    insns.push(Arc::new(insn(
+                        at + 1,
+                        Some((at + 1, at + 1)),
+                        Some(semt(Operation::Branch, "jne", vec![], vec![], Some(first))),
+                        vec![],
+                        vec![],
+                    )));
+                    insns.push(Arc::new(insn(
+                        at + 2,
+                        Some((at + 2, at + 2)),
+                        Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(second))),
+                        vec![],
+                        vec![],
+                    )));
+                }
+                [first] => insns.push(Arc::new(insn(
+                    at + 1,
+                    Some((at + 1, at + 1)),
+                    Some(semt(Operation::Jump, "jmp", vec![], vec![], Some(first))),
+                    vec![],
+                    vec![],
+                ))),
+                _ => insns.push(Arc::new(insn(
+                    at + 1,
+                    Some((at + 1, at + 1)),
+                    Some(sem(Operation::Return, "ret", vec![], vec![])),
+                    vec![],
+                    vec![],
+                ))),
+            }
+            list.push(block(at, insns, targets).into());
         }
-        rank(&crate::backend::spillforward::_transfer(regs, input.bits, &input.blocks[0], facts).2)
-    };
-    let (absent, reloaded, stored) = (out(None), out(Some(false)), out(Some(true)));
-    assert!(
-        absent <= reloaded && reloaded <= stored,
-        "absent {absent}, reload-filled {reloaded}, store-written {stored}"
-    );
+        spillforward::forwarded(&body("witness", 100, list));
+    }
 }

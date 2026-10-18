@@ -268,32 +268,58 @@ fn _available(body: &LirBody) -> IndexMap<i64, Facts> {
     }
     let blocks: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let nodes: Vec<&Block> = body.blocks.iter().collect();
-    let solved = dataflow::solve(
-        &nodes,
-        Direction::Forward,
-        |_| None::<Facts>,
-        |at, outs| {
-            if at == body.entry || predecessors[&at].is_empty() {
-                return Some(Facts::default());
-            }
-            let mut met: Option<Facts> = None;
-            for parent in &predecessors[&at] {
-                let Some(Some(leaving)) = outs.get(parent) else {
-                    continue;
-                };
-                met = Some(match met {
-                    None => leaving.clone(),
-                    Some(met) => met
-                        .iter()
-                        .filter(|(fact, _)| leaving.contains_key(*fact))
-                        .map(|(fact, stored)| (fact.clone(), *stored && leaving[fact]))
-                        .collect(),
-                });
-            }
-            met
-        },
-        |at, facts| facts.as_ref().map(|facts| _transfer(regs, body.bits, blocks[&at], facts.clone()).2),
-    );
+    let input = |at: i64, outs: &IndexMap<i64, Option<Facts>>| {
+        if at == body.entry || predecessors[&at].is_empty() {
+            return Some(Facts::default());
+        }
+        let mut met: Option<Facts> = None;
+        for parent in &predecessors[&at] {
+            let Some(Some(leaving)) = outs.get(parent) else {
+                continue;
+            };
+            met = Some(match met {
+                None => leaving.clone(),
+                Some(met) => met
+                    .iter()
+                    .filter(|(fact, _)| leaving.contains_key(*fact))
+                    .map(|(fact, stored)| (fact.clone(), *stored && leaving[fact]))
+                    .collect(),
+            });
+        }
+        met
+    };
+    let transfer = |at: i64, facts: &Option<Facts>| {
+        facts.as_ref().map(|facts| _transfer(regs, body.bits, blocks[&at], facts.clone()).2)
+    };
+    // Which pairs hold, and so which reloads and stores are redundant, is a
+    // question of presence alone: a store is dropped where its pair is
+    // present and kept where it is not, and the pair is present after either.
+    // That is monotone, and has one answer. What the pairs' `stored` flags
+    // are is asked after, with the pairs fixed: a flag decided in the
+    // same solve as the presence gave a store of DI more (true) where the pair
+    // was absent than where it was present as a reload's (false), so a loop
+    // through it had two fixed points and the answer depended on the order of
+    // the blocks.
+    let presence = |at: i64, facts: &Option<Facts>| {
+        transfer(at, facts).map(|mut out| {
+            out.values_mut().for_each(|stored| *stored = true);
+            out
+        })
+    };
+    let present = dataflow::solve(&nodes, Direction::Forward, |_| None::<Facts>, &input, &presence);
+    let start: IndexMap<i64, Option<Facts>> = nodes
+        .iter()
+        .map(|block| {
+            let held = present.input[&block.at].as_ref();
+            let out = held.map(|facts| {
+                let mut out = _transfer(regs, body.bits, block, facts.clone()).2;
+                out.values_mut().for_each(|stored| *stored = true);
+                out
+            });
+            (block.at, out)
+        })
+        .collect();
+    let solved = dataflow::solve(&nodes, Direction::Forward, |at| start[&at].clone(), &input, &transfer);
     solved.input.into_iter().map(|(at, facts)| (at, facts.unwrap_or_default())).collect()
 }
 
