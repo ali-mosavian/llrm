@@ -811,3 +811,15 @@ fn undef_in_a_phi_or_a_select_folds_as_the_pin_does() {
     assert_eq!(simplified(&guarded("i16 %w, i16 undef"), "r").as_deref(), Some("%w"));
     check("  %r = select i1 %c, i16 undef, i16 %y\n", "r", None);
 }
+
+/// Old: `freeze` of a value that is neither undef nor poison was kept
+/// (`simplifyFreezeInst` was not translated): a constant, a freeze of a
+/// freeze. A freeze of an undef, a poison or an unknown argument stays.
+#[test]
+fn a_freeze_of_a_defined_value_is_the_value() {
+    check("  %r = freeze i16 7\n", "r", Some("7"));
+    check("  %f = freeze i16 %x\n  %r = freeze i16 %f\n", "r", Some("%f"));
+    check("  %r = freeze i16 %x\n", "r", None);
+    check("  %r = freeze i16 undef\n", "r", None);
+    check("  %r = freeze i16 poison\n", "r", None);
+}

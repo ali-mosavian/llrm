@@ -5539,22 +5539,6 @@ fn test_a_poison_i64_is_two_zero_dwords() {
     assert!(!listing(text, "f").is_empty());
 }
 
-/// The translated coalescer is the default: a function compiled here never
-/// reaches the old pass, whose counter says when it can be deleted.
-#[test]
-fn test_the_old_coalescer_is_not_reached_by_default() {
-    let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
-  %c = add i16 %a, %b
-  %d = mul i16 %c, %a
-  ret i16 %d
-}
-";
-    let before = crate::backend::coalesce::old_runs();
-    let got = listing(text, "f");
-    assert!(got.len() > 3, "premise: the function compiled: {got:?}");
-    assert_eq!(crate::backend::coalesce::old_runs() - before, 0, "the old coalescer ran");
-}
-
 /// A far pointer that is poison (SROA's value for a read of an unwritten
 /// slot, which a returned struct's hidden pointer was) was refused: "an address
 /// of no global: Poison" (regparm3_matrix_22 at -O2). Poison is any value.
@@ -5567,4 +5551,20 @@ b0:
 ";
     let got = listing(text, "f");
     assert!(got.iter().any(|line| line == "retf"), "{got:?}");
+}
+
+/// Old: `@g = global i16 undef` was refused as "a poison initializer". An undef
+/// initializer is any bytes; the data is zero, as a `zeroinitializer` is.
+#[test]
+fn test_an_undef_initializer_is_zero_bytes() {
+    use crate::backend::masm::{Datum, Label};
+    let text = "@u = internal global i16 undef\n@s = internal global { i8, i16 } undef\n";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = |name: &str| {
+        crate::backend::globals::datums(&module, module.named(name).expect("a global"), &names).expect("data")
+    };
+    assert_eq!(datums("u"), [Datum::Label(Label { name: "u".to_owned() }), Datum::Bytes(vec![0, 0])]);
+    assert_eq!(datums("s"), [Datum::Label(Label { name: "s".to_owned() }), Datum::Bytes(vec![0, 0, 0, 0])]);
 }

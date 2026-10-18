@@ -244,8 +244,8 @@ impl LoopIdiomRecognize {
             }
         };
         let is_undef = |run: &Run, written: Written| match written {
-            Written::Splat(byte) => byte == Some(Byte::Undef),
-            Written::Pattern(Some(id)) => matches!(run.context.get(id).kind, ConstantKind::Poison),
+            Written::Splat(byte) => matches!(byte, Some(Byte::Undef | Byte::Poison)),
+            Written::Pattern(Some(id)) => matches!(run.context.get(id).kind, ConstantKind::Poison | ConstantKind::Undef),
             Written::Pattern(None) => false,
         };
 
