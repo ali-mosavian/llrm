@@ -34,6 +34,13 @@ pub struct AAInfo {
     pub noalias_scope: Option<MetadataId>,
 }
 
+impl AAInfo {
+    /// The tags an instruction carries.
+    pub fn of(op: &llrm_mir::module::Instruction) -> Self {
+        Self { tbaa: op.metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, id)| *id), noalias_scope: None }
+    }
+}
+
 /// A place in memory: a pointer and how much of it (`MemoryLocation`).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct MemoryLocation {
@@ -48,6 +55,40 @@ impl MemoryLocation {
         size: LocationSize,
     ) -> Self {
         Self { ptr, size, aa_info: AAInfo::default() }
+    }
+
+    /// `MemoryLocation::get(Instruction)`: the place a load or a store
+    /// accesses, its size the accessed type's store size and its tags the
+    /// instruction's; none for a call, a fence or anything else
+    /// (`getForArgument` is the call's).
+    pub fn get(
+        unit: &crate::memory::Unit,
+        inst: InstId,
+    ) -> Option<Self> {
+        let function = unit.function;
+        let op = function.instruction(inst);
+        let (pointer, accessed) = match &op.opcode {
+            llrm_mir::opcode::Opcode::Load { .. } => (op.operands[0], op.ty),
+            llrm_mir::opcode::Opcode::Store { .. } => {
+                (op.operands[1], function.operand_type(unit.context, op.operands[0])?)
+            }
+            _ => return None,
+        };
+        let bytes = unit.layout.store_size(&unit.context.types, accessed) as u64;
+        Some(Self { ptr: pointer, size: LocationSize::Precise(bytes), aa_info: AAInfo::of(op) })
+    }
+
+    /// `MemoryLocation::getForArgument`: the place argument `arg` of `call`
+    /// names, as far as the callee's attributes size it
+    /// (`dereferenceable`), else unsized.
+    pub fn get_for_argument(
+        unit: &crate::memory::Unit,
+        call: InstId,
+        arg: u32,
+    ) -> Option<Self> {
+        let op = unit.function.instruction(call);
+        let pointer = *op.operands.get(arg as usize)?;
+        Some(Self::before_or_after(pointer))
     }
 
     /// `MemoryLocation::getBeforeOrAfter`.
@@ -78,6 +119,17 @@ pub enum AliasResult {
     MayAlias,
     PartialAlias { offset: Option<i32> },
     MustAlias,
+}
+
+impl AliasResult {
+    /// The result for the pair the other way round (`AliasResult::swap`): a
+    /// partial alias's offset changes sign.
+    pub fn swap(self) -> Self {
+        match self {
+            Self::PartialAlias { offset } => Self::PartialAlias { offset: offset.map(|one| -one) },
+            other => other,
+        }
+    }
 }
 
 /// `ModRefInfo`: what an access may do to a location.
@@ -197,8 +249,10 @@ impl MemoryEffects {
     }
 }
 
-/// What the queries of one batch keep (`AAQueryInfo`): the answers asked for
-/// pairs, and the two switches a walk sets.
+/// What the queries of one batch keep (`AAQueryInfo`): the locations asked
+/// about, numbered, and the answer for each pair by those numbers (a pair is
+/// asked in one order, `swap` gives the other), and the two switches a walk
+/// sets.
 #[derive(Debug)]
 pub struct AAQueryInfo {
     /// The query may be asked about different iterations of a loop
@@ -206,12 +260,56 @@ pub struct AAQueryInfo {
     pub may_be_cross_iteration: bool,
     /// Whether the dominator tree may be used (`UseDominatorTree`).
     pub use_dominator_tree: bool,
-    pub cache: HashMap<(MemoryLocation, MemoryLocation), AliasResult>,
+    locations: HashMap<MemoryLocation, u32>,
+    answers: HashMap<u64, AliasResult>,
+    /// What the implementation memoises of capture questions
+    /// (`IsCapturedCache`): here so that a batch drops it, not the
+    /// implementation.
+    pub captured: HashMap<u64, bool>,
 }
 
 impl Default for AAQueryInfo {
     fn default() -> Self {
-        Self { may_be_cross_iteration: false, use_dominator_tree: true, cache: HashMap::new() }
+        Self {
+            may_be_cross_iteration: false,
+            use_dominator_tree: true,
+            locations: HashMap::new(),
+            answers: HashMap::new(),
+            captured: HashMap::new(),
+        }
+    }
+}
+
+impl AAQueryInfo {
+    fn number(
+        &mut self,
+        location: &MemoryLocation,
+    ) -> u32 {
+        let next = self.locations.len() as u32;
+        *self.locations.entry(*location).or_insert(next)
+    }
+
+    /// The remembered answer for the pair, in the order asked.
+    pub fn cached(
+        &mut self,
+        a: &MemoryLocation,
+        b: &MemoryLocation,
+    ) -> Option<AliasResult> {
+        let (one, other) = (self.number(a), self.number(b));
+        if let Some(found) = self.answers.get(&(u64::from(one) << 32 | u64::from(other))) {
+            return Some(*found);
+        }
+        self.answers.get(&(u64::from(other) << 32 | u64::from(one))).map(|found| found.swap())
+    }
+
+    pub fn remember(
+        &mut self,
+        a: &MemoryLocation,
+        b: &MemoryLocation,
+        answer: AliasResult,
+    ) {
+        let (one, other) = (self.number(a), self.number(b));
+        self.answers.insert(u64::from(one) << 32 | u64::from(other), answer);
     }
 }
 
@@ -317,6 +415,15 @@ pub trait AAResults {
         self.get_memory_effects(call, aaqi).does_not_access_memory()
     }
 
+    fn only_writes_memory(
+        &mut self,
+        call: InstId,
+        aaqi: &mut AAQueryInfo,
+    ) -> bool {
+        let effects = self.get_memory_effects(call, aaqi);
+        !effects.overall().is_ref_set()
+    }
+
     fn only_reads_memory(
         &mut self,
         call: InstId,
@@ -410,6 +517,27 @@ impl<'a, A: AAResults> BatchAAResults<'a, A> {
         self.aa.get_memory_effects(call, &mut self.aaqi)
     }
 
+    pub fn only_writes_memory(
+        &mut self,
+        call: InstId,
+    ) -> bool {
+        self.aa.only_writes_memory(call, &mut self.aaqi)
+    }
+
+    pub fn does_not_access_memory(
+        &mut self,
+        call: InstId,
+    ) -> bool {
+        self.aa.does_not_access_memory(call, &mut self.aaqi)
+    }
+
+    pub fn only_reads_memory(
+        &mut self,
+        call: InstId,
+    ) -> bool {
+        self.aa.only_reads_memory(call, &mut self.aaqi)
+    }
+
     pub fn call_captures_before(
         &mut self,
         inst: InstId,
@@ -443,6 +571,8 @@ impl<'a, A: AAResults> BatchAAResults<'a, A> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::memory::Unit;
+    use crate::testing::{DOS, function, layout, parsed};
 
     /// An analysis that answers nothing: every pair may alias, every access
     /// does both.
@@ -527,5 +657,42 @@ mod tests {
         assert_eq!(MemoryEffects::none().overall(), ModRefInfo::NoModRef);
         assert_eq!(ModRefInfo::Ref.union(ModRefInfo::Mod), ModRefInfo::ModRef);
         assert_eq!(ModRefInfo::ModRef.intersect(ModRefInfo::Ref), ModRefInfo::Ref);
+    }
+
+    /// A pair asked one way and again the other is one question: the answer is
+    /// kept by the interned ids of the two locations, and a partial alias's
+    /// offset changes sign when read the other way (LLVM's
+    /// `AliasResult::swap`).
+    #[test]
+    fn a_remembered_pair_is_read_back_the_other_way_with_the_offset_swapped() {
+        let (a, b) = (
+            MemoryLocation::new(Operand::Value(llrm_mir::module::ValueId(1)), LocationSize::Precise(4)),
+            MemoryLocation::new(Operand::Value(llrm_mir::module::ValueId(2)), LocationSize::Precise(4)),
+        );
+        let mut batch = AAQueryInfo::default();
+        assert_eq!(batch.cached(&a, &b), None);
+        batch.remember(&a, &b, AliasResult::PartialAlias { offset: Some(8) });
+        assert_eq!(batch.cached(&a, &b), Some(AliasResult::PartialAlias { offset: Some(8) }));
+        assert_eq!(batch.cached(&b, &a), Some(AliasResult::PartialAlias { offset: Some(-8) }));
+        assert_eq!(AliasResult::NoAlias.swap(), AliasResult::NoAlias);
+    }
+
+    /// The place a load or a store accesses is its pointer and the type's store
+    /// size; a call has none.
+    #[test]
+    fn the_location_of_an_instruction_is_its_pointer_and_the_accessed_size() {
+        let module = parsed(&format!(
+            "{DOS}declare void @g()\ndefine void @f(ptr %p) {{\nentry:\n  %v = load i16, ptr %p\n  store i32 7, ptr %p\n  call void @g()\n  ret void\n}}\n"
+        ));
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let sizes: Vec<Option<LocationSize>> = f
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| !matches!(f.instruction(inst).opcode, llrm_mir::opcode::Opcode::Ret))
+            .map(|inst| MemoryLocation::get(&unit, inst).map(|one| one.size))
+            .collect();
+        assert_eq!(sizes, vec![Some(LocationSize::Precise(2)), Some(LocationSize::Precise(4)), None]);
     }
 }
