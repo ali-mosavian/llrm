@@ -290,6 +290,8 @@ struct Walk<'a> {
     mssa: Box<dyn MemorySsaView + 'a>,
     callees: &'a memory::Callees,
     tree: &'a DomTree,
+    /// `SQ.DT` and `SQ.AC` of the function as it was.
+    analyses: &'a FunctionAnalyses,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
     invariants: Scoped<(Operand, TypeId), u32>,

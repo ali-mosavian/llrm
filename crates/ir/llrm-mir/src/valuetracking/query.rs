@@ -272,7 +272,7 @@ impl AssumptionCache {
             .collect();
         let mut cache = Self { assumes, affected: HashMap::default() };
         for assume in cache.assumes.clone() {
-            cache.update_affected_values(query, assume);
+            cache.update_affected_values(&query, assume);
         }
         cache
     }
@@ -378,17 +378,7 @@ impl FunctionAnalyses {
         Self { layout, dt: DomTree::of(function), assumptions: AssumptionCache::new(module, function) }
     }
 
-    /// The dominator tree (`SQ.DT`).
-    pub fn dominator_tree(&self) -> &DomTree {
-        &self.dt
-    }
-
-    /// The assumptions (`SQ.AC`).
-    pub fn assumption_cache(&self) -> &AssumptionCache {
-        &self.assumptions
-    }
-
-    /// The same from a module's parts: its globals name `llvm.assume`.
+    /// The same from the parts of a module a pass holds, not the module.
     pub fn of(
         context: &Context,
         globals: &[GlobalValue],
@@ -396,12 +386,15 @@ impl FunctionAnalyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Self {
-        let query = Query { globals, metadata, ..Query::bare(context, function, layout) };
-        Self { layout: layout.clone(), dt: DominatorTree::new(function), assumptions: AssumptionCache::of(&query) }
+        Self {
+            layout: layout.clone(),
+            dt: DomTree::of(function),
+            assumptions: AssumptionCache::of(context, globals, metadata, function),
+        }
     }
 
     /// The dominator tree (`SQ.DT`).
-    pub fn dominator_tree(&self) -> &DominatorTree {
+    pub fn dominator_tree(&self) -> &DomTree {
         &self.dt
     }
 
