@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:fb173eb1fd234dadee136a9610d04597d11fb23bc94ae99099fdadc2e4554f10 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:59edab9beb1d94a783f56900f4cb0cb1f24ff92cc63dd38d8881df7d892fa864 -->
 
 # simplifycfg
 
@@ -107,13 +107,29 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   LLVM's default (`simplifycfg-require-and-preserve-domtree` off, where the
   pass is given no `DominatorTree`) the analyses are invalidated when
   anything changed: that is a MIRROR.
-- D5. After a terminator was folded, `transform::_trivial_phis` runs over
-  the whole body, as `decide` did after the branches it decided: LLVM's pass
-  cleans only the phis of the blocks it touched (`removePredecessor`), and
-  `bintree` -O3 was 7 instructions longer without the rest (gvn leaves `phi
-  [%x, entry], [%self, latch]`; nothing else removes it, and a rule in
-  `algebraic` that did made `x_hanoi2` -O2 23% slower by exposing an
-  invariant to `hoist`).
+- D5. Temporary, driven by rows. After a terminator was folded,
+  `transform::_trivial_phis` runs over the whole body, as `decide` did after
+  the branches it decided. SimplifyCFG has no such construct: its phi
+  cleanup is
+  [`BasicBlock::removePredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/BasicBlock.cpp#L446)
+  (`hasConstantValue`, L468), of the phis of the successor whose edge went
+  (here `predecessor_removed`). What `_trivial_phis` does is InstSimplify's
+  [`simplifyPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5620),
+  which InstCombine and EarlyCSE run over the whole function. Whole body,
+  not the touched successors, because the phis are not there: gvn leaves
+  `phi [%x, entry], [%self, latch]` in loop headers (premise:
+  `gvn_tests::test_forwarding_a_loops_cell_to_its_phi_leaves_a_phi_of_itself`),
+  which `decide` removed whenever it decided something. With the touched
+  successors only, `bintree` -O3 was 7 instructions longer (twice; LSR
+  declines the build loop with the phis in), seen failing in
+  `simplifycfg_tests::test_a_fold_takes_a_phi_of_itself_and_one_value_out_of_the_body`.
+  It runs once in a pass run that folded, not once per fold; compile
+  instructions on the largest programs, base to here: `jpeg_single` (C)
+  -2.0%, `jpeg_fixed` (Nib) -0.3%, `qcport/mdl_ai` -0.4%, `stft_single` (C)
+  +0.08%, `jpeg_single` (BASIC, flat) +0.06%. Exit: gvn leaves no phi of
+  itself (#2186) and `hoist` no longer lifts into an unguarded entry
+  (#2194; a rule in `algebraic` that removed the phis made `x_hanoi2` -O2
+  22.8% slower through it); then this goes.
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches
