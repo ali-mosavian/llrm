@@ -227,12 +227,12 @@ def declared(packages: list[str], budget: float = BUDGET) -> float:
     return sum(cost for _, _, cost in plan(packages, budget))
 
 
-def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET) -> tuple[bool, str]:
-    """(passed, the last line). The clock is the test's, which waits on virtual time."""
+def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET, known_red: frozenset[str] = frozenset()) -> tuple[bool, str]:
+    """(passed, the last line). The clock is the test's, which waits on virtual time. A step named in `known_red` is not run and is said to be skipped."""
     started, wall, parts, failed, skipped = clock(), time.monotonic(), [], [], []
     for name, step, _ in steps:
         began = clock()
-        verdict, detail = step(bins)
+        verdict, detail = ("skipped", "known red, not run") if name in known_red else step(bins)
         parts.append(f"{name} {verdict} {clock() - began:.1f} s")
         if verdict == "fail":
             failed.append(f"{name}: {detail}")
@@ -271,6 +271,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--bin", type=Path, default=None, help="the llrm-c, llrm-qb and llrm-nib directory (default: LLRM_BIN, else the target dir's release)")
     parser.add_argument("--base", default="origin/feat/parity", help="what the merge result is compared with to find the touched crates")
+    parser.add_argument("--skip", action="append", default=[], metavar="STEP", help="a step known red (tools/parity_squash.py --known-red): not run, named as skipped in the line")
     parser.add_argument("--rank", nargs="+", metavar="CRATE", help="measure these crates' unit tests once and write the ranking")
     args = parser.parse_args()
     if args.rank:
@@ -280,7 +281,7 @@ def main() -> int:
     packages = touched(args.base)
     for package in packages:  # built first, untimed
         subprocess.run(["cargo", "test", "-q", "--lib", "-p", package, "--no-run"], cwd=ROOT, capture_output=True)
-    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir())
+    ok, line = run_steps(plan(packages), args.bin or llrmbin.bin_dir(), known_red=frozenset(args.skip))
     print(line)
     return 0 if ok else 1
 
