@@ -3,6 +3,7 @@
 //! docs/architecture/basicaa-port.md). Per query: nothing is solved for the
 //! whole function, and what one query learns lives in its `AAQueryInfo`.
 //!
+//! # How it works
 //! Translated: `aliasCheck` (empty locations, casts stripped, the same value,
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
@@ -14,6 +15,17 @@
 //! ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
 //! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
 //! read the attributes.
+//!
+//! # Example
+//! Two allocas never alias:
+//!
+//! ```text
+//! %a = alloca i32
+//! %b = alloca i32        ; alias(%a, %b) = NoAlias
+//! ```
+//!
+//! # Provides
+//! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};
