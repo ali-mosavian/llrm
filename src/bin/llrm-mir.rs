@@ -4,7 +4,11 @@
 //! N instructions instead, and prints what it returns. `llrm-mir --ivs FILE`
 //! prints, per function and innermost loop, how many of the loop's header
 //! phis ScalarEvolution proves step by a nonzero amount: its induction
-//! variables, as tools/loops counts them.
+//! variables, as tools/loops counts them. `llrm-mir --aliases FILE` prints, per
+//! function, the answer today's points-to facts give for every pair of pointer
+//! operands of its loads, stores and calls, one `NoAlias|MayAlias|MustAlias
+//! %a %b` line a pair, in the order `opt -passes=aa-eval` lists them, for
+//! tools/aliascompare.py.
 
 use std::process::ExitCode;
 
@@ -19,6 +23,10 @@ fn main() -> ExitCode {
     }
     let ivs = arguments.first().is_some_and(|one| one == "--ivs");
     if ivs {
+        arguments.remove(0);
+    }
+    let aliases_wanted = arguments.first().is_some_and(|one| one == "--aliases");
+    if aliases_wanted {
         arguments.remove(0);
     }
     let mut option = |flag: &str| {
@@ -52,6 +60,10 @@ fn main() -> ExitCode {
             }
             if ivs {
                 print!("{}", induction_variables(&module));
+                return ExitCode::SUCCESS;
+            }
+            if aliases_wanted {
+                print!("{}", aliases(&module));
                 return ExitCode::SUCCESS;
             }
             if !run {
@@ -95,6 +107,71 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
             let header = loops.loops[at].header;
             let count = evolution.counted(&module.context, function, &loops, header);
             out += &format!("{}\t{number}\t{count}\n", global.name.as_deref().unwrap_or("?"));
+        }
+    }
+    out
+}
+
+/// `function<TAB>answer<TAB>%a<TAB>%b` per pair of the pointer values that
+/// load, store and call operands name (a value, in order of first use), by what
+/// the points-to facts of the body say: `NoAlias` where no object they point
+/// into is shared, `MustAlias` for one value, else `MayAlias`.
+fn aliases(module: &llrm_mir::module::Module) -> String {
+    use llrm_analysis::memory::Unit;
+    use llrm_mir::module::{Operand, ValueId};
+    use llrm_mir::opcode::Opcode;
+    let layout = module
+        .datalayout
+        .as_deref()
+        .map_or_else(llrm_mir::datalayout::DataLayout::default, |text| {
+            llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout")
+        });
+    let mut out = String::new();
+    for (_, global, function) in module.functions() {
+        if function.layout().is_empty() {
+            continue;
+        }
+        let plain = Unit::of(module, &layout, function);
+        let known = llrm_analysis::consts::known(&Unit { registers: None, ..plain });
+        let shape = llrm_analysis::cfg::Shape::of(function);
+        let unit = plain.with_registers(&known).with_shape(&shape);
+        let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
+        let names = llrm_mir::print::value_names(function);
+        let mut pointers: Vec<ValueId> = Vec::new();
+        let mut note = |operand: Operand, pointers: &mut Vec<ValueId>| {
+            if let Operand::Value(value) = operand
+                && function.operand_type(&module.context, operand).is_some_and(|ty| matches!(module.context.types.get(ty), llrm_mir::types::Type::Pointer(_)))
+                && !pointers.contains(&value)
+            {
+                pointers.push(value);
+            }
+        };
+        for (_, inst) in function.walk() {
+            let op = function.instruction(inst);
+            match &op.opcode {
+                Opcode::Load { .. } => note(op.operands[0], &mut pointers),
+                Opcode::Store { .. } => note(op.operands[1], &mut pointers),
+                Opcode::Call(_) | Opcode::Invoke(_) => {
+                    for &operand in &op.operands {
+                        note(operand, &mut pointers);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (at, &one) in pointers.iter().enumerate() {
+            for &other in &pointers[at + 1..] {
+                let answer = match (facts.values.get(&one), facts.values.get(&other)) {
+                    (Some(left), Some(right)) if !left.intersects(right) => "NoAlias",
+                    _ => "MayAlias",
+                };
+                out += &format!(
+                    "{}\t{answer}\t%{}\t%{}\n",
+                    global.name.as_deref().unwrap_or("?"),
+                    names[&one],
+                    names[&other]
+                );
+            }
         }
     }
     out
