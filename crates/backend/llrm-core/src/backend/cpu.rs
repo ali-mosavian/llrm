@@ -678,6 +678,44 @@ mod tests {
         assert_eq!((target.costs().call, target.size_costs().call), (18, 5));
     }
 
+    /// The target every frontend lowers to states its LLVM cost model: the
+    /// flat 32-bit target's, none for real mode. `tti` was not forwarded, so
+    /// `LLRM_EXP_INLINEDECIDE` priced with the generic rules whatever the
+    /// target said (the rows with and without the model were the same run).
+    #[test]
+    fn test_the_lowered_target_forwards_its_cost_model() {
+        use llrm_mir::target::Machine;
+        let abi = || crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+        };
+        let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
+        assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
+        assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_none());
+    }
+
+    /// The target every frontend lowers to states X86's `TargetLowering`
+    /// facts on both word sizes. `lowering` was not forwarded (and `mask_test`
+    /// priced the sink of a masked compare): the sink never ran on QB's
+    /// target once the price was gone.
+    #[test]
+    fn test_the_lowered_target_forwards_its_lowering_facts() {
+        use llrm_mir::target::Machine;
+        let abi = || crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+        };
+        let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
+        for cpu in [flat, profile("486").unwrap()] {
+            let lowering = crate::abi::qb::LoweredTarget::of(cpu, abi()).lowering().expect("x86 states them");
+            assert!(lowering.is_mask_and_cmp0_folding_beneficial());
+        }
+    }
+
     /// Real mode indexes by a dword behind the address-size prefix; a flat
     /// target's form is native. Both are the form that takes a dword index,
     /// and the word form is not.

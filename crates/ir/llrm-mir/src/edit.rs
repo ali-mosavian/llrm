@@ -1077,17 +1077,34 @@ impl Function {
         &mut self,
         block: BlockId,
     ) -> Result<(), String> {
-        if !self.block(block).instructions.is_empty() {
-            return Err(format!("block {} still holds instructions", block.0));
+        self.erase_blocks(&[block])
+    }
+
+    /// Removes empty blocks nothing names, leaving the layout in one pass:
+    /// erasing `n` blocks one by one scans it `n` times.
+    pub fn erase_blocks(
+        &mut self,
+        blocks: &[BlockId],
+    ) -> Result<(), String> {
+        for &block in blocks {
+            if !self.block(block).instructions.is_empty() {
+                return Err(format!("block {} still holds instructions", block.0));
+            }
+            if !self.block_users(block).is_empty() {
+                return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+            }
         }
-        if !self.block_users(block).is_empty() {
-            return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
+        let mut gone = crate::dense::IdSet::<BlockId>::new();
+        for &block in blocks {
+            gone.insert(block);
         }
-        self.layout.retain(|one| *one != block);
-        self.release_name(block);
-        self.blocks[block.0 as usize].erased = true;
-        self.blocks[block.0 as usize].placed = false;
-        self.log(Change::BlockErased(block));
+        self.layout.retain(|one| !gone.contains(one));
+        for &block in blocks {
+            self.release_name(block);
+            self.blocks[block.0 as usize].erased = true;
+            self.blocks[block.0 as usize].placed = false;
+            self.log(Change::BlockErased(block));
+        }
         Ok(())
     }
 }
