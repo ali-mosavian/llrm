@@ -284,9 +284,7 @@ fn planned(
     let entry = function.entry()?;
     let early: BTreeSet<InstId> = function
         .block(entry)
-        .instructions()
         .iter()
-        .copied()
         .take_while(|&inst| {
             !matches!(
                 function.instruction(inst).opcode,

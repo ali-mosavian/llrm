@@ -102,7 +102,7 @@ fn test_exact_nested_recurrence_rewinds_before_reloading_its_start() {
     let function = f(&mut module);
     let inner =
         function.layout().iter().copied().find(|&one| function.block(one).name.as_deref() == Some("b3")).unwrap();
-    let phi = function.block(inner).instructions()[0];
+    let phi = function.block(inner).first().expect("a block with an instruction");
     assert!(
         !function
             .instruction(phi)
@@ -674,9 +674,8 @@ fn header_phis(module: &mut Module) -> usize {
     let [one] = &loops::loops(&cfg::graph(function), function.entry().map(cfg::id))[..] else { panic!("one loop") };
     function
         .block(cfg::block(one.header))
-        .instructions()
         .iter()
-        .filter(|&&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .filter(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
         .count()
 }
 
