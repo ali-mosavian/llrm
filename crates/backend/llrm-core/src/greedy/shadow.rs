@@ -230,6 +230,35 @@ impl PhysInterference for CallMasks {
     ) -> bool {
         false
     }
+
+    fn reg_mask_range(
+        &self,
+        start: SlotIndex,
+        stop: SlotIndex,
+    ) -> std::ops::Range<usize> {
+        self.calls.partition_point(|(slot, ..)| *slot < start)..self.calls.partition_point(|(slot, ..)| *slot < stop)
+    }
+
+    fn reg_mask_slot(
+        &self,
+        i: usize,
+    ) -> SlotIndex {
+        self.calls[i].0
+    }
+
+    /// DEVIATE D-IC2: a call's registers are the roots it destroys plus the
+    /// high halves a wide value loses; the cache asks per register, not per
+    /// value, so both count. The fact: `reg_mask_clobbered` decides the high
+    /// halves by the width of the value asked, which a register has none of.
+    fn reg_mask_clobbers(
+        &self,
+        i: usize,
+        phys: RegId,
+    ) -> bool {
+        let root = crate::model::ir::root(phys);
+        let (_, destroyed, high, _) = &self.calls[i];
+        destroyed.contains(&root) || high.contains(&root)
+    }
 }
 
 /// What `decide` decided: the register of each value that has one, and the
