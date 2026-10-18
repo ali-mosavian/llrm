@@ -26,7 +26,7 @@ Each old analysis keeps a zero-callers counter (`LLRM_DEBUG=analyses`): when no 
 | mem2reg | `mem2reg.rs` (#2130) | difftest vs `opt -passes=mem2reg` |
 | sroa | `sroa.rs` (spike) | difftest vs `sroa<preserve-cfg>` |
 | gvn | gvn-port | difftest vs `gvn`, `gvn<memoryssa>` |
-| loop-rotate, unroll, peel, unswitch, deletion | loop-passes-port (#2234) | difftest per pass; acceptance rows in [rotate-refusals](rotate-refusals.md) |
+| loop-rotate, unroll, peel, unswitch, deletion | loop-passes-port (#2234) | difftest per pass; acceptance rows in rotate-refusals (PR 2235) |
 
 ## Run counts per level
 
