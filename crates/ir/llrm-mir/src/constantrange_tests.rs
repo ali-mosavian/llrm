@@ -467,6 +467,8 @@ fn golden_lines() -> Vec<String> {
 fn test_every_operation_agrees_with_llvm() {
     let golden: Vec<&str> = include_str!("constantrange_golden.txt").lines().collect();
     let ours = golden_lines();
+    let distinct: std::collections::BTreeSet<&str> = golden.iter().filter_map(|line| line.rsplit(' ').next()).collect();
+    assert!(distinct.len() * 2 > golden.len(), "LLVM's file says {} things in {} lines", distinct.len(), golden.len());
     let differing: Vec<String> =
         ours.iter().zip(&golden).filter(|(a, b)| a.as_str() != **b).map(|(a, b)| format!("{a} (LLVM: {b})")).collect();
     assert_eq!(ours.len(), golden.len(), "{} operations here, {} in LLVM's file", ours.len(), golden.len());

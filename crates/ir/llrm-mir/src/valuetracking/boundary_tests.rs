@@ -92,3 +92,36 @@ fn nothing_outside_mir_produces_a_vector_type() {
     }
     assert!(found.is_empty(), "these build a vector type: {found:?}");
 }
+
+/// The answers we assert were taken from LLVM, and an oracle that can only say
+/// one thing proves nothing: in each directory of `tests/vt`, every column that
+/// appears says at least two different things (a fact and "unknown").
+#[test]
+fn the_pinned_llvm_answers_we_assert_say_more_than_one_thing() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vt");
+    let mut checked = 0;
+    for area in std::fs::read_dir(&root).expect("tests/vt").flatten() {
+        let mut answers = std::collections::BTreeMap::<String, std::collections::BTreeSet<String>>::new();
+        for file in std::fs::read_dir(area.path()).expect("an area").flatten() {
+            let path = file.path();
+            if !matches!(
+                path.extension().and_then(|one| one.to_str()),
+                Some("expected" | "llvm")
+            ) {
+                continue;
+            }
+            for line in std::fs::read_to_string(&path).expect("a file").lines() {
+                for word in line.split_whitespace() {
+                    if let Some((key, value)) = word.split_once('=') {
+                        answers.entry(key.to_owned()).or_default().insert(value.to_owned());
+                    }
+                }
+            }
+        }
+        for (key, values) in &answers {
+            assert!(values.len() >= 2, "{}: column `{key}` always says {values:?}", area.path().display());
+            checked += 1;
+        }
+    }
+    assert!(checked >= 10, "{checked} columns checked");
+}
