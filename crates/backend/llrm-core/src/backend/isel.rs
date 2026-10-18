@@ -1663,7 +1663,7 @@ impl Selector<'_, '_, '_> {
         let kept = self.callee_facts.stack_alignment(self.arch, name);
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
                     let size = self.layout.alloc_size(self.types(), allocated) as i64;
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
@@ -1705,7 +1705,7 @@ impl Selector<'_, '_, '_> {
         }
         for &block in layout {
             block_at.insert(block, at);
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 self.ats.insert(inst, at);
                 at += 1;
                 if let Opcode::Alloca { allocated, .. } = function.instruction(inst).opcode {
@@ -1913,7 +1913,7 @@ impl Selector<'_, '_, '_> {
             );
         }
         for &block in layout {
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 self.fuse(block, inst);
                 self.covered_by_pattern(inst, &block_at, convention);
                 self.narrowed(inst);
@@ -1952,7 +1952,7 @@ impl Selector<'_, '_, '_> {
             let blocks = made.entry(block).or_default();
             let mut insns = if block == entry { std::mem::take(&mut prologue) } else { Vec::new() };
             let mut phis = Vec::new();
-            for &inst in function.block(block).instructions() {
+            for inst in function.block(block).iter() {
                 let instruction = function.instruction(inst);
                 if instruction.opcode == Opcode::Phi && (self.is_far(instruction.ty) || self.is_wide(instruction.ty)) {
                     let result = instruction.result.expect("a phi's value");
@@ -2265,10 +2265,11 @@ impl Selector<'_, '_, '_> {
         if self.consumed.contains(&inst) || !matches!(self.types().int_bits(instruction.ty), Some(16 | 32 | 64)) {
             return;
         }
-        let Some(block) = function.parent(inst) else { return };
-        let later = function.block(block).instructions().iter().skip_while(|&&one| one != inst).skip(1);
+        if function.parent(inst).is_none() {
+            return;
+        }
+        let mut later = std::iter::successors(function.next_in_block(inst), |&one| function.next_in_block(one));
         let found = later
-            .copied()
             .find(
                 |&one| {
                     let other = function.instruction(one);
@@ -2303,17 +2304,10 @@ impl Selector<'_, '_, '_> {
         to: InstId,
     ) -> bool {
         let function = self.function;
-        let Some(block) = function.parent(from) else { return false };
-        let instructions = function.block(block).instructions();
-        let (Some(start), Some(end)) =
-            (instructions.iter().position(|&one| one == from), instructions.iter().position(|&one| one == to))
-        else {
-            return false;
-        };
-        start < end
-            && instructions[start + 1..end]
-                .iter()
-                .all(|&one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
+        function.comes_before(from, to)
+            && std::iter::successors(function.next_in_block(from), |&one| function.next_in_block(one))
+                .take_while(|&one| one != to)
+                .all(|one| !llrm_mir::memory::of(&self.module.context, &self.callees, function, one).writes)
     }
 
     /// Whether `inst` is a call of `llvm.lifetime.start` or `.end`.
@@ -2349,7 +2343,7 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let positions: IndexMap<InstId, i64> = layout
             .iter()
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.block(block).iter())
             .enumerate()
             .map(|(at, inst)| (inst, at as i64))
             .collect();
@@ -2424,7 +2418,7 @@ impl Selector<'_, '_, '_> {
         block: BlockId,
     ) -> Result<(), Unselected> {
         let function = self.function;
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let instruction = function.instruction(inst);
             if instruction.opcode != Opcode::Phi {
                 break;
@@ -2610,7 +2604,7 @@ impl Selector<'_, '_, '_> {
         let mut out = BTreeSet::new();
         let Some(&entry) = function.layout().first() else { return out };
         let order: IndexMap<InstId, usize> =
-            function.block(entry).instructions().iter().enumerate().map(|(index, &inst)| (inst, index)).collect();
+            function.block(entry).iter().enumerate().map(|(index, inst)| (inst, index)).collect();
         for (&inst, &index) in &order {
             let Some(local) = self.zero_write(inst) else { continue };
             if function.users(local).iter().all(|one| {
@@ -3286,7 +3280,7 @@ impl Selector<'_, '_, '_> {
                 Some(&pair) => pair,
                 None => {
                     let (base, selector) = (self.fresh_held(2), self.fresh_held(2));
-                    let at = self.ats[&self.function.block(block).instructions()[0]];
+                    let at = self.ats[&self.function.block(block).first().expect("a block with instructions")];
                     let symbol = |space, index| {
                         Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index, ..Addr::new(space, 0) }) })
                     };
@@ -6754,10 +6748,8 @@ impl Selector<'_, '_, '_> {
         let function = self.function;
         let ValueDef::Instruction(call) = function.value(value).def else { return false };
         let Some(block) = function.parent(call) else { return false };
-        let instructions = function.block(block).instructions();
-        let Some(at) = instructions.iter().position(|&one| one == call) else { return false };
-        instructions.get(at + 1) == Some(&inst)
-            && (!self.fused.contains(&inst) || instructions.get(at + 2) == function.terminator(block).as_ref())
+        function.next_in_block(call) == Some(inst)
+            && (!self.fused.contains(&inst) || function.next_in_block(inst) == function.terminator(block))
     }
 
     /// A port read or written: `in` or `out`, a port below 256 immediate,
