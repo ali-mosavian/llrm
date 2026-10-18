@@ -36,3 +36,37 @@ def test_stdout_is_one_line_naming_an_existing_file_after_a_noisy_rebuild(tmp_pa
 def test_the_setup_step_reads_the_last_line_and_fails_with_a_message_when_it_is_no_executable():
     step = (ROOT / ".github/actions/setup/action.yml").read_text()
     assert "sh toolchain/wdump.sh | tail -n 1" in step and "which is not an executable file" in step
+
+
+def captured_scripts():
+    """Every toolchain script a workflow or tool captures with `$(sh toolchain/NAME.sh)` (or runs through `$(toolchain/NAME.sh)`)."""
+    import re
+
+    found = set()
+    for path in [*(ROOT / ".github").rglob("*.yml"), *(ROOT / "tools").rglob("*.py"), *(ROOT / "tools").rglob("*.sh")]:
+        if path.name == "test_wdump_sh.py":
+            continue
+        found |= set(re.findall(r"\$\((?:sh |bash )?(?:\./)?toolchain/(\w+\.sh)", path.read_text(errors="replace")))
+    return sorted(found)
+
+
+def test_every_captured_toolchain_script_prints_its_result_on_a_descriptor_of_its_own():
+    """The class, not one script: a script whose stdout is captured by `$(...)` must send every log to stderr and print its result on fd 3, or a build on a
+    cache miss pollutes the captured value (wdump.sh, #2093); gcctorture.sh only escaped by a `>&2` on one call."""
+    scripts = captured_scripts()
+    assert {"wdump.sh", "gcctorture.sh"} <= set(scripts), scripts
+    for name in scripts:
+        text = (ROOT / "toolchain" / name).read_text()
+        assert "exec 3>&1 1>&2" in text and ">&3" in text, f"{name} prints its result on stdout among its logs"
+
+
+def test_gcctorture_prints_one_line_even_when_git_is_noisy(tmp_path):
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    (stub / "git").write_text("#!/bin/sh\necho 'git: noise on stdout'\n")
+    (stub / "git").chmod(0o755)
+    env = {**os.environ, "PATH": f"{stub}:{os.environ['PATH']}", "XDG_CACHE_HOME": str(tmp_path / "cache")}
+    done = subprocess.run(["sh", str(ROOT / "toolchain/gcctorture.sh")], capture_output=True, text=True, env=env)
+    assert done.returncode == 0, done.stderr[-300:]
+    assert len(done.stdout.splitlines()) == 1 and done.stdout.strip().endswith("gcc.c-torture/execute"), done.stdout
+    assert "git: noise on stdout" in done.stderr
