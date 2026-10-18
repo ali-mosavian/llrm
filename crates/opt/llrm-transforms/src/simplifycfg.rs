@@ -237,10 +237,13 @@ fn iteratively_simplified(
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
+    // D7: a function with a loop only.
+    let form = if headers.is_empty() { Default::default() } else { crate::decide::loop_form_blocks(function) };
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers) {
+            if function.is_placed(block) && block_simplified(context, callees, function, block, folded, &headers, &form)
+            {
                 local = true;
             }
         }
@@ -258,6 +261,7 @@ fn block_simplified(
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
+    form: &std::collections::BTreeSet<i64>,
 ) -> bool {
     // No predecessor but not the entry, or only itself: unreachable.
     let predecessors = function.predecessors(block);
@@ -269,7 +273,10 @@ fn block_simplified(
     *folded |= changed;
     changed |= transform::duplicate_phis_in(function, block).expect("a phi nothing reads is erased");
     changed |= cfg::merged_into_predecessor(function, block);
-    changed | (function.is_placed(block) && jump_simplified(context, function, block, headers))
+    changed
+        | (function.is_placed(block)
+            && !form.contains(&llrm_analysis::cfg::id(block))
+            && jump_simplified(context, function, block, headers))
 }
 
 /// The back edges' targets, by one walk from the entry: LLVM's
