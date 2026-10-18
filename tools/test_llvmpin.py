@@ -102,3 +102,16 @@ def test_a_test_needing_the_pin_runs_where_the_pin_is_present(monkeypatch):
     monkeypatch.setattr(llvmpin, "missing", lambda: None)
     monkeypatch.setenv("RUNNER_ENVIRONMENT", "self-hosted")
     assert pinned_tests.require_pin() is None
+
+
+def test_the_pin_dir_variable_moves_the_pinned_build(monkeypatch, tmp_path):
+    """The CI runners hold the pin at /opt/llrm-pin, not under ~alim: PINNED_BIN follows LLRM_PIN_DIR."""
+    import importlib
+
+    monkeypatch.setenv("LLRM_PIN_DIR", str(tmp_path))
+    moved = importlib.reload(llvmpin)
+    try:
+        assert moved.PINNED_BIN == tmp_path / "bin"
+    finally:
+        monkeypatch.delenv("LLRM_PIN_DIR")
+        importlib.reload(llvmpin)
