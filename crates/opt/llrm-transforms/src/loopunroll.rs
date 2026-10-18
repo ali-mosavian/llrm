@@ -33,7 +33,8 @@
 //! - D2 No partial, runtime or epilog unrolling: `options.count` must be the
 //!   maximum trip count (`unroll_loop` refuses otherwise). The pinned `opt`
 //!   leaves `UP.Partial` and `UP.Runtime` off at `-mcpu=i486` and `pentiumpro`
-//!   ([the plan](https://github.com/ali-mosavian/llrm/blob/main/docs/architecture/loop-passes-port.md)).
+//!   ([the
+//!   plan](https://github.com/ali-mosavian/llrm/blob/main/docs/architecture/loop-passes-port.md)).
 //! - D8 No `LoopInfo`, `DominatorTree`, `ScalarEvolution` or `AssumptionCache`
 //!   to update: llrm derives its loop shape and dominators from the function
 //!   each time they are asked, so none is kept up to date here, and nothing

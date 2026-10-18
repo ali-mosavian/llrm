@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunroll.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunroll.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunroll.rs sha256:e819a7fc7b8f6e781bceb6b7f512e801fbea078fdc854d8c329c5748d5a8181e -->
+<!-- src: crates/opt/llrm-transforms/src/loopunroll.rs sha256:c77d804ad9fa9ccf6483ec8573484fd01d04a8addf9939fd8bd51c7ea39c5860 -->
 
 # loopunroll
 
@@ -38,7 +38,8 @@ shape is a guard.
 - D2 No partial, runtime or epilog unrolling: `options.count` must be the
   maximum trip count (`unroll_loop` refuses otherwise). The pinned `opt`
   leaves `UP.Partial` and `UP.Runtime` off at `-mcpu=i486` and `pentiumpro`
-  ([the plan](https://github.com/ali-mosavian/llrm/blob/main/docs/architecture/loop-passes-port.md)).
+  ([the
+  plan](https://github.com/ali-mosavian/llrm/blob/main/docs/architecture/loop-passes-port.md)).
 - D8 No `LoopInfo`, `DominatorTree`, `ScalarEvolution` or `AssumptionCache`
   to update: llrm derives its loop shape and dominators from the function
   each time they are asked, so none is kept up to date here, and nothing
