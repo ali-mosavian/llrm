@@ -2230,6 +2230,7 @@ pub(crate) enum Pass {
     /// Not a pass: from here the module analyses it names are not dropped by a
     /// pass that adds no memory operation.
     Freeze(Vec<Kind>),
+    Hold(Vec<Kind>),
 }
 
 impl Pass {
@@ -2239,6 +2240,7 @@ impl Pass {
             Pass::Module(pass) => pass.name(),
             Pass::Program(pass) => pass.name(),
             Pass::Freeze(_) => "freeze",
+            Pass::Hold(_) => "hold",
         }
     }
 }
@@ -2296,6 +2298,15 @@ impl PassManager {
     /// stays conservative.
     pub fn freeze<M: ModuleAnalysis>(&mut self) {
         self.passes.push(Pass::Freeze(vec![Kind::of::<M>()]));
+    }
+
+    /// From this point `M` is held past every function pass, whatever it adds,
+    /// as LLVM's `GlobalsAAResult::invalidate` (GlobalsModRef.cpp:825): the
+    /// result is stateless, kept unless a pass abandons it, and only module
+    /// passes do. Held past a function pass it is rechecked under
+    /// `LLRM_CHECK_STALE` like a frozen one.
+    pub fn hold<M: ModuleAnalysis>(&mut self) {
+        self.passes.push(Pass::Hold(vec![Kind::of::<M>()]));
     }
 
     pub fn add_module(
@@ -2454,6 +2465,7 @@ impl PassManager {
             running
         };
         let mut frozen: Vec<Kind> = Vec::new();
+        let mut held: Vec<Kind> = Vec::new();
         for (number, pass) in self.passes.iter_mut().enumerate().skip(passes.start).take(passes.len()) {
             let name = pass.name();
             PASS.with(|p| p.set(name));
@@ -2462,6 +2474,10 @@ impl PassManager {
                 Pass::Program(_) => unreachable!("a program pass runs over every module"),
                 Pass::Freeze(kinds) => {
                     frozen.extend(kinds.iter().copied());
+                    continue;
+                }
+                Pass::Hold(kinds) => {
+                    held.extend(kinds.iter().copied());
                     continue;
                 }
                 Pass::Module(pass) => {
@@ -2571,12 +2587,15 @@ impl PassManager {
             if !pass.adds_memory_operations() {
                 kept.extend(frozen.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             }
+            kept.extend(held.iter().map(|one| one.id).filter(|one| analyses.results.contains_key(one)));
             let mut preserved = PreservedAnalyses::none();
             preserved.kept = kept;
             analyses.invalidate(&preserved);
+            let mut checked = held.clone();
             if !pass.adds_memory_operations() {
-                checked_stale(module, analyses, &frozen, name);
+                checked.extend(frozen.iter().copied());
             }
+            checked_stale(module, analyses, &checked, name);
             after(dump, self.verify_each, number, name, module)?;
         }
         Ok(stages)
