@@ -318,7 +318,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 43] = [
+pub const FLAG_ATTRIBUTES: [&str; 44] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -348,6 +348,7 @@ pub const FLAG_ATTRIBUTES: [&str; 43] = [
     "nosync",
     "noundef",
     "nounwind",
+    "null_pointer_is_valid",
     "optnone",
     "optsize",
     "readnone",
