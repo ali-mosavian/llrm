@@ -3,7 +3,7 @@
 //! `<function> <n> kb=... sb=...`, where `<n>` numbers the function's arguments
 //! and then its instructions that have a scalar integer or pointer result.
 //! usage: vtdump COLS FILE.ll...     COLS: a comma list, in this order, of kb
-//! sb nz p2 p2z gp nn ng cru crs sp ov
+//! sb nz p2 p2z gp nn ng cru crs pat ov
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dominators::DominatorTree;

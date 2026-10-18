@@ -1,8 +1,8 @@
 // Prints what LLVM's ValueTracking proves of every integer and pointer value of a module, one line each:
 //   <function> <n> <column>=<answer> ...
 // where <n> numbers the function's arguments and then its instructions that have a scalar integer or pointer result.
-// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z gp nn ng cru crs sp ov (the order printed)
-// `sp` is matchSelectPattern of a select: flavor/NaN behaviour/ordered/cast/LHS/RHS (`-` on anything else).
+// usage: vtdump COLS FILE.ll...   COLS is a comma list of: kb sb nz p2 p2z gp nn ng cru crs pat ov (the order printed)
+// `pat` is matchSelectPattern of a select: flavor/NaN behaviour/ordered/cast/LHS/RHS (`-` on anything else).
 // `ov` is computeOverflowFor* of an add, sub or mul, as letters M(ay) L(ow) H(igh) N(ever): add u/s(AddOperator)/s(operands), sub u/s, mul u/s.
 // `tools/llvmport/vtcompare.py` runs it beside the Rust `vtdump` example and compares the lines.
 #include "llvm/Config/llvm-config.h"
@@ -144,7 +144,7 @@ int main(int argc, char **argv) {
           if (cols.count("cru")) printf(" cru=%s", cr(computeConstantRange(V, false, Q, 0)).c_str());
           if (cols.count("crs")) printf(" crs=%s", cr(computeConstantRange(V, true, Q, 0)).c_str());
         }
-        if (cols.count("sp")) printf(" sp=%s", sp(V).c_str());
+        if (cols.count("pat")) printf(" pat=%s", sp(V).c_str());
         if (cols.count("ov")) printf(" ov=%s", ov(V, Q).c_str());
         printf("\n");
       };

@@ -488,6 +488,21 @@ pub fn run_main(main: impl FnOnce() -> i32) -> i32 {
     code
 }
 
+/// `LLRM_DEBUG=checks`: one line per oracle the compile reached, `[checks]
+/// REPLAY 4`, with `extra` for the oracles whose crate cannot name `env_flag!`
+/// (llrm-mir has no dependencies): their own count of checks run.
+pub fn report_checks(extra: &[(&str, u32)]) {
+    if enabled("checks") {
+        let mut rows: Vec<(String, u32)> =
+            crate::reached_checks().into_iter().map(|(name, sites)| (name.to_owned(), sites)).collect();
+        rows.extend(extra.iter().filter(|row| row.1 > 0).map(|row| (row.0.to_owned(), row.1)));
+        rows.sort();
+        for (oracle, count) in rows {
+            eprintln!("[checks] {oracle} {count}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{work_fd, work_now};
