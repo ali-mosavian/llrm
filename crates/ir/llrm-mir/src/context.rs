@@ -7,6 +7,13 @@ use crate::types::{TypeId, Types};
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ConstantId(u32);
 
+impl ConstantId {
+    /// Its place among the interned constants: later ids are made later.
+    pub fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
 /// A global value -- variable or function -- of the module.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct GlobalId(pub u32);
@@ -89,6 +96,12 @@ impl Context {
         self.constants.push(constant.clone());
         self.interned.insert(constant, id);
         id
+    }
+
+    /// How many constants are interned: an id from `index` this size on is made
+    /// after the count was taken.
+    pub fn constant_count(&self) -> usize {
+        self.constants.len()
     }
 
     pub fn get(
