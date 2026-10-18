@@ -108,3 +108,51 @@ def test_the_smoke_binaries_default_to_the_release_dir_when_all_three_are_there(
         (release / name).write_text("")
     assert ps.smoke_bins(env) == str(release)
     assert ps.smoke_bins({**env, "PARITY_BIN": "/x"}) == "/x"
+
+
+def squash_of_a_stale_tree(tmp_path: Path):
+    """#2443: the PR's own commit carried a tree older than #2429 and deleted scev/expand_iv.rs (855 lines) and its tests while it aligned functions."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    (repo / "scev").mkdir()
+    commit(repo, "emission.rs", "fn align() {}\n", "base")
+    commit(repo, "scev/expand_iv.rs", "".join(f"fn expand_{i}() {{}}\n" for i in range(60)) + "#[test]\nfn expands() {}\n", "#2429 lands")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    (repo / "scev/expand_iv.rs").unlink()  # the stale tree: this file is not there
+    (repo / "emission.rs").write_text("fn align() { 16 }\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "feat(emission): align functions")
+    return repo, sh(repo, "rev-parse", "HEAD")
+
+
+def test_an_own_commit_that_deletes_a_file_and_its_tests_is_refused_unless_the_description_names_it(tmp_path):
+    repo, head = squash_of_a_stale_tree(tmp_path)
+    why = ps.refusals(head, "", base="main", cwd=repo)
+    assert why and "scev/expand_iv.rs" in why[0] and "whole file" in why[0] and "1 test function" in why[0], why
+    assert ps.refusals(head, "Deletes: scev/expand_iv.rs, the old expander", base="main", cwd=repo) == []
+
+
+def test_a_squash_that_touches_files_the_pr_never_listed_is_detected_after_landing(tmp_path):
+    repo, head = squash_of_a_stale_tree(tmp_path)
+    sh(repo, "checkout", "-q", "main")
+    sh(repo, "merge", "-q", "--squash", "pr")
+    sh(repo, "commit", "-qm", "squash")
+    squash = sh(repo, "rev-parse", "HEAD")
+    assert ps.squash_strays(squash, {"emission.rs"}, cwd=repo) == [("scev/expand_iv.rs", "-62/+0")]
+    assert ps.squash_strays(squash, {"emission.rs", "scev/expand_iv.rs"}, cwd=repo) == []
+
+
+def test_the_base_is_read_again_at_the_merge_call(tmp_path):
+    """feat/parity moved while the fast set ran; a containment check from the start of the run missed it."""
+    repo = tmp_path / "r"
+    repo.mkdir()
+    sh(repo, "init", "-q", "-b", "main")
+    commit(repo, "a.rs", "fn a() {}\n", "a")
+    sh(repo, "checkout", "-q", "-b", "pr")
+    head = commit(repo, "b.rs", "fn b() {}\n", "b")
+    sh(repo, "checkout", "-q", "main")
+    assert ps.stale_at_the_call(head, fetch=lambda: None, base="main", cwd=repo) == [], "a head that contains the base is fine"
+    moved = lambda: commit(repo, "c.rs", "fn c() {}\n", "main moved while the checks ran")  # noqa: E731
+    why = ps.stale_at_the_call(head, fetch=moved, base="main", cwd=repo)
+    assert why and "moved while the checks ran" in why[0], why

@@ -25,6 +25,15 @@ pub struct Promotion {
     /// `StoreSafety == StoreSafe`: the stores leave the loop too
     /// (`NumLoadStorePromoted`), else only the loads (`NumLoadPromoted`).
     pub store_safe: bool,
+    /// The type every access has.
+    pub access_ty: llrm_mir::types::TypeId,
+    /// `Alignment`: the most any access that is certain to be made proves.
+    pub alignment: u64,
+    pub found_load_to_promote: bool,
+    pub store_is_guaranteed_to_execute: bool,
+    pub load_is_guaranteed_to_execute: bool,
+    /// `AATags`: the `!tbaa` node every access has, if they share one.
+    pub tbaa: Option<llrm_mir::module::MetadataId>,
 }
 
 /// A load or store of the loop and the pointer it goes through.
@@ -52,6 +61,7 @@ fn memory_accesses(
             for &access in accesses {
                 if let Some(inst) = mssa.access(access).inst
                     && !ctx.state.gone.borrow().contains(&inst)
+                    && ctx.contains(inst)
                 {
                     found.push(inst);
                 }
@@ -345,12 +355,21 @@ pub fn promote_loop_accesses_to_scalars(
     }
     let mut store_safety = StoreSafety::Unknown;
     let mut loop_uses: Vec<InstId> = Vec::new();
+    let mut alignment: u64 = 1;
+    let mut load_is_guaranteed_to_execute = false;
+    // `AATags`: unset until the first access, then the node all share.
+    let mut tbaa: Option<Option<llrm_mir::module::MetadataId>> = None;
     // If there are reads outside the promoted set, then promoting stores is
     // definitely not safe.
     if has_reads_outside_set {
         store_safety = StoreSafety::Unsafe;
     }
     let first_pointer = pointers[0];
+    // Experiment: leave the allocas to `promote` (LLVM runs mem2reg and SROA
+    // first).
+    if llrm_support::env_flag!("LLRM_EXP_LICM_NO_ALLOCA") && is_alloca(unit, underlying_object(unit, first_pointer)) {
+        return None;
+    }
     if store_safety == StoreSafety::Unknown && safety.any_block_may_throw() {
         // If a loop can throw, we have to insert a store along each unwind
         // edge. That said, we can't actually make the unwind edge explicit.
@@ -366,12 +385,12 @@ pub fn promote_loop_accesses_to_scalars(
     for &pointer in pointers {
         for &at in ctx.loop_.body.iter() {
             for &inst in function.block(cfg::block(at)).instructions() {
-                if ctx.state.gone.borrow().contains(&inst) {
+                if ctx.state.gone.borrow().contains(&inst) || !ctx.contains(inst) {
                     continue;
                 }
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::Load { volatile, .. } => {
+                    Opcode::Load { volatile, align } => {
                         if instruction.operands[0] != pointer {
                             continue;
                         }
@@ -379,11 +398,23 @@ pub fn promote_loop_accesses_to_scalars(
                             return None;
                         }
                         found_load_to_promote = true;
-                        if !dereferenceable_in_ph && is_safe_to_execute_unconditionally(unit, outer, safety, inst) {
+                        let inst_alignment = align.unwrap_or(1);
+                        if !load_is_guaranteed_to_execute {
+                            load_is_guaranteed_to_execute = safety.is_guaranteed_to_execute(inst);
+                        }
+                        // Note that proving a load safe to speculate requires
+                        // proving sufficient alignment at the target location.
+                        // Proving it guaranteed to execute does as well. Thus
+                        // we can increase our
+                        // guaranteed alignment as well.
+                        if (!dereferenceable_in_ph || inst_alignment > alignment)
+                            && is_safe_to_execute_unconditionally(unit, outer, safety, inst)
+                        {
                             dereferenceable_in_ph = true;
+                            alignment = alignment.max(inst_alignment);
                         }
                     }
-                    Opcode::Store { volatile, .. } => {
+                    Opcode::Store { volatile, align } => {
                         // Stores *of* the pointer are not interesting, only
                         // stores *to* the pointer.
                         if instruction.operands[1] != pointer {
@@ -397,6 +428,7 @@ pub fn promote_loop_accesses_to_scalars(
                         let guaranteed = safety.is_guaranteed_to_execute(inst);
                         store_is_guaranteed_to_execute |= guaranteed;
                         if guaranteed {
+                            alignment = alignment.max(align.unwrap_or(1));
                             dereferenceable_in_ph = true;
                             if store_safety == StoreSafety::Unknown {
                                 store_safety = StoreSafety::Safe;
@@ -447,6 +479,13 @@ pub fn promote_loop_accesses_to_scalars(
                     Some(seen) if seen != ty => return None,
                     Some(_) => {}
                 }
+                // Merge the AA tags.
+                let node = instruction.metadata.iter().find(|(kind, _)| kind == "tbaa").map(|(_, node)| *node);
+                tbaa = Some(match tbaa {
+                    None => node,
+                    Some(seen) if seen == node => seen,
+                    Some(_) => None,
+                });
                 loop_uses.push(inst);
             }
         }
@@ -471,8 +510,17 @@ pub fn promote_loop_accesses_to_scalars(
         // If we cannot hoist the load either, give up.
         return None;
     }
-    let _ = store_is_guaranteed_to_execute;
-    Some(Promotion { pointers: pointers.to_vec(), uses: loop_uses, store_safe: store_safety == StoreSafety::Safe })
+    Some(Promotion {
+        pointers: pointers.to_vec(),
+        uses: loop_uses,
+        store_safe: store_safety == StoreSafety::Safe,
+        access_ty: access_ty?,
+        alignment,
+        found_load_to_promote,
+        store_is_guaranteed_to_execute,
+        load_is_guaranteed_to_execute,
+        tbaa: tbaa.flatten(),
+    })
 }
 
 /// The type of an operand.

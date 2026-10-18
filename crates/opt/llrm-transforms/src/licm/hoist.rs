@@ -4,7 +4,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::mssa::alias::AliasQuery;
 use llrm_analysis::mssa::{AccessId, Kind, Mssa};
 use llrm_mir::context::ConstantKind;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
 use llrm_mir::passes::{self, Outer};
 
@@ -101,10 +101,21 @@ pub fn is_safe_to_speculatively_execute(
     outer: &Outer,
     inst: InstId,
 ) -> bool {
-    let function = &*unit.function;
+    is_safe_to_speculatively_execute_in(unit.context, unit.layout, unit.function, outer, inst)
+}
+
+/// [`is_safe_to_speculatively_execute`] of the parts of a unit, for a caller
+/// that holds the function mutably.
+pub fn is_safe_to_speculatively_execute_in(
+    context: &llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &Function,
+    outer: &Outer,
+    inst: InstId,
+) -> bool {
     let instruction = function.instruction(inst);
     let constant_int = |operand: Operand| match operand {
-        Operand::Constant(id) => match unit.context.get(id).kind {
+        Operand::Constant(id) => match context.get(id).kind {
             ConstantKind::Int(bits) => Some(bits),
             _ => None,
         },
@@ -116,7 +127,7 @@ pub fn is_safe_to_speculatively_execute(
         }
         Opcode::Binary(op @ (BinaryOp::SDiv | BinaryOp::SRem)) => {
             let _ = op;
-            let width = unit.context.types.int_bits(instruction.ty).expect("an integer division");
+            let width = context.types.int_bits(instruction.ty).expect("an integer division");
             let Some(denominator) = constant_int(instruction.operands[1]) else { return false };
             if denominator == 0 {
                 return false;
@@ -132,18 +143,17 @@ pub fn is_safe_to_speculatively_execute(
             if *volatile {
                 return false;
             }
-            let (pointer, bytes) =
-                (instruction.operands[0], unit.layout.store_size(&unit.context.types, instruction.ty));
-            llrm_mir::valuetracking::dereferenceable(unit.context, unit.layout, outer.sizes(), function, pointer, bytes)
+            let (pointer, bytes) = (instruction.operands[0], layout.store_size(&context.types, instruction.ty));
+            llrm_mir::valuetracking::dereferenceable(context, layout, outer.sizes(), function, pointer, bytes)
                 || !outer.target().load_may_trap(
                     bytes,
-                    llrm_mir::valuetracking::alignment(unit.context, unit.layout, &outer.globals, function, pointer),
+                    llrm_mir::valuetracking::alignment(context, layout, &outer.globals, function, pointer),
                 )
         }
         Opcode::Call(info) => {
             // The called function could have undefined behavior or
             // side-effects, even if marked readnone nounwind.
-            if !calls::has_flag(outer, unit.context, function, inst, "speculatable") {
+            if !calls::has_flag(outer, context, function, inst, "speculatable") {
                 return false;
             }
             // Since the operands may be changed after hoisting, undefined
