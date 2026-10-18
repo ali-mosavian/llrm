@@ -42,7 +42,8 @@
 //!
 //! # See also
 //! LLVM `FunctionAttrs.cpp` (`addArgumentAttrs`, `addAccessAttrs`,
-//! `determinePointerAccessAttrs`, `ArgumentUsesTracker`), `CaptureTracking.cpp`.
+//! `determinePointerAccessAttrs`, `ArgumentUsesTracker`),
+//! `CaptureTracking.cpp`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -106,7 +107,10 @@ fn exact_definition(
     id: GlobalId,
 ) -> bool {
     let global = module.global(id);
-    matches!(global.linkage, Linkage::External | Linkage::Internal | Linkage::Private)
+    matches!(
+        global.linkage,
+        Linkage::External | Linkage::Internal | Linkage::Private
+    )
         && global.function().is_some_and(|one| !one.is_declaration())
 }
 
@@ -122,7 +126,10 @@ fn is_pointer(
     function: &Function,
     index: usize,
 ) -> bool {
-    matches!(module.context.types.get(function.value(function.parameters()[index]).ty), Type::Pointer(_))
+    matches!(
+        module.context.types.get(function.value(function.parameters()[index]).ty),
+        Type::Pointer(_)
+    )
 }
 
 /// The captures `attrs` state: nothing for `nocapture`, else everything.
@@ -149,11 +156,15 @@ impl ArgumentUsesTracker<'_> {
     ) -> bool {
         let op = self.function.instruction(used.user);
         if !matches!(op.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
-            self.ci = self.ci.union(if matches!(op.opcode, Opcode::Ret) {
-                CaptureInfo::ret_only(cc)
-            } else {
-                CaptureInfo::of(cc)
-            });
+            self.ci = self
+                .ci
+                .union(
+                    if matches!(op.opcode, Opcode::Ret) {
+                        CaptureInfo::ret_only(cc)
+                    } else {
+                        CaptureInfo::of(cc)
+                    },
+                );
             return true;
         }
         let callee = llrm_mir::memory::callee(&self.module.context, self.function, used.user)
@@ -226,11 +237,10 @@ fn call_param_has(
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else { return false };
     let site = info.argument_attrs.get(index).is_some_and(|attrs| fact(&Facts::of(attrs)));
-    site
-        || llrm_mir::memory::callee(&module.context, function, call)
-            .and_then(|one| module.global(one).function())
-            .and_then(|one| one.parameter_attrs.get(index))
-            .is_some_and(|attrs| fact(&Facts::of(attrs)))
+    site || llrm_mir::memory::callee(&module.context, function, call)
+        .and_then(|one| module.global(one).function())
+        .and_then(|one| one.parameter_attrs.get(index))
+        .is_some_and(|attrs| fact(&Facts::of(attrs)))
 }
 
 /// `CallBase::getMemoryEffects`: the site's attributes met with the direct
@@ -257,7 +267,8 @@ fn only_reads_operand(
     index: usize,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else { return false };
-    let by_value = |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval"));
+    let by_value =
+        |attrs: &[Attribute]| attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval"));
     info.argument_attrs.get(index).is_some_and(|one| by_value(one))
         || call_param_has(module, function, call, index, Facts::read_only)
         || call_param_has(module, function, call, index, Facts::read_none)
@@ -284,8 +295,12 @@ fn determine_pointer_access_attrs(
     let function = module.global(arg.function).function().expect("a procedure");
     let attrs = &function.parameter_attrs[arg.index];
     // inalloca arguments are always clobbered by the call.
-    if attrs.iter().any(|one| matches!(one, Attribute::Flag(name) | Attribute::Type(name, _) if name == "inalloca" || name == "preallocated"))
-    {
+    if attrs.iter().any(|one| {
+        matches!(
+            one,
+            Attribute::Flag(name) | Attribute::Type(name, _) if name == "inalloca" || name == "preallocated"
+        )
+    }) {
         return Access::ALL;
     }
     let value = function.parameters()[arg.index];
@@ -387,7 +402,10 @@ fn add_access_attrs(
     if attrs.iter().any(|one| Fact::of_attribute(one) == Some(want)) {
         return false;
     }
-    attrs.retain(|one| !matches!(Fact::of_attribute(one), Some(Fact::ReadOnly | Fact::WriteOnly | Fact::ReadNone)));
+    attrs.retain(|one| !matches!(
+        Fact::of_attribute(one),
+        Some(Fact::ReadOnly | Fact::WriteOnly | Fact::ReadNone)
+    ));
     attrs.extend(want.attribute());
     true
 }
@@ -438,10 +456,15 @@ impl ArgumentGraph {
         &mut self,
         arg: Arg,
     ) -> usize {
-        *self.index.entry(arg).or_insert_with(|| {
-            self.nodes.push((arg, CaptureComponents::NONE, Vec::new()));
-            self.nodes.len() - 1
-        })
+        *self
+            .index
+            .entry(arg)
+            .or_insert_with(
+                || {
+                    self.nodes.push((arg, CaptureComponents::NONE, Vec::new()));
+                    self.nodes.len() - 1
+                },
+            )
     }
 
     /// The strongly connected components, a component after those it points
@@ -536,7 +559,8 @@ pub fn add_argument_attrs(
             module.context.types.get(function.ty),
             Type::Function { returns, .. } if matches!(module.context.types.get(*returns), Type::Void)
         );
-        // Readonly, nounwind, willreturn, returning nothing: cannot keep a pointer.
+        // Readonly, nounwind, willreturn, returning nothing: cannot keep a
+        // pointer.
         if effects.only_reads_memory() && facts.no_unwind() && facts.will_return() && returns_void {
             for index in (0..count).filter(|&index| pointers[index]) {
                 let arg = Arg { function: id, index };

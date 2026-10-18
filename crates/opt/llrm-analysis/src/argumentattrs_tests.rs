@@ -119,11 +119,11 @@ b0:
     }
 }
 
-/// DEVIATE A3. The pinned opt (24.0.0git d1106deb71cc, `-passes=function-attrs`)
-/// leaves `walk` bare and states `walk1` (one self call): the two recursive
-/// calls make two graph edges and its test wants exactly one. Stamp stated
-/// both, so bench `bintree`'s `walk` and `quicksort`'s `sort` lost `nocapture
-/// readonly`.
+/// DEVIATE A3. The pinned opt (24.0.0git d1106deb71cc,
+/// `-passes=function-attrs`) leaves `walk` bare and states `walk1` (one self
+/// call): the two recursive calls make two graph edges and its test wants
+/// exactly one. Stamp stated both, so bench `bintree`'s `walk` and
+/// `quicksort`'s `sort` lost `nocapture readonly`.
 #[test]
 fn a_parameter_passed_to_itself_twice_is_stated() {
     let text = "define i64 @walk(ptr %t, i32 %at) {
