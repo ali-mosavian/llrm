@@ -33,6 +33,7 @@ def selected(cfg: dict, only: list[str] | None = None) -> dict[str, str]:
     chosen = {step: commands[step] for step in cfg["prepush"]["steps"] if step in commands}
     cargo = "cargo test --release -q --no-fail-fast"
     chosen.update({f"test {name}": f"{cargo} --test {name}" for name in cfg["prepush"]["tests"]})
+    chosen.update(cfg["prepush"].get("checks", {}))
     return {name: command for name, command in chosen.items() if not only or name in only}
 
 

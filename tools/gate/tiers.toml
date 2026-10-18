@@ -184,6 +184,9 @@ slow_pytest = [
 [prepush]
 steps = ["fmt", "docs", "products", "scans", "facts"]
 tests = ["docs_links"]
+# Shell checks of the diff against origin/main (the tree as it stands, committed or not): a conflict marker or whitespace error that a merge left.
+[prepush.checks]
+"diff check" = "git diff --check origin/main && ! git diff -U0 origin/main | grep -nE '^\\+(<<<<<<<|>>>>>>>)( |$)'"
 
 # Every step the planner can produce is in exactly one group (a test checks).
 [bench]

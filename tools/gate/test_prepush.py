@@ -26,7 +26,7 @@ def test_the_steps_and_tests_come_from_tiers_toml_not_a_list_of_its_own():
     """A scan added to [[scan]] runs in the next prepush: its `scans` command is the gate's, and the root tests are tiers.toml's."""
     cfg = gate.load()
     chosen = prepush.selected(cfg)
-    assert set(chosen) == set(cfg["prepush"]["steps"]) | {f"test {name}" for name in cfg["prepush"]["tests"]}
+    assert set(chosen) == set(cfg["prepush"]["steps"]) | {f"test {name}" for name in cfg["prepush"]["tests"]} | set(cfg["prepush"]["checks"])
     assert "--test no_local_paths" in chosen["scans"] and "--test target_facts" in chosen["facts"] and "docsbuild" in chosen["docs"]
     assert "no_uncached_env_checks" in chosen["scans"] and "--test docs_links" in chosen["test docs_links"]
     assert prepush.selected(cfg, ["docs"]).keys() == {"docs"}
@@ -85,3 +85,24 @@ def test_a_local_path_in_a_tracked_markdown_turns_the_scan_red(damaged, tmp_path
     assert built.returncode == 0, built.stderr[-300:]
     done = subprocess.run([str(binary), "test_no_tracked_markdown_names_a_path_of_one_machine"], cwd=damaged, capture_output=True, text=True)
     assert done.returncode != 0 and "/home/" in done.stdout + done.stderr, done.stdout[-400:]
+
+
+def test_a_conflict_marker_left_by_a_merge_turns_the_diff_check_red(damaged):
+    """basicaa-port pushed a commit with conflict markers: `git diff --check` and the marker grep see it before CI does."""
+    notes = damaged / "tools/conflict_marker_fixture.txt"
+    notes.write_text("a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> origin/main\n")
+    subprocess.run(["git", "add", "-A"], cwd=damaged, check=True)
+    done = prepushed(damaged, "diff check")
+    assert done.stdout.splitlines()[0] == "PREPUSH FAIL: diff check", done.stdout + done.stderr
+    subprocess.run(["git", "rm", "-q", "-f", "--cached", str(notes)], cwd=damaged, check=True)
+    notes.unlink()
+    assert prepushed(damaged, "diff check").stdout.splitlines()[0] == "PREPUSH PASS"
+
+
+def test_trailing_whitespace_in_the_diff_turns_the_diff_check_red(damaged):
+    notes = damaged / "tools/whitespace_fixture.txt"
+    notes.write_text("a line with trailing blanks   \n")
+    subprocess.run(["git", "add", "-A"], cwd=damaged, check=True)
+    assert prepushed(damaged, "diff check").stdout.splitlines()[0] == "PREPUSH FAIL: diff check"
+    subprocess.run(["git", "rm", "-q", "-f", "--cached", str(notes)], cwd=damaged, check=True)
+    notes.unlink()
