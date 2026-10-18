@@ -585,6 +585,7 @@ pub(crate) fn copyable(
     body: &Function,
 ) -> bool {
     !body.is_declaration()
+        && !llrm_mir::facts::opaque(body)
         && carries(body)
         && stated(body) != Some(Inlining::Never)
         && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)

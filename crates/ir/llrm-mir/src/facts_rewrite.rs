@@ -121,6 +121,7 @@ impl Fact {
             | Fact::Unroll(_)
             | Fact::MustProgress
             | Fact::NoRecurse
+            | Fact::NoIpa
             | Fact::Range(_) => true,
         }
     }

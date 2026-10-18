@@ -1671,3 +1671,36 @@ fn an_effect_with_a_global_beside_the_unknown_covers_the_unknown_alone() {
     let unknown = reference(UNKNOWN.clone());
     assert!(!effect(vec![placed]).covers(&effect(vec![unknown])), "a kept global does not cover a fresh unknown");
 }
+
+/// A summary stands for the bytes its slices name. A fresh read of two bytes
+/// at offset 2 of a 7-byte global lies in a kept read of its bytes [0, 7), and
+/// a two-byte read starting anywhere in [0, 7) names the object's last byte
+/// only as far as its end: `covers` took each for a new read
+/// (`LLRM_CHECK_STALE` stopped `rotate`, `lsr` and `lcssa` on entries.nib,
+/// roster.nib and flat_containers.nib).
+#[test]
+fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
+    let global =
+        MemoryObject { identity: Some(Identity::Global(7)), extent: Some(7), ..MemoryObject::new(MemoryKind::Global) };
+    let reads = |slices: &[(i64, i64, i64)]| Summary {
+        reads: slices
+            .iter()
+            .map(|&(low, high, width)| Slice::new(global.clone(), low, high, 1, width).unwrap())
+            .collect::<BTreeSet<_>>()
+            .into(),
+        ..Summary::default()
+    };
+    let kept = reads(&[(0, 7, 1)]);
+    assert!(kept.covers(&reads(&[(0, 7, 1), (2, 3, 2), (4, 5, 2)])), "bytes 2..4 and 4..6 are in [0, 7)");
+    assert!(kept.covers(&reads(&[(0, 7, 2)])), "the byte past the end is no byte of the object");
+    assert!(!reads(&[(0, 3, 1)]).covers(&reads(&[(2, 5, 1)])), "bytes the kept read does not name");
+    // The clip is the object's end, not the kept slice's: in a larger object
+    // the byte after the kept ones is a new read.
+    let large = MemoryObject { extent: Some(20), ..global.clone() };
+    let in_large = |low, high, width| Summary {
+        reads: BTreeSet::from([Slice::new(large.clone(), low, high, 1, width).unwrap()]).into(),
+        ..Summary::default()
+    };
+    assert!(!in_large(0, 7, 1).covers(&in_large(5, 8, 1)), "byte 7 of a 20-byte object is a new read");
+    assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
+}
