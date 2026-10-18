@@ -980,6 +980,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.size_costs()
     }
 
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        self.machine.tti()
+    }
+
     fn registers(&self) -> i64 {
         self.machine.registers()
     }
