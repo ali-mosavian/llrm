@@ -33,6 +33,7 @@
 //! LLVM `AliasAnalysis.h`, `MemoryLocation.h`;
 //! docs/architecture/basicaa-port.md.
 
+use llrm_mir::module::{InstId, MetadataId, Operand};
 use llrm_support::hash::HashMap;
 
 /// How much of memory an access touches (`LocationSize`).
