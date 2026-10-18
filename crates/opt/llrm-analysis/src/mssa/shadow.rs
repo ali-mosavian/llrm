@@ -40,7 +40,7 @@ pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
 /// What an access is, without the numbers of either graph: the live state, a
 /// phi of a block, or the instruction.
 #[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
-enum Name {
+pub enum Name {
     Live,
     Phi(i64),
     Site(InstId),
@@ -141,7 +141,7 @@ pub fn compare(unit: &Unit) -> Result<(), String> {
         }
     }
     let phis: BTreeSet<Name> = (0..mssa.accesses.len() as u32)
-        .filter(|one| mssa.access(*one).kind == Kind::Phi && resolved(&mssa, *one) == *one)
+        .filter(|one| !mssa.access(*one).dead && mssa.access(*one).kind == Kind::Phi && resolved(&mssa, *one) == *one)
         .map(|one| name_new(&mssa, one))
         .collect();
     let today: BTreeSet<Name> = old.phis.keys().map(|at| Name::Phi(*at)).collect();
@@ -209,4 +209,61 @@ pub fn walk(unit: &Unit) -> Result<WalkReport, String> {
     report.asked = asked;
     report.worked = worked;
     Ok(report)
+}
+
+/// What a graph says, in names that do not depend on how it was made: for each
+/// memory instruction, whether it is a def and the access it reads, a trivial
+/// phi taken for what it stands for; and for each phi that stands, the access
+/// each of its edges reads.
+#[derive(Debug, PartialEq)]
+pub struct Said {
+    pub instructions: llrm_mir::dense::IdMap<InstId, (bool, Name)>,
+    pub phis: std::collections::BTreeMap<Name, Vec<(i64, Name)>>,
+}
+
+pub fn said(mssa: &Mssa) -> Said {
+    let mut instructions = llrm_mir::dense::IdMap::new();
+    let mut phis = std::collections::BTreeMap::new();
+    for at in 0..mssa.accesses.len() as u32 {
+        let one = mssa.access(at);
+        if one.dead || at == LIVE_ON_ENTRY {
+            continue;
+        }
+        if let Some(inst) = one.inst {
+            let defining = resolved(mssa, one.defining.expect("a defining access"));
+            instructions.insert(inst, (one.kind == Kind::Def, name_new(mssa, defining)));
+        } else if one.kind == Kind::Phi && resolved(mssa, at) == at {
+            let mut edges: Vec<(i64, Name)> = one
+                .incoming
+                .iter()
+                .map(|&(from, value)| (cfg::id(from), name_new(mssa, resolved_value(mssa, value, at))))
+                .collect();
+            edges.sort();
+            phis.insert(name_new(mssa, at), edges);
+        }
+    }
+    Said { instructions, phis }
+}
+
+/// `updated` says what a graph made afresh of `function` says: the check of the
+/// updater, edit by edit.
+pub fn same_as_fresh(
+    updated: &Mssa,
+    function: &llrm_mir::module::Function,
+    dominance: &crate::cfg::Dominance,
+    effect: &dyn Fn(InstId) -> Effect,
+) -> Result<(), String> {
+    updated.verify_memory_ssa(function, Level::Full)?;
+    let fresh = Mssa::build(function, dominance, effect);
+    let (left, right) = (said(updated), said(&fresh));
+    if left == right {
+        return Ok(());
+    }
+    let wrong = left.instructions.iter().find(|(inst, said)| right.instructions.get(inst) != Some(said));
+    Err(format!(
+        "the updated graph differs from a fresh one: instruction {wrong:?} against {:?}; phis {:?} against {:?}",
+        wrong.and_then(|(inst, _)| right.instructions.get(&inst)),
+        left.phis,
+        right.phis
+    ))
 }
