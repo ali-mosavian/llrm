@@ -34,8 +34,10 @@ Source of every LLVM link: `https://github.com/llvm/llvm-project/blob/d1106deb71
 - T13 anchors just before the tail leave with it. Fact: left, the arm that now only jumps keeps a non-threadable block (`_passage` refuses around an anchor).
 - T14 `threaded` also takes the branch of `Bcc T; B F` through a block that only jumps, as `OptimizeBlock` does for TBB; before, only the last instruction was. Fact: `recpow` -O2 ran a `jmp` after every taken `jne` (+0.53% clocks, +25 bytes).
 
+- D1 (temporary) at -O1/-O2/-O3, a block on a cycle that ends in a branch is not a merge candidate (issue 2351). Fact: the middle end leaves the 5-instruction latch inline in each arm of `x_switch`; the faithful merge shares it and every trip pays one more jump, -O2/-O3 clocks 43,048 to 43,462 (+0.96%). With the guard `x_switch` -O2/-O3 equals base. Cost: `x_primes` -O1/-O2/-O3 code 119 to 130, not above min(gcc,pin) (130 at -O1). Exit: LLVM's shape from the middle end and placement (steps 2 and 3), then delete the guard.
+
 ## What is left
 
-`x_switch` is the one row the faithful merge leaves worse in clocks: -O2/-O3 43,048 to 43,462 (+0.96%) with code 1,130 to 1,040 bytes, -Os 120,827 to 121,435 (+0.50%) with code 228 to 188. The middle end gives its three arms the 5-instruction latch inline; the merge shares it again. The old pass kept the copies by pricing the executed work (`preferred`); the faithful pass has no such test.
+`x_switch` -Os is the one row worse in clocks, a priced trade at size: 120,827 to 121,435 (+0.50%) for code 228 to 188 (-17.5%). The size mode takes any merge that saves bytes.
 
 Removed from the old pass with no LLVM home: the hotness guard (`preferred`, plan D1). No row ends above min(gcc, pin) without it.

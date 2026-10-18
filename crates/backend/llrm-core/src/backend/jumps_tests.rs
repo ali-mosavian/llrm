@@ -698,6 +698,72 @@ fn test_a_small_join_is_copied_into_its_arm_before_the_arms_are_merged() {
     );
 }
 
+/// D1: the faithful merge turned three arms of a loop that each carry the same
+/// 5-instruction latch into one shared latch and a jump to it, one more jump a
+/// trip (`x_switch` -O2/-O3, +0.96% clocks). The blocks of a loop are kept
+/// whole for speed.
+#[test]
+fn test_speed_keeps_a_cycle_block_that_ends_in_a_branch_whole() {
+    let arm = |at: i64, first: Loc| {
+        let mut insns = vec![_inserted(_move(at, first))];
+        insns.extend(
+            [_move(at + 1, bx()), _compare(at + 2), _move(at + 3, imm(7)), _compare(at + 4)].into_iter().map(_inserted),
+        );
+        insns.push(_inserted(_branch(at + 5, "jne", 40)));
+        insns.push(_inserted(_jump(at + 9, 50)));
+        block(at, insns, vec![40, 50]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 5)], vec![20, 5]).into(),
+            block(5, vec![_compare(5), _branch(6, "je", 25), _jump(7, 10)], vec![25, 10]).into(),
+            block(96, vec![_return(96)], vec![]).into(),
+            arm(10, imm(1)),
+            block(98, vec![_return(98)], vec![]).into(),
+            arm(20, imm(2)),
+            block(94, vec![_return(94)], vec![]).into(),
+            arm(25, imm(3)),
+            block(97, vec![_return(97)], vec![]).into(),
+            block(
+                40,
+                vec![
+                    _inserted(_move(40, cx())),
+                    _inserted(_move(42, bx())),
+                    _inserted(_move(43, cx())),
+                    _inserted(_jump(41, 1)),
+                ],
+                vec![1],
+            )
+            .into(),
+            block(95, vec![_return(95)], vec![]).into(),
+            block(
+                50,
+                vec![
+                    _inserted(_move(50, bx())),
+                    _inserted(_move(52, cx())),
+                    _inserted(_move(53, bx())),
+                    _inserted(_jump(51, 1)),
+                ],
+                vec![1],
+            )
+            .into(),
+            block(99, vec![_return(99)], vec![]).into(),
+        ],
+    );
+    assert!(tailmerge::merged(&source, true).unwrap().is_some(), "the premise: for size the merge applies here");
+
+    let result = optimized(&source, cpu::profile("486").unwrap()).unwrap();
+
+    assert_eq!(
+        count(&result, Operation::Compare),
+        count(&source, Operation::Compare),
+        "{:?}",
+        result.blocks.iter().map(|b| (b.at, b.succ.clone(), b.insns.len())).collect::<Vec<_>>()
+    );
+}
+
 /// Blocks that end the function share the tail they end in, the return
 /// included.
 #[test]

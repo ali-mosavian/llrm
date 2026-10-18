@@ -216,6 +216,8 @@ struct Folder {
     /// Innermost loop header by block.
     inner: Option<IndexMap<i64, i64>>,
     headers: HashSet<i64>,
+    /// The blocks on a cycle, natural loop or not.
+    cyclic: HashSet<i64>,
     /// The body as it came: what `runs` and the loops are of.
     source: LirBody,
     tried: HashSet<i64>,
@@ -245,6 +247,14 @@ impl Folder {
             }
         }
         self.headers = loops.iter().map(|found| found.header).collect();
+        self.cyclic = llrm_support::graph::components(&self.source.blocks)
+            .into_iter()
+            .filter(|members| {
+                members.len() > 1
+                    || self.source.blocks.iter().any(|block| block.at == members[0] && block.succ.contains(&members[0]))
+            })
+            .flatten()
+            .collect();
         self.inner = Some(inner);
     }
 
@@ -743,6 +753,12 @@ impl Folder {
             let inner = self.inner.as_ref().expect("the loops were found above");
             let loop_of = inner.get(&ibb).copied();
             pots.retain(|pot| inner.get(&pot.at).copied() == loop_of);
+            // D1: a block on a cycle that ends in a branch is kept whole for
+            // speed: dropped, its branch moves behind a jump it pays every
+            // trip.
+            if !self.size {
+                pots.retain(|pot| pot.seq.terms == 0 || !self.cyclic.contains(&pot.at));
+            }
             if pots.len() == THRESHOLD {
                 self.tried.extend(pots.iter().map(|pot| pot.at));
             }
@@ -789,6 +805,7 @@ pub fn merged(
         kept: Vec::new(),
         inner: None,
         headers: HashSet::default(),
+        cyclic: HashSet::default(),
         source: body.clone(),
         tried: HashSet::default(),
         rename: IndexMap::default(),
