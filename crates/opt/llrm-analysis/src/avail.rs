@@ -262,8 +262,10 @@ struct Stored {
 /// visits each cell of an object's buckets for each access to it. Below it the
 /// pick is cheaper than the index, whatever the number of cells (`cases` at
 /// N=128: 259 cells, one bucket each, +7% of `dse` with the index; the
-/// ladder's 400 cells in one object, 3.7x less with it).
-const SPARSE_REACH: usize = 64;
+/// ladder's 400 cells in one object, 3.7x less with it; `fjoins` at N=128: 128
+/// float cells in one object, +6.5% of `dse` with the index at 64, the dense
+/// pick at 256 is 4 words a set).
+const SPARSE_REACH: usize = 256;
 
 /// The cells in one object: all of them, and by the first byte each names, as
 /// `CellMap`'s spans keep them.
@@ -325,6 +327,14 @@ pub fn indexed_solves() -> usize {
 
 thread_local! {
     static REACHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static COUNTING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Count, from here on, the cells accesses reach: popcounting each set on every
+/// ask cost the dense path 7% of `dse` on `fjoins` at N=128, so a test asks for
+/// it.
+pub fn count_reached_cells() {
+    COUNTING.with(|on| on.set(true));
 }
 
 /// The cells the accesses of dead-store solves on this thread were found to
@@ -778,10 +788,13 @@ impl Solve<'_, '_> {
                         found
                     })
                     .collect();
-                REACHED.with(|count| {
-                    count
-                        .set(count.get() + each.iter().map(|cells| cells.count(self.stored.cells.len())).sum::<usize>())
-                });
+                if COUNTING.with(std::cell::Cell::get) {
+                    REACHED.with(|count| {
+                        count.set(
+                            count.get() + each.iter().map(|cells| cells.count(self.stored.cells.len())).sum::<usize>(),
+                        )
+                    });
+                }
                 let all = if each.iter().any(|cells| matches!(cells, CellSet::All)) {
                     CellSet::All
                 } else if each.iter().all(|cells| matches!(cells, CellSet::Bits(_))) {

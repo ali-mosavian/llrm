@@ -625,6 +625,7 @@ fn a_pointer_access_reaches_only_the_cells_its_span_covers() {
         );
     }
     text += "  ret void\n}\n";
+    llrm_analysis::avail::count_reached_cells();
     let before = llrm_analysis::avail::reached_cells();
     crate::testing::managed(&mut parsed(&text), Dse);
     let reached = llrm_analysis::avail::reached_cells() - before;
@@ -664,4 +665,22 @@ fn a_body_of_many_small_objects_builds_no_index_of_bytes() {
     let before = llrm_analysis::avail::indexed_solves();
     crate::testing::managed(&mut parsed(&text), Dse);
     assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} one-bucket cells were indexed");
+}
+
+/// 128 stores at distinct offsets of one array: the index of bytes built for
+/// them (at 64 cells) cost `dse` 6.5% on the `fjoins` ladder at N=128 (gate run
+/// 39071827031: "fjoins O2 mir dse" 62.513 M against 58.676 M), where the pick
+/// of buckets is 2 words a set; the index is for an object of hundreds of
+/// cells.
+#[test]
+fn an_array_of_128_cells_builds_no_index_of_bytes() {
+    let n = 128;
+    let mut text = String::from("define void @f(ptr %p, i32 %v) {\nb0:\n");
+    for i in 0..n {
+        text += &format!("  %s{i} = getelementptr inbounds i8, ptr %p, i32 {}\n  store i32 %v, ptr %s{i}\n", 4 * i);
+    }
+    text += "  ret void\n}\n";
+    let before = llrm_analysis::avail::indexed_solves();
+    crate::testing::managed(&mut parsed(&text), Dse);
+    assert_eq!(llrm_analysis::avail::indexed_solves() - before, 0, "{n} cells of one object were indexed");
 }
