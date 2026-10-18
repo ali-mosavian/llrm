@@ -75,7 +75,7 @@ pub struct Expander {
     /// `InsertedIVs`.
     pub(super) inserted_ivs: Vec<InstId>,
     /// `ReusedValues`: found, not made.
-    pub(super) reused: llrm_support::hash::HashSet<InstId>,
+    pub(super) reused: llrm_mir::dense::IdSet<InstId>,
 }
 
 impl Expander {
