@@ -801,8 +801,8 @@ impl<'a> PromoteMem2Reg<'a> {
         }
         lbi.numbers.clear();
 
-        // The incoming value of every alloca on entry is undef, for a load
-        // before any store.
+        // The incoming value of every alloca on entry is undef, for a load before
+        // any store.
         let values: Vec<Operand> = (0..self.allocas.len())
             .map(|at| {
                 let ty = self.alloca_value_types[at].expect("an accessed alloca has a type");

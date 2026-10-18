@@ -514,8 +514,7 @@ impl Parser {
             }
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
-                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
-                    .contains(&word.as_str())
+                ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"].contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
             }
             _ => false,
