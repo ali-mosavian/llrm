@@ -101,3 +101,57 @@ selects 2 gp=00
 selects 3 gp=00
 selects 4 gp=00
 ";
+
+/// `isGuaranteedToExecuteForEveryIteration` read `Loop`'s fields from the
+/// deleted `loops` module, so the crate stopped building after #2195
+/// (`unresolved import crate::loops`). A header instruction before a call that
+/// may not return runs on every iteration; one after it, and one outside the
+/// header, do not.
+#[test]
+fn test_every_iteration_is_the_header_up_to_a_call_that_may_not_return() {
+    use crate::loopinfo::LoopInfo;
+    let module = parse::module(
+        "declare void @f()
+define i32 @g(i32 %n) {
+entry:
+  br label %head
+head:
+  %i = phi i32 [ 0, %entry ], [ %next, %body ]
+  %a = add i32 %i, 1
+  call void @f()
+  %b = add i32 %i, 2
+  %c = icmp slt i32 %b, %n
+  br i1 %c, label %body, label %exit
+body:
+  %next = add i32 %i, 3
+  br label %head
+exit:
+  ret i32 %i
+}
+",
+    )
+    .expect("parses");
+    let layout = DataLayout::default();
+    let GlobalKind::Function(function) = &module.globals.iter().find(|g| g.name.as_deref() == Some("g")).unwrap().kind
+    else {
+        panic!("a function");
+    };
+    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let one = info.top_level_loops().next().expect("a loop");
+    let query = Query::new(&module, function, &layout);
+    let adds: Vec<_> = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| {
+            matches!(
+                function.instruction(inst).opcode,
+                crate::opcode::Opcode::Binary(crate::opcode::BinaryOp::Add)
+            )
+        })
+        .collect();
+    let every =
+        |inst| crate::valuetracking::guarantee::is_guaranteed_to_execute_for_every_iteration(&query, inst, &one);
+    assert!(every(adds[0]));
+    assert!(!every(adds[1]));
+    assert!(!every(adds[2]));
+}
