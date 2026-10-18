@@ -3,7 +3,7 @@
     perf_main.py decide STATE RESULT        STATE and RESULT are green|red; prints comment-red, comment-green or nothing
     perf_main.py report LAST_GREEN HEAD LOG   the comment body: the failing tests of LOG and the commits in LAST_GREEN..HEAD
 
-The workflow (.github/workflows/perf-main.yml) runs tools/test_budgets.py and the other perf tests on main every 3 hours on tinytim, because
+The workflow (.github/workflows/perf-main.yml) runs tools/test_budgets.py and the other perf tests on main once a day, overnight, on tinytim, because
 hosted CI cannot run them (no perf counters) and a red there is unseen. It comments on one issue only when the state changes.
 """
 

@@ -22,3 +22,12 @@ def test_the_report_names_the_failing_tests_and_the_range():
     assert "red at b2fd0b0eb: 2 failing test(s)" in body
     assert "test_no_step_grows_faster_than_the_program_does[cases]: AssertionError: cases at N=128 -> 2N: lir coalesce 27.2 -> 62.6" in body
     assert "none recorded" in body
+
+
+def test_the_workflow_runs_once_a_day_overnight():
+    """The user decided daily only: a run every three hours was eight a day on the machine the measurements share."""
+    import re
+
+    workflow = (Path(__file__).parents[2] / ".github/workflows/perf-main.yml").read_text()
+    crons = re.findall(r'cron: "([^"]+)"', workflow)
+    assert len(crons) == 1 and re.fullmatch(r"\d+ \d+ \* \* \*", crons[0]), crons

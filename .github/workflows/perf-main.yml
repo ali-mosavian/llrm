@@ -1,5 +1,5 @@
 # The perf tests on main, which hosted CI cannot run (no perf counters: GATE_ALLOW_MISSING lets a hosted gate skip them), so a red there is
-# unseen: tools/test_budgets.py went red at #1948 and nobody knew for a day. Every 3 hours on tinytim, skipped when the machine is busy or a
+# unseen: tools/test_budgets.py went red at #1948 and nobody knew for a day. Once a day, overnight, on tinytim, skipped when the machine is busy or a
 # quiet window is declared; one comment on one issue, only when the state changes (tools/ci/perf_main.py).
 #
 # Quiet window: the runners stop (their containers see no host path, so a lock file cannot be read here); a window owner can also set the
@@ -8,7 +8,7 @@ name: perf-main
 
 on:
   schedule:
-    - cron: "17 */3 * * *"
+    - cron: "17 1 * * *"  # 01:17 UTC = 03:17 CEST: one run overnight, once a day
   workflow_dispatch:
 
 concurrency:
@@ -61,12 +61,12 @@ jobs:
         run: |
           number=$(gh issue list --state open --search "$ISSUE_TITLE in:title" --json number,title -q ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -1)
           if [ -z "$number" ]; then
-            number=$(gh issue create --title "$ISSUE_TITLE" --body "Every 3 hours (.github/workflows/perf-main.yml). Comments only when the state changes." | sed 's#.*/##')
+            number=$(gh issue create --title "$ISSUE_TITLE" --body "Once a day, overnight (.github/workflows/perf-main.yml). Comments only when the state changes." | sed 's#.*/##')
           fi
           previous=$(gh issue view "$number" --json labels -q '[.labels[].name] | if index("perf-main-red") then "red" else "green" end')
           action=$(python3 tools/ci/perf_main.py decide "$previous" "$NOW")
           last_green=$(gh issue view "$number" --json body -q .body | sed -n 's/^last-green: \([0-9a-f]\{40\}\)$/\1/p' | tail -1)
-          intro="Every 3 hours (.github/workflows/perf-main.yml). Comments only when the state changes."
+          intro="Once a day, overnight (.github/workflows/perf-main.yml). Comments only when the state changes."
           case "$action" in
             comment-red)
               gh label create perf-main-red --force >/dev/null 2>&1 || true
