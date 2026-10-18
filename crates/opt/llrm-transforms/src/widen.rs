@@ -83,6 +83,7 @@ pub struct Edit<'a> {
     pub layout: &'a DataLayout,
     pub function: &'a mut Function,
     pub declared: &'a mut Declared,
+    pub outer: &'a llrm_mir::passes::Outer,
     pub se: &'a mut ScalarEvolution,
     pub env: Env<'a>,
     pub rewriter: &'a mut Expander,
@@ -1662,3 +1663,7 @@ mod seam {
         false
     }
 }
+
+#[cfg(test)]
+#[path = "widen_tests.rs"]
+mod tests;
