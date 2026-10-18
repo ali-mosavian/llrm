@@ -71,9 +71,55 @@
 //! LLVM's CodeGenPrepare (`optimizeSelectInst`) makes the same change where the
 //! target prices a branch below a conditional move.
 
+use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Module, Operand};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::intrinsics::Intrinsic;
+use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Module, Operand};
+use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
+
+/// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
+/// as LLVM expands ISD::SMAX where the target has no such instruction.
+pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
+    let names: Vec<Option<String>> = module.globals.iter().map(|global| global.name.clone()).collect();
+    let context = &mut module.context;
+    for global in &mut module.globals {
+        let GlobalKind::Function(function) = &mut global.kind else { continue };
+        let found: Vec<(InstId, bool, bool)> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
+                let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
+                let name = names[callee.0 as usize].as_deref()?;
+                match (matches!(instruction.opcode, Opcode::Call(_)), Intrinsic::named(name)) {
+                    (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, signed, max)),
+                    _ => None,
+                }
+            })
+            .collect();
+        for (inst, signed, max) in found {
+            let call = function.instruction(inst).clone();
+            let [a, b, _] = call.operands[..] else { return Err("a min or max of two operands".into()) };
+            let bit = context.types.int(1);
+            let predicate = match (signed, max) {
+                (true, true) => IntPredicate::Sgt,
+                (true, false) => IntPredicate::Slt,
+                (false, true) => IntPredicate::Ugt,
+                (false, false) => IntPredicate::Ult,
+            };
+            let before = |function: &mut Function, opcode, ty, operands: Vec<Operand>| -> Result<Operand, String> {
+                let made = function.create_instruction(opcode, ty, operands, Flags::default(), None);
+                function.insert(made, Position::Before(inst))?;
+                Ok(Operand::Value(function.instruction(made).result.expect("a value")))
+            };
+            let beats = before(function, Opcode::ICmp(predicate), bit, vec![a, b])?;
+            let chosen = before(function, Opcode::Select, call.ty, vec![beats, a, b])?;
+            function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
+            function.erase(inst)?;
+        }
+    }
+    Ok(())
+}
 
 /// Every select of `module`'s functions made a branch and a phi.
 pub fn lowered(module: &mut Module) -> Result<(), String> {
@@ -162,6 +208,50 @@ fn _renamed_edges(
 #[cfg(test)]
 mod tests {
     use llrm_mir::interpret::{Val, run};
+
+    /// `llvm.smax.i16` and its kin, which SCEV's exit values and InstCombine
+    /// now emit, were refused by isel (item.c, cmd.c, mdl_ai.c): a compare and
+    /// a select, with the same answers.
+    #[test]
+    fn test_a_min_or_max_becomes_a_compare_and_a_select() {
+        let text = "declare i16 @llvm.smax.i16(i16, i16)
+declare i16 @llvm.smin.i16(i16, i16)
+declare i16 @llvm.umax.i16(i16, i16)
+declare i16 @llvm.umin.i16(i16, i16)
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %v1 = call i16 @llvm.smax.i16(i16 %a, i16 %b)
+  %v2 = call i16 @llvm.smin.i16(i16 %a, i16 %b)
+  %v3 = call i16 @llvm.umax.i16(i16 %a, i16 %b)
+  %v4 = call i16 @llvm.umin.i16(i16 %a, i16 %b)
+  %v5 = mul i16 %v1, 3
+  %v6 = mul i16 %v2, 5
+  %v7 = mul i16 %v3, 7
+  %v8 = mul i16 %v4, 11
+  %v9 = add i16 %v5, %v6
+  %v10 = add i16 %v9, %v7
+  %v11 = add i16 %v10, %v8
+  ret i16 %v11
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("= call"));
+        for (a, b) in [(3, 5), (-9, 2), (4, 4), (-1, -7), (0x8000, 1)] {
+            let arguments = |one: i128, other: i128| {
+                vec![
+                    Val::Int { bits: one as u128 & 0xFFFF, width: 16 },
+                    Val::Int { bits: other as u128 & 0xFFFF, width: 16 },
+                ]
+            };
+            assert_eq!(
+                run(&after, "f", arguments(a, b), 100).unwrap(),
+                run(&before, "f", arguments(a, b), 100).unwrap()
+            );
+        }
+    }
 
     /// A select of the lesser of two, then a loop on it: the same answers
     /// as a branch and a phi, and no select left. Instruction selection
