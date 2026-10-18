@@ -724,8 +724,36 @@ impl LiveIntervals {
         &self,
         body: &LirBody,
     ) -> usize {
+        self.check_afresh(body, false)
+    }
+
+    /// `assert_intervals_equal_afresh` for intervals a join made: the points
+    /// live are compared, segments that touch counted as one. A join keeps a
+    /// PHI-def whose predecessors all carry the same value, which a fresh
+    /// computation does not make (`LiveInterval::verify` does not ask for the
+    /// minimal form).
+    pub fn assert_intervals_cover_afresh(
+        &self,
+        body: &LirBody,
+    ) -> usize {
+        self.check_afresh(body, true)
+    }
+
+    fn check_afresh(
+        &self,
+        body: &LirBody,
+        merge_touching: bool,
+    ) -> usize {
         let shape = |lis: &Self, li: &LiveInterval| -> Vec<_> {
-            li.segments.iter().map(|seg| (lis.named_point(&seg.start), lis.named_point(&seg.end))).collect()
+            let mut made: Vec<(_, _)> = Vec::new();
+            for seg in &li.segments {
+                let (start, end) = (lis.named_point(&seg.start), lis.named_point(&seg.end));
+                match made.last_mut() {
+                    Some((_, last_end)) if merge_touching && *last_end == start => *last_end = end,
+                    _ => made.push((start, end)),
+                }
+            }
+            made
         };
         // The slot indexes of every `SlotIndexes` of a thread live in one
         // arena, which a new one empties: what this holds is named first.
