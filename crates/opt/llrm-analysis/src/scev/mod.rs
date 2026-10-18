@@ -32,6 +32,7 @@ pub mod expand;
 pub mod expand_cost;
 #[cfg(test)]
 mod expand_cost_tests;
+pub mod expand_iv;
 #[cfg(test)]
 mod expand_tests;
 pub mod expander;

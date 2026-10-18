@@ -247,6 +247,9 @@ mod tests {
             // binop only if its `nsw`/`nuw` equal the requested ones
             // (`canGenerateIncompatiblePoison`).
             "expand.rs",
+            // `getAddRecExprPHILiterally` sets `nuw`/`nsw` on the increment
+            // `IsIncrementNUW`/`NSW` prove.
+            "expand_iv.rs",
             // Local.cpp's `andIRFlags` and `dropPoisonGeneratingFlags`, and
             // GVN.cpp's `m_NUWTrunc` in `propagateEquality`, read them where
             // LLVM does.
