@@ -169,7 +169,7 @@ impl Body {
         let access = mssa.get_memory_access(inst).expect("an access");
         self.mutate(|function| {
             let others: Vec<InstId> =
-                function.block(block).instructions().iter().copied().filter(|&one| one != inst).collect();
+                function.block(block).iter().filter(|&one| one != inst).collect();
             let before = others[index.min(others.len() - 1)];
             function.move_to(inst, Position::Before(before)).expect("moved");
         });
@@ -195,7 +195,7 @@ impl Body {
         let copy = self.mutate(|function| {
             let copy = function.clone_instruction(like);
             let before =
-                function.block(block).instructions()[index.min(function.block(block).instructions().len() - 1)];
+                function.block(block).instructions()[index.min(function.block(block).len() - 1)];
             function.insert(copy, Position::Before(before)).expect("inserted");
             copy
         });

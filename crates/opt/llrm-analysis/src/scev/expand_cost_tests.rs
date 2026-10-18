@@ -47,9 +47,9 @@ fn high_cost(
     let entry = function.entry().expect("an entry");
     let values: Vec<Operand> = function
         .block(entry)
-        .instructions()
+        
         .iter()
-        .filter_map(|&inst| function.instruction(inst).result.map(Operand::Value))
+        .filter_map(|inst| function.instruction(inst).result.map(Operand::Value))
         .collect();
     // The instructions before the `ret` are read first, as the pass that asks
     // has read them: that is what `ExprValueMap` is made of.

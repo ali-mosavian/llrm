@@ -449,7 +449,7 @@ impl MemoryDependenceResults {
     ) -> Option<InstId> {
         match scan {
             Some(inst) => function.prev_in_block(inst),
-            None => function.block(bb).instructions().last().copied(),
+            None => function.block(bb).last(),
         }
     }
 

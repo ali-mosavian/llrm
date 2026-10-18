@@ -167,5 +167,5 @@ fn test_insertion_makes_the_missing_gep_at_the_end_of_the_predecessor_or_nothing
     assert_eq!(got, Some(Operand::Value(function.instruction(made[0]).result.expect("a value"))));
     assert_eq!(function.parent(made[0]), Some(b0));
     assert!(function.terminator(b0).is_some_and(|t| function.instruction(t).opcode.is_terminator()));
-    assert_eq!(function.block(b0).instructions().len(), 2, "the GEP and the branch");
+    assert_eq!(function.block(b0).len(), 2, "the GEP and the branch");
 }

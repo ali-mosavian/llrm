@@ -72,7 +72,7 @@ pub fn operations_in<'a>(
         .into_iter()
         .map(|&at| crate::cfg::block(at))
         .flat_map(move |block| {
-            function.block(block).instructions().iter().map(move |&inst| (inst, block, function.instruction(inst)))
+            function.block(block).iter().map(move |inst| (inst, block, function.instruction(inst)))
         })
         .filter(|(_, _, instruction)| instruction.opcode != Opcode::Phi)
 }

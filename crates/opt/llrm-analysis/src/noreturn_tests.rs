@@ -43,9 +43,9 @@ fn shape(
         .map(|&one| {
             function
                 .block(one)
-                .instructions()
+                
                 .iter()
-                .map(|&inst| function.instruction(inst).opcode.mnemonic())
+                .map(|inst| function.instruction(inst).opcode.mnemonic())
                 .collect()
         })
         .collect()

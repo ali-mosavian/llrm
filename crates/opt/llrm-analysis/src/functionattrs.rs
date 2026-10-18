@@ -215,9 +215,9 @@ fn can_return(
         if ends_in_ret
             && !function
                 .block(block)
-                .instructions()
+                
                 .iter()
-                .any(|&inst| effects::states(context, declarations, function, inst, Fact::NoReturn))
+                .any(|inst| effects::states(context, declarations, function, inst, Fact::NoReturn))
         {
             return true;
         }

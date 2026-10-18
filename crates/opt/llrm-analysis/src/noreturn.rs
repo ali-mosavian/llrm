@@ -240,10 +240,10 @@ pub fn cold(
     let marked = |at: i64| {
         function
             .block(cfg::block(at))
-            .instructions()
+            
             .iter()
             .any(
-                |&inst| matches!(
+                |inst| matches!(
                     function.instruction(inst).opcode,
                     Opcode::Call(_) | Opcode::Invoke(_)
                 )
@@ -353,7 +353,7 @@ pub fn after_terminal_calls(
     let void = context.types.void();
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let instructions = function.block(block).instructions().to_vec();
+        let instructions = function.block(block).iter().collect::<Vec<_>>();
         let cut = instructions
             .iter()
             .position(

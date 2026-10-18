@@ -262,9 +262,8 @@ fn phis_of(
 ) -> Vec<InstId> {
     function
         .block(block)
-        .instructions()
+        
         .iter()
-        .copied()
         .take_while(|&one| function.instruction(one).opcode == Opcode::Phi)
         .collect()
 }

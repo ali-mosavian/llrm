@@ -101,9 +101,9 @@ impl ScalarEvolution {
         let position = |block: BlockId, inst: InstId| -> usize {
             function
                 .block(block)
-                .instructions()
+                
                 .iter()
-                .position(|&one| one == inst)
+                .position(|one| one == inst)
                 .expect("an instruction of its block")
         };
         if a_block == b_block
