@@ -174,7 +174,9 @@ pub fn machine_with<'a>(
         // must be, and none of those is.
         let built: Vec<&str> = phases
             .iter()
-            .map(|phase| SLOTS.iter().find(|(class, _)| *class == phase.class_name()).map_or("unknown", |(_, slot)| *slot))
+            .map(|phase| {
+                SLOTS.iter().find(|(class, _)| *class == phase.class_name()).map_or("unknown", |(_, slot)| *slot)
+            })
             .collect();
         llrm_transforms::parity::check_backend(&built)?;
     }

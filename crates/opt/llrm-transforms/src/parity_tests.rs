@@ -76,8 +76,11 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
         kind: SlotKind::Translated,
         replaced_by: "",
     });
-    let built: Vec<&str> =
-        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend && one.kind != SlotKind::Missing).map(|one| one.slot).collect();
+    let built: Vec<&str> = parity::REGISTRY
+        .iter()
+        .filter(|one| one.phase == Phase::Backend && one.kind != SlotKind::Missing)
+        .map(|one| one.slot)
+        .collect();
     assert_eq!(parity::check(parity::REGISTRY, Phase::Backend, &built), Ok(()));
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
@@ -89,7 +92,8 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
 /// counted as joined: `jumps@17` is TailMergeBlocks only.
 #[test]
 fn test_a_partial_slot_is_checked_like_a_translated_one_and_not_counted_joined() {
-    let built: Vec<&str> = parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
+    let built: Vec<&str> =
+        parity::REGISTRY.iter().filter(|one| one.phase == Phase::Backend).map(|one| one.slot).collect();
     let without: Vec<&str> = built.iter().copied().filter(|one| *one != "jumps@17").collect();
     let why = parity::check(parity::REGISTRY, Phase::Backend, &without).expect_err("jumps@17 left out");
     assert!(why.contains("jumps@17"), "{why}");
