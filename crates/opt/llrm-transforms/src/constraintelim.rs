@@ -14,21 +14,28 @@
 //! and decided by asking the system whether the row or its negation is
 //! implied.
 //!
-//! This file is the engine: [`Decomposition`], [`ConstraintTy`] and
-//! [`ConstraintInfo`] (`decompose`, `getConstraint`, `isImpliedBy`, `addFact`,
-//! `transferToOtherSystem`, `checkCondition`).
+//! This file is the pass: the engine ([`Decomposition`], [`ConstraintTy`],
+//! [`ConstraintInfo`]), the worklist over the dominator tree and the
+//! [`ConstraintElimination`] function pass.
 //!
 //! DEVIATE (anything MIR lacks):
 //! 1. A variable is an `Operand`: a value or a constant (a global, `null`),
 //!    where LLVM's is a `Value *`.
 //! 2. A constant-expression GEP is not a `GEPOperator` here: only a `gep`
-//!    instruction is decomposed (`decomposeGEP`), a constant one stays a
-//!    variable.
-//! 3. `stripPointerCastsSameRepresentation` is the identity: MIR pointers are
-//!    opaque, and a cast between address spaces is not a same-representation
-//!    cast.
-//! 4. `DebugCounter`, `DumpReproducers` (`generateReproducer`) and the
-//!    `LLVM_DEBUG` output are not translated.
+//!    instruction is decomposed (`decomposeGEP`); a constant one is stripped
+//!    to its base or stays a variable.
+//! 3. `DebugCounter`, `DumpReproducers` (`generateReproducer`), the
+//!    `LLVM_DEBUG` output and the debug-record rewrite of
+//!    `replaceCmpWithConstant` are not translated.
+//! 4. `takeName` has no counterpart: the `usub.sat` and overflow
+//!    replacements get fresh names.
+//! 5. Induction facts (`addBoundsForHeaderInductions`, `addInfoForInductions`,
+//!    `getMonotonicityInfo`) are not translated: they need ScalarEvolution,
+//!    which scev-port owns. Exit: join them once it lands. Measured effect:
+//!    every file of the pass's tests that differs from the pinned `opt` is a
+//!    loop one (`tools/llvmport/cecompare.py`).
+//! 6. Memory-access facts (`getConstraintFromMemoryAccess`) are not
+//!    translated: they need `getBaseObjectSize`, which MIR lacks.
 //!
 //! # Example
 //! `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
@@ -370,13 +377,12 @@ struct OffsetResult {
 }
 
 /// The bits of `GEPNoWrapFlags` that matter here, of `flags`: `inbounds`
-/// implies `nusw` and `nuw`.
+/// implies `nusw`, not `nuw`.
 fn gep_flags(flags: Flags) -> Flags {
     let mut out = Flags::default();
     if flags.contains(Flags::INBOUNDS) {
         out.insert(Flags::INBOUNDS);
         out.insert(Flags::NUSW);
-        out.insert(Flags::NUW);
     }
     if flags.contains(Flags::NUSW) {
         out.insert(Flags::NUSW);
@@ -1141,9 +1147,8 @@ impl ConstraintInfo {
         }
 
         let is_signed_system = force_signed_system || is_signed(pred);
-        // `stripPointerCastsSameRepresentation` is the identity (DEVIATE 3).
-        let a_dec = self.decompose(q, op0, is_signed_system);
-        let b_dec = self.decompose(q, op1, is_signed_system);
+        let a_dec = self.decompose(q, strip_pointer_casts_same_representation(q, op0), is_signed_system);
+        let b_dec = self.decompose(q, strip_pointer_casts_same_representation(q, op1), is_signed_system);
         let mut r = get_row_for_less_equal(&a_dec, &b_dec, self.value2index(is_signed_system), new_variables);
         if r.is_empty() {
             return ConstraintTy::default();
@@ -1433,6 +1438,66 @@ fn side_is_known_non_negative(
     }
 }
 
+/// `Value::stripPointerCastsSameRepresentation`: `v` without the pointer casts
+/// and the GEPs with all indices zero around it.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
+fn strip_pointer_casts_same_representation(
+    q: &Query,
+    v: Side,
+) -> Side {
+    let Side::Value(mut op) = v else { return v };
+    if !q.is_pointer(op) {
+        return v;
+    }
+    // Even though we don't look through PHI nodes, we could be called on an
+    // instruction in an unreachable block, which may be on a cycle.
+    let mut visited = vec![op];
+    loop {
+        let next = match op {
+            Operand::Value(_) => {
+                let Some((_, instruction)) = q.instruction_of(op) else { return Side::of(q, op) };
+                match instruction.opcode {
+                    Opcode::GetElementPtr { .. } => {
+                        if !instruction.operands[1..].iter().all(|index| q.int_constant(*index).is_some_and(|(bits, _)| bits == 0)) {
+                            return Side::of(q, op);
+                        }
+                        instruction.operands[0]
+                    }
+                    Opcode::Cast(CastOp::BitCast) => {
+                        if !q.is_pointer(instruction.operands[0]) {
+                            return Side::of(q, op);
+                        }
+                        instruction.operands[0]
+                    }
+                    Opcode::Call(_) => match pattern::returned_argument_operand(q, instruction) {
+                        Some(returned) => returned,
+                        None => return Side::of(q, op),
+                    },
+                    _ => return Side::of(q, op),
+                }
+            }
+            Operand::Constant(id) => match &q.context().get(id).kind {
+                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::GetElementPtr { operands, .. })
+                    if operands[1..].iter().all(|index| q.int_constant(Operand::Constant(*index)).is_some_and(|(bits, _)| bits == 0)) =>
+                {
+                    Operand::Constant(operands[0])
+                }
+                llrm_mir::context::ConstantKind::Expr(llrm_mir::context::ConstantExpr::Cast { op: CastOp::BitCast, value }) => {
+                    Operand::Constant(*value)
+                }
+                _ => return Side::of(q, op),
+            },
+            Operand::Block(_) => return Side::of(q, op),
+        };
+        op = next;
+        if visited.contains(&op) {
+            return Side::of(q, op);
+        }
+        visited.push(op);
+    }
+}
+
 /// `mayLookThrough`: whether `v` is an operation `decompose_impl` can look
 /// through.
 ///
@@ -1664,10 +1729,6 @@ pub struct FactOrCheck {
 }
 
 impl FactOrCheck {
-    fn is_check(&self) -> bool {
-        matches!(self.entry, Entry2::InstCheck { .. } | Entry2::UseCheck { .. })
-    }
-
     fn is_condition_fact(&self) -> bool {
         matches!(self.entry, Entry2::ConditionFact { .. })
     }
@@ -2565,7 +2626,7 @@ fn check_and_replace_condition(
     actions: &mut Vec<Action>,
 ) -> bool {
     let positions = positions_of(q);
-    let mut replace = |is_true: bool, actions: &mut Vec<Action>| {
+    let replace = |is_true: bool, actions: &mut Vec<Action>| {
         let uses = qualifying_uses(q, tree, &positions, check, context_inst, cb.num_in, cb.num_out);
         let changed = !uses.is_empty();
         actions.push(Action::ReplaceCmp { check, is_true, uses });
