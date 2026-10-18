@@ -39,11 +39,6 @@ thread_local! {
     pub(crate) static WORKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// `nodes` solved: `initial(at)` is the output every block starts from,
-/// `input(at, outputs)` a block's input from the outputs that flow into it (the
-/// pass's meet, and its boundary at the entry), `transfer(at, input)` the
-/// output across it. A block starts with no input; its input is worked out the
-/// first time it is worked.
 #[cfg(test)]
 thread_local! {
     static ALWAYS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -63,6 +58,11 @@ fn checking() -> bool {
     crate::support::env_flag!("LLRM_CHECK_DATAFLOW")
 }
 
+/// `nodes` solved: `initial(at)` is the output every block starts from,
+/// `input(at, outputs)` a block's input from the outputs that flow into it (the
+/// pass's meet, and its boundary at the entry), `transfer(at, input)` the
+/// output across it. A block starts with no input; its input is worked out the
+/// first time it is worked.
 pub fn solve<S: Clone + PartialEq>(
     nodes: &[&Block],
     direction: Direction,
