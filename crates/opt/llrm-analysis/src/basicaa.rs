@@ -15,6 +15,17 @@
 //! ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
 //! the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
 //! read the attributes.
+//!
+//! # Example
+//! Two allocas never alias:
+//!
+//! ```text
+//! %a = alloca i32
+//! %b = alloca i32        ; alias(%a, %b) = NoAlias
+//! ```
+//!
+//! # Provides
+//! [`BasicAA`], an [`crate::aa::AAResults`]. No client reads it yet.
 
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{GlobalKind, Instruction, Operand, ValueDef};

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/basicaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/basicaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:7cb98e64b88ddcd1fcc1f19a329dd0306be1ebc9015522f3a67b8a07fc750b41 -->
+<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:0d7f89293bd9a8549bcdcb7eb6928ed7ba5a47341a2f009d9c44c16f57bee7b1 -->
 
 # basicaa
 
@@ -20,3 +20,14 @@ plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
 ranges, `aliasPHI`, `aliasSelect`, the location mod/ref queries (they answer
 the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`
 read the attributes.
+
+## Example
+Two allocas never alias:
+
+```text
+%a = alloca i32
+%b = alloca i32        ; alias(%a, %b) = NoAlias
+```
+
+## Provides
+`BasicAA`, an [`crate::aa::AAResults`](aa.md). No client reads it yet.
