@@ -1,3 +1,7 @@
+---
+architecture-index: LLVM's SimplifyCFG against llrm's `decide`
+architecture-order: 370
+---
 # LLVM's SimplifyCFG against llrm's `decide`
 
 TL;DR: SimplifyCFG folds a branch whose condition is a constant it can see in the block and asks no analysis; `decide` first builds the whole function's facts, ranges and guards and then looks at 574 branches to decide none of them on d_faces `-O2`: 151 M (4.7%) against SimplifyCFG's 8.4 M (2.0%).
