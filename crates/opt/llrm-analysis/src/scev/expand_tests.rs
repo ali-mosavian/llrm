@@ -221,9 +221,7 @@ fn expanded_in_loop_with(
     let s = build(&mut se, &env.cx(&context, &function), header, &arguments);
     let at = function
         .block(header)
-        .instructions()
         .iter()
-        .copied()
         .find(|&one| matches!(function.instruction(one).opcode, Opcode::ICmp(_)))
         .expect("the compare");
     let mut expander = Expander::new("t");
@@ -375,9 +373,7 @@ exit:
     let named = |function: &llrm_mir::module::Function, name: &str| {
         function
             .block(header)
-            .instructions()
             .iter()
-            .copied()
             .find(|&one| {
                 function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
             })
@@ -417,7 +413,7 @@ exit:
         function
             .layout()
             .iter()
-            .flat_map(|&b| function.block(b).instructions().to_vec())
+            .flat_map(|&b| function.block(b).iter().collect::<Vec<_>>())
             .find(|&one| {
                 function.instruction(one).result.is_some_and(|v| function.value(v).name.as_deref() == Some(name))
             })
