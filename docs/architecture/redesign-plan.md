@@ -1191,6 +1191,8 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 
 **Quiet-window switch and a finding.** The scheduled perf-on-main workflow honours the repository variable `QUIET_WINDOW=1` (`gh variable set` and `delete`; llvm-difftest's #2191), set by the window owner together with the runner stop. The three `tools/test_budgets.py` failures seen on the #2154 gate (`lir twoaddr`, `lir coalesce`, `isel` and `analysis pressure`) were never green on a measured main: `lir coalesce` is a x2.31 debt (issue #2189).
 
+**Void rows.** `rows/main` and `rows/base` were built with the Ubuntu clang 20.1.8 and are not a reference ([#2226]); `main24` to `main24d` are pinned and valid. Figures read from the void rows: `rows-series.md` (every table against min(gcc, clang)), `compile-gap-series.md` (the rows of `5e2e995ef`), the plan's 0.1 rows box and the `[rows-series]` ablation constraint in the 3.2 text, and the numbers in the PR bodies that quote them (owners redo them on `main24d`).
+
 **Decisions of 2026-10-18, second batch (oversight).**
 1. Greedy allocator: the turn-on is parked OFF and the per-row cause work is stopped (quality waits on S2); the mirror stays. Measured: greedy -56.4 M (-2.2%) at `d_faces` -O2 by plain `perf stat`; the old regalloc is 376 M against LLVM's RAGreedy at about 27 to 29 M on the pin. Next: profile greedy's own 143 M per function against RAGreedy; the line stops if it cannot get within about 2x per decision.
 2. GVN ([#2179]): about +1% compile is accepted, on the condition of the per-IR-instruction cost per run against LLVM's 25,680.
@@ -1445,6 +1447,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2186]: https://github.com/ali-mosavian/llrm/pull/2186
 [#2191]: https://github.com/ali-mosavian/llrm/pull/2191
 [#2194]: https://github.com/ali-mosavian/llrm/pull/2194
+[#2226]: https://github.com/ali-mosavian/llrm/pull/2226
 [#2196]: https://github.com/ali-mosavian/llrm/pull/2196
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
