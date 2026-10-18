@@ -923,7 +923,13 @@ impl Function {
         inst: InstId,
         kind: &str,
     ) {
-        self.instructions[inst.0 as usize].metadata.retain(|(one, _)| one != kind);
+        let metadata = &mut self.instructions[inst.0 as usize].metadata;
+        let held = metadata.len();
+        metadata.retain(|(one, _)| one != kind);
+        // `!range` and the like are facts about the result.
+        if metadata.len() != held {
+            self.log(Change::Rewritten(inst));
+        }
     }
 
     /// A copy of `inst`, placed nowhere, its result unnamed.
