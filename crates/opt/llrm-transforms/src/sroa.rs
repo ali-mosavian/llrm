@@ -341,7 +341,7 @@ fn has_unsafe_phi_or_select_use(
     function: &Function,
     root: InstId,
 ) -> Result<u64, ()> {
-    let mut visited: HashSet<InstId> = HashSet::default();
+    let mut visited: llrm_mir::dense::IdSet<InstId> = Default::default();
     visited.insert(root);
     let mut uses: Vec<(Option<ValueId>, InstId)> = vec![(None, root)];
     // With no loads or stores the access is dead: a size of zero.
@@ -417,9 +417,9 @@ fn build_slices(
     let mut found = AllocaSlices::default();
     // `MemTransferSliceMap` (L1034): the slice a transfer made from its first
     // side.
-    let mut transfer_slice: HashMap<InstId, usize> = HashMap::default();
+    let mut transfer_slice: llrm_mir::dense::IdMap<InstId, usize> = Default::default();
     // `PHIOrSelectSizes` (L1035): the largest access through a phi or select.
-    let mut phi_or_select_sizes: HashMap<InstId, u64> = HashMap::default();
+    let mut phi_or_select_sizes: llrm_mir::dense::IdMap<InstId, u64> = Default::default();
     let intrinsic = |inst: InstId| {
         let callee = llrm_mir::memory::callee(context, function, inst)?;
         llrm_mir::intrinsics::Intrinsic::named(globals.get(callee.0 as usize)?.name.as_deref()?)
@@ -429,7 +429,7 @@ fn build_slices(
     let alloc_size = layout.alloc_size(&context.types, allocated);
     let mut worklist: Vec<(Use, bool, i128)> = Vec::new();
     let mut visited_uses: HashSet<Use> = HashSet::default();
-    let mut visited_dead: HashSet<InstId> = HashSet::default();
+    let mut visited_dead: llrm_mir::dense::IdSet<InstId> = Default::default();
     let mut aborted = false;
 
     // `enqueueUsers` (PtrUseVisitor.cpp).
@@ -456,7 +456,7 @@ fn build_slices(
         };
         // `insertUse` (L1048).
         let insert_use = |found: &mut AllocaSlices,
-                          visited_dead: &mut HashSet<InstId>,
+                          visited_dead: &mut llrm_mir::dense::IdSet<InstId>,
                           offset: i128,
                           size: u64,
                           splittable: bool,
@@ -642,7 +642,7 @@ fn build_slices(
                     }
                     // Both sides seen: both point into this alloca.
                     let inserted = !transfer_slice.contains_key(&user);
-                    let at = *transfer_slice.entry(user).or_insert(found.slices.len());
+                    let at = *transfer_slice.get_or_insert_with(user, || found.slices.len());
                     if !inserted {
                         // Equal begin offsets and not volatile: the transfer is
                         // elided.
@@ -1199,7 +1199,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     /// The allocas a debug record names (DEVIATE: left alone).
     /// DEVIATE: `findDVRDeclares` (SROA.cpp#L6160) is not migrated; the alloca
     /// stays.
-    fn declared_allocas(&self) -> HashSet<InstId> {
+    fn declared_allocas(&self) -> llrm_mir::dense::IdSet<InstId> {
         self.function()
             .debug_records()
             .iter()
@@ -1240,7 +1240,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     continue;
                 }
                 changed |= self.run_on_alloca(alloca);
-                let mut deleted: HashSet<InstId> = HashSet::default();
+                let mut deleted: llrm_mir::dense::IdSet<InstId> = Default::default();
                 changed |= self.delete_dead_instructions(&mut deleted);
                 if !deleted.is_empty() {
                     self.worklist.retain(|one| !deleted.contains(one));
@@ -1336,7 +1336,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     /// `SROA::deleteDeadInstructions`. SROA.cpp#L6374
     fn delete_dead_instructions(
         &mut self,
-        deleted_allocas: &mut HashSet<InstId>,
+        deleted_allocas: &mut llrm_mir::dense::IdSet<InstId>,
     ) -> bool {
         let mut changed = false;
         while let Some(inst) = self.dead_insts.pop() {
@@ -1546,10 +1546,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         let mut loads: Vec<InstId> = Vec::new();
         let mut stores: Vec<InstId> = Vec::new();
-        let mut split_offsets: HashMap<InstId, SplitOffsets> = HashMap::default();
+        let mut split_offsets: llrm_mir::dense::IdMap<InstId, SplitOffsets> = Default::default();
         // Loads out of this alloca which cannot be pre-split, and so neither
         // can the stores of them.
-        let mut unsplittable_loads: HashSet<InstId> = HashSet::default();
+        let mut unsplittable_loads: llrm_mir::dense::IdSet<InstId> = Default::default();
         let value_load = |this: &Self, store: InstId| -> Option<InstId> {
             let Operand::Value(value) = this.function().instruction(store).operands[0] else { return None };
             match this.function().value(value).def {
@@ -1626,7 +1626,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     _ => continue,
                 }
                 // Record the initial split.
-                let offsets = split_offsets.entry(inst).or_default();
+                let offsets = split_offsets.get_or_insert_with(inst, Default::default);
                 offsets.slice = at;
                 offsets.splits.push(p.end - slice.begin);
             }
@@ -1660,7 +1660,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         },
                     )
             })
-            .map(|(&inst, _)| inst)
+            .map(|(inst, _)| inst)
             .collect();
         for inst in unsupported {
             match self.function().instruction(inst).opcode {
@@ -1698,7 +1698,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         let layout = self.unit.layout;
         let mut new_slices: Vec<Slice> = Vec::new();
-        let mut resplit_promotable: HashSet<InstId> = HashSet::default();
+        let mut resplit_promotable: llrm_mir::dense::IdSet<InstId> = Default::default();
         let load_align = |this: &Self, inst: InstId, offset: u64| -> u64 {
             let instruction = this.function().instruction(inst);
             let base = match instruction.opcode {
@@ -1725,7 +1725,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
         };
         // First, rewrite all of the split loads, building slices for them.
-        let mut split_loads_map: HashMap<InstId, Vec<InstId>> = HashMap::default();
+        let mut split_loads_map: llrm_mir::dense::IdMap<InstId, Vec<InstId>> = Default::default();
         for &load in &loads {
             let offsets = split_offsets.get(&load).expect("a candidate");
             let (slice_index, splits) = (offsets.slice, offsets.splits.clone());
@@ -3293,9 +3293,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         alloca: InstId,
     ) -> bool {
         let mut queue: Vec<Use> = Vec::new();
-        let mut visited: HashSet<InstId> = HashSet::default();
+        let mut visited: llrm_mir::dense::IdSet<InstId> = Default::default();
         let root = self.function().instruction(alloca).result.expect("an alloca has a result");
-        let enqueue = |function: &Function, queue: &mut Vec<Use>, visited: &mut HashSet<InstId>, value: ValueId| {
+        let enqueue = |function: &Function, queue: &mut Vec<Use>, visited: &mut llrm_mir::dense::IdSet<InstId>, value: ValueId| {
             for &used in function.users(value) {
                 if visited.insert(used.user) {
                     queue.push(used);
@@ -3395,7 +3395,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     fn split_aggregate_load(
         &mut self,
         load: InstId,
-        visited: &mut HashSet<InstId>,
+        visited: &mut llrm_mir::dense::IdSet<InstId>,
     ) {
         let layout = self.unit.layout;
         let ty = self.function().instruction(load).ty;
@@ -3429,7 +3429,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     fn split_aggregate_store(
         &mut self,
         store: InstId,
-        visited: &mut HashSet<InstId>,
+        visited: &mut llrm_mir::dense::IdSet<InstId>,
     ) {
         let layout = self.unit.layout;
         let value = self.function().instruction(store).operands[0];
