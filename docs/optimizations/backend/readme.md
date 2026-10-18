@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented, 0 undocumented.
+From the `//!` headers of `crates/backend/llrm-core/src/backend`: 96 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -56,6 +56,7 @@ From the `//!` headers of `crates/backend/llrm-core/src/backend`: 95 documented,
 | liveunion | Answers which values already hold a register where an interval lies, so the allocator can test an assignment without visiting every holder. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |
 | loopslots | Moves a loop's spill slots, and its loop-invariant reloads, into the registers the loop leaves free. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
 | lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
+| machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In place of `regthrash` and `copyprop` in the peephole phase under | [machinecp](machinecp.md) |
 | machinecse | Removes a repeated pure register computation after allocation, by value numbering the byte lanes each instruction reads and writes. | A peephole sub-pass, once per `peephole` run, after `sharedstores` and | [machinecse](machinecse.md) |
 | machinedce | Removes a pure allocated instruction whose whole result is dead. | The last body rewrite of `peephole` before `popped_arguments`, and | [machinedce](machinedce.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
