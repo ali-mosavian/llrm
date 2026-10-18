@@ -24,6 +24,20 @@
 2. **LLVM's answers** (not run): `opt -passes=aa-eval -print-all-alias-modref-info` with the pinned `~/scratch/llvm-build/bin/opt` (24.0.0git `d1106deb71cc`), on llvm-difftest's replay of the dumped pass inputs, pair by pair, every difference classified against today's. The first table of this page is the count of NoAlias-vs-MayAlias, MayAlias-vs-NoAlias and MustAlias differences; wherever today says NoAlias and BasicAA says MayAlias is a candidate miscompile and goes to a program test and a fix PR ahead of the perf work.
 3. **Walker equality** (memoryssa-port): `check_clobber_sanity` on every load and store of 167 `d_faces` bodies must hold with the new AA.
 
+### First table (oracle 2, `tools/aliascompare.py` of #2176)
+
+`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`), `-passes=aa-eval -print-all-alias-modref-info`; llrm side: `llrm-mir --aliases`, the answer `regions::overlapping` gives two pointers with every byte of their objects (aa-eval asks without a size). Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps, 166 with two or more pointers. Failed rows: 0.
+
+| ours | LLVM | pairs |
+|---|---|---|
+| NoAlias | NoAlias | 643,275 |
+| MayAlias | MayAlias | 629,409 |
+| MayAlias | NoAlias | 18,976 (precision LLVM has) |
+| MayAlias | MustAlias | 323 |
+| NoAlias | MayAlias | 0 (the candidate-miscompile column) |
+
+Pairs llrm printed that aa-eval did not: 79,186 (not compared). Two earlier readings of the same inputs gave 22,815 and 282,728 NoAlias-against-MayAlias pairs; both were my instrument (a one-byte width where aa-eval has none, and raw object sets where consumers treat parameters as possibly aliasing), found by reading the pairs: every one was two pointers loaded from one cell or derived from one parameter. The method is part of the table: the column is only as good as the width and object rule of `aliases()`.
+
 ## 4. Stages and gates
 
 | stage | content | gate |
