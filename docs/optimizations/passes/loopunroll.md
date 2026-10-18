@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunroll.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunroll.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunroll.rs sha256:c77d804ad9fa9ccf6483ec8573484fd01d04a8addf9939fd8bd51c7ea39c5860 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunroll.rs sha256:5a8f250c4f37460fc2ab3aaeed15c46f9f21099bdde2d390852ece7e777986ee -->
 
 # loopunroll
 
@@ -53,6 +53,27 @@ shape is a guard.
 
 ## Runs
 Not a pass: a library, called by the full-unroll pass when it is wired in.
+
+## Example
+A loop of two trips, `count` 2 and `b2` leaving on trip 2:
+```mir
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  br label %b2
+b2:
+  %next = add i16 %i, 1
+  %go = icmp slt i16 %next, 2
+  br i1 %go, label %b1, label %b3
+```
+becomes straight-line code, the second copy reading `%next` for `%i`:
+```mir
+b1:
+  %next = add i16 0, 1
+  br label %b1.1
+b1.1:
+  %next.1 = add i16 %next, 1
+  br label %b3
+```
 
 ## Needs
 `lcssa`, `cfg`, `edges`.

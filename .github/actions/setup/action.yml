@@ -51,7 +51,9 @@ runs:
       run: |
         # tests/dwarf.rs reads 16-bit DWARF images with it. About a second from the cached tree (the key above holds the pinned commit
         # and the script); LLRM_REQUIRE_WDUMP makes a build that failed a red job, not a skipped test.
-        wdump=$(sh toolchain/wdump.sh)
+        # A cache miss rebuilds it, and the build's log must not reach GITHUB_ENV: the script prints the path alone (the last line is all that is read).
+        wdump=$(sh toolchain/wdump.sh | tail -n 1)
+        [ -x "$wdump" ] || { echo "::error::toolchain/wdump.sh printed '$wdump', which is not an executable file"; exit 1; }
         echo "WDUMP=$wdump" >> "$GITHUB_ENV"
         echo "LLRM_REQUIRE_WDUMP=1" >> "$GITHUB_ENV"
     - name: The gcc torture corpus (pinned, cached with the forks)

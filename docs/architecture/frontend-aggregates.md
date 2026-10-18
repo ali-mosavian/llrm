@@ -1,3 +1,7 @@
+---
+architecture-index: front-end aggregates
+architecture-order: 230
+---
 # Front-end aggregates: the plan
 
 This page rests on an instruction count of the first dump of `d_faces`; no rows were run.
@@ -50,7 +54,7 @@ DEVIATE D4 (pending): MIR pointers are opaque and Open Watcom's tree does not ca
 
 ## 4. What llrm does
 
-`translate.rs` `copy` lays `size` bytes down as loads and stores, widest first (4, 2, 1), at any size. A zero-fill or constant fill is stores. The MIR then has `size / 4` pairs per copy, which `memcpyopt` merges back (`MAX_PAIRS` 64 pairs, kept where they cost more than `fill::copy_price`) and `Merge` turns runs of stores into a `memset` (MemCpyOpt's `tryMergingIntoMemset`; `lru` is a row of it, see [loopidiom-port](loopidiom-port.md)). The back end already lowers `llvm.memcpy` and `llvm.memset` of a constant length: `isel.rs` `memcpy` (`MEMCPY_MOVES` = 8 pairs, widest first, else `rep movsd` with `movsw`/`movsb` for the tail) and `memset`.
+`translate.rs` `copy` lays `size` bytes down as loads and stores, widest first (4, 2, 1), at any size. A zero-fill or constant fill is stores. The MIR then has `size / 4` pairs per copy, which `memcpyopt` merges back (`MAX_PAIRS` 64 pairs, kept where they cost more than `loopidioms::copy_price`) and `Merge` turns runs of stores into a `memset` (MemCpyOpt's `tryMergingIntoMemset`; `lru` is a row of it, see [loopidiom-port](loopidiom-port.md)). The back end already lowers `llvm.memcpy` and `llvm.memset` of a constant length: `isel.rs` `memcpy` (`MEMCPY_MOVES` = 8 pairs, widest first, else `rep movsd` with `movsw`/`movsb` for the tail) and `memset`.
 
 ## 5. Stages and gates
 
@@ -72,7 +76,7 @@ All pending oversight; none is built before it is approved.
 
 - D1. A local's constant initializer too large for stores is copied from an unnamed constant global in clang. On a flat unit llrm already lays the initializer under `_TEXT`; a 16-bit unit has no read-only data segment of its own here (fact: the front end's segment layout). The `memcpy` source is that object.
 - D2. clang's `!tbaa.struct` on the copy is not carried: MIR has `!tbaa` on accesses only. Copies of aggregates with mixed field types lose the field types; alias analysis treats the copy as a plain `memcpy`.
-- D3. `fill`'s memmove direction tags (`llrm.forward`/`llrm.backward`) are not used by an aggregate copy: copies from the front end are `memcpy`.
+- D3. `loopidioms`'s memmove direction tags (`llrm.forward`/`llrm.backward`) are not used by an aggregate copy: copies from the front end are `memcpy`.
 
 ## 7. Not in this plan
 
