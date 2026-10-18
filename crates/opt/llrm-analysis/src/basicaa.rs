@@ -3,6 +3,7 @@
 //! docs/architecture/basicaa-port.md). Per query: nothing is solved for the
 //! whole function, and what one query learns lives in its `AAQueryInfo`.
 //!
+//! # How it works
 //! Translated: `aliasCheck` (empty locations, casts stripped, the same value,
 //! the underlying objects, identified objects, arguments against function-local
 //! objects, an escape source against a non-captured local object, an access
