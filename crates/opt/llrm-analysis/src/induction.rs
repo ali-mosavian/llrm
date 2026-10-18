@@ -108,7 +108,7 @@
 //! [`crate::difference`], [`crate::guards`], [`crate::floatfacts`], and in
 //! llrm-transforms `indvars`, `lsr`, `loopexit`, `peel`, `unroll`,
 //! `unroll_jam`, `rotate`, `decide`, `hoist`, `expand`, `exitfold`, `counting`,
-//! `window`, `fill`, `floatloop`.
+//! `window`, `loopidioms`, `floatloop`.
 //!
 //! # Needs
 //! [`crate::consts`] (the registers the proofs read), [`crate::occurrence`],

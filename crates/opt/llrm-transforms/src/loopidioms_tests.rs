@@ -1,10 +1,10 @@
-//! `fill` had no tests of its own in llrm-core; these are behaviour tests,
-//! each body MIR text run by llrm-mir's interpreter before and after.
+//! `loopidioms` had no tests of its own in llrm-core; these are behaviour
+//! tests, each body MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_analysis::testing::{DOS, layout};
 use llrm_mir::passes::{Declared, Outer};
 
-use super::{Fill, Merge, filled};
+use super::{LoopIdioms, Merge, filled};
 use crate::testing::{managed, parsed, printed, results};
 
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n\n";
@@ -44,7 +44,7 @@ fn managed_fill_on(
 ) -> String {
     let before = parsed(&format!("{target}{text}"));
     let mut module = before.clone();
-    let after = managed(&mut module, Fill { size: false });
+    let after = managed(&mut module, LoopIdioms { size: false });
     assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
     after
 }
@@ -189,7 +189,7 @@ fn an_undeclared_memset_is_declared() {
     let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
     let before = parsed(&format!("{DOS}{}", looped("i8", "%n", body, "%e").replace(MEMSET, "")));
     let mut module = before.clone();
-    let text = managed(&mut module, Fill { size: false });
+    let text = managed(&mut module, LoopIdioms { size: false });
     assert!(
         text.contains("declare void @llvm.memset.p0.i16(ptr")
             && text.contains("call void @llvm.memset.p0.i16(ptr %p, i8 65"),
