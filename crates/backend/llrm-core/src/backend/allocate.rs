@@ -6828,7 +6828,17 @@ mod tests {
     /// again, a new value every pass, and compilation did not finish (#104).
     #[test]
     fn test_a_reload_stretched_by_a_parallel_copy_is_not_spilled_again() {
-        let (body, phases) = before_regalloc("walks10.ll", "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum", "386");
+        // Without the coalescer: the loop's parallel copy is what the allocator
+        // is handed to stress, and a coalescer that joins its copies (LLVM's
+        // does) leaves none.
+        let (body, phases) = crate::backend::regalloc_input::before_phase_skipping(
+            crate::backend::regalloc_input::Calls::C,
+            "walks10.ll",
+            "_f_conc10_s2_xi_bgnlnpfpn_end_n_st1_sum",
+            "386",
+            "RegAlloc",
+            &["Coalescer"],
+        );
         let longest =
             body.blocks.iter().map(|one| one.insns.iter().filter(|insn| insn.group.is_some()).count()).max().unwrap();
         assert!(longest >= 5, "premise: a parallel copy of {longest} insns stretches what is live across it");
