@@ -220,5 +220,7 @@ Acceptance at 4N ([#2265], debts in [#2260]): each step within its limit under g
 | unrolled | siblings depths | x2.59 | gone | none needed |
 | unrolled | facts masks | x1.81 | x2.00 | within; regmask slots |
 
+Owners of the callers of `intervals walk` and `intervals liveness` under greedy at 4N: `coalesce::joined` and `twoaddr` (lir-cleanup-poc: RegisterCoalescer, TwoAddressInstructionPass); `Facts::of` in the greedy driver and `slots_colored` (regalloc-core-poc: LiveIntervals, LiveStacks); spiller short updates (regalloc-core-poc: InlineSpiller without `spiller.rs`).
+
 [#2260]: https://github.com/ali-mosavian/llrm/issues/2260
 [#2265]: https://github.com/ali-mosavian/llrm/issues/2265
