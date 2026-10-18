@@ -870,3 +870,31 @@ def test_the_gvn_gvn_exception_leaves_every_other_step_at_the_normal_limits():
     base = {"cells O1 mir fold": [50.0, 100.0, 200.0, 400.0]}
     assert measure.step_rises(base, {"cells O1 mir fold": [80.0, 160.0, 320.0, 400.0]}, mine)[1]
     assert not [one for one in measure.tolerances(branch="x")["accepted"] if "branch" in one]
+
+def test_a_step_rise_line_says_it_is_an_own_reading_on_this_build_profile(monkeypatch):
+    """#2318: the gate read gvn x1.583 where a direct reading said x1.41, and neither said what it was: the same binaries give 1.583
+    (own, dist), 1.507 (total, dist), 1.523 (own, release) and 1.460 (total, release)."""
+    monkeypatch.setattr(measure, "PROFILE", "dist")
+    key = "straight O1 mir gvn"
+    base, now = {key: [10.0, 20.0, 44.3, 400.0]}, {key: [15.0, 30.0, 70.1, 410.0]}
+    lines, bad = measure.step_rises(base, now, measure.tolerances())
+    assert "(own, dist)" in lines[0] and "(own, dist)" in bad[0], (lines, bad)
+
+
+def test_the_gate_reads_a_step_as_the_own_column_of_its_row_not_the_total(monkeypatch, tmp_path):
+    """The same compile's `[instr]` row read by the gate and by hand (`awk '{print $2}'` own, `$5` total) is one number for each definition:
+    the gate's is the own column, less the empty file's."""
+    rows = lambda own, total: f"[instr]  {own:8.3f} Minstr own  {total:8.3f} Minstr total  1x mir gvn\n"
+    seen = {}
+
+    def sample(command, env):
+        text = Path(command[-1]).read_text()
+        own = 0.1 * len(text) ** 0.5 if text else 0.0
+        seen[len(text)] = rows(own, own * 1.15)
+        return 0, "", seen[len(text)]
+
+    monkeypatch.setattr(measure.scaling_gate.scaling, "sample", sample)
+    got = measure.scaling_gate.pass_costs("straight", "O1", tmp_path, command=lambda compiler, level, source: ["cc", str(source)])
+    big = got["straight O1 mir gvn"][2]
+    by_hand = seen[max(seen)].split()  # [instr] OWN Minstr own TOTAL Minstr total ...
+    assert big == float(by_hand[1]) and big != float(by_hand[4]), got
