@@ -2,6 +2,7 @@
 //! of, `getConstantMultiple`, `setNoWrapFlags`, `inferNoWrapViaConstantRanges`.
 
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType, RangeIntrinsic};
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::known::{compute_known_bits, pointer_alignment, pointer_dereferenceable_bytes};
@@ -311,32 +312,31 @@ impl ScalarEvolution {
         hint: RangeSignHint,
     ) -> ConstantRange {
         let mut work_list: Vec<Scev> = Vec::new();
-        let mut seen: std::collections::HashSet<Scev> = std::collections::HashSet::new();
+        let mut seen: HashSet<Scev> = HashSet::default();
 
         // Add Expr to the worklist, if Expr is either an N-ary expression or a
         // SCEVUnknown PHI node.
-        let add_to_worklist =
-            |se: &Self, work_list: &mut Vec<Scev>, seen: &mut std::collections::HashSet<Scev>, expr: Scev| {
-                if !seen.insert(expr) {
-                    return;
-                }
-                if se.cached_range(expr, hint).is_some() {
-                    return;
-                }
-                match se.node(expr).kind {
-                    Kind::Unknown(Operand::Value(id)) => {
-                        // Only a PHI node is followed.
-                        if let ValueDef::Instruction(inst) = cx.function.value(id).def
-                            && cx.function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi
-                        {
-                            work_list.push(expr);
-                        }
+        let add_to_worklist = |se: &Self, work_list: &mut Vec<Scev>, seen: &mut HashSet<Scev>, expr: Scev| {
+            if !seen.insert(expr) {
+                return;
+            }
+            if se.cached_range(expr, hint).is_some() {
+                return;
+            }
+            match se.node(expr).kind {
+                Kind::Unknown(Operand::Value(id)) => {
+                    // Only a PHI node is followed.
+                    if let ValueDef::Instruction(inst) = cx.function.value(id).def
+                        && cx.function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi
+                    {
+                        work_list.push(expr);
                     }
-                    Kind::Unknown(_) => {}
-                    Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
-                    _ => work_list.push(expr),
                 }
-            };
+                Kind::Unknown(_) => {}
+                Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
+                _ => work_list.push(expr),
+            }
+        };
         add_to_worklist(self, &mut work_list, &mut seen, s);
 
         // Build worklist by queuing operands of N-ary expressions and phi

@@ -2,8 +2,7 @@
 //! of a loop give about the expressions in it (S5). Signatures; the bodies are
 //! `todo!()` until S5.
 
-use std::collections::HashMap;
-
+use llrm_mir::hash::HashMap;
 use llrm_mir::module::BlockId;
 
 use super::expr::Scev;

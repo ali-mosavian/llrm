@@ -1,9 +1,8 @@
 //! `SCEVRewriteVisitor`: rebuild an expression with its operands rewritten,
 //! and the `SCEVCastSinkingRewriter` that `getPtrToAddrExpr` runs.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::ConstantKind;
+use llrm_mir::hash::HashMap;
 use llrm_mir::module::Operand;
 
 use super::expr::{Kind, Scev, Ty, Type, Use};
@@ -161,7 +160,7 @@ impl ScalarEvolution {
 
         // Use the rewriter to sink the cast down to SCEVUnknown leaves. The
         // rewriter handles null pointer constant folding.
-        let mut memo = HashMap::new();
+        let mut memo = HashMap::default();
         let int_op = self.sink_cast(cx, op, ty, &mut memo, &mut |se, u| {
             let Kind::Unknown(_) = se.node(u).kind else { unreachable!("an unknown") };
             let key = super::Key {

@@ -6,6 +6,7 @@
 //! `createAddRecFromPHIWithCasts` and the predicated rewrites are not
 //! translated.
 
+use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{Flags as IrFlags, IntPredicate, Opcode};
 use llrm_mir::types::Type as MirType;
@@ -471,7 +472,7 @@ impl ScalarEvolution {
         let can_recurse_into =
             |kind: Type| root_kind == kind || non_sequential_root_kind == kind || Type::ZeroExtend == kind;
 
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = HashSet::default();
         let mut worklist = vec![root];
         visited.insert(root);
         while let Some(s) = worklist.pop() {

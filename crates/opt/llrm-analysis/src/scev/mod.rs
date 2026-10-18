@@ -46,12 +46,11 @@ pub mod values;
 mod values_tests;
 pub mod wrap_proof;
 
-use std::collections::{HashMap, HashSet};
-
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::dominators::DominatorTree;
+use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Function, GlobalValue, MetadataNode, Operand, ValueDef, ValueId};
 use llrm_mir::types::Type as MirType;
@@ -183,23 +182,23 @@ impl ScalarEvolution {
     pub fn new() -> Self {
         let mut se = Self {
             nodes: Vec::new(),
-            unique: HashMap::new(),
-            fold_cache: HashMap::new(),
+            unique: HashMap::default(),
+            fold_cache: HashMap::default(),
             proving_split_predicate: false,
-            unsigned_ranges: HashMap::new(),
-            signed_ranges: HashMap::new(),
-            constant_multiple_cache: HashMap::new(),
-            loop_dispositions: HashMap::new(),
-            block_dispositions: HashMap::new(),
+            unsigned_ranges: HashMap::default(),
+            signed_ranges: HashMap::default(),
+            constant_multiple_cache: HashMap::default(),
+            loop_dispositions: HashMap::default(),
+            block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
-            expr_value_map: HashMap::new(),
-            scev_users: HashMap::new(),
+            expr_value_map: HashMap::default(),
+            scev_users: HashMap::default(),
             loop_users: IdMap::new(),
-            unsigned_wrap_via_induction_tried: HashSet::new(),
-            signed_wrap_via_induction_tried: HashSet::new(),
-            values_at_scopes: HashMap::new(),
-            values_at_scopes_users: HashMap::new(),
-            fold_cache_user: HashMap::new(),
+            unsigned_wrap_via_induction_tried: HashSet::default(),
+            signed_wrap_via_induction_tried: HashSet::default(),
+            values_at_scopes: HashMap::default(),
+            values_at_scopes_users: HashMap::default(),
+            fold_cache_user: HashMap::default(),
             could_not_compute: Scev(0),
         };
         se.nodes.push(Node { kind: Kind::CouldNotCompute, ty: None, size: 0, flags: 0, canonical: Scev(0) });
