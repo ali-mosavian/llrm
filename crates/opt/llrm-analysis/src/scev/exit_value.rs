@@ -8,12 +8,14 @@
 //! backedge is taken a bounded number of times.
 //!
 //! # Deviations
-//! - D-T4 (temporary): `computeExitCountExhaustively`,
-//!   `getConstantEvolvingPHI`, `EvaluateExpression` and
-//!   `getConstantEvolutionLoopExitValue` run the loop on constants through
-//!   `ConstantFoldInstOperands`, which MIR's folder does not offer for an
-//!   instruction by operand list. The exhaustive count is CouldNotCompute,
-//!   which is LLVM's answer when `getConstantEvolvingPHI` finds no phi.
+//! - D-T4 (temporary,
+//!   [#2328](https://github.com/ali-mosavian/llrm/issues/2328)):
+//!   `computeExitCountExhaustively`, `getConstantEvolvingPHI`,
+//!   `EvaluateExpression` and `getConstantEvolutionLoopExitValue` run the loop
+//!   on constants through `ConstantFoldInstOperands`, which MIR's folder does
+//!   not offer for an instruction by operand list. The exhaustive count is
+//!   CouldNotCompute, which is LLVM's answer when `getConstantEvolvingPHI`
+//!   finds no phi.
 //!
 //! # Example
 //! `while (x >>= 1)` over an `i32` is taken at most 32 times.
@@ -141,9 +143,8 @@ impl ScalarEvolution {
             BinaryOp::AShr => {
                 // {K,ashr,<positive-constant>} stabilizes to signum(K) in at
                 // most bitwidth(K) iterations.
-                let Some(first_value) = pattern::phi_incoming(phi)
-                    .find(|&(_, from)| from == predecessor)
-                    .map(|(value, _)| value)
+                let Some(first_value) =
+                    pattern::phi_incoming(phi).find(|&(_, from)| from == predecessor).map(|(value, _)| value)
                 else {
                     return ExitLimit::could_not_compute(self);
                 };

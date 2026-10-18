@@ -15,10 +15,14 @@
 //! - Predicates (DEVIATE 1 of `docs/architecture/scev-port.md`): no
 //!   `AllowPredicates`, so `SolveLinEquationWithOverflow` gives up where it
 //!   would add a predicate.
-//! - D-T3 (temporary): `BinomialCoefficient` computes at `W + T` bits (`T` the
-//!   factors of two in `K!`, plus one), and `Ap` holds 128: past that the
-//!   coefficient is CouldNotCompute.
-//! - D-T2 (temporary): quadratic recurrences. `SolveQuadraticAddRecExact` and
+//! - D-T3 (temporary,
+//!   [#2327](https://github.com/ali-mosavian/llrm/issues/2327)):
+//!   `BinomialCoefficient` computes at `W + T` bits (`T` the factors of two in
+//!   `K!`, plus one), and `Ap` holds 128: past that the coefficient is
+//!   CouldNotCompute.
+//! - D-T2 (temporary,
+//!   [#2326](https://github.com/ali-mosavian/llrm/issues/2326)): quadratic
+//!   recurrences. `SolveQuadraticAddRecExact` and
 //!   `SolveQuadraticAddRecRange` need `SolveQuadraticEquationWrap` over
 //!   integers three times as wide as the coefficients, which `Ap` does not
 //!   hold. A quadratic recurrence's count is CouldNotCompute, as LLVM's is
@@ -60,22 +64,6 @@ fn one_bit_set(
 }
 
 impl ScalarEvolution {
-    /// `SCEVAddRecExpr::isAffine`.
-    pub fn is_affine(
-        &self,
-        ar: Scev,
-    ) -> bool {
-        matches!(&self.node(ar).kind, Kind::AddRec(operands, _) if operands.len() == 2)
-    }
-
-    /// `SCEVAddRecExpr::isQuadratic`.
-    pub fn is_quadratic(
-        &self,
-        ar: Scev,
-    ) -> bool {
-        matches!(&self.node(ar).kind, Kind::AddRec(operands, _) if operands.len() == 3)
-    }
-
     /// `s` is an add recurrence of the loop headed by `header`.
     pub fn is_add_rec_of(
         &self,
@@ -336,7 +324,8 @@ impl ScalarEvolution {
             if c.is_zero() {
                 return ExitLimit::exact(self, v);
             }
-            return ExitLimit::could_not_compute(self); // Otherwise it will loop infinitely.
+            // Otherwise it will loop infinitely.
+            return ExitLimit::could_not_compute(self);
         }
 
         let add_rec = self.strip_injective_functions(v);
@@ -420,9 +409,8 @@ impl ScalarEvolution {
                 // may be a wrapped set even when the guards bound Distance + 1
                 // tightly.
                 let guarded = self.apply_loop_guards(cx, distance_plus_one, header);
-                let max = self
-                    .get_unsigned_range_max(cx, guarded)
-                    .umin(self.get_unsigned_range_max(cx, distance_plus_one));
+                let max =
+                    self.get_unsigned_range_max(cx, guarded).umin(self.get_unsigned_range_max(cx, distance_plus_one));
                 max_be_count = max_be_count.umin(max.sub(Ap::one(max.width)));
             }
             let constant_max = self.get_constant(max_be_count);
@@ -499,7 +487,8 @@ impl ScalarEvolution {
                 let zero = self.get_zero(cx, self.type_of(v));
                 return ExitLimit::exact(self, zero);
             }
-            return ExitLimit::could_not_compute(self); // Otherwise it will loop infinitely.
+            // Otherwise it will loop infinitely.
+            return ExitLimit::could_not_compute(self);
         }
 
         // We could implement others, but I really doubt anyone writes loops
@@ -659,7 +648,9 @@ impl ScalarEvolution {
             //
             // The positive stride case is the same as isKnownPositive(Stride)
             // returning true (original behavior of the function).
-            if !no_wrap || !self.loop_is_finite_by_assumption(cx, header) || !self.loop_has_no_abnormal_exits(cx, header)
+            if !no_wrap
+                || !self.loop_is_finite_by_assumption(cx, header)
+                || !self.loop_has_no_abnormal_exits(cx, header)
             {
                 return ExitLimit::could_not_compute(self);
             }
@@ -744,10 +735,7 @@ impl ScalarEvolution {
         let mut be_count = unknown;
         let mut be_count_if_backedge_taken = unknown;
         if !self.is_loop_invariant(cx, rhs, Some(header)) {
-            if positive_stride
-                && self.is_add_rec_of(rhs, header)
-                && self.get_no_wrap_flags(rhs, flags::MASK) != 0
-            {
+            if positive_stride && self.is_add_rec_of(rhs, header) && self.get_no_wrap_flags(rhs, flags::MASK) != 0 {
                 // The structure of loop we are trying to calculate backedge
                 // count of:
                 //
@@ -793,10 +781,11 @@ impl ScalarEvolution {
                 }
             }
         } else {
-            // Let End = max(RHS,Start). We use the expression (End-Start)/Stride
-            // to describe the backedge count: if the backedge is taken at
-            // least once then End is RHS, and if not End is Start so we get a
-            // backedge count of zero.
+            // Let End = max(RHS,Start). We use the expression
+            // (End-Start)/Stride to describe the backedge count: if
+            // the backedge is taken at least once then End is RHS,
+            // and if not End is Start so we get a backedge count of
+            // zero.
             //
             // AddingStrideMinusOneMayOverflow has the following preconditions:
             //
@@ -816,7 +805,7 @@ impl ScalarEvolution {
             // overflow.
             let one = self.get_one(cx, self.type_of(stride));
             let adding_stride_minus_one_may_overflow = iv_may_overflow && {
-                if self.is_known_to_be_a_power_of_two_scev(cx, stride, false, false) {
+                if self.is_known_to_be_a_power_of_two(cx, stride, false, false) {
                     // Suppose Stride is a power of two, and Start/End are
                     // unsigned integers. By the preconditions of this
                     // function, "(Start + Stride * N) >= End" and this doesn't
@@ -858,7 +847,8 @@ impl ScalarEvolution {
                 // (The case analysis showing these are equivalent under the
                 // preconditions is in LLVM's comment at this place.)
                 let minus_one = self.get_minus_one(cx, self.type_of(stride));
-                let rhs_minus_one = self.get_add_expr(cx, vec![Use::of(rhs), Use::of(minus_one)], Flags::default(), 0).scev;
+                let rhs_minus_one =
+                    self.get_add_expr(cx, vec![Use::of(rhs), Use::of(minus_one)], Flags::default(), 0).scev;
                 let start_minus_stride = self.get_minus_scev(cx, Use::of(start), Use::of(stride), 0, 0);
                 let numerator = self.get_minus_scev(cx, Use::of(rhs_minus_one), Use::of(start_minus_stride), 0, 0);
                 be_count = self.get_udiv_expr(cx, Use::of(numerator), Use::of(stride));
@@ -877,8 +867,8 @@ impl ScalarEvolution {
                     }
 
                     // (RHS > Start - 1) implies RHS >= Start.
-                    // * "RHS >= Start" is trivially equivalent to
-                    //   "RHS > Start - 1" if "Start - 1" doesn't overflow.
+                    // * "RHS >= Start" is trivially equivalent to "RHS > Start
+                    //   - 1" if "Start - 1" doesn't overflow.
                     // * For signed comparison, if Start - 1 does overflow, it's
                     //   equal to INT_MAX, and "RHS >s INT_MAX" is trivially
                     //   false.
@@ -929,8 +919,9 @@ impl ScalarEvolution {
                     // We prefer this formulation if it's legal because it's
                     // fewer operations.
                     let stride_minus_one = self.get_minus_scev(cx, Use::of(stride), Use::of(one), 0, 0);
-                    let sum =
-                        self.get_add_expr(cx, vec![Use::of(delta), Use::of(stride_minus_one)], Flags::default(), 0).scev;
+                    let sum = self
+                        .get_add_expr(cx, vec![Use::of(delta), Use::of(stride_minus_one)], Flags::default(), 0)
+                        .scev;
                     be_count = self.get_udiv_expr(cx, Use::of(sum), Use::of(stride));
                 } else {
                     be_count = self.get_udiv_ceil_scev(cx, delta, stride);
@@ -1091,7 +1082,7 @@ impl ScalarEvolution {
 impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L11290
     /// `ScalarEvolution::isKnownToBeAPowerOfTwo(S, OrZero, OrNegative)`.
-    pub fn is_known_to_be_a_power_of_two_scev(
+    pub fn is_known_to_be_a_power_of_two(
         &mut self,
         cx: &Cx,
         s: Scev,

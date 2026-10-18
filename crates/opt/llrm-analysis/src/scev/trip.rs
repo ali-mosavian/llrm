@@ -576,19 +576,14 @@ impl ScalarEvolution {
         cx: &Cx,
         header: BlockId,
     ) -> bool {
-        // isFinite(L): the function returns (`willreturn`).
-        let has = |name: &str| {
-            cx.function
-                .attrs
-                .iter()
-                .any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == name))
-        };
+        let facts = llrm_mir::facts::Facts::of(&cx.function.attrs);
         let loop_ = cx.loops.get_loop_for(header).expect("the header of a loop");
         // isMustProgress(L): the function says so or the loop is marked.
-        let marked = loop_.get_loop_latch(cx.function).is_some_and(|latch| {
-            llrm_mir::loopinfo::marked(cx.metadata, cx.function, latch)
-        });
-        has("willreturn") || ((has("mustprogress") || marked) && self.loop_has_no_side_effects(cx, header))
+        let marked = loop_
+            .get_loop_latch(cx.function)
+            .is_some_and(|latch| llrm_mir::loopinfo::marked(cx.metadata, cx.function, latch));
+        // isFinite(L): the function returns (`willreturn`).
+        facts.will_return() || ((facts.must_progress() || marked) && self.loop_has_no_side_effects(cx, header))
     }
 }
 
@@ -671,18 +666,5 @@ impl ScalarEvolution {
             held.symbolic_max = Some(symbolic_max);
         }
         symbolic_max
-    }
-
-    /// `forgetMemoizedResults(LoopUsers[L])` (D-T5, temporary): the range
-    /// caches are dropped whole, which forgets the ranges of every expression
-    /// that used an add recurrence of the loop, and more. `LoopUsers` arrives
-    /// with `forgetMemoizedResults` (S3).
-    fn forget_loop_users(
-        &mut self,
-        _cx: &Cx,
-        _header: BlockId,
-    ) {
-        self.unsigned_ranges.clear();
-        self.signed_ranges.clear();
     }
 }

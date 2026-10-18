@@ -199,9 +199,9 @@ impl ScalarEvolution {
 
         // An exit with an uncomputable exit count makes the result 1.
         if exiting_blocks.is_empty()
-            || exiting_blocks
-                .iter()
-                .any(|&exiting| self.get_exit_count(cx, l, exiting, ExitCountKind::Exact) == self.get_could_not_compute())
+            || exiting_blocks.iter().any(|&exiting| {
+                self.get_exit_count(cx, l, exiting, ExitCountKind::Exact) == self.get_could_not_compute()
+            })
         {
             return 1;
         }
@@ -232,11 +232,7 @@ impl ScalarEvolution {
         let multiple = self.get_non_zero_constant_multiple(cx, tc_expr);
         // If a trip multiple is huge (>=2^32), the trip count is still
         // divisible by the greatest power of 2 divisor less than 2^32.
-        if multiple.active_bits() > 32 {
-            1u32 << multiple.countr_zero().min(31)
-        } else {
-            multiple.zext_value() as u32
-        }
+        if multiple.active_bits() > 32 { 1u32 << multiple.countr_zero().min(31) } else { multiple.zext_value() as u32 }
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8464

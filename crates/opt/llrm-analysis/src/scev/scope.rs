@@ -198,3 +198,17 @@ impl ScalarEvolution {
         self.is_guaranteed_to_transfer_execution_to(cx, def_i, i)
     }
 }
+
+impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10079
+    /// `getSCEVAtScope(S, L)`: `S` as it is outside `l` (none: the function
+    /// body). SEAM (S4).
+    pub fn get_scev_at_scope(
+        &mut self,
+        _cx: &Cx,
+        _s: Scev,
+        _l: Option<BlockId>,
+    ) -> Scev {
+        todo!("S4")
+    }
+}

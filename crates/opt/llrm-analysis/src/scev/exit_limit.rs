@@ -54,7 +54,10 @@ impl ExitLimitCache {
 }
 
 fn is_signed(pred: IntPredicate) -> bool {
-    matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle)
+    matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    )
 }
 
 impl ScalarEvolution {
@@ -156,9 +159,7 @@ impl ScalarEvolution {
         controls_only_exit: bool,
     ) -> ExitLimit {
         // Handle BinOp conditions (And, Or).
-        if let Some(limit) =
-            self.compute_exit_limit_from_cond_from_bin_op(cx, cache, header, exit_cond, exit_if_true)
-        {
+        if let Some(limit) = self.compute_exit_limit_from_cond_from_bin_op(cx, cache, header, exit_cond, exit_if_true) {
             return limit;
         }
 
@@ -167,7 +168,14 @@ impl ScalarEvolution {
         // With an icmp, it may be feasible to compute an exact backedge-taken
         // count. Proceed to the next level to examine the icmp.
         if let Some((_, instruction, _, _, _)) = pattern::icmp(&query, exit_cond) {
-            return self.compute_exit_limit_from_icmp_inst(cx, header, exit_cond, instruction, exit_if_true, controls_only_exit);
+            return self.compute_exit_limit_from_icmp_inst(
+                cx,
+                header,
+                exit_cond,
+                instruction,
+                exit_if_true,
+                controls_only_exit,
+            );
         }
 
         // Check for a constant condition. These are normally stripped out by
@@ -220,7 +228,10 @@ impl ScalarEvolution {
 
         let query = cx.query(None);
         let (_, extract, wo) = pattern::extract_value(&query, exit_cond)?;
-        if !matches!(&extract.opcode, Opcode::ExtractValue(indices) if indices.as_slice() == [1]) {
+        if !matches!(
+            &extract.opcode,
+            Opcode::ExtractValue(indices) if indices.as_slice() == [1]
+        ) {
             return None;
         }
         let (wo_inst, wo_instruction) = pattern::with_overflow_inst(&query, wo)?;
@@ -286,8 +297,10 @@ impl ScalarEvolution {
         let mut constant_max_be_count = unknown;
         let mut symbolic_max_be_count = unknown;
         if either_may_exit {
-            let use_sequential_umin =
-                !matches!(query.instruction_of(exit_cond), Some((_, one)) if matches!(one.opcode, Opcode::Binary(_)));
+            let use_sequential_umin = !matches!(
+                query.instruction_of(exit_cond),
+                Some((_, one)) if matches!(one.opcode, Opcode::Binary(_))
+            );
             // Both conditions must be same for the loop to continue
             // executing. Choose the less conservative count.
             if el0.exact_not_taken != unknown && el1.exact_not_taken != unknown {
@@ -302,8 +315,11 @@ impl ScalarEvolution {
             } else if el1.constant_max_not_taken == unknown {
                 constant_max_be_count = el0.constant_max_not_taken;
             } else {
-                constant_max_be_count =
-                    self.get_umin_from_mismatched_types_pair(cx, el0.constant_max_not_taken, el1.constant_max_not_taken);
+                constant_max_be_count = self.get_umin_from_mismatched_types_pair(
+                    cx,
+                    el0.constant_max_not_taken,
+                    el1.constant_max_not_taken,
+                );
             }
             if el0.symbolic_max_not_taken == unknown {
                 symbolic_max_be_count = el1.symbolic_max_not_taken;
@@ -396,8 +412,9 @@ impl ScalarEvolution {
             pred = pred.swapped();
         }
 
-        let controlling_finite_loop =
-            controls_only_exit && self.loop_has_no_abnormal_exits(cx, header) && self.loop_is_finite_by_assumption(cx, header);
+        let controlling_finite_loop = controls_only_exit
+            && self.loop_has_no_abnormal_exits(cx, header)
+            && self.loop_is_finite_by_assumption(cx, header);
         // Simplify the operands before analyzing them.
         self.simplify_icmp_operands(cx, &mut pred, &mut lhs, &mut rhs, 0);
 
@@ -423,7 +440,8 @@ impl ScalarEvolution {
         match pred {
             IntPredicate::Ne => {
                 // while (X != Y)  -->  while (X-Y != 0)
-                let (Some(lhs), Some(rhs)) = (self.pointer_to_address(cx, lhs), self.pointer_to_address(cx, rhs)) else {
+                let (Some(lhs), Some(rhs)) = (self.pointer_to_address(cx, lhs), self.pointer_to_address(cx, rhs))
+                else {
                     return ExitLimit::could_not_compute(self);
                 };
                 let diff = self.get_minus_scev(cx, Use::of(lhs), Use::of(rhs), 0, 0);
@@ -434,7 +452,8 @@ impl ScalarEvolution {
             }
             IntPredicate::Eq => {
                 // while (X == Y)  -->  while (X-Y == 0)
-                let (Some(lhs), Some(rhs)) = (self.pointer_to_address(cx, lhs), self.pointer_to_address(cx, rhs)) else {
+                let (Some(lhs), Some(rhs)) = (self.pointer_to_address(cx, lhs), self.pointer_to_address(cx, rhs))
+                else {
                     return ExitLimit::could_not_compute(self);
                 };
                 let diff = self.get_minus_scev(cx, Use::of(lhs), Use::of(rhs), 0, 0);
@@ -520,10 +539,7 @@ impl ScalarEvolution {
         // A switch's operands: the condition, the default, then (value, block)
         // pairs.
         let (condition, default) = (instruction.operands[0], instruction.operands[1]);
-        debug_assert!(
-            !cx.loops.get_loop_for(header).expect("a loop").contains(exiting_block),
-            "Not an exiting block!"
-        );
+        debug_assert!(!cx.loops.get_loop_for(header).expect("a loop").contains(exiting_block), "Not an exiting block!");
 
         // Give up if the exit is the default dest of a switch.
         if default == Operand::Block(exiting_block) {
@@ -605,7 +621,7 @@ impl ScalarEvolution {
             && self.is_affine(inner_lhs)
         {
             let step = self.get_step_recurrence(cx, inner_lhs);
-            if self.is_known_to_be_a_power_of_two_scev(cx, step, true, true) {
+            if self.is_known_to_be_a_power_of_two(cx, step, true, true) {
                 let mut f = self.get_no_wrap_flags(inner_lhs, flags::MASK);
                 f |= flags::NW;
                 let operands = self.operands(inner_lhs).to_vec();

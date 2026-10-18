@@ -4,8 +4,6 @@
 //! answer until its stage lands; the stack that lands S1 lands them with it.
 //! A seam never makes a fold unsound, only less eager than LLVM's.
 
-use llrm_mir::module::BlockId;
-
 use super::expr::{Scev, flags};
 use super::{Cx, ScalarEvolution};
 
@@ -90,18 +88,6 @@ impl ScalarEvolution {
 }
 
 impl ScalarEvolution {
-    /// `getSCEVAtScope(S, L)`: `s` with what is loop-invariant at `l`
-    /// evaluated (the exit values of inner loops). SEAM (S3): `s` itself,
-    /// which is a valid answer.
-    pub fn get_scev_at_scope(
-        &mut self,
-        _cx: &Cx,
-        s: Scev,
-        _l: Option<BlockId>,
-    ) -> Scev {
-        s
-    }
-
     /// `isKnownPredicateAt(Pred, LHS, RHS, CtxI)`. SEAM (S5): not known.
     pub fn is_known_predicate_at(
         &mut self,
