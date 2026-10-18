@@ -30,7 +30,7 @@ import icount  # noqa: E402
 
 TOP = 0x0A000000  # the emulated memory: the image sits at 0x08048000, the heap above it, the stack below the image
 HEAP = 0x08800000
-STACK = 0x07F00000  # below the image (0x08048000), as the extender's is: a pointer test against the image's tables takes the path DOSBox does
+STACK = 0x07F00000  # 1 MiB below the image base. Only the order matters: in DOSBox under DOS/32A the stack (phys 0x1817ac-0x181a7c) is below the image's temp-string table, so a pointer test against it takes the same path here
 GDT = 0x9000
 FLAT_CODE, FLAT_DATA = 0x00CF9A000000FFFF, 0x00CF92000000FFFF  # base 0, 4 GiB, 32-bit: the stack is ESP, not SP
 
@@ -74,7 +74,11 @@ def run(image: Path, region: str, cwd: Path, limit: int = LIMIT) -> icount.Run:
     (entry,) = struct.unpack_from("<I", data, 24)
     uc = Uc(UC_ARCH_X86, UC_MODE_32)
     uc.mem_map(0, TOP)
-    for address, blob, _ in _segments(image):
+    segments = _segments(image)
+    if segments and STACK >= min(address for address, _, _ in segments):
+        result.error = f"the image starts at {min(address for address, _, _ in segments):#x}, not above the stack at {STACK:#x}: the layout is not the extender's"
+        return result
+    for address, blob, _ in segments:
         uc.mem_write(address, blob)
     uc.mem_write(GDT, struct.pack("<QQQ", 0, FLAT_CODE, FLAT_DATA))
     uc.reg_write(UC_X86_REG_GDTR, (0, GDT, 23, 0))
