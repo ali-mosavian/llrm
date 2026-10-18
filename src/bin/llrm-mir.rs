@@ -127,8 +127,7 @@ fn induction_variables(module: &llrm_mir::module::Module) -> String {
         if function.layout().is_empty() {
             continue;
         }
-        let loops =
-            llrm_mir::loopinfo::LoopInfo::analyze(function, || llrm_mir::dominators::DominatorTree::new(function));
+        let loops = llrm_mir::loopinfo::LoopInfo::analyze(function, || llrm_mir::domtree::DomTree::of(function));
         let evolution = llrm_mir::scalarevolution::Evolution::new(&module.context, function, &loops);
         // Larger loops first, by header among the same size: the order the
         // numbers in tools/loops were counted in.

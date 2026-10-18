@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
 use crate::datalayout::DataLayout;
-use crate::dominators::DominatorTree;
+use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::module::{Change, Function, GlobalKind, GlobalValue, MetadataNode, Module};
 use crate::program::{Program, ProgramAnalyses, ProgramPass, ProgramProxy, interface};
@@ -615,7 +615,7 @@ impl ModuleAnalysis for Declarations {
 pub struct Dominators;
 
 impl Analysis for Dominators {
-    type Result = DominatorTree;
+    type Result = DomTree;
     const READS_OUTER: bool = false;
     const NAME: &'static str = "dominators";
     const INCREMENTAL: bool = true;
@@ -623,14 +623,31 @@ impl Analysis for Dominators {
     /// The blocks the changed edges reach are worked out again; nothing else
     /// can move.
     fn update(
-        previous: &DominatorTree,
+        previous: &DomTree,
         changes: &[crate::module::Change],
         _: &Context,
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> Option<DominatorTree> {
+    ) -> Option<DomTree> {
         previous.updated(function, changes)
+    }
+
+    /// In place where nothing else holds the tree: LLVM's pass updates the
+    /// tree it owns, and a copy of it per edit is a step in the size of the
+    /// function.
+    fn update_owned(
+        previous: Rc<DomTree>,
+        changes: &[crate::module::Change],
+        _: &Context,
+        _: &DataLayout,
+        function: &Function,
+        _: &mut Analyses,
+    ) -> Option<DomTree> {
+        match Rc::try_unwrap(previous) {
+            Ok(mut tree) => tree.update_in_place(function, changes).then_some(tree),
+            Err(shared) => shared.updated(function, changes),
+        }
     }
 
     fn run(
@@ -638,8 +655,8 @@ impl Analysis for Dominators {
         _: &DataLayout,
         function: &Function,
         _: &mut Analyses,
-    ) -> DominatorTree {
-        DominatorTree::new(function)
+    ) -> DomTree {
+        DomTree::of(function)
     }
 }
 

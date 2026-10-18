@@ -480,7 +480,7 @@ d:
     let counted = |name: &str| {
         let (_, _, function) =
             module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name)).expect("a function");
-        let loops = crate::loopinfo::LoopInfo::analyze(function, || crate::dominators::DominatorTree::new(function));
+        let loops = crate::loopinfo::LoopInfo::analyze(function, || crate::domtree::DomTree::of(function));
         let evolution = crate::scalarevolution::Evolution::new(&module.context, function, &loops);
         let header = loops.get_loops_in_preorder()[0].get_header();
         evolution.counted(&module.context, function, &loops, header)
@@ -559,9 +559,9 @@ fn test_verifying_a_block_does_not_scan_it_for_each_use() {
     let chain: String = (1..300).map(|at| format!("  %v{at} = add i16 %v{}, 1\n", at - 1)).collect();
     let text = format!("{DATALAYOUT}define i16 @f(i16 %v0) {{\nentry:\n{chain}  ret i16 %v299\n}}\n");
     let module = parse::module(&text).unwrap_or_else(|error| panic!("{error}"));
-    let before = crate::dominators::scans();
+    let before = crate::domtree::scans();
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
-    assert_eq!(crate::dominators::scans() - before, 0, "a use scanned its block");
+    assert_eq!(crate::domtree::scans() - before, 0, "a use scanned its block");
 }
 
 /// A use before its definition in one block is still refused, by position.
@@ -842,12 +842,12 @@ fn nested(depth: usize) -> String {
 /// innermost loops.
 #[test]
 fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
-    use crate::dominators::DominatorTree;
+    use crate::domtree::DomTree;
     use crate::loopinfo::LoopInfo;
     let depth = 12;
     let module = parse::module(&nested(depth)).expect("a module");
     let function = module.functions().next().expect("@f").2;
-    let info = LoopInfo::analyze(function, || DominatorTree::new(function));
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
     let loops = info.get_loops_in_preorder();
     assert_eq!(loops.len(), depth);
     for (at, one) in loops.iter().enumerate() {
@@ -873,13 +873,13 @@ fn a_nest_of_loops_is_found_in_the_blocks_and_not_the_blocks_times_the_depth() {
 /// grow with the blocks, not with their depth.
 #[test]
 fn the_loops_of_a_function_are_found_in_time_that_grows_with_its_blocks() {
-    use crate::dominators::DominatorTree;
+    use crate::domtree::DomTree;
     use crate::loopinfo::{LoopInfo, visits};
     let visited = |depth: usize| {
         let module = parse::module(&nested(depth)).expect("a module");
         let function = module.functions().next().expect("@f").2;
         let before = visits();
-        LoopInfo::analyze(function, || DominatorTree::new(function));
+        LoopInfo::analyze(function, || DomTree::of(function));
         visits() - before
     };
     let (small, large) = (visited(40), visited(80));
