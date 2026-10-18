@@ -1,5 +1,6 @@
 """aliascompare.py reads aa-eval's lines the way llrm prints its own, and says so where it cannot run."""
 import importlib.util
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -43,3 +44,29 @@ def test_a_set_the_reference_only_ever_calls_may_alias_is_refused():
     assert "MustAlias, NoAlias" in aliascompare.premise(only_may)
     varied = collections.Counter({("MayAlias", "MayAlias"): 10, ("NoAlias", "NoAlias"): 3, ("MayAlias", "MustAlias"): 1})
     assert aliascompare.premise(varied) is None
+
+
+def slot_with_loads(loads: int) -> str:
+    reads = "".join(f"  %w{n} = load ptr, ptr %slot\n" for n in range(loads))
+    return (
+        f'target datalayout = "{aliascompare.M32_DATALAYOUT}"\n'
+        "define i32 @f(ptr %p, i32 %i) {\nentry:\n  %slot = alloca ptr\n  store ptr %p, ptr %slot\n  %q = load ptr, ptr %slot\n"
+        f"  %a = getelementptr inbounds i8, ptr %q, i32 %i\n  store i32 0, ptr %a\n{reads}  ret i32 0\n}}\n"
+    )
+
+
+def test_capture_tracking_gives_up_after_150_uses_in_the_pinned_opt():
+    """The cap is 150, not the 100 the plan page said (#2330): 32 pairs of d_faces-O1 differed. The slot has two uses beside its loads."""
+    try:
+        dt = aliascompare.difftest()
+    except SystemExit:
+        pytest.skip("the difftest normaliser is not here")
+    opt = dt.LLVM_BIN / "opt"
+    if not opt.exists():
+        pytest.skip("the pinned opt is not built here")
+    version = subprocess.run([str(opt), "--version"], capture_output=True, text=True).stdout
+    assert "24.0.0git" in version, f"the premise is the pinned opt, this is: {version!r}"
+    pair = lambda loads: next(
+        v for (_, names), v in aliascompare.llvm_answers(dt, slot_with_loads(loads), "basic").items() if {n for n, _ in names} == {"%a", "%slot"}
+    )
+    assert pair(148) == "NoAlias" and pair(149) == "MayAlias"
