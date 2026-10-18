@@ -24,13 +24,13 @@ Each function names its C++ permalink. Tests: LLVM's `test/Transforms/InstSimpli
 
 Agreed with fold-poc (in writing, to the coordinator):
 
-- \`constantfolding.rs\` calls \`constfold.rs\` for the binary, cast, compare and select folds and does not translate them again.
-- \`constant_fold_load_from_const(context, layout, c: ConstantId, ty, offset: u64) -> Option<ConstantId>\` and \`constant_fold_load_from_const_ptr(context, layout, globals, ptr: ConstantId, ty) -> Option<ConstantId>\` keep the signatures fold-poc gave gvn-port (#2160).
-- \`simplify_select.rs\` and \`simplify_calls.rs\` recurse into \`simplify.rs\`, whose \`Query\` is private. fold-poc moves it to its own \`pub(crate)\` file in a small PR with no behaviour change, right after the ValueTracking port; until then they are drafted against \`ValueQuery\`, \`&mut Context\` and \`max_recurse: u32\`.
+- `constantfolding.rs` calls `constfold.rs` for the binary, cast, compare and select folds and does not translate them again.
+- `constant_fold_load_from_const(context, layout, c: ConstantId, ty, offset: u64) -> Option<ConstantId>` and `constant_fold_load_from_const_ptr(context, layout, globals, ptr: ConstantId, ty) -> Option<ConstantId>` keep the signatures fold-poc gave gvn-port (#2160).
+- `simplify_select.rs` and `simplify_calls.rs` recurse into `simplify.rs`, whose `Query` is private. fold-poc moves it to its own `pub(crate)` file in a small PR with no behaviour change, right after the ValueTracking port; until then they are drafted against `ValueQuery`, `&mut Context` and `max_recurse: u32`.
 
 ## fold-poc
 
-`simplify.rs`, `constfold.rs`, the dispatch (one match arm per entry point above), pass wiring (combine, EarlyCSE, GVN, fold), the ValueTracking consumer switch, the \`Query\` move, and the functions \`simplify.rs\`'s header lists as owed and this plan does not (\`AndOrOfCmps\`, \`AndOrWithICmpEq\`, \`threadBinOpOverSelect\`/\`PHI\`) after the wiring PR.
+`simplify.rs`, `constfold.rs`, the dispatch (one match arm per entry point above), pass wiring (combine, EarlyCSE, GVN, fold), the ValueTracking consumer switch, the `Query` move, and the functions `simplify.rs`'s header lists as owed and this plan does not (`AndOrOfCmps`, `AndOrWithICmpEq`, `threadBinOpOverSelect`/`PHI`) after the wiring PR.
 
 ## Interface
 
