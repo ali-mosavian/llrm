@@ -24,6 +24,7 @@ mod facts_coverage;
 mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
+pub mod fpclass;
 pub mod hash;
 pub mod inline;
 pub mod interpret;
@@ -67,6 +68,10 @@ mod build_tests;
 mod constantrange_tests;
 #[cfg(test)]
 mod edit_tests;
+#[cfg(test)]
+mod fpclass_tests;
+#[cfg(test)]
+mod golden_dump;
 #[cfg(test)]
 mod interpret_tests;
 #[cfg(test)]
