@@ -15,7 +15,12 @@ fn names(
 fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
     let built = names(&on, Phase::Simplify);
-    let mut registry = parity::REGISTRY.to_vec();
+    // The rotate slot is Old while `LLRM_EXP_ROTATE` is unset, as in the pipeline's own check.
+    let rotate = pipeline::Options::default().rotate_slot;
+    let mut registry: Vec<Entry> = parity::REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if !rotate && one.slot == "rotate@728" { SlotKind::Old } else { one.kind }, ..*one })
+        .collect();
     registry.push(Entry {
         slot: "ghost@999",
         phase: Phase::Simplify,
@@ -26,8 +31,16 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
     });
     let why = parity::check(&registry, Phase::Simplify, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@999"), "{why}");
+    registry.pop();
     let without: Vec<_> = built.iter().copied().filter(|one| *one != "earlycse@649").collect();
-    let why = parity::check(parity::REGISTRY, Phase::Simplify, &without).expect_err("earlycse@649 left out");
+    // The rotate slot is Old while `LLRM_EXP_ROTATE` is unset, as in the
+    // pipeline's own check.
+    let rotate = pipeline::Options::default().rotate_slot;
+    let registry: Vec<Entry> = parity::REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if !rotate && one.slot == "rotate@728" { SlotKind::Old } else { one.kind }, ..*one })
+        .collect();
+    let why = parity::check(&registry, Phase::Simplify, &without).expect_err("earlycse@649 left out");
     assert!(why.contains("earlycse@649"), "{why}");
 }
 

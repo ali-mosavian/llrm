@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 53 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -37,7 +37,9 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 51 documented, 0 undoc
 | interprocedural | Finds what the two sides of a direct call make certain: constant arguments, constant returns, purity and termination. | The functions above, and the re-export of `noreturn::terminal_sites`. | [interprocedural](interprocedural.md) |
 | liveness | Which SSA values are live at each block's entry and exit, and how many are live at once. | `Liveness`, `live`, `live_where`, `pressure`, `pressure_of`, `entry_values`, | [liveness](liveness.md) |
 | loopaccess | `getPointersDiff` and `isConsecutiveAccess`. |  | [loopaccess](loopaccess.md) |
+| loopunrollanalyzer | `UnrolledInstAnalyzer`: what simplifies in one iteration of a loop if it were unrolled completely, to cost the unrolled form without making it. |  | [loopunrollanalyzer](loopunrollanalyzer.md) |
 | manager | The memory and range analyses as entries of llrm-mir's analysis manager: asked for by name, cached, kept or brought up to date after a pass. | The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`, | [manager](manager.md) |
+| memdep | `MemoryDependenceAnalysis`: for a load, a store or a call, the nearest instruction it depends on in its block (a def or a clobber), or that there is none there and the question moves to the predecessors. | `MemDepResult`, `MemoryDependenceResults` (`get_dependency`, | [memdep](memdep.md) |
 | memory | The memory model every alias query reads: objects, byte slices, provenance, accesses (`MemRef`) and the `Unit` that carries a function's facts. | The types above; `exposed_frames`, `object_of`, `global_object`, `typed`, | [memory](memory.md) |
 | memoryssa | Memory SSA: a single memory state versioned by stores and writing calls, with a walker that finds the writes a load may see. | `Accesses` (analysis `accesses`), `MemorySSA` via `built`, `Kind`, `Access`, | [memoryssa](memoryssa.md) |
 | mustexecute | `SimpleLoopSafetyInfo`. |  | [mustexecute](mustexecute.md) |

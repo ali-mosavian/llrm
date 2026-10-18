@@ -383,8 +383,10 @@ pub fn run(
                 .with_shape(&shape);
             if graph.is_none() {
                 // The manager's graph of this body, cloned: the updater edits
-                // the clone, and the manager drops its own with the pass's change.
-                let held = analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
+                // the clone, and the manager drops its own with the pass's
+                // change.
+                let held =
+                    analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
                 let (mssa, accesses) = match &*held {
                     Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
                     Err(_) => {
