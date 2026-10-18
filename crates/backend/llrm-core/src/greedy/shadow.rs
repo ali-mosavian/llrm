@@ -276,6 +276,15 @@ pub fn decide_with(
     mode: Mode<'_>,
 ) -> Option<Decided> {
     let body = inputs.body;
+    if std::env::var("HINTDBG").is_ok() {
+        for (k, b) in body.blocks.iter().enumerate() {
+            for i in &b.insns {
+                let name = i.what.as_ref().and_then(|w| w.name.clone()).unwrap_or_default();
+                eprintln!("LIR b{k} {name} def {:?} use {:?} pins {:?}", i.defines, i.uses, i.requires);
+            }
+        }
+        eprintln!("PINS {:?}", inputs.pins);
+    }
     if body.blocks.iter().any(|block| !block.phis.is_empty()) || body.blocks.is_empty() {
         return None;
     }
