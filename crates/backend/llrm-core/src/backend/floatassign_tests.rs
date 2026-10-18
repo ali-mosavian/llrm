@@ -227,3 +227,22 @@ fn test_a_body_with_no_float_is_returned_without_rebuilding_a_block() {
         assert!(one.insns.same_as(&other.insns), "block {:#x} rebuilt", one.at);
     }
 }
+
+/// `pressuresink` took the body's liveness as a set of values for each block,
+/// blocks times values, though it asks of each load only whether a value is
+/// live out of its block: the gate's `cases` program (128 and 256 cases) read
+/// 10.3 and 33.3 Minstr there, x3.2 for twice the program. It asks the rows
+/// of bits instead, and builds no set.
+#[test]
+fn test_pressuresink_builds_no_set_of_live_values_per_block() {
+    use crate::backend::allocate::SETS_BUILT;
+    let (body, _) = before_float_assign();
+    SETS_BUILT.with(|one| one.set(0));
+    crate::backend::pressuresink::sunk(
+        &body,
+        &crate::backend::target::BUILT_IN,
+        &crate::backend::classes::RegisterClasses::m16(),
+    );
+    let built = SETS_BUILT.with(|one| one.get());
+    assert_eq!(built, 0, "{built} block sets built");
+}
