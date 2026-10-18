@@ -432,7 +432,7 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let trips = profit::proven_trips(&view, &registers);
+        let trips = profit::proven_trips(&view);
         let (by_block, taken) =
             profit::_products_with_odds_in(view.context, view.metadata, &outer.globals, function, &shape, Some(&trips))
                 .map_or((None, Default::default()), |(by_block, taken)| (Some(by_block), taken));
@@ -472,7 +472,7 @@ impl Analysis for Products {
             .with_registers(&registers)
             .with_shape(&shape)
             .with_counted(&counted);
-        let trips = profit::proven_trips(&view, &registers);
+        let trips = profit::proven_trips(&view);
         if trips != previous.trips {
             return None;
         }
@@ -694,7 +694,7 @@ fn _function_price(
         &outer.globals,
         unit.function,
         &shape,
-        Some(&profit::proven_trips(&view, &facts)),
+        Some(&profit::proven_trips(&view)),
     )?;
     profit::motion_price(unit.context, unit.layout, outer, unit.function, &target.costs, target.room, &frequencies)
 }

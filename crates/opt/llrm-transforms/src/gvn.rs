@@ -212,7 +212,6 @@ impl FunctionPass for Gvn {
                     .with_registers(&registers)
                     .with_shape(&shape)
                     .with_counted(&counted),
-                &registers,
             )
         };
         match accesses.and_then(|accesses| {
