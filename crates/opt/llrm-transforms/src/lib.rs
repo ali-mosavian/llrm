@@ -119,6 +119,8 @@ mod globaldce_tests;
 pub mod globalopt;
 pub mod gvn;
 #[cfg(test)]
+mod gvn_load_tests;
+#[cfg(test)]
 mod gvn_scalar_tests;
 pub mod hoist;
 pub mod homes;
@@ -196,7 +198,6 @@ pub mod transform;
 pub mod trivialunswitch;
 pub mod twoentryphi;
 pub mod unroll;
-pub mod widen;
 pub mod unroll_jam;
 pub mod unswitch;
 pub mod versionalias;
@@ -204,6 +205,7 @@ pub mod versionstride;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
+pub mod widen;
 pub mod window;
 // Not ported, meaning nothing where a value is whole: `wholephis` and
 // `wholestores` joined word halves of the old MIR's split values (called
