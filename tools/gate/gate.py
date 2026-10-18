@@ -379,6 +379,8 @@ def narrowed(p: Plan, cfg: dict, live: list[str]) -> Plan:
         steps.append("bench")
     if any(f.startswith("tools/torture/") for f in live):
         steps.append("torture")
+    if any(f in ("tools/oracle_sweep.py", "tools/oracle_expected.toml") for f in live):
+        steps += ["oracle-sweep", "oracle-premise"]  # a change to the sweep runs the sweep: it cannot be tried any other way
     if any(matches(f, cfg["fmt"]["paths"]) for f in live):
         steps.append("fmt")
     for h in cfg["heavy"]:

@@ -216,7 +216,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure", "pytest-perf"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -1394,3 +1394,10 @@ def test_the_oracle_sweep_is_cut_into_slices_that_run_on_their_own_runners_and_t
     assert [g for g in groups if g.startswith("oracle")] == [f"oracle-{i}" for i in range(1, n + 1)] and groups["perf"][-1] == "oracle-premise"
     assert gate.shard_of("oracle-2") == ("oracle", f"2/{n}") and gate.shard_of("bench-1") == ("bench", f"1/{gate.load()['bench']['shards']}")
     assert "--shard" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"] and "--no-premise" in gate.commands(p, gate.load(), gate.packages())["oracle-sweep"]
+
+
+def test_a_change_to_the_oracle_sweep_runs_the_sweep_and_its_premise():
+    """A tools-only PR to oracle_sweep.py planned neither step: its own sharded groups never ran in its CI."""
+    p = gate.plan(["tools/oracle_sweep.py"])
+    assert "oracle-sweep" in p.steps and "oracle-premise" in p.steps
+    assert "oracle-sweep" not in gate.plan(["tools/bench/mkci.py"]).steps
