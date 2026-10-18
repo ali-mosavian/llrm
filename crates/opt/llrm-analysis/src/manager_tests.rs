@@ -1500,6 +1500,7 @@ fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
             "{name} kept past a branch sent elsewhere"
         );
     }
+}
 
 /// `LLRM_CHECK_CAPTURES` judges the points-to facts each time `get` hands them
 /// out, so a fact a pass reads (dse dropping a store behind `phi [%slot, %q]`)

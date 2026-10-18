@@ -30,7 +30,8 @@ pub enum LocationSize {
 }
 
 impl LocationSize {
-    /// The bytes the location spans, where it says (`hasValue`): an upper bound or a precise size.
+    /// The bytes the location spans, where it says (`hasValue`): an upper bound
+    /// or a precise size.
     pub fn value(self) -> Option<u64> {
         match self {
             Self::Precise(n) | Self::UpperBound(n) => Some(n),
