@@ -12,8 +12,7 @@
 //! allocation order (hints first), then evicting the interference of a register
 //! whose holders are all lighter than it (each eviction carries a cascade
 //! number so an eviction cycle cannot run forever), then waits a round
-//! (`RS_Split`) so smaller ranges are placed first, then splits (not yet
-//! translated: S2), and at last spills; a spill product (`RS_Done`) that finds
+//! (`RS_Split`) so smaller ranges are placed first, then splits (`regionsplit`), and at last spills; a spill product (`RS_Done`) that finds
 //! no register recolors the ranges in its way. Stages only move forward.
 //!
 //! ```text
@@ -22,7 +21,7 @@
 //!           + evict  a round  (S2)                 recoloring
 //! ```
 //!
-//! DEVIATE (until S2, named, no number): `trySplit`, `tryAssignCSRFirstTime`,
+//! DEVIATE (until S2, named, no number): `tryAssignCSRFirstTime`,
 //! `trySplitAroundHintReg` and `tryHintsRecoloring` are not translated, so a
 //! range that cannot get a register goes from `RS_Split` straight to spill;
 //! this target's register costs are all zero (`RegCosts`), so the cost-per-use
@@ -43,6 +42,7 @@ use std::rc::Rc;
 use llrm_lir::registers::RegId;
 
 use super::matrix::{InterferenceKind, LiveRegMatrix};
+use super::regionsplit::{SplitSupport, Splitter};
 use super::virtregmap::VirtRegMap;
 use crate::liveness::calcspillweights::{Hint, SpillWeightEnv, VirtRegAuxInfo};
 use crate::liveness::liveintervals::LiveIntervals;
@@ -375,6 +375,9 @@ pub struct RAGreedy<'a> {
     queue: BinaryHeap<(u32, u32)>,
     spiller: Box<dyn Spiller + 'a>,
     pub stats: Stats,
+    /// What `trySplit` works with; none until the caller gives it the
+    /// function's blocks (then a range that does not fit is spilled).
+    pub split: Option<SplitSupport>,
 }
 
 impl<'a> RAGreedy<'a> {
@@ -395,6 +398,7 @@ impl<'a> RAGreedy<'a> {
             queue: BinaryHeap::new(),
             spiller,
             stats: Stats::default(),
+            split: None,
         }
     }
 
@@ -901,7 +905,25 @@ impl<'a> RAGreedy<'a> {
             new_vregs.push(virt.reg());
             return Select::None;
         }
-        // trySplit: not translated (S2); every attempt fails.
+        if stage < LiveRangeStage::Spill && !virt.empty() {
+            // Try splitting VirtReg or interferences.
+            if let Some(ss) = self.split.as_mut() {
+                let before = new_vregs.len();
+                let mut splitter = Splitter {
+                    lis: &mut self.lis,
+                    matrix: &mut self.matrix,
+                    extra: &mut self.extra,
+                    ss,
+                    env: self.env,
+                    original: &self.original,
+                    hints: &mut self.hints,
+                };
+                let phys = splitter.try_split(virt, &order, new_vregs);
+                if phys.is_some() || new_vregs.len() != before {
+                    return phys.map_or(Select::None, Select::Reg);
+                }
+            }
+        }
         // If we couldn't allocate a register from spilling, there is probably
         // some invalid inline assembly. The base class will report it.
         if stage >= LiveRangeStage::Done || !virt.is_spillable() {

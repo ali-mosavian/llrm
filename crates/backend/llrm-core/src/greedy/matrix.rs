@@ -294,6 +294,15 @@ impl LiveRegMatrix {
         clobbered.as_ref().is_some_and(|roots| roots.contains(&crate::model::ir::root(phys)))
     }
 
+    /// `checkRegMaskInterference(VirtReg)` with no register: the range is live
+    /// across an instruction that destroys some register.
+    pub fn crosses_reg_mask(
+        &mut self,
+        virt: &LiveInterval,
+    ) -> bool {
+        self.fixed.reg_mask_clobbered(virt).is_some()
+    }
+
     /// `checkInterference(VirtReg, PhysReg)` (LiveRegMatrix.cpp#L178).
     pub fn check_interference(
         &mut self,

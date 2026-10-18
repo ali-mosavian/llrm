@@ -35,19 +35,21 @@
 //! `RAGreedy::trySplit` and its region, block and local splits.
 
 use std::rc::Rc;
+use std::sync::Arc;
 
 use super::virtregmap::VirtRegMap;
 use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::{InstrKey, SlotIndex};
+use crate::model::lir::Insn;
 
 /// What LIR does not state the way MIR does (D-SK2).
 pub trait SplitEnv {
-    /// `MBB.getFirstTerminator()`: the first terminator of block `block`.
-    fn first_terminator(
+    /// `MI.isTerminator()`.
+    fn is_terminator(
         &self,
-        block: usize,
-    ) -> Option<InstrKey>;
+        insn: &Insn,
+    ) -> bool;
 
     /// `L = Loops.getLoopFor(MBB); L && L->isLoopLatch(MBB)`.
     fn is_loop_latch(
@@ -73,19 +75,30 @@ pub trait SplitEnv {
         l: usize,
     ) -> usize;
 
+    /// `TII.isTriviallyReMaterializable(*MRI.getUniqueVRegDef(reg))`: the
+    /// value can be made again where it is read.
+    fn is_rematerializable(
+        &self,
+        reg: u32,
+    ) -> bool;
+
     /// `TII.isCopyInstr(MI) || MI.isSubregToReg()`.
     fn is_copy_like(
         &self,
-        instr: InstrKey,
+        insn: &Insn,
     ) -> bool;
 
     /// `BuildMI(MBB, I, DebugLoc(), TII.get(TII.getLiveRangeSplitOpcode(
     /// FromReg, MF)), ToReg).addReg(FromReg)`: a move of `from` into `to`.
+    /// The new instruction goes beside `beside` (the one it is put before, or
+    /// the last of its block) and claims none of its bytes.
     fn build_copy(
         &self,
+        lis: &LiveIntervals,
         to: u32,
         from: u32,
-    ) -> std::sync::Arc<crate::model::lir::Insn>;
+        beside: Option<&Insn>,
+    ) -> Arc<Insn>;
 }
 
 /// `-enable-split-loopiv-heuristic`
@@ -117,9 +130,10 @@ impl InsertPointAnalysis {
         if self.last_insert_point[mbb].is_valid() {
             return self.last_insert_point[mbb];
         }
-        let at = match env.first_terminator(mbb) {
+        // `MBB.getFirstTerminator()`.
+        let at = match lis.block_insns(mbb).iter().find(|insn| env.is_terminator(insn)) {
             None => lis.indexes.get_mbb_end_idx(mbb),
-            Some(term) => lis.indexes.get_instruction_index(term),
+            Some(term) => lis.indexes.get_instruction_index(term.id()),
         };
         self.last_insert_point[mbb] = at;
         at
@@ -472,7 +486,7 @@ impl SplitAnalysis {
         }
         // No point in isolating a copy. It has no register class constraints.
         let mi = lis.indexes.get_instruction_from_index(&bi.first_instr).expect("an instruction");
-        if env.is_copy_like(mi) {
+        if env.is_copy_like(lis.instr(mi)) {
             return false;
         }
         // Finally, don't isolate an end point that was created by earlier
@@ -562,11 +576,11 @@ mod tests {
     }
 
     impl SplitEnv for Env {
-        fn first_terminator(
+        fn is_terminator(
             &self,
-            block: usize,
-        ) -> Option<InstrKey> {
-            self.terminators.iter().find(|(b, _)| *b == block).map(|(_, k)| *k)
+            insn: &Insn,
+        ) -> bool {
+            self.terminators.iter().any(|(_, k)| *k == insn.id())
         }
 
         fn is_loop_latch(
@@ -574,6 +588,13 @@ mod tests {
             block: usize,
         ) -> bool {
             self.latches.contains(&block)
+        }
+
+        fn is_rematerializable(
+            &self,
+            _reg: u32,
+        ) -> bool {
+            false
         }
 
         fn loop_of(
@@ -599,15 +620,17 @@ mod tests {
 
         fn is_copy_like(
             &self,
-            _instr: InstrKey,
+            _insn: &Insn,
         ) -> bool {
             false
         }
 
         fn build_copy(
             &self,
+            _lis: &LiveIntervals,
             _to: u32,
             _from: u32,
+            _beside: Option<&Insn>,
         ) -> Arc<Insn> {
             unreachable!("the analysis builds no copy")
         }
