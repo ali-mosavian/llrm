@@ -1,3 +1,7 @@
+---
+architecture-index: decide against SimplifyCFG and JumpThreading
+architecture-order: 140
+---
 # decide against SimplifyCFG, JumpThreading, CorrelatedValuePropagation and ConstraintElimination
 
 TL;DR: `decide` is 124.7 M of `d_faces` -O2 (36 runs, 3.5 M a run) and decides nothing: all 36 runs find no branch to decide, 4 of them thread a block. Across the 38 bench programs it decides 15 branches in all (guards 10, constants 4, ranges 1) in 5 runs of about 520. LLVM's four counterparts together are 31.9 M. The cost is per run and per branch, spent on answers that are all "no": 1,021 range proofs that fail, 486 guard collections, a constant propagation over the whole body, and the facts asked first (58%).

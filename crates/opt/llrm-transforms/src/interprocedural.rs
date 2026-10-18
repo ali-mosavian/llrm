@@ -1472,6 +1472,10 @@ pub fn optimized_with<E: From<String>>(
                 bases[at].insert(id, size);
             }
             for &id in made.added.iter().chain(&made.edited) {
+                llrm_mir::memory::unsplit(
+                    &mut function_mut(&mut program.modules[at], id).1.attrs,
+                    llrm_mir::memory::Moved::OutOfArguments,
+                );
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-cp.")?;
                 cloned_now = true;
@@ -2053,10 +2057,17 @@ fn _narrowed(
         slices.iter().filter(|one| !local(one)).any(|one| (one.object.kind == MemoryKind::Parameter) == parameter)
     };
     let (stated_arguments, stated_other) = llrm_mir::memory::located(attrs);
-    let arguments =
-        _both(stated_arguments, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
+    // What the attribute allows anywhere bounds what is allowed at each
+    // location, but its split between them does not: the body may have been
+    // rewritten since (argument promotion takes `sc->faces` as a parameter, so
+    // a write that was `other` memory is now `argmem`), and a location the
+    // old split forbade would lose the write. LLVM meets the same split
+    // (FunctionAttrs.cpp:298, `ME & OldME`) but runs once per SCC, after
+    // ArgumentPromotion.
+    let stated = _either(_either(stated_arguments, stated_other), llrm_mir::memory::inaccessible(attrs));
+    let arguments = _both(stated, Effects { reads: found(&summary.reads, true), writes: found(&summary.writes, true) });
     let other = _both(
-        stated_other,
+        stated,
         Effects {
             reads: found(&summary.reads, false) || summary.unknown_read,
             writes: found(&summary.writes, false) || summary.unknown_write,
