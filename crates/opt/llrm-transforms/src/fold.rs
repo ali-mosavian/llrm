@@ -164,7 +164,7 @@ struct _EdgeFold {
 /// expression folded on its edges, then floatfold; `outer` is its module
 /// and target, `calls` what each call writes. Whether anything changed.
 pub fn folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     outer: &Outer,
@@ -175,7 +175,7 @@ pub fn folded(
 
 /// `folded`, `analyses` holding what is known of `function`.
 fn _folded(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,
@@ -196,7 +196,7 @@ fn _folded(
 /// `folded`'s integers: consts' answers, a counted float loop's exit
 /// cells among them.
 fn _numbers(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     analyses: &mut Analyses,

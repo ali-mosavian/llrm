@@ -749,3 +749,58 @@ b2:
 ";
     check(text, text, &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]]);
 }
+
+/// `CanMergeValues` and `replaceUndefValuesInPhi`: an `undef` input merges with
+/// any other as `poison` does, so a jump block whose phi value is `undef` is
+/// bypassed where b0 itself reaches b2 with 2. The second body runs the
+/// `poison`/`undef` pair fix-up of `replaceUndefValuesInPhi`; the phi folds
+/// afterwards either way, so no result tells the fix-up from its absence.
+#[test]
+fn test_undef_inputs_merge_and_a_poison_undef_pair_becomes_undef() {
+    check_branching(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b2:
+  %p = phi i16 [ undef, %b0 ], [ 2, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  ret i16 2
+}
+",
+        &[&[3, 1]],
+    );
+    check_branching(
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  br i1 %d, label %b3, label %b4
+
+b4:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b2
+
+b3:
+  br label %b2
+
+b2:
+  %p = phi i16 [ poison, %b4 ], [ undef, %b1 ], [ %x, %b3 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b0:
+  ret i16 %x
+}
+",
+        &[&[3, 1, 1]],
+    );
+}

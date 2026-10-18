@@ -43,12 +43,12 @@ group narrowed_moves
 
 rule narrowed_register
     match   mov d:reg32, s:reg32
-    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), encodable($0)
+    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), unread(@0, upper(d)), encodable($0)
     rewrite @0: =@0 low_word(d), low_word(s)
 
 rule narrowed_immediate
     match   mov d:reg32, s:sym32
-    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), encodable($0)
+    when    free(@0, narrowable), !empty(upper(d)), dead(@0, upper(d)), unread(@0, upper(d)), encodable($0)
     rewrite @0: =@0 low_word(d), low_word(s)
 
 

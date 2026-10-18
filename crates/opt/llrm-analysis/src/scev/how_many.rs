@@ -1108,6 +1108,61 @@ impl ScalarEvolution {
         operands.iter().all(|op| non_recursive(self, op.scev)) && (or_zero || self.is_known_non_zero(cx, s))
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L2372
+    /// `getStrengthenedNoWrapFlagsFromBinOp`: the `(nuw, nsw)` the no-wrap
+    /// proofs give the add, sub, mul or shl by a constant `inst`, with the ones
+    /// it has; none if it gains none. (`UseContextForNoWrapFlagInference` is
+    /// off, its `cl::opt` default, so no context instruction.)
+    pub fn get_strengthened_no_wrap_flags_from_bin_op(
+        &mut self,
+        cx: &Cx,
+        inst: llrm_mir::module::InstId,
+    ) -> Option<(bool, bool)> {
+        use llrm_mir::context::ConstantKind;
+        use llrm_mir::opcode::{Flags as IrFlags, Opcode};
+        let instruction = cx.function.instruction(inst);
+        let Opcode::Binary(mut opcode) = instruction.opcode else { return None };
+        let (has_nuw, has_nsw) = (instruction.flags.contains(IrFlags::NUW), instruction.flags.contains(IrFlags::NSW));
+        // It cannot be done any better.
+        if has_nuw && has_nsw {
+            return None;
+        }
+        let (mut nuw, mut nsw) = (has_nuw, has_nsw);
+        let mut deduced = false;
+
+        let lhs = self.get_scev(cx, instruction.operands[0]);
+        let mut rhs = self.get_scev(cx, instruction.operands[1]);
+
+        let mut can_use_nsw = true;
+        if opcode == BinaryOp::Shl {
+            // Treat `shl %a, C` as `mul %a, 1 << C`.
+            let llrm_mir::module::Operand::Constant(constant) = instruction.operands[1] else { return None };
+            let found = cx.context.get(constant);
+            let ConstantKind::Int(amount) = found.kind else { return None };
+            let bit_width = cx.context.types.int_bits(found.ty)?;
+            if amount >= u128::from(bit_width) {
+                return None;
+            }
+            // NSW only transfers if the shift amount is < BitWidth - 1, as
+            // INT_MIN * -1 overflows.
+            can_use_nsw = amount < u128::from(bit_width - 1);
+            opcode = BinaryOp::Mul;
+            rhs = self.get_constant(Ap::new(bit_width, 1u128 << amount));
+        } else if !matches!(opcode, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
+            return None;
+        }
+
+        if !has_nuw && self.will_not_overflow(cx, opcode, false, lhs, rhs, None) {
+            nuw = true;
+            deduced = true;
+        }
+        if can_use_nsw && !has_nsw && self.will_not_overflow(cx, opcode, true, lhs, rhs, None) {
+            nsw = true;
+            deduced = true;
+        }
+        deduced.then_some((nuw, nsw))
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L2299
     /// `willNotOverflow`: whether `ext(LHS op RHS) == ext(LHS) op ext(RHS)`.
     pub fn will_not_overflow(

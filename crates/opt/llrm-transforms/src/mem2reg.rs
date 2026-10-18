@@ -240,7 +240,7 @@ pub fn is_alloca_promotable(
 /// the pointers derived from it, go; a marker leaves a store of poison where
 /// it was, as the memory is dead from there. PromoteMemoryToRegister.cpp#L522
 fn remove_intrinsic_users(
-    context: &mut Context,
+    context: &Context,
     callees: &Callees,
     function: &mut Function,
     alloca: InstId,
@@ -405,7 +405,7 @@ impl LargeBlockInfo {
 
 /// `poison` of `ty`: MIR's `UndefValue`/`PoisonValue`.
 fn poison(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> Operand {
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
@@ -413,7 +413,7 @@ fn poison(
 
 /// `UndefValue::get(ty)`.
 fn uninitialized(
-    context: &mut Context,
+    context: &Context,
     ty: TypeId,
 ) -> Operand {
     Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Undef }))
@@ -480,7 +480,7 @@ fn convert_declares_to_values(
 /// value. Whether the alloca is gone; if not, `info.using_blocks` holds the
 /// blocks of the loads left. PromoteMemoryToRegister.cpp#L593
 fn rewrite_single_store_alloca(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
@@ -557,7 +557,7 @@ fn erase_alloca(
 /// over it. Whether the alloca is gone (false when a load comes before every
 /// store). PromoteMemoryToRegister.cpp#L706
 fn promote_single_block_alloca(
-    context: &mut Context,
+    context: &Context,
     layout: &DataLayout,
     function: &mut Function,
     alloca: InstId,
@@ -1124,7 +1124,7 @@ fn edges(
 /// poison. Local until `llrm_mir::simplify::simplify_phi` lands.
 /// InstructionSimplify.cpp `simplifyPHINode`
 fn simplify_phi(
-    context: &mut Context,
+    context: &Context,
     function: &Function,
     dominance: &cfg::Dominance,
     phi: InstId,
