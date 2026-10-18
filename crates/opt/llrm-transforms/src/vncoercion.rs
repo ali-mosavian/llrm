@@ -518,7 +518,7 @@ pub fn get_constant_value_for_load(
 
 /// `getMemInstValueForLoad`
 /// ([VNCoercion.cpp:414](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp#L414)):
-/// the value of a load fully inside a `memset`; a transfer is DEVIATE 9.
+/// the value of a load fully inside a `memset`; a transfer is owed by fold-poc.
 pub fn get_mem_inst_value_for_load(
     builder: &mut Inserter,
     src_inst: MemIntrinsic,
