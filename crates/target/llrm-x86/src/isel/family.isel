@@ -348,6 +348,14 @@ pattern pointer_cast for ptrtoint=mov inttoptr=mov addrspacecast=mov
   emit $x86 r <- s
 end
 
+# A frozen value is the value: LLVM selects it as a copy.
+pattern freeze
+  match freeze.i1|i8|i16|i32|ptr(x)
+  let r = result
+  let s = source(x)
+  emit mov r <- s
+end
+
 pattern unselected_cast
   match cast
   call unselected_cast
