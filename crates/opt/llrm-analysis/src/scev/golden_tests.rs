@@ -77,6 +77,9 @@ fn test_where_the_pinned_llvm_is_wrong_the_folds_take_the_right_answer() {
             assert!(ours.contains("(-1 * "), "{expression}: the -1 was dropped: {ours}");
         }
     }
+    for head in ["(add ", "(mul "] {
+        assert!(cases.iter().any(|(e, _, _)| e.starts_with(head)), "no case reaches the {head}lookup");
+    }
     let crashes = cases.iter().filter(|(_, llvm, _)| llvm == "SEGFAULT").count();
     assert!(crashes >= 2 && crashes < cases.len(), "premise: both a crash and a wrong answer, {crashes} crashes");
 }

@@ -883,10 +883,11 @@ impl ScalarEvolution {
                 }
 
                 // Otherwise, add the folded AddRec by the non-invariant parts.
-                // DEVIATE 8: LLVM compares `Ops[i] == AddRec` with the use
-                // bits, so an add recurrence held with a use
+                // DEVIATE 8 (permanent): LLVM compares `Ops[i] == AddRec` with
+                // the use bits, so a recurrence held with a use
                 // flag is never found and the loop runs off the
-                // array (tools/scev/divergences.txt). Ignore the bits.
+                // array. Compare the node.
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L2939
                 let at = ops.iter().position(|op| op.scev == add_rec).expect("the add recurrence is still there");
                 ops[at] = Use::of(new_rec);
                 return self.get_add_expr(cx, ops, Flags::default(), depth + 1);
@@ -1284,10 +1285,11 @@ impl ScalarEvolution {
 
                 // Otherwise, multiply the folded AddRec by the non-invariant
                 // parts.
-                // DEVIATE 8: LLVM compares `Ops[i] == AddRec` with the use
-                // bits, so an add recurrence held with a use
+                // DEVIATE 8 (permanent): LLVM compares `Ops[i] == AddRec` with
+                // the use bits, so a recurrence held with a use
                 // flag is never found and the loop runs off the
-                // array (tools/scev/divergences.txt). Ignore the bits.
+                // array. Compare the node.
+                // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3357
                 let at = ops.iter().position(|op| op.scev == add_rec).expect("the add recurrence is still there");
                 ops[at] = Use::of(new_rec);
                 return self.get_mul_expr(cx, ops, Flags::default(), depth + 1);
