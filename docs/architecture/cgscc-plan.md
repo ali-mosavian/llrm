@@ -98,7 +98,7 @@ Compile time, instructions (`perf stat instructions:u`, `llrm-c -O2`, QCport mod
 The cost analysis itself is a small part (`inlinecost::sites`: 20M of the 827M that cmd.c gains); the rest is the
 pipeline over larger bodies, about 6 fixed-point steps per re-run. A callees-first walk (branch `feat/inline-walk`,
 `LLRM_EXP_INLINEWALK`) visits each function once and gives the same rows: cmd.c 2,554M, ls.c 1,403M, dbg.c 146M
-(87, 71 and 7 steps), so the order is not the cost; the single pass-list run of the order work is.
+(87, 71 and 7 steps), so the order is not the cost; the single pass-list run of the order work (llvm-order-poc's step 3.2) is, and the walk PR is not opened until it lands.
 
 Rows (71 vsgcc programs, m32, against the pinned references of `rows/main24d`: gcc 13.4.0, clang 24.0.0git
 d1106deb71cc): only x_dct and x_heapsort move, at -O2 and -O3. Clocks -25.0% / -27.9% and -15.1%; code bytes +32% on
