@@ -1,4 +1,5 @@
 # i32 checksum (no unsigned 32-bit needed: it stays far below 2^31).
+@noipa
 fn bench_matmul(seed: i16) -> i32:
     let mut a: i16[8, 8] = [[0] * 8] * 8
     let mut b: i16[8, 8] = [[0] * 8] * 8

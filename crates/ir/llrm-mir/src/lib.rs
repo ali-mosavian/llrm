@@ -30,7 +30,7 @@ pub mod intrinsics;
 pub mod knownbits;
 pub mod lexer;
 pub mod lint;
-pub mod loops;
+pub mod loopinfo;
 pub mod memory;
 pub mod module;
 pub mod opcode;
@@ -68,6 +68,8 @@ mod edit_tests;
 mod interpret_tests;
 #[cfg(test)]
 mod lint_tests;
+#[cfg(test)]
+mod loopinfo_tests;
 #[cfg(test)]
 mod pass_tests;
 #[cfg(test)]
