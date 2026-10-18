@@ -1094,11 +1094,15 @@ impl Function {
                 return Err(format!("block {} still has {} users", block.0, self.block_users(block).len()));
             }
         }
-        let mut gone = crate::dense::IdSet::<BlockId>::new();
-        for &block in blocks {
-            gone.insert(block);
+        if let [block] = blocks {
+            self.layout.retain(|one| one != block);
+        } else {
+            let mut gone = crate::dense::IdSet::<BlockId>::new();
+            for &block in blocks {
+                gone.insert(block);
+            }
+            self.layout.retain(|one| !gone.contains(one));
         }
-        self.layout.retain(|one| !gone.contains(one));
         for &block in blocks {
             self.release_name(block);
             self.blocks[block.0 as usize].erased = true;
