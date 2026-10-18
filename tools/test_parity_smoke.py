@@ -24,7 +24,7 @@ def test_the_declared_cost_of_the_set_fits_the_budget():
 def test_a_set_within_the_budget_ends_in_pass():
     clock, steps = clocked([("a", 2.0, "ok"), ("b", 3.0, "ok")])
     ok, line = ps.run_steps(steps, Path("."), clock)
-    assert ok and line.startswith("PARITY SMOKE PASS") and "5.0 s of 10 s" in line
+    assert ok and line.startswith("PARITY SMOKE PASS") and "5.0 s CPU of 10 s" in line
 
 
 def test_a_set_over_the_budget_fails_whatever_its_steps_say():
@@ -46,3 +46,13 @@ def test_a_failed_step_fails_the_set_and_a_skipped_one_is_named_not_passed():
 def test_the_last_line_carries_pass_or_fail_for_the_merge_loop():
     clock, steps = clocked([("a", 1.0, "ok")])
     assert ps.run_steps(steps, Path("."), clock)[1].split()[:3] == ["PARITY", "SMOKE", "PASS"]
+
+
+def test_the_budget_is_cpu_time_not_the_wall_clock_of_a_loaded_host():
+    """The same work took 4.2 s and 8.2 s of wall on this host at load 60: a wall budget fails merges for nothing."""
+    import inspect
+
+    assert inspect.signature(ps.run_steps).parameters["clock"].default is ps.cpu
+    before = ps.cpu()
+    sum(range(300000))
+    assert ps.cpu() > before

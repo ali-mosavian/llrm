@@ -8,7 +8,7 @@ named as skipped and is not a pass of that step. Steps, with what they were meas
   programs  bintree as BASIC, Nib and C at -m16 and -m32, every LLRM_CHECK_* oracle on        ~1.5 s  frontends, both machines, the oracles
   sc        QCport's render/sc.c at -m16 -O1, every oracle on                                  ~2.0 s  the C front end on real 16-bit code (the unsound memory summary)
   d_faces   d_faces.c -m32 -O2 run in unicorn, the reports equal gcc -O0's                      ~2.3 s  a miscompile of real code, executed
-The set exceeds its budget when the steps' spent time does (the run fails) or when their declared costs do (a test fails): add a step only by
+The budget is CPU seconds (a loaded host stretches the wall clock of the same work 2-3x; wall is printed). The set exceeds it when the steps' spent time does (the run fails) or when their declared costs do (a test fails): add a step only by
 dropping or cheapening another. The oracles on d_faces (1.3-4.7 s with the host loaded) and the unit tests of a touched crate (building them is the cost) are not here.
 """
 from __future__ import annotations
@@ -95,9 +95,15 @@ def d_faces(bins: Path) -> tuple[str, str]:
 STEPS = [("programs", programs, 1.5), ("sc", sc, 2.0), ("d_faces", d_faces, 2.5)]  # (name, step, declared seconds)
 
 
-def run_steps(steps, bins: Path, clock=time.monotonic, budget: float = BUDGET) -> tuple[bool, str]:
+def cpu() -> float:
+    """CPU seconds of this process and its children: a loaded host (load 60 here) stretches the wall clock of the same work 2-3x and failed no merge by it."""
+    t = os.times()
+    return t.user + t.system + t.children_user + t.children_system
+
+
+def run_steps(steps, bins: Path, clock=cpu, budget: float = BUDGET) -> tuple[bool, str]:
     """(passed, the last line). The clock is the test's, which waits on virtual time."""
-    started, parts, failed, skipped = clock(), [], [], []
+    started, wall, parts, failed, skipped = clock(), time.monotonic(), [], [], []
     for name, step, _ in steps:
         began = clock()
         verdict, detail = step(bins)
@@ -109,7 +115,7 @@ def run_steps(steps, bins: Path, clock=time.monotonic, budget: float = BUDGET) -
     spent = clock() - started
     if spent > budget:
         failed.append(f"over the budget: {spent:.1f} s > {budget:.0f} s")
-    line = f"{' | '.join(parts)} | {spent:.1f} s of {budget:.0f} s" + (f" | skipped {'; '.join(skipped)}" if skipped else "")
+    line = f"{' | '.join(parts)} | {spent:.1f} s CPU of {budget:.0f} s ({time.monotonic() - wall:.1f} s wall)" + (f" | skipped {'; '.join(skipped)}" if skipped else "")
     if failed:
         return False, f"PARITY SMOKE FAIL {'; '.join(failed)} | {line}"
     return True, f"PARITY SMOKE PASS {line}"
