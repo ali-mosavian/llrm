@@ -1824,7 +1824,11 @@ pub fn stamped(
         let promised = norecurse
             && unobserved
             && states(Fact::WillReturn)
-            && llrm_mir::loops::ends_by_promise(&module.metadata, function, Facts::of(&function.attrs).must_progress());
+            && llrm_mir::loopinfo::ends_by_promise(
+                &module.metadata,
+                function,
+                Facts::of(&function.attrs).must_progress(),
+            );
         let counted = || {
             let shape = Shape::of(function);
             // Found once for the function, not for each loop: the proofs of
