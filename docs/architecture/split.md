@@ -1,3 +1,7 @@
+---
+architecture-index: split
+architecture-order: 10
+---
 # The split
 
 For contributors deciding where a piece of logic belongs. There is one line in

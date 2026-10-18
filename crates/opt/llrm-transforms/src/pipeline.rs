@@ -222,6 +222,10 @@ pub struct Options {
     /// `-floop-interchange`, -O3 (gcc's `gimple-loop-interchange.cc`); -Omax
     /// too. LLVM's `LoopInterchange` is off in its pipelines.
     pub interchange: bool,
+    /// The passes run in LLVM's order, once each (`Fixed::linear`:
+    /// [`llvm_order`]), not in the rounds; `LLRM_EXP_LLVM` sets it, off by
+    /// default.
+    pub llvm_order: bool,
     /// The round's `Promote` is the translated `PromoteMemToReg`
     /// ([`crate::mem2reg`]); `LLRM_EXP_MEM2REG` sets it, off by default.
     pub mem2reg: bool,
@@ -259,6 +263,7 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             optimize: true,
+            llvm_order: experiment_llvm(),
             limits: Limits { target_percent: 100, ..Limits::default() },
             inline: inline::Threshold::default(),
             lcssa: true,
@@ -447,14 +452,14 @@ impl Options {
         &self,
         name: &str,
     ) -> bool {
-        match name {
+        match base(name) {
             "lcssa" => self.lcssa,
             "floatloop" => self.floatloop,
             "fold" => self.fold,
             "decide" => self.decide,
             "dead" => self.dead,
             "hoist" | "loopmotion" => self.hoist,
-            "gvn" | "equalcalls" => self.forward && self.drop_loads,
+            "gvn" | "equalcalls" | "earlycse" => self.forward && self.drop_loads,
             "dse" => self.drop_stores,
             "sink" => self.sink,
             "sroa" | "promote" => self.promote,
@@ -542,6 +547,197 @@ pub fn pipeline(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     every.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
 }
 
+/// `name` without the slot it stands in (`gvn@787` is `gvn`).
+fn base(name: &str) -> &str {
+    name.split_once('@').map_or(name, |split| split.0)
+}
+
+/// A pass in one place of LLVM's function pipeline, named by it so that its
+/// settled record and its line of `LLRM_DEBUG=runs` are its own.
+struct Slot {
+    name: &'static str,
+    inner: Box<dyn FunctionPass>,
+}
+
+impl FunctionPass for Slot {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.inner.adds_memory_operations()
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.inner.reads()
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        self.inner.run(unit, analyses)
+    }
+}
+
+/// Passes that stand for one pass of LLVM, run one after the other and named
+/// as one: SROA runs mem2reg on what it splits, so the slot is SROA, then
+/// Promote, with nothing between (SROA.cpp `promoteAllocas`).
+struct Together {
+    name: &'static str,
+    parts: Vec<Box<dyn FunctionPass>>,
+}
+
+impl FunctionPass for Together {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        self.parts.iter().any(|part| part.adds_memory_operations())
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        self.parts.iter().fold(llrm_mir::footprint::Footprint::default(), |all, part| all.with(part.reads()))
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let mut changed = false;
+        for part in &mut self.parts {
+            let preserved = part.run(unit, analyses);
+            if !preserved.are_all_preserved() {
+                changed = true;
+                analyses.invalidate(unit.function, &preserved);
+            }
+        }
+        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+    }
+}
+
+/// `LLRM_EXP_LLVM`, read once: [`Options::llvm_order`] by default
+/// (PassBuilderPipelines.cpp at d1106deb71cc).
+fn experiment_llvm() -> bool {
+    llrm_support::env_flag!("LLRM_EXP_LLVM")
+}
+
+/// Where a list of LLVM's order stands.
+#[derive(Clone, Copy)]
+pub(crate) enum Phase {
+    /// The early function pipeline (l.1178-1180).
+    Early,
+    /// GlobalCleanup (l.1241-1244).
+    Cleanup,
+    /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
+    Simplify,
+}
+
+/// The passes of `phase`, each once in the place LLVM runs it (the line is the
+/// slot's name).
+pub(crate) fn llvm_order(
+    applied: &Applied,
+    phase: Phase,
+) -> Vec<Box<dyn FunctionPass>> {
+    let size = applied.options.prefers_size();
+    let limits = || applied.options.limits.clone();
+    let slot =
+        |name: &'static str, inner: Box<dyn FunctionPass>| -> Box<dyn FunctionPass> { Box::new(Slot { name, inner }) };
+    let decide = |name| slot(name, Box::new(decide::Decide));
+    let phiopt = |name| slot(name, Box::new(phiopt::PhiOpt { size }));
+    let fold = |name| slot(name, Box::new(fold::Fold));
+    let dead = |name| slot(name, Box::new(dead::Dead));
+    // SROA runs mem2reg on what it splits: one slot, nothing between
+    // (SROA.cpp `promoteAllocas`).
+    let sroa = |name: &'static str| -> Box<dyn FunctionPass> {
+        Box::new(Together {
+            name,
+            parts: vec![Box::new(promote::Sroa), Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+        })
+    };
+    let earlycse = |name| slot(name, Box::new(crate::earlycse::EarlyCse));
+    let hoist = |name| slot(name, Box::new(hoist::Hoist { size }));
+    let loopmotion = |name| slot(name, Box::new(loopmotion::LoopMotion));
+    let canonical = |a: &'static str, b: &'static str| {
+        [slot(a, Box::new(loopsimplify::LoopSimplify)), slot(b, Box::new(lcssa::LoopClosedSSA))]
+    };
+    let list: Vec<Box<dyn FunctionPass>> = match phase {
+        Phase::Early => {
+            vec![decide("decide@1178"), phiopt("phiopt@1178"), sroa("sroa@1179"), earlycse("earlycse@1180")]
+        }
+        Phase::Cleanup => vec![
+            Box::new(Together {
+                name: "promote@1241",
+                parts: vec![Box::new(promote::Promote), Box::new(promote::DeadSlots)],
+            }),
+            fold("fold@1242"),
+            dead("dead@1242"),
+            decide("decide@1244"),
+            phiopt("phiopt@1244"),
+        ],
+        Phase::Simplify => {
+            let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
+            list.extend([
+                decide("decide@675"),
+                phiopt("phiopt@675"),
+                fold("fold@677"),
+                dead("dead@677"),
+                slot("tailrec@688", Box::new(tailrec::TailRecursion)),
+                decide("decide@690"),
+                phiopt("phiopt@690"),
+                slot("algebraic@696", Box::new(algebraic::Algebraic { size })),
+            ]);
+            list.extend(canonical("loopsimplify@764", "lcssa@764"));
+            list.extend([
+                slot("floatloop@724", Box::new(floatloop::FloatLoop)),
+                hoist("hoist@724"),
+                loopmotion("loopmotion@724"),
+                hoist("hoist@730"),
+                slot("trivialunswitch@732", Box::new(trivialunswitch::TrivialUnswitch)),
+                decide("decide@766"),
+                phiopt("phiopt@766"),
+                fold("fold@768"),
+                dead("dead@768"),
+            ]);
+            list.extend(canonical("loopsimplify@772", "lcssa@772"));
+            list.extend([
+                slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
+                slot(
+                    "indvars@738",
+                    Box::new(indvars::IndVars {
+                        exit_values: false,
+                        unrolls: applied.options.unroll.then(|| applied.options.limits.max_unroll_iterations),
+                    }),
+                ),
+                slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
+                sroa("sroa@776"),
+                slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
+                slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
+                fold("fold@801"),
+                dead("dead@801"),
+                decide("decide@809"),
+                slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
+                slot("merge@818", Box::new(loopidioms::Merge { size })),
+                slot("dse@820", Box::new(dse::Dse)),
+            ]);
+            list.extend(canonical("loopsimplify@823", "lcssa@823"));
+            list.extend([
+                hoist("hoist@823"),
+                loopmotion("loopmotion@823"),
+                decide("decide@832"),
+                phiopt("phiopt@832"),
+                fold("fold@837"),
+                dead("dead@837"),
+            ]);
+            list
+        }
+    };
+    list.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+}
+
 /// The order, from the pipeline itself rather than beside it.
 pub fn passes() -> Vec<&'static str> {
     pipeline(&Applied::default()).iter().map(|one| one.name()).collect()
@@ -573,6 +769,21 @@ pub fn applied(
     applied: &Applied,
 ) -> Result<(), String> {
     recorded(program, applied).map(|_| ())
+}
+
+/// What runs on each body before the interprocedural step: the rounds, or
+/// LLVM's early function pipeline, GlobalCleanup and function simplification
+/// once each (`Options::llvm_order`).
+pub(crate) fn function_stages(applied: &Applied) -> Vec<Fixed> {
+    if applied.options.llvm_order {
+        vec![
+            Fixed::linear(applied, Phase::Early),
+            Fixed::linear(applied, Phase::Cleanup),
+            Fixed::linear(applied, Phase::Simplify),
+        ]
+    } else {
+        vec![Fixed::new(applied)]
+    }
 }
 
 /// `applied`, with what the pipeline did to each function.
@@ -607,11 +818,18 @@ pub fn recorded(
         manager.add(ports::Ports);
     }
     manager.add_program(crate::interprocedural::Stamp);
-    manager.add(Fixed::new(applied));
+    for stage in function_stages(applied) {
+        manager.add(stage);
+    }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
-    let mut again =
-        Fixed::new(&Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() });
+    let again_applied =
+        Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
+    let mut again = if applied.options.llvm_order {
+        Fixed::linear(&again_applied, Phase::Simplify)
+    } else {
+        Fixed::new(&again_applied)
+    };
     manager.add_program(Interprocedural {
         pipeline: Box::new(move |module, analyses, id, stage| {
             TRIGGER.with(|trigger| *trigger.borrow_mut() = stage.to_owned());
@@ -903,6 +1121,33 @@ impl Fixed {
         }
     }
 
+    /// `passes` once each in order, no fixed point: LLVM's function pipelines
+    /// run a pass where it stands (`Options::llvm_order`).
+    fn linear(
+        applied: &Applied,
+        phase: Phase,
+    ) -> Self {
+        // The passes that make a candidate and judge it stay after the list, as
+        // in the rounds.
+        let mut linear = Self::new(applied);
+        linear.boundary.clear();
+        linear.unrollers.clear();
+        linear.last.clear();
+        linear.passes = llvm_order(applied, phase);
+        linear.rounds = 1;
+        if !matches!(phase, Phase::Simplify) {
+            linear.peelers.clear();
+            linear.unswitch = None;
+            linear.split = None;
+            linear.distribute = None;
+            linear.version = None;
+            linear.fuse = None;
+            linear.interchange = None;
+            linear.jam = None;
+        }
+        linear
+    }
+
     fn transacted(
         &mut self,
         unit: &mut Unit,
@@ -1072,7 +1317,10 @@ impl Fixed {
                 run.settled(unit, analyses);
                 return Ok(());
             }
-            if !history.insert(print::fingerprint(unit.function)) {
+            // A list that runs once (LLVM's order) may end where it began:
+            // EarlyCSE drops the LCSSA phis that `lcssa` makes
+            // again.
+            if self.rounds > 1 && !history.insert(print::fingerprint(unit.function)) {
                 return Err(format!("MIR optimization did not converge: cycle after {} rounds", iteration + 1));
             }
         }
@@ -1140,7 +1388,7 @@ impl FunctionPass for Fixed {
             steps: 0,
             skipped: 0,
             fixed: 0,
-            billing: llrm_support::debug::enabled("runs"),
+            billing: runs_billed(),
             idle: 0,
             useful: 0,
             idle_with_analyses: 0,
@@ -1157,9 +1405,8 @@ impl FunctionPass for Fixed {
         run.rerun = run.records.knows(unit.function);
         self.transacted(unit, analyses, &mut run).unwrap_or_else(|error| panic!("pipeline: {error}"));
         run.remember(unit, analyses);
-        llrm_support::debug!(
-            "runs",
-            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {})",
+        runs_line(format_args!(
+            "body {} trigger {:?}: {} fixed points, {} rounds, {} pass runs, {} skipped as settled, {} skipped as unreached, {} skipped as settled in an earlier run, {} changes, work idle {} useful {} (with the analyses the passes computed first: idle {} useful {}) name {}",
             unit.id.map_or(-1, |id| i64::from(id.0)),
             TRIGGER.with(|trigger| trigger.borrow().clone()),
             run.fixed,
@@ -1172,10 +1419,41 @@ impl FunctionPass for Fixed {
             run.idle,
             run.useful,
             run.idle_with_analyses,
-            run.useful_with_analyses
-        );
+            run.useful_with_analyses,
+            llrm_mir::passes::running_function()
+        ));
         if run.version == 0 { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
+}
+
+/// The instructions in the function's layout: erased ones stay in the arena
+/// and are not counted.
+fn placed_instructions(function: &llrm_mir::module::Function) -> usize {
+    function.layout().iter().map(|&block| function.block(block).instructions().len()).sum()
+}
+
+thread_local! {
+    /// Tests: the `runs` lines go here, and are billed without `LLRM_DEBUG`.
+    static RUNS_CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+fn runs_billed() -> bool {
+    llrm_support::debug::enabled("runs") || RUNS_CAPTURE.with(|capture| capture.borrow().is_some())
+}
+
+fn runs_line(line: std::fmt::Arguments) {
+    let captured = RUNS_CAPTURE.with(|capture| capture.borrow_mut().as_mut().map(|lines| lines.push(line.to_string())));
+    if captured.is_none() {
+        llrm_support::debug!("runs", "{}", line);
+    }
+}
+
+/// `run` with the `runs` lines kept, not printed.
+#[cfg(test)]
+pub(crate) fn capturing_runs<T>(run: impl FnOnce() -> T) -> (T, Vec<String>) {
+    RUNS_CAPTURE.with(|capture| *capture.borrow_mut() = Some(Vec::new()));
+    let done = run();
+    (done, RUNS_CAPTURE.with(|capture| capture.borrow_mut().take()).unwrap_or_default())
 }
 
 /// `LLRM_CHECK_SETTLED`: a pass skipped as settled by an earlier run is run,
@@ -1318,7 +1596,7 @@ impl Run {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> bool {
-        if !self.promotes && matches!(pass.name(), "sroa" | "promote") {
+        if !self.promotes && matches!(base(pass.name()), "sroa" | "promote") {
             return false;
         }
         let name = pass.name();
@@ -1347,24 +1625,26 @@ impl Run {
             llrm_analysis::manager::ask_some(unit.context, unit.layout, unit.function, analyses, mix);
         }
         let outside = llrm_mir::passes::read::swap(0);
-        let billed = self.billing.then(|| (llrm_support::debug::work(), llrm_support::debug::analysed_work()));
+        let billed = self.billing.then(|| {
+            (llrm_support::debug::work(), llrm_support::debug::analysed_work(), placed_instructions(unit.function))
+        });
         let running = llrm_mir::counts::pass_run_over(pass.name(), unit.function);
         let preserved = llrm_mir::passes::spanned(pass.name(), || pass.run(unit, analyses));
         drop(running);
         let read = llrm_mir::passes::read::swap(outside);
         llrm_mir::passes::read::note(read);
         self.classify(unit);
-        if let Some((billed, analysed)) = billed {
+        if let Some((billed, analysed, entering)) = billed {
             let with_analyses = llrm_support::debug::work() - billed;
             let own = with_analyses.saturating_sub(llrm_support::debug::analysed_work() - analysed);
             let idle = preserved.are_all_preserved();
             *(if idle { &mut self.idle } else { &mut self.useful }) += own;
             *(if idle { &mut self.idle_with_analyses } else { &mut self.useful_with_analyses }) += with_analyses;
-            llrm_support::debug!(
-                "runs",
-                "step {stage} {} {own} with-analyses {with_analyses}",
-                if idle { "idle" } else { "changed" }
-            );
+            runs_line(format_args!(
+                "step {stage} {} {own} with-analyses {with_analyses} in={entering} out={}",
+                if idle { "idle" } else { "changed" },
+                placed_instructions(unit.function)
+            ));
         }
         assert!(
             !checking || preserved.are_all_preserved(),
@@ -1397,7 +1677,7 @@ impl Run {
         analyses: &Analyses,
     ) {
         if !llrm_support::env_flag!("LLRM_CHECK_SKIPPED")
-            || (!self.promotes && matches!(pass.name(), "sroa" | "promote"))
+            || (!self.promotes && matches!(base(pass.name()), "sroa" | "promote"))
         {
             return;
         }

@@ -1,3 +1,7 @@
+---
+architecture-index: LIR clean-up: each pass against LLVM's machine pass
+architecture-order: 390
+---
 # LIR clean-up: each pass against LLVM's machine pass
 
 TL;DR: on `d_faces` `-O2` the LIR passes after selection cost 315.5 M against about 49.6 M for clang's machine passes, a gap of 266 M, and until now had no plan. This page maps every LIR sub-pass to the LLVM pass it stands in for, with cost against cost, runs, owner and what deletes it. Four rows are 233 M of the gap: `peephole` (86.9 M against 12.6 M), `jumps` (51.6 against 5.9), the x87 pair (60.6 against 1.6) and `coalesce` (54.5 against 10.1, held for the allocator). Measured: callgrind inclusive, `d_faces` `-O2`, 11 functions, 2,250 LIR instructions (1,594 machine instructions in LLVM's six); llrm figures are the pinned ones where the table has them.
