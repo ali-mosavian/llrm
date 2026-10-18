@@ -6,8 +6,8 @@ use llrm_analysis::cfg;
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _frequencies, _loop_products, OperationCosts, UNKNOWN_TRIPS, operation, proven_trips, spill_forecast, r#static,
-    weighted,
+    _frequencies, _loop_products, OperationCosts, UNKNOWN_TRIPS, operation, proven_trips, proven_trips_using,
+    spill_forecast, r#static, weighted,
 };
 
 fn risk(

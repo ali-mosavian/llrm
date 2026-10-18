@@ -35,8 +35,9 @@
 //! Frequencies come in two models, both per entry:
 //! - `_frequencies`: `branchprob`'s estimate in `UNIT`ths of an execution
 //!   (never below one, so a cold arm is near free but ordered), with each
-//!   loop's proven trips (`proven_trips`, from `induction::trip_count`) in
-//!   place of its estimate;
+//!   loop's proven trips (`proven_trips`, from ScalarEvolution's
+//!   `getSmallConstantTripCount`; `LLRM_NO_SCEV_TRIPS` asks
+//!   `induction::trip_count`) in place of its estimate;
 //! - `_loop_products`: the trips of each loop around a block multiplied, with
 //!   `UNKNOWN_TRIPS` (ten) for a loop `induction` does not name. `lsr` and
 //!   `gvn` were tuned on it (#202, #203). `_loop_products_by_branch` weighs
@@ -353,8 +354,8 @@ pub fn priced(
 }
 
 /// Each loop's trips by latch (the runs of its latch), where ScalarEvolution
-/// proves them (`getSmallConstantTripCount`): the `trips` that replaces the conventional
-/// ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
+/// proves them (`getSmallConstantTripCount`): the `trips` that replaces the
+/// conventional ten. `LLRM_NO_SCEV_TRIPS` asks `induction` instead.
 pub fn proven_trips(
     unit: &memory::Unit,
     facts: &IndexMap<ValueId, Known>,
