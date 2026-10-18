@@ -50,7 +50,8 @@ b2:
 b3:
   %2 = load i16, ptr %total
   %3 = load i16, ptr %i
-  %4 = add i16 %2, %3
+  %t = mul i16 %2, 3
+  %4 = add i16 %t, %3
   store i16 %4, ptr %total
   %5 = add i16 %3, 1
   store i16 %5, ptr %i

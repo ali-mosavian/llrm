@@ -1190,7 +1190,7 @@ pub fn edges_solved(
                 up.and_then(|up| known.get(&up)).map(|up| (**up).clone()).unwrap_or(seeded)
             }
         };
-        for &inst in function.block(block).instructions() {
+        for inst in function.block(block).iter() {
             let (Some(interval), Some(result)) =
                 (_computed(unit, inst, &scoped, facts), function.instruction(inst).result)
             else {
@@ -1544,7 +1544,7 @@ fn capped_from(
         .iter()
         .map(|one| {
             one.body.len()
-                * one.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum::<usize>()
+                * one.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum::<usize>()
         })
         .sum();
     (work > CAP_WORK).then_some(CAP_DEPTH)
@@ -1862,7 +1862,7 @@ fn bounded_solved_under(
         let operations = in_layout
             .iter()
             .filter(|&&block| inside.contains(&cfg::id(block)) || cfg::id(block) == loop_.header)
-            .flat_map(|&block| function.block(block).instructions().iter().copied())
+            .flat_map(|&block| function.block(block).iter())
             .filter(|&inst| function.instruction(inst).opcode != Opcode::Phi)
             .collect::<Vec<_>>();
         if check_scopes() {
@@ -2443,13 +2443,13 @@ fn box_candidates(
     const SIZE: usize = 512;
     let function = unit.function;
     let header = cfg::block(loop_.header);
-    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).instructions().len()).sum();
+    let size: usize = loop_.body.iter().map(|&at| function.block(cfg::block(at)).len()).sum();
     if size > SIZE {
         return Vec::new();
     }
     // (phi, width, the entries' hull, the (latch, value) pairs coming round)
     let mut candidates = Vec::new();
-    for &inst in function.block(header).instructions() {
+    for inst in function.block(header).iter() {
         let op = function.instruction(inst);
         let (Opcode::Phi, Some(phi)) = (&op.opcode, op.result) else { continue };
         let Some(width) = unit.int_bits(Operand::Value(phi)).filter(|&width| width > 1) else { continue };

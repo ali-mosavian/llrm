@@ -288,6 +288,28 @@ impl LiveIntervals {
         Rc::make_mut(self.intervals.get_mut(&reg).expect("an interval is held"))
     }
 
+    /// Takes the interval of `reg` out of the map, to edit it beside the maps.
+    pub fn take_interval(
+        &mut self,
+        reg: u32,
+    ) -> LiveInterval {
+        let rc = self.intervals.remove(&reg).expect("an interval is held");
+        Rc::try_unwrap(rc).unwrap_or_else(|shared| (*shared).clone())
+    }
+
+    /// `removeVRegDefAt`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp#L1848>),
+    /// without sub-ranges.
+    pub fn remove_vreg_def_at(
+        li: &mut LiveInterval,
+        pos: &SlotIndex,
+    ) {
+        if let Some(vni) = li.get_vn_info_at(pos) {
+            assert!(vni.def().get_base_index() == pos.get_base_index());
+            li.remove_val_no(&vni);
+        }
+    }
+
     /// How many intervals are held.
     pub fn interval_count(&self) -> usize {
         self.intervals.len()
@@ -446,7 +468,19 @@ impl LiveIntervals {
     ) -> LirBody {
         let blocks =
             body.blocks.iter().enumerate().map(|(n, block)| block.with_insns(self.blocks[n].clone())).collect();
-        body.with_blocks(blocks)
+        LirBody { inputs: self.inputs.clone(), ..body.with_blocks(blocks) }
+    }
+
+    /// A parameter that joined another value is that value now (the rename
+    /// `updateRegDefsUses` makes in every instruction, for the entry's def).
+    pub fn rename_input(
+        &mut self,
+        from: u32,
+        to: u32,
+    ) {
+        if self.inputs.remove(&from) {
+            self.inputs.insert(to);
+        }
     }
 
     /// `extendToIndices` (LiveIntervals.cpp#L695): extends `lr` to reach each

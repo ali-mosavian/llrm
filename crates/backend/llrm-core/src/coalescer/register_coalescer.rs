@@ -226,6 +226,7 @@ fn update_reg_defs_uses(
     src: u32,
     dst: u32,
 ) {
+    lis.rename_input(src, dst);
     let mut keys: Vec<InstrKey> = lis.operands(src).iter().map(|operand| operand.instr).collect();
     keys.sort_unstable();
     keys.dedup();

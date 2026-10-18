@@ -7,7 +7,7 @@
 //! cleared here when they land with their stage.
 
 use llrm_mir::hash::HashSet;
-use llrm_mir::module::{BlockId, Operand};
+use llrm_mir::module::{BlockId, InstId, Operand};
 
 use super::expr::Scev;
 use super::{Cx, ScalarEvolution};
@@ -116,6 +116,52 @@ impl ScalarEvolution {
     ) {
         let users = self.loop_users.get(&header).cloned().unwrap_or_default();
         self.forget_memoized_results(&users);
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8690
+    /// `visitAndClearUsers`: the SCEVs of the instructions on `worklist` and
+    /// of all their users, collected in `to_forget` and dropped from the value
+    /// map. (`ConstantEvolutionLoopExitValue` is DEVIATE 10.)
+    pub fn visit_and_clear_users(
+        &mut self,
+        cx: &Cx,
+        mut worklist: Vec<InstId>,
+        visited: &mut HashSet<InstId>,
+        to_forget: &mut Vec<Scev>,
+    ) {
+        while let Some(i) = worklist.pop() {
+            let Some(result) = cx.function.instruction(i).result else { continue };
+            if !self.is_value_scevable(cx, Operand::Value(result)) {
+                continue;
+            }
+            if let Some(&s) = self.value_expr_map.get(&result) {
+                to_forget.push(s);
+                self.erase_value_from_map(Operand::Value(result));
+            }
+            // `PushDefUseChildren`
+            for user in cx.function.users(result) {
+                if visited.insert(user.user) {
+                    worklist.push(user.user);
+                }
+            }
+        }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8714
+    /// `forgetValue`: the SCEV of `v` and of everything computed from it.
+    pub fn forget_value(
+        &mut self,
+        cx: &Cx,
+        v: Operand,
+    ) {
+        let Operand::Value(value) = v else { return };
+        let llrm_mir::module::ValueDef::Instruction(i) = cx.function.value(value).def else { return };
+        // Drop information about expressions based on loop-header PHIs.
+        let mut visited: HashSet<InstId> = HashSet::default();
+        visited.insert(i);
+        let mut to_forget = Vec::new();
+        self.visit_and_clear_users(cx, vec![i], &mut visited, &mut to_forget);
+        self.forget_memoized_results(&to_forget);
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4536

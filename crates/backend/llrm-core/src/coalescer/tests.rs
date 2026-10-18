@@ -232,3 +232,20 @@ fn test_a_copy_renamed_by_an_earlier_join_is_still_tried() {
     assert_eq!(names(&lis).len(), 3, "{:?}", names(&lis));
     assert_consistent(&lis, &was, 1);
 }
+
+/// A parameter is a value defined at the function's entry. Joining it into the
+/// value of its copy must leave the body naming the survivor as the parameter:
+/// a body that still named the absorbed value gave the survivor an interval
+/// with no definition, which the check against a fresh computation caught.
+#[test]
+fn test_a_parameter_joined_into_its_copy_stays_a_parameter() {
+    let (c, r) = (copy(2, 1), read(2));
+    let was = LirBody { inputs: [1].into_iter().collect(), ..body(&[(&[Arc::clone(&c), r], &[])]) };
+    let mut lis = LiveIntervals::new(&was);
+    assert_eq!(join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id()), JoinResult::Joined);
+    let after = lis.body_like(&was);
+    assert_eq!(after.inputs.len(), 1);
+    let survivor = *after.inputs.iter().next().expect("a parameter");
+    assert_eq!(names(&lis), vec![(vec![], vec![survivor])], "the read names the parameter");
+    assert!(lis.assert_intervals_cover_afresh(&after) >= 1);
+}

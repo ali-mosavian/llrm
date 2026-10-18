@@ -23,7 +23,7 @@ fn dump(text: &str) -> String {
         let name = global.name.clone().unwrap_or_default();
         let dt = DomTree::of(function);
         let assumptions = AssumptionCache::new(&module, function);
-        let first = function.block(function.entry().expect("an entry")).instructions().first().copied();
+        let first = function.block(function.entry().expect("an entry")).first();
         let mut values: Vec<(Operand, Option<InstId>)> =
             function.parameters().iter().map(|parameter| (Operand::Value(*parameter), first)).collect();
         for (_, inst) in function.walk() {

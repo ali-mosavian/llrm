@@ -401,10 +401,10 @@ pub struct Tally {
     pub missing: usize,
 }
 
-pub(crate) fn tally(registry: &[Entry]) -> Tally {
+fn count(kinds: impl Iterator<Item = SlotKind>) -> Tally {
     let mut out = Tally::default();
-    for one in registry {
-        match one.kind {
+    for kind in kinds {
+        match kind {
             Translated => out.translated += 1,
             Partial => out.partial += 1,
             Old => out.old += 1,
@@ -412,6 +412,46 @@ pub(crate) fn tally(registry: &[Entry]) -> Tally {
         }
     }
     out
+}
+
+pub(crate) fn tally(registry: &[Entry]) -> Tally {
+    count(registry.iter().map(|one| one.kind))
+}
+
+const PHASES: [(Phase, &str); 5] = [
+    (Phase::Early, "early"),
+    (Phase::Cleanup, "cleanup"),
+    (Phase::Simplify, "simplify"),
+    (Phase::Module, "module"),
+    (Phase::Backend, "backend"),
+];
+
+/// The recount of `registry` and `analyses` as the `[parity]` lines that
+/// `LLRM_DEBUG=counts` prints: all slots, each phase's slots, the analyses.
+pub(crate) fn tally_lines_of(
+    registry: &[Entry],
+    analyses: &[AnalysisEntry],
+) -> Vec<String> {
+    let line = |what: &str, count: Tally| {
+        format!(
+            "[parity] {what} translated {} partial {} old {} missing {}",
+            count.translated, count.partial, count.old, count.missing
+        )
+    };
+    let mut out = vec![line("slots", tally(registry)) + &format!(" (of {})", registry.len())];
+    for (phase, name) in PHASES {
+        out.push(line(
+            &format!("phase {name}"),
+            count(registry.iter().filter(|one| one.phase == phase).map(|one| one.kind)),
+        ));
+    }
+    out.push(line("analyses", count(analyses.iter().map(|one| one.kind))));
+    out
+}
+
+/// [`tally_lines_of`] for [`REGISTRY`] and [`ANALYSES`].
+pub fn tally_lines() -> Vec<String> {
+    tally_lines_of(REGISTRY, ANALYSES)
 }
 
 /// The registry as text: each Old slot with the translation that takes it, each

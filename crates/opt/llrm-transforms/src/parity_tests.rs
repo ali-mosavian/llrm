@@ -179,3 +179,43 @@ fn test_the_llvm_order_has_no_gvn_at_o1_as_the_pin_has_none() {
     assert_eq!(gvn(&lines), 0, "-O1 ran gvn: {lines:?}");
     assert!(gvn(&o2) > 0, "premise: the -O2 order runs gvn: {o2:?}");
 }
+
+/// The scoreboard's recount printed all zeros once the tally stopped reading
+/// the kinds: a hand-made registry must come out as counted by hand.
+#[test]
+fn test_the_tally_lines_count_a_registry_by_kind_and_by_phase() {
+    let one =
+        |slot, phase, kind| Entry { slot, phase, llvm: "x", kind, replaced_by: "", note: "criterion: c; exit: e" };
+    let registry = [
+        one("a", Phase::Early, SlotKind::Translated),
+        one("b", Phase::Simplify, SlotKind::Translated),
+        one("c", Phase::Simplify, SlotKind::Old),
+        one("d", Phase::Backend, SlotKind::Partial),
+        one("e", Phase::Backend, SlotKind::Missing),
+    ];
+    let lines = parity::tally_lines_of(&registry, &[]);
+    assert_eq!(lines[0], "[parity] slots translated 2 partial 1 old 1 missing 1 (of 5)");
+    assert!(lines.contains(&"[parity] phase early translated 1 partial 0 old 0 missing 0".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"[parity] phase simplify translated 1 partial 0 old 1 missing 0".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"[parity] phase backend translated 0 partial 1 old 0 missing 1".to_owned()), "{lines:?}");
+    assert!(lines.contains(&"[parity] analyses translated 0 partial 0 old 0 missing 0".to_owned()), "{lines:?}");
+}
+
+/// The real registry: every slot is counted once overall and once in its phase.
+#[test]
+fn test_the_tally_lines_of_the_real_registry_add_up() {
+    let lines = parity::tally_lines();
+    let numbers = |line: &str| -> Vec<usize> {
+        line.split_whitespace().filter_map(|word| word.trim_matches(|c| c == '(' || c == ')').parse().ok()).collect()
+    };
+    let total = numbers(&lines[0]);
+    assert_eq!(total[0] + total[1] + total[2] + total[3], parity::REGISTRY.len(), "{lines:?}");
+    assert_eq!(total[4], parity::REGISTRY.len());
+    let by_phase: usize = lines
+        .iter()
+        .filter(|line| line.starts_with("[parity] phase "))
+        .map(|line| numbers(line).iter().sum::<usize>())
+        .sum();
+    assert_eq!(by_phase, parity::REGISTRY.len(), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("[parity] analyses ")), "{lines:?}");
+}
