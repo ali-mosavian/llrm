@@ -547,7 +547,7 @@ fn frame(
 
 /// The stack a copy of `body` adds to a caller: its allocas, and a copy of each
 /// `byval` object it may write.
-fn grown(
+pub(crate) fn grown(
     context: &Context,
     layout: &DataLayout,
     body: &Function,
