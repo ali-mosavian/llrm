@@ -361,6 +361,22 @@ impl Dominance {
         tree.is_reachable(block(at)) && tree.dominates(block(dominator), block(at))
     }
 
+    /// `reachable` of a resolved `Dominance`.
+    pub fn reachable_resolved(
+        &self,
+        at: i64,
+    ) -> bool {
+        self.0.tree.get().expect("the owner resolved the tree").is_reachable(block(at))
+    }
+
+    /// `immediate` of a resolved `Dominance`.
+    pub fn immediate_resolved(
+        &self,
+        at: i64,
+    ) -> Option<i64> {
+        self.0.tree.get().expect("the owner resolved the tree").immediate_dominator(block(at)).map(id)
+    }
+
     pub fn reachable(
         &self,
         function: &Function,

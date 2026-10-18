@@ -184,13 +184,9 @@ impl FunctionPass for Gvn {
         // the rest reads is read of the body it leaves.
         let blocks = unit.function.layout().len();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let (scalar, cfg_changed) = pass::run_impl_cfg(
-            unit.context,
-            unit.layout,
-            unit.function,
-            analyses.outer(),
-            Some(shape.dominance.tree()),
-        );
+        let tree = shape.dominance.tree(unit.function);
+        let (scalar, cfg_changed) =
+            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), Some(tree));
         drop(shape);
         // Edits to operands leave what the manager holds of the body whole but
         // for its registers; a changed CFG leaves none of it.
@@ -385,8 +381,8 @@ fn _numbered(
             if !(forwarded || subexpressed) {
                 break;
             }
-            let (changed, split) =
-                pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(shape.dominance.tree()));
+            let tree = shape.dominance.tree(&function);
+            let (changed, split) = pass::run_impl_cfg(context, unit.layout, &mut function, outer, Some(tree));
             scalar |= changed;
             cfg |= split;
             if !changed || split {
