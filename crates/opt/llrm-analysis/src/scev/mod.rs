@@ -246,6 +246,14 @@ impl ScalarEvolution {
         self.node(s).ty.expect("a SCEV that has a type")
     }
 
+    /// `isa<SCEVCouldNotCompute>`.
+    pub fn is_could_not_compute(
+        &self,
+        s: Scev,
+    ) -> bool {
+        matches!(self.node(s).kind, Kind::CouldNotCompute)
+    }
+
     /// `getCouldNotCompute`.
     pub fn get_could_not_compute(&self) -> Scev {
         self.could_not_compute
