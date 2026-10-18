@@ -182,22 +182,32 @@ pub fn _trivial_phis(function: &mut Function) -> Result<(), String> {
 fn _duplicate_phis(function: &mut Function) -> Result<bool, String> {
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
-        for phi in edges::phis(function, block) {
-            let op = function.instruction(phi);
-            let (ty, result) = (op.ty, op.result.expect("a phi's value"));
-            let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
-            incoming.sort_by_key(|&(from, _)| from);
-            match seen.entry((ty, incoming)) {
-                std::collections::hash_map::Entry::Occupied(earlier) => {
-                    function.replace_value(result, Operand::Value(*earlier.get()));
-                    function.set_operands(phi, Vec::new());
-                    function.erase(phi)?;
-                    changed = true;
-                }
-                std::collections::hash_map::Entry::Vacant(slot) => {
-                    slot.insert(result);
-                }
+        changed |= duplicate_phis_in(function, block)?;
+    }
+    Ok(changed)
+}
+
+/// `_duplicate_phis` of one `block`: LLVM's `EliminateDuplicatePHINodes(BB)`.
+pub fn duplicate_phis_in(
+    function: &mut Function,
+    block: BlockId,
+) -> Result<bool, String> {
+    let mut changed = false;
+    let mut seen = llrm_support::hash::HashMap::<(TypeId, Vec<(BlockId, Operand)>), ValueId>::default();
+    for phi in edges::phis(function, block) {
+        let op = function.instruction(phi);
+        let (ty, result) = (op.ty, op.result.expect("a phi's value"));
+        let mut incoming = arms(function, phi).into_iter().map(|(value, from)| (from, value)).collect::<Vec<_>>();
+        incoming.sort_by_key(|&(from, _)| from);
+        match seen.entry((ty, incoming)) {
+            std::collections::hash_map::Entry::Occupied(earlier) => {
+                function.replace_value(result, Operand::Value(*earlier.get()));
+                function.set_operands(phi, Vec::new());
+                function.erase(phi)?;
+                changed = true;
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(result);
             }
         }
     }

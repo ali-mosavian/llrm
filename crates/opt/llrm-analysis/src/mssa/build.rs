@@ -46,6 +46,7 @@ impl Mssa {
             value_to_access: IdMap::new(),
             dominance: dominance.clone(),
             next_id: 0,
+            use_list_steps: 0,
             block_numbering: Default::default(),
             block_numbering_valid: Default::default(),
         };
@@ -58,9 +59,12 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             phi_users: Vec::new(),
             user_slot: 0,
+            optimized_users: Vec::new(),
+            optimized_slot: 0,
             id,
         });
         debug_assert_eq!(mssa.accesses.len() - 1, LIVE_ON_ENTRY as usize);
@@ -134,9 +138,12 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             phi_users: Vec::new(),
             user_slot: 0,
+            optimized_users: Vec::new(),
+            optimized_slot: 0,
             id,
         });
         self.value_to_access.insert(inst, access);
@@ -159,9 +166,12 @@ impl Mssa {
             defining: None,
             incoming: Vec::new(),
             optimized: None,
+            optimized_id: None,
             users: Vec::new(),
             phi_users: Vec::new(),
             user_slot: 0,
+            optimized_users: Vec::new(),
+            optimized_slot: 0,
             id,
         });
         // Phi's always are placed at the front of the block.
