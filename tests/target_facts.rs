@@ -277,7 +277,7 @@ fn problems(
 #[test]
 fn shared_code_holds_no_copy_of_a_target_fact() {
     let root = Path::new(ROOT);
-    if std::env::var_os("LLRM_BLESS").is_some() {
+    if llrm_core::support::env_set("LLRM_BLESS") {
         let mut text =
             String::from("# Copies of target facts left in shared code, per file: count path. Only shrinks.\n");
         for (path, n) in &counts(root) {
@@ -499,7 +499,7 @@ fn a_size_written_beside_long_double_is_a_copy() {
 /// target).
 #[test]
 fn runs_of_this_binary_side_by_side_do_not_share_a_tree() {
-    if std::env::var_os("LLRM_TARGET_FACTS_CHILD").is_some() {
+    if llrm_core::support::env_set("LLRM_TARGET_FACTS_CHILD") {
         return;
     }
     let tests = [

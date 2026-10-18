@@ -18,6 +18,7 @@ pub mod depends;
 pub mod dominators;
 pub mod dumpdir;
 pub mod edit;
+pub mod env;
 pub mod facts;
 #[cfg(test)]
 mod facts_coverage;

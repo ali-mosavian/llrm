@@ -1203,7 +1203,7 @@ b3:
 fn a_mask_is_judged_by_the_bounds_the_manager_holds_not_by_new_ones() {
     use llrm_analysis::manager::Bounded;
     // The check derives them afresh to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_REPLAY") {
         return;
     }
     let mut module = parsed(&masked_loop(40, 63));

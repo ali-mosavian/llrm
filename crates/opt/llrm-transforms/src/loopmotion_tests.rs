@@ -321,7 +321,7 @@ fn test_the_entry_value_is_asked_once_per_block_not_per_path() {
 #[test]
 fn test_sinking_a_loops_store_proves_only_that_loop_again() {
     // The check derives them afresh to compare, and is counted.
-    if std::env::var_os("LLRM_CHECK_REPLAY").is_some() {
+    if llrm_support::env_set("LLRM_CHECK_REPLAY") {
         return;
     }
     let loops = 20;
