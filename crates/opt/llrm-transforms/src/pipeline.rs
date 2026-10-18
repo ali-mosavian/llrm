@@ -482,7 +482,7 @@ impl Options {
             "indvars" | "lsr" | "window" | "gepoffset" | "addresssink" => self.strength,
             "unroll" => self.unroll,
             "peel" => self.peel,
-            "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
+            "loopidiom" | "loopidioms" | "merge" | "memcpyopt" => self.loopidioms,
             "tailrec" => self.sibcalls,
             "ipa-ranges" => self.ipa_ranges,
             _ => true,
@@ -787,6 +787,7 @@ pub(crate) fn llvm_order(
             ]);
             list.extend(canonical("loopsimplify@772", "lcssa@772"));
             list.extend([
+                slot("loopidiom@737", Box::new(crate::loopidiom::pass::LoopIdiom::new())),
                 slot("loopidioms@737", Box::new(loopidioms::LoopIdioms { size })),
                 slot(
                     "indvars@738",

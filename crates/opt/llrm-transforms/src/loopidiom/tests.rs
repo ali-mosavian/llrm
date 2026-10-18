@@ -304,3 +304,33 @@ exit:
 fn test_a_loop_without_an_invariant_count_is_left_to_the_noncountable_half() {
     assert_eq!(run_on_loop(UNCOUNTED, "f"), None);
 }
+
+/// `text` through `LoopIdiom` under the pass manager, printed.
+fn pass_output(text: &str) -> String {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(super::pass::LoopIdiom::new());
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+    llrm_mir::print::module(&module)
+}
+
+/// The pass, joined at `loopidiom@737`, turns the byte fill into a memset;
+/// before the join nothing ran `LoopIdiomRecognize` on a function.
+#[test]
+fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
+    let after = pass_output(FILL);
+    assert!(after.contains("%0 = call i32 @llvm.smax.i32(i32 %n, i32 1)"), "{after}");
+    assert!(after.contains("%1 = zext nneg i32 %0 to i64"), "{after}");
+    assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
+}
+
+/// The load/store/default dispatch of `getModRefInfo(Instruction)`: BasicAA
+/// answered ModRef for every instruction, so no loop with a phi could pass
+/// `mayLoopAccessLocation` and the fill above stayed a loop.
+#[test]
+fn test_a_loop_that_reads_what_it_fills_is_left_alone() {
+    let text = FILL.replace("  store i8 0, ptr %a\n", "  store i8 0, ptr %a\n  %l = load i8, ptr %a\n");
+    let after = pass_output(&text);
+    assert!(!after.contains("llvm.memset"), "{after}");
+}

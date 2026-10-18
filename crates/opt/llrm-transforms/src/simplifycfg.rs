@@ -81,6 +81,7 @@
 //! | [`TryToSimplifyUncondBranchFromEmptyBlock`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L1147) | `empty_block_removed` | MIRROR; D6 |
 //! | [`SimplifyCFGOptions::NeedCanonicalLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/SimplifyCFGOptions.h#L29), read at [`simplifyUncondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8812) | `Options::need_canonical_loop` | MIRROR: true by default and at the early slot, cleared at the one after vectorization ([`PassBuilderPipelines.cpp#L1443`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L1443)); D7 |
 //! | [`foldTwoEntryPHINode`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3834), called from `simplifyOnce` ([L9351](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9351)) under `SpeculateBlocks` | `twoentryphi::folded`, `Options::speculate_blocks` | MIRROR; see that module |
+//! | [`speculativelyExecuteBB`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L3244), called from `simplifyCondBranch` ([L9060](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L9060)) | `branch_speculated`, `speculate::executed` | MIRROR for the call; see that module |
 //! | [`FindFunctionBackedges`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimplifyCFGPass.cpp#L236) | `loop_headers` | MIRROR |
 //! | [`removeUnreachableBlocks`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L2912) and `markAliveBlocks` | `unreachable_removed` | the terminator folding and the deletion; D3 |
 //! | [`ConstantFoldTerminator`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L133) | `terminator_folded` | MIRROR; D4 |
@@ -95,10 +96,10 @@
 //! - D2. Not ported yet, each a later change of this series:
 //!   `tailMergeBlocksWithSimilarFunctionTerminators`,
 //!   `removeUndefIntroducingPredecessor`, `sinkCommonCodeFromPredecessors` (off
-//!   at this slot), `speculativelyExecuteBB`, and the terminator
-//!   simplifications `simplifyUncondBranch` beyond the empty block
-//!   (`tryToSimplifyUncondBranchWithICmpInIt`, landing pads: none in the MIR),
-//!   `simplifyCondBranch`, `simplifySwitch`, `simplifyUnreachable`.
+//!   at this slot), and the terminator simplifications `simplifyUncondBranch`
+//!   beyond the empty block (`tryToSimplifyUncondBranchWithICmpInIt`, landing
+//!   pads: none in the MIR), `simplifyCondBranch`, `simplifySwitch`,
+//!   `simplifyUnreachable`.
 //! - D3. `markAliveBlocks` also turns what follows a call of a `noreturn`
 //!   function, `llvm.assume(false)` and a store to `undef` into `unreachable`
 //!   (`FoldInstsToUnreachable`): not ported yet. It reads the target's
@@ -181,6 +182,7 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
+use crate::speculate;
 use crate::twoentryphi::{self, Speculation};
 use crate::{cfg, dead, edges, transform};
 
@@ -325,10 +327,39 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
+    if options.speculate_blocks && function.is_placed(block) && branch_speculated(context, spec, function, block) {
+        return true;
+    }
     changed
         | (function.is_placed(block)
             && !form.contains(&llrm_analysis::cfg::id(block))
             && jump_simplified(context, function, block, headers))
+}
+
+/// The one-armed `if` ending `block` run before its branch: the speculation
+/// of LLVM's `simplifyCondBranch`.
+fn branch_speculated(
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let &[_, Operand::Block(first), Operand::Block(second)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    let alone = |one: BlockId| function.predecessors(one).len() == 1;
+    let jumps_to = |one: BlockId, target: BlockId| {
+        function.terminator(one).is_some_and(|jump| function.instruction(jump).operands[..] == [Operand::Block(target)])
+    };
+    let then = if alone(first) {
+        (!alone(second) && jumps_to(first, second)).then_some(first)
+    } else if alone(second) {
+        jumps_to(second, first).then_some(second)
+    } else {
+        None
+    };
+    then.is_some_and(|then| speculate::executed(context, spec, function, block, then))
 }
 
 /// The back edges' targets, by one walk from the entry: LLVM's

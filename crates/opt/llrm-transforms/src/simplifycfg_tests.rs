@@ -421,7 +421,7 @@ b2:
 /// successor's phis.
 #[test]
 fn test_a_block_of_phis_and_a_jump_is_merged_into_the_successor() {
-    check(
+    check_branching(
         "define i16 @f(i16 %x, i1 %c, i1 %d) {
 b0:
   br i1 %c, label %b1, label %b2
@@ -670,4 +670,82 @@ b3:
 }
 ";
     check_branching(text, expected, &[&[1, 2, 1], &[1, 2, 0]]);
+}
+
+/// The join has a third predecessor, so `foldTwoEntryPHINode` does not apply:
+/// the add of the arm runs before the branch (`speculativelyExecuteBB`) and
+/// the phi reads a select.
+#[test]
+fn test_one_cheap_instruction_of_a_one_armed_if_runs_before_the_branch() {
+    check(
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  br i1 %d, label %b0, label %b2
+
+b0:
+  br i1 %c, label %b2, label %b1
+
+b1:
+  %y = add i16 %x, 1
+  br label %b2
+
+b2:
+  %p = phi i16 [ 9, %b9 ], [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+",
+        "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  %y = add i16 %x, 1
+  %0 = select i1 %c, i16 %x, i16 %y
+  %1 = select i1 %d, i16 %0, i16 9
+  ret i16 %1
+}
+",
+        &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]],
+    );
+}
+
+/// A store is not run early (the pin only does that for a store it can prove
+/// safe, which is not ported).
+#[test]
+fn test_a_store_in_the_one_armed_if_stays_behind_its_branch() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  %q = alloca i16
+  br i1 %c, label %b2, label %b1
+
+b1:
+  store i16 %x, ptr %q
+  br label %b2
+
+b2:
+  ret i16 %x
+}
+";
+    check(text, text, &[&[3, 1], &[3, 0]]);
+}
+
+/// `%t` is read by the arm alone: running the arm early leaves `%t` behind
+/// as a second instruction speculated, so the branch stays.
+#[test]
+fn test_a_value_only_the_arm_reads_counts_as_a_second_speculated_instruction() {
+    let text = "define i16 @f(i16 %x, i1 %c, i1 %d) {
+b9:
+  br i1 %d, label %b0, label %b2
+
+b0:
+  %t = add i16 %x, 1
+  br i1 %c, label %b2, label %b1
+
+b1:
+  %y = add i16 %t, 3
+  br label %b2
+
+b2:
+  %p = phi i16 [ 9, %b9 ], [ %x, %b0 ], [ %y, %b1 ]
+  ret i16 %p
+}
+";
+    check(text, text, &[&[3, 1, 1], &[3, 0, 1], &[3, 1, 0]]);
 }

@@ -22,6 +22,7 @@ use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::AliasQuery;
+use llrm_analysis::mssa::updater::MemorySsaUpdater;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
@@ -341,16 +342,39 @@ pub fn run(
             .with_shape(&shape);
         std::rc::Rc::new(llrm_analysis::memory::exposed_frames(&memory).into_iter().collect())
     };
-    let calls = llrm_analysis::manager::writes(unit.context, unit.layout, unit.function, analyses);
-    // The manager's graph of this body state, cloned: the edits below update
-    // the clone, and the manager drops its own with the pass's change.
-    let mut graph: Option<(Mssa, std::rc::Rc<Accesses>)> =
-        match &*analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function) {
-            Ok(held) => Some((held.mssa.clone(), std::rc::Rc::clone(&held.accesses))),
-            Err(_) => None,
-        };
+    // `LLRM_CHECK_LICM_GRAPH`: the graph the updater kept says what a graph
+    // made afresh of the body says. (Phis left non-minimal in cycles of
+    // irreducible control flow, as LLVM's updater leaves them, are not
+    // compared.)
+    let check_graph = |unit: &passes::Unit, built: &Built, what: &str| {
+        if !llrm_support::env_flag!("LLRM_CHECK_LICM_GRAPH") || !shape.dominance.irreducible(unit.function).is_empty() {
+            return;
+        }
+        let memory = llrm_analysis::memory::Unit::within(unit.context, unit.layout, unit.function, &outer)
+            .with_registers(&registers)
+            .with_shape(&shape);
+        let (mut fresh, fresh_accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+        // What the walker answers is what is compared: the kept graph's uses
+        // read what the walker found, a fresh graph's what is nearest.
+        let mut kept = built.mssa.clone();
+        if let Err(why) = kept.verify_memory_ssa(unit.function, llrm_analysis::mssa::verify::Level::Full) {
+            panic!("LLRM_CHECK_LICM_GRAPH after {what}: {why}");
+        }
+        let aa = AliasQuery::new(&memory, &fresh_accesses);
+        let left = llrm_analysis::mssa::shadow::walked(&mut kept, &aa, unit.function);
+        let right = llrm_analysis::mssa::shadow::walked(&mut fresh, &aa, unit.function);
+        let differ: Vec<String> = left
+            .iter()
+            .filter(|(inst, name)| right.get(inst) != Some(*name))
+            .map(|(inst, name)| format!("{inst:?}: kept {name:?}, fresh {:?}", right.get(&inst)))
+            .collect();
+        if !differ.is_empty() {
+            panic!("LLRM_CHECK_LICM_GRAPH after {what}: the walker answers differ: {differ:?}");
+        }
+    };
+    let mut graph: Option<Built> = None;
     // One look at the function as it stands: the loop's context, the graph
-    // (made again if the last edit left it stale), and what `body` decides.
+    // (made once, kept right by the updater), and what `body` decides.
     macro_rules! looking {
         ($one:expr, $strict:expr, |$view:ident, $ctx:ident, $mssa:ident, $aa:ident, $accesses:ident| $body:expr) => {{
             let $view: &passes::Unit = &*unit;
@@ -358,13 +382,22 @@ pub fn run(
                 .with_registers(&registers)
                 .with_shape(&shape);
             if graph.is_none() {
-                let (built, made) = llrm_analysis::mssa::shadow::translated_with(&memory, &calls);
-                graph = Some((built, std::rc::Rc::new(made)));
-                decisions.rebuilds += 1;
-                decisions.rebuilt_instructions += $view.function.walk().count();
+                // The manager's graph of this body, cloned: the updater edits
+                // the clone, and the manager drops its own with the pass's change.
+                let held = analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
+                let (mssa, accesses) = match &*held {
+                    Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
+                    Err(_) => {
+                        let (mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+                        decisions.rebuilds += 1;
+                        decisions.rebuilt_instructions += $view.function.walk().count();
+                        (mssa, accesses)
+                    }
+                };
+                graph = Some(Built { mssa, accesses, updater: MemorySsaUpdater::new() });
             }
-            let ($mssa, $accesses) = graph.as_mut().expect("a graph");
-            let $accesses: &Accesses = &**$accesses;
+            let built = graph.as_mut().expect("a graph");
+            let ($mssa, $accesses) = (&mut built.mssa, &built.accesses);
             let $aa = AliasQuery::new(&memory, $accesses).with_exposed(std::rc::Rc::clone(&exposed));
             // The function stands as the edits so far left it: nothing is
             // simulated.
@@ -395,11 +428,28 @@ pub fn run(
             record_edits(view, &mut decisions, header, &found.0, &found.1);
             found
         });
-        if apply::apply_loop(&mut *unit.function, one, preheader, &sunk, &hoisted)
-            .unwrap_or_else(|why| panic!("licm: {why}"))
         {
-            graph = None;
+            let built = graph.as_mut().expect("a graph");
+            let mut kept = apply::Graph {
+                mssa: &mut built.mssa,
+                accesses: &mut built.accesses,
+                updater: &mut built.updater,
+                outer: &outer,
+                layout: unit.layout,
+                last_store: IdMap::new(),
+            };
+            apply::apply_loop(&mut *unit.function, &*unit.context, &mut kept, one, preheader, &sunk, &hoisted)
+                .unwrap_or_else(|why| panic!("licm: {why}"));
         }
+        check_graph(
+            unit,
+            graph.as_ref().expect("a graph"),
+            &format!(
+                "the sinking and hoisting of the loop at {header:?}: {} sunk, {} hoisted",
+                sunk.len(),
+                hoisted.len()
+            ),
+        );
         let Some(preheader) = preheader else { continue };
         // The stores of a promotion go before the first instruction of each
         // exit block that is not a phi, taken before any promotion: the
@@ -429,6 +479,7 @@ pub fn run(
                 })
                 .collect()
         };
+        let mut last_store: IdMap<BlockId, llrm_analysis::mssa::AccessId> = IdMap::new();
         loop {
             let (candidates, promoted) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
                 promotion_round(view, &outer, &ctx, mssa, &aa, accesses, &exposed)
@@ -440,8 +491,23 @@ pub fn run(
             let loop_of = |block: BlockId| innermost.get(&block).map(|&at| &shape.loops[at]);
             let site = apply::PromotionSite { preheader, exits: &exits, loop_of: &loop_of };
             for found in &promoted {
-                apply::promote(&mut *unit.function, &mut *unit.context, &site, found)
+                let built = graph.as_mut().expect("a graph");
+                let mut kept = apply::Graph {
+                    mssa: &mut built.mssa,
+                    accesses: &mut built.accesses,
+                    updater: &mut built.updater,
+                    outer: &outer,
+                    layout: unit.layout,
+                    last_store: std::mem::take(&mut last_store),
+                };
+                apply::promote(&mut *unit.function, &mut *unit.context, &mut kept, &site, found)
                     .unwrap_or_else(|why| panic!("licm: {why}"));
+                last_store = kept.last_store;
+                check_graph(
+                    unit,
+                    graph.as_ref().expect("a graph"),
+                    &format!("promoting {:?} out of the loop at {header:?}", found.pointers),
+                );
                 decisions
                     .promoted
                     .push(
@@ -454,7 +520,6 @@ pub fn run(
                         },
                     );
             }
-            graph = None;
         }
     }
     decisions
@@ -591,6 +656,13 @@ fn has_dedicated_exits(ctx: &LoopCtx) -> bool {
 /// (`DECIDED`); with it true it hoists, sinks and erases, rebuilding the memory
 /// graph after each loop it changed until `MemorySSAUpdater` lands. Promotion
 /// is decided in either, not yet applied.
+/// The graph and what keeps it right, for the length of a function's run.
+struct Built {
+    mssa: Mssa,
+    accesses: Accesses,
+    updater: MemorySsaUpdater,
+}
+
 pub struct Licm {
     pub apply: bool,
 }

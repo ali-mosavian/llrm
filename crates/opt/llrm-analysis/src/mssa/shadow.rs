@@ -31,16 +31,7 @@ pub fn effect_of<'a>(
 }
 
 pub fn translated(unit: &Unit) -> (Mssa, Accesses) {
-    translated_with(unit, &Default::default())
-}
-
-/// As `translated`, each call writing what `calls` says: the accesses the
-/// manager's `MemorySsa` is made of.
-pub fn translated_with(
-    unit: &Unit,
-    calls: &crate::consts::Calls,
-) -> (Mssa, Accesses) {
-    let accesses = Accesses::plain(unit, calls);
+    let accesses = Accesses::plain(unit, &Default::default());
     let shape = unit.shape();
     let mssa = Mssa::build(unit.function, &shape.dominance, &effect_of(&accesses, unit.function));
     (mssa, accesses)
