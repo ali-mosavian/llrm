@@ -281,6 +281,36 @@ impl DataLayout {
         }
     }
 
+    /// The alignment a global variable is emitted at:
+    /// `DataLayout::getPreferredAlign(GV)`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/DataLayout.cpp#L1003-L1038>)
+    /// and `AsmPrinter::getGVAlignment`
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L380-L405>):
+    /// the type's preferred alignment, raised to the stated one, and 16 for an
+    /// initialized global over 128 bits that states none. A stated alignment of
+    /// a global in a section is kept exactly.
+    pub fn global_align(
+        &self,
+        types: &Types,
+        ty: TypeId,
+        stated: Option<u64>,
+        in_section: bool,
+        initialized: bool,
+    ) -> u64 {
+        let mut align = self.pref_align(types, ty);
+        match stated {
+            Some(stated) if in_section => return stated,
+            Some(stated) if stated >= align => align = stated,
+            Some(stated) => align = stated.max(self.align(types, ty)),
+            None if initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
+            None => {}
+        }
+        match stated {
+            Some(stated) if stated > align => stated,
+            _ => align,
+        }
+    }
+
     /// `StructLayout::getAlignment`: the largest ABI alignment of the fields
     /// (one for a packed struct), at least the aggregate ABI alignment.
     fn align_of_struct_layout(
@@ -442,5 +472,33 @@ mod tests {
             (4, 16, 16)
         );
         module.globals.clear();
+    }
+
+    /// Globals with no stated alignment were emitted byte aligned (a dword a
+    /// loop reads misaligned across two cache lines on a 486). `getGVAlignment`
+    /// gives the type's preferred alignment, 16 over 128 bits, and keeps a
+    /// stated alignment of a global in a section.
+    #[test]
+    fn a_global_is_aligned_as_the_preferred_alignment_of_its_type() {
+        let module = crate::parse::module(
+            "@w = global i32 0\n@b = global i8 0\n@big = global [40 x i8] zeroinitializer\n@small = global [4 x i8] zeroinitializer\n",
+        )
+        .unwrap();
+        let types = &module.context.types;
+        let of = |name: &str| {
+            let variable = module.globals.iter().find(|one| one.name.as_deref() == Some(name)).unwrap();
+            let crate::module::GlobalKind::Variable(variable) = &variable.kind else { unreachable!("a variable") };
+            variable.ty
+        };
+        let layout = DataLayout::parse("i32:32-i8:8").unwrap();
+        let align =
+            |name, stated, section, initialized| layout.global_align(types, of(name), stated, section, initialized);
+        assert_eq!(align("w", None, false, true), 4);
+        assert_eq!(align("b", None, false, true), 1);
+        assert_eq!(align("big", None, false, true), 16, "over 128 bits and initialized");
+        assert_eq!(align("big", None, false, false), 1, "a declaration is not raised");
+        assert_eq!(align("small", Some(8), false, true), 8, "a stated alignment is kept");
+        assert_eq!(align("w", Some(1), false, true), 4, "raised to the type's ABI alignment");
+        assert_eq!(align("w", Some(1), true, true), 1, "kept exactly in a section");
     }
 }

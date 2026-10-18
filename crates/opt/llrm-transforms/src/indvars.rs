@@ -214,6 +214,11 @@ impl FunctionPass for IndVars {
             analyses.invalidate(function, &kept);
             analyses.get::<llrm_analysis::manager::Registers>(context, layout, function)
         });
+        let compared = crate::simplifyindvar::enabled()
+            && crate::simplifyindvar::simplified(unit.context, unit.layout, unit.function, &outer);
+        if compared {
+            standing.changed();
+        }
         let evaluated =
             crate::loopexit::evaluated_with(unit.context, unit.layout, unit.function, &outer, &mut standing)
                 .unwrap_or_else(|error| panic!("indvars: {error}"));
@@ -251,11 +256,11 @@ impl FunctionPass for IndVars {
             crate::profit::registers(&outer).registers,
             &crate::profit::costs(&outer),
         );
-        let dead = (sunk || rewound || widened || valued || merged)
+        let dead = (compared || sunk || rewound || widened || valued || merged)
             && dead::dead(unit.context, outer.callees(), unit.function);
         if evaluated || folded || valued {
             PreservedAnalyses::none()
-        } else if sunk || rewound || widened || merged || dead {
+        } else if compared || sunk || rewound || widened || merged || dead {
             // Blocks and edges are as they were.
             PreservedAnalyses::none().preserve::<passes::Dominators>().preserve::<passes::Loops>()
         } else {

@@ -102,7 +102,7 @@ impl ScalarEvolution {
     }
 
     /// `isSCEVable(V->getType())`.
-    pub(super) fn is_value_scevable(
+    pub fn is_value_scevable(
         &self,
         cx: &Cx,
         v: Operand,

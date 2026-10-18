@@ -45,10 +45,10 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::fmt;
 
 use crate::model::lir::LirBody;
+use crate::support::hash::HashMap;
 
 /// A stand-in for `MachineInstr*`: `Insn::id()`.
 pub type InstrKey = u64;

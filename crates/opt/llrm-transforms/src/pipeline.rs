@@ -700,6 +700,7 @@ pub(crate) fn llvm_order(
         Phase::Simplify => {
             let mut list = vec![sroa("sroa@646"), earlycse("earlycse@649")];
             list.extend([
+                slot("cvp@669", Box::new(crate::cvp::Cvp)),
                 decide("decide@675"),
                 phiopt("phiopt@675"),
                 fold("fold@677"),
@@ -751,10 +752,14 @@ pub(crate) fn llvm_order(
                 slot("unroll@753", Box::new(unroll::Unroll { limits: limits() })),
                 sroa("sroa@776"),
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
+                // The pin's `default<O1>` has no GVN (`pre` is off exactly at
+                // -O1 and -Og); rows against clang's -O1 are pending, a loss
+                // there becomes a numbered DEVIATE.
                 slot("gvn@787", Box::new(gvn::Gvn { pre: applied.options.pre })),
                 fold("fold@801"),
                 dead("dead@801"),
                 decide("decide@809"),
+                slot("cvp@810", Box::new(crate::cvp::Cvp)),
                 slot("memcpyopt@818", Box::new(memcpyopt::MemCpyOpt { size })),
                 slot("merge@818", Box::new(loopidioms::Merge { size })),
                 slot("dse@820", Box::new(dse::Dse)),
@@ -771,7 +776,10 @@ pub(crate) fn llvm_order(
             list
         }
     };
-    list.into_iter().filter(|one| applied.options.wanted(one.name())).collect()
+    list.into_iter()
+        .filter(|one| applied.options.wanted(one.name()))
+        .filter(|one| applied.options.pre || one.name() != "gvn@787")
+        .collect()
 }
 
 /// The order, from the pipeline itself rather than beside it, then the
@@ -860,6 +868,10 @@ pub fn recorded(
     }
     // Once every body has reached its own fixed point, as the old Nib
     // driver's whole-module step: a body it changes goes back through.
+    // DEVIATE from LLVM: `ipa-range` runs after the function pipeline here,
+    // LLVM's `ipsccp` before it, so a body it changes runs the Simplify list a
+    // second time (d_faces -O2: one body, `gvn` 12 runs over 11 functions
+    // against clang's 11, `parity::RUNS_PER_BODY`).
     let again_applied =
         Applied { dump: applied.dump.as_ref().map(|one| one.join("interprocedural")), ..applied.clone() };
     let mut again = if applied.options.llvm_order {
@@ -998,7 +1010,13 @@ pub fn recorded(
     // Last: what it names are the instructions selection sees.
     manager.add_module(crate::spares::Spares);
     manager.add_module(crate::homes::Homes);
-    manager.run(program)
+    let done = manager.run(program);
+    if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
+        for module in &program.modules {
+            llrm_analysis::capturecheck::check_module(module, &program.layout);
+        }
+    }
+    done
 }
 
 /// What `pass_ch` runs and what it leaves to clean: the loops' headers copied,
@@ -1174,7 +1192,8 @@ impl Fixed {
         linear.last.clear();
         linear.passes = llvm_order(applied, phase);
         let built = linear.passes.iter().map(|one| one.name()).collect::<Vec<_>>();
-        let checked = crate::parity::check_phase(phase, &built);
+        let level = if applied.options.pre { crate::parity::Level::O2 } else { crate::parity::Level::O1 };
+        let checked = crate::parity::check_phase_at(phase, &built, level);
         debug_assert!(checked.is_ok(), "{checked:?}");
         linear.rounds = 1;
         if !matches!(phase, Phase::Simplify) {
