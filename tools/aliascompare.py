@@ -79,6 +79,8 @@ def main() -> int:
     for path in args.files:
         text = path.read_text()
         ours, theirs = llrm_answers(args.llrm_mir, path), llvm_answers(dt, text)
+        if not ours and not theirs:
+            continue  # no two pointers to compare
         if not ours or not theirs:
             print(f"FAILED ROW (no answers from {'llrm' if not ours else 'opt'}): {path}")
             continue
