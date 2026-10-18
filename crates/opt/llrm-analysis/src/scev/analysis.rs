@@ -132,3 +132,29 @@ impl ScevView {
         query(&mut self.scevs.0.borrow_mut(), &cx)
     }
 }
+
+/// A [`ScevView`] made at the first query: a pass that rarely asks pays for
+/// the loops and dominator tree it would otherwise ask the manager for at
+/// the start.
+pub struct LazyScevView<'a> {
+    analyses: std::cell::RefCell<&'a mut Analyses>,
+    view: std::cell::OnceCell<ScevView>,
+}
+
+impl<'a> LazyScevView<'a> {
+    pub fn new(analyses: &'a mut Analyses) -> Self {
+        Self { analyses: std::cell::RefCell::new(analyses), view: std::cell::OnceCell::new() }
+    }
+
+    /// [`ScevView::ask`], the view made on the first call.
+    pub fn ask<R>(
+        &self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        query: impl FnOnce(&mut ScalarEvolution, &Cx) -> R,
+    ) -> R {
+        let view = self.view.get_or_init(|| ScevView::of(context, layout, function, &mut self.analyses.borrow_mut()));
+        view.ask(context, layout, function, query)
+    }
+}

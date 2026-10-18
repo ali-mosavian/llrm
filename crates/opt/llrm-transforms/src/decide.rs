@@ -99,7 +99,7 @@ use llrm_analysis::manager::Held;
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
 use llrm_analysis::ranges;
-use llrm_analysis::scev::analysis::ScevView;
+use llrm_analysis::scev::analysis::LazyScevView;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
@@ -165,10 +165,11 @@ fn _decided(
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
     let registers = analyses.get::<llrm_analysis::manager::Registers>(context, layout, function);
-    let scev = ScevView::of(context, layout, function, analyses);
     let held =
         Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
-    let decisions = _decisions(&held.unit(context, layout, function, analyses.outer()), &registers, &scev)?;
+    let outer = std::rc::Rc::clone(analyses.outer());
+    let scev = LazyScevView::new(analyses);
+    let decisions = _decisions(&held.unit(context, layout, function, &outer), &registers, &scev)?;
     if decisions.is_empty() {
         return Ok(threaded);
     }
@@ -185,7 +186,7 @@ fn _decided(
 fn _decisions(
     unit: &Unit,
     facts: &IndexMap<ValueId, Known>,
-    scev: &ScevView,
+    scev: &LazyScevView,
 ) -> Result<Vec<(BlockId, BlockId)>, String> {
     let function = unit.function;
     // Points-to only for a pointer compared with null, as LLVM asks
@@ -269,7 +270,7 @@ fn _decisions(
 /// which reads the guards over its block and the loops holding it).
 fn _implied(
     unit: &Unit,
-    scev: &ScevView,
+    scev: &LazyScevView,
     last: InstId,
 ) -> Option<bool> {
     let function = unit.function;
