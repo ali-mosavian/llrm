@@ -287,12 +287,31 @@ no:
 
 #[test]
 fn test_what_is_not_selected_yet_is_refused() {
-    for (body, why) in [
-        ("%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v", "arithmetic on an i1"),
-        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "a byte division"),
-    ] {
+    for (body, why) in [(
+        "%c = icmp eq i16 %a, 0\n  %d = add i1 %c, %c\n  %v = sext i1 %d to i16\n  ret i16 %v",
+        "arithmetic on an i1",
+    )] {
         let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
         assert_eq!(selected(&text, "f").err(), Some(Unselected(why.to_owned())), "{body}");
+    }
+}
+
+/// CVP narrows a `udiv` to i8 and expands a `urem` through a `freeze`; both
+/// were refused ("a byte division", "freeze") and stopped vid.c and screen.c.
+#[test]
+fn test_a_byte_division_and_a_freeze_are_selected() {
+    for (body, mnemonic) in [
+        ("%b = trunc i16 %a to i8\n  %v = udiv i8 %b, %b\n  %w = zext i8 %v to i16\n  ret i16 %w", "div"),
+        ("%b = trunc i16 %a to i8\n  %v = sdiv i8 %b, 3\n  %w = sext i8 %v to i16\n  ret i16 %w", "idiv"),
+        (
+            "%b = trunc i16 %a to i8\n  %q = sdiv i8 %b, %b\n  %r = srem i8 %b, %b\n  %v = add i8 %q, %r\n  %w = sext i8 %v to i16\n  ret i16 %w",
+            "idiv",
+        ),
+        ("%f = freeze i16 %a\n  %v = udiv i16 %f, %f\n  ret i16 %v", "div"),
+    ] {
+        let text = format!("define i16 @f(ptr %p, i16 %a) addrspace(1) {{\n  {body}\n}}\n");
+        let got = listing(&text, "f");
+        assert!(got.iter().any(|one| one.starts_with(mnemonic)), "{body}: {got:?}");
     }
 }
 
