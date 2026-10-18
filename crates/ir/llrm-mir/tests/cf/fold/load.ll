@@ -1,0 +1,53 @@
+target datalayout = "e-p:64:64-i64:64"
+%S = type { i32, i8, i64, [3 x i16] }
+%P = type { i8, i32 }
+@g = constant [4 x i32] [i32 1, i32 2, i32 3, i32 4]
+@s = constant %S { i32 7, i8 9, i64 11, [3 x i16] [i16 1, i16 2, i16 3] }
+@p = constant %P { i8 -1, i32 -2 }
+@z = constant [8 x i8] zeroinitializer
+@ones = constant [2 x i32] [i32 -1, i32 -1]
+@str = constant [6 x i8] c"hello\00"
+@f = constant [2 x float] [float 1.5, float 2.5]
+@d = constant double 2.5
+@pp = constant [2 x ptr] [ptr @g, ptr null]
+@w = global i32 5
+@v = constant [2 x i32] [i32 poison, i32 3]
+@odd = constant [3 x i7] [i7 1, i7 2, i7 3]
+@big = constant i128 340282366920938463463374607431768211455
+@h = constant { i16, i16 } { i16 1, i16 2 }
+
+define void @t() {
+  %a = load i32, ptr @g
+  %b = load i32, ptr getelementptr inbounds ([4 x i32], ptr @g, i64 0, i64 3)
+  %c = load i8, ptr getelementptr inbounds (%S, ptr @s, i32 0, i32 1)
+  %d = load i64, ptr getelementptr inbounds (%S, ptr @s, i32 0, i32 2)
+  %e = load i16, ptr getelementptr inbounds (%S, ptr @s, i32 0, i32 3, i32 2)
+  %f = load i32, ptr getelementptr inbounds (i8, ptr @g, i64 1)
+  %g = load i64, ptr getelementptr inbounds (i8, ptr @g, i64 4)
+  %h = load i32, ptr getelementptr inbounds (i8, ptr @p, i64 1)
+  %i = load i8, ptr getelementptr inbounds (i8, ptr @z, i64 5)
+  %j = load i64, ptr @z
+  %k = load i32, ptr getelementptr (i8, ptr @ones, i64 2)
+  %l = load i8, ptr getelementptr inbounds (i8, ptr @str, i64 1)
+  %m = load i32, ptr @str
+  %n = load float, ptr getelementptr inbounds ([2 x float], ptr @f, i64 0, i64 1)
+  %o = load i32, ptr @f
+  %p = load i64, ptr @d
+  %q = load double, ptr @d
+  %r = load ptr, ptr @pp
+  %s = load ptr, ptr getelementptr inbounds ([2 x ptr], ptr @pp, i64 0, i64 1)
+  %t = load i64, ptr @pp
+  %u = load i32, ptr @w
+  %v = load i32, ptr getelementptr inbounds ([2 x i32], ptr @v, i64 0, i64 0)
+  %x = load i32, ptr getelementptr inbounds ([2 x i32], ptr @v, i64 0, i64 1)
+  %y = load i8, ptr getelementptr inbounds (i8, ptr @g, i64 100)
+  %zz = load i8, ptr getelementptr inbounds (i8, ptr @g, i64 -1)
+  %aa = load i128, ptr @big
+  %ab = load i16, ptr @h
+  %ac = load i32, ptr @h
+  %ad = load volatile i32, ptr @g
+  %ae = load i32, ptr @odd
+  %af = load { i32, i8 }, ptr @s
+  %ag = load i1, ptr @z
+  ret void
+}
