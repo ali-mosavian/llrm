@@ -99,7 +99,7 @@ def main() -> None:
     parser.add_argument("--allow-other-llvm", action="store_true", help="compare with a clang that is not the pinned one")
     parser.add_argument(
         "--distro-clang",
-        help="a second clang column, what users run (the distro's shared-libLLVM clang: +20% of startup and calls into libLLVM)",
+        help="a second clang column, what users run (the distro's shared-libLLVM clang: +20%% of startup and calls into libLLVM)",
     )
     parser.add_argument("--allow-other-corpus", action="store_true", help="measure a source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
