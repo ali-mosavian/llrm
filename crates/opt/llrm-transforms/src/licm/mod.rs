@@ -212,7 +212,7 @@ pub struct Decisions {
 }
 
 fn found_changed(found: &Decisions) -> bool {
-    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty()
+    !found.hoisted.is_empty() || !found.sunk.is_empty() || !found.erased.is_empty() || !found.promoted.is_empty()
 }
 
 /// Each block's innermost loop, an index in `shape.loops`.
@@ -382,10 +382,19 @@ pub fn run(
                 .with_registers(&registers)
                 .with_shape(&shape);
             if graph.is_none() {
-                let (mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+                // The manager's graph of this body, cloned: the updater edits
+                // the clone, and the manager drops its own with the pass's change.
+                let held = analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
+                let (mssa, accesses) = match &*held {
+                    Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
+                    Err(_) => {
+                        let (mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
+                        decisions.rebuilds += 1;
+                        decisions.rebuilt_instructions += $view.function.walk().count();
+                        (mssa, accesses)
+                    }
+                };
                 graph = Some(Built { mssa, accesses, updater: MemorySsaUpdater::new() });
-                decisions.rebuilds += 1;
-                decisions.rebuilt_instructions += $view.function.walk().count();
             }
             let built = graph.as_mut().expect("a graph");
             let ($mssa, $accesses) = (&mut built.mssa, &built.accesses);
