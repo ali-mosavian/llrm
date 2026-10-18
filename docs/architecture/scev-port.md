@@ -46,6 +46,8 @@ Each stage is a PR that lands alone, deletes what it replaces, and is gated by s
 
 ### L1. LoopInfo (before any SCEV code)
 
+L1b-1 (#2228, draft) makes `analyzeImpl` generic over a `LoopGraph` so LIR and the graph walks use it and `forest::forest` loses its algorithm; L1b-2 (#2231, draft) adds the `Loop` queries memoryssa-port's LICM asked for and `LoopBlocksDFS`/`RPO`. The adapter exits after the lsr/indvars migration in S7 (#2197, owner scev-port).
+
 L1a landed as #2195: `llrm-mir/src/loopinfo.rs`, `analyzeImpl` translated (pinned LLVM finds loops by Wei et al.'s single depth-first search, not by back edges and dominance; the dominator tree is asked only for a re-entered cycle), the `Loop` queries, `tools/loops_oracle.py` (equal to `print<loops>` on 306 corpus files and the irreducible and odd-shape fixtures); `llrm_mir::loops` deleted; `Shape` reads it through `Forest::of_loop_info`. L1b: the mutators below, `analyzeImpl` generic over the CFG so LIR and the graph walks use it and the address forest's builder goes, and the flat `Loop` consumers move.
 
 Module `crates/ir/llrm-mir/src/loopinfo.rs`, over `Forest`. `LoopInfoBase::analyze` becomes `Forest` construction (the walk is the same: dominator tree, back edges, subloop discovery, DFS population).
@@ -64,6 +66,10 @@ Replaces: `llrm_mir::loops` (deleted), the flat `graph::loops::Loop` consumers m
 Gate: `LoopInfo` equals `opt -passes='print<loops>'` (headers, depth, blocks, latches, exiting/exit blocks) on every function of the corpus dumps; a test that the per-shape cache still hits (fail first by bypassing the key); `tools/identical.py` with every `LLRM_CHECK_*` on, identical output.
 
 ### S1. Expressions, uniquing, folds
+
+**S1 and S2 land as one stack, on #2143.** `getAddExpr`, `getMulExpr` and the casts call `getRange`, `getMinTrailingZeros` and `StrengthenNoWrapFlags`, and the extension folds of an `AddRec` call `isKnownPredicate`, `isLoopEntryGuardedByCond` and `getBackedgeTakenCount` (S5 and the `BackedgeCounts` seam), so the folds cannot be verified apart from them. The stack is built and verified in pieces against the fold oracle (section 5); it needs `ConstantRange`, `KnownBits` and `computeKnownBits`/`computeConstantRange` from #2143.
+
+The pinned LLVM has `SCEVUse`: an operand carries use-site `nuw`/`nsw` bits (`SCEVUseT`, `SCEVFlags{ExprFlags, UseFlags}`), `SCEV::computeAndSetCanonical` strips them from the operands and `getWithOperands` rebuilds, and uniquing keys on the use bits. They print as `<u nuw>`. Translated as `scev::expr::Use`, with the flags a node gains later (`setNoWrapFlags`) kept on the node.
 
 Module `crates/opt/llrm-analysis/src/scev/` (`expr.rs`, `fold.rs`, `print.rs`). `FoldingSet` becomes an interner (`HashMap<Key, ExprId>` in an arena); `SCEV` is `Copy` ids.
 
@@ -170,6 +176,8 @@ Same IR into both: `llrm-mir` prints a function as LLVM assembly (`print.rs`); t
 | S5 | `isKnownPredicate` / `isImpliedCond` answers on the questions `opt` asks (`-debug-only=scalar-evolution`-free: `-passes=indvars,lsr` remarks) and on a dumped question set | equal; every difference classified |
 | S6 | expanded code for a SCEV against `opt -passes=indvars` / `loop-reduce` output on the same loop; `-stats` `scalar-evolution`, `loop-reduce` counters | instruction counts per loop equal or classified |
 | S7 | rows | see below |
+
+**Fold oracle.** `tools/scev/oracle.cpp` links the pinned `libLLVMAnalysis.a` and builds any expression with LLVM's own `ScalarEvolution` constructors from an s-expression (`(add nuw:- (u 0) (c 16 1))`) over the arguments and loops of `tools/scev/fixture.ll`, printing `SCEV::print` and the type. The suite holds fixed golden cases hashed against it, each asserting at least two distinct answers; the fuzzing of the folds against it is a one-off run outside CI. The oracle prints the pinned version (`llvmpin.py` once it is on main).
 
 Rows (S7 and any stage that changes output): rows total / with counters / failed / missing first; per-row worse counts per metric (clocks, executed instructions, memory operands, code bytes) and level, then geomean; rows above min(gcc, clang) moved (reference `rows/main24d`). Code bytes block only at -Os. Identical-output stages run `tools/identical.py` with every `LLRM_CHECK_*` on. Compile time: callgrind on `d_faces` -O2 against the pinned `opt`/`clang` (lsr 89.5 M against 10.0 M is the target).
 
