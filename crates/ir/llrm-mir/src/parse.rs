@@ -587,7 +587,7 @@ impl Parser {
         }
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = &self.module.globals[id.0 as usize].name {
-            intrinsics::declare(&mut local.function, name);
+            intrinsics::declare(&mut local.function, &self.module.context.types, name);
         }
         if define {
             self.body(&mut local)?;

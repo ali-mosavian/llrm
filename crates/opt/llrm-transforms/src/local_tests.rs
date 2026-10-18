@@ -3,7 +3,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dominators::DominatorTree;
+use llrm_mir::domtree::DomTree;
 use llrm_mir::memory;
 use llrm_mir::module::{BlockId, InstId, Module, Operand, Use, ValueId};
 use llrm_mir::types::Type;
@@ -345,9 +345,9 @@ fn a_noundef_replacement_that_stays_keeps_its_range() {
 
 // ---- the dominator tree queries and replaceDominatedUsesWith
 
-fn tree_of(module: &Module) -> DominatorTree {
+fn tree_of(module: &Module) -> DomTree {
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
-    DominatorTree::new(function)
+    DomTree::of(function)
 }
 
 fn block(

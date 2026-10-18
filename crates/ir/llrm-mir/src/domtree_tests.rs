@@ -1,5 +1,6 @@
 use super::*;
 use crate::hash::HashMap;
+use crate::module::Operand;
 
 /// A graph given by its successor lists, for edits a `Function` cannot make
 /// without a pass.
@@ -357,4 +358,67 @@ fn a_function_is_a_graph_of_its_blocks() {
     post.verify(function, VerificationLevel::Full).expect("post");
     assert_eq!(dom.immediate_dominator(layout[3]), Some(layout[0]), "the join's dominator is the entry");
     assert_eq!(post.immediate_dominator(layout[0]), Some(layout[3]), "the entry's post-dominator is the join");
+}
+
+fn function(text: &str) -> Function {
+    let module = crate::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    module
+        .functions()
+        .find(|(_, _, function)| !function.is_declaration())
+        .map(|(_, _, function)| function.clone())
+        .expect("a body")
+}
+
+/// Asking was a walk up the tree through a hash map, as deep as the loops nest:
+/// 45% of a compile of 60 sequential loops, and 301 s of one of 200 (#394). It
+/// is a comparison of two numbers.
+#[test]
+fn asking_whether_a_block_dominates_does_not_walk_the_tree() {
+    let depth = 20_000;
+    let body: String = (0..depth).map(|at| format!("b{at}:\n  br label %b{}\n", at + 1)).collect();
+    let function = function(&format!("define void @f() {{\nentry:\n  br label %b0\n{body}b{depth}:\n  ret void\n}}\n"));
+    let tree = DomTree::of(&function);
+    let last = *function.layout().last().expect("blocks");
+    let start = std::time::Instant::now();
+    let asked = function.layout().iter().filter(|&&at| tree.dominates(at, last)).count();
+    assert_eq!(asked, depth + 2);
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(1),
+        "{:?} for {depth} questions of depth {depth}",
+        start.elapsed()
+    );
+}
+
+const DIAMOND_LOOP: &str = "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %join\nb:\n  br i1 %c, label %join, label %loop\nloop:\n  br i1 %c, label %loop, label %out\njoin:\n  br label %out\nout:\n  ret void\n}\n";
+
+/// The tree after an edit the log tells of, against a tree of the edited
+/// function built afresh. Each edit is one the passes make: a branch to another
+/// block, a block put between two, a branch cut and a branch made.
+#[test]
+fn a_tree_updated_from_the_log_is_the_tree_of_the_function_afresh() {
+    // (block whose terminator is rewritten, operand index, new target block
+    // name) over DIAMOND_LOOP.
+    let edits: [(&str, usize, &str); 5] =
+        [("a", 0, "out"), ("b", 1, "out"), ("b", 2, "join"), ("loop", 1, "join"), ("join", 0, "loop")];
+    for (block, slot, target) in edits {
+        let mut function = function(DIAMOND_LOOP);
+        let by_name = |function: &Function, name: &str| {
+            *function.layout().iter().find(|one| function.block(**one).name.as_deref() == Some(name)).expect("a block")
+        };
+        let before = DomTree::of(&function);
+        let mark = function.mark();
+        let (at, to) = (by_name(&function, block), by_name(&function, target));
+        let last = function.terminator(at).expect("terminated");
+        let mut operands = function.instruction(last).operands.clone();
+        operands[slot] = Operand::Block(to);
+        function.set_operands(last, operands);
+        let changes = function.changes_since(mark).expect("on record").to_vec();
+        let updated =
+            before.updated(&function, &changes).unwrap_or_else(|| panic!("{block}[{slot}] -> {target}: not updated"));
+        let fresh = DomTree::of(&function);
+        assert_eq!(updated, fresh, "{block}[{slot}] -> {target}");
+        updated
+            .verify(&function, VerificationLevel::Full)
+            .unwrap_or_else(|error| panic!("{block}[{slot}] -> {target}: {error}"));
+    }
 }
