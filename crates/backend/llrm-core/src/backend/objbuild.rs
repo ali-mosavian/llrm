@@ -572,8 +572,9 @@ fn built_inner(
             .unwrap_or_else(|| panic!("ValueError: {} is not in list", pyrepr::string(name)));
         _data(&mut segments[index], index, items, &mut symbols, module.object.bitness);
     }
+    let mut sizes: IndexMap<String, usize> = IndexMap::default();
     for (index, group) in groups.iter().enumerate() {
-        _code(&mut segments[index], index, module, group, &mut symbols, format)?;
+        _code(&mut segments[index], index, module, group, &mut symbols, &mut sizes, format)?;
     }
     // The BASIC dialect's records name an address by its offset alone, so they
     // need the one code segment the module's code is in; CodeView 4 as C7
@@ -583,7 +584,7 @@ fn built_inner(
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
-    let mut object = object_of(module, source, segments, &symbols, &externs)?;
+    let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per
     // procedure is what MSC's /Gy and Watcom's -zm write, which every linker
@@ -642,9 +643,10 @@ pub fn _code(
     module: &masm::Module,
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
+    sizes: &mut IndexMap<String, usize>,
     format: Format,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, format, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, format, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -656,6 +658,7 @@ pub fn _code_by(
     module: &masm::Module,
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
+    sizes: &mut IndexMap<String, usize>,
     format: Format,
     listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
 ) -> Result<(), Error> {
@@ -683,9 +686,7 @@ pub fn _code_by(
                 Err(error) => return Err(Unencodable(format!("{}: {error}", procedure.name)).into()),
             }
         }
-        if aligned && format == Format::Elf {
-            items.push(Encoded::End(end));
-        }
+        items.push(Encoded::End(end));
     }
     // Tuned for size, a long conditional jump may go through a `jmp` within
     // reach.
@@ -705,7 +706,11 @@ pub fn _code_by(
                 }
             }
             Encoded::Piece(Piece { code, fixups }) => segment.put(code, fixups),
-            Encoded::End(_) => {}
+            Encoded::End(end) => {
+                // `.size`: the body alone, not the padding before it.
+                let name = end.strip_suffix("$end").expect("an end label is named for its procedure");
+                sizes.insert(name.to_string(), at - symbols[name].1);
+            }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
                 let pad = _size(item, at as i64, bits);
                 segment.put(&nops(pad, usize::from(module.padding.nop), bits == 16), &[]);
@@ -1092,6 +1097,7 @@ pub fn object_of(
     source: &str,
     segments: Vec<Segment>,
     symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
     externs: &IndexMap<String, String>,
 ) -> Result<Object, Error> {
     let bits = module.object.bitness;
@@ -1130,6 +1136,7 @@ pub fn object_of(
             name: name.clone(),
             binding: if module.publics.contains(name) { Binding::Public } else { Binding::Local },
             definition: Definition::Defined { section, offset },
+            size: sizes.get(name).copied().unwrap_or(0),
             group: None,
         })
         .collect();
@@ -1139,6 +1146,7 @@ pub fn object_of(
         name: (*name).clone(),
         binding: Binding::Public,
         definition: Definition::Undefined,
+        size: 0,
         group: (externs[*name] == "byte").then_some(0),
     }));
     let index: IndexMap<String, usize> =
@@ -1678,7 +1686,10 @@ mod tests {
             let module = small(size);
             let mut segment = Segment::new("M_TEXT", Role::Text, true);
             let mut symbols = IndexMap::default();
-            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, format, body_of).unwrap();
+            let mut sizes = IndexMap::default();
+            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, format, body_of).unwrap();
+            // `.size` is the body alone: the padding before a function is no symbol's.
+            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "{format:?}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
         assert_eq!(offsets(Format::Coff, false), ([0, 16, 32], 16), "p2align 4 each");

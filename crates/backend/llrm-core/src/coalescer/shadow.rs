@@ -21,7 +21,7 @@
 //! `shadow-coalesce f: copies 30 old-left 4 new-left 3 joined 27`.
 //!
 //! `joined` is the same run returning the body, which `backend::coalesce` uses
-//! in place of the old pass under `LLRM_COALESCE_LLVM`.
+//! in place of the old pass unless `LLRM_NO_COALESCE_LLVM` is set.
 //!
 //! # Used by
 //! `backend::coalesce` (behind `LLRM_SHADOW_COALESCE` and

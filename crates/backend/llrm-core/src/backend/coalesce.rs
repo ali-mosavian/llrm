@@ -45,13 +45,14 @@
 //! end every value is renamed to its web's root and identity moves are
 //! dropped. `LLRM_CHECK_COALESCE=1` checks each count against a scan.
 //!
-//! `LLRM_COALESCE_LLVM=1` runs the translation of LLVM's `RegisterCoalescer`
-//! ([`crate::coalescer`]) in place of all of the above;
-//! `LLRM_SHADOW_COALESCE=1` runs it beside, and prints the copies each leaves.
-//! It joins by interval overlap and leaves colouring to the allocator, so it
-//! joins more (bench `-O2` m32: 939 copies left of 5,499, against 2,342 here)
-//! and `d_faces` is 2.5% smaller; `fib`, `frames`, `queens` and `rectwo` grow
-//! (+128, +128, +32, +32 bytes), which is why it is not the default.
+//! The translation of LLVM's `RegisterCoalescer` ([`crate::coalescer`]) runs in
+//! place of all of the above; `LLRM_NO_COALESCE_LLVM=1` brings this pass back
+//! (until it is deleted) and `LLRM_SHADOW_COALESCE=1` runs the translation
+//! beside it, printing the copies each leaves. It joins by interval overlap and
+//! leaves colouring to the allocator, so it joins more (bench `-O2` m32: 939
+//! copies left of 5,499, against 2,342 here) and `d_faces` is 2.5% smaller;
+//! `fib`, `frames`, `queens` and `rectwo` grow (+128, +128, +32, +32 bytes):
+//! the allocator spills where this pass kept two values apart.
 //!
 //! # Example
 //! A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates
@@ -154,12 +155,14 @@ impl LIRTransform for Coalescer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // The translated pass in place of the old one (`LLRM_COALESCE_LLVM`).
-        if llrm_support::env_flag!("LLRM_COALESCE_LLVM") {
+        // The translated pass, unless `LLRM_NO_COALESCE_LLVM` asks for the old
+        // one.
+        if !llrm_support::env_flag!("LLRM_NO_COALESCE_LLVM") {
             if let Some((env, depth)) = self.llvm_env(&body) {
                 return Ok(crate::coalescer::shadow::joined(&body, &env, &depth));
             }
         }
+        OLD_RUNS.with(|runs| runs.set(runs.get() + 1));
         let after = joined(&body, Some(&self.pinned), &self.segments, &self.classes);
         if llrm_support::env_flag!("LLRM_SHADOW_COALESCE") {
             self.shadow(&body, &after);
@@ -223,6 +226,18 @@ impl Coalescer {
             body.name, report.copies, old_copies, report.left, report.stats.joined, report.stats.left
         );
     }
+}
+
+thread_local! {
+    /// How many bodies the old pass handled on this thread: the counter that
+    /// says when it can be deleted.
+    static OLD_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Bodies the old coalescer handled on this thread (0 when it is no longer
+/// needed).
+pub fn old_runs() -> usize {
+    OLD_RUNS.with(std::cell::Cell::get)
 }
 
 pub type Graph = IndexMap<u32, Neighbours>;

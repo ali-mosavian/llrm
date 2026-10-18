@@ -61,7 +61,7 @@ fn object(
             name: "_f".into(),
             binding: Binding::Public,
             definition: Definition::Defined { section: 0, offset: 0 },
-            group: None,
+            size: 0, group: None,
         }],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),

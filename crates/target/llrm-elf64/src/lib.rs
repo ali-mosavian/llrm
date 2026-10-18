@@ -73,7 +73,7 @@ mod tests {
         section: usize,
         offset: usize,
     ) -> Symbol {
-        Symbol { name: name.into(), binding, definition: Definition::Defined { section, offset }, group: None }
+        Symbol { name: name.into(), binding, definition: Definition::Defined { section, offset }, size: 0, group: None }
     }
 
     fn word(
