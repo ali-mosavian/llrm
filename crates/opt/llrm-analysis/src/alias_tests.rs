@@ -8,7 +8,7 @@ use llrm_mir::opcode::Opcode;
 use llrm_support::hash::IndexMap;
 
 use super::{
-    _direct_summary, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
+    _direct_summary, _fills, Effect, PointsTo, Procedure, Summary, UNKNOWN, annotated, calls_annotated, congruences,
     initialized, nonnull_by_definition, points_to, summaries,
 };
 use crate::memory::{
@@ -1744,4 +1744,28 @@ fn a_summary_covers_a_read_by_the_bytes_it_names_not_by_its_shape() {
     };
     assert!(!in_large(0, 7, 1).covers(&in_large(5, 8, 1)), "byte 7 of a 20-byte object is a new read");
     assert!(!in_large(0, 7, 1).covers(&in_large(0, 7, 2)), "so is the byte after a two-byte read from 6");
+}
+
+/// A byval parameter is the callee's own copy: `initializes` on it said the
+/// caller's object was written first, so `c/byval_inline` -O2 dropped the
+/// store `g.a[0] = 1`. Without `byval` the same call fills the object.
+#[test]
+fn a_byval_argument_that_initializes_fills_nothing_of_the_callers_object() {
+    let fills = |attrs: &str| {
+        let text = format!(
+            "declare void @h(ptr {attrs}initializes((0, 4)))\ndefine void @f() {{\nb0:\n  %a = alloca i32\n  call void @h(ptr %a)\n  ret void\n}}\n"
+        );
+        let parsed = Parsed::new(&text);
+        let unit = parsed.unit();
+        let facts = points_to(&unit, None, None).unwrap();
+        let call = unit
+            .function
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| matches!(unit.function.instruction(inst).opcode, Opcode::Call(_)))
+            .unwrap();
+        _fills(&unit, &facts, call).len()
+    };
+    assert_eq!(fills(""), 1, "premise: a plain parameter initializes the object");
+    assert_eq!(fills("byval(i32) "), 0);
 }
