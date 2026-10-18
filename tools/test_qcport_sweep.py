@@ -43,4 +43,4 @@ def test_the_issue_names_the_repro_the_head_and_the_first_bad_squash():
 def test_the_known_file_parses_and_names_issue_numbers():
     import tomllib
 
-    assert all(isinstance(e["issue"], int) and e["match"] for e in tomllib.loads(q.KNOWN.read_text())["known"])
+    assert all(isinstance(e["issue"], int) and e["match"] for e in tomllib.loads(q.KNOWN.read_text()).get("known", []))

@@ -349,7 +349,15 @@ pub fn optimized(
     }
     timed("mir min max", || program.modules.iter_mut().try_for_each(crate::backend::selects::minmax_expanded))?;
     if options.arch.expands("select") {
-        timed("mir selects", || program.modules.iter_mut().try_for_each(crate::backend::selects::lowered))?;
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        let pricing = crate::backend::selects::Pricing {
+            target: Some(program.target.clone()),
+            layout: &program.layout,
+            tti: &*tti,
+        };
+        timed("mir selects", || {
+            program.modules.iter_mut().try_for_each(|module| crate::backend::selects::lowered(module, &pricing))
+        })?;
     }
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
