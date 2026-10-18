@@ -158,6 +158,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use llrm_analysis::aa::MemoryEffects;
 use llrm_analysis::alias::{self, Procedure, Summary};
 use llrm_analysis::cfg::Shape;
 use llrm_analysis::effects;
@@ -1840,6 +1841,35 @@ pub fn stamped(
     // as they stand when its first member is reached: LLVM stamps an SCC at
     // once.
     let mut inferred: BTreeMap<Vec<GlobalId>, BTreeMap<GlobalId, functionattrs::Inferred>> = BTreeMap::new();
+    let shadow_memory = std::env::var_os("LLRM_SHADOW_MEMORY").is_some();
+    // Shadow of `functionattrs::stamp_memory`: the same bodies stamped
+    // callees first from no memory attribute at all, against what `_narrowed`
+    // states; one line per body that differs.
+    let shadow = shadow_memory.then(|| {
+        let mut copy = module.clone();
+        for global in &mut copy.globals {
+            if let GlobalKind::Function(function) = &mut global.kind {
+                function
+                    .attrs
+                    .retain(
+                        |one| match one {
+                            Attribute::Memory(_) => false,
+                            other => {
+                                !matches!(
+                                    Fact::of_attribute(other),
+                                    Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
+                                )
+                            }
+                        },
+                    );
+            }
+        }
+        for (members, _) in graph.bottom_up_components() {
+            functionattrs::stamp_memory(&mut copy, &members);
+        }
+        copy
+    });
+    let mut compared = 0_usize;
     for id in graph.bottom_up() {
         let global = module.global(id);
         let exact = matches!(
@@ -1949,9 +1979,19 @@ pub fn stamped(
                 Type::Pointer(_)
             ))
             .collect::<Vec<_>>();
+        let shadow =
+            shadow.as_ref().map(|one| MemoryEffects::of_attrs(&one.global(id).function().expect("a procedure").attrs));
+        let shown = module.global(id).name.clone().unwrap_or_default();
         let function = function_mut(module, id).1;
         let before = (function.attrs.clone(), function.parameter_attrs.clone());
         _narrowed(&mut function.attrs, summary, hidden);
+        if let Some(expected) = shadow {
+            compared += 1;
+            let stated = MemoryEffects::of_attrs(&function.attrs);
+            if stated != expected {
+                eprintln!("shadow-memory disagree @{}: stamp {stated:?} infer_memory {expected:?}", shown);
+            }
+        }
         for (fact, proved) in [(Fact::WillReturn, returns), (Fact::NoUnwind, nounwind), (Fact::NoRecurse, norecurse)] {
             if proved && !Facts::of(&function.attrs).contains(fact) {
                 function.attrs.extend(fact.attribute());
@@ -1995,6 +2035,9 @@ pub fn stamped(
             declarations[id.0 as usize] = module.global(id).declaration();
             changed.push(id);
         }
+    }
+    if shadow_memory {
+        eprintln!("shadow-memory compared {compared} bodies");
     }
     Ok(changed)
 }
