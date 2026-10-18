@@ -28,6 +28,8 @@ pub enum ConstantKind {
     /// IEEE bits: a `float`'s in the low 32.
     Float(u64),
     Null,
+    /// `UndefValue`: any value, chosen per use.
+    Undef,
     Poison,
     /// `zeroinitializer`.
     Zero,

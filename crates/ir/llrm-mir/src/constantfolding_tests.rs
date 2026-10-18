@@ -89,8 +89,7 @@ fn rejects(text: &str) -> bool {
 /// The constructs of `ConstantFolding.cpp` MIR cannot say: a test fails the
 /// day MIR gains one, so its translation is owed then.
 #[test]
-fn mir_has_no_undef_no_binary_constant_expressions_and_no_inrange() {
-    assert!(rejects("define i32 @f() {\n  ret i32 undef\n}\n"));
+fn mir_has_no_binary_constant_expressions_and_no_inrange() {
     for expr in [
         "sub (i64 ptrtoint (ptr @g to i64), i64 1)",
         "add (i64 ptrtoint (ptr @g to i64), i64 1)",
