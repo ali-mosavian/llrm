@@ -487,13 +487,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn norecurse {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn norecurse {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn nounwind norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind norecurse {",
             "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn norecurse {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn norecurse {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
         ],
         "{text}"
     );
@@ -683,8 +683,10 @@ b:
     assert_eq!(pure(text), named(&["local", "h", "leaf", "middle"]));
 }
 
-/// A read of this module's near static data goes unnoticed; a far, an
-/// external or a pointer's may fault, a volatile one is ordered.
+/// A call that only reads, comes back and cannot unwind goes unnoticed, as in
+/// LLVM (`wouldInstructionBeTriviallyDead`): a far, an external or a pointer's
+/// read too, which llrm kept while `nounwind` also meant "cannot fault"
+/// (`cannot_fault`, F1). A volatile one is ordered.
 #[test]
 fn an_unused_call_that_only_reads_static_data_goes() {
     let text = "@g = global i16 0
@@ -745,7 +747,7 @@ b:
   ret void
 }
 ";
-    assert_eq!(dropped(text), named(&["read", "caller"]));
+    assert_eq!(dropped(text), named(&["read", "caller", "far", "external", "pointer"]));
 }
 
 #[test]
