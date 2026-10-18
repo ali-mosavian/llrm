@@ -16,12 +16,14 @@
 //!
 //! A translation joins when its oracle passes (output identical to `opt` at the
 //! pin), not when it is on by default; see
-//! `docs/architecture/parity-pipeline.md`.
+//! the parity pipeline plan page (PR 2288).
+//!
+//! # Example
+//! `parity::check_phase(Phase::Simplify, &built)` is `Ok` when every Translated
+//! Simplify slot is in `built` and every name in `built` has an entry.
 //!
 //! # Used by
 //! `pipeline` (`Fixed::linear`), the registry tests.
-
-use crate::pipeline::Phase;
 
 /// What stands in a slot.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,6 +35,22 @@ pub enum SlotKind {
     Old,
     /// LLVM runs a pass here and llrm nothing.
     Missing,
+}
+
+/// Where a list of LLVM's order stands: one list per phase, one mechanism for
+/// all of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Phase {
+    /// The early function pipeline (l.1178-1180).
+    Early,
+    /// GlobalCleanup (l.1241-1244).
+    Cleanup,
+    /// `buildFunctionSimplificationPipeline` (l.630-837), once for a function.
+    Simplify,
+    /// The module pipeline: the inliner, the CGSCC members, the IPO passes.
+    Module,
+    /// llc's machine pipeline.
+    Backend,
 }
 
 /// One slot of LLVM's pipeline.
@@ -96,7 +114,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("dead@768", Simplify, "instcombine", Old, "instcombine-port"),
     entry("loopsimplify@772", Simplify, "loop-simplify", Old, "loopsimplify-port"),
     entry("lcssa@772", Simplify, "lcssa", Old, "lcssa-port"),
-    entry("fill@737", Simplify, "loop-idiom", Old, "loop-idiom-port"),
+    entry("loopidioms@737", Simplify, "loop-idiom", Old, "loop-idiom-port"),
     entry("indvars@738", Simplify, "indvars", Old, "scev-port"),
     entry("unroll@753", Simplify, "loop-unroll-full", Old, "loop-passes-port"),
     entry("sroa@776", Simplify, "sroa", Old, "sroa.rs"),
@@ -183,7 +201,7 @@ pub(crate) fn check(
 
 /// [`check`] against [`REGISTRY`]; the built slots that are Translated are told
 /// to the counts as joined.
-pub(crate) fn check_phase(
+pub fn check_phase(
     phase: Phase,
     built: &[&str],
 ) -> Result<(), String> {

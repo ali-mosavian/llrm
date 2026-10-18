@@ -142,6 +142,65 @@ pub fn split(
     Ok(bridge)
 }
 
+/// `BasicBlock::getSinglePredecessor`: the block when exactly one edge, of one
+/// block, enters `block`.
+pub fn single_predecessor(
+    function: &Function,
+    block: BlockId,
+) -> Option<BlockId> {
+    let mut edges =
+        function.block_users(block).iter().filter(|one| function.instruction(one.user).opcode.is_terminator());
+    let first = edges.next()?;
+    edges.next().is_none().then(|| function.parent(first.user)).flatten()
+}
+
+/// `isCriticalEdge`
+/// ([CFG.cpp:106](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/CFG.cpp#L106)),
+/// for the first edge from `from` to `to`: `from` has several edges out and
+/// `to` more than one in.
+pub fn is_critical_edge(
+    function: &Function,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let Some(terminator) = function.terminator(from) else { return false };
+    let out = function.instruction(terminator).operands.iter().filter(|one| matches!(one, Operand::Block(_))).count();
+    out > 1 && single_predecessor(function, to).is_none()
+}
+
+/// `SplitCriticalEdge(Src, Dst)`
+/// ([BasicBlockUtils.h:244](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Transforms/Utils/BasicBlockUtils.h#L244))
+/// without analyses to keep: a block holding a `br to` on the first edge from
+/// `from` to `to`, if that edge is critical and `to` is not a landing pad.
+pub fn split_critical_edge(
+    function: &mut Function,
+    from: BlockId,
+    to: BlockId,
+) -> Option<BlockId> {
+    if !is_critical_edge(function, from, to) {
+        return None;
+    }
+    let first =
+        function.block(to).instructions().iter().copied().find(|&one| function.instruction(one).opcode != Opcode::Phi);
+    if first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. })) {
+        return None;
+    }
+    let terminator = function.terminator(from)?;
+    let slot = function.instruction(terminator).operands.iter().position(|one| *one == Operand::Block(to))?;
+    let void = function.instruction(terminator).ty;
+    let bridge = function.create_block(None);
+    function.insert_block(bridge, None).ok()?;
+    let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(to)], Flags::default(), None);
+    function.insert(jump, Position::End(bridge)).ok()?;
+    function.set_operand(terminator, slot, Operand::Block(bridge));
+    // One input of each phi is the edge that moved.
+    for phi in phis(function, to) {
+        let at = function.instruction(phi).operands.iter().position(|one| *one == Operand::Block(from))?;
+        function.set_operand(phi, at, Operand::Block(bridge));
+    }
+    Some(bridge)
+}
+
 /// The edge's own phi uses: a phi in one arm of a `br i1` that takes the
 /// branch's own condition from the branch's block reads that arm's constant:
 /// the edge it is read on is the one the condition decides (GVN's

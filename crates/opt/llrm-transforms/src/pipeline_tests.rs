@@ -1419,10 +1419,10 @@ fn test_llvm_order_runs_the_function_pipeline_once_with_one_gvn_and_the_translat
     assert_eq!(pipeline::function_stages(&off).len(), 1, "the rounds are one stage");
     assert_eq!(pipeline::function_stages(&on).len(), 3, "early, cleanup and simplify");
     let names = |phase| pipeline::llvm_order(&on, phase).iter().map(|one| one.name()).collect::<Vec<_>>();
-    let simplify = names(pipeline::Phase::Simplify);
+    let simplify = names(crate::parity::Phase::Simplify);
     let count = |what: &str| simplify.iter().filter(|one| one.split('@').next() == Some(what)).count();
     assert_eq!((count("gvn"), count("dse"), count("earlycse")), (1, 1, 1), "{simplify:?}");
-    assert!(names(pipeline::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(pipeline::Phase::Early));
+    assert!(names(crate::parity::Phase::Early).contains(&"earlycse@1180"), "{:?}", names(crate::parity::Phase::Early));
 }
 
 /// A body computes the same answer through LLVM's order.
@@ -1502,4 +1502,45 @@ impl llrm_mir::passes::FunctionPass for Idle {
     ) -> llrm_mir::passes::PreservedAnalyses {
         llrm_mir::passes::PreservedAnalyses::all()
     }
+}
+
+/// Erases the first instruction nothing uses.
+struct EraseUnused;
+
+impl llrm_mir::passes::FunctionPass for EraseUnused {
+    fn name(&self) -> &'static str {
+        "erase-unused"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        _: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        let unused = unit.function.walk().map(|(_, one)| one).find(|&one| {
+            unit.function.instruction(one).result.is_some_and(|result| unit.function.users(result).is_empty())
+        });
+        let Some(unused) = unused else { return llrm_mir::passes::PreservedAnalyses::all() };
+        unit.function.erase(unused).unwrap();
+        llrm_mir::passes::PreservedAnalyses::none()
+    }
+}
+
+/// The `runs` lines gave no sizes, so the body a slot enters and leaves was
+/// guessed from the IR dumps, which map to the runs lines 12 to 34 on
+/// d_faces. A step now says `in=` and `out=` (an idle one the same), and the
+/// body line names the function.
+#[test]
+fn test_the_runs_lines_carry_the_sizes_a_step_enters_and_leaves_and_the_body_name() {
+    let mut module = llrm_analysis::testing::parsed(
+        "define i16 @f(i16 %x) {\nb0:\n  %d = add i16 %x, 1\n  %y = add i16 %x, 2\n  ret i16 %y\n}\n",
+    );
+    let mut fixed = pipeline::Fixed::new(&Applied { only: Some("none".to_owned()), ..Applied::default() });
+    fixed.only = false;
+    fixed.passes = vec![Box::new(EraseUnused)];
+    let (_, lines) = pipeline::capturing_runs(|| crate::testing::managed(&mut module, fixed));
+    let steps: Vec<&String> = lines.iter().filter(|line| line.starts_with("step ")).collect();
+    assert!(steps.first().is_some_and(|line| line.contains(" changed ") && line.ends_with(" in=3 out=2")), "{lines:?}");
+    assert!(steps.last().is_some_and(|line| line.contains(" idle ") && line.ends_with(" in=2 out=2")), "{lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("body ") && line.ends_with(" name f")), "{lines:?}");
 }
