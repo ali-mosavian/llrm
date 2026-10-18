@@ -32,29 +32,31 @@ def test_the_steps_and_tests_come_from_tiers_toml_not_a_list_of_its_own():
     assert prepush.selected(cfg, ["docs"]).keys() == {"docs"}
 
 
-def tree(tmp_path: Path) -> Path:
-    """A copy of HEAD (tracked files only) to damage."""
-    copy = tmp_path / "tree"
-    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(copy), "HEAD"], cwd=ROOT, check=True)
-    return copy
-
-
 def prepushed(copy: Path, *only: str) -> subprocess.CompletedProcess:
     env = {**os.environ, "CARGO_TARGET_DIR": str(copy / "target")}
     return subprocess.run([str(copy / "tools/prepush.sh"), "--only", *only], cwd=copy, capture_output=True, text=True, env=env)
 
 
-@pytest.fixture
-def damaged(tmp_path):
-    copy = tree(tmp_path)
+@pytest.fixture(scope="module")
+def checkout(tmp_path_factory):
+    """One copy of HEAD (tracked files only), damaged by a test and restored after it."""
+    copy = tmp_path_factory.mktemp("prepush") / "tree"
+    subprocess.run(["git", "worktree", "add", "-q", "--detach", str(copy), "HEAD"], cwd=ROOT, check=True)
     yield copy
     subprocess.run(["git", "worktree", "remove", "--force", str(copy)], cwd=ROOT, check=False)
 
 
+@pytest.fixture
+def damaged(checkout):
+    yield checkout
+    subprocess.run(["git", "checkout", "-q", "--", "."], cwd=checkout, check=True)
+
+
 def test_a_stale_generated_doc_turns_it_red(damaged):
-    """The generated docs are checked against their source (tools/docsbuild): a hand edit of a generated page is the commonest red."""
-    page = next(p for p in (damaged / "docs").rglob("*.md") if "generated" in p.read_text(errors="replace")[:400].lower())
-    page.write_text(page.read_text() + "\nstale line nobody generated\n")
+    """docs/optimizations/passes/*.md is generated from the `//!` header of the pass: editing the header without regenerating is the commonest red."""
+    source = damaged / "crates/opt/llrm-transforms/src/algebraic.rs"
+    text = source.read_text()
+    source.write_text(text.replace("//!", "//! A sentence the generated page does not have yet.\n//!", 1))
     done = prepushed(damaged, "docs")
     assert done.stdout.splitlines()[0] == "PREPUSH FAIL: docs", done.stdout + done.stderr
     assert prepushed(damaged, "products").stdout.splitlines()[0] == "PREPUSH PASS"
@@ -75,7 +77,12 @@ def test_a_local_path_in_a_tracked_markdown_turns_the_scan_red(damaged, tmp_path
     readme = damaged / "docs" / "readme.md"
     readme.write_text(readme.read_text() + "\nsee /home/someone/notes.txt\n")
     subprocess.run(["git", "add", "-A"], cwd=damaged, check=True)
+    lines = (damaged / "tests/no_local_paths.rs").read_text().splitlines()
+    head = lines[: next(n for n, line in enumerate(lines) if line.startswith("fn repo("))]  # the rest are self-tests that need the tempfile crate
+    source = tmp_path / "no_local_paths.rs"
+    source.write_text("\n".join(head) + "\n")
     binary = tmp_path / "no_local_paths"
-    subprocess.run(["rustc", "--edition", "2021", "--test", str(damaged / "tests/no_local_paths.rs"), "-o", str(binary)], check=True, capture_output=True, env={**os.environ, "CARGO_MANIFEST_DIR": str(damaged)})
-    done = subprocess.run([str(binary)], cwd=damaged, capture_output=True, text=True)
+    built = subprocess.run(["rustc", "--edition", "2021", "--test", str(source), "-o", str(binary)], capture_output=True, text=True, env={**os.environ, "CARGO_MANIFEST_DIR": str(damaged)})
+    assert built.returncode == 0, built.stderr[-300:]
+    done = subprocess.run([str(binary), "test_no_tracked_markdown_names_a_path_of_one_machine"], cwd=damaged, capture_output=True, text=True)
     assert done.returncode != 0 and "/home/" in done.stdout + done.stderr, done.stdout[-400:]
