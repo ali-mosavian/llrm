@@ -26,7 +26,7 @@
 
 ### First table (oracle 2, `tools/aliascompare.py` of #2176)
 
-`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`), `-passes=aa-eval -print-all-alias-modref-info`; llrm side: `llrm-mir --aliases`, the answer `regions::overlapping` gives two pointers with every byte of their objects (aa-eval asks without a size). Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps, 166 with two or more pointers. Failed rows: 0.
+`opt` 24.0.0git `d1106deb71cc` (`~/scratch/llvm-build/bin/opt`; inputs made by `mkinputs.sh` at main `7ac662405`, `-fno-inline-functions`), `-passes=aa-eval -print-all-alias-modref-info`; llrm side: `llrm-mir --aliases`, the answer `regions::overlapping` gives two pointers with every byte of their objects (aa-eval asks without a size). Inputs: the hoist, gvn and dse pass inputs of the replay set (`~/scratch/replay/inputs`) of `d_faces` -O1 (66), -O2 (104) and -Os (104): 274 dumps, 166 with two or more pointers. Failed rows: 0.
 
 | ours | LLVM | pairs |
 |---|---|---|
