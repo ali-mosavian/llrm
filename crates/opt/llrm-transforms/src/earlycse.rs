@@ -9,11 +9,6 @@
 //! - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
 //!   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
 //!   none (or `fill` makes them later). `llvm.assume` is handled.
-//! - DEVIATE `simplifyInstruction` is `simplify_instruction`, a stub with the
-//!   signature of fold-poc's `llrm_mir::simplify::simplify_instruction`
-//!   (InstructionSimplify.cpp): `algebraic::identity`, constants folded, a
-//!   select on a constant or with equal arms, `x cmp x`, `icmp ne (zext i1 x),
-//!   0`, `gep p, 0`, a phi of one value. It goes when theirs builds.
 //! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
 //!   does it only when poison-generating flags remain); a load's metadata not
 //!   shared by both loads is dropped (`combineMetadataForCSE` merges it).
@@ -81,7 +76,9 @@ use llrm_mir::memory;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
+use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
+use llrm_mir::valuetracking::FunctionAnalyses;
 use llrm_support::hash::HashMap;
 
 /// `EarlyCSEMssaOptCap`, `-earlycse-mssa-optimization-cap`.
@@ -283,162 +280,6 @@ impl MemorySsaView for Manager<'_> {
     }
 }
 
-fn int_constant(
-    context: &Context,
-    operand: Operand,
-) -> Option<u128> {
-    let Operand::Constant(id) = operand else { return None };
-    match context.get(id).kind {
-        llrm_mir::context::ConstantKind::Int(bits) => Some(bits),
-        _ => None,
-    }
-}
-
-fn int_width(
-    context: &Context,
-    ty: TypeId,
-) -> Option<u32> {
-    context.types.int_bits(ty)
-}
-
-fn definer(
-    function: &Function,
-    operand: Operand,
-) -> Option<InstId> {
-    let Operand::Value(value) = operand else { return None };
-    match function.value(value).def {
-        ValueDef::Instruction(inst) => Some(inst),
-        ValueDef::Argument(_) => None,
-    }
-}
-
-/// `simplifyInstruction`: the operand `inst` equals.
-///
-/// STUB, to be replaced by fold-poc's translation of InstructionSimplify.cpp
-/// (llrm-mir, beside constfold.rs) with this signature; until then the subset
-/// llrm has at hand, which a DEVIATE of the module comment names.
-fn simplify_instruction(
-    context: &mut Context,
-    function: &Function,
-    inst: InstId,
-) -> Option<Operand> {
-    if let Some(kept) = crate::algebraic::identity(context, function, inst) {
-        return Some(kept);
-    }
-    let op = function.instruction(inst).clone();
-    let width = int_width(&*context, op.ty);
-    let constants: Option<Vec<u128>> = op.operands.iter().map(|one| int_constant(&*context, *one)).collect();
-    match (&op.opcode, &op.operands[..]) {
-        (Opcode::Select, [cond, yes, no]) => {
-            if let Some(cond) = int_constant(&*context, *cond) {
-                return Some(if cond & 1 == 1 { *yes } else { *no });
-            }
-            if yes == no {
-                return Some(*yes);
-            }
-            None
-        }
-        (Opcode::Phi, operands) => {
-            let result = Operand::Value(op.result?);
-            let mut same = None;
-            for pair in operands.chunks(2) {
-                let value = pair[0];
-                if value == result {
-                    continue;
-                }
-                match same {
-                    None => same = Some(value),
-                    Some(one) if one == value => {}
-                    Some(_) => return None,
-                }
-            }
-            same
-        }
-        // `icmp ne (zext i1 x), 0` is `x` (simplifyICmpInst).
-        (Opcode::ICmp(IntPredicate::Ne), [wide, zero]) if int_constant(&*context, *zero) == Some(0) => {
-            let widened = function.instruction(definer(function, *wide)?);
-            let (Opcode::Cast(CastOp::ZExt), [narrow]) = (&widened.opcode, &widened.operands[..]) else {
-                return None;
-            };
-            let one_bit = function.operand_type(context, *narrow).and_then(|ty| int_width(&*context, ty)) == Some(1);
-            one_bit.then_some(*narrow)
-        }
-        // `gep p, 0` is `p` (simplifyGEPInst).
-        (Opcode::GetElementPtr { .. }, [base, indices @ ..]) => {
-            let same_type = function.operand_type(context, *base) == Some(op.ty);
-            (!indices.is_empty() && same_type && indices.iter().all(|one| int_constant(&*context, *one) == Some(0)))
-                .then_some(*base)
-        }
-        (Opcode::ICmp(predicate), [left, right]) if left == right => {
-            let holds = matches!(
-                predicate,
-                IntPredicate::Eq | IntPredicate::Uge | IntPredicate::Ule | IntPredicate::Sge | IntPredicate::Sle
-            );
-            Some(Operand::Constant(context.int(op.ty, i128::from(holds))))
-        }
-        (Opcode::Binary(binary), _) => {
-            let (constants, width) = (constants?, width?);
-            if width > 64 || constants.len() != 2 {
-                return None;
-            }
-            let mask = if width == 64 { u64::MAX as u128 } else { (1u128 << width) - 1 };
-            let (a, b) = (constants[0] & mask, constants[1] & mask);
-            let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
-            let bits = match binary {
-                BinaryOp::Add => a.wrapping_add(b),
-                BinaryOp::Sub => a.wrapping_sub(b),
-                BinaryOp::Mul => a.wrapping_mul(b),
-                BinaryOp::And => a & b,
-                BinaryOp::Or => a | b,
-                BinaryOp::Xor => a ^ b,
-                BinaryOp::Shl if b < u128::from(width) => a << b,
-                BinaryOp::LShr if b < u128::from(width) => a >> b,
-                BinaryOp::AShr if b < u128::from(width) => (signed(a) >> b) as u128,
-                _ => return None,
-            };
-            Some(Operand::Constant(context.int(op.ty, (bits & mask) as i128)))
-        }
-        (Opcode::ICmp(predicate), _) => {
-            let constants = constants?;
-            let width = int_width(&*context, function.operand_type(context, op.operands[0])?)?;
-            if width > 64 || constants.len() != 2 {
-                return None;
-            }
-            let mask = (1u128 << width) - 1;
-            let (a, b) = (constants[0] & mask, constants[1] & mask);
-            let signed = |value: u128| ((value << (128 - width)) as i128) >> (128 - width);
-            let holds = match predicate {
-                IntPredicate::Eq => a == b,
-                IntPredicate::Ne => a != b,
-                IntPredicate::Ugt => a > b,
-                IntPredicate::Uge => a >= b,
-                IntPredicate::Ult => a < b,
-                IntPredicate::Ule => a <= b,
-                IntPredicate::Sgt => signed(a) > signed(b),
-                IntPredicate::Sge => signed(a) >= signed(b),
-                IntPredicate::Slt => signed(a) < signed(b),
-                IntPredicate::Sle => signed(a) <= signed(b),
-            };
-            Some(Operand::Constant(context.int(op.ty, i128::from(holds))))
-        }
-        (Opcode::Cast(cast), [source]) => {
-            let (bits, width) = (int_constant(&*context, *source)?, width?);
-            let from = int_width(&*context, function.operand_type(context, *source)?)?;
-            if width > 64 || from > 64 {
-                return None;
-            }
-            let value = match cast {
-                CastOp::Trunc => bits,
-                CastOp::ZExt => bits & ((1u128 << from) - 1),
-                CastOp::SExt => (((bits << (128 - from)) as i128) >> (128 - from)) as u128,
-                _ => return None,
-            };
-            Some(Operand::Constant(context.int(op.ty, (value & ((1u128 << width) - 1)) as i128)))
-        }
-        _ => None,
-    }
-}
-
 /// One walk of a function.
 struct Walk<'a> {
     context: &'a mut Context,
@@ -448,6 +289,8 @@ struct Walk<'a> {
     mssa: Box<dyn MemorySsaView + 'a>,
     callees: &'a memory::Callees,
     tree: &'a DominatorTree,
+    /// `SQ.DT` and `SQ.AC` of the function as it was.
+    analyses: &'a FunctionAnalyses,
     values: Scoped<SimpleKey, Operand>,
     loads: Scoped<Operand, LoadValue>,
     invariants: Scoped<(Operand, TypeId), u32>,
@@ -1056,7 +899,14 @@ impl Walk<'_> {
             }
             // If the instruction can be simplified, replace it with its
             // simpler value.
-            if let Some(value) = simplify_instruction(self.context, self.function, inst) {
+            if let Some(value) = simplify_instruction_in(
+                self.context,
+                self.view.globals,
+                self.view.layout,
+                Some(self.analyses),
+                self.function,
+                inst,
+            ) {
                 let result = self.function.instruction(inst).result;
                 if let Some(result) = result
                     && !self.function.users(result).is_empty()
@@ -1307,6 +1157,7 @@ impl FunctionPass for EarlyCse {
         let before = unit.function.fork();
         let frozen = unit.context.clone();
         let view = View::within(&frozen, unit.layout, &before, &outer);
+        let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
         let mssa = memoryssa::built(&view, &accesses);
         let mut walk = Walk {
             context: unit.context,
@@ -1315,6 +1166,7 @@ impl FunctionPass for EarlyCse {
             mssa: Box::new(Manager { mssa, accesses: &accesses }),
             callees: outer.callees(),
             tree: &tree,
+            analyses: &simplifier,
             values: Scoped::new(),
             loads: Scoped::new(),
             invariants: Scoped::new(),

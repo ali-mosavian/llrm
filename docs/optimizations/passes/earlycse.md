@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:1c25db9d55dd1871fd69e3de4ec6feae453cddd3718f68a9cd19e1861c33f324 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:73f6cf4f3daf89e2fbe84a73c5cdf4b767ff0348deec4bef7de51249eb546238 -->
 
 # earlycse
 
@@ -14,11 +14,6 @@ translated is marked DEVIATE with its reason:
 - DEVIATE no `invariant.start`, `guard`, `sideeffect`, `pseudoprobe`, masked
   or target memory intrinsics, memset forwarding, fences or atomics: MIR has
   none (or `fill` makes them later). `llvm.assume` is handled.
-- DEVIATE `simplifyInstruction` is `simplify_instruction`, a stub with the
-  signature of fold-poc's `llrm_mir::simplify::simplify_instruction`
-  (InstructionSimplify.cpp): `algebraic::identity`, constants folded, a
-  select on a constant or with equal arms, `x cmp x`, `icmp ne (zext i1 x),
-  0`, `gep p, 0`, a phi of one value. It goes when theirs builds.
 - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
   does it only when poison-generating flags remain); a load's metadata not
   shared by both loads is dropped (`combineMetadataForCSE` merges it).

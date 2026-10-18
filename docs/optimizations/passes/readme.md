@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 77 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 78 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -41,6 +41,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
 | inlinecost | LLVM's inline cost: what inlining one call site costs, and the threshold it is held to, translated from `InlineCost.cpp` and `InlineAdvisor.cpp`. | Off by default. With `LLRM_EXP_INLINECOST` the interprocedural stage prints | [inlinecost](inlinecost.md) |
+| instsimplify | InstSimplify as a pass: every instruction that equals one of its operands, or a constant, is replaced by it, and what that leaves dead goes. |  | [instsimplify](instsimplify.md) |
 | interprocedural | The whole-program step run once every body has reached its own fixed point: states what each body does, inlines, carries constants across direct calls, drops dead pure calls and the tails of calls that never return, and sends each changed body back through its pipeline. | A `ProgramPass` after the per-body fixed point and before `globaldce`, | [interprocedural](interprocedural.md) |
 | ipacp | Copies a function for the constants its callers pass and redirects those calls to the copy, so the copy's loops and branches fold on values the original cannot assume: GCC's `ipa-cp` cloning. | In [`crate::interprocedural`](../analyses/interprocedural.md)'s constants loop, after constant arguments are | [ipacp](ipacp.md) |
 | jumpthread | Threads a path through a branch or switch that the way into it decides: the blocks between the deciding value and the test are copied for that path, which jumps straight to its target and does not run the test. | After the loop passes and `rotate`, before the last `hoist`. Switch state | [jumpthread](jumpthread.md) |
