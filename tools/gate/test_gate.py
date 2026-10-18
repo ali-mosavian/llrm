@@ -508,7 +508,7 @@ def test_every_step_runs_with_the_flags_the_build_used_and_the_base_build_with_n
     """`integration` (`cargo test --test X`) without the build step's RUSTFLAGS rebuilt llrm-c and replaced target/release/llrm-c while
     `torture` was starting it ("No such file or directory"): the steps share one set of flags, and the base the measure builds, which
     is historical, has none."""
-    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1"}
+    assert gate.STEP_ENV == {"RUSTFLAGS": gate.WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENTAL": "0"}
     assert f"RUSTFLAGS='{gate.WARNING_FLAGS}'" in gate.BUILD
     assert "RUSTFLAGS" in gate.MEASURE_BUILD and "env -u RUSTFLAGS cargo" in gate.MEASURE_BUILD
     assert "RUSTFLAGS" not in gate.MEASURE_BUILD.replace("env -u RUSTFLAGS", "")
@@ -1401,3 +1401,10 @@ def test_a_change_to_the_oracle_sweep_runs_the_sweep_and_its_premise():
     p = gate.plan(["tools/oracle_sweep.py"])
     assert "oracle-sweep" in p.steps and "oracle-premise" in p.steps
     assert "oracle-sweep" not in gate.plan(["tools/bench/mkci.py"]).steps
+
+
+def test_the_gate_builds_as_ci_does_not_incrementally():
+    """A local gate run built release incrementally (the profile's default) and test_budgets counted lir pressuresink 10.3 -> 33.3 Minstr (1.72% of the
+    compile, under the share) where CI's build reads 11.3 -> 37.6 (2.03%): a debt read 'paid' on the one machine and not the other."""
+    assert gate.STEP_ENV["CARGO_INCREMENTAL"] == "0"
+    assert all(k in gate.STEP_ENV for k in ("RUSTFLAGS", "RUSTC_BOOTSTRAP"))

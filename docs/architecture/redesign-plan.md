@@ -101,7 +101,7 @@ Main was `ef40f30a7` when this was read and is `c37be2a9c` as of this edit; PR s
 | front end (translate, hir to mir, data layout) | 49.4 | 44.8 | 1.1x | lex, parse, sema, IRGen | none (at parity) |
 | optimizer: ten passes (gvn, fold, algebraic, sroa, promote, hoist, loopmotion, jumpthread, dse, indvars, unroll, rotate) | 498.7 | 116.6, with the analyses they use | | InstCombine, GVN, SROA, LICM, JumpThreading, DSE, IndVars, LoopUnroll, LoopRotate | the translation tracks of the per-pass table |
 | optimizer: analyses | 535.5 | inside clang's pass rows | | nearest: through-memory ~ MemoryDependence 23.5 and MemorySSA ~6; pointer-values, points-to, globals-aa ~ BasicAA 19.5 and GlobalsAA 1.1; bounded, counted, demanded, float-facts ~ ValueTracking 12.5, LazyValueInfo 6.2, SCEV 5.6; call-effects ~ GlobalsModRef and FunctionAttrs (not separable); registers, pressure, exposed-frames, annotated, published, shape: none | memoryssa-port, basicaa-port, valuetracking-port; the "none" analyses below |
-| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | indvars-decide-poc |
+| optimizer: lsr | 89.5 | 10.0 (LSRInstance, inside the 177.5) | 8.9x | LSRInstance | loop-products-slope (the `LoopStrengthReduce.cpp` translation, see the decisions below) |
 | optimizer: all other mir passes (interprocedural 62.7, decide 62.0, stamp 39.6, lcssa 21.1, fill 17.1) | 254.7 | 50.9 | 5.0x | SimplifyCFG 8.4, CVP 6.7, EarlyCSE 5.7, IPSCCP 4.1; stamp and fill: none | decide: simplifycfg-port; stamp: llvm-order-poc says what it is for first; fill: loopidiom-port; lcssa: llvm-order-poc |
 | optimizer total | 1,378.4 | 177.5 | 7.8x | | |
 | isel | 49.5 | 54.2 | 0.9x | SelectionDAGISel 51.3, CodeGenPrepare 2.9 | none (at parity) |
@@ -1204,6 +1204,8 @@ Decide's branch decisions over the full C corpus (1,580 compiles, 33,932 `decide
 6. TTI: two cost systems are accepted as LLVM's split; the MIR passes migrate to read TTI and `OperationCosts` stays for LIR (the migration is owed in `tti-plan.md`).
 7. `noipa`: [#2196] is closed (merged via [#2140]); the parity kernels stay missing until executed; `matmul` is re-blessed, no waiver.
 8. The fold split is approved ([#2218]); `KnownFPClass` Stage A only, Stage B waits for a named reader. Front-end item 2 is parked ([#2221]). The perf cron is daily only ([#2191]).
+9. `LoopStrengthReduce.cpp` is translated at the pin. Owner loop-products-slope (was loopidiom-lp0 and indvars-decide-poc). It starts after scev-port S3 to S5 (it needs `SCEVExpander` and AddRec). Oracle: LLVM's LSR output. The llrm `lsr` pass and the interim loop-products and pressure slope fix are deleted when it becomes default.
+10. [#2260] `lir loopslots` is REPLACED by RAGreedy region splitting (SplitKit). Exit: deleted with the old pass when greedy is default. The acceptance axis (its own slope within the limit at 2N) is on regalloc-core-poc.
 
 **Method M (every exit measurement).**
 
@@ -1459,6 +1461,7 @@ The back-end track runs beside it from B1: 2.4 (A' alone) → 3.3 → 3.4 → 3.
 [#2196]: https://github.com/ali-mosavian/llrm/pull/2196
 [#2218]: https://github.com/ali-mosavian/llrm/pull/2218
 [#2221]: https://github.com/ali-mosavian/llrm/pull/2221
+[#2260]: https://github.com/ali-mosavian/llrm/issues/2260
 [#2173]: https://github.com/ali-mosavian/llrm/pull/2173
 [#2179]: https://github.com/ali-mosavian/llrm/pull/2179
 [#2151]: https://github.com/ali-mosavian/llrm/pull/2151
