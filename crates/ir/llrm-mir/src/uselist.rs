@@ -1,10 +1,25 @@
-//! A value's uses as LLVM keeps them (`Value::UseList`): a doubly linked
-//! list, the newest use first. A use is added at the head and unlinked
-//! through its own links, both O(1).
+//! A value's uses as LLVM keeps them: a doubly linked list per value, the
+//! newest use first.
+//! [`Value::addUse`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Value.h#L515)
+//! adds at the head and
+//! [`Use::removeFromList`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Use.h#L95)
+//! unlinks through the use's own links
+//! ([`Use::addToList`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/IR/Use.h#L87)),
+//! both O(1). MIRROR.
 //!
-//! A node per operand slot: the slots of instruction `i` are the nodes from
+//! DEVIATE 1: the links live in an arena node per operand slot, not in the
+//! operand. MIR operands are `Vec<Operand>` on the instruction (D5 of
+//! `target-architecture.md`); the slots of instruction `i` are the nodes from
 //! `base[i]` for `cap[i]` entries, so the node of `Use { user, index }` is
-//! found without a search.
+//! found without a search. `node` asserts the slot exists; `check_uses` is the
+//! test.
+//!
+//! DEVIATE 2 (temporary): block uses stay a `Vec` until the block-use PR;
+//! their order feeds predecessor order, which needs its own difftest.
+//!
+//! DEVIATE 3 (temporary): `Users::{len, to_vec, contains}` read a use list as
+//! a slice, which LLVM cannot; the readers are counted by
+//! `slice-users.txt` and the methods go at zero.
 
 use crate::module::Use;
 
@@ -145,6 +160,7 @@ impl UseLists {
         &self,
         at: Use,
     ) -> u32 {
+        debug_assert!(at.index < self.cap[at.user.0 as usize], "{at:?} has no slot");
         self.base[at.user.0 as usize] + at.index
     }
 
