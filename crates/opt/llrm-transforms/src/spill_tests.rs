@@ -989,3 +989,210 @@ b3:
     assert_eq!(first, 4, "premise: every block's points worked out the first time");
     assert_eq!(second, 1, "only the block the edit was in");
 }
+
+/// Every edit that read an argument named it, and the argument's live range,
+/// the function's size, was walked again: 1,904 blocks 254 times, 3.6% of an
+/// unrolled compile. A read added in a block the argument was live into anyway
+/// leaves the range as it was.
+#[test]
+fn test_an_argument_read_again_where_it_is_live_is_not_walked_again() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::module::Function;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    struct Probe(std::rc::Rc<std::cell::Cell<usize>>);
+    impl FunctionPass for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            analyses: &mut Analyses,
+        ) -> PreservedAnalyses {
+            analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            // The first update builds where each value is live; the second is
+            // the one asked about.
+            for round in 0..2 {
+                let function: &mut Function = unit.function;
+                let at = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                    .unwrap();
+                let x = function.parameters()[0];
+                let ty = unit.context.types.int(16);
+                let made = function.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    ty,
+                    vec![llrm_mir::module::Operand::Value(x); 2],
+                    Flags::default(),
+                    None,
+                );
+                function.insert(made, Position::Before(at)).expect("a position");
+                let result = function.instruction(made).result.expect("a value");
+                function.set_operands(at, vec![llrm_mir::module::Operand::Value(result)]);
+                analyses.invalidate(unit.function, &PreservedAnalyses::none());
+                super::RANGES_ASKED.with(|one| one.set(0));
+                analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+                let _ = round;
+            }
+            self.0.set(super::RANGES_ASKED.with(|one| one.get()));
+            PreservedAnalyses::none()
+        }
+    }
+
+    let mut module = module(
+        "define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+
+b1:
+  %b = add i16 %a, %x
+  br label %b2
+
+b2:
+  %c = add i16 %b, 3
+  br label %b3
+
+b3:
+  %d = add i16 %c, %x
+  ret i16 %d
+}
+",
+    );
+    let asked = std::rc::Rc::new(std::cell::Cell::new(usize::MAX));
+    crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&asked)));
+    assert_eq!(asked.get(), 0, "arguments asked of ranges_of");
+}
+
+/// An update asked the model about every value of the function again whatever
+/// the edit named: 0.8 G over 254 updates of an unrolled function (1.8% of the
+/// compile). Only the values an edit named, and those it made, are asked.
+#[test]
+fn test_an_update_counts_only_the_values_the_edit_named() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::module::Function;
+    use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    struct Probe(std::rc::Rc<std::cell::Cell<usize>>);
+    impl FunctionPass for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            analyses: &mut Analyses,
+        ) -> PreservedAnalyses {
+            analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            let function: &mut Function = unit.function;
+            let ret = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                .unwrap();
+            let ty = unit.context.types.int(16);
+            let operand = function.instruction(ret).operands[0];
+            let made = function.create_instruction(
+                Opcode::Binary(BinaryOp::Add),
+                ty,
+                vec![operand; 2],
+                Flags::default(),
+                None,
+            );
+            function.insert(made, Position::Before(ret)).expect("a position");
+            let result = function.instruction(made).result.expect("a value");
+            function.set_operands(ret, vec![llrm_mir::module::Operand::Value(result)]);
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+            super::COUNTS_ASKED.with(|one| one.set(0));
+            analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            self.0.set(super::COUNTS_ASKED.with(|one| one.get()));
+            PreservedAnalyses::none()
+        }
+    }
+
+    let mut text = String::from("define i16 @f(i16 %x) {\nb0:\n  %v0 = add i16 %x, 1\n");
+    for at in 1..200 {
+        text += &format!("  %v{at} = add i16 %v{}, 1\n", at - 1);
+    }
+    text += "  ret i16 %v199\n}\n";
+    let mut module = module(&text);
+    let asked = std::rc::Rc::new(std::cell::Cell::new(usize::MAX));
+    crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&asked)));
+    assert!(asked.get() <= 8, "{} values asked for an edit of one instruction in 200", asked.get());
+}
+
+/// A pointer is folded where everything that reads it is an access or a
+/// folded pointer, so a value an edit made unfolded moves the answer for the
+/// pointers it is made of, which the edit did not name: nbody_single -Os kept
+/// a counted set that a fresh pass disagreed with (`LLRM_CHECK_PRESSURE`).
+#[test]
+fn test_an_update_moves_the_answer_of_the_pointer_a_changed_one_is_made_of() {
+    use llrm_mir::edit::Position;
+    use llrm_mir::module::Function;
+    use llrm_mir::opcode::{CastOp, Flags, Opcode};
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    struct Probe(std::rc::Rc<std::cell::Cell<bool>>);
+    impl FunctionPass for Probe {
+        fn name(&self) -> &'static str {
+            "probe"
+        }
+
+        fn run(
+            &mut self,
+            unit: &mut Unit,
+            analyses: &mut Analyses,
+        ) -> PreservedAnalyses {
+            analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            let function: &mut Function = unit.function;
+            let ret = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| function.instruction(inst).opcode == Opcode::Ret)
+                .unwrap();
+            let load = function
+                .walk()
+                .map(|(_, inst)| inst)
+                .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Load { .. }))
+                .unwrap();
+            let llrm_mir::module::Operand::Value(q) = function.instruction(load).operands[0] else {
+                panic!("a pointer")
+            };
+            let ty = unit.context.types.int(16);
+            let made = function.create_instruction(
+                Opcode::Cast(CastOp::PtrToInt),
+                ty,
+                vec![llrm_mir::module::Operand::Value(q)],
+                Flags::default(),
+                None,
+            );
+            function.insert(made, Position::Before(ret)).expect("a position");
+            analyses.invalidate(unit.function, &PreservedAnalyses::none());
+            let kept = analyses.get::<Pressure>(unit.context, unit.layout, unit.function);
+            let fresh = Pressure::of(unit.context, unit.function, 0);
+            self.0.set(kept.counted == fresh.counted);
+            PreservedAnalyses::none()
+        }
+    }
+
+    let mut module = module(
+        "define i16 @f(ptr %b, i16 %i) {
+b0:
+  %p = getelementptr i16, ptr %b, i16 %i
+  %q = getelementptr i16, ptr %p, i16 1
+  %v = load i16, ptr %q
+  ret i16 %v
+}
+",
+    );
+    let same = std::rc::Rc::new(std::cell::Cell::new(false));
+    crate::testing::managed(&mut module, Probe(std::rc::Rc::clone(&same)));
+    assert!(same.get(), "the updated counted set differs from a fresh pass");
+}

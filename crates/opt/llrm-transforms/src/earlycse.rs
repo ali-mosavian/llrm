@@ -28,8 +28,41 @@
 //!   `MemRef`: a set of nearest defs, each of which must dominate the earlier
 //!   access, where LLVM's walker answers one.
 //!
-//! The pass is named `earlycse`; `LLRM_EXP_EARLYCSE=real` selects it in the
-//! order experiment, in place of `gvn::EarlyCse`.
+//! # How it works
+//! The dominator tree is walked depth first with a scope per node: the scoped
+//! tables hold the expressions, loads, calls and GEPs available there, each
+//! stamped with the generation of memory when it was made. An instruction that
+//! `simplify_instruction` folds is replaced; one equal to an available entry
+//! is replaced by it; a load is the stored or loaded value of an earlier
+//! access when the MemorySSA clobber query says nothing wrote between them
+//! (`isSameMemGeneration`); a store that rewrites what an earlier one wrote
+//! goes. Entering a branch arm records the condition as known.
+//!
+//! # Example
+//! Before (`test_a_commuted_operation_is_the_one_before`):
+//! ```mir
+//! define i32 @f(i32 %x, i32 %y) {
+//! b0:
+//!   %a = add i32 %x, %y
+//!   %b = add i32 %y, %x
+//!   %c = mul i32 %a, %b
+//!   ret i32 %c
+//! }
+//! ```
+//!
+//! After:
+//! ```mir
+//! define i32 @f(i32 %x, i32 %y) {
+//! b0:
+//!   %a = add i32 %x, %y
+//!   %c = mul i32 %a, %a
+//!   ret i32 %c
+//! }
+//! ```
+//!
+//! # Used by
+//! [`crate::pipeline`]'s `llvm_order` lists (`earlycse@649`, `earlycse@1180`),
+//! behind `Options::llvm_order` (`LLRM_EXP_LLVM`), off by default.
 
 use std::collections::HashMap;
 
@@ -1192,10 +1225,10 @@ impl Walk<'_> {
     /// the dominator tree depth first, a scope for each node.
     fn run(&mut self) -> bool {
         let Some(entry) = self.function.entry() else { return false };
-        let mut children: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+        let mut children: llrm_mir::dense::IdMap<BlockId, Vec<BlockId>> = llrm_mir::dense::IdMap::new();
         for &block in self.function.layout() {
             if let Some(parent) = self.tree.immediate_dominator(block) {
-                children.entry(parent).or_default().push(block);
+                children.get_or_insert_with(parent, Vec::new).push(block);
             }
         }
         struct Frame {
@@ -1218,7 +1251,7 @@ impl Walk<'_> {
                 frame.child_generation = self.generation;
                 frame.processed = true;
             } else if frame.next < children.get(&frame.block).map_or(0, Vec::len) {
-                let child = children[&frame.block][frame.next];
+                let child = children.get(&frame.block).expect("it has children")[frame.next];
                 frame.next += 1;
                 let generation = frame.child_generation;
                 self.enter();
