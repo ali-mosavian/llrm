@@ -1,3 +1,7 @@
+---
+architecture-index: a decision that records what it read
+architecture-order: 120
+---
 # A decision that records what it read: the hoist forecast
 
 TL;DR: a hoist price that was worked out and rejected is worked out again, identically, in the next round, because another pass changed the body somewhere. Recording the facts the price read and keeping it while they are unchanged is the right form, but the forecast reads every block, every value's total traffic and a greedy state that runs through the function in layout order, so no read-set that is both cheap to compare and exact exists. The ceiling is under 1% of the `d_faces` -Os compile. Closed as not kept; what a future version needs is listed at the end.

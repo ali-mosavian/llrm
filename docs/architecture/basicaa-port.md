@@ -1,3 +1,7 @@
+---
+architecture-index: BasicAA as a translation of LLVM's
+architecture-order: 290
+---
 # BasicAA as a translation of LLVM's: the plan
 
 **TL;DR.** Today alias answers come from a whole-function tower (`alias.rs` 3,852 lines, `frameescape.rs` 703, `llrm-mir/alias.rs` 216, tests 1,640): points-to sets, a flow-sensitive escape phase and a join rule per case. Two soundness bugs in one day (#2132: a join lost an arm; #2125: edges not re-derived) are a class LLVM's per-query design does not have. The plan is to translate `AliasAnalysis.cpp`, `BasicAliasAnalysis.cpp`, `CaptureTracking.cpp` and `MemoryLocation.cpp` (pinned `d1106deb71cc`, about 4,100 C++ lines) behind the interface of [#2163](https://github.com/ali-mosavian/llrm/pull/2163), move the clients over one PR each, and delete the tower. Nothing below is measured yet unless a number is given.
