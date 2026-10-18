@@ -84,8 +84,19 @@ included, so it is a floor on linearity). Per doubling, 400 to 800:
 With the list ops taken to O(1) the rest bounds the ratio: mem about 2.1, loop
 about 1.8, so the swap can bring SROA near LLVM's x2.05 on those. Diamond's
 rest is x3.0 by itself: a second super-linear term that is not the list
-(unlocated; its own issue). The arena POC (SROA on a linked list, measured as
-above) confirms this bound before B is built; result to be added here.
+(unlocated; its own issue).
+
+POC result (branch `alim/poc/block-list`, `sroa-poc sroa-unit`, same method;
+output byte-identical to the Vec version on the five ladders checked): the
+arena list as truth (prev/next per `InstId`, head/tail/len per block) with the
+`Vec` kept as a lazy view rebuilt on read, SROA's own readers unchanged.
+CPU samples, 400 to 800: mem 123 to 244 (x1.98, was x2.75), loop 130 to 284
+(x2.18, was x2.74), diamond 51 to 79 (x1.55, was x3.1); mem800 is 3.4 times
+faster than the Vec (244 against 832 samples). That is LLVM's x2.05. Two
+lessons: any read of `instructions()` after an edit rebuilds the view (the
+first run, with the erased-block check going through `block()`, was 77% in
+`attach`), so stage A's reader migration is part of the cost, not optional;
+and `Block::instructions()` cannot stay a slice once the list is the truth.
 
 ## DEVIATE
 None planned: the list is LLVM's. A deviation is recorded here only if the
