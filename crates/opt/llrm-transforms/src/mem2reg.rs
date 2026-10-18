@@ -1161,7 +1161,7 @@ fn simplify_phi(
 }
 
 /// `PromoteMemToReg`: `allocas` promoted. PromoteMemoryToRegister.cpp#L1264
-fn promote_mem_to_reg(
+pub(crate) fn promote_mem_to_reg(
     context: &mut Context,
     layout: &DataLayout,
     callees: &Callees,

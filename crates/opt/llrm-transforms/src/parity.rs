@@ -182,14 +182,20 @@ pub(crate) fn check(
 }
 
 /// [`check`] against [`REGISTRY`]; the built slots that are Translated are told
-/// to the counts as joined.
+/// to the counts as joined. With `sroa` (`LLRM_EXP_SROA`) the SROA slots are
+/// Translated: the translated unit is what runs there.
 pub(crate) fn check_phase(
     phase: Phase,
     built: &[&str],
+    sroa: bool,
 ) -> Result<(), String> {
-    check(REGISTRY, phase, built)?;
+    let registry: Vec<Entry> = REGISTRY
+        .iter()
+        .map(|one| Entry { kind: if sroa && one.replaced_by == "sroa.rs" { Translated } else { one.kind }, ..*one })
+        .collect();
+    check(&registry, phase, built)?;
     llrm_mir::counts::joined(
-        REGISTRY.iter().filter(|one| one.kind == Translated && built.contains(&one.slot)).map(|one| one.slot),
+        registry.iter().filter(|one| one.kind == Translated && built.contains(&one.slot)).map(|one| one.slot),
     );
     Ok(())
 }

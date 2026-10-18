@@ -44,7 +44,7 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
         let on = Applied { options: pipeline::Options { llvm_order: true, ..options }, ..Applied::default() };
         for phase in [Phase::Early, Phase::Cleanup, Phase::Simplify] {
             let built = names(&on, phase);
-            assert_eq!(parity::check_phase(phase, &built), Ok(()), "{phase:?}");
+            assert_eq!(parity::check_phase(phase, &built, on.options.sroa), Ok(()), "{phase:?}");
         }
     }
 }
@@ -62,4 +62,24 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     assert!(report.contains("gvn@787 (gvn) -> gvn-port") && report.contains("shadow_mssa"), "{report}");
     assert!(parity::TODO.iter().any(|one| one.contains("kept updated by the pass")));
     assert!(parity::TODO.iter().any(|one| one.contains("CFGAnalyses")));
+}
+
+/// The SROA slots are Translated only when the translated unit runs in them:
+/// `Options::sroa` put `sroa-real` in the slot, and without it the stand-in
+/// stayed, so the registry would have said joined over the old pass.
+#[test]
+fn test_the_sroa_slots_run_the_translated_unit_only_with_the_flag() {
+    let parts = |sroa: bool, phase: Phase, slot: &str| {
+        let on = Applied {
+            options: pipeline::Options { llvm_order: true, sroa, ..pipeline::Options::standard() },
+            ..Applied::default()
+        };
+        let list = pipeline::llvm_order(&on, phase);
+        let found = list.iter().find(|one| one.name() == slot).expect("slot");
+        found.parts()
+    };
+    for (phase, slot) in [(Phase::Early, "sroa@1179"), (Phase::Simplify, "sroa@646"), (Phase::Simplify, "sroa@776")] {
+        assert!(parts(true, phase, slot).contains(&"sroa-real"), "{slot}");
+        assert!(!parts(false, phase, slot).contains(&"sroa-real"), "{slot}");
+    }
 }
